@@ -1,10 +1,10 @@
 import { render, screen } from "@testing-library/react";
 
-import { HomePage } from "../pages/HomePage";
+import { App } from "../app/App";
 
-describe("HomePage", () => {
+describe("App", () => {
   it("renders the project shell heading", () => {
-    render(<HomePage />);
+    render(<App />);
 
     expect(
       screen.getByRole("heading", { name: /python \+ react monorepo is ready/i }),
