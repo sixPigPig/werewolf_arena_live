@@ -1,19 +1,29 @@
 # Python + React Web Monorepo
 
-This repository contains:
+## Repository layout
 
 - `apps/api`: FastAPI backend
 - `apps/web`: React SPA frontend
+- `docs`: architecture and planning docs
 
-## Local development
+## Quick start
 
-1. Start PostgreSQL:
+1. Copy environment files:
+   - `cp apps/api/.env.example apps/api/.env`
+   - `cp apps/web/.env.example apps/web/.env`
+2. Start PostgreSQL:
    - `docker compose up -d db`
-2. Install backend dependencies:
+3. Install dependencies:
    - `cd apps/api && uv sync`
-3. Install frontend dependencies:
    - `pnpm install`
-4. Start the backend:
+4. Run migrations:
+   - `cd apps/api && uv run alembic upgrade head`
+5. Start the backend:
    - `make api`
-5. Start the frontend:
+6. Start the frontend:
    - `make web`
+
+## Quality checks
+
+- `make lint`
+- `make test`
