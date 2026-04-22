@@ -8,7 +8,7 @@
 ## Local runtime
 
 - PostgreSQL runs in Docker via `docker-compose.yml`
-- The API runs locally on `http://127.0.0.1:8000`
+- The API runs locally on `http://localhost:8000`
 - The SPA runs locally on `http://localhost:5173`
 
 ## Request flow

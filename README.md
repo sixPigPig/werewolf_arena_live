@@ -27,4 +27,5 @@
 
 - `make lint`
 - `make test`
+- `cd apps/api && uv run alembic upgrade head`
 - `cd apps/web && pnpm build`
