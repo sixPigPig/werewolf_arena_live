@@ -32,6 +32,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: cd apps/api && uv sync
+      - run: cd apps/api && uv run alembic upgrade head
       - run: cd apps/api && uv run ruff check .
       - run: cd apps/api && uv run pytest
 

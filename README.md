@@ -27,3 +27,4 @@
 
 - `make lint`
 - `make test`
+- `cd apps/web && pnpm build`
