@@ -4,17 +4,26 @@ export async function apiFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
-  });
+  const response = await fetch(`${API_BASE_URL}${path}`, init);
 
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`);
   }
 
-  return (await response.json()) as T;
+  if (response.status === 204 || response.status === 205) {
+    return undefined as T;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+
+  if (!body) {
+    return undefined as T;
+  }
+
+  if (contentType.includes("application/json")) {
+    return JSON.parse(body) as T;
+  }
+
+  return body as T;
 }
