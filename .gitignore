@@ -1,0 +1,30 @@
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# JavaScript
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+apps/web/dist/
+apps/web/coverage/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+apps/api/.venv/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+*.log
