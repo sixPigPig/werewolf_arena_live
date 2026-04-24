@@ -68,6 +68,9 @@ def test_registry_marks_completed_and_failed() -> None:
     )
 
     registry.mark_running(completed.run_id)
+    assert registry.get_run(completed.run_id).status == "running"
+    assert registry.get_run(completed.run_id).events[-1].type == "run_started"
+
     registry.mark_completed(completed.run_id, winner="狼人阵营")
     registry.mark_failed(failed.run_id, error="Maximum rounds exceeded")
 
