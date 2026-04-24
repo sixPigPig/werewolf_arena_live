@@ -1,45 +1,45 @@
-# Official Rule Presets Implementation Plan
+# 官方预设规则实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给智能体执行者：** 必须使用子技能：推荐使用 `superpowers:subagent-driven-development`，也可以使用 `superpowers:executing-plans`，按任务逐步执行本计划。步骤使用复选框（`- [ ]`）记录进度。
 
-**Goal:** Build an official-rule-preset game platform so users can launch狼人杀 runs with `classic_8`, `starter_6`, or `social_8`, and see the selected rule in live and replay views.
+**目标：** 建设官方预设规则对局平台，让用户可以用 `classic_8`、`starter_6` 或 `social_8` 发起狼人杀对局，并在直播和复盘页面看到本局选择的规则。
 
-**Architecture:** Add a backend `RuleSet` registry as the source of truth. Thread a selected `RuleSet` through game initialization, engine night actions, prompt rendering, live run metadata, events, and saved replay state. The frontend fetches official rule summaries, sends `rule_set_id` when launching runs, and renders a compact rule summary on create/live/replay screens.
+**架构：** 后端新增 `RuleSet` 注册表作为唯一规则来源。选中的 `RuleSet` 会贯穿游戏初始化、引擎夜晚行动、prompt 渲染、实时运行元数据、事件和落盘复盘状态。前端拉取官方规则摘要，发起对局时发送 `rule_set_id`，并在创建页、直播页和复盘页展示紧凑的规则摘要。
 
-**Tech Stack:** FastAPI, dataclasses, pytest, React, TanStack Query, TypeScript, Vitest, Testing Library.
-
----
-
-## File Structure
-
-- Create `apps/api/app/werewolf/rules.py`: official rule definitions, validation, lookup, snapshot serialization, and Chinese rule text rendering.
-- Create `apps/api/tests/test_werewolf_rules.py`: backend tests for registry behavior and validation.
-- Modify `apps/api/app/werewolf/models.py`: store `rule_set` on `GameState`.
-- Modify `apps/api/app/werewolf/engine.py`: initialize players from `RuleSet`, run night actions based on rule config, and pass dynamic rule text to prompts.
-- Modify `apps/api/app/werewolf/runner.py`: accept `rule_set_id`, resolve the rule, and pass it into `initialize_game_state()` and `GameEngine`.
-- Modify `apps/api/app/werewolf/prompts_zh.py`: render `world_state["rule_text"]` instead of a fixed role composition.
-- Modify `apps/api/app/werewolf/live.py`: store and emit rule metadata for live runs.
-- Modify `apps/api/app/api/routes/games.py`: expose `GET /api/v1/games/rule-sets`, accept `rule_set_id` in run creation, and pass rule metadata to background runs.
-- Modify `apps/api/app/werewolf/replay.py`: include `rule_set` in session summaries.
-- Modify existing backend tests in `apps/api/tests/test_werewolf_runner.py`, `apps/api/tests/test_werewolf_lm.py`, and `apps/api/tests/test_games_api.py`.
-- Create `apps/web/src/features/games/api/listRuleSets.ts`: fetch official rule summaries.
-- Create `apps/web/src/features/games/components/RuleSetSummary.tsx`: reusable rule summary display.
-- Modify `apps/web/src/features/games/types.ts`: add `RuleSetSummary` and optional rule fields on run/replay/session types.
-- Modify `apps/web/src/features/games/components/CreateGameRunForm.tsx`: render official rule selection and submit `rule_set_id`.
-- Modify `apps/web/src/pages/LiveGamePage.tsx` and `apps/web/src/pages/GameDetailPage.tsx`: display selected rule summary.
-- Modify frontend tests in `apps/web/src/features/games/api/liveRunApi.test.ts`, `apps/web/src/pages/GamesPage.test.tsx`, `apps/web/src/pages/LiveGamePage.test.tsx`, and `apps/web/src/pages/GameDetailPage.test.tsx`.
+**技术栈：** FastAPI、dataclasses、pytest、React、TanStack Query、TypeScript、Vitest、Testing Library。
 
 ---
 
-### Task 1: Backend Official Rule Registry
+## 文件结构
 
-**Files:**
-- Create: `apps/api/app/werewolf/rules.py`
-- Test: `apps/api/tests/test_werewolf_rules.py`
+- 新增 `apps/api/app/werewolf/rules.py`：官方规则定义、校验、查询、快照序列化和中文规则文本渲染。
+- 新增 `apps/api/tests/test_werewolf_rules.py`：覆盖规则注册表行为和校验逻辑的后端测试。
+- 修改 `apps/api/app/werewolf/models.py`：在 `GameState` 上保存 `rule_set`。
+- 修改 `apps/api/app/werewolf/engine.py`：根据 `RuleSet` 初始化玩家，按规则配置执行夜晚行动，并把动态规则文本传给 prompt。
+- 修改 `apps/api/app/werewolf/runner.py`：接受 `rule_set_id`，解析规则，并传入 `initialize_game_state()` 与 `GameEngine`。
+- 修改 `apps/api/app/werewolf/prompts_zh.py`：渲染 `world_state["rule_text"]`，替代固定身份配置文案。
+- 修改 `apps/api/app/werewolf/live.py`：为实时对局保存并发出规则元数据。
+- 修改 `apps/api/app/api/routes/games.py`：暴露 `GET /api/v1/games/rule-sets`，创建对局时接受 `rule_set_id`，并把规则元数据传给后台运行流程。
+- 修改 `apps/api/app/werewolf/replay.py`：在会话摘要中包含 `rule_set`。
+- 修改现有后端测试：`apps/api/tests/test_werewolf_runner.py`、`apps/api/tests/test_werewolf_lm.py` 和 `apps/api/tests/test_games_api.py`。
+- 新增 `apps/web/src/features/games/api/listRuleSets.ts`：拉取官方规则摘要。
+- 新增 `apps/web/src/features/games/components/RuleSetSummary.tsx`：可复用的规则摘要展示组件。
+- 修改 `apps/web/src/features/games/types.ts`：添加 `RuleSetSummary`，并在对局运行、复盘和会话类型上添加可选规则字段。
+- 修改 `apps/web/src/features/games/components/CreateGameRunForm.tsx`：渲染官方规则选择，并提交 `rule_set_id`。
+- 修改 `apps/web/src/pages/LiveGamePage.tsx` 和 `apps/web/src/pages/GameDetailPage.tsx`：展示已选规则摘要。
+- 修改前端测试：`apps/web/src/features/games/api/liveRunApi.test.ts`、`apps/web/src/pages/GamesPage.test.tsx`、`apps/web/src/pages/LiveGamePage.test.tsx` 和 `apps/web/src/pages/GameDetailPage.test.tsx`。
 
-- [ ] **Step 1: Write failing tests for the official registry**
+---
 
-Create `apps/api/tests/test_werewolf_rules.py`:
+### 任务 1：后端官方规则注册表
+
+**文件：**
+- 新增：`apps/api/app/werewolf/rules.py`
+- 测试：`apps/api/tests/test_werewolf_rules.py`
+
+- [ ] **步骤 1：编写官方规则注册表的失败测试**
+
+创建 `apps/api/tests/test_werewolf_rules.py`：
 
 ```python
 import pytest
@@ -139,19 +139,19 @@ def test_validate_rule_sets_rejects_duplicate_ids() -> None:
         validate_rule_sets(duplicate)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **步骤 2：运行测试，确认失败**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest tests/test_werewolf_rules.py -v
 ```
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'app.werewolf.rules'`.
+预期：失败，并出现 `ModuleNotFoundError: No module named 'app.werewolf.rules'`。
 
-- [ ] **Step 3: Implement `rules.py`**
+- [ ] **步骤 3：实现 `rules.py`**
 
-Create `apps/api/app/werewolf/rules.py`:
+创建 `apps/api/app/werewolf/rules.py`：
 
 ```python
 from __future__ import annotations
@@ -345,19 +345,19 @@ def _role_count_text(rule: RuleSet) -> str:
 validate_rule_sets(OFFICIAL_RULE_SETS)
 ```
 
-- [ ] **Step 4: Run registry tests**
+- [ ] **步骤 4：运行注册表测试**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest tests/test_werewolf_rules.py -v
 ```
 
-Expected: PASS.
+预期：通过。
 
-- [ ] **Step 5: Commit registry**
+- [ ] **步骤 5：提交注册表变更**
 
-Run:
+运行：
 
 ```bash
 git add apps/api/app/werewolf/rules.py apps/api/tests/test_werewolf_rules.py
@@ -366,17 +366,17 @@ git commit -m "feat: add official rule registry"
 
 ---
 
-### Task 2: Backend Engine Uses Rule Sets
+### 任务 2：后端引擎接入规则集
 
-**Files:**
-- Modify: `apps/api/app/werewolf/models.py`
-- Modify: `apps/api/app/werewolf/engine.py`
-- Modify: `apps/api/app/werewolf/runner.py`
-- Test: `apps/api/tests/test_werewolf_runner.py`
+**文件：**
+- 修改：`apps/api/app/werewolf/models.py`
+- 修改：`apps/api/app/werewolf/engine.py`
+- 修改：`apps/api/app/werewolf/runner.py`
+- 测试：`apps/api/tests/test_werewolf_runner.py`
 
-- [ ] **Step 1: Add failing runner tests for rule selection**
+- [ ] **步骤 1：为规则选择添加失败的运行器测试**
 
-Append these tests to `apps/api/tests/test_werewolf_runner.py`:
+将这些测试追加到 `apps/api/tests/test_werewolf_runner.py`：
 
 ```python
 def test_run_game_uses_starter_6_rule_set(tmp_path) -> None:
@@ -442,19 +442,19 @@ def _role_counts(players: list[dict[str, object]]) -> dict[str, int]:
     return counts
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **步骤 2：运行测试，确认失败**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest tests/test_werewolf_runner.py::test_run_game_uses_starter_6_rule_set tests/test_werewolf_runner.py::test_run_game_uses_social_8_rule_set_without_divine_actions tests/test_werewolf_runner.py::test_run_game_defaults_to_classic_8_rule_set -v
 ```
 
-Expected: FAIL because `run_game()` does not accept `rule_set_id` and `GameState` does not serialize `rule_set`.
+预期：失败，因为 `run_game()` 还不接受 `rule_set_id`，`GameState` 也还没有序列化 `rule_set`。
 
-- [ ] **Step 3: Store rule snapshots on game state**
+- [ ] **步骤 3：在游戏状态中保存规则快照**
 
-Modify `apps/api/app/werewolf/models.py`:
+修改 `apps/api/app/werewolf/models.py`：
 
 ```python
 @dataclass
@@ -480,9 +480,9 @@ class GameState:
         }
 ```
 
-- [ ] **Step 4: Update engine initialization and night-action gating**
+- [ ] **步骤 4：更新引擎初始化和夜晚行动开关**
 
-Modify imports in `apps/api/app/werewolf/engine.py`:
+修改 `apps/api/app/werewolf/engine.py` 中的导入：
 
 ```python
 from app.werewolf.rules import (
@@ -497,7 +497,7 @@ from app.werewolf.rules import (
 )
 ```
 
-Replace `initialize_game_state()` with:
+将 `initialize_game_state()` 替换为：
 
 ```python
 def initialize_game_state(
@@ -538,19 +538,19 @@ def initialize_game_state(
     )
 ```
 
-In `GameEngine.__init__()`, add `rule_set`:
+在 `GameEngine.__init__()` 中加入 `rule_set`：
 
 ```python
         rule_set: RuleSet,
 ```
 
-and store it:
+并保存它：
 
 ```python
         self.rule_set = rule_set
 ```
 
-In `_run_night_phase()`, replace role checks with rule-action checks:
+在 `_run_night_phase()` 中，用规则行动开关替换固定身份检查：
 
 ```python
         active_wolves = [
@@ -606,23 +606,23 @@ In `_run_night_phase()`, replace role checks with rule-action checks:
                 seer.add_observation(f"第{round_state.number}轮：我查验了{investigated}，身份是{role}。")
 ```
 
-In `_world_state()`, replace fixed counts with dynamic rule text:
+在 `_world_state()` 中，用动态规则文本替换固定人数：
 
 ```python
             "rule_text": render_rule_text(self.rule_set),
             "werewolf_context": self._werewolf_context(player, active_players),
 ```
 
-Remove `"num_players": 8` and `"num_villagers": 4` from `_world_state()`.
+从 `_world_state()` 中移除 `"num_players": 8` 和 `"num_villagers": 4`。
 
-Add helper to `GameEngine`:
+给 `GameEngine` 添加辅助方法：
 
 ```python
     def _is_werewolf(self, player: Player) -> bool:
         return self.rule_set.role_team(player.role) == TEAM_WEREWOLVES
 ```
 
-Replace `_get_winner()` with:
+将 `_get_winner()` 替换为：
 
 ```python
     def _get_winner(self, active_players: list[str]) -> str:
@@ -639,21 +639,21 @@ Replace `_get_winner()` with:
         return ""
 ```
 
-- [ ] **Step 5: Update runner to resolve rule sets**
+- [ ] **步骤 5：更新运行器，让它解析规则集**
 
-Modify `apps/api/app/werewolf/runner.py` imports:
+修改 `apps/api/app/werewolf/runner.py` 的导入：
 
 ```python
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set
 ```
 
-Add parameter to `run_game()`:
+给 `run_game()` 添加参数：
 
 ```python
     rule_set_id: str = DEFAULT_RULE_SET_ID,
 ```
 
-Resolve before initialization:
+初始化前解析规则：
 
 ```python
     rule_set = get_rule_set(rule_set_id)
@@ -666,7 +666,7 @@ Resolve before initialization:
     )
 ```
 
-Pass into engine:
+传入引擎：
 
 ```python
         engine = GameEngine(
@@ -678,19 +678,19 @@ Pass into engine:
         )
 ```
 
-- [ ] **Step 6: Run runner tests**
+- [ ] **步骤 6：运行运行器测试**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest tests/test_werewolf_runner.py -v
 ```
 
-Expected: FAIL only in prompt-related assertions because `prompts_zh.py` still expects fixed `num_players` keys.
+预期：只剩 prompt 相关断言失败，因为 `prompts_zh.py` 仍然期待固定的 `num_players` 字段。
 
-- [ ] **Step 7: Commit engine wiring after prompt task passes**
+- [ ] **步骤 7：prompt 任务通过后提交引擎接线变更**
 
-Do not commit yet if Step 6 still fails. This task commits after Task 3 also passes:
+如果步骤 6 仍然失败，先不要提交。这个任务等任务 3 也通过后再提交：
 
 ```bash
 git add apps/api/app/werewolf/models.py apps/api/app/werewolf/engine.py apps/api/app/werewolf/runner.py apps/api/tests/test_werewolf_runner.py
@@ -699,17 +699,17 @@ git commit -m "feat: initialize games from rule presets"
 
 ---
 
-### Task 3: Dynamic Prompt Rule Text
+### 任务 3：动态 prompt 规则文本
 
-**Files:**
-- Modify: `apps/api/app/werewolf/prompts_zh.py`
-- Modify: `apps/api/tests/test_werewolf_lm.py`
-- Test: `apps/api/tests/test_werewolf_lm.py`
-- Test: `apps/api/tests/test_werewolf_runner.py`
+**文件：**
+- 修改：`apps/api/app/werewolf/prompts_zh.py`
+- 修改：`apps/api/tests/test_werewolf_lm.py`
+- 测试：`apps/api/tests/test_werewolf_lm.py`
+- 测试：`apps/api/tests/test_werewolf_runner.py`
 
-- [ ] **Step 1: Update prompt tests for dynamic rule text**
+- [ ] **步骤 1：更新动态规则文本的 prompt 测试**
 
-Modify `test_chinese_prompt_contains_rules_role_and_json_instruction()` in `apps/api/tests/test_werewolf_lm.py` so the world state includes `rule_text`:
+修改 `apps/api/tests/test_werewolf_lm.py` 中的 `test_chinese_prompt_contains_rules_role_and_json_instruction()`，让世界状态包含 `rule_text`：
 
 ```python
 def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
@@ -740,27 +740,27 @@ def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
     assert schema["required"] == ["reasoning", "vote"]
 ```
 
-In `test_generate_action_retries_until_allowed_value()` and `test_generate_action_accepts_numeric_value_for_string_allowed_values()`, replace `num_players` and `num_villagers` keys with:
+在 `test_generate_action_retries_until_allowed_value()` 和 `test_generate_action_accepts_numeric_value_for_string_allowed_values()` 中，把 `num_players` 与 `num_villagers` 替换为：
 
 ```python
             "rule_text": "你正在进行一局数字版狼人杀。",
 ```
 
-- [ ] **Step 2: Run prompt tests to verify they fail**
+- [ ] **步骤 2：运行 prompt 测试，确认失败**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest tests/test_werewolf_lm.py::test_chinese_prompt_contains_rules_role_and_json_instruction -v
 ```
 
-Expected: FAIL with `KeyError: 'num_players'`.
+预期：失败，并出现 `KeyError: 'num_players'`。
 
-- [ ] **Step 3: Update prompt rendering**
+- [ ] **步骤 3：更新 prompt 渲染**
 
-Modify `apps/api/app/werewolf/prompts_zh.py`.
+修改 `apps/api/app/werewolf/prompts_zh.py`。
 
-Replace `GAME_RULES` with a fallback:
+用兜底文本替换 `GAME_RULES`：
 
 ```python
 DEFAULT_GAME_RULES = """你正在进行一局数字版狼人杀。
@@ -774,7 +774,7 @@ DEFAULT_GAME_RULES = """你正在进行一局数字版狼人杀。
 """
 ```
 
-Replace `_render_base()` with:
+将 `_render_base()` 替换为：
 
 ```python
 def _render_base(world_state: dict[str, Any]) -> str:
@@ -791,19 +791,19 @@ def _render_base(world_state: dict[str, Any]) -> str:
     )
 ```
 
-- [ ] **Step 4: Run prompt and runner tests**
+- [ ] **步骤 4：运行 prompt 和运行器测试**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest tests/test_werewolf_lm.py tests/test_werewolf_runner.py -v
 ```
 
-Expected: PASS.
+预期：通过。
 
-- [ ] **Step 5: Commit prompt and engine wiring**
+- [ ] **步骤 5：提交 prompt 和引擎接线变更**
 
-Run:
+运行：
 
 ```bash
 git add apps/api/app/werewolf/prompts_zh.py apps/api/tests/test_werewolf_lm.py apps/api/app/werewolf/models.py apps/api/app/werewolf/engine.py apps/api/app/werewolf/runner.py apps/api/tests/test_werewolf_runner.py
@@ -812,17 +812,17 @@ git commit -m "feat: render prompts from selected rule"
 
 ---
 
-### Task 4: API, Live Run Metadata, and Replay Summaries
+### 任务 4：API、实时运行元数据和复盘摘要
 
-**Files:**
-- Modify: `apps/api/app/werewolf/live.py`
-- Modify: `apps/api/app/api/routes/games.py`
-- Modify: `apps/api/app/werewolf/replay.py`
-- Test: `apps/api/tests/test_games_api.py`
+**文件：**
+- 修改：`apps/api/app/werewolf/live.py`
+- 修改：`apps/api/app/api/routes/games.py`
+- 修改：`apps/api/app/werewolf/replay.py`
+- 测试：`apps/api/tests/test_games_api.py`
 
-- [ ] **Step 1: Add failing API tests**
+- [ ] **步骤 1：添加失败的 API 测试**
 
-Add these tests to `apps/api/tests/test_games_api.py`:
+把这些测试添加到 `apps/api/tests/test_games_api.py`：
 
 ```python
 def test_list_rule_sets_returns_official_rules() -> None:
@@ -910,56 +910,56 @@ def test_list_games_includes_rule_set_summary(tmp_path: Path) -> None:
     assert response.json()["sessions"][0]["rule_set"]["id"] == "social_8"
 ```
 
-- [ ] **Step 2: Run API tests to verify they fail**
+- [ ] **步骤 2：运行 API 测试，确认失败**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest tests/test_games_api.py::test_list_rule_sets_returns_official_rules tests/test_games_api.py::test_create_game_run_accepts_rule_set_id tests/test_games_api.py::test_create_game_run_rejects_unknown_rule_set tests/test_games_api.py::test_list_games_includes_rule_set_summary -v
 ```
 
-Expected: FAIL because the route and live metadata do not exist.
+预期：失败，因为路由和实时元数据还不存在。
 
-- [ ] **Step 3: Update live run metadata**
+- [ ] **步骤 3：更新实时运行元数据**
 
-Modify `apps/api/app/werewolf/live.py`.
+修改 `apps/api/app/werewolf/live.py`。
 
-Add fields to `LiveGameRun`:
+给 `LiveGameRun` 添加字段：
 
 ```python
     rule_set_id: str
     rule_set: dict[str, Any]
 ```
 
-In `to_summary()`, include:
+在 `to_summary()` 中包含：
 
 ```python
             "rule_set_id": self.rule_set_id,
             "rule_set": self.rule_set,
 ```
 
-Change `LiveRunRegistry.create_run()` signature:
+修改 `LiveRunRegistry.create_run()` 的签名：
 
 ```python
         rule_set_id: str,
         rule_set: dict[str, Any],
 ```
 
-Pass those into `LiveGameRun`:
+把这些字段传入 `LiveGameRun`：
 
 ```python
                 rule_set_id=rule_set_id,
                 rule_set=rule_set,
 ```
 
-Add to `run_created` payload:
+加入 `run_created` payload：
 
 ```python
                     "rule_set_id": rule_set_id,
                     "rule_set": rule_set,
 ```
 
-Update existing direct registry calls in `apps/api/tests/test_games_api.py`, including `test_game_run_events_replays_existing_events()`, so they pass rule metadata:
+更新 `apps/api/tests/test_games_api.py` 里直接调用 registry 的位置，包括 `test_game_run_events_replays_existing_events()`，让它们传入规则元数据：
 
 ```python
     run = registry.create_run(
@@ -979,21 +979,21 @@ Update existing direct registry calls in `apps/api/tests/test_games_api.py`, inc
     )
 ```
 
-- [ ] **Step 4: Update games API routes**
+- [ ] **步骤 4：更新 games API 路由**
 
-Modify imports in `apps/api/app/api/routes/games.py`:
+修改 `apps/api/app/api/routes/games.py` 的导入：
 
 ```python
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, list_rule_set_summaries, rule_set_snapshot
 ```
 
-Add field to `CreateGameRunRequest`:
+给 `CreateGameRunRequest` 添加字段：
 
 ```python
     rule_set_id: str = DEFAULT_RULE_SET_ID
 ```
 
-Add route before `@router.get("/{session_id}")`:
+在 `@router.get("/{session_id}")` 之前添加路由：
 
 ```python
 @router.get("/rule-sets")
@@ -1001,7 +1001,7 @@ def list_rule_sets() -> dict:
     return {"rule_sets": list_rule_set_summaries()}
 ```
 
-At the start of `create_game_run()`:
+在 `create_game_run()` 开头添加：
 
 ```python
     try:
@@ -1014,62 +1014,62 @@ At the start of `create_game_run()`:
     rule_snapshot = rule_set_snapshot(rule_set)
 ```
 
-Pass rule metadata to `registry.create_run()`:
+把规则元数据传给 `registry.create_run()`：
 
 ```python
         rule_set_id=rule_set.id,
         rule_set=rule_snapshot,
 ```
 
-Pass `rule_set_id` to background thread kwargs:
+把 `rule_set_id` 传给后台线程 kwargs：
 
 ```python
             "rule_set_id": rule_set.id,
 ```
 
-Add parameter to `_run_game_in_background()`:
+给 `_run_game_in_background()` 添加参数：
 
 ```python
     rule_set_id: str,
 ```
 
-Pass to `run_game()`:
+传给 `run_game()`：
 
 ```python
             rule_set_id=rule_set_id,
 ```
 
-- [ ] **Step 5: Include rule_set in replay session summaries**
+- [ ] **步骤 5：在复盘会话摘要中包含 `rule_set`**
 
-Modify `apps/api/app/werewolf/replay.py` inside `list_sessions()` session payload:
+修改 `apps/api/app/werewolf/replay.py` 中 `list_sessions()` 的 session payload：
 
 ```python
                     "rule_set": state.get("rule_set"),
 ```
 
-- [ ] **Step 6: Run API tests**
+- [ ] **步骤 6：运行 API 测试**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest tests/test_games_api.py -v
 ```
 
-Expected: PASS.
+预期：通过。
 
-- [ ] **Step 7: Run all backend tests**
+- [ ] **步骤 7：运行全部后端测试**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest -v
 ```
 
-Expected: PASS.
+预期：通过。
 
-- [ ] **Step 8: Commit API metadata**
+- [ ] **步骤 8：提交 API 元数据变更**
 
-Run:
+运行：
 
 ```bash
 git add apps/api/app/werewolf/live.py apps/api/app/api/routes/games.py apps/api/app/werewolf/replay.py apps/api/tests/test_games_api.py
@@ -1078,18 +1078,18 @@ git commit -m "feat: expose selected rule metadata"
 
 ---
 
-### Task 5: Frontend Rule Types, API Client, and Create Form
+### 任务 5：前端规则类型、API 客户端和创建表单
 
-**Files:**
-- Create: `apps/web/src/features/games/api/listRuleSets.ts`
-- Modify: `apps/web/src/features/games/types.ts`
-- Modify: `apps/web/src/features/games/components/CreateGameRunForm.tsx`
-- Test: `apps/web/src/features/games/api/liveRunApi.test.ts`
-- Test: `apps/web/src/pages/GamesPage.test.tsx`
+**文件：**
+- 新增：`apps/web/src/features/games/api/listRuleSets.ts`
+- 修改：`apps/web/src/features/games/types.ts`
+- 修改：`apps/web/src/features/games/components/CreateGameRunForm.tsx`
+- 测试：`apps/web/src/features/games/api/liveRunApi.test.ts`
+- 测试：`apps/web/src/pages/GamesPage.test.tsx`
 
-- [ ] **Step 1: Add frontend types and API test expectations**
+- [ ] **步骤 1：添加前端类型和 API 测试预期**
 
-Modify `apps/web/src/features/games/types.ts`:
+修改 `apps/web/src/features/games/types.ts`：
 
 ```ts
 export type RoleSpecSummary = {
@@ -1120,11 +1120,11 @@ export type RuleSetsResponse = {
 };
 ```
 
-Add optional `rule_set?: RuleSetSummary | null;` to `GameSessionSummary`, `RawGameState`, and `GameRun`.
+给 `GameSessionSummary`、`RawGameState` 和 `GameRun` 添加可选字段 `rule_set?: RuleSetSummary | null;`。
 
-Add `rule_set_id?: string;` to `CreateGameRunRequest`.
+给 `CreateGameRunRequest` 添加 `rule_set_id?: string;`。
 
-Modify `apps/web/src/features/games/api/liveRunApi.test.ts` create-run mock to include:
+修改 `apps/web/src/features/games/api/liveRunApi.test.ts` 的创建对局模拟响应，让它包含：
 
 ```ts
           rule_set_id: "starter_6",
@@ -1137,7 +1137,7 @@ Modify `apps/web/src/features/games/api/liveRunApi.test.ts` create-run mock to i
           },
 ```
 
-Change create call and expected body:
+修改创建调用和预期请求体：
 
 ```ts
     const run = await createGameRun({
@@ -1155,9 +1155,9 @@ Change create call and expected body:
         }),
 ```
 
-- [ ] **Step 2: Add rule list API client**
+- [ ] **步骤 2：添加规则列表 API 客户端**
 
-Create `apps/web/src/features/games/api/listRuleSets.ts`:
+创建 `apps/web/src/features/games/api/listRuleSets.ts`：
 
 ```ts
 import { apiFetch } from "../../../api/client";
@@ -1168,19 +1168,19 @@ export function listRuleSets(): Promise<RuleSetsResponse> {
 }
 ```
 
-- [ ] **Step 3: Run API client tests**
+- [ ] **步骤 3：运行 API 客户端测试**
 
-Run:
+运行：
 
 ```bash
 pnpm --dir apps/web test -- --run src/features/games/api/liveRunApi.test.ts
 ```
 
-Expected: PASS.
+预期：通过。
 
-- [ ] **Step 4: Update create form tests to mock rule-set fetch**
+- [ ] **步骤 4：更新创建表单测试，模拟规则集请求**
 
-In `apps/web/src/pages/GamesPage.test.tsx`, add helper near the top:
+在 `apps/web/src/pages/GamesPage.test.tsx` 顶部附近添加辅助函数：
 
 ```ts
 function ruleSetsResponse() {
@@ -1223,9 +1223,9 @@ function ruleSetsResponse() {
 }
 ```
 
-For each `fetch` mock in the file, return `ruleSetsResponse()` when the URL ends with `/api/v1/games/rule-sets`.
+文件中的每个 `fetch` 模拟都要在 URL 以 `/api/v1/games/rule-sets` 结尾时返回 `ruleSetsResponse()`。
 
-Add a test:
+添加测试：
 
 ```ts
   it("renders official rule presets and submits the selected rule", async () => {
@@ -1297,28 +1297,28 @@ Add a test:
   });
 ```
 
-- [ ] **Step 5: Run page test to verify it fails before UI update**
+- [ ] **步骤 5：运行页面测试，确认 UI 更新前失败**
 
-Run:
+运行：
 
 ```bash
 pnpm --dir apps/web test -- --run src/pages/GamesPage.test.tsx
 ```
 
-Expected: FAIL because no rule radios are rendered.
+预期：失败，因为页面还没有渲染规则单选项。
 
-- [ ] **Step 6: Update create form UI**
+- [ ] **步骤 6：更新创建表单 UI**
 
-Modify `apps/web/src/features/games/components/CreateGameRunForm.tsx`.
+修改 `apps/web/src/features/games/components/CreateGameRunForm.tsx`。
 
-Replace the TanStack Query import with:
+将 TanStack Query 导入替换为：
 
 ```ts
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { listRuleSets } from "../api/listRuleSets";
 ```
 
-Add state and query:
+添加状态和查询：
 
 ```ts
   const [selectedRuleSetId, setSelectedRuleSetId] = useState("classic_8");
@@ -1333,7 +1333,7 @@ Add state and query:
   const ruleSets = ruleSetsData?.rule_sets ?? [];
 ```
 
-In submit payload:
+在提交 payload 中：
 
 ```ts
         mutation.mutate({
@@ -1343,7 +1343,7 @@ In submit payload:
         });
 ```
 
-Before the existing seed/max-round controls, render:
+在现有随机种子/最大轮数控件之前渲染：
 
 ```tsx
       <fieldset className="mb-4">
@@ -1387,25 +1387,25 @@ Before the existing seed/max-round controls, render:
       </fieldset>
 ```
 
-Disable submit when rules are unavailable:
+规则不可用时禁用提交：
 
 ```tsx
           disabled={mutation.isPending || isRuleSetsPending || isRuleSetsError}
 ```
 
-- [ ] **Step 7: Run frontend form tests**
+- [ ] **步骤 7：运行前端表单测试**
 
-Run:
+运行：
 
 ```bash
 pnpm --dir apps/web test -- --run src/pages/GamesPage.test.tsx src/features/games/api/liveRunApi.test.ts
 ```
 
-Expected: PASS.
+预期：通过。
 
-- [ ] **Step 8: Commit frontend rule picker**
+- [ ] **步骤 8：提交前端规则选择器**
 
-Run:
+运行：
 
 ```bash
 git add apps/web/src/features/games/api/listRuleSets.ts apps/web/src/features/games/types.ts apps/web/src/features/games/components/CreateGameRunForm.tsx apps/web/src/features/games/api/liveRunApi.test.ts apps/web/src/pages/GamesPage.test.tsx
@@ -1414,19 +1414,19 @@ git commit -m "feat: select official rule presets"
 
 ---
 
-### Task 6: Frontend Rule Summaries on Live and Replay Pages
+### 任务 6：直播页和复盘页展示规则摘要
 
-**Files:**
-- Create: `apps/web/src/features/games/components/RuleSetSummary.tsx`
-- Modify: `apps/web/src/features/games/api/adapters.ts`
-- Modify: `apps/web/src/pages/LiveGamePage.tsx`
-- Modify: `apps/web/src/pages/GameDetailPage.tsx`
-- Test: `apps/web/src/pages/LiveGamePage.test.tsx`
-- Test: `apps/web/src/pages/GameDetailPage.test.tsx`
+**文件：**
+- 新增：`apps/web/src/features/games/components/RuleSetSummary.tsx`
+- 修改：`apps/web/src/features/games/api/adapters.ts`
+- 修改：`apps/web/src/pages/LiveGamePage.tsx`
+- 修改：`apps/web/src/pages/GameDetailPage.tsx`
+- 测试：`apps/web/src/pages/LiveGamePage.test.tsx`
+- 测试：`apps/web/src/pages/GameDetailPage.test.tsx`
 
-- [ ] **Step 1: Add reusable rule summary component**
+- [ ] **步骤 1：添加可复用的规则摘要组件**
 
-Create `apps/web/src/features/games/components/RuleSetSummary.tsx`:
+创建 `apps/web/src/features/games/components/RuleSetSummary.tsx`：
 
 ```tsx
 import type { RuleSetSummary as RuleSetSummaryType } from "../types";
@@ -1468,19 +1468,19 @@ export function RuleSetSummary({ ruleSet }: RuleSetSummaryProps) {
 }
 ```
 
-- [ ] **Step 2: Update replay adapter to keep rule metadata**
+- [ ] **步骤 2：更新复盘适配器，保留规则元数据**
 
-Modify `normalizeGameReplay()` in `apps/web/src/features/games/api/adapters.ts`:
+修改 `apps/web/src/features/games/api/adapters.ts` 中的 `normalizeGameReplay()`：
 
 ```ts
     ruleSet: response.state.rule_set ?? null,
 ```
 
-Add `ruleSet?: RuleSetSummary | null;` to `GameReplay` in `types.ts`.
+在 `types.ts` 的 `GameReplay` 中添加 `ruleSet?: RuleSetSummary | null;`。
 
-- [ ] **Step 3: Add tests for rendering rule summaries**
+- [ ] **步骤 3：添加规则摘要渲染测试**
 
-In `apps/web/src/pages/LiveGamePage.test.tsx`, add `rule_set_id` and `rule_set` to run responses:
+在 `apps/web/src/pages/LiveGamePage.test.tsx` 中，给运行响应添加 `rule_set_id` 和 `rule_set`：
 
 ```ts
             rule_set_id: "starter_6",
@@ -1499,14 +1499,14 @@ In `apps/web/src/pages/LiveGamePage.test.tsx`, add `rule_set_id` and `rule_set` 
             },
 ```
 
-In the first live page test, assert:
+在第一个直播页测试中断言：
 
 ```ts
     expect(await screen.findByText("新手 6 人快局")).toBeInTheDocument();
     expect(screen.getByText("1 狼人 / 1 预言家 / 1 医生 / 3 村民")).toBeInTheDocument();
 ```
 
-In `apps/web/src/pages/GameDetailPage.test.tsx`, add `rule_set` to `detailResponse.state`:
+在 `apps/web/src/pages/GameDetailPage.test.tsx` 中，给 `detailResponse.state` 添加 `rule_set`：
 
 ```ts
     rule_set: {
@@ -1522,32 +1522,32 @@ In `apps/web/src/pages/GameDetailPage.test.tsx`, add `rule_set` to `detailRespon
     },
 ```
 
-In replay detail test, assert:
+在复盘详情测试中断言：
 
 ```ts
     expect(await screen.findByText("无神职心理局")).toBeInTheDocument();
     expect(screen.getByText("2 狼人 / 6 村民")).toBeInTheDocument();
 ```
 
-- [ ] **Step 4: Run tests to verify they fail before page updates**
+- [ ] **步骤 4：运行测试，确认页面更新前失败**
 
-Run:
+运行：
 
 ```bash
 pnpm --dir apps/web test -- --run src/pages/LiveGamePage.test.tsx src/pages/GameDetailPage.test.tsx
 ```
 
-Expected: FAIL because the pages do not render the new summary component.
+预期：失败，因为页面还没有渲染新的摘要组件。
 
-- [ ] **Step 5: Render summaries on live page**
+- [ ] **步骤 5：在直播页渲染规则摘要**
 
-Modify imports in `apps/web/src/pages/LiveGamePage.tsx`:
+修改 `apps/web/src/pages/LiveGamePage.tsx` 的导入：
 
 ```ts
 import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 ```
 
-Render below the status strip:
+在状态条下方渲染：
 
 ```tsx
       <div className="mt-4">
@@ -1556,15 +1556,15 @@ Render below the status strip:
       <div className="mt-4 grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)_22rem]">
 ```
 
-- [ ] **Step 6: Render summaries on replay page**
+- [ ] **步骤 6：在复盘页渲染规则摘要**
 
-Modify imports in `apps/web/src/pages/GameDetailPage.tsx`:
+修改 `apps/web/src/pages/GameDetailPage.tsx` 的导入：
 
 ```ts
 import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 ```
 
-Wrap `GameLayout` with a main layout:
+用 `main` 布局包裹 `GameLayout`：
 
 ```tsx
   return (
@@ -1590,19 +1590,19 @@ Wrap `GameLayout` with a main layout:
   );
 ```
 
-- [ ] **Step 7: Run rule summary page tests**
+- [ ] **步骤 7：运行规则摘要页面测试**
 
-Run:
+运行：
 
 ```bash
 pnpm --dir apps/web test -- --run src/pages/LiveGamePage.test.tsx src/pages/GameDetailPage.test.tsx
 ```
 
-Expected: PASS.
+预期：通过。
 
-- [ ] **Step 8: Commit frontend summaries**
+- [ ] **步骤 8：提交前端摘要展示变更**
 
-Run:
+运行：
 
 ```bash
 git add apps/web/src/features/games/components/RuleSetSummary.tsx apps/web/src/features/games/api/adapters.ts apps/web/src/features/games/types.ts apps/web/src/pages/LiveGamePage.tsx apps/web/src/pages/GameDetailPage.tsx apps/web/src/pages/LiveGamePage.test.tsx apps/web/src/pages/GameDetailPage.test.tsx
@@ -1611,48 +1611,48 @@ git commit -m "feat: show rule presets in live and replay"
 
 ---
 
-### Task 7: Full Verification
+### 任务 7：完整验证
 
-**Files:**
-- Verify: all files changed in previous tasks.
+**文件：**
+- 验证：前面各任务修改过的所有文件。
 
-- [ ] **Step 1: Run all backend tests**
+- [ ] **步骤 1：运行全部后端测试**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && uv run pytest -v
 ```
 
-Expected: PASS.
+预期：通过。
 
-- [ ] **Step 2: Run all frontend tests**
+- [ ] **步骤 2：运行全部前端测试**
 
-Run:
+运行：
 
 ```bash
 pnpm --dir apps/web test -- --run
 ```
 
-Expected: PASS.
+预期：通过。
 
-- [ ] **Step 3: Run frontend build**
+- [ ] **步骤 3：运行前端构建**
 
-Run:
+运行：
 
 ```bash
 pnpm --dir apps/web build
 ```
 
-Expected: PASS with Vite build output and no TypeScript errors.
+预期：通过，输出 Vite 构建结果，并且没有 TypeScript 错误。
 
-- [ ] **Step 4: Review final diff**
+- [ ] **步骤 4：检查最终 diff**
 
-Run:
+运行：
 
 ```bash
 git status --short
 git log --oneline -5
 ```
 
-Expected: `git status --short` shows no uncommitted changes from this implementation. Existing unrelated user changes may remain if they were present before execution; do not revert them.
+预期：`git status --short` 不显示本次实现产生的未提交变更。如果执行前已有无关的用户改动，它们可能仍然存在；不要回滚这些改动。
