@@ -12,6 +12,7 @@ from app.werewolf.config import (
     WINNER_WEREWOLVES,
     choose_player_names,
 )
+from app.werewolf.live import NullEventSink
 from app.werewolf.lm import ModelProvider, generate_action
 from app.werewolf.models import ActionLog, DebateEntry, GameState, GameView, Player, RoundLog, RoundState
 
@@ -59,16 +60,25 @@ class GameEngine:
         provider: ModelProvider,
         max_rounds: int,
         debate_turns: int = DEFAULT_DEBATE_TURNS,
+        event_sink: object | None = None,
     ) -> None:
         self.state = state
         self.provider = provider
         self.max_rounds = max_rounds
         self.debate_turns = debate_turns
+        self.event_sink = event_sink or NullEventSink()
 
     def run(self) -> list[RoundLog]:
         logs: list[RoundLog] = []
         active_players = [player.name for player in self.state.players]
         self.state.winner = self._get_winner(active_players)
+        self._publish(
+            "game_started",
+            payload={
+                "players": [player.to_dict() for player in self.state.players],
+                "active_players": active_players.copy(),
+            },
+        )
 
         while not self.state.winner:
             if len(self.state.rounds) >= self.max_rounds:
@@ -80,6 +90,11 @@ class GameEngine:
             round_log = RoundLog(number=round_number)
             self.state.rounds.append(round_state)
             logs.append(round_log)
+            self._publish(
+                "round_started",
+                round_number=round_number,
+                payload={"active_players": active_players.copy()},
+            )
 
             self._run_night_phase(round_state, round_log, active_players)
             self.state.winner = self._get_winner(active_players)
@@ -99,6 +114,12 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
     ) -> None:
+        self._publish(
+            "phase_started",
+            round_number=round_state.number,
+            phase="night",
+            payload={"active_players": active_players.copy()},
+        )
         players_by_name = self.state.player_by_name()
         active_wolves = [
             name for name in active_players if players_by_name[name].role == WEREWOLF
@@ -115,6 +136,7 @@ class GameEngine:
                 options=non_wolves,
                 result_key="remove",
                 round_state=round_state,
+                phase="night",
             )
             round_state.eliminated = eliminated
 
@@ -126,6 +148,7 @@ class GameEngine:
                 options=active_players,
                 result_key="protect",
                 round_state=round_state,
+                phase="night",
             )
             round_state.protected = protected
 
@@ -142,6 +165,7 @@ class GameEngine:
                 options=investigate_options,
                 result_key="investigate",
                 round_state=round_state,
+                phase="night",
             )
             round_state.investigated = investigated
             if investigated:
@@ -154,6 +178,16 @@ class GameEngine:
             self._announce(active_players, f"第{round_state.number}轮：夜晚，{round_state.eliminated}出局。")
         else:
             self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="night",
+            payload={
+                "eliminated": round_state.eliminated,
+                "protected": round_state.protected,
+                "investigated": round_state.investigated,
+                "active_players": active_players.copy(),
+            },
+        )
 
     def _run_day_phase(
         self,
@@ -161,6 +195,12 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
     ) -> None:
+        self._publish(
+            "phase_started",
+            round_number=round_state.number,
+            phase="day",
+            payload={"active_players": active_players.copy()},
+        )
         previous_speaker = ""
         for _turn in range(min(self.debate_turns, len(active_players))):
             speaker, bid_logs, bids = self._get_next_speaker(
@@ -179,6 +219,7 @@ class GameEngine:
                 options=[],
                 result_key="say",
                 round_state=round_state,
+                phase="day",
             )
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{speaker} did not return a valid debate message.")
@@ -187,10 +228,32 @@ class GameEngine:
             round_state.debate.append(entry)
             round_log.debate.append(action_log)
             self._record_public_debate(active_players, entry)
+            self._publish_state_updated(
+                round_state=round_state,
+                phase="day",
+                actor=speaker,
+                action="debate",
+                payload={
+                    "debate_entry": entry.to_dict(),
+                    "debate": [debate_entry.to_dict() for debate_entry in round_state.debate],
+                },
+            )
 
+        self._publish(
+            "phase_started",
+            round_number=round_state.number,
+            phase="vote",
+            payload={"active_players": active_players.copy()},
+        )
         votes, vote_logs = self._run_voting(round_state, active_players)
         round_state.votes.append(votes)
         round_log.votes.append(vote_logs)
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="vote",
+            action="vote",
+            payload={"votes": votes},
+        )
 
         exiled = self._majority_vote(votes, len(active_players))
         if exiled:
@@ -199,6 +262,14 @@ class GameEngine:
             self._announce(active_players, f"第{round_state.number}轮：白天投票，{exiled}被放逐。")
         else:
             self._announce(active_players, f"第{round_state.number}轮：白天投票未形成多数，无人被放逐。")
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="vote",
+            payload={
+                "exiled": round_state.exiled,
+                "active_players": active_players.copy(),
+            },
+        )
 
         self._run_summaries(round_state, round_log, active_players)
 
@@ -223,6 +294,7 @@ class GameEngine:
                 options=["0", "1", "2", "3", "4"],
                 result_key="bid",
                 round_state=round_state,
+                phase="day",
             )
             bid_value = int(bid)
             bids[name] = bid_value
@@ -249,6 +321,7 @@ class GameEngine:
                 options=[name for name in active_players if name != voter],
                 result_key="vote",
                 round_state=round_state,
+                phase="vote",
             )
             if not isinstance(vote, str) or not vote:
                 raise ValueError(f"{voter} did not return a valid vote.")
@@ -262,6 +335,12 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
     ) -> None:
+        self._publish(
+            "phase_started",
+            round_number=round_state.number,
+            phase="summary",
+            payload={"active_players": active_players.copy()},
+        )
         players_by_name = self.state.player_by_name()
         for name in active_players:
             player = players_by_name[name]
@@ -271,11 +350,19 @@ class GameEngine:
                 options=[],
                 result_key="summary",
                 round_state=round_state,
+                phase="summary",
             )
             if isinstance(summary, str) and summary:
                 round_state.summaries[name] = summary
                 player.add_observation(f"第{round_state.number}轮总结：{summary}")
             round_log.summaries.append(action_log)
+            self._publish_state_updated(
+                round_state=round_state,
+                phase="summary",
+                actor=name,
+                action="summarize",
+                payload={"summaries": round_state.summaries.copy()},
+            )
 
     def _player_action(
         self,
@@ -285,11 +372,29 @@ class GameEngine:
         options: list[str],
         result_key: str,
         round_state: RoundState,
+        phase: str,
     ) -> tuple[object | None, ActionLog]:
+        world_state = self._world_state(player, options, round_state)
+        self._publish(
+            "action_requested",
+            round_number=round_state.number,
+            phase=phase,
+            actor=player.name,
+            action=action,
+            payload={"options": options.copy(), "result_key": result_key},
+        )
+        self._publish(
+            "model_request_started",
+            round_number=round_state.number,
+            phase=phase,
+            actor=player.name,
+            action=action,
+            payload={"model": player.model, "world_state": world_state},
+        )
         value, lm_log = generate_action(
             provider=self.provider,
             action=action,
-            world_state=self._world_state(player, options, round_state),
+            world_state=world_state,
             model=player.model,
             allowed_values=options if options else None,
             result_key=result_key,
@@ -301,9 +406,66 @@ class GameEngine:
             choice=str(value) if value is not None else None,
             lm_log=lm_log,
         )
+        self._publish(
+            "model_response_received",
+            round_number=round_state.number,
+            phase=phase,
+            actor=player.name,
+            action=action,
+            payload={"prompt": lm_log.prompt, "raw_response": lm_log.raw_response},
+        )
+        self._publish(
+            "action_parsed",
+            round_number=round_state.number,
+            phase=phase,
+            actor=player.name,
+            action=action,
+            payload={
+                "choice": action_log.choice,
+                "result": lm_log.result,
+                "options": options.copy(),
+            },
+        )
         if options and value not in options:
             raise ValueError(f"{player.name} returned invalid {action}: {value}")
         return value, action_log
+
+    def _publish(
+        self,
+        event_type: str,
+        *,
+        round_number: int | None = None,
+        phase: str | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        self.event_sink.publish(
+            event_type,
+            round_number=round_number,
+            phase=phase,
+            actor=actor,
+            action=action,
+            payload=payload,
+        )
+
+    def _publish_state_updated(
+        self,
+        *,
+        round_state: RoundState,
+        phase: str,
+        actor: str | None = None,
+        action: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        self._publish(
+            "state_updated",
+            round_number=round_state.number,
+            phase=phase,
+            actor=actor,
+            action=action,
+            payload=payload,
+        )
 
     def _world_state(
         self,

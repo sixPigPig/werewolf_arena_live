@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.werewolf.config import DEFAULT_MAX_ROUNDS
 from app.werewolf.engine import GameEngine, initialize_game_state
+from app.werewolf.live import NullEventSink
 from app.werewolf.logging import save_game
 from app.werewolf.lm import ModelProvider
 from app.werewolf.providers import DeepSeekProvider
@@ -33,8 +34,10 @@ def run_game(
     logs_dir: str | Path = "logs",
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     provider: ModelProvider | None = None,
+    session_id: str | None = None,
+    event_sink: object | None = None,
 ) -> RunGameResult:
-    session_id = _new_session_id()
+    session_id = session_id or new_session_id()
     log_directory = Path(logs_dir) / session_id
     state = initialize_game_state(
         session_id=session_id,
@@ -49,6 +52,7 @@ def run_game(
             state=state,
             provider=provider or DeepSeekProvider(),
             max_rounds=max_rounds,
+            event_sink=event_sink or NullEventSink(),
         )
         logs = engine.run()
     except Exception as exc:
@@ -65,5 +69,9 @@ def run_game(
 
 
 def _new_session_id() -> str:
+    return new_session_id()
+
+
+def new_session_id() -> str:
     timestamp = dt.datetime.now(tz=dt.UTC).strftime("%Y%m%d_%H%M%S")
     return f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
