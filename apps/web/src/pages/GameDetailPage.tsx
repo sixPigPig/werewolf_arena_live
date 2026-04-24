@@ -48,24 +48,20 @@ export function GameDetailPage() {
     null;
 
   return (
-    <main className="mx-auto w-full max-w-5xl px-4 py-8">
-      <div className="mb-4">
-        <RuleSetSummary ruleSet={data.ruleSet} />
-      </div>
-      <GameLayout
-        debug={<DebugPanel item={visibleSelectedItem} />}
-        players={<PlayerPanel game={data} />}
-        timeline={
-          <RoundTimeline
-            debugItems={data.debugItems}
-            onSelect={(item) =>
-              setSelection({ itemId: item.id, sessionId: data.sessionId })
-            }
-            rounds={data.rounds}
-            selectedItem={visibleSelectedItem}
-          />
-        }
-      />
-    </main>
+    <GameLayout
+      debug={<DebugPanel item={visibleSelectedItem} />}
+      header={<RuleSetSummary ruleSet={data.ruleSet} />}
+      players={<PlayerPanel game={data} />}
+      timeline={
+        <RoundTimeline
+          debugItems={data.debugItems}
+          onSelect={(item) =>
+            setSelection({ itemId: item.id, sessionId: data.sessionId })
+          }
+          rounds={data.rounds}
+          selectedItem={visibleSelectedItem}
+        />
+      }
+    />
   );
 }
