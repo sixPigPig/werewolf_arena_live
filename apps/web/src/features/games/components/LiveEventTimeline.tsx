@@ -19,18 +19,31 @@ function titleForEvent(event: LiveGameEvent) {
   return event.type;
 }
 
+function payloadForEvent(event: LiveGameEvent) {
+  return event.payload &&
+    typeof event.payload === "object" &&
+    !Array.isArray(event.payload)
+    ? event.payload
+    : {};
+}
+
 function detailForEvent(event: LiveGameEvent) {
-  const raw = event.payload.raw_response;
+  const payload = payloadForEvent(event);
+  const raw = payload.raw_response;
   if (typeof raw === "string") {
     return raw;
   }
-  const choice = event.payload.choice;
+  const choice = payload.choice;
   if (typeof choice === "string") {
     return choice;
   }
-  const winner = event.payload.winner;
+  const winner = payload.winner;
   if (typeof winner === "string") {
     return winner;
+  }
+  const error = payload.error;
+  if (typeof error === "string") {
+    return error;
   }
   return "";
 }
@@ -42,23 +55,27 @@ export function LiveEventTimeline({ events }: { events: LiveGameEvent[] }) {
 
   return (
     <ol className="divide-y divide-slate-200">
-      {events.map((event) => (
-        <li className="px-4 py-3" key={event.id}>
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium text-slate-950">
-              {titleForEvent(event)}
-            </p>
-            <p className="text-xs text-slate-500">
-              {event.round ? `第 ${event.round} 轮` : event.type}
-            </p>
-          </div>
-          {detailForEvent(event) ? (
-            <pre className="mt-2 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-700">
-              {detailForEvent(event)}
-            </pre>
-          ) : null}
-        </li>
-      ))}
+      {events.map((event) => {
+        const detail = detailForEvent(event);
+
+        return (
+          <li className="px-4 py-3" key={event.id}>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium text-slate-950">
+                {titleForEvent(event)}
+              </p>
+              <p className="text-xs text-slate-500">
+                {event.round ? `第 ${event.round} 轮` : event.type}
+              </p>
+            </div>
+            {detail ? (
+              <pre className="mt-2 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-700">
+                {detail}
+              </pre>
+            ) : null}
+          </li>
+        );
+      })}
     </ol>
   );
 }

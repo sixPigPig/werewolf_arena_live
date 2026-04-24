@@ -34,7 +34,10 @@ export function LiveGamePage() {
       return;
     }
     queryClient.invalidateQueries({ queryKey: ["games"] });
-  }, [queryClient, terminalEvent]);
+    if (runId) {
+      queryClient.invalidateQueries({ queryKey: ["game-run", runId] });
+    }
+  }, [queryClient, runId, terminalEvent]);
 
   if (isPending) {
     return (
