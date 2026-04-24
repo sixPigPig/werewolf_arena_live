@@ -20,6 +20,7 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:5173"]
     )
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/app"
+    werewolf_logs_dir: str = "logs"
 
     @field_validator("cors_origins", mode="before")
     @classmethod
