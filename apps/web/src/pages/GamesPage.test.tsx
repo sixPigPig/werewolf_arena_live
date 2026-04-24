@@ -10,31 +10,80 @@ import {
 } from "../tests/renderWithClient";
 import { GamesPage } from "./GamesPage";
 
+function ruleSetsResponse() {
+  return {
+    rule_sets: [
+      {
+        id: "classic_8",
+        version: "2026.04",
+        name: "经典 8 人局",
+        description: "标准配置，适合完整推演。",
+        player_count: 8,
+        roles: [
+          { role: "werewolf", count: 2, team: "werewolves" },
+          { role: "villager", count: 4, team: "villagers" },
+          { role: "seer", count: 1, team: "villagers" },
+          { role: "guard", count: 1, team: "villagers" },
+        ],
+        role_summary: "2 狼人 / 4 村民 / 1 预言家 / 1 守卫",
+        complexity: "标准",
+        estimated_duration: "中",
+      },
+      {
+        id: "starter_6",
+        version: "2026.04",
+        name: "新手 6 人快局",
+        description: "更短流程，适合快速验证。",
+        player_count: 6,
+        roles: [
+          { role: "werewolf", count: 2, team: "werewolves" },
+          { role: "villager", count: 3, team: "villagers" },
+          { role: "seer", count: 1, team: "villagers" },
+        ],
+        role_summary: "2 狼人 / 3 村民 / 1 预言家",
+        complexity: "入门",
+        estimated_duration: "短",
+      },
+    ],
+  };
+}
+
 describe("GamesPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("renders available game sessions", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          sessions: [
-            {
-              session_id: "session_20260424_001",
-              status: "complete",
-              winner: "狼人阵营",
-              round_count: 4,
-              created_at: "2026-04-24T10:00:00Z",
-            },
-          ],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sessions: [
+              {
+                session_id: "session_20260424_001",
+                status: "complete",
+                winner: "狼人阵营",
+                round_count: 4,
+                created_at: "2026-04-24T10:00:00Z",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    });
 
     renderWithClient(<GamesPage />, "/games");
 
@@ -46,12 +95,23 @@ describe("GamesPage", () => {
   });
 
   it("renders an empty state when no sessions exist", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ sessions: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
 
     renderWithClient(<GamesPage />, "/games");
 
@@ -61,6 +121,14 @@ describe("GamesPage", () => {
   it("creates a live game run and navigates to the live page", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
       if (url.endsWith("/api/v1/games/runs")) {
         return Promise.resolve(
           new Response(
@@ -109,7 +177,88 @@ describe("GamesPage", () => {
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/v1/games/runs",
       expect.objectContaining({
-        body: JSON.stringify({ seed: null, max_rounds: 8 }),
+        body: JSON.stringify({
+          rule_set_id: "classic_8",
+          seed: null,
+          max_rounds: 8,
+        }),
+        method: "POST",
+      }),
+    );
+    expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
+  });
+
+  it("creates a live game run with the selected official rule set", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/runs")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              run_id: "run_1234abcd",
+              session_id: "session_20260424_120000_ab12cd34",
+              villager_model: "deepseek-chat",
+              werewolf_model: "deepseek-chat",
+              rule_set_id: "starter_6",
+              rule_set: {
+                id: "starter_6",
+                version: "2026.04",
+                name: "新手 6 人快局",
+                player_count: 6,
+                roles: [],
+              },
+              seed: null,
+              max_rounds: 8,
+              status: "queued",
+              created_at: "2026-04-24T12:00:00Z",
+              started_at: null,
+              completed_at: null,
+              winner: null,
+              error: null,
+              event_count: 1,
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games" element={<GamesPage />} />
+        <Route
+          path="/games/live/:runId"
+          element={<p>实时观战 run_1234abcd</p>}
+        />
+      </Routes>,
+      "/games",
+    );
+
+    await userEvent.click(await screen.findByLabelText("新手 6 人快局"));
+    await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/games/runs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          rule_set_id: "starter_6",
+          seed: null,
+          max_rounds: 8,
+        }),
         method: "POST",
       }),
     );
@@ -117,12 +266,23 @@ describe("GamesPage", () => {
   });
 
   it("blocks launch when max rounds is empty", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ sessions: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
 
     renderWithClient(<GamesPage />, "/games");
 
@@ -140,9 +300,18 @@ describe("GamesPage", () => {
   });
 
   it("renders only the error state when refreshing cached sessions fails", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(null, { status: 500 }),
-    );
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 500 }));
+    });
 
     const queryClient = createTestQueryClient();
     queryClient.setQueryData(["games"], {

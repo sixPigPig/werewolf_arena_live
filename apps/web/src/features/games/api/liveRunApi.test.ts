@@ -16,6 +16,14 @@ describe("live run api", () => {
           session_id: "session_20260424_120000_ab12cd34",
           villager_model: "deepseek",
           werewolf_model: "minimax",
+          rule_set_id: "starter_6",
+          rule_set: {
+            id: "starter_6",
+            version: "2026.04",
+            name: "新手 6 人快局",
+            player_count: 6,
+            roles: [],
+          },
           seed: 21,
           max_rounds: 8,
           winner: null,
@@ -30,14 +38,22 @@ describe("live run api", () => {
       ),
     );
 
-    const run = await createGameRun({ seed: 21, max_rounds: 8 });
+    const run = await createGameRun({
+      rule_set_id: "starter_6",
+      seed: 21,
+      max_rounds: 8,
+    });
 
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/v1/games/runs",
       expect.objectContaining({
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ seed: 21, max_rounds: 8 }),
+        body: JSON.stringify({
+          rule_set_id: "starter_6",
+          seed: 21,
+          max_rounds: 8,
+        }),
       }),
     );
     expect(run.run_id).toBe("run_1234abcd");
