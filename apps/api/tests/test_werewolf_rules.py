@@ -88,6 +88,14 @@ def test_render_rule_text_matches_rule_actions() -> None:
     assert "预言家查验" not in social_text
 
 
+def test_render_rule_text_describes_engine_win_conditions() -> None:
+    text = render_rule_text(get_rule_set("classic_8"))
+
+    assert "好人阵营需要放逐/淘汰全部狼人获胜" in text
+    assert "狼人数量大于或等于其他存活玩家数量时狼人获胜" in text
+    assert "否则好人阵营胜利" not in text
+
+
 def test_validate_rule_sets_rejects_duplicate_ids() -> None:
     duplicate = (get_rule_set("classic_8"), get_rule_set("classic_8"))
 
