@@ -76,4 +76,5 @@ def test_registry_marks_completed_and_failed() -> None:
     assert registry.get_run(completed.run_id).events[-1].type == "game_completed"
     assert registry.get_run(failed.run_id).status == "failed"
     assert registry.get_run(failed.run_id).error == "Maximum rounds exceeded"
+    assert registry.get_run(failed.run_id).completed_at is not None
     assert registry.get_run(failed.run_id).events[-1].type == "game_failed"
