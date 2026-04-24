@@ -1,0 +1,113 @@
+export type GameStatus = "complete" | "partial";
+
+export type GameSessionSummary = {
+  session_id: string;
+  status: GameStatus;
+  winner: string | null;
+  round_count: number;
+  created_at: string | null;
+};
+
+export type GameSessionsResponse = {
+  sessions: GameSessionSummary[];
+};
+
+export type RawLmLog = {
+  prompt?: string;
+  raw_response?: string;
+  parsed?: unknown;
+};
+
+export type RawActionLog = {
+  actor: string;
+  action: string;
+  options: string[];
+  choice: string | null;
+  lm_log: RawLmLog;
+};
+
+export type RawRoundLog = {
+  number: number;
+  eliminate: RawActionLog | null;
+  protect: RawActionLog | null;
+  investigate: RawActionLog | null;
+  bid: RawActionLog[][];
+  debate: RawActionLog[];
+  votes: RawActionLog[][];
+  summaries: RawActionLog[];
+};
+
+export type RawPlayer = {
+  name: string;
+  role: string;
+  model: string;
+  observations?: string[];
+};
+
+export type RawRoundState = {
+  number: number;
+  players: string[];
+  eliminated: string | null;
+  protected: string | null;
+  investigated: string | null;
+  exiled: string | null;
+  debate: Array<{ speaker: string; message: string }>;
+  bids: Array<Record<string, number>>;
+  votes: Array<Record<string, string>>;
+  summaries: Record<string, string>;
+  success: boolean;
+};
+
+export type RawGameState = {
+  session_id: string;
+  players: RawPlayer[];
+  rounds: RawRoundState[];
+  winner: string;
+  error_message: string;
+};
+
+export type RawGameReplayResponse = {
+  session_id: string;
+  status: GameStatus;
+  state: RawGameState;
+  logs: RawRoundLog[];
+};
+
+export type BidEntry = {
+  actor: string;
+  score: number;
+};
+
+export type VoteEntry = {
+  voter: string;
+  target: string;
+};
+
+export type DebugItem = {
+  id: string;
+  roundNumber: number;
+  phase: "night" | "day" | "summary";
+  title: string;
+  actor: string;
+  action: string;
+  choice: string | null;
+  prompt: string;
+  rawResponse: string;
+  parsed: unknown;
+};
+
+export type GameRound = Omit<RawRoundState, "bids" | "votes"> & {
+  bids: BidEntry[];
+  votes: VoteEntry[];
+};
+
+export type GameReplay = {
+  sessionId: string;
+  status: GameStatus;
+  winner: string;
+  errorMessage: string;
+  players: RawPlayer[];
+  rounds: GameRound[];
+  logs: RawRoundLog[];
+  debugItems: DebugItem[];
+};
