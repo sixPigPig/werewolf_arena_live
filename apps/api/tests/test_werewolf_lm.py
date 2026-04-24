@@ -1,5 +1,6 @@
 import json
 import os
+import urllib.error
 
 import pytest
 
@@ -114,6 +115,56 @@ def test_deepseek_provider_requires_api_key(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"):
         DeepSeekProvider()
+
+
+def test_deepseek_provider_retries_connection_reset(monkeypatch) -> None:
+    attempts = []
+
+    def flaky_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        attempts.append({"url": url, "headers": headers, "payload": payload})
+        if len(attempts) == 1:
+            raise urllib.error.URLError(ConnectionResetError(54, "Connection reset by peer"))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "重试成功", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    provider = DeepSeekProvider(transport=flaky_transport, sleep=lambda _seconds: None)
+
+    raw = provider.complete_json(
+        model="deepseek-chat",
+        prompt='请输出 json：{"vote":"老周"}',
+        temperature=0.3,
+    )
+
+    assert json.loads(raw) == {"reasoning": "重试成功", "vote": "老周"}
+    assert len(attempts) == 2
+
+
+def test_deepseek_provider_raises_clear_error_after_network_retries(monkeypatch) -> None:
+    def failing_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        del url, headers, payload
+        raise urllib.error.URLError(ConnectionResetError(54, "Connection reset by peer"))
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    provider = DeepSeekProvider(
+        transport=failing_transport,
+        max_retries=2,
+        sleep=lambda _seconds: None,
+    )
+
+    with pytest.raises(RuntimeError, match="DeepSeek network request failed after 2 attempts"):
+        provider.complete_json(
+            model="deepseek-chat",
+            prompt='请输出 json：{"vote":"老周"}',
+            temperature=0.3,
+        )
 
 
 def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
