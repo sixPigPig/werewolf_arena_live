@@ -97,6 +97,91 @@ def sample_logs() -> list[dict]:
     ]
 
 
+def test_list_rule_sets_returns_official_rules() -> None:
+    response = client.get("/api/v1/games/rule-sets")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [rule["id"] for rule in payload["rule_sets"]] == [
+        "classic_8",
+        "starter_6",
+        "social_8",
+    ]
+    assert payload["rule_sets"][0]["role_summary"] == "2 狼人 / 1 预言家 / 1 医生 / 4 村民"
+
+
+def test_create_game_run_accepts_rule_set_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"rule_set_id": "starter_6", "seed": 21, "max_rounds": 1},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["rule_set"]["id"] == "starter_6"
+    assert captured[0]["rule_set_id"] == "starter_6"
+
+
+def test_create_game_run_rejects_unknown_rule_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"rule_set_id": "missing_rule", "seed": 21, "max_rounds": 1},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Unknown rule set: missing_rule"
+
+
+def test_list_games_includes_rule_set_summary(tmp_path: Path) -> None:
+    session_id = "session_20260424_050950_66ea9f38"
+    state = sample_state(session_id)
+    state["rule_set"] = {
+        "id": "social_8",
+        "version": "2026.04",
+        "name": "无神职心理局",
+        "player_count": 8,
+        "roles": [{"role": "狼人", "count": 2}, {"role": "村民", "count": 6}],
+    }
+    write_json(tmp_path / session_id / "game_complete.json", state)
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json()["sessions"][0]["rule_set"]["id"] == "social_8"
+
+
 def test_create_game_run_returns_run_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -150,6 +235,14 @@ def test_game_run_events_replays_existing_events() -> None:
         werewolf_model="deepseek-chat",
         seed=None,
         max_rounds=8,
+        rule_set_id="classic_8",
+        rule_set={
+            "id": "classic_8",
+            "version": "2026.04",
+            "name": "经典 8 人局",
+            "player_count": 8,
+            "roles": [],
+        },
     )
     registry.publish(run.run_id, "game_started", payload={"players": []})
     registry.mark_completed(run.run_id, winner="狼人阵营")

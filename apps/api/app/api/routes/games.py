@@ -10,6 +10,12 @@ from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.werewolf.live import EventSink, LiveEvent, LiveRunRegistry, format_sse
 from app.werewolf.replay import ReplayNotFoundError, ReplayStore
+from app.werewolf.rules import (
+    DEFAULT_RULE_SET_ID,
+    get_rule_set,
+    list_rule_set_summaries,
+    rule_set_snapshot,
+)
 from app.werewolf.runner import GameRunError, new_session_id, run_game
 
 
@@ -22,6 +28,7 @@ class CreateGameRunRequest(BaseModel):
     werewolf_model: str = "deepseek-chat"
     seed: int | None = None
     max_rounds: int = Field(default=8, ge=1, le=20)
+    rule_set_id: str = DEFAULT_RULE_SET_ID
 
 
 def get_replay_store() -> ReplayStore:
@@ -37,11 +44,24 @@ def list_games(store: Annotated[ReplayStore, Depends(get_replay_store)]) -> dict
     return {"sessions": store.list_sessions()}
 
 
+@router.get("/rule-sets")
+def list_rule_sets() -> dict:
+    return {"rule_sets": list_rule_set_summaries()}
+
+
 @router.post("/runs", status_code=201)
 def create_game_run(
     request: CreateGameRunRequest,
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
 ) -> dict:
+    try:
+        rule_set = get_rule_set(request.rule_set_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown rule set: {request.rule_set_id}",
+        ) from exc
+    rule_snapshot = rule_set_snapshot(rule_set)
     session_id = new_session_id()
     run = registry.create_run(
         session_id=session_id,
@@ -49,6 +69,8 @@ def create_game_run(
         werewolf_model=request.werewolf_model,
         seed=request.seed,
         max_rounds=request.max_rounds,
+        rule_set_id=rule_set.id,
+        rule_set=rule_snapshot,
     )
     thread = threading.Thread(
         target=_run_game_in_background,
@@ -60,6 +82,7 @@ def create_game_run(
             "werewolf_model": request.werewolf_model,
             "seed": request.seed,
             "max_rounds": request.max_rounds,
+            "rule_set_id": rule_set.id,
         },
         daemon=True,
     )
@@ -116,6 +139,7 @@ def _run_game_in_background(
     werewolf_model: str,
     seed: int | None,
     max_rounds: int,
+    rule_set_id: str,
 ) -> None:
     registry.mark_running(run_id)
     try:
@@ -123,6 +147,7 @@ def _run_game_in_background(
             villager_model=villager_model,
             werewolf_model=werewolf_model,
             seed=seed,
+            rule_set_id=rule_set_id,
             logs_dir=settings.werewolf_logs_dir,
             max_rounds=max_rounds,
             session_id=session_id,

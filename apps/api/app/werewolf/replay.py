@@ -55,6 +55,7 @@ class ReplayStore:
                     "winner": state.get("winner"),
                     "round_count": len(rounds),
                     "created_at": created_at_from_session_id(directory.name),
+                    "rule_set": state.get("rule_set"),
                 }
             )
 
