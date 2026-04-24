@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from app.api.routes.games import get_replay_store
+from app.api.routes.games import get_live_registry, get_replay_store
 from app.main import app
+from app.werewolf.live import LiveRunRegistry
 from app.werewolf.replay import ReplayStore
 
 
@@ -25,8 +27,22 @@ def override_logs_root(tmp_path: Path) -> None:
     app.dependency_overrides[get_replay_store] = lambda: ReplayStore(tmp_path)
 
 
+def override_live_registry(registry: LiveRunRegistry) -> None:
+    app.dependency_overrides[get_live_registry] = lambda: registry
+
+
 def clear_overrides() -> None:
     app.dependency_overrides.clear()
+
+
+class ImmediateThread:
+    def __init__(self, *, target, kwargs, daemon):
+        self.target = target
+        self.kwargs = kwargs
+        self.daemon = daemon
+
+    def start(self) -> None:
+        self.target(**self.kwargs)
 
 
 def sample_state(session_id: str, *, winner: str = "狼人阵营", error: str = "") -> dict:
@@ -79,6 +95,77 @@ def sample_logs() -> list[dict]:
             "summaries": [],
         }
     ]
+
+
+def test_create_game_run_returns_run_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    started: list[str] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        started.append(str(kwargs["run_id"]))
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"seed": 21, "max_rounds": 1},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["run_id"].startswith("run_")
+    assert payload["session_id"].startswith("session_")
+    assert payload["status"] in {"queued", "running", "completed", "failed"}
+    assert payload["event_count"] >= 1
+    assert started == [payload["run_id"]]
+
+
+def test_get_game_run_returns_404_for_missing_run() -> None:
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+
+    try:
+        response = client.get("/api/v1/games/runs/run_missing")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Game run not found"
+
+
+def test_game_run_events_replays_existing_events() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="session_20260424_120000_ab12cd34",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+    )
+    registry.publish(run.run_id, "game_started", payload={"players": []})
+    registry.mark_completed(run.run_id, winner="狼人阵营")
+    override_live_registry(registry)
+
+    try:
+        response = client.get(f"/api/v1/games/runs/{run.run_id}/events")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "event: run_created" in body
+    assert "event: game_started" in body
+    assert "event: game_completed" in body
 
 
 def test_list_games_returns_complete_and_partial_sessions(tmp_path: Path) -> None:
