@@ -2,7 +2,11 @@ import json
 
 import pytest
 
+from app.werewolf.config import SEER
+from app.werewolf.engine import GameEngine, initialize_game_state
 from app.werewolf.live import NullEventSink
+from app.werewolf.models import RoundLog, RoundState
+from app.werewolf.rules import get_rule_set
 from app.werewolf.runner import GameRunError, run_game
 
 
@@ -35,6 +39,13 @@ class ScriptedChineseProvider:
                 ensure_ascii=False,
             )
         raise AssertionError(f"Unexpected prompt: {prompt}")
+
+
+class NoInvestigateProvider(ScriptedChineseProvider):
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"investigate"' in prompt:
+            raise AssertionError("Investigate should be skipped when there are no candidates.")
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
 def _extract_options(prompt: str) -> list[str]:
@@ -254,6 +265,36 @@ def test_run_game_defaults_to_classic_8_rule_set(tmp_path) -> None:
 
     assert state["rule_set"]["id"] == "classic_8"
     assert len(state["players"]) == 8
+
+
+def test_night_phase_skips_investigate_when_seer_has_no_candidates() -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="session_test_no_investigate_candidates",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=43,
+        rule_set=rule_set,
+    )
+    players_by_name = state.player_by_name()
+    seer = next(player for player in state.players if player.role == SEER)
+    active_players = [player.name for player in state.players]
+    seer.known_roles = {
+        name: players_by_name[name].role for name in active_players if name != seer.name
+    }
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(
+        state=state,
+        provider=NoInvestigateProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    engine._run_night_phase(round_state, round_log, active_players)
+
+    assert round_state.investigated is None
+    assert round_log.investigate is None
 
 
 def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:

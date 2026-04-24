@@ -174,19 +174,20 @@ class GameEngine:
                 for name in active_players
                 if name != seer.name and name not in seer.known_roles
             ]
-            investigated, round_log.investigate = self._player_action(
-                player=seer,
-                action=ACTION_INVESTIGATE,
-                options=investigate_options,
-                result_key=ACTION_INVESTIGATE,
-                round_state=round_state,
-                phase="night",
-            )
-            round_state.investigated = investigated
-            if investigated:
-                role = players_by_name[investigated].role
-                seer.known_roles[investigated] = role
-                seer.add_observation(f"第{round_state.number}轮：我查验了{investigated}，身份是{role}。")
+            if investigate_options:
+                investigated, round_log.investigate = self._player_action(
+                    player=seer,
+                    action=ACTION_INVESTIGATE,
+                    options=investigate_options,
+                    result_key=ACTION_INVESTIGATE,
+                    round_state=round_state,
+                    phase="night",
+                )
+                round_state.investigated = investigated
+                if investigated:
+                    role = players_by_name[investigated].role
+                    seer.known_roles[investigated] = role
+                    seer.add_observation(f"第{round_state.number}轮：我查验了{investigated}，身份是{role}。")
 
         if round_state.eliminated and round_state.eliminated != round_state.protected:
             self._remove_player(active_players, round_state.eliminated)
