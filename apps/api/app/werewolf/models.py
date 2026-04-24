@@ -132,6 +132,7 @@ class RoundLog:
 class GameState:
     session_id: str
     players: list[Player]
+    rule_set: dict[str, Any] = field(default_factory=dict)
     rounds: list[RoundState] = field(default_factory=list)
     winner: str = ""
     error_message: str = ""
@@ -143,6 +144,7 @@ class GameState:
         return {
             "session_id": self.session_id,
             "players": [player.to_dict() for player in self.players],
+            "rule_set": self.rule_set,
             "rounds": [round_state.to_dict() for round_state in self.rounds],
             "winner": self.winner,
             "error_message": self.error_message,

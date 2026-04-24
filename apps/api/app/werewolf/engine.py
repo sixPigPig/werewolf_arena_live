@@ -7,8 +7,6 @@ from app.werewolf.config import (
     DEFAULT_DEBATE_TURNS,
     DOCTOR,
     SEER,
-    VILLAGER,
-    WEREWOLF,
     WINNER_VILLAGERS,
     WINNER_WEREWOLVES,
     choose_player_names,
@@ -16,6 +14,16 @@ from app.werewolf.config import (
 from app.werewolf.live import NullEventSink
 from app.werewolf.lm import ModelProvider, generate_action
 from app.werewolf.models import ActionLog, DebateEntry, GameState, GameView, Player, RoundLog, RoundState
+from app.werewolf.rules import (
+    ACTION_INVESTIGATE,
+    ACTION_PROTECT,
+    ACTION_REMOVE,
+    MODEL_GROUP_WEREWOLF,
+    TEAM_WEREWOLVES,
+    RuleSet,
+    render_rule_text,
+    rule_set_snapshot,
+)
 
 
 class MaxRoundsExceeded(RuntimeError):
@@ -28,21 +36,23 @@ def initialize_game_state(
     villager_model: str,
     werewolf_model: str,
     seed: int | None,
+    rule_set: RuleSet,
 ) -> GameState:
-    player_names = choose_player_names(seed)
-    seer = Player(player_names[0], SEER, villager_model)
-    doctor = Player(player_names[1], DOCTOR, villager_model)
-    werewolves = [
-        Player(player_names[2], WEREWOLF, werewolf_model),
-        Player(player_names[3], WEREWOLF, werewolf_model),
-    ]
-    villagers = [Player(name, VILLAGER, villager_model) for name in player_names[4:]]
-    players = [seer, doctor, *werewolves, *villagers]
+    player_names = choose_player_names(seed, player_count=rule_set.player_count)
+    players: list[Player] = []
+    name_index = 0
+    for role_spec in rule_set.roles:
+        model = werewolf_model if role_spec.model_group == MODEL_GROUP_WEREWOLF else villager_model
+        for _ in range(role_spec.count):
+            players.append(Player(player_names[name_index], role_spec.role, model))
+            name_index += 1
+
+    werewolves = [player for player in players if _role_team(rule_set, player.role) == TEAM_WEREWOLVES]
     current_players = [player.name for player in players]
 
     for player in players:
         other_wolf = None
-        if player.role == WEREWOLF:
+        if _role_team(rule_set, player.role) == TEAM_WEREWOLVES and len(werewolves) > 1:
             other_wolf = next(wolf.name for wolf in werewolves if wolf.name != player.name)
         player.gamestate = GameView(
             round_number=1,
@@ -50,7 +60,11 @@ def initialize_game_state(
             other_wolf=other_wolf,
         )
 
-    return GameState(session_id=session_id, players=players)
+    return GameState(session_id=session_id, players=players, rule_set=rule_set_snapshot(rule_set))
+
+
+def _role_team(rule_set: RuleSet, role: str) -> str:
+    return next(role_spec.team for role_spec in rule_set.roles if role_spec.role == role)
 
 
 class GameEngine:
@@ -60,12 +74,14 @@ class GameEngine:
         state: GameState,
         provider: ModelProvider,
         max_rounds: int,
+        rule_set: RuleSet,
         debate_turns: int = DEFAULT_DEBATE_TURNS,
         event_sink: object | None = None,
     ) -> None:
         self.state = state
         self.provider = provider
         self.max_rounds = max_rounds
+        self.rule_set = rule_set
         self.debate_turns = debate_turns
         self.event_sink = event_sink or NullEventSink()
 
@@ -122,38 +138,36 @@ class GameEngine:
             payload={"active_players": active_players.copy()},
         )
         players_by_name = self.state.player_by_name()
-        active_wolves = [
-            name for name in active_players if players_by_name[name].role == WEREWOLF
-        ]
+        active_wolves = [name for name in active_players if self._is_werewolf(players_by_name[name])]
         non_wolves = [
-            name for name in active_players if players_by_name[name].role != WEREWOLF
+            name for name in active_players if not self._is_werewolf(players_by_name[name])
         ]
 
-        if active_wolves and non_wolves:
+        if ACTION_REMOVE in self.rule_set.night_actions and active_wolves and non_wolves:
             wolf = players_by_name[active_wolves[0]]
             eliminated, round_log.eliminate = self._player_action(
                 player=wolf,
-                action="remove",
+                action=ACTION_REMOVE,
                 options=non_wolves,
-                result_key="remove",
+                result_key=ACTION_REMOVE,
                 round_state=round_state,
                 phase="night",
             )
             round_state.eliminated = eliminated
 
-        if self._is_role_active(DOCTOR, active_players):
+        if ACTION_PROTECT in self.rule_set.night_actions and self._is_role_active(DOCTOR, active_players):
             doctor = players_by_name[self._active_player_for_role(DOCTOR, active_players)]
             protected, round_log.protect = self._player_action(
                 player=doctor,
-                action="protect",
+                action=ACTION_PROTECT,
                 options=active_players,
-                result_key="protect",
+                result_key=ACTION_PROTECT,
                 round_state=round_state,
                 phase="night",
             )
             round_state.protected = protected
 
-        if self._is_role_active(SEER, active_players):
+        if ACTION_INVESTIGATE in self.rule_set.night_actions and self._is_role_active(SEER, active_players):
             seer = players_by_name[self._active_player_for_role(SEER, active_players)]
             investigate_options = [
                 name
@@ -162,9 +176,9 @@ class GameEngine:
             ]
             investigated, round_log.investigate = self._player_action(
                 player=seer,
-                action="investigate",
+                action=ACTION_INVESTIGATE,
                 options=investigate_options,
-                result_key="investigate",
+                result_key=ACTION_INVESTIGATE,
                 round_state=round_state,
                 phase="night",
             )
@@ -485,15 +499,14 @@ class GameEngine:
             "debate": debate,
             "bidding_rationale": player.bidding_rationale,
             "personality": "",
-            "num_players": 8,
-            "num_villagers": 4,
+            "rule_text": render_rule_text(self.rule_set),
             "werewolf_context": self._werewolf_context(player, active_players),
             "debate_turns_left": max(0, self.debate_turns - len(round_state.debate)),
             "options": "、".join(options),
         }
 
     def _werewolf_context(self, player: Player, active_players: list[str]) -> str:
-        if player.role != WEREWOLF or not player.gamestate or not player.gamestate.other_wolf:
+        if not self._is_werewolf(player) or not player.gamestate or not player.gamestate.other_wolf:
             return ""
         other_wolf = player.gamestate.other_wolf
         if other_wolf in active_players:
@@ -502,9 +515,7 @@ class GameEngine:
 
     def _get_winner(self, active_players: list[str]) -> str:
         players_by_name = self.state.player_by_name()
-        active_wolves = [
-            name for name in active_players if players_by_name[name].role == WEREWOLF
-        ]
+        active_wolves = [name for name in active_players if self._is_werewolf(players_by_name[name])]
         active_villagers = [name for name in active_players if name not in active_wolves]
 
         if not active_wolves:
@@ -512,6 +523,9 @@ class GameEngine:
         if len(active_wolves) >= len(active_villagers):
             return WINNER_WEREWOLVES
         return ""
+
+    def _is_werewolf(self, player: Player) -> bool:
+        return _role_team(self.rule_set, player.role) == TEAM_WEREWOLVES
 
     def _is_role_active(self, role: str, active_players: list[str]) -> bool:
         return bool(self._active_player_for_role(role, active_players))

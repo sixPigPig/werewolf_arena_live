@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-GAME_RULES = """你正在进行一局数字版狼人杀。
+DEFAULT_GAME_RULES = """你正在进行一局数字版狼人杀。
 
 游戏规则：
-- 共 {{num_players}} 名玩家：2 名狼人、1 名预言家、1 名医生、{{num_villagers}} 名村民。
+- 共 8 名玩家：2 名狼人、1 名预言家、1 名医生、4 名村民。
 - 每轮包含夜晚和白天两个阶段。
 - 夜晚：狼人选择一名玩家出局；预言家查验一名玩家身份；医生保护一名玩家。如果狼人目标被医生保护，则无人出局。
 - 白天：所有存活玩家讨论，并投票放逐一名玩家。
@@ -67,14 +67,13 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
 
 
 def _render_base(world_state: dict[str, Any]) -> str:
-    text = GAME_RULES
-    for key in ("num_players", "num_villagers"):
-        text = text.replace(f"{{{{{key}}}}}", str(world_state[key]))
-
+    rules_text = str(world_state.get("rule_text") or DEFAULT_GAME_RULES)
+    if "狼人杀" not in rules_text:
+        rules_text = f"你正在进行一局数字版狼人杀。\n\n{rules_text}"
     personality = world_state.get("personality") or "无"
     werewolf_context = world_state.get("werewolf_context") or ""
     return (
-        f"{text}\n"
+        f"{rules_text}\n"
         "当前状态：\n"
         f"- 现在是第 {world_state['round']} 轮。\n"
         f"- 你是{world_state['name']}，身份是{world_state['role']}。{werewolf_context}\n"

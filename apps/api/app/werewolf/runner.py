@@ -11,6 +11,7 @@ from app.werewolf.live import NullEventSink
 from app.werewolf.logging import save_game
 from app.werewolf.lm import ModelProvider
 from app.werewolf.providers import DeepSeekProvider
+from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set
 
 
 @dataclass(frozen=True)
@@ -36,14 +37,17 @@ def run_game(
     provider: ModelProvider | None = None,
     session_id: str | None = None,
     event_sink: object | None = None,
+    rule_set_id: str = DEFAULT_RULE_SET_ID,
 ) -> RunGameResult:
     session_id = session_id or new_session_id()
     log_directory = Path(logs_dir) / session_id
+    rule_set = get_rule_set(rule_set_id)
     state = initialize_game_state(
         session_id=session_id,
         villager_model=villager_model,
         werewolf_model=werewolf_model,
         seed=seed,
+        rule_set=rule_set,
     )
     logs = []
 
@@ -52,6 +56,7 @@ def run_game(
             state=state,
             provider=provider or DeepSeekProvider(),
             max_rounds=max_rounds,
+            rule_set=rule_set,
             event_sink=event_sink or NullEventSink(),
         )
         logs = engine.run()
