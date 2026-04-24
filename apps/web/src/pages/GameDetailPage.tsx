@@ -6,6 +6,7 @@ import { getGameDetail } from "../features/games/api/getGameDetail";
 import { DebugPanel } from "../features/games/components/DebugPanel";
 import { GameLayout } from "../features/games/components/GameLayout";
 import { PlayerPanel } from "../features/games/components/PlayerPanel";
+import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 import { RoundTimeline } from "../features/games/components/RoundTimeline";
 
 export function GameDetailPage() {
@@ -47,19 +48,24 @@ export function GameDetailPage() {
     null;
 
   return (
-    <GameLayout
-      debug={<DebugPanel item={visibleSelectedItem} />}
-      players={<PlayerPanel game={data} />}
-      timeline={
-        <RoundTimeline
-          debugItems={data.debugItems}
-          onSelect={(item) =>
-            setSelection({ itemId: item.id, sessionId: data.sessionId })
-          }
-          rounds={data.rounds}
-          selectedItem={visibleSelectedItem}
-        />
-      }
-    />
+    <main className="mx-auto w-full max-w-5xl px-4 py-8">
+      <div className="mb-4">
+        <RuleSetSummary ruleSet={data.ruleSet} />
+      </div>
+      <GameLayout
+        debug={<DebugPanel item={visibleSelectedItem} />}
+        players={<PlayerPanel game={data} />}
+        timeline={
+          <RoundTimeline
+            debugItems={data.debugItems}
+            onSelect={(item) =>
+              setSelection({ itemId: item.id, sessionId: data.sessionId })
+            }
+            rounds={data.rounds}
+            selectedItem={visibleSelectedItem}
+          />
+        }
+      />
+    </main>
   );
 }

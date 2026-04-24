@@ -16,6 +16,17 @@ const detailResponse = {
     session_id: sessionId,
     winner: "狼人阵营",
     error_message: "",
+    rule_set: {
+      id: "social_8",
+      version: "2026.04",
+      name: "无神职心理局",
+      player_count: 8,
+      roles: [
+        { role: "狼人", count: 2 },
+        { role: "村民", count: 6 },
+      ],
+      role_summary: "2 狼人 / 6 村民",
+    },
     players: [
       {
         name: "张三",
@@ -209,6 +220,8 @@ describe("GameDetailPage", () => {
     );
 
     expect(await screen.findByText("狼人阵营")).toBeInTheDocument();
+    expect(await screen.findByText("无神职心理局")).toBeInTheDocument();
+    expect(screen.getByText("2 狼人 / 6 村民")).toBeInTheDocument();
     expect(screen.getAllByText("张三").length).toBeGreaterThan(0);
     expect(
       screen.getByRole("heading", { name: "第 1 轮" }),

@@ -7,6 +7,7 @@ import { LiveEventTimeline } from "../features/games/components/LiveEventTimelin
 import { LiveFocusStage } from "../features/games/components/LiveFocusStage";
 import { LivePlayerPanel } from "../features/games/components/LivePlayerPanel";
 import { LiveStatusStrip } from "../features/games/components/LiveStatusStrip";
+import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 import { useGameRunEvents } from "../features/games/hooks/useGameRunEvents";
 import { deriveLiveSpectatorState } from "../features/games/liveSpectator";
 
@@ -86,6 +87,9 @@ export function LiveGamePage() {
       <section className="overflow-hidden rounded-md border border-slate-200 bg-white">
         <LiveStatusStrip run={run} connectionState={connectionState} />
       </section>
+      <div className="mt-4">
+        <RuleSetSummary ruleSet={run.rule_set} />
+      </div>
       <div className="mt-4 grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)_22rem]">
         <LivePlayerPanel
           activePlayerName={spectatorState.activePlayerName}

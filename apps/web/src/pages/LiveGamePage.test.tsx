@@ -53,6 +53,20 @@ describe("LiveGamePage", () => {
             werewolf_model: "deepseek-chat",
             seed: null,
             max_rounds: 8,
+            rule_set_id: "starter_6",
+            rule_set: {
+              id: "starter_6",
+              version: "2026.04",
+              name: "新手 6 人快局",
+              player_count: 6,
+              roles: [
+                { role: "狼人", count: 1 },
+                { role: "预言家", count: 1 },
+                { role: "医生", count: 1 },
+                { role: "村民", count: 3 },
+              ],
+              role_summary: "1 狼人 / 1 预言家 / 1 医生 / 3 村民",
+            },
             status: "running",
             created_at: "2026-04-24T12:00:00Z",
             started_at: "2026-04-24T12:00:01Z",
@@ -73,6 +87,20 @@ describe("LiveGamePage", () => {
             werewolf_model: "deepseek-chat",
             seed: null,
             max_rounds: 8,
+            rule_set_id: "starter_6",
+            rule_set: {
+              id: "starter_6",
+              version: "2026.04",
+              name: "新手 6 人快局",
+              player_count: 6,
+              roles: [
+                { role: "狼人", count: 1 },
+                { role: "预言家", count: 1 },
+                { role: "医生", count: 1 },
+                { role: "村民", count: 3 },
+              ],
+              role_summary: "1 狼人 / 1 预言家 / 1 医生 / 3 村民",
+            },
             status: "completed",
             created_at: "2026-04-24T12:00:00Z",
             started_at: "2026-04-24T12:00:01Z",
@@ -93,6 +121,10 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    expect(await screen.findByText("新手 6 人快局")).toBeInTheDocument();
+    expect(
+      screen.getByText("1 狼人 / 1 预言家 / 1 医生 / 3 村民"),
+    ).toBeInTheDocument();
     const source = MockEventSource.instances[0];
     act(() => {
       source.onopen?.();

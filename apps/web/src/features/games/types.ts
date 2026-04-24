@@ -138,6 +138,7 @@ export type GameReplay = {
   status: GameStatus;
   winner: string;
   errorMessage: string;
+  ruleSet?: RuleSetSummary | null;
   players: RawPlayer[];
   rounds: GameRound[];
   logs: RawRoundLog[];
