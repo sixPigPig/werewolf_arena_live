@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 
 export function createTestQueryClient() {
@@ -11,14 +11,6 @@ export function createTestQueryClient() {
       },
     },
   });
-}
-
-export function TestQueryProvider({ children }: { children: ReactNode }) {
-  const [queryClient] = useState(() => createTestQueryClient());
-
-  return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
 }
 
 export function renderWithClient(ui: ReactNode, route = "/") {
