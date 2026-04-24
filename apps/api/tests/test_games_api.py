@@ -16,6 +16,11 @@ def write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def write_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
+
+
 def override_logs_root(tmp_path: Path) -> None:
     app.dependency_overrides[get_replay_store] = lambda: ReplayStore(tmp_path)
 
@@ -145,3 +150,208 @@ def test_get_game_detail_rejects_invalid_session_id(tmp_path: Path) -> None:
         clear_overrides()
 
     assert response.status_code == 422
+
+
+def test_list_games_returns_empty_when_logs_root_is_missing(tmp_path: Path) -> None:
+    override_logs_root(tmp_path / "missing")
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json() == {"sessions": []}
+
+
+def test_list_games_skips_invalid_session_directories(tmp_path: Path) -> None:
+    valid_id = "session_20260424_050950_66ea9f38"
+    invalid_id = "not-a-session"
+    write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
+    write_json(tmp_path / invalid_id / "game_complete.json", sample_state(invalid_id))
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert [item["session_id"] for item in response.json()["sessions"]] == [valid_id]
+
+
+def test_get_game_detail_prefers_complete_over_partial(tmp_path: Path) -> None:
+    session_id = "session_20260424_050950_66ea9f38"
+    write_json(
+        tmp_path / session_id / "game_complete.json",
+        sample_state(session_id, winner="狼人阵营"),
+    )
+    write_json(
+        tmp_path / session_id / "game_partial.json",
+        sample_state(session_id, winner="", error="still running"),
+    )
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "complete"
+    assert response.json()["state"]["winner"] == "狼人阵营"
+
+
+def test_get_game_detail_returns_empty_logs_when_logs_file_is_missing(
+    tmp_path: Path,
+) -> None:
+    session_id = "session_20260424_050950_66ea9f38"
+    write_json(tmp_path / session_id / "game_complete.json", sample_state(session_id))
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json()["logs"] == []
+
+
+def test_symlinked_session_directory_is_rejected(tmp_path: Path) -> None:
+    logs_root = tmp_path / "logs"
+    outside_root = tmp_path / "outside"
+    session_id = "session_20260424_050950_66ea9f38"
+    write_json(outside_root / "game_complete.json", sample_state(session_id))
+    logs_root.mkdir()
+    (logs_root / session_id).symlink_to(outside_root, target_is_directory=True)
+    override_logs_root(logs_root)
+
+    try:
+        list_response = client.get("/api/v1/games")
+        detail_response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert list_response.status_code == 200
+    assert list_response.json() == {"sessions": []}
+    assert detail_response.status_code == 404
+    assert detail_response.json()["detail"] == "Game session not found"
+
+
+def test_symlinked_json_files_are_rejected(tmp_path: Path) -> None:
+    logs_root = tmp_path / "logs"
+    outside_root = tmp_path / "outside"
+    session_id = "session_20260424_050950_66ea9f38"
+    write_json(outside_root / "game_complete.json", sample_state(session_id))
+    session_dir = logs_root / session_id
+    session_dir.mkdir(parents=True)
+    (session_dir / "game_complete.json").symlink_to(outside_root / "game_complete.json")
+    override_logs_root(logs_root)
+
+    try:
+        list_response = client.get("/api/v1/games")
+        detail_response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert list_response.status_code == 200
+    assert list_response.json() == {"sessions": []}
+    assert detail_response.status_code == 404
+    assert detail_response.json()["detail"] == "Game session not found"
+
+
+def test_symlinked_complete_file_rejects_session_even_when_partial_exists(
+    tmp_path: Path,
+) -> None:
+    logs_root = tmp_path / "logs"
+    outside_root = tmp_path / "outside"
+    session_id = "session_20260424_050950_66ea9f38"
+    session_dir = logs_root / session_id
+    write_json(outside_root / "game_complete.json", sample_state(session_id))
+    write_json(
+        session_dir / "game_partial.json",
+        sample_state(session_id, winner="", error="still running"),
+    )
+    (session_dir / "game_complete.json").symlink_to(outside_root / "game_complete.json")
+    override_logs_root(logs_root)
+
+    try:
+        list_response = client.get("/api/v1/games")
+        detail_response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert list_response.status_code == 200
+    assert list_response.json() == {"sessions": []}
+    assert detail_response.status_code == 404
+    assert detail_response.json()["detail"] == "Game session not found"
+
+
+def test_symlinked_logs_file_is_rejected(tmp_path: Path) -> None:
+    logs_root = tmp_path / "logs"
+    outside_root = tmp_path / "outside"
+    session_id = "session_20260424_050950_66ea9f38"
+    write_json(logs_root / session_id / "game_complete.json", sample_state(session_id))
+    write_json(outside_root / "game_logs.json", sample_logs())
+    (logs_root / session_id / "game_logs.json").symlink_to(
+        outside_root / "game_logs.json"
+    )
+    override_logs_root(logs_root)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Game session not found"
+
+
+def test_list_games_skips_corrupt_json_and_detail_returns_404(tmp_path: Path) -> None:
+    valid_id = "session_20260424_050950_66ea9f38"
+    corrupt_id = "session_20260424_060000_abcd1234"
+    write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
+    write_text(tmp_path / corrupt_id / "game_complete.json", "{")
+    override_logs_root(tmp_path)
+
+    try:
+        list_response = client.get("/api/v1/games")
+        detail_response = client.get(f"/api/v1/games/{corrupt_id}")
+    finally:
+        clear_overrides()
+
+    assert list_response.status_code == 200
+    assert [item["session_id"] for item in list_response.json()["sessions"]] == [valid_id]
+    assert detail_response.status_code == 404
+    assert detail_response.json()["detail"] == "Game session not found"
+
+
+def test_get_game_detail_returns_404_for_corrupt_logs_json(tmp_path: Path) -> None:
+    session_id = "session_20260424_050950_66ea9f38"
+    write_json(tmp_path / session_id / "game_complete.json", sample_state(session_id))
+    write_text(tmp_path / session_id / "game_logs.json", "{")
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Game session not found"
+
+
+def test_list_games_does_not_crash_on_invalid_timestamp(tmp_path: Path) -> None:
+    session_id = "session_20261340_250000_abcd1234"
+    write_json(tmp_path / session_id / "game_complete.json", sample_state(session_id))
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json()["sessions"][0]["session_id"] == session_id
+    assert response.json()["sessions"][0]["created_at"] is None

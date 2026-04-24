@@ -25,14 +25,22 @@ class ReplayStore:
 
         sessions = []
         for directory in self.logs_root.iterdir():
-            if not directory.is_dir() or not _SESSION_PATTERN.fullmatch(directory.name):
+            if (
+                directory.is_symlink()
+                or not directory.is_dir()
+                or not _SESSION_PATTERN.fullmatch(directory.name)
+            ):
                 continue
 
             state_path, status = self._state_path_for_directory(directory)
             if state_path is None or status is None:
                 continue
 
-            state = self._read_json(state_path)
+            try:
+                state = self._read_json(state_path)
+            except ReplayNotFoundError:
+                continue
+
             sessions.append(
                 {
                     "session_id": directory.name,
@@ -49,9 +57,13 @@ class ReplayStore:
         if not _SESSION_PATTERN.fullmatch(session_id):
             raise ReplayNotFoundError
 
-        session_dir = (self.logs_root / session_id).resolve()
+        session_dir = self.logs_root / session_id
+        if session_dir.is_symlink() or not session_dir.is_dir():
+            raise ReplayNotFoundError
+
+        resolved_session_dir = session_dir.resolve()
         try:
-            session_dir.relative_to(self.logs_root.resolve())
+            resolved_session_dir.relative_to(self.logs_root.resolve())
         except ValueError as exc:
             raise ReplayNotFoundError from exc
 
@@ -70,17 +82,32 @@ class ReplayStore:
 
     def _state_path_for_directory(self, directory: Path) -> tuple[Path | None, str | None]:
         complete_path = directory / "game_complete.json"
-        if complete_path.exists():
+        if complete_path.is_symlink():
+            return None, None
+
+        if self._is_regular_json_file(complete_path):
             return complete_path, "complete"
 
         partial_path = directory / "game_partial.json"
-        if partial_path.exists():
+        if partial_path.is_symlink():
+            return None, None
+
+        if self._is_regular_json_file(partial_path):
             return partial_path, "partial"
 
         return None, None
 
+    def _is_regular_json_file(self, path: Path) -> bool:
+        return path.exists() and not path.is_symlink() and path.is_file()
+
     def _read_json(self, path: Path) -> Any:
-        return json.loads(path.read_text(encoding="utf-8"))
+        if path.is_symlink():
+            raise ReplayNotFoundError
+
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ReplayNotFoundError from exc
 
 
 def created_at_from_session_id(session_id: str) -> str | None:
@@ -89,5 +116,9 @@ def created_at_from_session_id(session_id: str) -> str | None:
         return None
 
     raw_value = "".join(match.groups())
-    created_at = datetime.strptime(raw_value, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
+    try:
+        created_at = datetime.strptime(raw_value, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
     return created_at.isoformat().replace("+00:00", "Z")
