@@ -8,6 +8,7 @@ export function CreateGameRunForm() {
   const navigate = useNavigate();
   const [seed, setSeed] = useState("");
   const [maxRounds, setMaxRounds] = useState("8");
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: createGameRun,
@@ -17,11 +18,24 @@ export function CreateGameRunForm() {
   return (
     <form
       className="rounded-md border border-slate-200 bg-white p-4"
+      noValidate
       onSubmit={(event) => {
         event.preventDefault();
+        const parsedMaxRounds = Number(maxRounds);
+        if (
+          !maxRounds ||
+          !Number.isInteger(parsedMaxRounds) ||
+          parsedMaxRounds < 1 ||
+          parsedMaxRounds > 20
+        ) {
+          setValidationError("最大轮数必须是 1 到 20 的整数");
+          return;
+        }
+
+        setValidationError(null);
         mutation.mutate({
           seed: seed ? Number(seed) : null,
-          max_rounds: Number(maxRounds),
+          max_rounds: parsedMaxRounds,
         });
       }}
     >
@@ -42,9 +56,13 @@ export function CreateGameRunForm() {
             className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             min={1}
             max={20}
+            required
             type="number"
             value={maxRounds}
-            onChange={(event) => setMaxRounds(event.target.value)}
+            onChange={(event) => {
+              setMaxRounds(event.target.value);
+              setValidationError(null);
+            }}
           />
         </label>
         <button
@@ -55,6 +73,9 @@ export function CreateGameRunForm() {
           {mutation.isPending ? "正在发起..." : "发起对局"}
         </button>
       </div>
+      {validationError ? (
+        <p className="mt-3 text-sm text-red-700">{validationError}</p>
+      ) : null}
       {mutation.isError ? (
         <p className="mt-3 text-sm text-red-700">无法发起对局</p>
       ) : null}

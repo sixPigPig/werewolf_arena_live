@@ -108,9 +108,35 @@ describe("GamesPage", () => {
 
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/v1/games/runs",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        body: JSON.stringify({ seed: null, max_rounds: 8 }),
+        method: "POST",
+      }),
     );
     expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
+  });
+
+  it("blocks launch when max rounds is empty", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ sessions: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    renderWithClient(<GamesPage />, "/games");
+
+    await userEvent.clear(
+      await screen.findByRole("spinbutton", { name: "最大轮数" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
+
+    expect(screen.getByText("最大轮数必须是 1 到 20 的整数")).toBeInTheDocument();
+    expect(
+      fetchSpy.mock.calls.some(([input]) =>
+        String(input).endsWith("/api/v1/games/runs"),
+      ),
+    ).toBe(false);
   });
 
   it("renders only the error state when refreshing cached sessions fails", async () => {
