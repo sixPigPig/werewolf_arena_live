@@ -1,16 +1,21 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { getGameRun } from "../features/games/api/getGameRun";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
+import { LiveFocusStage } from "../features/games/components/LiveFocusStage";
+import { LivePlayerPanel } from "../features/games/components/LivePlayerPanel";
 import { LiveStatusStrip } from "../features/games/components/LiveStatusStrip";
 import { useGameRunEvents } from "../features/games/hooks/useGameRunEvents";
+import { deriveLiveSpectatorState } from "../features/games/liveSpectator";
 
 export function LiveGamePage() {
   const { runId } = useParams();
   const queryClient = useQueryClient();
   const { events, connectionState } = useGameRunEvents(runId);
+  const [autoFollow, setAutoFollow] = useState(true);
+  const [manualFocusName, setManualFocusName] = useState<string | null>(null);
   const {
     data: run,
     isError,
@@ -28,6 +33,16 @@ export function LiveGamePage() {
   const terminalEvent = events.find(
     (event) => event.type === "game_completed" || event.type === "game_failed",
   );
+  const spectatorState = useMemo(
+    () => deriveLiveSpectatorState(events),
+    [events],
+  );
+  const focusedPlayerName = autoFollow
+    ? spectatorState.activePlayerName
+    : manualFocusName ?? spectatorState.activePlayerName;
+  const focusedPlayer =
+    spectatorState.players.find((player) => player.name === focusedPlayerName) ??
+    null;
 
   useEffect(() => {
     if (!terminalEvent) {
@@ -70,8 +85,37 @@ export function LiveGamePage() {
       </div>
       <section className="overflow-hidden rounded-md border border-slate-200 bg-white">
         <LiveStatusStrip run={run} connectionState={connectionState} />
-        <LiveEventTimeline events={events} />
       </section>
+      <div className="mt-4 grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)_22rem]">
+        <LivePlayerPanel
+          activePlayerName={spectatorState.activePlayerName}
+          autoFollow={autoFollow}
+          focusedPlayerName={focusedPlayerName}
+          onAutoFollowChange={(value) => {
+            setAutoFollow(value);
+            if (value) {
+              setManualFocusName(null);
+            }
+          }}
+          onSelectPlayer={(name) => {
+            setAutoFollow(false);
+            setManualFocusName(name);
+          }}
+          players={spectatorState.players}
+        />
+        <LiveFocusStage
+          currentPhase={spectatorState.currentPhase}
+          currentRound={spectatorState.currentRound}
+          latestEvent={spectatorState.latestActorEvent}
+          player={focusedPlayer}
+        />
+        <section className="overflow-hidden rounded-md border border-slate-200 bg-white lg:max-h-[calc(100vh-8rem)] lg:overflow-auto">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <h2 className="text-sm font-semibold text-slate-950">原始事件</h2>
+          </div>
+          <LiveEventTimeline events={events} />
+        </section>
+      </div>
     </main>
   );
 }
