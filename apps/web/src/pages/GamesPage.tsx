@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { listGames } from "../features/games/api/listGames";
+import { CreateGameRunForm } from "../features/games/components/CreateGameRunForm";
 import { SessionList } from "../features/games/components/SessionList";
 
 export function GamesPage() {
@@ -12,6 +13,10 @@ export function GamesPage() {
   return (
     <main className="mx-auto w-full max-w-4xl px-4 py-8">
       <h1 className="text-2xl font-semibold text-slate-950">狼人杀对局复盘</h1>
+
+      <div className="mt-6">
+        <CreateGameRunForm />
+      </div>
 
       <div className="mt-6">
         {isPending ? (
