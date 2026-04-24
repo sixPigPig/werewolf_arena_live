@@ -1,0 +1,37 @@
+import type { BidEntry } from "../types";
+
+type BidChartProps = {
+  bids: BidEntry[];
+};
+
+export function BidChart({ bids }: BidChartProps) {
+  if (bids.length === 0) {
+    return <p className="text-sm text-slate-500">无竞价记录</p>;
+  }
+
+  const maxScore = Math.max(...bids.map((bid) => bid.score), 1);
+
+  return (
+    <div className="space-y-2">
+      {bids.map((bid) => (
+        <div
+          className="grid grid-cols-[5rem_1fr_3rem] items-center gap-2"
+          key={bid.actor}
+        >
+          <span className="truncate text-sm text-slate-700">{bid.actor}</span>
+          <div className="h-2 overflow-hidden rounded bg-slate-100">
+            <div
+              className="h-full bg-cyan-600"
+              style={{
+                width: `${Math.max(8, (bid.score / maxScore) * 100)}%`,
+              }}
+            />
+          </div>
+          <span className="text-right font-mono text-xs text-slate-600">
+            {bid.score}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
