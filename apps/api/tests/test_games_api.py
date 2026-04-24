@@ -486,3 +486,46 @@ def test_list_games_skips_session_when_state_file_stat_raises(
 
     assert response.status_code == 200
     assert [item["session_id"] for item in response.json()["sessions"]] == [valid_id]
+
+
+def test_get_game_detail_returns_404_for_malformed_logs_schema(
+    tmp_path: Path,
+) -> None:
+    session_id = "session_20260424_050950_66ea9f38"
+    write_json(tmp_path / session_id / "game_complete.json", sample_state(session_id))
+    write_json(tmp_path / session_id / "game_logs.json", {})
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Game session not found"
+
+
+def test_get_game_detail_returns_404_when_session_resolve_raises(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_id = "session_20260424_050950_66ea9f38"
+    session_dir = tmp_path / session_id
+    write_json(session_dir / "game_complete.json", sample_state(session_id))
+    original_resolve = Path.resolve
+
+    def raising_resolve(path: Path, *args, **kwargs) -> Path:
+        if path == session_dir:
+            raise OSError("resolve failed")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", raising_resolve)
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Game session not found"

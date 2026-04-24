@@ -68,10 +68,11 @@ class ReplayStore:
         if self._is_symlink(session_dir) or not self._is_directory(session_dir):
             raise ReplayNotFoundError
 
-        resolved_session_dir = session_dir.resolve()
         try:
-            resolved_session_dir.relative_to(self.logs_root.resolve())
-        except ValueError as exc:
+            resolved_session_dir = session_dir.resolve()
+            resolved_logs_root = self.logs_root.resolve()
+            resolved_session_dir.relative_to(resolved_logs_root)
+        except (OSError, RuntimeError, ValueError) as exc:
             raise ReplayNotFoundError from exc
 
         state_path, status = self._state_path_for_directory(session_dir)
@@ -79,7 +80,7 @@ class ReplayStore:
             raise ReplayNotFoundError
 
         logs_path = session_dir / "game_logs.json"
-        logs = self._read_json(logs_path) if self._path_exists(logs_path) else []
+        logs = self._read_logs(logs_path) if self._path_exists(logs_path) else []
         state = self._read_state(state_path)
         return {
             "session_id": session_id,
@@ -148,6 +149,13 @@ class ReplayStore:
             raise ReplayNotFoundError
 
         return state
+
+    def _read_logs(self, path: Path) -> list[Any]:
+        logs = self._read_json(path)
+        if not isinstance(logs, list):
+            raise ReplayNotFoundError
+
+        return logs
 
 
 def created_at_from_session_id(session_id: str) -> str | None:
