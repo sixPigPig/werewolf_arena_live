@@ -120,6 +120,11 @@ export type GameRunStatus = "queued" | "running" | "completed" | "failed";
 export type GameRun = {
   run_id: string;
   session_id: string;
+  villager_model: string;
+  werewolf_model: string;
+  seed: number | null;
+  max_rounds: number;
+  winner: string | null;
   status: GameRunStatus;
   created_at: string;
   started_at: string | null;

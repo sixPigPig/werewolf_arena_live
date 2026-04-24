@@ -14,6 +14,11 @@ describe("live run api", () => {
         JSON.stringify({
           run_id: "run_1234abcd",
           session_id: "session_20260424_120000_ab12cd34",
+          villager_model: "deepseek",
+          werewolf_model: "minimax",
+          seed: 21,
+          max_rounds: 8,
+          winner: null,
           status: "queued",
           created_at: "2026-04-24T12:00:00Z",
           started_at: null,
@@ -36,6 +41,7 @@ describe("live run api", () => {
       }),
     );
     expect(run.run_id).toBe("run_1234abcd");
+    expect(run.max_rounds).toBe(8);
   });
 
   it("gets a game run", async () => {
@@ -44,6 +50,11 @@ describe("live run api", () => {
         JSON.stringify({
           run_id: "run_1234abcd",
           session_id: "session_20260424_120000_ab12cd34",
+          villager_model: "deepseek",
+          werewolf_model: "minimax",
+          seed: 21,
+          max_rounds: 8,
+          winner: "Villagers",
           status: "running",
           created_at: "2026-04-24T12:00:00Z",
           started_at: "2026-04-24T12:00:01Z",
@@ -59,5 +70,6 @@ describe("live run api", () => {
 
     expect(run.status).toBe("running");
     expect(run.event_count).toBe(4);
+    expect(run.winner).toBe("Villagers");
   });
 });
