@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { routes } from "../routes";
+import { routes } from "../routes/definitions";
 
 describe("App", () => {
   afterEach(() => {
