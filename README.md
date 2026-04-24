@@ -22,6 +22,8 @@ cd apps/api && uv sync
 pnpm install
 ```
 
+`uv` 只用于首次同步 Python 依赖。如果本机没有 `uv`，请先安装 `uv`，或者使用已经存在的 `apps/api/.venv` 运行后端；`make api` 会直接调用项目内的 `.venv/bin/python`。
+
 如需数据库，启动 PostgreSQL 并执行迁移：
 
 ```bash
@@ -43,7 +45,7 @@ make api
 
 ```bash
 cd apps/api
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 后端地址：
@@ -98,7 +100,7 @@ http://127.0.0.1:5173
 常用单独命令：
 
 ```bash
-cd apps/api && uv run pytest
+cd apps/api && .venv/bin/python -m pytest
 cd apps/web && pnpm test -- --run
 cd apps/web && pnpm build
 ```
