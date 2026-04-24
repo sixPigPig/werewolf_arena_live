@@ -128,6 +128,21 @@ class CapturingEventSink:
         self.events.append({"type": event_type, **kwargs})
 
 
+class MutatingWorldStateSink:
+    def publish(self, event_type: str, **kwargs: object) -> None:
+        if event_type != "model_request_started":
+            return
+
+        payload = kwargs.get("payload")
+        if not isinstance(payload, dict):
+            return
+
+        world_state = payload.get("world_state")
+        if isinstance(world_state, dict):
+            world_state["options"] = "__mutated_by_sink__"
+            world_state["remaining_players"] = "__mutated_by_sink__"
+
+
 def test_run_game_publishes_live_events(tmp_path) -> None:
     sink = CapturingEventSink()
 
@@ -148,3 +163,51 @@ def test_run_game_publishes_live_events(tmp_path) -> None:
     assert "model_response_received" in event_types
     assert "action_parsed" in event_types
     assert "state_updated" in event_types
+
+
+def test_run_game_event_sink_does_not_change_final_logs(tmp_path) -> None:
+    baseline = run_game(
+        logs_dir=tmp_path / "baseline",
+        seed=21,
+        max_rounds=4,
+        provider=ScriptedChineseProvider(),
+        session_id="session_20260424_120000_ab12cd34",
+    )
+    with_sink = run_game(
+        logs_dir=tmp_path / "with_sink",
+        seed=21,
+        max_rounds=4,
+        provider=ScriptedChineseProvider(),
+        session_id="session_20260424_120000_ab12cd34",
+        event_sink=CapturingEventSink(),
+    )
+
+    assert _read_json_outputs(with_sink.log_directory) == _read_json_outputs(baseline.log_directory)
+
+
+def test_model_request_world_state_event_payload_is_isolated_from_gameplay(tmp_path) -> None:
+    baseline = run_game(
+        logs_dir=tmp_path / "baseline",
+        seed=21,
+        max_rounds=4,
+        provider=ScriptedChineseProvider(),
+        session_id="session_20260424_120000_ab12cd34",
+    )
+    with_mutating_sink = run_game(
+        logs_dir=tmp_path / "with_mutating_sink",
+        seed=21,
+        max_rounds=4,
+        provider=ScriptedChineseProvider(),
+        session_id="session_20260424_120000_ab12cd34",
+        event_sink=MutatingWorldStateSink(),
+    )
+
+    assert _read_json_outputs(with_mutating_sink.log_directory) == _read_json_outputs(
+        baseline.log_directory
+    )
+
+
+def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:
+    complete = json.loads((log_directory / "game_complete.json").read_text())
+    logs = json.loads((log_directory / "game_logs.json").read_text())
+    return complete, logs

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from collections import Counter
 
 from app.werewolf.config import (
@@ -389,7 +390,7 @@ class GameEngine:
             phase=phase,
             actor=player.name,
             action=action,
-            payload={"model": player.model, "world_state": world_state},
+            payload={"model": player.model, "world_state": copy.deepcopy(world_state)},
         )
         value, lm_log = generate_action(
             provider=self.provider,
