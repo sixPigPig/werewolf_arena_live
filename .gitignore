@@ -28,3 +28,4 @@ apps/api/.venv/
 
 # Logs
 *.log
+apps/api/logs/
