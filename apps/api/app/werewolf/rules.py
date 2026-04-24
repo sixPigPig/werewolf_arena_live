@@ -173,7 +173,7 @@ def render_rule_text(rule_set: RuleSet) -> str:
     role_text = "、".join(f"{role.count} 名{role.role}" for role in rule_set.roles)
     lines = [
         f"{rule_set.name}：共 {rule_set.player_count} 名玩家：{role_text}。",
-        f"胜利条件：狼人数量大于或等于其他玩家时狼人胜利，否则好人阵营胜利。",
+        "胜利条件：狼人数量大于或等于其他玩家时狼人胜利，否则好人阵营胜利。",
         "夜晚行动：",
     ]
 
