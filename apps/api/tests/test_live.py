@@ -5,6 +5,19 @@ import json
 from app.werewolf.live import LiveRunRegistry, format_sse
 
 
+def classic_rule_kwargs() -> dict:
+    return {
+        "rule_set_id": "classic_8",
+        "rule_set": {
+            "id": "classic_8",
+            "version": "2026.04",
+            "name": "经典 8 人局",
+            "player_count": 8,
+            "roles": [],
+        },
+    }
+
+
 def test_registry_creates_run_with_initial_event() -> None:
     registry = LiveRunRegistry()
 
@@ -14,6 +27,7 @@ def test_registry_creates_run_with_initial_event() -> None:
         werewolf_model="deepseek-chat",
         seed=21,
         max_rounds=8,
+        **classic_rule_kwargs(),
     )
 
     assert run.run_id.startswith("run_")
@@ -31,6 +45,7 @@ def test_registry_appends_ordered_events_and_replays_after_id() -> None:
         werewolf_model="deepseek-chat",
         seed=None,
         max_rounds=8,
+        **classic_rule_kwargs(),
     )
 
     registry.publish(
@@ -60,6 +75,7 @@ def test_registry_marks_completed_and_failed() -> None:
         werewolf_model="deepseek-chat",
         seed=None,
         max_rounds=8,
+        **classic_rule_kwargs(),
     )
     failed = registry.create_run(
         session_id="session_20260424_120001_cd34ab12",
@@ -67,6 +83,7 @@ def test_registry_marks_completed_and_failed() -> None:
         werewolf_model="deepseek-chat",
         seed=None,
         max_rounds=8,
+        **classic_rule_kwargs(),
     )
 
     registry.mark_running(completed.run_id)
@@ -93,6 +110,7 @@ def test_format_sse_preserves_unicode_and_payload_history_is_stable() -> None:
         werewolf_model="deepseek-chat",
         seed=None,
         max_rounds=8,
+        **classic_rule_kwargs(),
     )
     payload = {"players": ["张三", "李四"], "meta": {"phase": "夜晚"}}
 
