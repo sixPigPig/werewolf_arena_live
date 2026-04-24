@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useGameRunEvents } from "./useGameRunEvents";
@@ -43,30 +43,32 @@ describe("useGameRunEvents", () => {
 
     const { result } = renderHook(() => useGameRunEvents("run_1234abcd"));
     const source = MockEventSource.instances[0];
-    source.onopen?.();
-    source.emit("game_started", {
-      id: 1,
-      type: "game_started",
-      run_id: "run_1234abcd",
-      session_id: "session_20260424_120000_ab12cd34",
-      created_at: "2026-04-24T12:00:00Z",
-      round: null,
-      phase: null,
-      actor: null,
-      action: null,
-      payload: { players: [] },
-    });
-    source.emit("game_started", {
-      id: 1,
-      type: "game_started",
-      run_id: "run_1234abcd",
-      session_id: "session_20260424_120000_ab12cd34",
-      created_at: "2026-04-24T12:00:00Z",
-      round: null,
-      phase: null,
-      actor: null,
-      action: null,
-      payload: { players: [] },
+    act(() => {
+      source.onopen?.();
+      source.emit("game_started", {
+        id: 1,
+        type: "game_started",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:00Z",
+        round: null,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: { players: [] },
+      });
+      source.emit("game_started", {
+        id: 1,
+        type: "game_started",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:00Z",
+        round: null,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: { players: [] },
+      });
     });
 
     await waitFor(() => expect(result.current.events).toHaveLength(1));
@@ -79,22 +81,68 @@ describe("useGameRunEvents", () => {
 
     const { result } = renderHook(() => useGameRunEvents("run_1234abcd"));
     const source = MockEventSource.instances[0];
-    source.onopen?.();
-    source.emit("game_completed", {
-      id: 2,
-      type: "game_completed",
-      run_id: "run_1234abcd",
-      session_id: "session_20260424_120000_ab12cd34",
-      created_at: "2026-04-24T12:01:00Z",
-      round: null,
-      phase: null,
-      actor: null,
-      action: null,
-      payload: { winner: "villagers" },
+    act(() => {
+      source.onopen?.();
+      source.emit("game_completed", {
+        id: 2,
+        type: "game_completed",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:01:00Z",
+        round: null,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: { winner: "villagers" },
+      });
     });
 
     await waitFor(() => expect(result.current.connectionState).toBe("closed"));
     expect(source.closed).toBe(true);
+    expect(result.current.latestEvent?.type).toBe("game_completed");
+  });
+
+  it("ignores late callbacks after a terminal event closes the source", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const { result } = renderHook(() => useGameRunEvents("run_1234abcd"));
+    const source = MockEventSource.instances[0];
+    act(() => {
+      source.onopen?.();
+      source.emit("game_completed", {
+        id: 2,
+        type: "game_completed",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:01:00Z",
+        round: null,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: { winner: "villagers" },
+      });
+    });
+
+    await waitFor(() => expect(result.current.connectionState).toBe("closed"));
+
+    act(() => {
+      source.onerror?.();
+      source.emit("state_updated", {
+        id: 3,
+        type: "state_updated",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:02:00Z",
+        round: 1,
+        phase: "day",
+        actor: null,
+        action: null,
+        payload: { status: "late" },
+      });
+    });
+
+    expect(result.current.connectionState).toBe("closed");
+    expect(result.current.events).toHaveLength(1);
     expect(result.current.latestEvent?.type).toBe("game_completed");
   });
 });

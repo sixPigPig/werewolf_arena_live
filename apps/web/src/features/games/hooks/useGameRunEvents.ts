@@ -34,14 +34,35 @@ export function useGameRunEvents(runId: string | undefined) {
     }
 
     setConnectionState("connecting");
+    let isActive = true;
     const source = new EventSource(
       `${API_BASE_URL}/api/v1/games/runs/${runId}/events`,
     );
 
-    source.onopen = () => setConnectionState("open");
-    source.onerror = () => setConnectionState("error");
+    const closeSource = () => {
+      source.onopen = null;
+      source.onerror = null;
+      source.onmessage = null;
+      source.close();
+    };
+
+    source.onopen = () => {
+      if (!isActive) {
+        return;
+      }
+      setConnectionState("open");
+    };
+    source.onerror = () => {
+      if (!isActive) {
+        return;
+      }
+      setConnectionState("error");
+    };
 
     const handleEvent = (message: MessageEvent) => {
+      if (!isActive) {
+        return;
+      }
       const event = JSON.parse(message.data) as LiveGameEvent;
       setEvents((current) => {
         if (current.some((item) => item.id === event.id)) {
@@ -50,8 +71,9 @@ export function useGameRunEvents(runId: string | undefined) {
         return [...current, event].sort((a, b) => a.id - b.id);
       });
       if (event.type === "game_completed" || event.type === "game_failed") {
+        isActive = false;
         setConnectionState("closed");
-        source.close();
+        closeSource();
       }
     };
 
@@ -60,7 +82,8 @@ export function useGameRunEvents(runId: string | undefined) {
     }
 
     return () => {
-      source.close();
+      isActive = false;
+      closeSource();
       setConnectionState("closed");
     };
   }, [runId]);
