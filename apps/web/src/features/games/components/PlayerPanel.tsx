@@ -6,9 +6,13 @@ type PlayerPanelProps = {
 
 const ROLE_STYLES: Record<string, string> = {
   werewolf: "border-red-200 bg-red-50 text-red-800",
+  狼人: "border-red-200 bg-red-50 text-red-800",
   villager: "border-slate-200 bg-slate-50 text-slate-700",
+  村民: "border-slate-200 bg-slate-50 text-slate-700",
   seer: "border-violet-200 bg-violet-50 text-violet-800",
+  预言家: "border-violet-200 bg-violet-50 text-violet-800",
   doctor: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  医生: "border-emerald-200 bg-emerald-50 text-emerald-800",
 };
 
 export function PlayerPanel({ game }: PlayerPanelProps) {

@@ -10,7 +10,10 @@ import { RoundTimeline } from "../features/games/components/RoundTimeline";
 
 export function GameDetailPage() {
   const { sessionId } = useParams();
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{
+    itemId: string;
+    sessionId: string;
+  } | null>(null);
 
   const { data, isError, isPending } = useQuery({
     queryKey: ["games", sessionId],
@@ -35,20 +38,26 @@ export function GameDetailPage() {
   }
 
   const selectedItem =
-    data.debugItems.find((item) => item.id === selectedItemId) ??
+    selection?.sessionId === data.sessionId
+      ? data.debugItems.find((item) => item.id === selection.itemId)
+      : undefined;
+  const visibleSelectedItem =
+    selectedItem ??
     data.debugItems[0] ??
     null;
 
   return (
     <GameLayout
-      debug={<DebugPanel item={selectedItem} />}
+      debug={<DebugPanel item={visibleSelectedItem} />}
       players={<PlayerPanel game={data} />}
       timeline={
         <RoundTimeline
           debugItems={data.debugItems}
-          onSelect={(item) => setSelectedItemId(item.id)}
+          onSelect={(item) =>
+            setSelection({ itemId: item.id, sessionId: data.sessionId })
+          }
           rounds={data.rounds}
-          selectedItem={selectedItem}
+          selectedItem={visibleSelectedItem}
         />
       }
     />

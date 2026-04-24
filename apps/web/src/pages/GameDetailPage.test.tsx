@@ -1,12 +1,13 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Route, Routes } from "react-router-dom";
+import { Link, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithClient } from "../tests/renderWithClient";
 import { GameDetailPage } from "./GameDetailPage";
 
 const sessionId = "session_20260424_050950_66ea9f38";
+const nextSessionId = "session_20260424_060000_next";
 
 const detailResponse = {
   session_id: sessionId,
@@ -36,7 +37,7 @@ const detailResponse = {
         investigated: null,
         exiled: null,
         debate: [{ speaker: "李四", message: "我不是狼。" }],
-        bids: [{ 张三: 0.82 }],
+        bids: [{ 张三: 0.82 }, { 张三: 0.41 }],
         votes: [{ 李四: "张三" }],
         summaries: { 张三: "继续隐藏身份。" },
         success: true,
@@ -70,6 +71,17 @@ const detailResponse = {
               prompt: "是否争取发言？",
               raw_response: "{\"score\":0.82}",
               result: { score: 0.82 },
+            },
+          },
+          {
+            actor: "张三",
+            action: "bid",
+            options: ["0", "1"],
+            choice: "0.41",
+            lm_log: {
+              prompt: "是否继续争取发言？",
+              raw_response: "{\"score\":0.41}",
+              result: { score: 0.41 },
             },
           },
         ],
@@ -119,18 +131,75 @@ const detailResponse = {
   ],
 };
 
+const nextDetailResponse = {
+  ...detailResponse,
+  session_id: nextSessionId,
+  state: {
+    ...detailResponse.state,
+    session_id: nextSessionId,
+    winner: "好人阵营",
+    rounds: [
+      {
+        ...detailResponse.state.rounds[0],
+        eliminated: "张三",
+        bids: [{ 李四: 0.33 }],
+      },
+    ],
+  },
+  logs: [
+    {
+      ...detailResponse.logs[0],
+      eliminate: {
+        ...detailResponse.logs[0].eliminate,
+        choice: "张三",
+        lm_log: {
+          prompt: "新对局请选择今晚击杀对象。",
+          raw_response: "{\"choice\":\"张三\"}",
+          result: { choice: "张三" },
+        },
+      },
+      bid: [
+        [
+          {
+            actor: "李四",
+            action: "bid",
+            options: ["0", "1"],
+            choice: "0.33",
+            lm_log: {
+              prompt: "新对局是否争取发言？",
+              raw_response: "{\"score\":0.33}",
+              result: { score: 0.33 },
+            },
+          },
+        ],
+      ],
+    },
+  ],
+};
+
+function mockGameDetailFetch() {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    const body = url.includes(nextSessionId)
+      ? nextDetailResponse
+      : detailResponse;
+
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
+}
+
 describe("GameDetailPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("renders replay detail and opens debug output for a selected action", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify(detailResponse), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    mockGameDetailFetch();
 
     renderWithClient(
       <Routes>
@@ -145,14 +214,48 @@ describe("GameDetailPage", () => {
       screen.getByRole("heading", { name: "第 1 轮" }),
     ).toBeInTheDocument();
     expect(screen.getByText("李四 -> 我不是狼。")).toBeInTheDocument();
+    expect(screen.getByText("请选择今晚击杀对象。")).toBeInTheDocument();
+    expect(screen.getByText('{"choice":"李四"}')).toBeInTheDocument();
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: /狼人击杀 张三 选择 李四/i,
+        name: /发言竞价 张三 选择 0.82/i,
       }),
     );
 
-    expect(screen.getByText("请选择今晚击杀对象。")).toBeInTheDocument();
-    expect(screen.getByText('{"choice":"李四"}')).toBeInTheDocument();
+    expect(screen.queryByText("请选择今晚击杀对象。")).not.toBeInTheDocument();
+    expect(screen.getByText("是否争取发言？")).toBeInTheDocument();
+    expect(screen.getByText('{"score":0.82}')).toBeInTheDocument();
+  });
+
+  it("resets the selected debug item when navigating to another session", async () => {
+    mockGameDetailFetch();
+
+    renderWithClient(
+      <>
+        <Link to={`/games/${nextSessionId}`}>下一局</Link>
+        <Routes>
+          <Route path="/games/:sessionId" element={<GameDetailPage />} />
+        </Routes>
+      </>,
+      `/games/${sessionId}`,
+    );
+
+    expect(await screen.findByText("请选择今晚击杀对象。")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /发言竞价 张三 选择 0.82/i,
+      }),
+    );
+
+    expect(screen.getByText("是否争取发言？")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("link", { name: "下一局" }));
+
+    expect(
+      await screen.findByText("新对局请选择今晚击杀对象。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("新对局是否争取发言？")).not.toBeInTheDocument();
   });
 });

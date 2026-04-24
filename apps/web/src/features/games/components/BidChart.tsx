@@ -13,10 +13,10 @@ export function BidChart({ bids }: BidChartProps) {
 
   return (
     <div className="space-y-2">
-      {bids.map((bid) => (
+      {bids.map((bid, index) => (
         <div
           className="grid grid-cols-[5rem_1fr_3rem] items-center gap-2"
-          key={bid.actor}
+          key={`${bid.actor}-${index}`}
         >
           <span className="truncate text-sm text-slate-700">{bid.actor}</span>
           <div className="h-2 overflow-hidden rounded bg-slate-100">
