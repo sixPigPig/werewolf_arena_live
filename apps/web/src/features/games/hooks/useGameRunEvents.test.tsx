@@ -145,4 +145,39 @@ describe("useGameRunEvents", () => {
     expect(result.current.events).toHaveLength(1);
     expect(result.current.latestEvent?.type).toBe("game_completed");
   });
+
+  it("resets events when subscribing to another run", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const { rerender, result } = renderHook(
+      ({ runId }: { runId: string }) => useGameRunEvents(runId),
+      { initialProps: { runId: "run_first" } },
+    );
+    const firstSource = MockEventSource.instances[0];
+    act(() => {
+      firstSource.emit("game_completed", {
+        id: 1,
+        type: "game_completed",
+        run_id: "run_first",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:01:00Z",
+        round: null,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: { winner: "villagers" },
+      });
+    });
+
+    await waitFor(() => expect(result.current.events).toHaveLength(1));
+
+    rerender({ runId: "run_second" });
+
+    await waitFor(() => expect(result.current.events).toHaveLength(0));
+    expect(result.current.latestEvent).toBeNull();
+    expect(result.current.connectionState).toBe("connecting");
+    expect(MockEventSource.instances[1].url).toBe(
+      "/api/v1/games/runs/run_second/events",
+    );
+  });
 });

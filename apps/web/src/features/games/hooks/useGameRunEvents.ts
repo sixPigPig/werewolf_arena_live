@@ -34,6 +34,7 @@ export function useGameRunEvents(runId: string | undefined) {
     }
 
     setConnectionState("connecting");
+    setEvents([]);
     let isActive = true;
     const source = new EventSource(
       `${API_BASE_URL}/api/v1/games/runs/${runId}/events`,
