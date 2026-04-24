@@ -1,47 +1,47 @@
-# Werewolf Replay Workbench Implementation Plan
+# 狼人杀对局复盘工作台实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给 agentic workers：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans，按任务逐项实施本计划。步骤使用 checkbox（`- [ ]`）语法进行跟踪。
 
-**Goal:** Build a read-only Chinese Werewolf replay workbench that lists generated game sessions and opens a three-panel replay/debug view for complete and partial logs.
+**目标：** 构建一个只读的中文狼人杀对局复盘工作台，用于列出已生成的游戏会话，并为完整日志和部分日志打开三栏复盘/调试视图。
 
-**Architecture:** Add a small backend replay API that reads existing session log directories and returns stable JSON contracts without exposing file paths. Add frontend API adapters, TanStack Query pages, and focused React components that render players, rounds, actions, votes, summaries, and model debug details. Keep the first phase read-only: no WebSocket, no model execution from the browser, and no changes to the game runner.
+**架构：** 新增一个小型后端复盘 API，读取现有会话日志目录，并在不暴露文件路径的前提下返回稳定的 JSON 契约。新增前端 API 适配器、TanStack Query 页面，以及职责聚焦的 React 组件，用于渲染玩家、轮次、行动、投票、总结和模型调试详情。第一阶段保持只读：不使用 WebSocket，不从浏览器执行模型，也不修改游戏运行器。
 
-**Tech Stack:** FastAPI, pathlib, pytest, React, Vite, React Router, TanStack Query, Testing Library, Tailwind CSS
+**技术栈：** FastAPI, pathlib, pytest, React, Vite, React Router, TanStack Query, Testing Library, Tailwind CSS
 
 ---
 
-## File Structure
+## 文件结构
 
-- Create `apps/api/app/werewolf/replay.py`: session-log reader, path validation, state/log JSON loading, list/detail contracts.
-- Create `apps/api/app/api/routes/games.py`: `/api/v1/games` and `/api/v1/games/{session_id}` read-only routes.
-- Modify `apps/api/app/api/router.py`: include the games router.
-- Modify `apps/api/app/core/config.py`: add `werewolf_logs_dir` setting with default `logs`.
-- Create `apps/api/tests/test_games_api.py`: API tests for session listing, detail loading, partial logs, not found, and invalid session IDs.
-- Create `apps/web/src/features/games/types.ts`: frontend replay, player, round, action, and debug item types.
-- Create `apps/web/src/features/games/api/adapters.ts`: backend JSON to UI model normalization.
-- Create `apps/web/src/features/games/api/listGames.ts`: `GET /api/v1/games` client.
-- Create `apps/web/src/features/games/api/getGameDetail.ts`: `GET /api/v1/games/:sessionId` client plus adapter.
-- Create `apps/web/src/features/games/api/adapters.test.ts`: adapter behavior tests.
-- Create `apps/web/src/features/games/components/SessionList.tsx`: compact session list.
-- Create `apps/web/src/features/games/components/GameLayout.tsx`: responsive three-panel replay shell.
-- Create `apps/web/src/features/games/components/PlayerPanel.tsx`: players, roles, model names, result metadata.
-- Create `apps/web/src/features/games/components/RoundTimeline.tsx`: round loop and phase composition.
-- Create `apps/web/src/features/games/components/NightPhase.tsx`: elimination, protection, investigation.
-- Create `apps/web/src/features/games/components/DayPhase.tsx`: bids, debate, votes, summaries.
-- Create `apps/web/src/features/games/components/ActionCard.tsx`: clickable action/debug item card.
-- Create `apps/web/src/features/games/components/BidChart.tsx`: compact bid score bars.
-- Create `apps/web/src/features/games/components/VoteTable.tsx`: voter to target rows.
-- Create `apps/web/src/features/games/components/SummaryStrip.tsx`: per-player summary snippets.
-- Create `apps/web/src/features/games/components/DebugPanel.tsx`: prompt, raw response, parsed result viewer.
-- Create `apps/web/src/pages/GamesPage.tsx`: session-list route.
-- Create `apps/web/src/pages/GameDetailPage.tsx`: detail route and selected debug state.
-- Create `apps/web/src/tests/renderWithClient.tsx`: QueryClient and router test helper.
-- Modify `apps/web/src/routes/index.tsx`: `/` redirects to `/games`; add `/games` and `/games/:sessionId`.
-- Modify `apps/web/src/tests/app.test.tsx`: route smoke test for replay workbench.
+- 创建 `apps/api/app/werewolf/replay.py`：会话日志读取器、路径校验、状态/日志 JSON 加载、列表/详情契约。
+- 创建 `apps/api/app/api/routes/games.py`：`/api/v1/games` 和 `/api/v1/games/{session_id}` 只读路由。
+- 修改 `apps/api/app/api/router.py`：引入 games 路由。
+- 修改 `apps/api/app/core/config.py`：添加 `werewolf_logs_dir` 设置，默认值为 `logs`。
+- 创建 `apps/api/tests/test_games_api.py`：覆盖会话列表、详情加载、部分日志、未找到和非法会话 ID 的 API 测试。
+- 创建 `apps/web/src/features/games/types.ts`：前端复盘、玩家、轮次、行动和调试项类型。
+- 创建 `apps/web/src/features/games/api/adapters.ts`：将后端 JSON 规范化为 UI 模型。
+- 创建 `apps/web/src/features/games/api/listGames.ts`：`GET /api/v1/games` 客户端。
+- 创建 `apps/web/src/features/games/api/getGameDetail.ts`：`GET /api/v1/games/:sessionId` 客户端及适配器。
+- 创建 `apps/web/src/features/games/api/adapters.test.ts`：适配器行为测试。
+- 创建 `apps/web/src/features/games/components/SessionList.tsx`：紧凑会话列表。
+- 创建 `apps/web/src/features/games/components/GameLayout.tsx`：响应式三栏复盘外壳。
+- 创建 `apps/web/src/features/games/components/PlayerPanel.tsx`：玩家、角色、模型名称和结果元数据。
+- 创建 `apps/web/src/features/games/components/RoundTimeline.tsx`：轮次循环和阶段组合。
+- 创建 `apps/web/src/features/games/components/NightPhase.tsx`：击杀、守护、查验。
+- 创建 `apps/web/src/features/games/components/DayPhase.tsx`：竞价、辩论、投票、总结。
+- 创建 `apps/web/src/features/games/components/ActionCard.tsx`：可点击的行动/调试项卡片。
+- 创建 `apps/web/src/features/games/components/BidChart.tsx`：紧凑竞价分数条。
+- 创建 `apps/web/src/features/games/components/VoteTable.tsx`：投票者到目标的行列表。
+- 创建 `apps/web/src/features/games/components/SummaryStrip.tsx`：按玩家展示的总结片段。
+- 创建 `apps/web/src/features/games/components/DebugPanel.tsx`：prompt、raw response、parsed result 查看器。
+- 创建 `apps/web/src/pages/GamesPage.tsx`：会话列表路由。
+- 创建 `apps/web/src/pages/GameDetailPage.tsx`：详情路由和选中调试状态。
+- 创建 `apps/web/src/tests/renderWithClient.tsx`：QueryClient 和路由测试辅助工具。
+- 修改 `apps/web/src/routes/index.tsx`：`/` 重定向到 `/games`；添加 `/games` 和 `/games/:sessionId`。
+- 修改 `apps/web/src/tests/app.test.tsx`：复盘工作台的路由冒烟测试。
 
-## Backend Contract
+## 后端契约
 
-`GET /api/v1/games` returns:
+`GET /api/v1/games` 返回：
 
 ```json
 {
@@ -57,7 +57,7 @@
 }
 ```
 
-`GET /api/v1/games/{session_id}` returns:
+`GET /api/v1/games/{session_id}` 返回：
 
 ```json
 {
@@ -74,20 +74,20 @@
 }
 ```
 
-Only IDs matching `session_YYYYMMDD_HHMMSS_suffix` are accepted. Missing valid sessions return `404`; invalid IDs return `422` from the path parameter pattern.
+只接受匹配 `session_YYYYMMDD_HHMMSS_suffix` 的 ID。缺失的有效会话返回 `404`；非法 ID 由路径参数模式返回 `422`。
 
-## Task 1: Backend Replay API
+## 任务 1：后端复盘 API
 
-**Files:**
-- Create: `apps/api/tests/test_games_api.py`
-- Create: `apps/api/app/werewolf/replay.py`
-- Create: `apps/api/app/api/routes/games.py`
-- Modify: `apps/api/app/api/router.py`
-- Modify: `apps/api/app/core/config.py`
+**文件：**
+- 创建：`apps/api/tests/test_games_api.py`
+- 创建：`apps/api/app/werewolf/replay.py`
+- 创建：`apps/api/app/api/routes/games.py`
+- 修改：`apps/api/app/api/router.py`
+- 修改：`apps/api/app/core/config.py`
 
-- [ ] **Step 1: Write failing backend API tests**
+- [ ] **步骤 1：编写预期失败的后端 API 测试**
 
-Create `apps/api/tests/test_games_api.py`:
+创建 `apps/api/tests/test_games_api.py`：
 
 ```python
 import json
@@ -236,19 +236,19 @@ def test_get_game_detail_rejects_invalid_session_id(tmp_path) -> None:
     assert response.status_code == 422
 ```
 
-- [ ] **Step 2: Run backend tests and verify RED**
+- [ ] **步骤 2：运行后端测试并确认 RED**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && .venv/bin/python -m pytest tests/test_games_api.py -q
 ```
 
-Expected: FAIL because `app.api.routes.games` and `app.werewolf.replay` do not exist.
+预期：FAIL，因为 `app.api.routes.games` 和 `app.werewolf.replay` 还不存在。
 
-- [ ] **Step 3: Implement replay store**
+- [ ] **步骤 3：实现复盘存储**
 
-Create `apps/api/app/werewolf/replay.py`:
+创建 `apps/api/app/werewolf/replay.py`：
 
 ```python
 from __future__ import annotations
@@ -342,15 +342,15 @@ def created_at_from_session_id(session_id: str) -> str | None:
     return created_at.isoformat().replace("+00:00", "Z")
 ```
 
-- [ ] **Step 4: Add config and routes**
+- [ ] **步骤 4：添加配置和路由**
 
-Modify `apps/api/app/core/config.py` by adding the setting inside `Settings`:
+修改 `apps/api/app/core/config.py`，在 `Settings` 中添加设置：
 
 ```python
     werewolf_logs_dir: str = "logs"
 ```
 
-Create `apps/api/app/api/routes/games.py`:
+创建 `apps/api/app/api/routes/games.py`：
 
 ```python
 from __future__ import annotations
@@ -390,7 +390,7 @@ def get_game_detail(
         raise HTTPException(status_code=404, detail="Game session not found") from exc
 ```
 
-Modify `apps/api/app/api/router.py`:
+修改 `apps/api/app/api/router.py`：
 
 ```python
 from fastapi import APIRouter
@@ -404,37 +404,37 @@ api_router.include_router(health_router, prefix="/health", tags=["health"])
 api_router.include_router(games_router, prefix="/games", tags=["games"])
 ```
 
-- [ ] **Step 5: Run backend tests and verify GREEN**
+- [ ] **步骤 5：运行后端测试并确认 GREEN**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && .venv/bin/python -m pytest tests/test_games_api.py -q
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 6: Commit backend API**
+- [ ] **步骤 6：提交后端 API**
 
-Run:
+运行：
 
 ```bash
 git add apps/api/app/core/config.py apps/api/app/api/router.py apps/api/app/api/routes/games.py apps/api/app/werewolf/replay.py apps/api/tests/test_games_api.py
 git commit -m "feat: add werewolf replay api"
 ```
 
-## Task 2: Frontend Replay Types And Adapters
+## 任务 2：前端复盘类型和适配器
 
-**Files:**
-- Create: `apps/web/src/features/games/types.ts`
-- Create: `apps/web/src/features/games/api/adapters.ts`
-- Create: `apps/web/src/features/games/api/adapters.test.ts`
-- Create: `apps/web/src/features/games/api/listGames.ts`
-- Create: `apps/web/src/features/games/api/getGameDetail.ts`
+**文件：**
+- 创建：`apps/web/src/features/games/types.ts`
+- 创建：`apps/web/src/features/games/api/adapters.ts`
+- 创建：`apps/web/src/features/games/api/adapters.test.ts`
+- 创建：`apps/web/src/features/games/api/listGames.ts`
+- 创建：`apps/web/src/features/games/api/getGameDetail.ts`
 
-- [ ] **Step 1: Write failing adapter tests**
+- [ ] **步骤 1：编写预期失败的适配器测试**
 
-Create `apps/web/src/features/games/api/adapters.test.ts`:
+创建 `apps/web/src/features/games/api/adapters.test.ts`：
 
 ```typescript
 import { describe, expect, it } from "vitest";
@@ -524,19 +524,19 @@ describe("normalizeGameReplay", () => {
 });
 ```
 
-- [ ] **Step 2: Run adapter tests and verify RED**
+- [ ] **步骤 2：运行适配器测试并确认 RED**
 
-Run:
+运行：
 
 ```bash
 cd apps/web && pnpm test -- --run src/features/games/api/adapters.test.ts
 ```
 
-Expected: FAIL because the games adapter module does not exist.
+预期：FAIL，因为 games 适配器模块还不存在。
 
-- [ ] **Step 3: Add frontend types**
+- [ ] **步骤 3：添加前端类型**
 
-Create `apps/web/src/features/games/types.ts`:
+创建 `apps/web/src/features/games/types.ts`：
 
 ```typescript
 export type GameStatus = "complete" | "partial";
@@ -654,9 +654,9 @@ export type GameReplay = {
 };
 ```
 
-- [ ] **Step 4: Add API functions and adapter**
+- [ ] **步骤 4：添加 API 函数和适配器**
 
-Create `apps/web/src/features/games/api/listGames.ts`:
+创建 `apps/web/src/features/games/api/listGames.ts`：
 
 ```typescript
 import { apiFetch } from "../../../api/client";
@@ -667,7 +667,7 @@ export function listGames() {
 }
 ```
 
-Create `apps/web/src/features/games/api/getGameDetail.ts`:
+创建 `apps/web/src/features/games/api/getGameDetail.ts`：
 
 ```typescript
 import { apiFetch } from "../../../api/client";
@@ -681,7 +681,7 @@ export async function getGameDetail(sessionId: string): Promise<GameReplay> {
 }
 ```
 
-Create `apps/web/src/features/games/api/adapters.ts`:
+创建 `apps/web/src/features/games/api/adapters.ts`：
 
 ```typescript
 import type {
@@ -776,36 +776,36 @@ function pushAction(
 }
 ```
 
-- [ ] **Step 5: Run adapter tests and verify GREEN**
+- [ ] **步骤 5：运行适配器测试并确认 GREEN**
 
-Run:
+运行：
 
 ```bash
 cd apps/web && pnpm test -- --run src/features/games/api/adapters.test.ts
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 6: Commit frontend data layer**
+- [ ] **步骤 6：提交前端数据层**
 
-Run:
+运行：
 
 ```bash
 git add apps/web/src/features/games/types.ts apps/web/src/features/games/api
 git commit -m "feat: add werewolf replay data adapters"
 ```
 
-## Task 3: Games List Page
+## 任务 3：游戏列表页面
 
-**Files:**
-- Create: `apps/web/src/tests/renderWithClient.tsx`
-- Create: `apps/web/src/features/games/components/SessionList.tsx`
-- Create: `apps/web/src/pages/GamesPage.tsx`
-- Create: `apps/web/src/pages/GamesPage.test.tsx`
+**文件：**
+- 创建：`apps/web/src/tests/renderWithClient.tsx`
+- 创建：`apps/web/src/features/games/components/SessionList.tsx`
+- 创建：`apps/web/src/pages/GamesPage.tsx`
+- 创建：`apps/web/src/pages/GamesPage.test.tsx`
 
-- [ ] **Step 1: Add test render helper**
+- [ ] **步骤 1：添加测试渲染辅助工具**
 
-Create `apps/web/src/tests/renderWithClient.tsx`:
+创建 `apps/web/src/tests/renderWithClient.tsx`：
 
 ```typescript
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -840,9 +840,9 @@ export function TestQueryProvider({ children }: { children: ReactNode }) {
 }
 ```
 
-- [ ] **Step 2: Write failing GamesPage tests**
+- [ ] **步骤 2：编写预期失败的 GamesPage 测试**
 
-Create `apps/web/src/pages/GamesPage.test.tsx`:
+创建 `apps/web/src/pages/GamesPage.test.tsx`：
 
 ```typescript
 import { screen, waitFor } from "@testing-library/react";
@@ -898,19 +898,19 @@ describe("GamesPage", () => {
 });
 ```
 
-- [ ] **Step 3: Run GamesPage tests and verify RED**
+- [ ] **步骤 3：运行 GamesPage 测试并确认 RED**
 
-Run:
+运行：
 
 ```bash
 cd apps/web && pnpm test -- --run src/pages/GamesPage.test.tsx
 ```
 
-Expected: FAIL because `GamesPage` and `SessionList` do not exist.
+预期：FAIL，因为 `GamesPage` 和 `SessionList` 还不存在。
 
-- [ ] **Step 4: Implement session list page**
+- [ ] **步骤 4：实现会话列表页面**
 
-Create `apps/web/src/features/games/components/SessionList.tsx`:
+创建 `apps/web/src/features/games/components/SessionList.tsx`：
 
 ```tsx
 import { Link } from "react-router-dom";
@@ -945,7 +945,7 @@ export function SessionList({ sessions }: { sessions: GameSessionSummary[] }) {
 }
 ```
 
-Create `apps/web/src/pages/GamesPage.tsx`:
+创建 `apps/web/src/pages/GamesPage.tsx`：
 
 ```tsx
 import { useQuery } from "@tanstack/react-query";
@@ -982,44 +982,44 @@ export function GamesPage() {
 }
 ```
 
-- [ ] **Step 5: Run GamesPage tests and verify GREEN**
+- [ ] **步骤 5：运行 GamesPage 测试并确认 GREEN**
 
-Run:
+运行：
 
 ```bash
 cd apps/web && pnpm test -- --run src/pages/GamesPage.test.tsx
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 6: Commit games list page**
+- [ ] **步骤 6：提交游戏列表页面**
 
-Run:
+运行：
 
 ```bash
 git add apps/web/src/tests/renderWithClient.tsx apps/web/src/features/games/components/SessionList.tsx apps/web/src/pages/GamesPage.tsx apps/web/src/pages/GamesPage.test.tsx
 git commit -m "feat: add werewolf games list page"
 ```
 
-## Task 4: Replay Detail Components And Debug Panel
+## 任务 4：复盘详情组件和调试面板
 
-**Files:**
-- Create: `apps/web/src/features/games/components/ActionCard.tsx`
-- Create: `apps/web/src/features/games/components/BidChart.tsx`
-- Create: `apps/web/src/features/games/components/DebugPanel.tsx`
-- Create: `apps/web/src/features/games/components/DayPhase.tsx`
-- Create: `apps/web/src/features/games/components/GameLayout.tsx`
-- Create: `apps/web/src/features/games/components/NightPhase.tsx`
-- Create: `apps/web/src/features/games/components/PlayerPanel.tsx`
-- Create: `apps/web/src/features/games/components/RoundTimeline.tsx`
-- Create: `apps/web/src/features/games/components/SummaryStrip.tsx`
-- Create: `apps/web/src/features/games/components/VoteTable.tsx`
-- Create: `apps/web/src/pages/GameDetailPage.tsx`
-- Create: `apps/web/src/pages/GameDetailPage.test.tsx`
+**文件：**
+- 创建：`apps/web/src/features/games/components/ActionCard.tsx`
+- 创建：`apps/web/src/features/games/components/BidChart.tsx`
+- 创建：`apps/web/src/features/games/components/DebugPanel.tsx`
+- 创建：`apps/web/src/features/games/components/DayPhase.tsx`
+- 创建：`apps/web/src/features/games/components/GameLayout.tsx`
+- 创建：`apps/web/src/features/games/components/NightPhase.tsx`
+- 创建：`apps/web/src/features/games/components/PlayerPanel.tsx`
+- 创建：`apps/web/src/features/games/components/RoundTimeline.tsx`
+- 创建：`apps/web/src/features/games/components/SummaryStrip.tsx`
+- 创建：`apps/web/src/features/games/components/VoteTable.tsx`
+- 创建：`apps/web/src/pages/GameDetailPage.tsx`
+- 创建：`apps/web/src/pages/GameDetailPage.test.tsx`
 
-- [ ] **Step 1: Write failing replay interaction test**
+- [ ] **步骤 1：编写预期失败的复盘交互测试**
 
-Create `apps/web/src/pages/GameDetailPage.test.tsx`:
+创建 `apps/web/src/pages/GameDetailPage.test.tsx`：
 
 ```typescript
 import { screen, waitFor } from "@testing-library/react";
@@ -1114,19 +1114,19 @@ describe("GameDetailPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run replay test and verify RED**
+- [ ] **步骤 2：运行复盘测试并确认 RED**
 
-Run:
+运行：
 
 ```bash
 cd apps/web && pnpm test -- --run src/pages/GameDetailPage.test.tsx
 ```
 
-Expected: FAIL because the detail page and components do not exist.
+预期：FAIL，因为详情页和组件还不存在。
 
-- [ ] **Step 3: Implement layout, player panel, and debug panel**
+- [ ] **步骤 3：实现布局、玩家面板和调试面板**
 
-Create `apps/web/src/features/games/components/GameLayout.tsx`:
+创建 `apps/web/src/features/games/components/GameLayout.tsx`：
 
 ```tsx
 import type { ReactNode } from "react";
@@ -1150,7 +1150,7 @@ export function GameLayout({
 }
 ```
 
-Create `apps/web/src/features/games/components/PlayerPanel.tsx`:
+创建 `apps/web/src/features/games/components/PlayerPanel.tsx`：
 
 ```tsx
 import type { GameReplay } from "../types";
@@ -1199,7 +1199,7 @@ export function PlayerPanel({ replay }: { replay: GameReplay }) {
 }
 ```
 
-Create `apps/web/src/features/games/components/DebugPanel.tsx`:
+创建 `apps/web/src/features/games/components/DebugPanel.tsx`：
 
 ```tsx
 import type { DebugItem } from "../types";
@@ -1237,9 +1237,9 @@ function DebugBlock({ title, value }: { title: string; value: string }) {
 }
 ```
 
-- [ ] **Step 4: Implement action, phase, and timeline components**
+- [ ] **步骤 4：实现行动、阶段和时间线组件**
 
-Create `apps/web/src/features/games/components/ActionCard.tsx`:
+创建 `apps/web/src/features/games/components/ActionCard.tsx`：
 
 ```tsx
 import type { DebugItem } from "../types";
@@ -1272,7 +1272,7 @@ export function ActionCard({
 }
 ```
 
-Create `apps/web/src/features/games/components/BidChart.tsx`:
+创建 `apps/web/src/features/games/components/BidChart.tsx`：
 
 ```tsx
 import type { BidEntry } from "../types";
@@ -1298,7 +1298,7 @@ export function BidChart({ bids }: { bids: BidEntry[] }) {
 }
 ```
 
-Create `apps/web/src/features/games/components/VoteTable.tsx`:
+创建 `apps/web/src/features/games/components/VoteTable.tsx`：
 
 ```tsx
 import type { VoteEntry } from "../types";
@@ -1321,7 +1321,7 @@ export function VoteTable({ votes }: { votes: VoteEntry[] }) {
 }
 ```
 
-Create `apps/web/src/features/games/components/SummaryStrip.tsx`:
+创建 `apps/web/src/features/games/components/SummaryStrip.tsx`：
 
 ```tsx
 export function SummaryStrip({ summaries }: { summaries: Record<string, string> }) {
@@ -1343,7 +1343,7 @@ export function SummaryStrip({ summaries }: { summaries: Record<string, string> 
 }
 ```
 
-Create `apps/web/src/features/games/components/NightPhase.tsx`:
+创建 `apps/web/src/features/games/components/NightPhase.tsx`：
 
 ```tsx
 import type { DebugItem, GameRound } from "../types";
@@ -1379,7 +1379,7 @@ export function NightPhase({
 }
 ```
 
-Create `apps/web/src/features/games/components/DayPhase.tsx`:
+创建 `apps/web/src/features/games/components/DayPhase.tsx`：
 
 ```tsx
 import type { DebugItem, GameRound } from "../types";
@@ -1423,7 +1423,7 @@ export function DayPhase({
 }
 ```
 
-Create `apps/web/src/features/games/components/RoundTimeline.tsx`:
+创建 `apps/web/src/features/games/components/RoundTimeline.tsx`：
 
 ```tsx
 import type { DebugItem, GameReplay } from "../types";
@@ -1464,9 +1464,9 @@ export function RoundTimeline({
 }
 ```
 
-- [ ] **Step 5: Implement detail page**
+- [ ] **步骤 5：实现详情页**
 
-Create `apps/web/src/pages/GameDetailPage.tsx`:
+创建 `apps/web/src/pages/GameDetailPage.tsx`：
 
 ```tsx
 import { useQuery } from "@tanstack/react-query";
@@ -1521,34 +1521,34 @@ export function GameDetailPage() {
 }
 ```
 
-- [ ] **Step 6: Run replay tests and verify GREEN**
+- [ ] **步骤 6：运行复盘测试并确认 GREEN**
 
-Run:
+运行：
 
 ```bash
 cd apps/web && pnpm test -- --run src/pages/GameDetailPage.test.tsx
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 7: Commit replay detail page**
+- [ ] **步骤 7：提交复盘详情页**
 
-Run:
+运行：
 
 ```bash
 git add apps/web/src/features/games/components apps/web/src/pages/GameDetailPage.tsx apps/web/src/pages/GameDetailPage.test.tsx
 git commit -m "feat: add werewolf replay detail view"
 ```
 
-## Task 5: App Routes And Smoke Tests
+## 任务 5：应用路由和冒烟测试
 
-**Files:**
-- Modify: `apps/web/src/routes/index.tsx`
-- Modify: `apps/web/src/tests/app.test.tsx`
+**文件：**
+- 修改：`apps/web/src/routes/index.tsx`
+- 修改：`apps/web/src/tests/app.test.tsx`
 
-- [ ] **Step 1: Write failing app route test**
+- [ ] **步骤 1：编写预期失败的应用路由测试**
 
-Replace `apps/web/src/tests/app.test.tsx` with:
+将 `apps/web/src/tests/app.test.tsx` 替换为：
 
 ```typescript
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -1581,19 +1581,19 @@ describe("App", () => {
 });
 ```
 
-- [ ] **Step 2: Run app test and verify RED**
+- [ ] **步骤 2：运行应用测试并确认 RED**
 
-Run:
+运行：
 
 ```bash
 cd apps/web && pnpm test -- --run src/tests/app.test.tsx
 ```
 
-Expected: FAIL because `/` still renders the skeleton home page.
+预期：FAIL，因为 `/` 仍然渲染骨架首页。
 
-- [ ] **Step 3: Wire routes**
+- [ ] **步骤 3：接入路由**
 
-Modify `apps/web/src/routes/index.tsx`:
+修改 `apps/web/src/routes/index.tsx`：
 
 ```tsx
 import { Navigate, createBrowserRouter } from "react-router-dom";
@@ -1617,107 +1617,107 @@ export const router = createBrowserRouter([
 ]);
 ```
 
-- [ ] **Step 4: Run app test and verify GREEN**
+- [ ] **步骤 4：运行应用测试并确认 GREEN**
 
-Run:
+运行：
 
 ```bash
 cd apps/web && pnpm test -- --run src/tests/app.test.tsx
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit route wiring**
+- [ ] **步骤 5：提交路由接入**
 
-Run:
+运行：
 
 ```bash
 git add apps/web/src/routes/index.tsx apps/web/src/tests/app.test.tsx
 git commit -m "feat: route app to werewolf replay workbench"
 ```
 
-## Task 6: Full Verification And Manual Browser Check
+## 任务 6：完整验证和手动浏览器检查
 
-**Files:**
-- No new files.
-- Use existing generated logs under `apps/api/logs` or run the CLI once if no logs exist.
+**文件：**
+- 不新增文件。
+- 使用 `apps/api/logs` 下已有的生成日志；如果没有日志，则运行一次 CLI。
 
-- [ ] **Step 1: Run backend tests**
+- [ ] **步骤 1：运行后端测试**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && .venv/bin/python -m pytest
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 2: Run backend lint**
+- [ ] **步骤 2：运行后端 lint**
 
-Run:
+运行：
 
 ```bash
 cd apps/api && .venv/bin/ruff check .
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 3: Run frontend tests**
+- [ ] **步骤 3：运行前端测试**
 
-Run:
+运行：
 
 ```bash
 npm run test:web
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 4: Run frontend build**
+- [ ] **步骤 4：运行前端构建**
 
-Run:
+运行：
 
 ```bash
 npm run build:web
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Start backend and frontend for manual verification**
+- [ ] **步骤 5：启动后端和前端进行手动验证**
 
-Terminal A:
+终端 A：
 
 ```bash
 cd apps/api && .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Terminal B:
+终端 B：
 
 ```bash
 VITE_API_BASE_URL=http://127.0.0.1:8000 pnpm --dir apps/web dev --host 127.0.0.1 --port 5173
 ```
 
-Open `http://127.0.0.1:5173/games`.
+打开 `http://127.0.0.1:5173/games`。
 
-Expected manual checks:
+预期手动检查：
 
-- The session list loads without exposing file paths.
-- A complete game opens and shows players, winner, round count, night phase, day phase, votes, and summaries.
-- A partial game displays the stored error message in the player panel.
-- Clicking an action updates the debug panel with prompt, raw response, and parsed result.
-- The layout stacks into readable panels on a narrow viewport.
+- 会话列表可以加载，且不暴露文件路径。
+- 完整对局可以打开，并展示玩家、胜利阵营、轮次数、夜晚阶段、白天阶段、投票和总结。
+- 部分对局会在玩家面板中显示已存储的错误消息。
+- 点击一条行动后，调试面板会更新并显示 prompt、raw response 和 parsed result。
+- 在窄视口下，布局会堆叠成可读的面板。
 
-- [ ] **Step 6: Commit any verification-driven fixes**
+- [ ] **步骤 6：提交验证过程中发现的小修复**
 
-Run this only if the manual check required a small fix:
+仅在手动检查需要小修复时运行：
 
 ```bash
 git add apps/api apps/web
 git commit -m "fix: polish werewolf replay workbench"
 ```
 
-## Self-Review
+## 自查
 
-- Spec coverage: Task 1 creates the read-only backend games API. Tasks 2 through 5 create the session list, replay route, player panel, round timeline, night/day phases, votes, summaries, and clickable debug panel. Task 6 verifies backend tests, frontend tests, build, and browser behavior.
-- Placeholder scan: The plan contains exact file paths, concrete tests, code blocks, commands, and expected outcomes.
-- Type consistency: Backend uses `session_id`, `status`, `state`, and `logs`; adapters map these to `sessionId`, `status`, `players`, `rounds`, and `debugItems`; components consume the normalized types.
-- Scope check: The plan remains read-only and does not add WebSockets, login, browser-triggered model runs, or changes to DeepSeek game execution.
+- 规格覆盖：任务 1 创建只读后端 games API。任务 2 到任务 5 创建会话列表、复盘路由、玩家面板、轮次时间线、夜晚/白天阶段、投票、总结和可点击调试面板。任务 6 验证后端测试、前端测试、构建和浏览器行为。
+- 占位内容扫描：本计划包含明确的文件路径、具体测试、代码块、命令和预期结果。
+- 类型一致性：后端使用 `session_id`、`status`、`state` 和 `logs`；适配器将这些映射为 `sessionId`、`status`、`players`、`rounds` 和 `debugItems`；组件消费规范化后的类型。
+- 范围检查：本计划保持只读，不添加 WebSockets、登录、浏览器触发的模型运行，也不修改 DeepSeek 游戏执行逻辑。
