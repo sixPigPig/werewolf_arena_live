@@ -1,4 +1,4 @@
-# Python + React Web 单仓库
+# 狼人杀实时观战工作台
 
 ## 仓库结构
 
@@ -8,24 +8,97 @@
 
 ## 快速开始
 
-1. 复制环境变量文件：
-   - `cp apps/api/.env.example apps/api/.env`
-   - `cp apps/web/.env.example apps/web/.env`
-2. 启动 PostgreSQL：
-   - `docker compose up -d db`
-3. 安装依赖：
-   - `cd apps/api && uv sync`
-   - `pnpm install`
-4. 执行数据库迁移：
-   - `cd apps/api && uv run alembic upgrade head`
-5. 启动后端：
-   - `make api`
-6. 启动前端：
-   - `make web`
+复制环境变量文件：
+
+```bash
+cp apps/api/.env.example apps/api/.env
+cp apps/web/.env.example apps/web/.env
+```
+
+安装依赖：
+
+```bash
+cd apps/api && uv sync
+pnpm install
+```
+
+如需数据库，启动 PostgreSQL 并执行迁移：
+
+```bash
+docker compose up -d db
+cd apps/api && uv run alembic upgrade head
+```
+
+## 本地运行
+
+后端和前端需要在两个终端分别运行。
+
+终端 1，启动 FastAPI：
+
+```bash
+make api
+```
+
+等价直接命令：
+
+```bash
+cd apps/api
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+后端地址：
+
+```text
+http://127.0.0.1:8000
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:8000/api/v1/health
+```
+
+终端 2，启动 Vite 前端：
+
+```bash
+make web
+```
+
+等价直接命令：
+
+```bash
+cd apps/web
+pnpm dev --host 127.0.0.1 --port 5173
+```
+
+前端地址：
+
+```text
+http://127.0.0.1:5173
+```
+
+开发服务器会把 `/api` 代理到 `http://localhost:8000`，因此前端页面中的 `/api/v1/...` 请求会自动转发到 FastAPI。
+
+## 实时观战流程
+
+1. 打开 `http://127.0.0.1:5173/games`。
+2. 点击“发起对局”。
+3. 页面会进入 `/games/live/<run_id>`。
+4. 实时观战页会展示玩家列表、当前聚焦玩家、原始事件侧栏。
+5. 对局结束后点击“查看完整复盘”进入 `/games/<session_id>`。
+
+运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。
 
 ## 质量检查
 
 - `make lint`
 - `make test`
-- `cd apps/api && uv run alembic upgrade head`
 - `cd apps/web && pnpm build`
+
+常用单独命令：
+
+```bash
+cd apps/api && uv run pytest
+cd apps/web && pnpm test -- --run
+cd apps/web && pnpm build
+```

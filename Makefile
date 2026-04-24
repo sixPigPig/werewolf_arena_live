@@ -6,12 +6,14 @@ install:
 
 dev:
 	@printf "Run 'make api' and 'make web' in separate terminals.\n"
+	@printf "API: http://127.0.0.1:8000\n"
+	@printf "Web: http://127.0.0.1:5173\n"
 
 api:
-	cd apps/api && uv run uvicorn app.main:app --reload
+	cd apps/api && uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
 web:
-	cd apps/web && pnpm dev
+	cd apps/web && pnpm dev --host 127.0.0.1 --port 5173
 
 db-up:
 	docker compose up -d db
