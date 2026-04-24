@@ -170,9 +170,10 @@ describe("GamesPage", () => {
       "/games",
     );
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "发起对局" }),
-    );
+    await screen.findByLabelText("经典 8 人局");
+    const launchButton = screen.getByRole("button", { name: "发起对局" });
+    expect(launchButton).toBeEnabled();
+    await userEvent.click(launchButton);
 
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/v1/games/runs",

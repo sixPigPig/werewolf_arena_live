@@ -73,7 +73,7 @@ export function CreateGameRunForm() {
 
               return (
                 <label
-                  className={`block rounded-md border p-3 text-sm transition ${
+                  className={`block rounded-md border p-3 text-sm transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-slate-950 has-[:focus-visible]:ring-offset-2 ${
                     isSelected
                       ? "border-slate-950 bg-slate-100"
                       : "border-slate-200 bg-white"
