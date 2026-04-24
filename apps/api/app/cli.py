@@ -21,8 +21,8 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_game_parser = subparsers.add_parser("run-game", help="Run one Werewolf game.")
-    run_game_parser.add_argument("--villager-model", default="local")
-    run_game_parser.add_argument("--werewolf-model", default="local")
+    run_game_parser.add_argument("--villager-model", default="deepseek-chat")
+    run_game_parser.add_argument("--werewolf-model", default="deepseek-chat")
     run_game_parser.add_argument("--seed", type=int, default=None)
     run_game_parser.add_argument("--logs-dir", type=Path, default=Path("logs"))
     run_game_parser.add_argument("--max-rounds", type=int, default=8)
@@ -49,12 +49,12 @@ def _run_game_command(args: argparse.Namespace) -> int:
     except GameRunError as exc:
         print(str(exc), file=sys.stderr)
         if exc.log_directory:
-            print(f"log_directory={exc.log_directory}", file=sys.stderr)
+            print(f"日志目录={exc.log_directory}", file=sys.stderr)
         return 1
 
-    print(f"winner={result.winner}")
+    print(f"胜利阵营={result.winner}")
     print(f"session_id={result.session_id}")
-    print(f"log_directory={result.log_directory}")
+    print(f"日志目录={result.log_directory}")
     return 0
 
 

@@ -1,0 +1,125 @@
+import json
+import os
+
+import pytest
+
+from app.werewolf.lm import FakeProvider, LmLog, generate_action, parse_json_object
+from app.werewolf.prompts_zh import build_prompt
+from app.werewolf.providers import DeepSeekProvider
+
+
+def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
+    prompt, schema = build_prompt(
+        "vote",
+        {
+            "name": "阿宁",
+            "role": "村民",
+            "round": 2,
+            "observations": ["第1轮：昨晚无人出局。"],
+            "remaining_players": "阿宁、老周、小白",
+            "debate": ["老周：我怀疑小白。"],
+            "bidding_rationale": "我需要说明自己的判断。",
+            "personality": "",
+            "num_players": 8,
+            "num_villagers": 4,
+            "werewolf_context": "",
+            "debate_turns_left": 2,
+            "options": "老周、小白",
+        },
+    )
+
+    assert "狼人杀" in prompt
+    assert "你是阿宁，身份是村民" in prompt
+    assert "请只输出合法 JSON" in prompt
+    assert '"vote"' in prompt
+    assert schema["required"] == ["reasoning", "vote"]
+
+
+def test_parse_json_object_accepts_fenced_json() -> None:
+    parsed = parse_json_object('```json\n{"reasoning":"观察发言","vote":"老周"}\n```')
+
+    assert parsed == {"reasoning": "观察发言", "vote": "老周"}
+
+
+def test_generate_action_retries_until_allowed_value() -> None:
+    provider = FakeProvider(
+        [
+            {"reasoning": "先试探", "vote": "不存在的玩家"},
+            {"reasoning": "改投合法目标", "vote": "老周"},
+        ]
+    )
+
+    value, log = generate_action(
+        provider=provider,
+        action="vote",
+        world_state={
+            "name": "阿宁",
+            "role": "村民",
+            "round": 1,
+            "observations": [],
+            "remaining_players": "阿宁、老周、小白",
+            "debate": [],
+            "bidding_rationale": "",
+            "personality": "",
+            "num_players": 8,
+            "num_villagers": 4,
+            "werewolf_context": "",
+            "debate_turns_left": 2,
+            "options": "老周、小白",
+        },
+        model="deepseek-chat",
+        allowed_values=["老周", "小白"],
+        result_key="vote",
+    )
+
+    assert value == "老周"
+    assert isinstance(log, LmLog)
+    assert log.result == {"reasoning": "改投合法目标", "vote": "老周"}
+    assert provider.calls == 2
+
+
+def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    provider = DeepSeekProvider(transport=fake_transport)
+
+    raw = provider.complete_json(
+        model="deepseek-chat",
+        prompt='请输出 json：{"vote":"老周"}',
+        temperature=0.3,
+    )
+
+    assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
+    assert requests[0]["url"] == "https://api.deepseek.com/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer test-key"
+    assert requests[0]["payload"]["model"] == "deepseek-chat"
+    assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
+
+
+def test_deepseek_provider_requires_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"):
+        DeepSeekProvider()
+
+
+def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
+    example = os.path.join(os.path.dirname(__file__), "..", ".env.example")
+
+    with open(example, encoding="utf-8") as file:
+        contents = file.read()
+
+    assert "DEEPSEEK_API_KEY=\n" in contents

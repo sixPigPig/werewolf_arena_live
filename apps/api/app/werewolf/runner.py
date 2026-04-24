@@ -8,6 +8,8 @@ from pathlib import Path
 from app.werewolf.config import DEFAULT_MAX_ROUNDS
 from app.werewolf.engine import GameEngine, initialize_game_state
 from app.werewolf.logging import save_game
+from app.werewolf.lm import ModelProvider
+from app.werewolf.providers import DeepSeekProvider
 
 
 @dataclass(frozen=True)
@@ -25,11 +27,12 @@ class GameRunError(RuntimeError):
 
 def run_game(
     *,
-    villager_model: str = "local",
-    werewolf_model: str = "local",
+    villager_model: str = "deepseek-chat",
+    werewolf_model: str = "deepseek-chat",
     seed: int | None = None,
     logs_dir: str | Path = "logs",
     max_rounds: int = DEFAULT_MAX_ROUNDS,
+    provider: ModelProvider | None = None,
 ) -> RunGameResult:
     session_id = _new_session_id()
     log_directory = Path(logs_dir) / session_id
@@ -42,7 +45,11 @@ def run_game(
     logs = []
 
     try:
-        engine = GameEngine(state=state, max_rounds=max_rounds)
+        engine = GameEngine(
+            state=state,
+            provider=provider or DeepSeekProvider(),
+            max_rounds=max_rounds,
+        )
         logs = engine.run()
     except Exception as exc:
         state.error_message = str(exc)

@@ -1,7 +1,26 @@
+from pathlib import Path
+
 from app.cli import main
+from app.werewolf.runner import GameRunError, RunGameResult
 
 
-def test_run_game_command_prints_result(tmp_path, capsys) -> None:
+def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    calls = {}
+
+    def fake_run_game(**kwargs) -> RunGameResult:
+        calls.update(kwargs)
+        return RunGameResult(
+            winner="狼人阵营",
+            session_id="session_test",
+            log_directory=Path(tmp_path) / "session_test",
+        )
+
+    monkeypatch.setattr("app.cli.run_game", fake_run_game)
+
     exit_code = main(
         [
             "run-game",
@@ -17,12 +36,19 @@ def test_run_game_command_prints_result(tmp_path, capsys) -> None:
     output = capsys.readouterr().out
 
     assert exit_code == 0
-    assert "winner=" in output
-    assert "session_id=session_" in output
-    assert "log_directory=" in output
+    assert "胜利阵营=狼人阵营" in output
+    assert "session_id=session_test" in output
+    assert "日志目录=" in output
+    assert calls["villager_model"] == "deepseek-chat"
+    assert calls["werewolf_model"] == "deepseek-chat"
 
 
-def test_run_game_command_returns_nonzero_on_engine_failure(tmp_path, capsys) -> None:
+def test_run_game_command_returns_nonzero_on_engine_failure(tmp_path, capsys, monkeypatch) -> None:
+    def fake_run_game(**kwargs) -> RunGameResult:
+        raise GameRunError("Maximum rounds exceeded", Path(kwargs["logs_dir"]) / "failed")
+
+    monkeypatch.setattr("app.cli.run_game", fake_run_game)
+
     exit_code = main(
         [
             "run-game",
