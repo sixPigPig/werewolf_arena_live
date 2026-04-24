@@ -1,9 +1,13 @@
-import { Navigate, createBrowserRouter } from "react-router-dom";
+import {
+  Navigate,
+  createBrowserRouter,
+  type RouteObject,
+} from "react-router-dom";
 
 import { GameDetailPage } from "../pages/GameDetailPage";
 import { GamesPage } from "../pages/GamesPage";
 
-export const router = createBrowserRouter([
+export const routes: RouteObject[] = [
   {
     path: "/",
     element: <Navigate to="/games" replace />,
@@ -16,4 +20,10 @@ export const router = createBrowserRouter([
     path: "/games/:sessionId",
     element: <GameDetailPage />,
   },
-]);
+];
+
+export function createAppRouter() {
+  return createBrowserRouter(routes);
+}
+
+export const router = createAppRouter();
