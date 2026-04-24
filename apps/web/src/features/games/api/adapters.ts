@@ -96,6 +96,6 @@ function pushAction(
     choice: action.choice,
     prompt: action.lm_log.prompt ?? "",
     rawResponse: action.lm_log.raw_response ?? "",
-    parsed: action.lm_log.parsed,
+    parsed: action.lm_log.result,
   });
 }

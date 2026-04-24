@@ -15,7 +15,7 @@ export type GameSessionsResponse = {
 export type RawLmLog = {
   prompt?: string;
   raw_response?: string;
-  parsed?: unknown;
+  result?: unknown;
 };
 
 export type RawActionLog = {
@@ -42,6 +42,9 @@ export type RawPlayer = {
   role: string;
   model: string;
   observations?: string[];
+  bidding_rationale?: string;
+  gamestate?: unknown;
+  known_roles?: Record<string, string>;
 };
 
 export type RawRoundState = {

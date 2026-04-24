@@ -41,7 +41,7 @@ const rawReplay: RawGameReplayResponse = {
         lm_log: {
           prompt: "请选择今晚击杀对象。",
           raw_response: '{"choice":"李四"}',
-          parsed: { choice: "李四" },
+          result: { choice: "李四" },
         },
       },
       protect: null,
@@ -80,6 +80,91 @@ describe("normalizeGameReplay", () => {
       actor: "张三",
       choice: "李四",
       prompt: "请选择今晚击杀对象。",
+      parsed: { choice: "李四" },
+    });
+  });
+
+  it("creates ordered debug items for day and summary actions", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      logs: [
+        {
+          number: 2,
+          eliminate: null,
+          protect: null,
+          investigate: null,
+          bid: [
+            [
+              {
+                actor: "张三",
+                action: "bid",
+                options: ["1", "2", "3"],
+                choice: "3",
+                lm_log: {
+                  prompt: "请选择发言顺序出价。",
+                  raw_response: '{"choice":"3"}',
+                  result: { choice: "3" },
+                },
+              },
+            ],
+          ],
+          debate: [
+            {
+              actor: "李四",
+              action: "debate",
+              options: [],
+              choice: "我不是狼。",
+              lm_log: {
+                prompt: "请发表白天发言。",
+                raw_response: '{"speech":"我不是狼。"}',
+                result: { speech: "我不是狼。" },
+              },
+            },
+          ],
+          votes: [
+            [
+              {
+                actor: "王五",
+                action: "vote",
+                options: ["张三", "李四"],
+                choice: "张三",
+                lm_log: {
+                  prompt: "请选择放逐对象。",
+                  raw_response: '{"choice":"张三"}',
+                  result: { choice: "张三" },
+                },
+              },
+            ],
+          ],
+          summaries: [
+            {
+              actor: "张三",
+              action: "summarize",
+              options: [],
+              choice: null,
+              lm_log: {
+                prompt: "请总结本轮信息。",
+                raw_response: '{"summary":"继续隐藏身份。"}',
+                result: { summary: "继续隐藏身份。" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      replay.debugItems.map(({ id, phase, title }) => ({ id, phase, title })),
+    ).toEqual([
+      { id: "round-2-day-bid-0", phase: "day", title: "发言竞价" },
+      { id: "round-2-day-debate-0", phase: "day", title: "白天发言" },
+      { id: "round-2-day-vote-0", phase: "day", title: "放逐投票" },
+      { id: "round-2-summary-0", phase: "summary", title: "轮次总结" },
+    ]);
+    expect(replay.debugItems[3]).toMatchObject({
+      actor: "张三",
+      prompt: "请总结本轮信息。",
+      parsed: { summary: "继续隐藏身份。" },
     });
   });
 });
