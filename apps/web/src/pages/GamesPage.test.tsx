@@ -1,7 +1,12 @@
-import { screen } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { renderWithClient } from "../tests/renderWithClient";
+import {
+  createTestQueryClient,
+  renderWithClient,
+} from "../tests/renderWithClient";
 import { GamesPage } from "./GamesPage";
 
 describe("GamesPage", () => {
@@ -50,5 +55,35 @@ describe("GamesPage", () => {
     renderWithClient(<GamesPage />, "/games");
 
     expect(await screen.findByText("还没有可复盘的对局")).toBeInTheDocument();
+  });
+
+  it("renders only the error state when refreshing cached sessions fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 500 }),
+    );
+
+    const queryClient = createTestQueryClient();
+    queryClient.setQueryData(["games"], {
+      sessions: [
+        {
+          session_id: "session_cached",
+          status: "complete",
+          winner: "狼人阵营",
+          round_count: 3,
+          created_at: null,
+        },
+      ],
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/games"]}>
+          <GamesPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("无法读取对局列表")).toBeInTheDocument();
+    expect(screen.queryByText("session_cached")).not.toBeInTheDocument();
   });
 });
