@@ -114,3 +114,36 @@ export type GameReplay = {
   logs: RawRoundLog[];
   debugItems: DebugItem[];
 };
+
+export type GameRunStatus = "queued" | "running" | "completed" | "failed";
+
+export type GameRun = {
+  run_id: string;
+  session_id: string;
+  status: GameRunStatus;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  event_count: number;
+};
+
+export type CreateGameRunRequest = {
+  villager_model?: string;
+  werewolf_model?: string;
+  seed?: number | null;
+  max_rounds?: number;
+};
+
+export type LiveGameEvent = {
+  id: number;
+  type: string;
+  run_id: string;
+  session_id: string;
+  created_at: string;
+  round: number | null;
+  phase: string | null;
+  actor: string | null;
+  action: string | null;
+  payload: Record<string, unknown>;
+};
