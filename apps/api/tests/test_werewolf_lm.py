@@ -79,6 +79,36 @@ def test_generate_action_retries_until_allowed_value() -> None:
     assert provider.calls == 2
 
 
+def test_generate_action_accepts_numeric_value_for_string_allowed_values() -> None:
+    provider = FakeProvider([{"reasoning": "我想发言", "bid": 2}])
+
+    value, log = generate_action(
+        provider=provider,
+        action="bid",
+        world_state={
+            "name": "阿宁",
+            "role": "村民",
+            "round": 1,
+            "observations": [],
+            "remaining_players": "阿宁、老周、小白",
+            "debate": [],
+            "bidding_rationale": "",
+            "personality": "",
+            "num_players": 8,
+            "num_villagers": 4,
+            "werewolf_context": "",
+            "debate_turns_left": 2,
+            "options": "0、1、2、3、4",
+        },
+        model="deepseek-chat",
+        allowed_values=["0", "1", "2", "3", "4"],
+        result_key="bid",
+    )
+
+    assert value == "2"
+    assert log.result == {"reasoning": "我想发言", "bid": 2}
+
+
 def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> None:
     requests = []
 
@@ -110,11 +140,44 @@ def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> Non
     assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
 
 
-def test_deepseek_provider_requires_api_key(monkeypatch) -> None:
+def test_deepseek_provider_requires_api_key(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"):
         DeepSeekProvider()
+
+
+def test_deepseek_provider_loads_key_from_dotenv(tmp_path, monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    (tmp_path / ".env").write_text(
+        "APP_NAME=Python React Web API\n"
+        "DEEPSEEK_API_KEY=dotenv-key\n"
+        "DEEPSEEK_BASE_URL=https://example.deepseek.test\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+
+    provider = DeepSeekProvider(transport=fake_transport)
+    provider.complete_json(model="deepseek-chat", prompt="{}", temperature=0.3)
+
+    assert requests[0]["url"] == "https://example.deepseek.test/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer dotenv-key"
 
 
 def test_deepseek_provider_retries_connection_reset(monkeypatch) -> None:

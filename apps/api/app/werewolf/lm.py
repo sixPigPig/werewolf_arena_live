@@ -70,14 +70,25 @@ def generate_action(
 
         last_result = result
         value = result.get(result_key) if result_key else result
-        if allowed_values is None or value in allowed_values:
-            return value, LmLog(prompt=prompt, raw_response=raw_response, result=result)
+        normalized_value = _normalize_allowed_value(value, allowed_values)
+        if allowed_values is None or normalized_value in allowed_values:
+            return normalized_value, LmLog(prompt=prompt, raw_response=raw_response, result=result)
 
     return None, LmLog(
         prompt=prompt,
         raw_response="\n--- retry ---\n".join(raw_responses),
         result=last_result,
     )
+
+
+def _normalize_allowed_value(value: Any, allowed_values: list[Any] | None) -> Any:
+    if allowed_values is None:
+        return value
+    if value in allowed_values:
+        return value
+    if all(isinstance(item, str) for item in allowed_values) and value is not None:
+        return str(value)
+    return value
 
 
 def parse_json_object(raw_response: str) -> dict[str, Any]:

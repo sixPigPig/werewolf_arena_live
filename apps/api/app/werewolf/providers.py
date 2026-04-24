@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 Transport = Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]]
@@ -22,11 +23,17 @@ class DeepSeekProvider:
         max_retries: int = 3,
         sleep: Sleep = time.sleep,
     ) -> None:
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
+        dotenv = _load_dotenv(Path(".env"))
+        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY") or dotenv.get("DEEPSEEK_API_KEY")
         if not self.api_key:
             raise RuntimeError("DEEPSEEK_API_KEY is required to call DeepSeek.")
 
-        self.base_url = (base_url or os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com").rstrip("/")
+        self.base_url = (
+            base_url
+            or os.getenv("DEEPSEEK_BASE_URL")
+            or dotenv.get("DEEPSEEK_BASE_URL")
+            or "https://api.deepseek.com"
+        ).rstrip("/")
         self.transport = transport or _urlopen_transport
         self.max_retries = max_retries
         self.sleep = sleep
@@ -85,3 +92,20 @@ def _urlopen_transport(url: str, headers: dict[str, str], payload: dict[str, Any
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"DeepSeek request failed with HTTP {exc.code}: {body}") from exc
+
+
+def _load_dotenv(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key.startswith("DEEPSEEK_"):
+            continue
+        values[key] = value.strip().strip("\"'")
+    return values
