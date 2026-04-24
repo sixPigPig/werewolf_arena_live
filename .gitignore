@@ -29,3 +29,6 @@ apps/api/.venv/
 # Logs
 *.log
 apps/api/logs/
+
+# Local git worktrees
+.worktrees/
