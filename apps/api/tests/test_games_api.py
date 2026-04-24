@@ -355,3 +355,54 @@ def test_list_games_does_not_crash_on_invalid_timestamp(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["sessions"][0]["session_id"] == session_id
     assert response.json()["sessions"][0]["created_at"] is None
+
+
+def test_list_games_skips_valid_json_malformed_state(tmp_path: Path) -> None:
+    valid_id = "session_20260424_050950_66ea9f38"
+    list_state_id = "session_20260424_060000_abcd1234"
+    null_rounds_id = "session_20260424_070000_abcd1234"
+    write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
+    write_json(tmp_path / list_state_id / "game_complete.json", [])
+    write_json(tmp_path / null_rounds_id / "game_complete.json", {"rounds": None})
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert [item["session_id"] for item in response.json()["sessions"]] == [valid_id]
+
+
+def test_get_game_detail_returns_404_for_malformed_state(tmp_path: Path) -> None:
+    list_state_id = "session_20260424_060000_abcd1234"
+    null_rounds_id = "session_20260424_070000_abcd1234"
+    write_json(tmp_path / list_state_id / "game_complete.json", [])
+    write_json(tmp_path / null_rounds_id / "game_complete.json", {"rounds": None})
+    override_logs_root(tmp_path)
+
+    try:
+        list_response = client.get(f"/api/v1/games/{list_state_id}")
+        null_rounds_response = client.get(f"/api/v1/games/{null_rounds_id}")
+    finally:
+        clear_overrides()
+
+    assert list_response.status_code == 404
+    assert list_response.json()["detail"] == "Game session not found"
+    assert null_rounds_response.status_code == 404
+    assert null_rounds_response.json()["detail"] == "Game session not found"
+
+
+def test_list_games_returns_empty_when_logs_root_is_file(tmp_path: Path) -> None:
+    logs_root = tmp_path / "logs"
+    logs_root.write_text("not a directory", encoding="utf-8")
+    override_logs_root(logs_root)
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json() == {"sessions": []}

@@ -20,16 +20,25 @@ class ReplayStore:
         self.logs_root = logs_root
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        if not self.logs_root.exists():
+        if not self.logs_root.exists() or not self.logs_root.is_dir():
             return []
 
         sessions = []
-        for directory in self.logs_root.iterdir():
+        try:
+            directories = list(self.logs_root.iterdir())
+        except OSError:
+            return []
+
+        for directory in directories:
             if (
                 directory.is_symlink()
-                or not directory.is_dir()
                 or not _SESSION_PATTERN.fullmatch(directory.name)
             ):
+                continue
+            try:
+                if not directory.is_dir():
+                    continue
+            except OSError:
                 continue
 
             state_path, status = self._state_path_for_directory(directory)
@@ -37,16 +46,17 @@ class ReplayStore:
                 continue
 
             try:
-                state = self._read_json(state_path)
+                state = self._read_state(state_path)
             except ReplayNotFoundError:
                 continue
 
+            rounds = state.get("rounds", [])
             sessions.append(
                 {
                     "session_id": directory.name,
                     "status": status,
                     "winner": state.get("winner"),
-                    "round_count": len(state.get("rounds", [])),
+                    "round_count": len(rounds),
                     "created_at": created_at_from_session_id(directory.name),
                 }
             )
@@ -73,10 +83,11 @@ class ReplayStore:
 
         logs_path = session_dir / "game_logs.json"
         logs = self._read_json(logs_path) if logs_path.exists() else []
+        state = self._read_state(state_path)
         return {
             "session_id": session_id,
             "status": status,
-            "state": self._read_json(state_path),
+            "state": state,
             "logs": logs,
         }
 
@@ -108,6 +119,17 @@ class ReplayStore:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ReplayNotFoundError from exc
+
+    def _read_state(self, path: Path) -> dict[str, Any]:
+        state = self._read_json(path)
+        if not isinstance(state, dict):
+            raise ReplayNotFoundError
+
+        rounds = state.get("rounds", [])
+        if not isinstance(rounds, list):
+            raise ReplayNotFoundError
+
+        return state
 
 
 def created_at_from_session_id(session_id: str) -> str | None:
