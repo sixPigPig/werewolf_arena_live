@@ -20,7 +20,7 @@ class ReplayStore:
         self.logs_root = logs_root
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        if not self.logs_root.exists() or not self.logs_root.is_dir():
+        if not self._is_directory(self.logs_root):
             return []
 
         sessions = []
@@ -31,14 +31,11 @@ class ReplayStore:
 
         for directory in directories:
             if (
-                directory.is_symlink()
+                self._is_symlink(directory)
                 or not _SESSION_PATTERN.fullmatch(directory.name)
             ):
                 continue
-            try:
-                if not directory.is_dir():
-                    continue
-            except OSError:
+            if not self._is_directory(directory):
                 continue
 
             state_path, status = self._state_path_for_directory(directory)
@@ -68,7 +65,7 @@ class ReplayStore:
             raise ReplayNotFoundError
 
         session_dir = self.logs_root / session_id
-        if session_dir.is_symlink() or not session_dir.is_dir():
+        if self._is_symlink(session_dir) or not self._is_directory(session_dir):
             raise ReplayNotFoundError
 
         resolved_session_dir = session_dir.resolve()
@@ -82,7 +79,7 @@ class ReplayStore:
             raise ReplayNotFoundError
 
         logs_path = session_dir / "game_logs.json"
-        logs = self._read_json(logs_path) if logs_path.exists() else []
+        logs = self._read_json(logs_path) if self._path_exists(logs_path) else []
         state = self._read_state(state_path)
         return {
             "session_id": session_id,
@@ -93,14 +90,14 @@ class ReplayStore:
 
     def _state_path_for_directory(self, directory: Path) -> tuple[Path | None, str | None]:
         complete_path = directory / "game_complete.json"
-        if complete_path.is_symlink():
+        if self._is_symlink(complete_path):
             return None, None
 
         if self._is_regular_json_file(complete_path):
             return complete_path, "complete"
 
         partial_path = directory / "game_partial.json"
-        if partial_path.is_symlink():
+        if self._is_symlink(partial_path):
             return None, None
 
         if self._is_regular_json_file(partial_path):
@@ -108,11 +105,32 @@ class ReplayStore:
 
         return None, None
 
+    def _path_exists(self, path: Path) -> bool:
+        try:
+            return path.exists()
+        except OSError:
+            return False
+
+    def _is_directory(self, path: Path) -> bool:
+        try:
+            return path.exists() and path.is_dir()
+        except OSError:
+            return False
+
+    def _is_symlink(self, path: Path) -> bool:
+        try:
+            return path.is_symlink()
+        except OSError:
+            return True
+
     def _is_regular_json_file(self, path: Path) -> bool:
-        return path.exists() and not path.is_symlink() and path.is_file()
+        try:
+            return path.exists() and not path.is_symlink() and path.is_file()
+        except OSError:
+            return False
 
     def _read_json(self, path: Path) -> Any:
-        if path.is_symlink():
+        if self._is_symlink(path):
             raise ReplayNotFoundError
 
         try:

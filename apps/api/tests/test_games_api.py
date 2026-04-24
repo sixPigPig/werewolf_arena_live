@@ -406,3 +406,83 @@ def test_list_games_returns_empty_when_logs_root_is_file(tmp_path: Path) -> None
 
     assert response.status_code == 200
     assert response.json() == {"sessions": []}
+
+
+def test_list_games_returns_empty_when_logs_root_stat_raises(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    logs_root = tmp_path / "logs"
+    original_exists = Path.exists
+
+    def raising_exists(path: Path) -> bool:
+        if path == logs_root:
+            raise OSError("stat failed")
+        return original_exists(path)
+
+    monkeypatch.setattr(Path, "exists", raising_exists)
+    override_logs_root(logs_root)
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json() == {"sessions": []}
+
+
+def test_list_games_skips_entry_when_symlink_stat_raises(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    valid_id = "session_20260424_050950_66ea9f38"
+    bad_id = "session_20260424_060000_abcd1234"
+    bad_dir = tmp_path / bad_id
+    write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
+    write_json(bad_dir / "game_complete.json", sample_state(bad_id))
+    original_is_symlink = Path.is_symlink
+
+    def raising_is_symlink(path: Path) -> bool:
+        if path == bad_dir:
+            raise OSError("lstat failed")
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", raising_is_symlink)
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert [item["session_id"] for item in response.json()["sessions"]] == [valid_id]
+
+
+def test_list_games_skips_session_when_state_file_stat_raises(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    valid_id = "session_20260424_050950_66ea9f38"
+    bad_id = "session_20260424_060000_abcd1234"
+    bad_state_path = tmp_path / bad_id / "game_complete.json"
+    write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
+    write_json(bad_state_path, sample_state(bad_id))
+    original_is_symlink = Path.is_symlink
+
+    def raising_is_symlink(path: Path) -> bool:
+        if path == bad_state_path:
+            raise OSError("lstat failed")
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", raising_is_symlink)
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert [item["session_id"] for item in response.json()["sessions"]] == [valid_id]
