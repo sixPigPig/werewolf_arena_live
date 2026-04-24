@@ -39,7 +39,7 @@ class LiveEvent:
             "phase": self.phase,
             "actor": self.actor,
             "action": self.action,
-            "payload": self.payload,
+            "payload": _copy_json_payload(self.payload),
         }
 
 
@@ -234,7 +234,7 @@ class LiveRunRegistry:
             phase=phase,
             actor=actor,
             action=action,
-            payload=payload or {},
+            payload=_copy_json_payload(payload or {}),
         )
         run.next_event_id += 1
         run.events.append(event)
@@ -286,3 +286,7 @@ class NullEventSink:
 def format_sse(event: LiveEvent) -> str:
     data = json.dumps(event.to_dict(), ensure_ascii=False)
     return f"id: {event.id}\nevent: {event.type}\ndata: {data}\n\n"
+
+
+def _copy_json_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(payload, ensure_ascii=False))

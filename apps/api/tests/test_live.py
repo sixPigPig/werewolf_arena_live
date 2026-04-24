@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from app.werewolf.live import LiveRunRegistry
+import json
+
+from app.werewolf.live import LiveRunRegistry, format_sse
 
 
 def test_registry_creates_run_with_initial_event() -> None:
@@ -81,3 +83,36 @@ def test_registry_marks_completed_and_failed() -> None:
     assert registry.get_run(failed.run_id).error == "Maximum rounds exceeded"
     assert registry.get_run(failed.run_id).completed_at is not None
     assert registry.get_run(failed.run_id).events[-1].type == "game_failed"
+
+
+def test_format_sse_preserves_unicode_and_payload_history_is_stable() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="session_20260424_120000_ab12cd34",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+    )
+    payload = {"players": ["张三", "李四"], "meta": {"phase": "夜晚"}}
+
+    event = registry.publish(run.run_id, "players_announced", payload=payload)
+    event_dict = event.to_dict()
+    payload["players"].append("王五")
+    payload["meta"]["phase"] = "白天"
+    event_dict["payload"]["players"].append("赵六")
+
+    replayed_event = registry.events_after(run.run_id, after_id=1)[0]
+    sse = format_sse(replayed_event)
+    lines = sse.splitlines()
+    data = json.loads(lines[2].removeprefix("data: "))
+
+    assert lines[0] == f"id: {replayed_event.id}"
+    assert lines[1] == "event: players_announced"
+    assert lines[2].startswith("data: ")
+    assert "张三" in lines[2]
+    assert data["payload"] == {"players": ["张三", "李四"], "meta": {"phase": "夜晚"}}
+    assert replayed_event.payload == {
+        "players": ["张三", "李四"],
+        "meta": {"phase": "夜晚"},
+    }
