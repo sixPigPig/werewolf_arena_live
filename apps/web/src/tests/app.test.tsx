@@ -1,18 +1,39 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import { vi } from "vitest";
-
-vi.mock("../features/health/components/HealthCard", () => ({
-  HealthCard: () => <div data-testid="health-card" />,
-}));
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../app/App";
 
 describe("App", () => {
-  it("renders the project shell heading", () => {
-    render(<App />);
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("routes the root path to the replay workbench", async () => {
+    window.history.pushState({}, "", "/");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ sessions: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
 
     expect(
-      screen.getByRole("heading", { name: /python \+ react monorepo is ready/i }),
+      await screen.findByRole("heading", { name: "狼人杀对局复盘" }),
     ).toBeInTheDocument();
   });
 });
