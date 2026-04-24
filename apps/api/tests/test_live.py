@@ -101,6 +101,8 @@ def test_format_sse_preserves_unicode_and_payload_history_is_stable() -> None:
     payload["players"].append("王五")
     payload["meta"]["phase"] = "白天"
     event_dict["payload"]["players"].append("赵六")
+    event.payload["players"].append("钱七")
+    event.payload["meta"]["phase"] = "黄昏"
 
     replayed_event = registry.events_after(run.run_id, after_id=1)[0]
     sse = format_sse(replayed_event)
@@ -113,6 +115,10 @@ def test_format_sse_preserves_unicode_and_payload_history_is_stable() -> None:
     assert "张三" in lines[2]
     assert data["payload"] == {"players": ["张三", "李四"], "meta": {"phase": "夜晚"}}
     assert replayed_event.payload == {
+        "players": ["张三", "李四"],
+        "meta": {"phase": "夜晚"},
+    }
+    assert replayed_event.to_dict()["payload"] == {
         "players": ["张三", "李四"],
         "meta": {"phase": "夜晚"},
     }

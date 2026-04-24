@@ -15,7 +15,7 @@ def utc_now() -> str:
     return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class LiveEvent:
     id: int
     type: str
@@ -26,7 +26,36 @@ class LiveEvent:
     phase: str | None = None
     actor: str | None = None
     action: str | None = None
-    payload: dict[str, Any] = field(default_factory=dict)
+    _payload: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def __init__(
+        self,
+        *,
+        id: int,
+        type: str,
+        run_id: str,
+        session_id: str,
+        created_at: str,
+        round: int | None = None,
+        phase: str | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        object.__setattr__(self, "id", id)
+        object.__setattr__(self, "type", type)
+        object.__setattr__(self, "run_id", run_id)
+        object.__setattr__(self, "session_id", session_id)
+        object.__setattr__(self, "created_at", created_at)
+        object.__setattr__(self, "round", round)
+        object.__setattr__(self, "phase", phase)
+        object.__setattr__(self, "actor", actor)
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "_payload", _copy_json_payload(payload or {}))
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return _copy_json_payload(self._payload)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -39,7 +68,7 @@ class LiveEvent:
             "phase": self.phase,
             "actor": self.actor,
             "action": self.action,
-            "payload": _copy_json_payload(self.payload),
+            "payload": self.payload,
         }
 
 
@@ -234,7 +263,7 @@ class LiveRunRegistry:
             phase=phase,
             actor=actor,
             action=action,
-            payload=_copy_json_payload(payload or {}),
+            payload=payload,
         )
         run.next_event_id += 1
         run.events.append(event)
