@@ -12,8 +12,10 @@ class MockEventSource {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   listeners = new Map<string, (event: MessageEvent) => void>();
+  url: string;
 
-  constructor(public url: string) {
+  constructor(url: string) {
+    this.url = url;
     MockEventSource.instances.push(this);
   }
 
