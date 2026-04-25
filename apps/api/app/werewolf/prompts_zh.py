@@ -50,6 +50,27 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
+RESULT_FIELD_BY_ACTION = {
+    "bid": "bid",
+    "debate": "say",
+    "vote": "vote",
+    "investigate": "investigate",
+    "remove": "remove",
+    "protect": "protect",
+    "summarize": "summary",
+}
+
+FIELD_LABELS = {
+    "reasoning": "推理",
+    "bid": "发言意愿",
+    "say": "发言内容",
+    "vote": "投票对象",
+    "investigate": "查验对象",
+    "remove": "袭击对象",
+    "protect": "保护对象",
+    "summary": "回合总结",
+}
+
 
 def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     if action not in SCHEMAS:
@@ -152,13 +173,9 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
 
 
 def _render_json_example(action: str) -> str:
-    key = {
-        "bid": "bid",
-        "debate": "say",
-        "vote": "vote",
-        "investigate": "investigate",
-        "remove": "remove",
-        "protect": "protect",
-        "summarize": "summary",
-    }[action]
-    return f'JSON 示例：{{"reasoning":"用中文说明你的推理","{key}":"你的选择或发言"}}'
+    key = RESULT_FIELD_BY_ACTION[action]
+    field_mapping = f"reasoning={FIELD_LABELS['reasoning']}，{key}={FIELD_LABELS[key]}"
+    return (
+        f"JSON 示例（字段含义：{field_mapping}）："
+        f'{{"reasoning":"用中文说明你的推理","{key}":"你的选择或发言"}}'
+    )

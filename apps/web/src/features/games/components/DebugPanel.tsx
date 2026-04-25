@@ -4,12 +4,51 @@ type DebugPanelProps = {
   item: DebugItem | null;
 };
 
+const PARSED_FIELD_LABELS: Record<string, string> = {
+  reasoning: "推理",
+  bid: "发言意愿",
+  say: "发言内容",
+  vote: "投票对象",
+  investigate: "查验对象",
+  remove: "袭击对象",
+  protect: "保护对象",
+  summary: "回合总结",
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatParsedValue(value: unknown) {
+  if (value === null || value === undefined) {
+    return "无内容";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(value, null, 2) ?? String(value);
+}
+
 function formatParsed(parsed: unknown) {
   if (parsed === null || parsed === undefined) {
     return "无内容";
   }
 
-  return JSON.stringify(parsed, null, 2);
+  if (!isRecord(parsed)) {
+    return formatParsedValue(parsed);
+  }
+
+  const entries = Object.entries(parsed);
+  if (entries.length === 0) {
+    return "无内容";
+  }
+
+  return entries
+    .map(([key, value]) => {
+      const label = PARSED_FIELD_LABELS[key] ?? key;
+      return `${label}：${formatParsedValue(value)}`;
+    })
+    .join("\n");
 }
 
 export function DebugPanel({ item }: DebugPanelProps) {
@@ -27,24 +66,24 @@ export function DebugPanel({ item }: DebugPanelProps) {
         <h2 className="text-base font-semibold text-slate-950">{item.title}</h2>
         <dl className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
           <div>
-            <dt className="font-medium text-slate-500">Round</dt>
+            <dt className="font-medium text-slate-500">轮次</dt>
             <dd>{item.roundNumber}</dd>
           </div>
           <div>
-            <dt className="font-medium text-slate-500">Actor</dt>
+            <dt className="font-medium text-slate-500">玩家</dt>
             <dd className="break-words">{item.actor}</dd>
           </div>
           <div className="col-span-2">
-            <dt className="font-medium text-slate-500">Choice</dt>
+            <dt className="font-medium text-slate-500">选择</dt>
             <dd className="break-words">{item.choice ?? "无"}</dd>
           </div>
         </dl>
       </div>
 
       <div className="space-y-4 p-4">
-        <DebugBlock label="Prompt" value={item.prompt || "无内容"} />
-        <DebugBlock label="Raw Response" value={item.rawResponse || "无内容"} />
-        <DebugBlock label="Parsed Result" value={formatParsed(item.parsed)} />
+        <DebugBlock label="提示词" value={item.prompt || "无内容"} />
+        <DebugBlock label="模型原文" value={item.rawResponse || "无内容"} />
+        <DebugBlock label="解析结果" value={formatParsed(item.parsed)} />
       </div>
     </aside>
   );

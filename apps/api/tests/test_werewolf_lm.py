@@ -33,6 +33,7 @@ def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
     assert "你是阿宁，身份是村民" in prompt
     assert "请只输出合法 JSON" in prompt
     assert '"vote"' in prompt
+    assert "字段含义：reasoning=推理，vote=投票对象" in prompt
     assert schema["required"] == ["reasoning", "vote"]
 
 
