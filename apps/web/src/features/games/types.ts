@@ -147,6 +147,8 @@ export type GameReplay = {
 
 export type GameRunStatus = "queued" | "running" | "completed" | "failed";
 
+export type EventPacingMode = "off" | "standard" | "slow";
+
 export type GameRun = {
   run_id: string;
   session_id: string;
