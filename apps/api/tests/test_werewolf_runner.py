@@ -2,7 +2,11 @@ import json
 
 import pytest
 
+from app.werewolf.config import SEER
+from app.werewolf.engine import GameEngine, initialize_game_state
 from app.werewolf.live import NullEventSink
+from app.werewolf.models import RoundLog, RoundState
+from app.werewolf.rules import get_rule_set
 from app.werewolf.runner import GameRunError, run_game
 
 
@@ -35,6 +39,13 @@ class ScriptedChineseProvider:
                 ensure_ascii=False,
             )
         raise AssertionError(f"Unexpected prompt: {prompt}")
+
+
+class NoInvestigateProvider(ScriptedChineseProvider):
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"investigate"' in prompt:
+            raise AssertionError("Investigate should be skipped when there are no candidates.")
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
 def _extract_options(prompt: str) -> list[str]:
@@ -207,7 +218,94 @@ def test_model_request_world_state_event_payload_is_isolated_from_gameplay(tmp_p
     )
 
 
+def test_run_game_uses_starter_6_rule_set(tmp_path) -> None:
+    result = run_game(
+        logs_dir=tmp_path,
+        seed=31,
+        max_rounds=8,
+        provider=ScriptedChineseProvider(),
+        rule_set_id="starter_6",
+    )
+
+    state = json.loads((result.log_directory / "game_complete.json").read_text())
+
+    assert state["rule_set"]["id"] == "starter_6"
+    assert state["rule_set"]["name"] == "新手 6 人快局"
+    assert len(state["players"]) == 6
+    assert _role_counts(state["players"]) == {"狼人": 1, "预言家": 1, "医生": 1, "村民": 3}
+
+
+def test_run_game_uses_social_8_rule_set_without_divine_actions(tmp_path) -> None:
+    result = run_game(
+        logs_dir=tmp_path,
+        seed=37,
+        max_rounds=8,
+        provider=ScriptedChineseProvider(),
+        rule_set_id="social_8",
+    )
+
+    state = json.loads((result.log_directory / "game_complete.json").read_text())
+    logs = json.loads((result.log_directory / "game_logs.json").read_text())
+
+    assert len(state["players"]) == 8
+    assert _role_counts(state["players"]) == {"狼人": 2, "村民": 6}
+    assert logs[0]["protect"] is None
+    assert logs[0]["investigate"] is None
+
+
+def test_run_game_defaults_to_classic_8_rule_set(tmp_path) -> None:
+    result = run_game(
+        logs_dir=tmp_path,
+        seed=41,
+        max_rounds=8,
+        provider=ScriptedChineseProvider(),
+    )
+
+    state = json.loads((result.log_directory / "game_complete.json").read_text())
+
+    assert state["rule_set"]["id"] == "classic_8"
+    assert len(state["players"]) == 8
+
+
+def test_night_phase_skips_investigate_when_seer_has_no_candidates() -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="session_test_no_investigate_candidates",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=43,
+        rule_set=rule_set,
+    )
+    players_by_name = state.player_by_name()
+    seer = next(player for player in state.players if player.role == SEER)
+    active_players = [player.name for player in state.players]
+    seer.known_roles = {
+        name: players_by_name[name].role for name in active_players if name != seer.name
+    }
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(
+        state=state,
+        provider=NoInvestigateProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    engine._run_night_phase(round_state, round_log, active_players)
+
+    assert round_state.investigated is None
+    assert round_log.investigate is None
+
+
 def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:
     complete = json.loads((log_directory / "game_complete.json").read_text())
     logs = json.loads((log_directory / "game_logs.json").read_text())
     return complete, logs
+
+
+def _role_counts(players: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for player in players:
+        role = str(player["role"])
+        counts[role] = counts.get(role, 0) + 1
+    return counts

@@ -6,6 +6,7 @@ import { getGameDetail } from "../features/games/api/getGameDetail";
 import { DebugPanel } from "../features/games/components/DebugPanel";
 import { GameLayout } from "../features/games/components/GameLayout";
 import { PlayerPanel } from "../features/games/components/PlayerPanel";
+import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 import { RoundTimeline } from "../features/games/components/RoundTimeline";
 
 export function GameDetailPage() {
@@ -49,6 +50,7 @@ export function GameDetailPage() {
   return (
     <GameLayout
       debug={<DebugPanel item={visibleSelectedItem} />}
+      header={<RuleSetSummary ruleSet={data.ruleSet} />}
       players={<PlayerPanel game={data} />}
       timeline={
         <RoundTimeline

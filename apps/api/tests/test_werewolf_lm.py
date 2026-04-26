@@ -21,8 +21,7 @@ def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
             "debate": ["老周：我怀疑小白。"],
             "bidding_rationale": "我需要说明自己的判断。",
             "personality": "",
-            "num_players": 8,
-            "num_villagers": 4,
+            "rule_text": "你正在进行一局数字版狼人杀。\n\n游戏规则：\n- 共 6 名玩家：1 名狼人、1 名预言家、1 名医生、3 名村民。",
             "werewolf_context": "",
             "debate_turns_left": 2,
             "options": "老周、小白",
@@ -30,6 +29,7 @@ def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
     )
 
     assert "狼人杀" in prompt
+    assert "共 6 名玩家：1 名狼人、1 名预言家、1 名医生、3 名村民" in prompt
     assert "你是阿宁，身份是村民" in prompt
     assert "请只输出合法 JSON" in prompt
     assert '"vote"' in prompt
@@ -63,8 +63,7 @@ def test_generate_action_retries_until_allowed_value() -> None:
             "debate": [],
             "bidding_rationale": "",
             "personality": "",
-            "num_players": 8,
-            "num_villagers": 4,
+            "rule_text": "你正在进行一局数字版狼人杀。",
             "werewolf_context": "",
             "debate_turns_left": 2,
             "options": "老周、小白",
@@ -95,8 +94,7 @@ def test_generate_action_accepts_numeric_value_for_string_allowed_values() -> No
             "debate": [],
             "bidding_rationale": "",
             "personality": "",
-            "num_players": 8,
-            "num_villagers": 4,
+            "rule_text": "你正在进行一局数字版狼人杀。",
             "werewolf_context": "",
             "debate_turns_left": 2,
             "options": "0、1、2、3、4",

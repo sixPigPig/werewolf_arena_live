@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
+
 RunStatus = Literal["queued", "running", "completed", "failed"]
 
 
@@ -80,6 +82,10 @@ class LiveGameRun:
     werewolf_model: str
     seed: int | None
     max_rounds: int
+    rule_set_id: str = DEFAULT_RULE_SET_ID
+    rule_set: dict[str, Any] = field(
+        default_factory=lambda: rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
+    )
     status: RunStatus = "queued"
     created_at: str = field(default_factory=utc_now)
     started_at: str | None = None
@@ -102,6 +108,8 @@ class LiveGameRun:
             "werewolf_model": self.werewolf_model,
             "seed": self.seed,
             "max_rounds": self.max_rounds,
+            "rule_set_id": self.rule_set_id,
+            "rule_set": _copy_json_payload(self.rule_set),
             "status": self.status,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -125,7 +133,14 @@ class LiveRunRegistry:
         werewolf_model: str,
         seed: int | None,
         max_rounds: int,
+        rule_set_id: str = DEFAULT_RULE_SET_ID,
+        rule_set: dict[str, Any] | None = None,
     ) -> LiveGameRun:
+        rule_set_data = (
+            _copy_json_payload(rule_set)
+            if rule_set is not None
+            else rule_set_snapshot(get_rule_set(rule_set_id))
+        )
         with self._lock:
             run = LiveGameRun(
                 run_id=f"run_{uuid.uuid4().hex[:12]}",
@@ -134,6 +149,8 @@ class LiveRunRegistry:
                 werewolf_model=werewolf_model,
                 seed=seed,
                 max_rounds=max_rounds,
+                rule_set_id=rule_set_id,
+                rule_set=rule_set_data,
             )
             self._runs[run.run_id] = run
             self._publish_locked(
@@ -145,6 +162,8 @@ class LiveRunRegistry:
                     "werewolf_model": werewolf_model,
                     "seed": seed,
                     "max_rounds": max_rounds,
+                    "rule_set_id": rule_set_id,
+                    "rule_set": rule_set_data,
                 },
             )
             return run

@@ -1,11 +1,39 @@
 export type GameStatus = "complete" | "partial";
 
+export type RoleSpecSummary = {
+  role: string;
+  count: number;
+  team?: string;
+  model_group?: string;
+};
+
+export type RuleSetSummary = {
+  id: string;
+  version: string;
+  name: string;
+  description?: string;
+  player_count: number;
+  roles: RoleSpecSummary[];
+  night_actions?: string[];
+  day_actions?: string[];
+  win_condition?: string;
+  reveal_policy?: string;
+  complexity?: string;
+  estimated_duration?: string;
+  role_summary?: string;
+};
+
+export type RuleSetsResponse = {
+  rule_sets: RuleSetSummary[];
+};
+
 export type GameSessionSummary = {
   session_id: string;
   status: GameStatus;
   winner: string | null;
   round_count: number;
   created_at: string | null;
+  rule_set?: RuleSetSummary | null;
 };
 
 export type GameSessionsResponse = {
@@ -67,6 +95,7 @@ export type RawGameState = {
   rounds: RawRoundState[];
   winner: string;
   error_message: string;
+  rule_set?: RuleSetSummary | null;
 };
 
 export type RawGameReplayResponse = {
@@ -109,6 +138,7 @@ export type GameReplay = {
   status: GameStatus;
   winner: string;
   errorMessage: string;
+  ruleSet?: RuleSetSummary | null;
   players: RawPlayer[];
   rounds: GameRound[];
   logs: RawRoundLog[];
@@ -122,6 +152,7 @@ export type GameRun = {
   session_id: string;
   villager_model: string;
   werewolf_model: string;
+  rule_set?: RuleSetSummary | null;
   seed: number | null;
   max_rounds: number;
   winner: string | null;
@@ -136,6 +167,7 @@ export type GameRun = {
 export type CreateGameRunRequest = {
   villager_model?: string;
   werewolf_model?: string;
+  rule_set_id?: string;
   seed?: number | null;
   max_rounds?: number;
 };

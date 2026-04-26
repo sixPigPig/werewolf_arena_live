@@ -25,6 +25,7 @@ export function normalizeGameReplay(
     status: response.status,
     winner: response.state.winner,
     errorMessage: response.state.error_message,
+    ruleSet: response.state.rule_set ?? null,
     players: response.state.players,
     rounds: response.state.rounds.map(normalizeRound),
     logs: response.logs,
