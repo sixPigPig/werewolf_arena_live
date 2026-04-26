@@ -32,3 +32,6 @@ apps/api/logs/
 
 # Local git worktrees
 .worktrees/
+
+# Local brainstorming artifacts
+.superpowers/
