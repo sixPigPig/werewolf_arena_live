@@ -24,9 +24,10 @@ export function LiveDirectorControls({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-36">
           <h2 className="text-sm font-semibold text-slate-950">观赛节奏</h2>
-          <p className="mt-1 text-xs text-slate-600">
-            {isCatchingUp ? "自动追进度" : `队列 ${backlogCount} 条`}
-          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            {isCatchingUp ? <span>自动追进度</span> : null}
+            <span>队列 {backlogCount} 条</span>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
 import type { LiveGameEvent } from "../features/games/types";
 import { renderWithClient } from "../tests/renderWithClient";
@@ -489,6 +490,23 @@ describe("LiveGamePage", () => {
 
     expect(rows[1]).toHaveClass("bg-slate-100", "ring-1");
     vi.useRealTimers();
+  });
+
+  it("shows the backlog count while automatically catching up", () => {
+    render(
+      <LiveDirectorControls
+        backlogCount={8}
+        isCatchingUp={true}
+        isPaused={false}
+        onCatchUpToLatest={() => {}}
+        onSpeedChange={() => {}}
+        onTogglePaused={() => {}}
+        speed={1}
+      />,
+    );
+
+    expect(screen.getByText("自动追进度")).toBeInTheDocument();
+    expect(screen.getByText("队列 8 条")).toBeInTheDocument();
   });
 
   it("renders malformed unknown timeline events as title-only rows", () => {
