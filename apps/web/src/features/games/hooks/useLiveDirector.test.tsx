@@ -127,6 +127,43 @@ describe("useLiveDirector", () => {
     expect(result.current.backlogCount).toBe(0);
   });
 
+  it("starts a caught-up cue from resume time when catch-up happens while paused", () => {
+    const events = [
+      event({ id: 1, type: "round_started", round: 1 }),
+      event({
+        id: 2,
+        type: "state_updated",
+        payload: { exiled: "李四", active_players: ["张三", "王五"] },
+      }),
+      event({
+        id: 3,
+        type: "action_requested",
+        actor: "王五",
+        action: "debate",
+      }),
+    ];
+    const { result } = renderHook(() => useLiveDirector(events));
+
+    act(() => {
+      result.current.pause();
+    });
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+      result.current.catchUpToLatest();
+    });
+    expect(result.current.currentEventId).toBe(2);
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+      result.current.resume();
+    });
+    act(() => {
+      vi.advanceTimersByTime(result.current.effectiveDurationMs);
+    });
+
+    expect(result.current.currentEventId).toBe(3);
+  });
+
   it("compresses normal cue duration while catching up from a high backlog", () => {
     const events = Array.from({ length: 9 }, (_, index) =>
       event({ id: index + 1, type: "round_started", round: index + 1 }),

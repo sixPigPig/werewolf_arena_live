@@ -63,9 +63,12 @@ export function useLiveDirector(events: LiveGameEvent[]): UseLiveDirectorResult 
     (nextIndex: number) => {
       const nextCue = cues[nextIndex];
       startedAtRef.current = Date.now();
+      if (isPaused) {
+        pausedAtRef.current = startedAtRef.current;
+      }
       setCurrentEventId(nextCue?.eventId ?? null);
     },
-    [cues],
+    [cues, isPaused],
   );
 
   const advance = useCallback(() => {
