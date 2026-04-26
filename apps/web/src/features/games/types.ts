@@ -147,6 +147,8 @@ export type GameReplay = {
 
 export type GameRunStatus = "queued" | "running" | "completed" | "failed";
 
+export type EventPacingMode = "off" | "standard" | "slow";
+
 export type GameRun = {
   run_id: string;
   session_id: string;
@@ -162,6 +164,7 @@ export type GameRun = {
   completed_at: string | null;
   error: string | null;
   event_count: number;
+  event_pacing: EventPacingMode;
 };
 
 export type CreateGameRunRequest = {
@@ -170,6 +173,7 @@ export type CreateGameRunRequest = {
   rule_set_id?: string;
   seed?: number | null;
   max_rounds?: number;
+  event_pacing?: EventPacingMode;
 };
 
 export type LiveGameEvent = {

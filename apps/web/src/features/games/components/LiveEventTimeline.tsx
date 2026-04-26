@@ -48,7 +48,15 @@ function detailForEvent(event: LiveGameEvent) {
   return "";
 }
 
-export function LiveEventTimeline({ events }: { events: LiveGameEvent[] }) {
+type LiveEventTimelineProps = {
+  events: LiveGameEvent[];
+  currentEventId?: number | null;
+};
+
+export function LiveEventTimeline({
+  events,
+  currentEventId = null,
+}: LiveEventTimelineProps) {
   if (events.length === 0) {
     return <p className="p-4 text-sm text-slate-600">等待实时事件...</p>;
   }
@@ -57,9 +65,16 @@ export function LiveEventTimeline({ events }: { events: LiveGameEvent[] }) {
     <ol className="divide-y divide-slate-200">
       {events.map((event) => {
         const detail = detailForEvent(event);
+        const isCurrent = event.id === currentEventId;
 
         return (
-          <li className="px-4 py-3" key={event.id}>
+          <li
+            className={[
+              "px-4 py-3",
+              isCurrent ? "bg-slate-100 ring-1 ring-inset ring-slate-300" : "",
+            ].join(" ")}
+            key={event.id}
+          >
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-medium text-slate-950">
                 {titleForEvent(event)}

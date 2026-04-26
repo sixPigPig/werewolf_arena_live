@@ -182,6 +182,7 @@ describe("GamesPage", () => {
           rule_set_id: "classic_8",
           seed: null,
           max_rounds: 8,
+          event_pacing: "off",
         }),
         method: "POST",
       }),
@@ -259,6 +260,81 @@ describe("GamesPage", () => {
           rule_set_id: "starter_6",
           seed: null,
           max_rounds: 8,
+          event_pacing: "off",
+        }),
+        method: "POST",
+      }),
+    );
+    expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
+  });
+
+  it("creates a live game run with standard event pacing", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/runs")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              run_id: "run_1234abcd",
+              session_id: "session_20260424_120000_ab12cd34",
+              villager_model: "deepseek-chat",
+              werewolf_model: "deepseek-chat",
+              seed: null,
+              max_rounds: 8,
+              event_pacing: "standard",
+              status: "queued",
+              created_at: "2026-04-24T12:00:00Z",
+              started_at: null,
+              completed_at: null,
+              winner: null,
+              error: null,
+              event_count: 1,
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games" element={<GamesPage />} />
+        <Route
+          path="/games/live/:runId"
+          element={<p>实时观战 run_1234abcd</p>}
+        />
+      </Routes>,
+      "/games",
+    );
+
+    await userEvent.selectOptions(
+      await screen.findByLabelText("演示慢速"),
+      "standard",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/games/runs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          rule_set_id: "classic_8",
+          seed: null,
+          max_rounds: 8,
+          event_pacing: "standard",
         }),
         method: "POST",
       }),

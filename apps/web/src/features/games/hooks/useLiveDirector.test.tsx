@@ -1,0 +1,185 @@
+import { act, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { useLiveDirector } from "./useLiveDirector";
+import type { LiveGameEvent } from "../types";
+
+function event(partial: Partial<LiveGameEvent>): LiveGameEvent {
+  return {
+    id: partial.id ?? 1,
+    type: partial.type ?? "round_started",
+    run_id: "run_1234abcd",
+    session_id: "session_20260424_120000_ab12cd34",
+    created_at: "2026-04-24T12:00:00Z",
+    round: partial.round ?? null,
+    phase: partial.phase ?? null,
+    actor: partial.actor ?? null,
+    action: partial.action ?? null,
+    payload: partial.payload ?? {},
+  };
+}
+
+describe("useLiveDirector", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("plays cues in order instead of jumping to the latest event", () => {
+    const initialEvents = [event({ id: 1, type: "round_started", round: 1 })];
+    const { result, rerender } = renderHook(
+      ({ events }: { events: LiveGameEvent[] }) => useLiveDirector(events),
+      { initialProps: { events: initialEvents } },
+    );
+
+    rerender({
+      events: [
+        ...initialEvents,
+        event({ id: 2, type: "phase_started", round: 1, phase: "day" }),
+        event({
+          id: 3,
+          type: "game_completed",
+          payload: { winner: "好人阵营" },
+        }),
+      ],
+    });
+
+    expect(result.current.currentEventId).toBe(1);
+    expect(result.current.backlogCount).toBe(2);
+
+    act(() => {
+      vi.advanceTimersByTime(result.current.effectiveDurationMs - 1);
+    });
+    expect(result.current.currentEventId).toBe(1);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.currentEventId).toBe(2);
+  });
+
+  it("pauses and resumes director timing without dropping later events", () => {
+    const { result, rerender } = renderHook(
+      ({ events }: { events: LiveGameEvent[] }) => useLiveDirector(events),
+      { initialProps: { events: [event({ id: 1, type: "round_started" })] } },
+    );
+
+    act(() => {
+      result.current.pause();
+    });
+    rerender({
+      events: [
+        event({ id: 1, type: "round_started" }),
+        event({ id: 2, type: "phase_started", phase: "day" }),
+      ],
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(result.current.currentEventId).toBe(1);
+    expect(result.current.backlogCount).toBe(1);
+
+    act(() => {
+      result.current.resume();
+    });
+    act(() => {
+      vi.advanceTimersByTime(result.current.effectiveDurationMs);
+    });
+
+    expect(result.current.currentEventId).toBe(2);
+    expect(result.current.backlogCount).toBe(0);
+  });
+
+  it("catches up to the latest key event instead of the latest compressible cue", () => {
+    const events = [
+      event({ id: 1, type: "round_started", round: 1 }),
+      event({ id: 2, type: "action_requested", actor: "张三", action: "vote" }),
+      event({
+        id: 3,
+        type: "state_updated",
+        payload: { exiled: "李四", active_players: ["张三", "王五"] },
+      }),
+      event({
+        id: 4,
+        type: "action_requested",
+        actor: "王五",
+        action: "debate",
+      }),
+    ];
+    const { result } = renderHook(() => useLiveDirector(events));
+
+    act(() => {
+      result.current.catchUpToLatest();
+    });
+
+    expect(result.current.currentEventId).toBe(3);
+    expect(result.current.currentCue?.compressible).toBe(false);
+    expect(result.current.backlogCount).toBe(1);
+
+    act(() => {
+      result.current.catchUpToLatest();
+    });
+    expect(result.current.currentEventId).toBe(4);
+    expect(result.current.backlogCount).toBe(0);
+  });
+
+  it("starts a caught-up cue from resume time when catch-up happens while paused", () => {
+    const events = [
+      event({ id: 1, type: "round_started", round: 1 }),
+      event({
+        id: 2,
+        type: "state_updated",
+        payload: { exiled: "李四", active_players: ["张三", "王五"] },
+      }),
+      event({
+        id: 3,
+        type: "action_requested",
+        actor: "王五",
+        action: "debate",
+      }),
+    ];
+    const { result } = renderHook(() => useLiveDirector(events));
+
+    act(() => {
+      result.current.pause();
+    });
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+      result.current.catchUpToLatest();
+    });
+    expect(result.current.currentEventId).toBe(2);
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+      result.current.resume();
+    });
+    act(() => {
+      vi.advanceTimersByTime(result.current.effectiveDurationMs);
+    });
+
+    expect(result.current.currentEventId).toBe(3);
+  });
+
+  it("compresses normal cue duration while catching up from a high backlog", () => {
+    const events = Array.from({ length: 9 }, (_, index) =>
+      event({ id: index + 1, type: "round_started", round: index + 1 }),
+    );
+    const { result } = renderHook(() => useLiveDirector(events));
+
+    expect(result.current.currentEventId).toBe(1);
+    expect(result.current.backlogCount).toBe(8);
+    expect(result.current.isCatchingUp).toBe(true);
+    expect(result.current.currentCue?.compressible).toBe(true);
+    expect(result.current.effectiveDurationMs).toBe(500);
+
+    act(() => {
+      result.current.setSpeed(1.5);
+    });
+    expect(result.current.speed).toBe(1.5);
+    expect(result.current.effectiveDurationMs).toBe(500);
+  });
+});

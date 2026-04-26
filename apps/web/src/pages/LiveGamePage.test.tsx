@@ -1,8 +1,9 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
 import type { LiveGameEvent } from "../features/games/types";
 import { renderWithClient } from "../tests/renderWithClient";
@@ -33,8 +34,48 @@ class MockEventSource {
   }
 }
 
+function runningRunResponse() {
+  return new Response(
+    JSON.stringify({
+      run_id: "run_1234abcd",
+      session_id: "session_20260424_120000_ab12cd34",
+      villager_model: "deepseek-chat",
+      werewolf_model: "deepseek-chat",
+      seed: null,
+      max_rounds: 8,
+      status: "running",
+      created_at: "2026-04-24T12:00:00Z",
+      started_at: "2026-04-24T12:00:01Z",
+      completed_at: null,
+      winner: null,
+      error: null,
+      event_count: 1,
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+function emitEvent(
+  source: MockEventSource,
+  partial: Partial<LiveGameEvent>,
+) {
+  source.emit(partial.type ?? "round_started", {
+    id: partial.id ?? 1,
+    type: partial.type ?? "round_started",
+    run_id: "run_1234abcd",
+    session_id: "session_20260424_120000_ab12cd34",
+    created_at: partial.created_at ?? "2026-04-24T12:00:03Z",
+    round: partial.round ?? null,
+    phase: partial.phase ?? null,
+    actor: partial.actor ?? null,
+    action: partial.action ?? null,
+    payload: partial.payload ?? {},
+  });
+}
+
 describe("LiveGamePage", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     MockEventSource.instances = [];
@@ -197,25 +238,8 @@ describe("LiveGamePage", () => {
 
   it("lets users pin a player and re-enable auto follow", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          run_id: "run_1234abcd",
-          session_id: "session_20260424_120000_ab12cd34",
-          villager_model: "deepseek-chat",
-          werewolf_model: "deepseek-chat",
-          seed: null,
-          max_rounds: 8,
-          status: "running",
-          created_at: "2026-04-24T12:00:00Z",
-          started_at: "2026-04-24T12:00:01Z",
-          completed_at: null,
-          winner: null,
-          error: null,
-          event_count: 1,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
     );
 
     renderWithClient(
@@ -259,10 +283,12 @@ describe("LiveGamePage", () => {
       });
     });
 
-    expect(await screen.findByRole("heading", { name: "张三" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /张三/ })).toHaveClass(
+      "ring-2",
+    );
 
     await userEvent.click(screen.getByRole("button", { name: /李四/ }));
-    expect(screen.getByRole("heading", { name: "李四" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /李四/ })).toHaveClass("ring-2");
 
     act(() => {
       source.emit("action_requested", {
@@ -278,33 +304,16 @@ describe("LiveGamePage", () => {
         payload: { options: ["李四"] },
       });
     });
-    expect(screen.getByRole("heading", { name: "李四" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /李四/ })).toHaveClass("ring-2");
 
     await userEvent.click(screen.getByRole("checkbox", { name: "自动跟随" }));
-    expect(screen.getByRole("heading", { name: "张三" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /张三/ })).toHaveClass("ring-2");
   });
 
   it("renders failed event errors", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          run_id: "run_1234abcd",
-          session_id: "session_20260424_120000_ab12cd34",
-          villager_model: "deepseek-chat",
-          werewolf_model: "deepseek-chat",
-          seed: null,
-          max_rounds: 8,
-          status: "running",
-          created_at: "2026-04-24T12:00:00Z",
-          started_at: "2026-04-24T12:00:01Z",
-          completed_at: null,
-          winner: null,
-          error: null,
-          event_count: 1,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
     );
 
     renderWithClient(
@@ -332,8 +341,172 @@ describe("LiveGamePage", () => {
       });
     });
 
-    expect(await screen.findByText("对局失败")).toBeInTheDocument();
-    expect(screen.getByText("model timeout")).toBeInTheDocument();
+    expect(await screen.findAllByText("对局失败")).toHaveLength(2);
+    expect(screen.getAllByText("model timeout").length).toBeGreaterThan(0);
+  });
+
+  it("plays the director stage in order instead of jumping to the latest event", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+    vi.useFakeTimers();
+
+    act(() => {
+      emitEvent(source, { id: 1, type: "round_started", round: 1 });
+      emitEvent(source, {
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "day",
+      });
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "第 1 轮开始" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "白天阶段开始" }),
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(2500);
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "白天阶段开始" }),
+    ).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("keeps the director stage paused until users catch up to the latest key event", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+    vi.useFakeTimers();
+
+    act(() => {
+      emitEvent(source, { id: 1, type: "round_started", round: 1 });
+      emitEvent(source, {
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+      });
+      emitEvent(source, {
+        id: 3,
+        type: "game_completed",
+        payload: { winner: "好人阵营" },
+      });
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "第 1 轮开始" }),
+    ).toBeInTheDocument();
+    act(() => {
+      screen.getByRole("button", { name: "暂停" }).click();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "第 1 轮开始" }),
+    ).toBeInTheDocument();
+
+    act(() => {
+      screen.getByRole("button", { name: "追到最新" }).click();
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "对局完成" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("胜利阵营：好人阵营")).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("keeps all raw events visible and highlights the current director event", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+
+    const { container } = renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+    vi.useFakeTimers();
+
+    act(() => {
+      emitEvent(source, { id: 1, type: "round_started", round: 1 });
+      emitEvent(source, {
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "day",
+      });
+    });
+
+    const timeline = container.querySelector("ol");
+    expect(timeline).not.toBeNull();
+    expect(within(timeline!).getByText("round_started")).toBeInTheDocument();
+    expect(within(timeline!).getByText("phase_started")).toBeInTheDocument();
+    expect(within(timeline!).getAllByRole("listitem")).toHaveLength(2);
+
+    const rows = within(timeline!).getAllByRole("listitem");
+    expect(rows[0]).toHaveClass("bg-slate-100", "ring-1");
+
+    act(() => {
+      vi.advanceTimersByTime(2500);
+    });
+
+    expect(rows[1]).toHaveClass("bg-slate-100", "ring-1");
+    vi.useRealTimers();
+  });
+
+  it("shows the backlog count while automatically catching up", () => {
+    render(
+      <LiveDirectorControls
+        backlogCount={8}
+        isCatchingUp={true}
+        isPaused={false}
+        onCatchUpToLatest={() => {}}
+        onSpeedChange={() => {}}
+        onTogglePaused={() => {}}
+        speed={1}
+      />,
+    );
+
+    expect(screen.getByText("自动追进度")).toBeInTheDocument();
+    expect(screen.getByText("队列 8 条")).toBeInTheDocument();
   });
 
   it("renders malformed unknown timeline events as title-only rows", () => {

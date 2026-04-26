@@ -4,12 +4,14 @@ import { useNavigate } from "react-router-dom";
 
 import { createGameRun } from "../api/createGameRun";
 import { listRuleSets } from "../api/listRuleSets";
+import type { EventPacingMode } from "../types";
 
 export function CreateGameRunForm() {
   const navigate = useNavigate();
   const [selectedRuleSetId, setSelectedRuleSetId] = useState("classic_8");
   const [seed, setSeed] = useState("");
   const [maxRounds, setMaxRounds] = useState("8");
+  const [eventPacing, setEventPacing] = useState<EventPacingMode>("off");
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const ruleSetsQuery = useQuery({
@@ -48,6 +50,7 @@ export function CreateGameRunForm() {
           rule_set_id: selectedRuleSetId,
           seed: seed ? Number(seed) : null,
           max_rounds: parsedMaxRounds,
+          event_pacing: eventPacing,
         });
       }}
     >
@@ -130,6 +133,20 @@ export function CreateGameRunForm() {
               setValidationError(null);
             }}
           />
+        </label>
+        <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-slate-700">
+          演示慢速
+          <select
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            value={eventPacing}
+            onChange={(event) =>
+              setEventPacing(event.target.value as EventPacingMode)
+            }
+          >
+            <option value="off">关闭</option>
+            <option value="standard">标准演示</option>
+            <option value="slow">慢速讲解</option>
+          </select>
         </label>
         <button
           className="rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:bg-slate-400"

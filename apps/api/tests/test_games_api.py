@@ -1,10 +1,15 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.routes.games import get_live_registry, get_replay_store
+from app.api.routes.games import (
+    _run_game_in_background,
+    get_live_registry,
+    get_replay_store,
+)
 from app.main import app
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.replay import ReplayStore
@@ -139,6 +144,55 @@ def test_create_game_run_accepts_rule_set_id(
     assert captured[0]["rule_set_id"] == "starter_6"
 
 
+def test_create_game_run_accepts_event_pacing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"seed": 21, "max_rounds": 1, "event_pacing": "standard"},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["event_pacing"] == "standard"
+    assert captured[0]["event_pacing"] == "standard"
+
+
+def test_create_game_run_rejects_unknown_event_pacing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"seed": 21, "max_rounds": 1, "event_pacing": "turbo"},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+
+
 def test_create_game_run_rejects_unknown_rule_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -225,6 +279,57 @@ def test_get_game_run_returns_404_for_missing_run() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Game run not found"
+
+
+def test_run_game_in_background_paces_registry_and_engine_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="session_20260424_120000_ab12cd34",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+        event_pacing="standard",
+    )
+    waits: list[str] = []
+
+    class FakePacer:
+        def __init__(self, mode: str) -> None:
+            self.mode = mode
+
+        def wait(self, event_type: str) -> None:
+            waits.append(event_type)
+
+    def fake_run_game(*, event_sink, **kwargs: object) -> SimpleNamespace:
+        event_sink.publish("phase_started", phase="night")
+        return SimpleNamespace(winner="狼人阵营")
+
+    monkeypatch.setattr("app.api.routes.games.EventPacer", FakePacer, raising=False)
+    monkeypatch.setattr("app.api.routes.games.run_game", fake_run_game)
+    monkeypatch.setattr("app.api.routes.games.settings.werewolf_logs_dir", str(tmp_path))
+
+    _run_game_in_background(
+        run_id=run.run_id,
+        registry=registry,
+        session_id=run.session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+        rule_set_id="classic_8",
+        event_pacing="standard",
+    )
+
+    assert waits == ["run_started", "phase_started", "game_completed"]
+    assert [event.type for event in registry.events_after(run.run_id)] == [
+        "run_created",
+        "run_started",
+        "phase_started",
+        "game_completed",
+    ]
 
 
 def test_game_run_events_replays_existing_events() -> None:
