@@ -164,6 +164,7 @@ export type GameRun = {
   completed_at: string | null;
   error: string | null;
   event_count: number;
+  event_pacing: EventPacingMode;
 };
 
 export type CreateGameRunRequest = {
@@ -172,6 +173,7 @@ export type CreateGameRunRequest = {
   rule_set_id?: string;
   seed?: number | null;
   max_rounds?: number;
+  event_pacing?: EventPacingMode;
 };
 
 export type LiveGameEvent = {

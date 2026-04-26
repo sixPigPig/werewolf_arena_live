@@ -77,6 +77,7 @@ describe("live run api", () => {
           completed_at: null,
           error: null,
           event_count: 4,
+          event_pacing: "slow",
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -86,6 +87,7 @@ describe("live run api", () => {
 
     expect(run.status).toBe("running");
     expect(run.event_count).toBe(4);
+    expect(run.event_pacing).toBe("slow");
     expect(run.winner).toBe("Villagers");
   });
 });
