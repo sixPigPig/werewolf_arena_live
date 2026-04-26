@@ -3,12 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { getGameRun } from "../features/games/api/getGameRun";
+import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
+import { LiveDirectorStage } from "../features/games/components/LiveDirectorStage";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
-import { LiveFocusStage } from "../features/games/components/LiveFocusStage";
 import { LivePlayerPanel } from "../features/games/components/LivePlayerPanel";
 import { LiveStatusStrip } from "../features/games/components/LiveStatusStrip";
 import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 import { useGameRunEvents } from "../features/games/hooks/useGameRunEvents";
+import { useLiveDirector } from "../features/games/hooks/useLiveDirector";
 import { deriveLiveSpectatorState } from "../features/games/liveSpectator";
 
 export function LiveGamePage() {
@@ -38,12 +40,12 @@ export function LiveGamePage() {
     () => deriveLiveSpectatorState(events),
     [events],
   );
+  const director = useLiveDirector(events);
+  const autoFocusName =
+    director.currentCue?.actor ?? spectatorState.activePlayerName;
   const focusedPlayerName = autoFollow
-    ? spectatorState.activePlayerName
-    : manualFocusName ?? spectatorState.activePlayerName;
-  const focusedPlayer =
-    spectatorState.players.find((player) => player.name === focusedPlayerName) ??
-    null;
+    ? autoFocusName
+    : manualFocusName ?? autoFocusName;
 
   useEffect(() => {
     if (!terminalEvent) {
@@ -107,17 +109,30 @@ export function LiveGamePage() {
           }}
           players={spectatorState.players}
         />
-        <LiveFocusStage
-          currentPhase={spectatorState.currentPhase}
-          currentRound={spectatorState.currentRound}
-          latestEvent={spectatorState.latestActorEvent}
-          player={focusedPlayer}
-        />
+        <div className="space-y-3">
+          <LiveDirectorStage
+            backlogCount={director.backlogCount}
+            cue={director.currentCue}
+            isCatchingUp={director.isCatchingUp}
+          />
+          <LiveDirectorControls
+            backlogCount={director.backlogCount}
+            isCatchingUp={director.isCatchingUp}
+            isPaused={director.isPaused}
+            onCatchUpToLatest={director.catchUpToLatest}
+            onSpeedChange={director.setSpeed}
+            onTogglePaused={director.togglePaused}
+            speed={director.speed}
+          />
+        </div>
         <section className="overflow-hidden rounded-md border border-slate-200 bg-white lg:max-h-[calc(100vh-8rem)] lg:overflow-auto">
           <div className="border-b border-slate-200 px-4 py-3">
             <h2 className="text-sm font-semibold text-slate-950">原始事件</h2>
           </div>
-          <LiveEventTimeline events={events} />
+          <LiveEventTimeline
+            currentEventId={director.currentEventId}
+            events={events}
+          />
         </section>
       </div>
     </main>
