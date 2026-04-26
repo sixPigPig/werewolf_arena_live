@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from app.werewolf.pacing import EventPacingMode
+from app.werewolf.pacing import EventPacingMode, validate_event_pacing
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
 
 RunStatus = Literal["queued", "running", "completed", "failed"]
@@ -140,6 +140,7 @@ class LiveRunRegistry:
         rule_set: dict[str, Any] | None = None,
         event_pacing: EventPacingMode = "off",
     ) -> LiveGameRun:
+        validated_event_pacing = validate_event_pacing(event_pacing)
         rule_set_data = (
             _copy_json_payload(rule_set)
             if rule_set is not None
@@ -155,7 +156,7 @@ class LiveRunRegistry:
                 max_rounds=max_rounds,
                 rule_set_id=rule_set_id,
                 rule_set=rule_set_data,
-                event_pacing=event_pacing,
+                event_pacing=validated_event_pacing,
             )
             self._runs[run.run_id] = run
             self._publish_locked(
@@ -169,7 +170,7 @@ class LiveRunRegistry:
                     "max_rounds": max_rounds,
                     "rule_set_id": rule_set_id,
                     "rule_set": rule_set_data,
-                    "event_pacing": event_pacing,
+                    "event_pacing": validated_event_pacing,
                 },
             )
             return run

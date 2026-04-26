@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.werewolf.live import LiveRunRegistry, format_sse
 
 
@@ -56,6 +58,21 @@ def test_registry_creates_run_with_event_pacing() -> None:
     assert run.event_pacing == "slow"
     assert run.to_summary()["event_pacing"] == "slow"
     assert run.events[0].payload["event_pacing"] == "slow"
+
+
+def test_registry_rejects_unsupported_event_pacing() -> None:
+    registry = LiveRunRegistry()
+
+    with pytest.raises(ValueError, match="Unsupported event pacing mode: fast"):
+        registry.create_run(
+            session_id="session_20260424_120000_ab12cd34",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+            event_pacing="fast",  # type: ignore[arg-type]
+            **classic_rule_kwargs(),
+        )
 
 
 def test_registry_appends_ordered_events_and_replays_after_id() -> None:
