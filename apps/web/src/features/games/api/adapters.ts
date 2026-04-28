@@ -109,7 +109,7 @@ function normalizeRound(
     votes,
     voteTally: tallyVotes(votes),
     voteCount: totalVoteWeight,
-    voteMajorityThreshold: totalVoteWeight > 0 ? totalVoteWeight / 2 : null,
+    voteMajorityThreshold: minimumWinningVoteWeight(votes),
   };
 }
 
@@ -129,6 +129,27 @@ function tallyVotes(votes: VoteEntry[]) {
   return Array.from(counts.entries())
     .map(([target, count]) => ({ target, count }))
     .sort((a, b) => b.count - a.count || a.target.localeCompare(b.target));
+}
+
+function minimumWinningVoteWeight(votes: VoteEntry[]): number | null {
+  const totalVoteWeight = votes.reduce((total, vote) => total + vote.weight, 0);
+  if (totalVoteWeight === 0) {
+    return null;
+  }
+
+  const majority = totalVoteWeight / 2;
+  const reachableWeights = new Set<number>([0]);
+  votes.forEach(({ weight }) => {
+    Array.from(reachableWeights).forEach((sum) => {
+      reachableWeights.add(sum + weight);
+    });
+  });
+
+  return (
+    Array.from(reachableWeights)
+      .filter((weight) => weight > majority)
+      .sort((a, b) => a - b)[0] ?? null
+  );
 }
 
 function debugItemsFromRound(round: RawRoundLog): DebugItem[] {

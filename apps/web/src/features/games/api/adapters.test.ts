@@ -139,20 +139,20 @@ describe("normalizeGameReplay", () => {
             is_sheriff: true,
           },
           { name: "Bob", role: "狼人", model: "deepseek-chat" },
-          { name: "Carol", role: "预言家", model: "deepseek-chat" },
+          { name: "Cora", role: "预言家", model: "deepseek-chat" },
         ],
         rounds: [
           {
             ...rawReplay.state.rounds[0],
-            players: ["Alice", "Bob", "Carol"],
+            players: ["Alice", "Bob", "Cora"],
             sheriff: "Alice",
             sheriff_candidates: ["Alice", "Bob"],
-            sheriff_votes: { Bob: "Alice", Carol: "Alice" },
-            speech_order: ["Alice", "Bob", "Carol"],
+            sheriff_votes: { Bob: "Alice", Cora: "Alice" },
+            speech_order: ["Alice", "Bob", "Cora"],
             speech_order_choice: "clockwise",
-            votes: [{ Alice: "Bob" }, { Carol: "Bob" }],
-            vote_weights: { Alice: 1.5, Carol: 1 },
-            sheriff_badge_target: "Carol",
+            votes: [{ Alice: "Bob" }, { Cora: "Bob" }],
+            vote_weights: { Alice: 1.5, Cora: 1 },
+            sheriff_badge_target: "Cora",
             sheriff_badge_lost: false,
           },
         ],
@@ -165,19 +165,46 @@ describe("normalizeGameReplay", () => {
     expect(replay.sheriffBadgeLost).toBe(false);
     expect(round.sheriff).toBe("Alice");
     expect(round.sheriff_candidates).toEqual(["Alice", "Bob"]);
-    expect(round.sheriff_votes).toEqual({ Bob: "Alice", Carol: "Alice" });
-    expect(round.speech_order).toEqual(["Alice", "Bob", "Carol"]);
+    expect(round.sheriff_votes).toEqual({ Bob: "Alice", Cora: "Alice" });
+    expect(round.speech_order).toEqual(["Alice", "Bob", "Cora"]);
     expect(round.speech_order_choice).toBe("clockwise");
     expect(round.votes).toEqual([
       { voter: "Alice", target: "Bob", weight: 1.5 },
-      { voter: "Carol", target: "Bob", weight: 1 },
+      { voter: "Cora", target: "Bob", weight: 1 },
     ]);
     expect(round.voteTally).toEqual([{ target: "Bob", count: 2.5 }]);
     expect(round.voteCount).toBe(2.5);
-    expect(round.voteMajorityThreshold).toBe(1.25);
-    expect(round.vote_weights).toEqual({ Alice: 1.5, Carol: 1 });
-    expect(round.sheriff_badge_target).toBe("Carol");
+    expect(round.voteMajorityThreshold).toBe(1.5);
+    expect(round.vote_weights).toEqual({ Alice: 1.5, Cora: 1 });
+    expect(round.sheriff_badge_target).toBe("Cora");
     expect(round.sheriff_badge_lost).toBe(false);
+  });
+
+  it("preserves legacy normal vote majority display thresholds", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        rounds: [
+          {
+            ...rawReplay.state.rounds[0],
+            players: ["Alice", "Bob", "Cora", "Dan", "Eve"],
+            votes: [
+              { Alice: "Dan" },
+              { Bob: "Dan" },
+              { Cora: "Dan" },
+              { Dan: "Alice" },
+              { Eve: "Dan" },
+            ],
+          },
+        ],
+      },
+    });
+
+    const round = replay.rounds[0];
+
+    expect(round.voteCount).toBe(5);
+    expect(round.voteMajorityThreshold).toBe(3);
   });
 
   it("creates debug items for sheriff actions", () => {
@@ -206,7 +233,7 @@ describe("normalizeGameReplay", () => {
             {
               actor: "Bob",
               action: "sheriff_vote",
-              options: ["Alice", "Carol"],
+              options: ["Alice", "Cora"],
               choice: "Alice",
               lm_log: {
                 prompt: "请选择警长候选人。",
@@ -229,12 +256,12 @@ describe("normalizeGameReplay", () => {
           sheriff_badge: {
             actor: "Alice",
             action: "sheriff_badge",
-            options: ["Bob", "Carol", "撕毁警徽"],
-            choice: "Carol",
+            options: ["Bob", "Cora", "撕毁警徽"],
+            choice: "Cora",
             lm_log: {
               prompt: "请选择警徽移交对象。",
-              raw_response: '{"choice":"Carol"}',
-              result: { choice: "Carol" },
+              raw_response: '{"choice":"Cora"}',
+              result: { choice: "Cora" },
             },
           },
           bid: [],
@@ -245,11 +272,29 @@ describe("normalizeGameReplay", () => {
       ],
     });
 
-    expect(replay.debugItems.map((item) => item.title)).toEqual([
-      "警长竞选",
-      "警长投票",
-      "发言方向",
-      "警徽移交",
+    expect(
+      replay.debugItems.map(({ id, phase, title }) => ({ id, phase, title })),
+    ).toEqual([
+      {
+        id: "round-1-day-sheriff-run-0",
+        phase: "day",
+        title: "警长竞选",
+      },
+      {
+        id: "round-1-day-sheriff-vote-0",
+        phase: "day",
+        title: "警长投票",
+      },
+      {
+        id: "round-1-day-speech-order",
+        phase: "day",
+        title: "发言方向",
+      },
+      {
+        id: "round-1-day-sheriff-badge",
+        phase: "day",
+        title: "警徽移交",
+      },
     ]);
   });
 
