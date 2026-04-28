@@ -364,10 +364,38 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
     ) -> None:
+        pending_night_deaths = self._record_night_deaths(deaths, round_state, active_players)
+        self._resolve_night_death_aftermath(
+            deaths,
+            pending_night_deaths,
+            round_state,
+            round_log,
+            active_players,
+        )
+
+    def _record_night_deaths(
+        self,
+        deaths: list[DeathEvent],
+        round_state: RoundState,
+        active_players: list[str],
+    ) -> set[str]:
         pending_night_deaths = {death.player for death in deaths}
         for death in deaths:
             round_state.night_deaths.append(death)
             self._remove_player(active_players, death.player)
+
+        round_state.eliminated = round_state.night_deaths[0].player if round_state.night_deaths else None
+        return pending_night_deaths
+
+    def _resolve_night_death_aftermath(
+        self,
+        deaths: list[DeathEvent],
+        pending_night_deaths: set[str],
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
+        for death in deaths:
             self._maybe_run_hunter_shot(
                 dead_player=death.player,
                 death_cause=death.cause,
@@ -386,8 +414,6 @@ class GameEngine:
                 phase="night",
                 excluded_badge_targets=pending_night_deaths,
             )
-
-        round_state.eliminated = round_state.night_deaths[0].player if round_state.night_deaths else None
 
     def _maybe_run_hunter_shot(
         self,
@@ -460,12 +486,23 @@ class GameEngine:
         )
         self._run_sheriff_election_if_needed(round_state, round_log, active_players)
         if pending_night_deaths is not None:
-            self._announce_night_deaths(pending_night_deaths, round_state, round_log, active_players)
+            pending_night_death_players = self._record_night_deaths(
+                pending_night_deaths,
+                round_state,
+                active_players,
+            )
             if round_state.night_deaths:
                 eliminated_names = "、".join(death.player for death in round_state.night_deaths)
                 self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
             else:
                 self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
+            self._resolve_night_death_aftermath(
+                pending_night_deaths,
+                pending_night_death_players,
+                round_state,
+                round_log,
+                active_players,
+            )
             self._publish_state_updated(
                 round_state=round_state,
                 phase="night",

@@ -1782,6 +1782,23 @@ def test_first_night_dead_elected_sheriff_transfers_badge_after_death_announceme
     assert round_state.sheriff_badge_lost is False
     assert round_log.sheriff_badge is not None
     assert round_state.speech_order[-1] == new_sheriff
+    new_sheriff_observations = players_by_name[new_sheriff].observations
+    election_index = next(
+        index
+        for index, observation in enumerate(new_sheriff_observations)
+        if f"警长竞选，{dead_sheriff}当选警长" in observation
+    )
+    night_death_index = next(
+        index
+        for index, observation in enumerate(new_sheriff_observations)
+        if observation == f"第1轮：夜晚，{dead_sheriff}出局。"
+    )
+    badge_index = next(
+        index
+        for index, observation in enumerate(new_sheriff_observations)
+        if observation == f"第1轮：{dead_sheriff}出局，将警徽移交给{new_sheriff}。"
+    )
+    assert election_index < night_death_index < badge_index
 
 
 def test_first_night_badge_cannot_transfer_to_pending_dead_player() -> None:
