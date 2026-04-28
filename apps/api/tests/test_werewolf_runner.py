@@ -760,6 +760,52 @@ def test_sheriff_prompt_actions_render_chinese_instructions() -> None:
     assert badge_schema["required"] == ["reasoning", "badge"]
 
 
+def test_sheriff_vote_prompt_includes_public_election_context() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_sheriff_prompt_context",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=60,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.sheriff_candidates = [active_players[0], active_players[1]]
+    round_state.sheriff_voters = [active_players[2]]
+    round_state.sheriff_speeches = [
+        {"speaker": active_players[0], "message": "我上警争警徽。"}
+    ]
+    round_state.sheriff_withdrawn = [active_players[1]]
+    round_state.sheriff_final_candidates = [active_players[0]]
+    round_state.sheriff_pk_candidates = [active_players[0], active_players[3]]
+    round_state.sheriff_pk_speeches = [
+        {"speaker": active_players[3], "message": "我进入 PK。"}
+    ]
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    world_state = engine._world_state(
+        state.player_by_name()[active_players[2]],
+        [active_players[0]],
+        round_state,
+    )
+    prompt, _schema = build_prompt("sheriff_vote", world_state)
+
+    assert "警长竞选公开信息" in prompt
+    assert f"上警名单：{active_players[0]}、{active_players[1]}" in prompt
+    assert f"警下名单：{active_players[2]}" in prompt
+    assert f"{active_players[0]}：我上警争警徽。" in prompt
+    assert f"退水名单：{active_players[1]}" in prompt
+    assert f"最终候选：{active_players[0]}" in prompt
+    assert f"PK 候选：{active_players[0]}、{active_players[3]}" in prompt
+    assert f"{active_players[3]}：我进入 PK。" in prompt
+
+
 def test_12_player_wolf_world_state_lists_all_living_teammates() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -1259,6 +1305,32 @@ def test_sheriff_election_runs_pk_and_runoff_when_first_vote_ties() -> None:
     assert round_state.sheriff_runoff_votes == runoff_votes
     assert round_state.sheriff_elected == first_candidate
     assert state.sheriff == first_candidate
+
+
+def test_sheriff_badge_is_lost_and_all_players_are_off_sheriff_when_no_one_runs() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_sheriff_no_candidates",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=61,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    provider = SheriffFlowProvider(
+        candidates=set(),
+        sheriff_vote_targets={},
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.sheriff_candidates == []
+    assert round_state.sheriff_voters == active_players
+    assert round_state.sheriff_badge_lost is True
+    assert state.sheriff is None
 
 
 def test_sheriff_badge_is_lost_when_no_candidates_remain_after_withdraw() -> None:

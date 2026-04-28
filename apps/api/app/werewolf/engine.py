@@ -543,6 +543,7 @@ class GameEngine:
 
         players_by_name = self.state.player_by_name()
         candidates: list[str] = []
+        voters: list[str] = []
         for name in active_players:
             run_choice, action_log = self._player_action(
                 player=players_by_name[name],
@@ -555,11 +556,13 @@ class GameEngine:
             round_log.sheriff_run.append(action_log)
             if run_choice == SHERIFF_RUN:
                 candidates.append(name)
+            else:
+                voters.append(name)
 
         round_state.sheriff_candidates = candidates
+        round_state.sheriff_voters = voters
         if not candidates:
             round_state.sheriff_final_candidates = []
-            round_state.sheriff_voters = []
             self._lose_sheriff_badge(round_state, active_players, "无人上警")
             return
 
@@ -593,9 +596,7 @@ class GameEngine:
 
         round_state.sheriff_withdrawn = withdrawn
         final_candidates = [name for name in candidates if name not in set(withdrawn)]
-        voters = [name for name in active_players if name not in set(candidates)]
         round_state.sheriff_final_candidates = final_candidates
-        round_state.sheriff_voters = voters
 
         if not final_candidates:
             self._lose_sheriff_badge(round_state, active_players, "警上候选全部退水")
@@ -1057,9 +1058,44 @@ class GameEngine:
             "personality": "",
             "rule_text": render_rule_text(self.rule_set),
             "werewolf_context": self._werewolf_context(player, active_players),
+            "sheriff_election": self._sheriff_election_context(round_state),
             "debate_turns_left": max(0, self.debate_turns - len(round_state.debate)),
             "options": "、".join(options),
         }
+
+    def _sheriff_election_context(self, round_state: RoundState) -> list[str]:
+        lines: list[str] = []
+        if round_state.sheriff_candidates:
+            lines.append(f"上警名单：{'、'.join(round_state.sheriff_candidates)}")
+        if round_state.sheriff_voters:
+            lines.append(f"警下名单：{'、'.join(round_state.sheriff_voters)}")
+        if round_state.sheriff_speeches:
+            speech_lines = [
+                f"{entry.get('speaker', '')}：{entry.get('message', '')}"
+                for entry in round_state.sheriff_speeches
+                if entry.get("speaker") and entry.get("message")
+            ]
+            if speech_lines:
+                lines.append(f"警上发言：{'；'.join(speech_lines)}")
+        if round_state.sheriff_withdrawn:
+            lines.append(f"退水名单：{'、'.join(round_state.sheriff_withdrawn)}")
+        if round_state.sheriff_final_candidates:
+            lines.append(f"最终候选：{'、'.join(round_state.sheriff_final_candidates)}")
+        if round_state.sheriff_pk_candidates:
+            lines.append(f"PK 候选：{'、'.join(round_state.sheriff_pk_candidates)}")
+        if round_state.sheriff_pk_speeches:
+            pk_speech_lines = [
+                f"{entry.get('speaker', '')}：{entry.get('message', '')}"
+                for entry in round_state.sheriff_pk_speeches
+                if entry.get("speaker") and entry.get("message")
+            ]
+            if pk_speech_lines:
+                lines.append(f"PK 发言：{'；'.join(pk_speech_lines)}")
+        if round_state.sheriff_elected:
+            lines.append(f"已当选警长：{round_state.sheriff_elected}")
+        elif round_state.sheriff_badge_lost:
+            lines.append("警徽流失")
+        return lines
 
     def _werewolf_context(self, player: Player, active_players: list[str]) -> str:
         if not self._is_werewolf(player) or not player.gamestate:

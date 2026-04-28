@@ -153,6 +153,7 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
     sections = [
         _render_base(world_state),
         _render_observations(world_state),
+        _render_sheriff_election(world_state),
         _render_debate(world_state),
         _render_instruction(action, world_state),
         "请只输出合法 JSON，不要输出 Markdown，不要添加解释性前后缀。",
@@ -182,6 +183,13 @@ def _render_observations(world_state: dict[str, Any]) -> str:
     if not observations:
         return "你的私人观察：暂无。"
     return "你的私人观察：\n" + "\n".join(f"- {observation}" for observation in observations)
+
+
+def _render_sheriff_election(world_state: dict[str, Any]) -> str:
+    election = world_state.get("sheriff_election") or []
+    if not election:
+        return ""
+    return "警长竞选公开信息：\n" + "\n".join(f"- {line}" for line in election)
 
 
 def _render_debate(world_state: dict[str, Any]) -> str:
