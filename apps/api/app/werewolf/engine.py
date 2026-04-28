@@ -394,6 +394,7 @@ class GameEngine:
         round_state: RoundState,
         round_log: RoundLog,
         active_players: list[str],
+        transfer_sheriff_badge: bool = True,
     ) -> None:
         for death in deaths:
             self._maybe_run_hunter_shot(
@@ -405,15 +406,17 @@ class GameEngine:
                 phase="night",
                 excluded_shot_targets=pending_night_deaths,
                 excluded_badge_targets=pending_night_deaths,
+                transfer_sheriff_badge=transfer_sheriff_badge,
             )
-            self._maybe_transfer_sheriff_badge(
-                dead_player=death.player,
-                round_state=round_state,
-                round_log=round_log,
-                active_players=active_players,
-                phase="night",
-                excluded_badge_targets=pending_night_deaths,
-            )
+            if transfer_sheriff_badge:
+                self._maybe_transfer_sheriff_badge(
+                    dead_player=death.player,
+                    round_state=round_state,
+                    round_log=round_log,
+                    active_players=active_players,
+                    phase="night",
+                    excluded_badge_targets=pending_night_deaths,
+                )
 
     def _maybe_run_hunter_shot(
         self,
@@ -426,6 +429,7 @@ class GameEngine:
         phase: str,
         excluded_shot_targets: set[str] | None = None,
         excluded_badge_targets: set[str] | None = None,
+        transfer_sheriff_badge: bool = True,
     ) -> None:
         players_by_name = self.state.player_by_name()
         hunter = players_by_name[dead_player]
@@ -462,14 +466,15 @@ class GameEngine:
                 round_state.night_deaths.append(death)
             else:
                 round_state.day_deaths.append(death)
-            self._maybe_transfer_sheriff_badge(
-                dead_player=shot_player,
-                round_state=round_state,
-                round_log=round_log,
-                active_players=active_players,
-                phase=phase,
-                excluded_badge_targets=excluded_badge_targets,
-            )
+            if transfer_sheriff_badge:
+                self._maybe_transfer_sheriff_badge(
+                    dead_player=shot_player,
+                    round_state=round_state,
+                    round_log=round_log,
+                    active_players=active_players,
+                    phase=phase,
+                    excluded_badge_targets=excluded_badge_targets,
+                )
 
     def _run_day_phase(
         self,
@@ -491,18 +496,29 @@ class GameEngine:
                 round_state,
                 active_players,
             )
-            if round_state.night_deaths:
-                eliminated_names = "、".join(death.player for death in round_state.night_deaths)
-                self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
-            else:
-                self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
             self._resolve_night_death_aftermath(
                 pending_night_deaths,
                 pending_night_death_players,
                 round_state,
                 round_log,
                 active_players,
+                transfer_sheriff_badge=False,
             )
+            if round_state.night_deaths:
+                eliminated_names = "、".join(death.player for death in round_state.night_deaths)
+                self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
+            else:
+                self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
+            night_death_players = {death.player for death in round_state.night_deaths}
+            for death in list(round_state.night_deaths):
+                self._maybe_transfer_sheriff_badge(
+                    dead_player=death.player,
+                    round_state=round_state,
+                    round_log=round_log,
+                    active_players=active_players,
+                    phase="night",
+                    excluded_badge_targets=night_death_players,
+                )
             self._publish_state_updated(
                 round_state=round_state,
                 phase="night",

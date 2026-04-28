@@ -199,6 +199,50 @@ class FirstNightPoisonBadgeProvider(FirstNightSheriffDeathProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+class FirstNightHunterShotBadgeProvider(SheriffFlowProvider):
+    def __init__(
+        self,
+        *,
+        remove_target: str,
+        shoot_choice: str,
+        candidates: set[str],
+        sheriff_vote_targets: dict[str, str],
+        badge_choice: str,
+    ) -> None:
+        super().__init__(
+            candidates=candidates,
+            sheriff_vote_targets=sheriff_vote_targets,
+            badge_choice=badge_choice,
+        )
+        self.remove_target = remove_target
+        self.shoot_choice = shoot_choice
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"remove"' in prompt:
+            return json.dumps(
+                {"reasoning": "首夜刀中猎人。", "remove": self.remove_target},
+                ensure_ascii=False,
+            )
+        if '"save"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试不救。", "save": "不使用解药"},
+                ensure_ascii=False,
+            )
+        if '"poison"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试不毒。", "poison": "不使用毒药"},
+                ensure_ascii=False,
+            )
+        if '"shoot"' in prompt:
+            options = _extract_options(prompt)
+            choice = self.shoot_choice if self.shoot_choice in options else "不发动技能"
+            return json.dumps(
+                {"reasoning": "猎人开枪带走警长。", "shoot": choice},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 class NoInvestigateProvider(ScriptedChineseProvider):
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         if '"investigate"' in prompt:
@@ -1799,6 +1843,92 @@ def test_first_night_dead_elected_sheriff_transfers_badge_after_death_announceme
         if observation == f"第1轮：{dead_sheriff}出局，将警徽移交给{new_sheriff}。"
     )
     assert election_index < night_death_index < badge_index
+
+
+def test_first_night_hunter_shot_is_announced_before_badge_and_debate() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_first_night_hunter_shot_full_announcement",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=67,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    hunter = next(player for player in state.players if player.role == "猎人")
+    shot_sheriff = next(
+        player.name
+        for player in state.players
+        if player.name != hunter.name and player.role != "狼人"
+    )
+    provider = FirstNightHunterShotBadgeProvider(
+        remove_target=hunter.name,
+        shoot_choice=shot_sheriff,
+        candidates={shot_sheriff},
+        sheriff_vote_targets={
+            name: shot_sheriff for name in active_players if name != shot_sheriff
+        },
+        badge_choice=hunter.name,
+    )
+    sink = CapturingEventSink()
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    state.rounds.append(round_state)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._run_day_phase(round_state, round_log, active_players, pending_deaths)
+
+    assert round_state.sheriff_elected == shot_sheriff
+    assert [death.player for death in round_state.night_deaths] == [
+        hunter.name,
+        shot_sheriff,
+    ]
+    assert round_state.hunter_shot == shot_sheriff
+    survivor = next(
+        player for player in state.players if player.name not in {hunter.name, shot_sheriff}
+    )
+    full_death_message = f"第1轮：夜晚，{hunter.name}、{shot_sheriff}出局。"
+    death_index = next(
+        index
+        for index, observation in enumerate(survivor.observations)
+        if observation == full_death_message
+    )
+    badge_index = next(
+        index
+        for index, observation in enumerate(survivor.observations)
+        if observation == f"第1轮：{shot_sheriff}出局，警徽被撕毁。"
+    )
+    assert death_index < badge_index
+    assert round_state.sheriff_badge_target not in {hunter.name, shot_sheriff}
+    assert state.sheriff not in {hunter.name, shot_sheriff}
+    assert round_state.sheriff_badge_lost is True
+    assert round_log.sheriff_badge is not None
+    assert hunter.name not in round_log.sheriff_badge.options
+    assert shot_sheriff not in round_log.sheriff_badge.options
+    night_update_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated"
+        and event["phase"] == "night"
+        and event["payload"]["night_deaths"]
+        == [
+            {"player": hunter.name, "cause": "werewolf_attack", "source": "狼人"},
+            {"player": shot_sheriff, "cause": "hunter_shot", "source": hunter.name},
+        ]
+    )
+    first_debate_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "action_requested" and event["action"] == "debate"
+    )
+    assert night_update_index < first_debate_index
 
 
 def test_first_night_badge_cannot_transfer_to_pending_dead_player() -> None:
