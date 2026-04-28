@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from app.werewolf.config import GUARD
+
 
 TEAM_VILLAGERS = "villagers"
 TEAM_WEREWOLVES = "werewolves"
@@ -16,10 +18,17 @@ ACTION_INVESTIGATE = "investigate"
 ACTION_WITCH_SAVE = "witch_save"
 ACTION_WITCH_POISON = "witch_poison"
 ACTION_HUNTER_SHOOT = "hunter_shoot"
+ACTION_SHERIFF_RUN = "sheriff_run"
+ACTION_SHERIFF_VOTE = "sheriff_vote"
+ACTION_SPEECH_ORDER = "speech_order"
+ACTION_SHERIFF_BADGE = "sheriff_badge"
 ACTION_BID = "bid"
 ACTION_DEBATE = "debate"
 ACTION_VOTE = "vote"
 ACTION_SUMMARIZE = "summarize"
+
+SPEECH_POLICY_SEQUENTIAL = "sequential"
+SPEECH_POLICY_SHERIFF_DIRECTED = "sheriff_directed"
 
 WIN_CONDITION_WOLVES_GTE_OTHERS = "wolves_gte_others"
 WIN_CONDITION_SLAUGHTER_SIDE = "slaughter_side"
@@ -60,26 +69,32 @@ class RuleSet:
     reveal_policy: str
     complexity: str
     estimated_duration: str
+    sheriff_enabled: bool = False
+    sheriff_vote_weight: float = 1.0
+    speech_policy: str = SPEECH_POLICY_SEQUENTIAL
+    speech_rounds: int = 1
+    rule_tags: tuple[str, ...] = ()
 
 
 CLASSIC_8 = RuleSet(
     id="classic_8",
     version=RULE_SET_VERSION,
     name="经典 8 人局",
-    description="包含狼人、预言家、医生与村民的官方标准局。",
+    description="包含狼人、预言家、守卫与村民的官方标准局。",
     player_count=8,
     roles=(
         RoleSpec("狼人", 2, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF, ROLE_CATEGORY_WEREWOLF),
         RoleSpec("预言家", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
-        RoleSpec("医生", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec(GUARD, 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
         RoleSpec("村民", 4, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE, ACTION_PROTECT, ACTION_INVESTIGATE),
-    day_actions=(ACTION_BID, ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
+    day_actions=(ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
     win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
     reveal_policy=REVEAL_POLICY_HIDDEN,
     complexity="标准",
     estimated_duration="中",
+    rule_tags=("无警长", "顺序发言", "标准"),
 )
 
 STARTER_6 = RuleSet(
@@ -91,15 +106,16 @@ STARTER_6 = RuleSet(
     roles=(
         RoleSpec("狼人", 1, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF, ROLE_CATEGORY_WEREWOLF),
         RoleSpec("预言家", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
-        RoleSpec("医生", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec(GUARD, 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
         RoleSpec("村民", 3, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE, ACTION_PROTECT, ACTION_INVESTIGATE),
-    day_actions=(ACTION_BID, ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
+    day_actions=(ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
     win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
     reveal_policy=REVEAL_POLICY_HIDDEN,
     complexity="入门",
     estimated_duration="短",
+    rule_tags=("无警长", "顺序发言", "新手"),
 )
 
 SOCIAL_8 = RuleSet(
@@ -113,11 +129,12 @@ SOCIAL_8 = RuleSet(
         RoleSpec("村民", 6, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE,),
-    day_actions=(ACTION_BID, ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
+    day_actions=(ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
     win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
     reveal_policy=REVEAL_POLICY_HIDDEN,
     complexity="心理",
     estimated_duration="中",
+    rule_tags=("无警长", "顺序发言", "心理"),
 )
 
 CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
@@ -135,11 +152,23 @@ CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
         RoleSpec("村民", 4, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE, ACTION_INVESTIGATE, ACTION_WITCH_SAVE, ACTION_WITCH_POISON),
-    day_actions=(ACTION_BID, ACTION_DEBATE, ACTION_VOTE, ACTION_HUNTER_SHOOT, ACTION_SUMMARIZE),
+    day_actions=(
+        ACTION_SHERIFF_RUN,
+        ACTION_SHERIFF_VOTE,
+        ACTION_SPEECH_ORDER,
+        ACTION_DEBATE,
+        ACTION_VOTE,
+        ACTION_HUNTER_SHOOT,
+        ACTION_SUMMARIZE,
+    ),
     win_condition=WIN_CONDITION_SLAUGHTER_SIDE,
     reveal_policy=REVEAL_POLICY_HIDDEN,
     complexity="进阶",
     estimated_duration="长",
+    sheriff_enabled=True,
+    sheriff_vote_weight=1.5,
+    speech_policy=SPEECH_POLICY_SHERIFF_DIRECTED,
+    rule_tags=("有警长", "警徽 1.5 票", "屠边", "预女猎白"),
 )
 
 OFFICIAL_RULE_SETS = (CLASSIC_8, STARTER_6, SOCIAL_8, CLASSIC_12_SEER_WITCH_HUNTER_IDIOT)
@@ -168,6 +197,11 @@ def rule_set_summary(rule_set: RuleSet) -> dict[str, Any]:
         "day_actions": list(rule_set.day_actions),
         "complexity": rule_set.complexity,
         "estimated_duration": rule_set.estimated_duration,
+        "sheriff_enabled": rule_set.sheriff_enabled,
+        "sheriff_vote_weight": rule_set.sheriff_vote_weight,
+        "speech_policy": rule_set.speech_policy,
+        "speech_rounds": rule_set.speech_rounds,
+        "rule_tags": list(rule_set.rule_tags),
     }
 
 
@@ -194,6 +228,11 @@ def rule_set_snapshot(rule_set: RuleSet) -> dict[str, Any]:
         "reveal_policy": rule_set.reveal_policy,
         "complexity": rule_set.complexity,
         "estimated_duration": rule_set.estimated_duration,
+        "sheriff_enabled": rule_set.sheriff_enabled,
+        "sheriff_vote_weight": rule_set.sheriff_vote_weight,
+        "speech_policy": rule_set.speech_policy,
+        "speech_rounds": rule_set.speech_rounds,
+        "rule_tags": list(rule_set.rule_tags),
     }
 
 
@@ -211,7 +250,7 @@ def render_rule_text(rule_set: RuleSet) -> str:
 
     night_action_text = {
         ACTION_REMOVE: "狼人选择并移除一名玩家",
-        ACTION_PROTECT: "医生保护一名玩家",
+        ACTION_PROTECT: "守卫保护一名玩家",
         ACTION_INVESTIGATE: "预言家查验一名玩家身份",
         ACTION_WITCH_SAVE: "女巫可以使用解药救下当晚被狼人袭击的玩家",
         ACTION_WITCH_POISON: "女巫可以使用毒药淘汰一名玩家",
@@ -227,7 +266,16 @@ def render_rule_text(rule_set: RuleSet) -> str:
         lines.append("猎人死亡时可以开枪带走一名玩家，但被女巫毒死时不能开枪。")
     if any(role.role == "白痴" for role in rule_set.roles):
         lines.append("白痴首次被放逐时翻牌免死，之后失去投票权但仍可发言。")
-    lines.append("白天行动：竞选、发言、投票与总结。")
+    if rule_set.sheriff_enabled:
+        lines.append(
+            "白天行动：首日进行警长竞选和警长投票，由警长决定发言顺序；"
+            "所有玩家完成完整发言，随后投票放逐并进行总结。"
+        )
+        lines.append(
+            f"警长投票计为 {rule_set.sheriff_vote_weight:g} 票，警长死亡时警徽可移交或撕毁。"
+        )
+    else:
+        lines.append("白天行动：按座次顺序进行一轮完整发言，随后投票放逐并进行总结。")
     lines.append("身份揭示：游戏过程中隐藏玩家真实身份。")
     return "\n".join(lines)
 

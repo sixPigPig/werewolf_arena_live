@@ -36,7 +36,7 @@ def test_get_rule_set_returns_classic_rule() -> None:
     assert rule == CLASSIC_8
     assert rule.name == "经典 8 人局"
     assert rule.player_count == 8
-    assert [role.role for role in rule.roles] == ["狼人", "预言家", "医生", "村民"]
+    assert [role.role for role in rule.roles] == ["狼人", "预言家", "守卫", "村民"]
 
 
 def test_get_rule_set_rejects_unknown_id() -> None:
@@ -69,7 +69,7 @@ def test_rule_set_snapshot_is_json_safe() -> None:
                 "category": "god",
             },
             {
-                "role": "医生",
+                "role": "守卫",
                 "count": 1,
                 "team": "villagers",
                 "model_group": "villager",
@@ -84,23 +84,61 @@ def test_rule_set_snapshot_is_json_safe() -> None:
             },
         ],
         "night_actions": ["remove", "protect", "investigate"],
-        "day_actions": ["bid", "debate", "vote", "summarize"],
+        "day_actions": ["debate", "vote", "summarize"],
         "win_condition": "wolves_gte_others",
         "reveal_policy": "hidden",
         "complexity": "入门",
         "estimated_duration": "短",
+        "sheriff_enabled": False,
+        "sheriff_vote_weight": 1.0,
+        "speech_policy": "sequential",
+        "speech_rounds": 1,
+        "rule_tags": ["无警长", "顺序发言", "新手"],
     }
+
+
+def test_12_player_rule_set_has_sheriff_flow_metadata() -> None:
+    rule = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    snapshot = rule_set_snapshot(rule)
+
+    assert rule.sheriff_enabled is True
+    assert rule.sheriff_vote_weight == 1.5
+    assert rule.speech_policy == "sheriff_directed"
+    assert rule.speech_rounds == 1
+    assert rule.rule_tags == ("有警长", "警徽 1.5 票", "屠边", "预女猎白")
+    assert rule.day_actions == (
+        "sheriff_run",
+        "sheriff_vote",
+        "speech_order",
+        "debate",
+        "vote",
+        "hunter_shoot",
+        "summarize",
+    )
+    assert snapshot["sheriff_enabled"] is True
+    assert snapshot["sheriff_vote_weight"] == 1.5
+    assert snapshot["speech_policy"] == "sheriff_directed"
+    assert snapshot["speech_rounds"] == 1
+    assert snapshot["rule_tags"] == ["有警长", "警徽 1.5 票", "屠边", "预女猎白"]
+    assert "bid" not in snapshot["day_actions"]
 
 
 def test_rule_summaries_are_frontend_friendly() -> None:
     summaries = list_rule_set_summaries()
 
     assert summaries[0]["id"] == "classic_8"
-    assert summaries[0]["role_summary"] == "2 狼人 / 1 预言家 / 1 医生 / 4 村民"
+    assert summaries[0]["role_summary"] == "2 狼人 / 1 预言家 / 1 守卫 / 4 村民"
+    assert summaries[0]["rule_tags"] == ["无警长", "顺序发言", "标准"]
     assert summaries[1]["player_count"] == 6
+    assert summaries[1]["rule_tags"] == ["无警长", "顺序发言", "新手"]
     assert summaries[2]["night_actions"] == ["remove"]
+    assert summaries[2]["rule_tags"] == ["无警长", "顺序发言", "心理"]
     assert summaries[3]["id"] == "classic_12_seer_witch_hunter_idiot"
     assert summaries[3]["role_summary"] == "4 狼人 / 1 预言家 / 1 女巫 / 1 猎人 / 1 白痴 / 4 村民"
+    assert summaries[3]["sheriff_enabled"] is True
+    assert summaries[3]["sheriff_vote_weight"] == 1.5
+    assert summaries[3]["speech_policy"] == "sheriff_directed"
+    assert summaries[3]["rule_tags"] == ["有警长", "警徽 1.5 票", "屠边", "预女猎白"]
 
 
 def test_official_rule_registry_contains_12_player_seer_witch_hunter_idiot() -> None:
@@ -121,18 +159,25 @@ def test_12_player_rule_text_describes_confirmed_table_rules() -> None:
     assert "猎人死亡时可以开枪" in text
     assert "白痴首次被放逐时翻牌免死" in text
     assert "神职全灭或平民全灭时狼人获胜" in text
+    assert "首日进行警长竞选和警长投票" in text
+    assert "由警长决定发言顺序" in text
+    assert "所有玩家完成完整发言" in text
+    assert "警长投票计为 1.5 票" in text
+    assert "警徽可移交或撕毁" in text
 
 
 def test_render_rule_text_matches_rule_actions() -> None:
     classic_text = render_rule_text(get_rule_set("classic_8"))
     social_text = render_rule_text(get_rule_set("social_8"))
 
-    assert "共 8 名玩家：2 名狼人、1 名预言家、1 名医生、4 名村民。" in classic_text
-    assert "医生保护一名玩家" in classic_text
+    assert "共 8 名玩家：2 名狼人、1 名预言家、1 名守卫、4 名村民。" in classic_text
+    assert "守卫保护一名玩家" in classic_text
     assert "预言家查验一名玩家身份" in classic_text
     assert "共 8 名玩家：2 名狼人、6 名村民。" in social_text
-    assert "医生保护" not in social_text
+    assert "守卫保护" not in social_text
     assert "预言家查验" not in social_text
+    assert "按座次顺序进行一轮完整发言" in classic_text
+    assert "随后投票放逐并进行总结" in classic_text
 
 
 def test_render_rule_text_describes_engine_win_conditions() -> None:

@@ -5,7 +5,8 @@ import random
 VILLAGER = "村民"
 WEREWOLF = "狼人"
 SEER = "预言家"
-DOCTOR = "医生"
+GUARD = "守卫"
+DOCTOR = GUARD
 WITCH = "女巫"
 HUNTER = "猎人"
 IDIOT = "白痴"
