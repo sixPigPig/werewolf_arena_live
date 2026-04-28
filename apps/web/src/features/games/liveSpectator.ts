@@ -70,6 +70,10 @@ export function deriveLiveSpectatorState(
       state.latestStateEvent = event;
       applyStateUpdate(state, event);
     }
+
+    if (event.type === "game_completed" || event.type === "game_failed") {
+      clearPendingPlayerStates(state);
+    }
   }
 
   return {
@@ -119,8 +123,22 @@ function applyStateUpdate(
     }
   }
 
+  const attacked = payload.attacked;
+  const protectedPlayer = payload.protected;
+  const protectedAttack =
+    typeof attacked === "string" && protectedPlayer === attacked
+      ? attacked
+      : null;
+  if (protectedAttack) {
+    const player = ensurePlayer(state, protectedAttack);
+    player.isAlive = true;
+    player.status = "waiting";
+    player.lastAction = "remove";
+    player.lastDetail = "被守护，未出局";
+  }
+
   const eliminated = payload.eliminated;
-  if (typeof eliminated === "string") {
+  if (typeof eliminated === "string" && eliminated !== protectedAttack) {
     const player = ensurePlayer(state, eliminated);
     player.isAlive = false;
     player.status = "out";
@@ -141,6 +159,17 @@ function applyStateUpdate(
     player.lastAction = "debate";
     player.lastDetail =
       typeof debate.message === "string" ? debate.message : player.lastDetail;
+  }
+}
+
+function clearPendingPlayerStates(state: MutableLiveSpectatorState) {
+  for (const player of state.playersByName.values()) {
+    if (player.status === "thinking" || player.status === "requesting") {
+      player.status = "waiting";
+    }
+    if (!player.lastDetail) {
+      player.lastAction = "";
+    }
   }
 }
 

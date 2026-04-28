@@ -108,6 +108,28 @@ describe("toDirectorCue", () => {
     });
   });
 
+  it("renders protected night attacks as a peaceful night cue", () => {
+    const cue = toDirectorCue(
+      event({
+        type: "state_updated",
+        payload: {
+          attacked: "李四",
+          protected: "李四",
+          eliminated: null,
+          active_players: ["张三", "李四"],
+        },
+      }),
+    );
+
+    expect(cue).toMatchObject({
+      title: "平安夜",
+      importance: "key",
+      durationMs: 6000,
+      compressible: false,
+    });
+    expect(cue.body).toContain("李四 被袭击，但被医生守护。");
+  });
+
   it("falls back safely for unknown or malformed events", () => {
     const unknownCue = toDirectorCue(
       event({
