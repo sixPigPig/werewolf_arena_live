@@ -124,6 +124,135 @@ describe("normalizeGameReplay", () => {
     expect(replay.rounds[0].eliminated).toBe("李四");
   });
 
+  it("normalizes sheriff speech order and weighted votes", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        sheriff: "Alice",
+        sheriff_badge_lost: false,
+        players: [
+          {
+            name: "Alice",
+            role: "村民",
+            model: "deepseek-chat",
+            is_sheriff: true,
+          },
+          { name: "Bob", role: "狼人", model: "deepseek-chat" },
+          { name: "Carol", role: "预言家", model: "deepseek-chat" },
+        ],
+        rounds: [
+          {
+            ...rawReplay.state.rounds[0],
+            players: ["Alice", "Bob", "Carol"],
+            sheriff: "Alice",
+            sheriff_candidates: ["Alice", "Bob"],
+            sheriff_votes: { Bob: "Alice", Carol: "Alice" },
+            speech_order: ["Alice", "Bob", "Carol"],
+            speech_order_choice: "clockwise",
+            votes: [{ Alice: "Bob" }, { Carol: "Bob" }],
+            vote_weights: { Alice: 1.5, Carol: 1 },
+            sheriff_badge_target: "Carol",
+            sheriff_badge_lost: false,
+          },
+        ],
+      },
+    });
+
+    const round = replay.rounds[0];
+
+    expect(replay.sheriff).toBe("Alice");
+    expect(replay.sheriffBadgeLost).toBe(false);
+    expect(round.sheriff).toBe("Alice");
+    expect(round.sheriff_candidates).toEqual(["Alice", "Bob"]);
+    expect(round.sheriff_votes).toEqual({ Bob: "Alice", Carol: "Alice" });
+    expect(round.speech_order).toEqual(["Alice", "Bob", "Carol"]);
+    expect(round.speech_order_choice).toBe("clockwise");
+    expect(round.votes).toEqual([
+      { voter: "Alice", target: "Bob", weight: 1.5 },
+      { voter: "Carol", target: "Bob", weight: 1 },
+    ]);
+    expect(round.voteTally).toEqual([{ target: "Bob", count: 2.5 }]);
+    expect(round.voteCount).toBe(2.5);
+    expect(round.voteMajorityThreshold).toBe(1.25);
+    expect(round.vote_weights).toEqual({ Alice: 1.5, Carol: 1 });
+    expect(round.sheriff_badge_target).toBe("Carol");
+    expect(round.sheriff_badge_lost).toBe(false);
+  });
+
+  it("creates debug items for sheriff actions", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      logs: [
+        {
+          number: 1,
+          eliminate: null,
+          protect: null,
+          investigate: null,
+          sheriff_run: [
+            {
+              actor: "Alice",
+              action: "sheriff_run",
+              options: ["参选", "退选"],
+              choice: "参选",
+              lm_log: {
+                prompt: "是否参与警长竞选？",
+                raw_response: '{"choice":"参选"}',
+                result: { choice: "参选" },
+              },
+            },
+          ],
+          sheriff_votes: [
+            {
+              actor: "Bob",
+              action: "sheriff_vote",
+              options: ["Alice", "Carol"],
+              choice: "Alice",
+              lm_log: {
+                prompt: "请选择警长候选人。",
+                raw_response: '{"choice":"Alice"}',
+                result: { choice: "Alice" },
+              },
+            },
+          ],
+          speech_order: {
+            actor: "Alice",
+            action: "speech_order",
+            options: ["clockwise", "counterclockwise"],
+            choice: "clockwise",
+            lm_log: {
+              prompt: "请选择发言方向。",
+              raw_response: '{"choice":"clockwise"}',
+              result: { choice: "clockwise" },
+            },
+          },
+          sheriff_badge: {
+            actor: "Alice",
+            action: "sheriff_badge",
+            options: ["Bob", "Carol", "撕毁警徽"],
+            choice: "Carol",
+            lm_log: {
+              prompt: "请选择警徽移交对象。",
+              raw_response: '{"choice":"Carol"}',
+              result: { choice: "Carol" },
+            },
+          },
+          bid: [],
+          debate: [],
+          votes: [],
+          summaries: [],
+        },
+      ],
+    });
+
+    expect(replay.debugItems.map((item) => item.title)).toEqual([
+      "警长竞选",
+      "警长投票",
+      "发言方向",
+      "警徽移交",
+    ]);
+  });
+
   it("creates ordered debug items for day and summary actions", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,

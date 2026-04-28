@@ -22,6 +22,11 @@ export type RuleSetSummary = {
   complexity?: string;
   estimated_duration?: string;
   role_summary?: string;
+  sheriff_enabled?: boolean;
+  sheriff_vote_weight?: number;
+  speech_policy?: "sequential" | "sheriff_directed" | string;
+  speech_rounds?: number;
+  rule_tags?: string[];
 };
 
 export type RuleSetsResponse = {
@@ -63,6 +68,10 @@ export type RawRoundLog = {
   witch_save?: RawActionLog | null;
   witch_poison?: RawActionLog | null;
   hunter_shoot?: RawActionLog | null;
+  sheriff_run?: RawActionLog[];
+  sheriff_votes?: RawActionLog[];
+  speech_order?: RawActionLog | null;
+  sheriff_badge?: RawActionLog | null;
   bid: RawActionLog[][];
   debate: RawActionLog[];
   votes: RawActionLog[][];
@@ -83,6 +92,7 @@ export type RawPlayer = {
   bidding_rationale?: string;
   gamestate?: unknown;
   known_roles?: Record<string, string>;
+  is_sheriff?: boolean;
 };
 
 export type RawRoundState = {
@@ -99,6 +109,14 @@ export type RawRoundState = {
   poisoned?: string | null;
   hunter_shot?: string | null;
   idiot_revealed?: string | null;
+  sheriff?: string | null;
+  sheriff_candidates?: string[];
+  sheriff_votes?: Record<string, string>;
+  speech_order?: string[];
+  speech_order_choice?: string | null;
+  vote_weights?: Record<string, number>;
+  sheriff_badge_target?: string | null;
+  sheriff_badge_lost?: boolean;
   debate: Array<{ speaker: string; message: string }>;
   bids: Array<Record<string, number>>;
   votes: Array<Record<string, string>>;
@@ -113,6 +131,8 @@ export type RawGameState = {
   winner: string;
   error_message: string;
   rule_set?: RuleSetSummary | null;
+  sheriff?: string | null;
+  sheriff_badge_lost?: boolean;
 };
 
 export type RawGameReplayResponse = {
@@ -136,6 +156,7 @@ export type BidGroup = {
 export type VoteEntry = {
   voter: string;
   target: string;
+  weight: number;
 };
 
 export type VoteTallyEntry = {
@@ -168,6 +189,14 @@ export type GameRound = Omit<
   | "poisoned"
   | "hunter_shot"
   | "idiot_revealed"
+  | "sheriff"
+  | "sheriff_candidates"
+  | "sheriff_votes"
+  | "speech_order"
+  | "speech_order_choice"
+  | "vote_weights"
+  | "sheriff_badge_target"
+  | "sheriff_badge_lost"
 > & {
   attacked: string | null;
   eliminated: string | null;
@@ -177,6 +206,14 @@ export type GameRound = Omit<
   poisoned: string | null;
   hunter_shot: string | null;
   idiot_revealed: string | null;
+  sheriff: string | null;
+  sheriff_candidates: string[];
+  sheriff_votes: Record<string, string>;
+  speech_order: string[];
+  speech_order_choice: string | null;
+  vote_weights: Record<string, number>;
+  sheriff_badge_target: string | null;
+  sheriff_badge_lost: boolean;
   bids: BidEntry[];
   bidGroups: BidGroup[];
   votes: VoteEntry[];
@@ -191,6 +228,8 @@ export type GameReplay = {
   winner: string;
   errorMessage: string;
   ruleSet?: RuleSetSummary | null;
+  sheriff: string | null;
+  sheriffBadgeLost: boolean;
   players: RawPlayer[];
   rounds: GameRound[];
   logs: RawRoundLog[];

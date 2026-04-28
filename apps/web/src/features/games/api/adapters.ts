@@ -6,6 +6,7 @@ import type {
   RawActionLog,
   RawGameReplayResponse,
   RawRoundLog,
+  VoteEntry,
 } from "../types";
 
 const ACTION_TITLES: Record<string, string> = {
@@ -15,6 +16,10 @@ const ACTION_TITLES: Record<string, string> = {
   witch_save: "女巫解药",
   witch_poison: "女巫毒药",
   hunter_shoot: "猎人开枪",
+  sheriff_run: "警长竞选",
+  sheriff_vote: "警长投票",
+  speech_order: "发言方向",
+  sheriff_badge: "警徽移交",
   bid: "发言竞价",
   debate: "白天发言",
   vote: "放逐投票",
@@ -30,6 +35,8 @@ export function normalizeGameReplay(
     winner: response.state.winner,
     errorMessage: response.state.error_message,
     ruleSet: response.state.rule_set ?? null,
+    sheriff: response.state.sheriff ?? null,
+    sheriffBadgeLost: response.state.sheriff_badge_lost ?? false,
     players: response.state.players,
     rounds: response.state.rounds.map(normalizeRound),
     logs: response.logs,
@@ -69,9 +76,15 @@ function normalizeRound(
       bids,
     };
   });
+  const voteWeights = round.vote_weights ?? {};
   const votes = round.votes.flatMap((entry) =>
-    Object.entries(entry).map(([voter, target]) => ({ voter, target })),
+    Object.entries(entry).map(([voter, target]) => ({
+      voter,
+      target,
+      weight: voteWeights[voter] ?? 1,
+    })),
   );
+  const totalVoteWeight = votes.reduce((total, vote) => total + vote.weight, 0);
 
   return {
     ...round,
@@ -83,13 +96,20 @@ function normalizeRound(
     poisoned: round.poisoned ?? null,
     hunter_shot: round.hunter_shot ?? null,
     idiot_revealed: round.idiot_revealed ?? null,
+    sheriff: round.sheriff ?? null,
+    sheriff_candidates: round.sheriff_candidates ?? [],
+    sheriff_votes: round.sheriff_votes ?? {},
+    speech_order: round.speech_order ?? [],
+    speech_order_choice: round.speech_order_choice ?? null,
+    vote_weights: voteWeights,
+    sheriff_badge_target: round.sheriff_badge_target ?? null,
+    sheriff_badge_lost: round.sheriff_badge_lost ?? false,
     bids: bidGroups.flatMap((group) => group.bids),
     bidGroups,
     votes,
-    voteTally: tallyVotes(votes.map((vote) => vote.target)),
-    voteCount: votes.length,
-    voteMajorityThreshold:
-      votes.length > 0 ? Math.floor(votes.length / 2) + 1 : null,
+    voteTally: tallyVotes(votes),
+    voteCount: totalVoteWeight,
+    voteMajorityThreshold: totalVoteWeight > 0 ? totalVoteWeight / 2 : null,
   };
 }
 
@@ -100,10 +120,10 @@ function selectedSpeakerFromBids(bids: BidEntry[]) {
   );
 }
 
-function tallyVotes(targets: string[]) {
+function tallyVotes(votes: VoteEntry[]) {
   const counts = new Map<string, number>();
-  targets.forEach((target) => {
-    counts.set(target, (counts.get(target) ?? 0) + 1);
+  votes.forEach(({ target, weight }) => {
+    counts.set(target, (counts.get(target) ?? 0) + weight);
   });
 
   return Array.from(counts.entries())
@@ -148,6 +168,26 @@ function debugItemsFromRound(round: RawRoundLog): DebugItem[] {
   round.bid.flat().forEach((action, index) => {
     pushAction(items, round.number, "day", `day-bid-${index}`, action);
   });
+  (round.sheriff_run ?? []).forEach((action, index) => {
+    pushAction(items, round.number, "day", `day-sheriff-run-${index}`, action);
+  });
+  (round.sheriff_votes ?? []).forEach((action, index) => {
+    pushAction(items, round.number, "day", `day-sheriff-vote-${index}`, action);
+  });
+  pushAction(
+    items,
+    round.number,
+    "day",
+    "day-speech-order",
+    round.speech_order ?? null,
+  );
+  pushAction(
+    items,
+    round.number,
+    "day",
+    "day-sheriff-badge",
+    round.sheriff_badge ?? null,
+  );
   round.debate.forEach((action, index) => {
     pushAction(items, round.number, "day", `day-debate-${index}`, action);
   });
