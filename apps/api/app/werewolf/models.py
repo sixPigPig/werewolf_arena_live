@@ -119,7 +119,15 @@ class RoundState:
     summaries: dict[str, str] = field(default_factory=dict)
     sheriff: str | None = None
     sheriff_candidates: list[str] = field(default_factory=list)
+    sheriff_speeches: list[dict[str, str]] = field(default_factory=list)
+    sheriff_withdrawn: list[str] = field(default_factory=list)
+    sheriff_final_candidates: list[str] = field(default_factory=list)
+    sheriff_voters: list[str] = field(default_factory=list)
     sheriff_votes: dict[str, str] = field(default_factory=dict)
+    sheriff_pk_candidates: list[str] = field(default_factory=list)
+    sheriff_pk_speeches: list[dict[str, str]] = field(default_factory=list)
+    sheriff_runoff_votes: dict[str, str] = field(default_factory=dict)
+    sheriff_elected: str | None = None
     speech_order: list[str] = field(default_factory=list)
     speech_order_choice: str | None = None
     vote_weights: dict[str, float] = field(default_factory=dict)
@@ -148,7 +156,15 @@ class RoundState:
             "summaries": self.summaries,
             "sheriff": self.sheriff,
             "sheriff_candidates": self.sheriff_candidates,
+            "sheriff_speeches": self.sheriff_speeches,
+            "sheriff_withdrawn": self.sheriff_withdrawn,
+            "sheriff_final_candidates": self.sheriff_final_candidates,
+            "sheriff_voters": self.sheriff_voters,
             "sheriff_votes": self.sheriff_votes,
+            "sheriff_pk_candidates": self.sheriff_pk_candidates,
+            "sheriff_pk_speeches": self.sheriff_pk_speeches,
+            "sheriff_runoff_votes": self.sheriff_runoff_votes,
+            "sheriff_elected": self.sheriff_elected,
             "speech_order": self.speech_order,
             "speech_order_choice": self.speech_order_choice,
             "vote_weights": self.vote_weights,
@@ -172,6 +188,10 @@ class RoundLog:
     votes: list[list[ActionLog]] = field(default_factory=list)
     summaries: list[ActionLog] = field(default_factory=list)
     sheriff_run: list[ActionLog] = field(default_factory=list)
+    sheriff_speech: list[ActionLog] = field(default_factory=list)
+    sheriff_withdraw: list[ActionLog] = field(default_factory=list)
+    sheriff_pk_speech: list[ActionLog] = field(default_factory=list)
+    sheriff_runoff_votes: list[ActionLog] = field(default_factory=list)
     sheriff_votes: list[ActionLog] = field(default_factory=list)
     speech_order: ActionLog | None = None
     sheriff_badge: ActionLog | None = None
@@ -190,6 +210,10 @@ class RoundLog:
             "votes": [[log.to_dict() for log in vote_logs] for vote_logs in self.votes],
             "summaries": [log.to_dict() for log in self.summaries],
             "sheriff_run": [log.to_dict() for log in self.sheriff_run],
+            "sheriff_speech": [log.to_dict() for log in self.sheriff_speech],
+            "sheriff_withdraw": [log.to_dict() for log in self.sheriff_withdraw],
+            "sheriff_pk_speech": [log.to_dict() for log in self.sheriff_pk_speech],
+            "sheriff_runoff_votes": [log.to_dict() for log in self.sheriff_runoff_votes],
             "sheriff_votes": [log.to_dict() for log in self.sheriff_votes],
             "speech_order": self.speech_order.to_dict() if self.speech_order else None,
             "sheriff_badge": self.sheriff_badge.to_dict() if self.sheriff_badge else None,

@@ -600,7 +600,7 @@ def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
         session_id="session_test_sheriff_payload",
         villager_model="villager-model",
         werewolf_model="wolf-model",
-        seed=54,
+        seed=42,
         rule_set=get_rule_set("classic_12_seer_witch_hunter_idiot"),
     )
     state.sheriff = state.players[0].name
@@ -608,7 +608,19 @@ def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
     round_state = RoundState(number=1, players=[player.name for player in state.players])
     round_state.sheriff = state.sheriff
     round_state.sheriff_candidates = [state.players[0].name, state.players[1].name]
+    round_state.sheriff_speeches = [
+        {"speaker": state.players[0].name, "message": "我上警争警徽。"}
+    ]
+    round_state.sheriff_withdrawn = [state.players[1].name]
+    round_state.sheriff_final_candidates = [state.players[0].name]
+    round_state.sheriff_voters = [state.players[2].name]
     round_state.sheriff_votes = {state.players[2].name: state.players[0].name}
+    round_state.sheriff_pk_candidates = [state.players[0].name, state.players[3].name]
+    round_state.sheriff_pk_speeches = [
+        {"speaker": state.players[3].name, "message": "我进入 PK。"}
+    ]
+    round_state.sheriff_runoff_votes = {state.players[2].name: state.players[3].name}
+    round_state.sheriff_elected = state.players[0].name
     round_state.speech_order = [player.name for player in state.players]
     round_state.vote_weights = {state.players[0].name: 1.5}
     state.rounds.append(round_state)
@@ -617,16 +629,69 @@ def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
 
     assert payload["sheriff"] == state.players[0].name
     assert payload["players"][0]["is_sheriff"] is True
-    assert payload["rounds"][0]["sheriff"] == state.players[0].name
-    assert payload["rounds"][0]["sheriff_candidates"] == [
-        state.players[0].name,
-        state.players[1].name,
+    round_payload = payload["rounds"][0]
+    assert round_payload["sheriff_candidates"] == [state.players[0].name, state.players[1].name]
+    assert round_payload["sheriff_speeches"] == [
+        {"speaker": state.players[0].name, "message": "我上警争警徽。"}
     ]
-    assert payload["rounds"][0]["sheriff_votes"] == {
-        state.players[2].name: state.players[0].name
+    assert round_payload["sheriff_withdrawn"] == [state.players[1].name]
+    assert round_payload["sheriff_final_candidates"] == [state.players[0].name]
+    assert round_payload["sheriff_voters"] == [state.players[2].name]
+    assert round_payload["sheriff_votes"] == {state.players[2].name: state.players[0].name}
+    assert round_payload["sheriff_pk_candidates"] == [
+        state.players[0].name,
+        state.players[3].name,
+    ]
+    assert round_payload["sheriff_pk_speeches"] == [
+        {"speaker": state.players[3].name, "message": "我进入 PK。"}
+    ]
+    assert round_payload["sheriff_runoff_votes"] == {
+        state.players[2].name: state.players[3].name
     }
-    assert payload["rounds"][0]["speech_order"] == [player.name for player in state.players]
-    assert payload["rounds"][0]["vote_weights"] == {state.players[0].name: 1.5}
+    assert round_payload["sheriff_elected"] == state.players[0].name
+    assert round_payload["speech_order"] == [player.name for player in state.players]
+    assert round_payload["vote_weights"] == {state.players[0].name: 1.5}
+
+
+def test_sheriff_action_logs_serialize_new_election_steps() -> None:
+    from app.werewolf.lm import LmLog
+    from app.werewolf.models import ActionLog
+
+    log = RoundLog(number=1)
+    action = ActionLog(
+        actor="Alice",
+        action="sheriff_speech",
+        options=[],
+        choice="我竞选警长。",
+        lm_log=LmLog(prompt="prompt", raw_response="{}", result={"say": "我竞选警长。"}),
+    )
+    log.sheriff_speech.append(action)
+    log.sheriff_withdraw.append(
+        ActionLog(
+            actor="Alice",
+            action="sheriff_withdraw",
+            options=["退水", "不退水"],
+            choice="不退水",
+            lm_log=LmLog(prompt="prompt", raw_response="{}", result={"withdraw": "不退水"}),
+        )
+    )
+    log.sheriff_pk_speech.append(action)
+    log.sheriff_runoff_votes.append(
+        ActionLog(
+            actor="Bob",
+            action="sheriff_runoff_vote",
+            options=["Alice", "Cora"],
+            choice="Alice",
+            lm_log=LmLog(prompt="prompt", raw_response="{}", result={"sheriff_vote": "Alice"}),
+        )
+    )
+
+    payload = log.to_dict()
+
+    assert payload["sheriff_speech"][0]["action"] == "sheriff_speech"
+    assert payload["sheriff_withdraw"][0]["choice"] == "不退水"
+    assert payload["sheriff_pk_speech"][0]["action"] == "sheriff_speech"
+    assert payload["sheriff_runoff_votes"][0]["choice"] == "Alice"
 
 
 def test_sheriff_prompt_actions_render_chinese_instructions() -> None:
