@@ -1,13 +1,11 @@
 import type { VoteEntry, VoteTallyEntry } from "../types";
 
+import { formatVoteCount } from "./voteFormatting";
+
 type VoteTableProps = {
   votes: VoteEntry[];
   tally: VoteTallyEntry[];
 };
-
-export function formatVoteCount(count: number) {
-  return Number.isInteger(count) ? String(count) : count.toFixed(1);
-}
 
 export function VoteTable({ votes, tally }: VoteTableProps) {
   if (votes.length === 0) {

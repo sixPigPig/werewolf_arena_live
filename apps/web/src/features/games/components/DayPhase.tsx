@@ -3,7 +3,8 @@ import type { DebugItem, GameRound } from "../types";
 import { ActionCard } from "./ActionCard";
 import { BidChart } from "./BidChart";
 import { SummaryStrip } from "./SummaryStrip";
-import { formatVoteCount, VoteTable } from "./VoteTable";
+import { VoteTable } from "./VoteTable";
+import { formatVoteCount } from "./voteFormatting";
 
 type DayPhaseProps = {
   round: GameRound;
