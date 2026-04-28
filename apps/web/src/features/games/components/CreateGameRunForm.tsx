@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { createGameRun } from "../api/createGameRun";
 import { listRuleSets } from "../api/listRuleSets";
-import type { EventPacingMode } from "../types";
+import type { EventPacingMode, RuleSetSummary } from "../types";
 
 export function CreateGameRunForm() {
   const navigate = useNavigate();
@@ -25,8 +25,56 @@ export function CreateGameRunForm() {
   });
 
   const ruleSets = ruleSetsQuery.data?.rule_sets ?? [];
+  const quickRuleSets = ruleSets.filter((rule) => !rule.sheriff_enabled);
+  const sheriffRuleSets = ruleSets.filter((rule) => rule.sheriff_enabled);
   const isSubmitDisabled =
     mutation.isPending || ruleSetsQuery.isPending || ruleSetsQuery.isError;
+
+  const renderRuleCard = (rule: RuleSetSummary) => {
+    const isSelected = selectedRuleSetId === rule.id;
+    const roleSummary =
+      rule.role_summary ??
+      rule.roles.map((role) => `${role.count} ${role.role}`).join(" / ");
+
+    return (
+      <label
+        className={`block rounded-md border p-3 text-sm transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-slate-950 has-[:focus-visible]:ring-offset-2 ${
+          isSelected
+            ? "border-slate-950 bg-slate-100"
+            : "border-slate-200 bg-white"
+        }`}
+        key={rule.id}
+      >
+        <input
+          aria-label={rule.name}
+          checked={isSelected}
+          className="sr-only"
+          name="rule_set_id"
+          type="radio"
+          value={rule.id}
+          onChange={() => setSelectedRuleSetId(rule.id)}
+        />
+        <span className="block font-semibold text-slate-950">{rule.name}</span>
+        <span className="mt-1 block text-slate-600">
+          {rule.player_count} 人 · {rule.complexity ?? "标准"} ·{" "}
+          {rule.estimated_duration ?? "中"}
+        </span>
+        <span className="mt-2 block text-slate-700">{roleSummary}</span>
+        {rule.rule_tags && rule.rule_tags.length > 0 ? (
+          <span className="mt-2 flex flex-wrap gap-1.5">
+            {rule.rule_tags.map((tag) => (
+              <span
+                className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600"
+                key={tag}
+              >
+                {tag}
+              </span>
+            ))}
+          </span>
+        ) : null}
+      </label>
+    );
+  };
 
   return (
     <form
@@ -65,46 +113,27 @@ export function CreateGameRunForm() {
           <p className="mt-2 text-sm text-red-700">无法读取官方规则</p>
         ) : null}
         {ruleSets.length > 0 ? (
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            {ruleSets.map((rule) => {
-              const isSelected = selectedRuleSetId === rule.id;
-              const roleSummary =
-                rule.role_summary ??
-                rule.roles
-                  .map((role) => `${role.count} ${role.role}`)
-                  .join(" / ");
-
-              return (
-                <label
-                  className={`block rounded-md border p-3 text-sm transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-slate-950 has-[:focus-visible]:ring-offset-2 ${
-                    isSelected
-                      ? "border-slate-950 bg-slate-100"
-                      : "border-slate-200 bg-white"
-                  }`}
-                  key={rule.id}
-                >
-                  <input
-                    aria-label={rule.name}
-                    checked={isSelected}
-                    className="sr-only"
-                    name="rule_set_id"
-                    type="radio"
-                    value={rule.id}
-                    onChange={() => setSelectedRuleSetId(rule.id)}
-                  />
-                  <span className="block font-semibold text-slate-950">
-                    {rule.name}
-                  </span>
-                  <span className="mt-1 block text-slate-600">
-                    {rule.player_count} 人 · {rule.complexity ?? "标准"} ·{" "}
-                    {rule.estimated_duration ?? "中"}
-                  </span>
-                  <span className="mt-2 block text-slate-700">
-                    {roleSummary}
-                  </span>
-                </label>
-              );
-            })}
+          <div className="mt-3 space-y-4">
+            {quickRuleSets.length > 0 ? (
+              <section>
+                <h3 className="text-xs font-semibold uppercase text-slate-500">
+                  快速少人局
+                </h3>
+                <div className="mt-2 grid gap-3 md:grid-cols-2">
+                  {quickRuleSets.map(renderRuleCard)}
+                </div>
+              </section>
+            ) : null}
+            {sheriffRuleSets.length > 0 ? (
+              <section>
+                <h3 className="text-xs font-semibold uppercase text-slate-500">
+                  标准警长局
+                </h3>
+                <div className="mt-2 grid gap-3 md:grid-cols-2">
+                  {sheriffRuleSets.map(renderRuleCard)}
+                </div>
+              </section>
+            ) : null}
           </div>
         ) : null}
       </fieldset>

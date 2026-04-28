@@ -3,7 +3,7 @@ import type { DebugItem, GameRound } from "../types";
 import { ActionCard } from "./ActionCard";
 import { BidChart } from "./BidChart";
 import { SummaryStrip } from "./SummaryStrip";
-import { VoteTable } from "./VoteTable";
+import { formatVoteCount, VoteTable } from "./VoteTable";
 
 type DayPhaseProps = {
   round: GameRound;
@@ -22,12 +22,27 @@ export function DayPhase({
     <section className="border-t border-slate-200 pt-4">
       <h3 className="text-sm font-semibold text-slate-950">白天</h3>
 
-      <section className="mt-3">
-        <h4 className="text-xs font-semibold uppercase text-slate-500">竞价</h4>
-        <div className="mt-2">
-          <BidRounds round={round} />
-        </div>
-      </section>
+      {round.bidGroups.length > 0 || round.bids.length > 0 ? (
+        <section className="mt-3">
+          <h4 className="text-xs font-semibold uppercase text-slate-500">
+            历史竞价
+          </h4>
+          <div className="mt-2">
+            <BidRounds round={round} />
+          </div>
+        </section>
+      ) : null}
+
+      {round.speech_order.length > 0 ? (
+        <section className="mt-4">
+          <h4 className="text-xs font-semibold uppercase text-slate-500">
+            发言顺序
+          </h4>
+          <p className="mt-2 text-sm text-slate-700">
+            {round.speech_order.join(" -> ")}
+          </p>
+        </section>
+      ) : null}
 
       <section className="mt-4">
         <h4 className="text-xs font-semibold uppercase text-slate-500">
@@ -140,7 +155,8 @@ function VoteResolution({ round }: { round: GameRound }) {
   return (
     <div className="mt-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
       <p className="font-medium text-slate-950">
-        多数门槛 {round.voteMajorityThreshold}/{round.voteCount}
+        多数门槛 {formatVoteCount(round.voteMajorityThreshold)}/
+        {formatVoteCount(round.voteCount)}
       </p>
       <p className="mt-1">
         {round.exiled ? `${round.exiled} 被放逐` : "无人被放逐"}

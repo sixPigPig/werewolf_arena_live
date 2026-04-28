@@ -12,10 +12,10 @@ const FALLBACK_RULE: RuleSetSummaryType = {
   roles: [
     { role: "狼人", count: 2 },
     { role: "预言家", count: 1 },
-    { role: "医生", count: 1 },
+    { role: "守卫", count: 1 },
     { role: "村民", count: 4 },
   ],
-  role_summary: "2 狼人 / 1 预言家 / 1 医生 / 4 村民",
+  role_summary: "2 狼人 / 1 预言家 / 1 守卫 / 4 村民",
 };
 
 export function RuleSetSummary({ ruleSet }: RuleSetSummaryProps) {
@@ -32,6 +32,18 @@ export function RuleSetSummary({ ruleSet }: RuleSetSummaryProps) {
         <span className="text-xs text-slate-500">{rule.player_count} 人</span>
       </div>
       <p className="mt-1 text-sm text-slate-700">{roleSummary}</p>
+      {rule.rule_tags && rule.rule_tags.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {rule.rule_tags.map((tag) => (
+            <span
+              className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-xs text-slate-600"
+              key={tag}
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }

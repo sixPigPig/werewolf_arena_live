@@ -28,6 +28,10 @@ function ruleSetsResponse() {
         role_summary: "2 狼人 / 4 村民 / 1 预言家 / 1 守卫",
         complexity: "标准",
         estimated_duration: "中",
+        rule_tags: ["无警长", "顺序发言", "屠边"],
+        sheriff_enabled: false,
+        speech_policy: "sequential",
+        speech_rounds: 1,
       },
       {
         id: "starter_6",
@@ -43,6 +47,32 @@ function ruleSetsResponse() {
         role_summary: "2 狼人 / 3 村民 / 1 预言家",
         complexity: "入门",
         estimated_duration: "短",
+        rule_tags: ["无警长", "顺序发言"],
+        sheriff_enabled: false,
+        speech_policy: "sequential",
+        speech_rounds: 1,
+      },
+      {
+        id: "sheriff_12",
+        version: "2026.04",
+        name: "标准 12 人警长局",
+        description: "带警长竞选、警徽流与加权投票。",
+        player_count: 12,
+        roles: [
+          { role: "werewolf", count: 4, team: "werewolves" },
+          { role: "villager", count: 4, team: "villagers" },
+          { role: "seer", count: 1, team: "villagers" },
+          { role: "witch", count: 1, team: "villagers" },
+          { role: "hunter", count: 1, team: "villagers" },
+          { role: "idiot", count: 1, team: "villagers" },
+        ],
+        role_summary: "4 狼人 / 4 村民 / 1 预言家 / 1 女巫 / 1 猎人 / 1 白痴",
+        complexity: "进阶",
+        estimated_duration: "长",
+        rule_tags: ["有警长", "警徽 1.5 票", "屠边", "预女猎白"],
+        sheriff_enabled: true,
+        speech_policy: "sheriff_directed",
+        speech_rounds: 2,
       },
     ],
   };
@@ -92,6 +122,11 @@ describe("GamesPage", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText("session_20260424_001")).toBeInTheDocument();
     expect(screen.getByText("狼人阵营")).toBeInTheDocument();
+    expect(screen.getByText("快速少人局")).toBeInTheDocument();
+    expect(screen.getAllByText("无警长")[0]).toBeInTheDocument();
+    expect(screen.getAllByText("顺序发言")[0]).toBeInTheDocument();
+    expect(screen.getByText("标准警长局")).toBeInTheDocument();
+    expect(screen.getByText("警徽 1.5 票")).toBeInTheDocument();
   });
 
   it("renders an empty state when no sessions exist", async () => {

@@ -5,6 +5,10 @@ type VoteTableProps = {
   tally: VoteTallyEntry[];
 };
 
+export function formatVoteCount(count: number) {
+  return Number.isInteger(count) ? String(count) : count.toFixed(1);
+}
+
 export function VoteTable({ votes, tally }: VoteTableProps) {
   if (votes.length === 0) {
     return <p className="text-sm text-slate-500">无投票记录</p>;
@@ -20,7 +24,7 @@ export function VoteTable({ votes, tally }: VoteTableProps) {
               className="rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-800"
               key={entry.target}
             >
-              {entry.target}：{entry.count}票
+              {entry.target}：{formatVoteCount(entry.count)}票
             </li>
           ))}
         </ul>
@@ -40,7 +44,9 @@ export function VoteTable({ votes, tally }: VoteTableProps) {
               key={`${vote.voter}-${index}`}
             >
               <td className="break-words py-2 pr-2 text-slate-700">
-                {vote.voter}
+                {vote.weight === 1
+                  ? vote.voter
+                  : `${vote.voter}（${formatVoteCount(vote.weight)}票）`}
               </td>
               <td className="break-words py-2 text-slate-950">{vote.target}</td>
             </tr>
