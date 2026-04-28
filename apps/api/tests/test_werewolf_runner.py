@@ -230,8 +230,10 @@ class HunterShotProvider(WitchChoiceProvider):
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         if '"shoot"' in prompt:
             self.actions.append("hunter_shoot")
+            options = _extract_options(prompt)
+            choice = self.shoot_choice if self.shoot_choice in options else "不发动技能"
             return json.dumps(
-                {"reasoning": "猎人带走最可疑玩家。", "shoot": self.shoot_choice},
+                {"reasoning": "猎人带走最可疑玩家。", "shoot": choice},
                 ensure_ascii=False,
             )
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
@@ -1305,6 +1307,39 @@ def test_night_hunter_shot_sheriff_cannot_badge_pending_night_death() -> None:
     assert state.sheriff != poisoned_player
     assert state.sheriff_badge_lost is True
     assert round_state.sheriff_badge_lost is True
+
+
+def test_night_hunter_cannot_shoot_pending_night_death() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_night_hunter_shot_pending_death",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=65,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    hunter = next(player for player in state.players if player.role == "猎人")
+    poisoned_player = next(player.name for player in state.players if player.name != hunter.name)
+    provider = HunterShotProvider(
+        remove_target=hunter.name,
+        save_choice="不使用解药",
+        poison_choice=poisoned_player,
+        shoot_choice=poisoned_player,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.attacked = hunter.name
+    round_state.poisoned = poisoned_player
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._resolve_night_deaths(round_state, round_log, active_players)
+
+    death_causes = [
+        death.cause for death in round_state.night_deaths if death.player == poisoned_player
+    ]
+    assert death_causes == ["witch_poison"]
+    assert round_state.hunter_shot != poisoned_player
 
 
 def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:

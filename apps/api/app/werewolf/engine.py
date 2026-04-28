@@ -352,6 +352,7 @@ class GameEngine:
                 round_log=round_log,
                 active_players=active_players,
                 phase="night",
+                excluded_shot_targets=pending_night_deaths,
                 excluded_badge_targets=pending_night_deaths,
             )
             self._maybe_transfer_sheriff_badge(
@@ -374,6 +375,7 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
         phase: str,
+        excluded_shot_targets: set[str] | None = None,
         excluded_badge_targets: set[str] | None = None,
     ) -> None:
         players_by_name = self.state.player_by_name()
@@ -383,7 +385,12 @@ class GameEngine:
         if death_cause == "witch_poison":
             return
 
-        options = [name for name in active_players if name != hunter.name] + [NO_HUNTER_SHOT]
+        excluded_shot_targets = excluded_shot_targets or set()
+        options = [
+            name
+            for name in active_players
+            if name != hunter.name and name not in excluded_shot_targets
+        ] + [NO_HUNTER_SHOT]
         if options == [NO_HUNTER_SHOT]:
             return
 
