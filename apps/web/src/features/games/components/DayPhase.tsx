@@ -2,6 +2,7 @@ import type { DebugItem, GameRound } from "../types";
 
 import { ActionCard } from "./ActionCard";
 import { BidChart } from "./BidChart";
+import { SheriffElectionPanel } from "./SheriffElectionPanel";
 import { SummaryStrip } from "./SummaryStrip";
 import { VoteTable } from "./VoteTable";
 import { formatVoteCount } from "./voteFormatting";
@@ -34,20 +35,11 @@ export function DayPhase({
         </section>
       ) : null}
 
-      {round.speech_order.length > 0 ? (
-        <section className="mt-4">
-          <h4 className="text-xs font-semibold uppercase text-slate-500">
-            发言顺序
-          </h4>
-          <p className="mt-2 text-sm text-slate-700">
-            {round.speech_order.join(" -> ")}
-          </p>
-        </section>
-      ) : null}
+      <SheriffElectionPanel round={round} />
 
       <section className="mt-4">
         <h4 className="text-xs font-semibold uppercase text-slate-500">
-          发言
+          白天发言
         </h4>
         <div className="mt-2 space-y-2">
           {round.debate.length === 0 ? (
@@ -67,7 +59,7 @@ export function DayPhase({
 
       <section className="mt-4">
         <h4 className="text-xs font-semibold uppercase text-slate-500">
-          投票
+          放逐投票
         </h4>
         <div className="mt-2">
           <VoteTable tally={round.voteTally} votes={round.votes} />

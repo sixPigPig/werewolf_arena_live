@@ -27,7 +27,15 @@ const baseRound: GameRound = {
   voteMajorityThreshold: null,
   sheriff: null,
   sheriff_candidates: [],
+  sheriff_speeches: [],
+  sheriff_withdrawn: [],
+  sheriff_final_candidates: [],
+  sheriff_voters: [],
   sheriff_votes: {},
+  sheriff_pk_candidates: [],
+  sheriff_pk_speeches: [],
+  sheriff_runoff_votes: {},
+  sheriff_elected: null,
   speech_order: [],
   speech_order_choice: null,
   vote_weights: {},
@@ -52,7 +60,7 @@ describe("DayPhase", () => {
     expect(screen.getByText("猎人带走 Alice")).toBeInTheDocument();
   });
 
-  it("hides bidding for ordered speech rounds and shows speech order", () => {
+  it("hides bidding for ordered speech rounds and shows day speeches", () => {
     render(
       <DayPhase
         round={{
@@ -73,8 +81,39 @@ describe("DayPhase", () => {
     );
 
     expect(screen.queryByText("历史竞价")).not.toBeInTheDocument();
-    expect(screen.getByText("发言顺序")).toBeInTheDocument();
-    expect(screen.getByText("Alice -> Bob")).toBeInTheDocument();
+    expect(screen.queryByText("发言顺序")).not.toBeInTheDocument();
+    expect(screen.getByText("白天发言")).toBeInTheDocument();
+  });
+
+  it("renders the sheriff election panel inside the day phase", () => {
+    render(
+      <DayPhase
+        round={{
+          ...baseRound,
+          hunter_shot: null,
+          idiot_revealed: null,
+          day_deaths: [],
+          sheriff: "Alice",
+          sheriff_candidates: ["Alice", "Bob"],
+          sheriff_speeches: [{ speaker: "Alice", message: "我上警争警徽。" }],
+          sheriff_final_candidates: ["Alice"],
+          sheriff_voters: ["Cora", "Dan"],
+          sheriff_votes: { Cora: "Alice" },
+          sheriff_elected: "Alice",
+          speech_order: ["Cora", "Dan", "Bob", "Alice"],
+          speech_order_choice: "警左发言",
+        }}
+        items={[]}
+        selectedItem={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("警长竞选")).toBeInTheDocument();
+    expect(screen.getByText("上警：Alice、Bob")).toBeInTheDocument();
+    expect(screen.getByText("发言方向：警左发言")).toBeInTheDocument();
+    expect(screen.getByText("白天发言")).toBeInTheDocument();
+    expect(screen.getByText("放逐投票")).toBeInTheDocument();
   });
 
   it("shows sheriff vote weight in vote table", () => {
