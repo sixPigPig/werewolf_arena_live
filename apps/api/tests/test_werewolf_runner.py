@@ -1264,6 +1264,49 @@ def test_night_sheriff_badge_cannot_transfer_to_pending_night_death() -> None:
     assert round_state.sheriff_badge_lost is True
 
 
+def test_night_hunter_shot_sheriff_cannot_badge_pending_night_death() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_night_hunter_badge_pending_death",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=64,
+        rule_set=rule_set,
+    )
+    players_by_name = state.player_by_name()
+    active_players = [player.name for player in state.players]
+    hunter = next(player for player in state.players if player.role == "猎人")
+    old_sheriff = next(player.name for player in state.players if player.name != hunter.name)
+    poisoned_player = next(
+        player.name
+        for player in state.players
+        if player.name not in {hunter.name, old_sheriff}
+    )
+    state.sheriff = old_sheriff
+    players_by_name[old_sheriff].is_sheriff = True
+    provider = HunterShotBadgeProvider(
+        remove_target=hunter.name,
+        save_choice="不使用解药",
+        poison_choice=poisoned_player,
+        shoot_choice=old_sheriff,
+        badge_choice=poisoned_player,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.attacked = hunter.name
+    round_state.poisoned = poisoned_player
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._resolve_night_deaths(round_state, round_log, active_players)
+
+    assert old_sheriff not in active_players
+    assert poisoned_player not in active_players
+    assert round_state.sheriff_badge_target != poisoned_player
+    assert state.sheriff != poisoned_player
+    assert state.sheriff_badge_lost is True
+    assert round_state.sheriff_badge_lost is True
+
+
 def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:
     complete = json.loads((log_directory / "game_complete.json").read_text())
     logs = json.loads((log_directory / "game_logs.json").read_text())

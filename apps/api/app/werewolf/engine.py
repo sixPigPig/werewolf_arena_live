@@ -352,6 +352,7 @@ class GameEngine:
                 round_log=round_log,
                 active_players=active_players,
                 phase="night",
+                excluded_badge_targets=pending_night_deaths,
             )
             self._maybe_transfer_sheriff_badge(
                 dead_player=death.player,
@@ -373,6 +374,7 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
         phase: str,
+        excluded_badge_targets: set[str] | None = None,
     ) -> None:
         players_by_name = self.state.player_by_name()
         hunter = players_by_name[dead_player]
@@ -410,6 +412,7 @@ class GameEngine:
                 round_log=round_log,
                 active_players=active_players,
                 phase=phase,
+                excluded_badge_targets=excluded_badge_targets,
             )
 
     def _run_day_phase(
