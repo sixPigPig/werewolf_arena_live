@@ -72,7 +72,7 @@ describe("DayPhase", () => {
       />,
     );
 
-    expect(screen.queryByText("竞价")).not.toBeInTheDocument();
+    expect(screen.queryByText("历史竞价")).not.toBeInTheDocument();
     expect(screen.getByText("发言顺序")).toBeInTheDocument();
     expect(screen.getByText("Alice -> Bob")).toBeInTheDocument();
   });
