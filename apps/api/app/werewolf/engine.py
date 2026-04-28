@@ -172,8 +172,6 @@ class GameEngine:
             self._run_day_phase(round_state, round_log, active_players, pending_deaths)
             self.state.winner = self._get_winner(active_players)
             round_state.success = True
-            if not self.state.winner and len(self.state.rounds) >= self.max_rounds:
-                break
 
         return logs
 
@@ -182,7 +180,7 @@ class GameEngine:
         round_state: RoundState,
         round_log: RoundLog,
         active_players: list[str],
-    ) -> list[DeathEvent]:
+    ) -> list[DeathEvent] | None:
         self._publish(
             "phase_started",
             round_number=round_state.number,
@@ -246,30 +244,32 @@ class GameEngine:
         should_defer_deaths = (
             self.rule_set.sheriff_enabled and round_state.number == 1 and not self.state.sheriff
         )
-        if not should_defer_deaths:
-            self._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
+        if should_defer_deaths:
+            return pending_deaths
 
-            if round_state.night_deaths:
-                eliminated_names = "、".join(death.player for death in round_state.night_deaths)
-                self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
-            else:
-                self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
-            self._publish_state_updated(
-                round_state=round_state,
-                phase="night",
-                payload={
-                    "attacked": round_state.attacked,
-                    "eliminated": round_state.eliminated,
-                    "protected": round_state.protected,
-                    "investigated": round_state.investigated,
-                    "saved_by_witch": round_state.saved_by_witch,
-                    "poisoned": round_state.poisoned,
-                    "night_deaths": [death.to_dict() for death in round_state.night_deaths],
-                    "active_players": active_players.copy(),
-                },
-            )
+        self._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
-        return pending_deaths
+        if round_state.night_deaths:
+            eliminated_names = "、".join(death.player for death in round_state.night_deaths)
+            self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
+        else:
+            self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="night",
+            payload={
+                "attacked": round_state.attacked,
+                "eliminated": round_state.eliminated,
+                "protected": round_state.protected,
+                "investigated": round_state.investigated,
+                "saved_by_witch": round_state.saved_by_witch,
+                "poisoned": round_state.poisoned,
+                "night_deaths": [death.to_dict() for death in round_state.night_deaths],
+                "active_players": active_players.copy(),
+            },
+        )
+
+        return None
 
     def _run_witch_phase(
         self,
@@ -459,28 +459,30 @@ class GameEngine:
             payload={"active_players": active_players.copy()},
         )
         self._run_sheriff_election_if_needed(round_state, round_log, active_players)
-        if pending_night_deaths:
+        if pending_night_deaths is not None:
             self._announce_night_deaths(pending_night_deaths, round_state, round_log, active_players)
             if round_state.night_deaths:
                 eliminated_names = "、".join(death.player for death in round_state.night_deaths)
                 self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
-                self._publish_state_updated(
-                    round_state=round_state,
-                    phase="night",
-                    payload={
-                        "attacked": round_state.attacked,
-                        "eliminated": round_state.eliminated,
-                        "protected": round_state.protected,
-                        "investigated": round_state.investigated,
-                        "saved_by_witch": round_state.saved_by_witch,
-                        "poisoned": round_state.poisoned,
-                        "night_deaths": [death.to_dict() for death in round_state.night_deaths],
-                        "active_players": active_players.copy(),
-                    },
-                )
-                self.state.winner = self._get_winner(active_players)
-                if self.state.winner:
-                    return
+            else:
+                self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
+            self._publish_state_updated(
+                round_state=round_state,
+                phase="night",
+                payload={
+                    "attacked": round_state.attacked,
+                    "eliminated": round_state.eliminated,
+                    "protected": round_state.protected,
+                    "investigated": round_state.investigated,
+                    "saved_by_witch": round_state.saved_by_witch,
+                    "poisoned": round_state.poisoned,
+                    "night_deaths": [death.to_dict() for death in round_state.night_deaths],
+                    "active_players": active_players.copy(),
+                },
+            )
+            self.state.winner = self._get_winner(active_players)
+            if self.state.winner:
+                return
         self._run_debate_phase(round_state, round_log, active_players)
 
         self._publish(

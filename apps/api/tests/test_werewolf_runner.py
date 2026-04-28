@@ -3,7 +3,7 @@ import json
 import pytest
 
 from app.werewolf.config import SEER
-from app.werewolf.engine import GameEngine, initialize_game_state
+from app.werewolf.engine import GameEngine, MaxRoundsExceeded, initialize_game_state
 from app.werewolf.live import NullEventSink
 from app.werewolf.models import RoundLog, RoundState
 from app.werewolf.prompts_zh import build_prompt
@@ -239,6 +239,64 @@ class ProtectedNightProvider:
         raise AssertionError(f"Unexpected prompt: {prompt}")
 
 
+class NoWinnerRoundProvider(ScriptedChineseProvider):
+    def __init__(self, *, protected_target: str) -> None:
+        self.protected_target = protected_target
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"remove"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试狼人袭击被守护目标。", "remove": self.protected_target},
+                ensure_ascii=False,
+            )
+        if '"protect"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试守卫守护被袭击目标。", "protect": self.protected_target},
+                ensure_ascii=False,
+            )
+        if '"vote"' in prompt:
+            name = _extract_actor_name(prompt)
+            options = _extract_options(prompt)
+            living_players = _extract_living_players(prompt)
+            if name in living_players:
+                choice = living_players[(living_players.index(name) + 1) % len(living_players)]
+                if choice in options:
+                    return json.dumps({"reasoning": "测试分散投票。", "vote": choice}, ensure_ascii=False)
+            choice = options[0] if options else "1"
+            return json.dumps({"reasoning": "测试分散投票。", "vote": choice}, ensure_ascii=False)
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class FirstNightPeacefulSheriffProvider(SheriffFlowProvider):
+    def __init__(
+        self,
+        *,
+        protected_target: str,
+        candidates: set[str],
+        sheriff_vote_targets: dict[str, str],
+    ) -> None:
+        super().__init__(candidates=candidates, sheriff_vote_targets=sheriff_vote_targets)
+        self.protected_target = protected_target
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"remove"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试首夜袭击会被救下的目标。", "remove": self.protected_target},
+                ensure_ascii=False,
+            )
+        if '"save"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试女巫首夜救人。", "save": self.protected_target},
+                ensure_ascii=False,
+            )
+        if '"poison"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试首夜不毒人。", "poison": "不使用毒药"},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 class WitchChoiceProvider:
     def __init__(self, *, remove_target: str, save_choice: str, poison_choice: str) -> None:
         self.remove_target = remove_target
@@ -424,6 +482,30 @@ def test_run_game_records_partial_log_when_max_rounds_is_exceeded(tmp_path) -> N
     assert "Maximum rounds exceeded" in state["error_message"]
 
 
+def test_engine_raises_max_rounds_after_positive_limit_without_winner() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_positive_max_rounds",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=202,
+        rule_set=rule_set,
+    )
+    target = next(player.name for player in state.players if player.role == SEER)
+    engine = GameEngine(
+        state=state,
+        provider=NoWinnerRoundProvider(protected_target=target),
+        max_rounds=1,
+        rule_set=rule_set,
+    )
+
+    with pytest.raises(MaxRoundsExceeded):
+        engine.run()
+
+    assert not state.winner
+    assert len(state.rounds) == 1
+
+
 def test_run_game_accepts_custom_session_id(tmp_path) -> None:
     result = run_game(
         logs_dir=tmp_path,
@@ -506,8 +588,8 @@ def test_protected_night_attack_records_attack_without_eliminating_target() -> N
     )
 
     pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
-    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
+    assert pending_deaths is None
     assert round_state.attacked == target
     assert round_state.protected == target
     assert round_state.eliminated is None
@@ -992,8 +1074,8 @@ def test_night_phase_skips_investigate_when_seer_has_no_candidates() -> None:
     )
 
     pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
-    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
+    assert pending_deaths is None
     assert round_state.investigated is None
     assert round_log.investigate is None
 
@@ -1016,11 +1098,12 @@ def test_witch_can_save_self_on_first_night_and_cannot_poison_same_night() -> No
         save_choice=witch.name,
         poison_choice="不使用毒药",
     )
+    state.sheriff = next(player.name for player in state.players if player.name != witch.name)
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
     pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
-    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
+    assert pending_deaths is None
     assert round_state.attacked == witch.name
     assert round_state.saved_by_witch == witch.name
     assert round_state.poisoned is None
@@ -1052,11 +1135,14 @@ def test_witch_poison_creates_night_death() -> None:
         save_choice="不使用解药",
         poison_choice=villager.name,
     )
+    state.sheriff = next(
+        player.name for player in state.players if player.name not in {target.name, villager.name}
+    )
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
     pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
-    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
+    assert pending_deaths is None
     assert round_state.eliminated == target.name
     assert round_state.poisoned == villager.name
     assert [death.to_dict() for death in round_state.night_deaths] == [
@@ -1088,11 +1174,14 @@ def test_hunter_shoots_after_werewolf_attack_death() -> None:
         poison_choice="不使用毒药",
         shoot_choice=wolf.name,
     )
+    state.sheriff = next(
+        player.name for player in state.players if player.name not in {hunter.name, wolf.name}
+    )
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
     pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
-    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
+    assert pending_deaths is None
     assert round_state.hunter_shot == wolf.name
     assert [death.cause for death in round_state.night_deaths] == [
         "werewolf_attack",
@@ -1122,11 +1211,14 @@ def test_hunter_cannot_shoot_after_witch_poison_death() -> None:
         poison_choice=hunter.name,
         shoot_choice=seer.name,
     )
+    state.sheriff = next(
+        player.name for player in state.players if player.name not in {seer.name, hunter.name}
+    )
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
     pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
-    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
+    assert pending_deaths is None
     assert round_state.poisoned == hunter.name
     assert round_state.hunter_shot is None
     assert "hunter_shoot" not in provider.actions
@@ -1281,6 +1373,59 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
     assert round_log.sheriff_run
     assert round_log.sheriff_votes
     assert round_log.speech_order is not None
+
+
+def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_debate() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_sheriff_first_night_peace",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=66,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    witch = next(player.name for player in state.players if player.role == "女巫")
+    sheriff = active_players[0]
+    second_candidate = active_players[1]
+    provider = FirstNightPeacefulSheriffProvider(
+        protected_target=witch,
+        candidates={sheriff, second_candidate},
+        sheriff_vote_targets={
+            name: sheriff for name in active_players if name not in {sheriff, second_candidate}
+        },
+    )
+    sink = CapturingEventSink()
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._run_day_phase(round_state, round_log, active_players, pending_deaths)
+
+    assert pending_deaths == []
+    assert round_state.night_deaths == []
+    assert round_state.eliminated is None
+    assert any("第1轮：夜晚无人出局。" in player.observations for player in state.players)
+    night_update_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated"
+        and event["phase"] == "night"
+        and event["payload"]["night_deaths"] == []
+    )
+    first_debate_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "action_requested" and event["action"] == "debate"
+    )
+    assert night_update_index < first_debate_index
 
 
 def test_sheriff_election_limits_speeches_to_candidates_and_votes_to_off_sheriff_players() -> None:
@@ -1620,10 +1765,13 @@ def test_first_night_dead_elected_sheriff_transfers_badge_after_death_announceme
         candidates={dead_sheriff},
         badge_choice=new_sheriff,
     )
-    engine = GameEngine(state=state, provider=provider, max_rounds=1, rule_set=rule_set)
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    state.rounds.append(round_state)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    logs = engine.run()
-    round_state = state.rounds[0]
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._run_day_phase(round_state, round_log, active_players, pending_deaths)
 
     assert round_state.sheriff_elected == dead_sheriff
     assert round_state.night_deaths[0].player == dead_sheriff
@@ -1632,7 +1780,7 @@ def test_first_night_dead_elected_sheriff_transfers_badge_after_death_announceme
     assert players_by_name[new_sheriff].is_sheriff is True
     assert round_state.sheriff_badge_target == new_sheriff
     assert round_state.sheriff_badge_lost is False
-    assert logs[0].sheriff_badge is not None
+    assert round_log.sheriff_badge is not None
     assert round_state.speech_order[-1] == new_sheriff
 
 
@@ -1659,10 +1807,13 @@ def test_first_night_badge_cannot_transfer_to_pending_dead_player() -> None:
         candidates={dead_sheriff},
         badge_choice=poisoned_player,
     )
-    engine = GameEngine(state=state, provider=provider, max_rounds=1, rule_set=rule_set)
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    state.rounds.append(round_state)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    engine.run()
-    round_state = state.rounds[0]
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._run_day_phase(round_state, round_log, active_players, pending_deaths)
 
     assert {death.player for death in round_state.night_deaths} >= {dead_sheriff, poisoned_player}
     assert round_state.sheriff_badge_target != poisoned_player
