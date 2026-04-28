@@ -980,16 +980,14 @@ class GameEngine:
         active_players: list[str],
         vote_weights: dict[str, float],
     ) -> str | None:
-        del active_players
         if not votes:
             return None
 
         tally: dict[str, float] = {}
-        total_weight = 0.0
         for voter, target in votes.items():
             weight = vote_weights.get(voter, 1.0)
             tally[target] = tally.get(target, 0.0) + weight
-            total_weight += weight
+        total_weight = sum(vote_weights.get(player, 1.0) for player in active_players)
 
         top_weight = max(tally.values())
         winners = [name for name, weight in tally.items() if weight == top_weight]

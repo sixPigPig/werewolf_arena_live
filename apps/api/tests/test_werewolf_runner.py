@@ -1064,6 +1064,23 @@ def test_sheriff_vote_counts_as_one_and_half_votes() -> None:
     assert engine._majority_vote(votes, active_players, weights) == active_players[1]
 
 
+def test_majority_vote_requires_majority_of_active_vote_weight() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_active_vote_weight",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=59,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players[:4]]
+    engine = GameEngine(state=state, provider=ScriptedChineseProvider(), max_rounds=8, rule_set=rule_set)
+    votes = {active_players[0]: active_players[1]}
+    weights = {name: 1.0 for name in active_players}
+
+    assert engine._majority_vote(votes, active_players, weights) is None
+
+
 def test_dead_sheriff_can_transfer_badge() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
