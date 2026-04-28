@@ -146,6 +146,59 @@ class SheriffFlowProvider(ScriptedChineseProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+class FirstNightSheriffDeathProvider(SheriffFlowProvider):
+    def __init__(self, *, remove_target: str, candidates: set[str], badge_choice: str) -> None:
+        super().__init__(
+            candidates=candidates,
+            sheriff_vote_targets={},
+            badge_choice=badge_choice,
+        )
+        self.remove_target = remove_target
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"remove"' in prompt:
+            return json.dumps(
+                {"reasoning": "首夜刀中未来警长。", "remove": self.remove_target},
+                ensure_ascii=False,
+            )
+        if '"save"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试不救。", "save": "不使用解药"},
+                ensure_ascii=False,
+            )
+        if '"poison"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试不毒。", "poison": "不使用毒药"},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class FirstNightPoisonBadgeProvider(FirstNightSheriffDeathProvider):
+    def __init__(
+        self,
+        *,
+        remove_target: str,
+        poison_choice: str,
+        candidates: set[str],
+        badge_choice: str,
+    ) -> None:
+        super().__init__(
+            remove_target=remove_target,
+            candidates=candidates,
+            badge_choice=badge_choice,
+        )
+        self.poison_choice = poison_choice
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"poison"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试毒死接警徽候选。", "poison": self.poison_choice},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 class NoInvestigateProvider(ScriptedChineseProvider):
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         if '"investigate"' in prompt:
@@ -452,7 +505,8 @@ def test_protected_night_attack_records_attack_without_eliminating_target() -> N
         event_sink=sink,
     )
 
-    engine._run_night_phase(round_state, round_log, active_players)
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
     assert round_state.attacked == target
     assert round_state.protected == target
@@ -937,7 +991,8 @@ def test_night_phase_skips_investigate_when_seer_has_no_candidates() -> None:
         rule_set=rule_set,
     )
 
-    engine._run_night_phase(round_state, round_log, active_players)
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
     assert round_state.investigated is None
     assert round_log.investigate is None
@@ -963,7 +1018,8 @@ def test_witch_can_save_self_on_first_night_and_cannot_poison_same_night() -> No
     )
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    engine._run_night_phase(round_state, round_log, active_players)
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
     assert round_state.attacked == witch.name
     assert round_state.saved_by_witch == witch.name
@@ -998,7 +1054,8 @@ def test_witch_poison_creates_night_death() -> None:
     )
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    engine._run_night_phase(round_state, round_log, active_players)
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
     assert round_state.eliminated == target.name
     assert round_state.poisoned == villager.name
@@ -1033,7 +1090,8 @@ def test_hunter_shoots_after_werewolf_attack_death() -> None:
     )
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    engine._run_night_phase(round_state, round_log, active_players)
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
     assert round_state.hunter_shot == wolf.name
     assert [death.cause for death in round_state.night_deaths] == [
@@ -1066,7 +1124,8 @@ def test_hunter_cannot_shoot_after_witch_poison_death() -> None:
     )
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    engine._run_night_phase(round_state, round_log, active_players)
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
     assert round_state.poisoned == hunter.name
     assert round_state.hunter_shot is None
@@ -1541,6 +1600,76 @@ def test_hunter_shot_target_sheriff_transfers_badge() -> None:
     assert round_log.sheriff_badge is not None
 
 
+def test_first_night_dead_elected_sheriff_transfers_badge_after_death_announcement() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_first_night_dead_sheriff_badge",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=60,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    players_by_name = state.player_by_name()
+    dead_sheriff = next(name for name in active_players if players_by_name[name].role != "狼人")
+    new_sheriff = next(
+        name for name in active_players if name != dead_sheriff and players_by_name[name].role != "狼人"
+    )
+    provider = FirstNightSheriffDeathProvider(
+        remove_target=dead_sheriff,
+        candidates={dead_sheriff},
+        badge_choice=new_sheriff,
+    )
+    engine = GameEngine(state=state, provider=provider, max_rounds=1, rule_set=rule_set)
+
+    logs = engine.run()
+    round_state = state.rounds[0]
+
+    assert round_state.sheriff_elected == dead_sheriff
+    assert round_state.night_deaths[0].player == dead_sheriff
+    assert dead_sheriff not in [player.name for player in state.players if player.is_sheriff]
+    assert state.sheriff == new_sheriff
+    assert players_by_name[new_sheriff].is_sheriff is True
+    assert round_state.sheriff_badge_target == new_sheriff
+    assert round_state.sheriff_badge_lost is False
+    assert logs[0].sheriff_badge is not None
+    assert round_state.speech_order[-1] == new_sheriff
+
+
+def test_first_night_badge_cannot_transfer_to_pending_dead_player() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_first_night_badge_excludes_pending_dead",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=61,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    players_by_name = state.player_by_name()
+    dead_sheriff = next(name for name in active_players if players_by_name[name].role != "狼人")
+    poisoned_player = next(
+        name
+        for name in active_players
+        if name != dead_sheriff and players_by_name[name].role not in {"狼人", "女巫"}
+    )
+    provider = FirstNightPoisonBadgeProvider(
+        remove_target=dead_sheriff,
+        poison_choice=poisoned_player,
+        candidates={dead_sheriff},
+        badge_choice=poisoned_player,
+    )
+    engine = GameEngine(state=state, provider=provider, max_rounds=1, rule_set=rule_set)
+
+    engine.run()
+    round_state = state.rounds[0]
+
+    assert {death.player for death in round_state.night_deaths} >= {dead_sheriff, poisoned_player}
+    assert round_state.sheriff_badge_target != poisoned_player
+    assert state.sheriff != poisoned_player
+    assert round_state.sheriff_badge_lost is True
+
+
 def test_night_sheriff_badge_cannot_transfer_to_pending_night_death() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -1571,7 +1700,8 @@ def test_night_sheriff_badge_cannot_transfer_to_pending_night_death() -> None:
     round_log = RoundLog(number=1)
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    engine._resolve_night_deaths(round_state, round_log, active_players)
+    pending_deaths = engine._pending_night_deaths(round_state, active_players)
+    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
     assert poisoned_player not in active_players
     assert round_state.sheriff_badge_target != poisoned_player
@@ -1613,7 +1743,8 @@ def test_night_hunter_shot_sheriff_cannot_badge_pending_night_death() -> None:
     round_log = RoundLog(number=1)
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    engine._resolve_night_deaths(round_state, round_log, active_players)
+    pending_deaths = engine._pending_night_deaths(round_state, active_players)
+    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
     assert old_sheriff not in active_players
     assert poisoned_player not in active_players
@@ -1647,7 +1778,8 @@ def test_night_hunter_cannot_shoot_pending_night_death() -> None:
     round_log = RoundLog(number=1)
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    engine._resolve_night_deaths(round_state, round_log, active_players)
+    pending_deaths = engine._pending_night_deaths(round_state, active_players)
+    engine._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
 
     death_causes = [
         death.cause for death in round_state.night_deaths if death.player == poisoned_player
