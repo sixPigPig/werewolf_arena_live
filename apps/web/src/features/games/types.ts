@@ -78,6 +78,7 @@ export type RawPlayer = {
 export type RawRoundState = {
   number: number;
   players: string[];
+  attacked?: string | null;
   eliminated: string | null;
   protected: string | null;
   investigated: string | null;
@@ -128,7 +129,12 @@ export type DebugItem = {
   parsed: unknown;
 };
 
-export type GameRound = Omit<RawRoundState, "bids" | "votes"> & {
+export type GameRound = Omit<
+  RawRoundState,
+  "attacked" | "eliminated" | "bids" | "votes"
+> & {
+  attacked: string | null;
+  eliminated: string | null;
   bids: BidEntry[];
   votes: VoteEntry[];
 };

@@ -278,4 +278,41 @@ describe("GameDetailPage", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("新对局是否争取发言？")).not.toBeInTheDocument();
   });
+
+  it("shows protected night attacks as saved attacks in replay", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...detailResponse,
+          state: {
+            ...detailResponse.state,
+            rounds: [
+              {
+                ...detailResponse.state.rounds[0],
+                attacked: "李四",
+                eliminated: null,
+                protected: "李四",
+                investigated: "张三",
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/:sessionId" element={<GameDetailPage />} />
+      </Routes>,
+      `/games/${sessionId}`,
+    );
+
+    expect(await screen.findByText("袭击")).toBeInTheDocument();
+    expect(screen.getAllByText("李四").length).toBeGreaterThan(0);
+    expect(screen.getByText("李四 被守护，平安夜")).toBeInTheDocument();
+  });
 });

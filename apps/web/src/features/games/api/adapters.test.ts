@@ -84,6 +84,46 @@ describe("normalizeGameReplay", () => {
     });
   });
 
+  it("normalizes protected legacy attacks without marking the target eliminated", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        rounds: [
+          {
+            ...rawReplay.state.rounds[0],
+            eliminated: "李四",
+            protected: "李四",
+          },
+        ],
+      },
+    });
+
+    expect(replay.rounds[0].attacked).toBe("李四");
+    expect(replay.rounds[0].protected).toBe("李四");
+    expect(replay.rounds[0].eliminated).toBeNull();
+  });
+
+  it("keeps confirmed eliminations when the attacked target is not protected", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        rounds: [
+          {
+            ...rawReplay.state.rounds[0],
+            attacked: "李四",
+            eliminated: "李四",
+            protected: "张三",
+          },
+        ],
+      },
+    });
+
+    expect(replay.rounds[0].attacked).toBe("李四");
+    expect(replay.rounds[0].eliminated).toBe("李四");
+  });
+
   it("creates ordered debug items for day and summary actions", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,

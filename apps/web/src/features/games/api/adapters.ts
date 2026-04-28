@@ -36,8 +36,18 @@ export function normalizeGameReplay(
 function normalizeRound(
   round: RawGameReplayResponse["state"]["rounds"][number],
 ): GameRound {
+  const attacked = round.attacked ?? round.eliminated ?? null;
+  const eliminated =
+    round.attacked === undefined &&
+    round.eliminated !== null &&
+    round.eliminated === round.protected
+      ? null
+      : round.eliminated;
+
   return {
     ...round,
+    attacked,
+    eliminated,
     bids: round.bids.flatMap((entry) =>
       Object.entries(entry).map(([actor, score]) => ({ actor, score })),
     ),
