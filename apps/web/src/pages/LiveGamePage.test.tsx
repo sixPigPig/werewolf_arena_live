@@ -212,6 +212,10 @@ describe("LiveGamePage", () => {
     const source = MockEventSource.instances[0];
     act(() => {
       source.onopen?.();
+    });
+    expect(screen.getByText("连接：已连接")).toBeInTheDocument();
+
+    act(() => {
       source.emit("game_started", {
         id: 1,
         type: "game_started",
@@ -276,7 +280,7 @@ describe("LiveGamePage", () => {
       "/games/session_20260424_120000_ab12cd34",
     );
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("completed")).toBeInTheDocument();
+    expect(await screen.findByText("已完成")).toBeInTheDocument();
   });
 
   it("lets users pin a player and re-enable auto follow", async () => {
@@ -543,7 +547,7 @@ describe("LiveGamePage", () => {
     });
 
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("completed")).toBeInTheDocument();
+    expect(await screen.findByText("已完成")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "运行已创建" }),
     ).toBeInTheDocument();
@@ -596,7 +600,7 @@ describe("LiveGamePage", () => {
     });
 
     await waitFor(() => expect(runAFetches).toHaveLength(2));
-    expect(await screen.findByText("completed")).toBeInTheDocument();
+    expect(await screen.findByText("已完成")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "运行已创建" }),
     ).toBeInTheDocument();
@@ -625,7 +629,7 @@ describe("LiveGamePage", () => {
         payload: { winner: "狼人阵营" },
       });
     });
-    expect(await screen.findByText("completed")).toBeInTheDocument();
+    expect(await screen.findByText("已完成")).toBeInTheDocument();
     expect(
       await screen.findByRole("heading", { name: "对局完成" }),
     ).toBeInTheDocument();
