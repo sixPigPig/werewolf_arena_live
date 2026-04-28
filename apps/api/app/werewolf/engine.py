@@ -337,6 +337,7 @@ class GameEngine:
         if round_state.poisoned:
             deaths.append(DeathEvent(round_state.poisoned, "witch_poison", witch_name or None))
 
+        pending_night_deaths = {death.player for death in deaths}
         seen: set[str] = set()
         for death in deaths:
             if death.player in seen:
@@ -358,6 +359,7 @@ class GameEngine:
                 round_log=round_log,
                 active_players=active_players,
                 phase="night",
+                excluded_badge_targets=pending_night_deaths,
             )
 
         round_state.eliminated = round_state.night_deaths[0].player if round_state.night_deaths else None
@@ -402,6 +404,13 @@ class GameEngine:
                 round_state.night_deaths.append(death)
             else:
                 round_state.day_deaths.append(death)
+            self._maybe_transfer_sheriff_badge(
+                dead_player=shot_player,
+                round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
+                phase=phase,
+            )
 
     def _run_day_phase(
         self,
@@ -714,6 +723,7 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
         phase: str,
+        excluded_badge_targets: set[str] | None = None,
     ) -> None:
         if (
             not self.rule_set.sheriff_enabled
@@ -729,18 +739,22 @@ class GameEngine:
             round_state.sheriff = None
             return
 
+        excluded_badge_targets = excluded_badge_targets or set()
+        badge_options = [
+            name for name in active_players if name not in excluded_badge_targets
+        ]
         old_sheriff = self.state.player_by_name()[dead_player]
         choice, action_log = self._player_action(
             player=old_sheriff,
             action=ACTION_SHERIFF_BADGE,
-            options=active_players + [SHERIFF_BADGE_DESTROY],
+            options=badge_options + [SHERIFF_BADGE_DESTROY],
             result_key="badge",
             round_state=round_state,
             phase=phase,
         )
         round_log.sheriff_badge = action_log
 
-        if isinstance(choice, str) and choice in active_players:
+        if isinstance(choice, str) and choice in badge_options:
             self._set_sheriff(choice)
             round_state.sheriff_badge_target = choice
             round_state.sheriff = choice
@@ -987,7 +1001,14 @@ class GameEngine:
         for voter, target in votes.items():
             weight = vote_weights.get(voter, 1.0)
             tally[target] = tally.get(target, 0.0) + weight
-        total_weight = sum(vote_weights.get(player, 1.0) for player in active_players)
+        players_by_name = self.state.player_by_name()
+        total_weight = sum(
+            vote_weights.get(player, 1.0)
+            for player in active_players
+            if players_by_name[player].can_vote
+        )
+        if total_weight <= 0:
+            return None
 
         top_weight = max(tally.values())
         winners = [name for name, weight in tally.items() if weight == top_weight]
