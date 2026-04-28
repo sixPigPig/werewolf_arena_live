@@ -12,6 +12,9 @@ const ACTION_TITLES: Record<string, string> = {
   remove: "狼人击杀",
   protect: "医生守护",
   investigate: "预言家查验",
+  witch_save: "女巫解药",
+  witch_poison: "女巫毒药",
+  hunter_shoot: "猎人开枪",
   bid: "发言竞价",
   debate: "白天发言",
   vote: "放逐投票",
@@ -44,6 +47,16 @@ function normalizeRound(
     round.eliminated === round.protected
       ? null
       : round.eliminated;
+  const nightDeaths =
+    round.night_deaths ??
+    (eliminated
+      ? [{ player: eliminated, cause: "legacy_night_elimination", source: null }]
+      : []);
+  const dayDeaths =
+    round.day_deaths ??
+    (round.exiled
+      ? [{ player: round.exiled, cause: "legacy_vote_exile", source: null }]
+      : []);
   const bidGroups = round.bids.map((entry, index) => {
     const bids = Object.entries(entry).map(([actor, score]) => ({
       actor,
@@ -64,6 +77,12 @@ function normalizeRound(
     ...round,
     attacked,
     eliminated,
+    night_deaths: nightDeaths,
+    day_deaths: dayDeaths,
+    saved_by_witch: round.saved_by_witch ?? null,
+    poisoned: round.poisoned ?? null,
+    hunter_shot: round.hunter_shot ?? null,
+    idiot_revealed: round.idiot_revealed ?? null,
     bids: bidGroups.flatMap((group) => group.bids),
     bidGroups,
     votes,
@@ -103,6 +122,27 @@ function debugItemsFromRound(round: RawRoundLog): DebugItem[] {
     "night",
     "night-investigate",
     round.investigate,
+  );
+  pushAction(
+    items,
+    round.number,
+    "night",
+    "night-witch-save",
+    round.witch_save ?? null,
+  );
+  pushAction(
+    items,
+    round.number,
+    "night",
+    "night-witch-poison",
+    round.witch_poison ?? null,
+  );
+  pushAction(
+    items,
+    round.number,
+    "night",
+    "night-hunter-shoot",
+    round.hunter_shoot ?? null,
   );
 
   round.bid.flat().forEach((action, index) => {

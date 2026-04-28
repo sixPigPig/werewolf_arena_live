@@ -43,6 +43,21 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {"reasoning": {"type": "string"}, "protect": {"type": "string"}},
         "required": ["reasoning", "protect"],
     },
+    "witch_save": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "save": {"type": "string"}},
+        "required": ["reasoning", "save"],
+    },
+    "witch_poison": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "poison": {"type": "string"}},
+        "required": ["reasoning", "poison"],
+    },
+    "hunter_shoot": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "shoot": {"type": "string"}},
+        "required": ["reasoning", "shoot"],
+    },
     "summarize": {
         "type": "object",
         "properties": {"reasoning": {"type": "string"}, "summary": {"type": "string"}},
@@ -57,6 +72,9 @@ RESULT_FIELD_BY_ACTION = {
     "investigate": "investigate",
     "remove": "remove",
     "protect": "protect",
+    "witch_save": "save",
+    "witch_poison": "poison",
+    "hunter_shoot": "shoot",
     "summarize": "summary",
 }
 
@@ -68,6 +86,9 @@ FIELD_LABELS = {
     "investigate": "查验对象",
     "remove": "袭击对象",
     "protect": "保护对象",
+    "save": "解药选择",
+    "poison": "毒药选择",
+    "shoot": "开枪目标",
     "summary": "回合总结",
 }
 
@@ -161,6 +182,28 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             f"候选人：{options}。\n"
             "你必须选择一名最需要保护的玩家。\n"
             "输出字段 reasoning 和 protect。"
+        )
+    if action == "witch_save":
+        return (
+            "行动：女巫夜晚解药。\n"
+            f"候选人：{options}。\n"
+            "你知道今晚被狼人袭击的玩家，可以选择使用解药救人，或选择不使用解药。"
+            "本规则允许首夜自救，但同一夜使用解药后不能再使用毒药。"
+            "输出字段 reasoning 和 save。"
+        )
+    if action == "witch_poison":
+        return (
+            "行动：女巫夜晚毒药。\n"
+            f"候选人：{options}。\n"
+            "你可以选择一名玩家使用毒药，或选择不使用毒药。"
+            "被毒死的猎人不能开枪。输出字段 reasoning 和 poison。"
+        )
+    if action == "hunter_shoot":
+        return (
+            "行动：猎人死亡开枪。\n"
+            f"候选人：{options}。\n"
+            "你可以选择一名存活玩家带走，或选择不发动技能。"
+            "结合发言、投票和阵营目标做判断。输出字段 reasoning 和 shoot。"
         )
     if action == "summarize":
         return (

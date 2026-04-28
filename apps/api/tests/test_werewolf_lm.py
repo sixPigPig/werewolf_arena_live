@@ -37,6 +37,56 @@ def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
     assert schema["required"] == ["reasoning", "vote"]
 
 
+def test_build_prompt_supports_witch_save_action() -> None:
+    prompt, schema = build_prompt(
+        "witch_save",
+        _world_state_for_special_action("女巫", "Alice、不使用解药"),
+    )
+
+    assert schema["required"] == ["reasoning", "save"]
+    assert "女巫夜晚解药" in prompt
+    assert "输出字段 reasoning 和 save" in prompt
+
+
+def test_build_prompt_supports_witch_poison_action() -> None:
+    prompt, schema = build_prompt(
+        "witch_poison",
+        _world_state_for_special_action("女巫", "Bob、Carol、不使用毒药"),
+    )
+
+    assert schema["required"] == ["reasoning", "poison"]
+    assert "女巫夜晚毒药" in prompt
+    assert "输出字段 reasoning 和 poison" in prompt
+
+
+def test_build_prompt_supports_hunter_shoot_action() -> None:
+    prompt, schema = build_prompt(
+        "hunter_shoot",
+        _world_state_for_special_action("猎人", "Bob、Carol、不发动技能"),
+    )
+
+    assert schema["required"] == ["reasoning", "shoot"]
+    assert "猎人死亡开枪" in prompt
+    assert "输出字段 reasoning 和 shoot" in prompt
+
+
+def _world_state_for_special_action(role: str, options: str) -> dict[str, object]:
+    return {
+        "name": "Alice",
+        "role": role,
+        "round": 1,
+        "observations": [],
+        "remaining_players": "Alice、Bob、Carol",
+        "debate": [],
+        "bidding_rationale": "",
+        "personality": "",
+        "rule_text": "你正在进行一局数字版狼人杀。",
+        "werewolf_context": "",
+        "debate_turns_left": 0,
+        "options": options,
+    }
+
+
 def test_parse_json_object_accepts_fenced_json() -> None:
     parsed = parse_json_object('```json\n{"reasoning":"观察发言","vote":"老周"}\n```')
 

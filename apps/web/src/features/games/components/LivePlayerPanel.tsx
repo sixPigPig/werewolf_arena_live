@@ -25,6 +25,9 @@ const ROLE_STYLES: Record<string, string> = {
   seer: "border-violet-200 bg-violet-50 text-violet-800",
   医生: "border-emerald-200 bg-emerald-50 text-emerald-800",
   doctor: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  女巫: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800",
+  猎人: "border-orange-200 bg-orange-50 text-orange-800",
+  白痴: "border-cyan-200 bg-cyan-50 text-cyan-800",
   村民: "border-slate-200 bg-slate-50 text-slate-700",
   villager: "border-slate-200 bg-slate-50 text-slate-700",
 };

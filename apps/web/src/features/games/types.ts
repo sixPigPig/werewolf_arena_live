@@ -5,6 +5,7 @@ export type RoleSpecSummary = {
   count: number;
   team?: string;
   model_group?: string;
+  category?: string;
 };
 
 export type RuleSetSummary = {
@@ -59,10 +60,19 @@ export type RawRoundLog = {
   eliminate: RawActionLog | null;
   protect: RawActionLog | null;
   investigate: RawActionLog | null;
+  witch_save?: RawActionLog | null;
+  witch_poison?: RawActionLog | null;
+  hunter_shoot?: RawActionLog | null;
   bid: RawActionLog[][];
   debate: RawActionLog[];
   votes: RawActionLog[][];
   summaries: RawActionLog[];
+};
+
+export type DeathEvent = {
+  player: string;
+  cause: string;
+  source?: string | null;
 };
 
 export type RawPlayer = {
@@ -83,6 +93,12 @@ export type RawRoundState = {
   protected: string | null;
   investigated: string | null;
   exiled: string | null;
+  night_deaths?: DeathEvent[];
+  day_deaths?: DeathEvent[];
+  saved_by_witch?: string | null;
+  poisoned?: string | null;
+  hunter_shot?: string | null;
+  idiot_revealed?: string | null;
   debate: Array<{ speaker: string; message: string }>;
   bids: Array<Record<string, number>>;
   votes: Array<Record<string, string>>;
@@ -142,10 +158,25 @@ export type DebugItem = {
 
 export type GameRound = Omit<
   RawRoundState,
-  "attacked" | "eliminated" | "bids" | "votes"
+  | "attacked"
+  | "eliminated"
+  | "bids"
+  | "votes"
+  | "night_deaths"
+  | "day_deaths"
+  | "saved_by_witch"
+  | "poisoned"
+  | "hunter_shot"
+  | "idiot_revealed"
 > & {
   attacked: string | null;
   eliminated: string | null;
+  night_deaths: DeathEvent[];
+  day_deaths: DeathEvent[];
+  saved_by_witch: string | null;
+  poisoned: string | null;
+  hunter_shot: string | null;
+  idiot_revealed: string | null;
   bids: BidEntry[];
   bidGroups: BidGroup[];
   votes: VoteEntry[];

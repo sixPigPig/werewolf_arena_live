@@ -19,6 +19,7 @@ def test_official_rule_registry_contains_mvp_rules() -> None:
         "classic_8",
         "starter_6",
         "social_8",
+        "classic_12_seer_witch_hunter_idiot",
     ]
 
 
@@ -53,10 +54,34 @@ def test_rule_set_snapshot_is_json_safe() -> None:
         "description": "更短的官方入门局，适合快速观察模型策略。",
         "player_count": 6,
         "roles": [
-            {"role": "狼人", "count": 1, "team": "werewolves", "model_group": "werewolf"},
-            {"role": "预言家", "count": 1, "team": "villagers", "model_group": "villager"},
-            {"role": "医生", "count": 1, "team": "villagers", "model_group": "villager"},
-            {"role": "村民", "count": 3, "team": "villagers", "model_group": "villager"},
+            {
+                "role": "狼人",
+                "count": 1,
+                "team": "werewolves",
+                "model_group": "werewolf",
+                "category": "werewolf",
+            },
+            {
+                "role": "预言家",
+                "count": 1,
+                "team": "villagers",
+                "model_group": "villager",
+                "category": "god",
+            },
+            {
+                "role": "医生",
+                "count": 1,
+                "team": "villagers",
+                "model_group": "villager",
+                "category": "god",
+            },
+            {
+                "role": "村民",
+                "count": 3,
+                "team": "villagers",
+                "model_group": "villager",
+                "category": "civilian",
+            },
         ],
         "night_actions": ["remove", "protect", "investigate"],
         "day_actions": ["bid", "debate", "vote", "summarize"],
@@ -74,6 +99,28 @@ def test_rule_summaries_are_frontend_friendly() -> None:
     assert summaries[0]["role_summary"] == "2 狼人 / 1 预言家 / 1 医生 / 4 村民"
     assert summaries[1]["player_count"] == 6
     assert summaries[2]["night_actions"] == ["remove"]
+    assert summaries[3]["id"] == "classic_12_seer_witch_hunter_idiot"
+    assert summaries[3]["role_summary"] == "4 狼人 / 1 预言家 / 1 女巫 / 1 猎人 / 1 白痴 / 4 村民"
+
+
+def test_official_rule_registry_contains_12_player_seer_witch_hunter_idiot() -> None:
+    rule = get_rule_set("classic_12_seer_witch_hunter_idiot")
+
+    assert rule.name == "12 人预女猎白局"
+    assert rule.player_count == 12
+    assert rule.win_condition == "slaughter_side"
+    assert [role.role for role in rule.roles] == ["狼人", "预言家", "女巫", "猎人", "白痴", "村民"]
+    assert [role.count for role in rule.roles] == [4, 1, 1, 1, 1, 4]
+
+
+def test_12_player_rule_text_describes_confirmed_table_rules() -> None:
+    text = render_rule_text(get_rule_set("classic_12_seer_witch_hunter_idiot"))
+
+    assert "共 12 名玩家：4 名狼人、1 名预言家、1 名女巫、1 名猎人、1 名白痴、4 名村民。" in text
+    assert "女巫拥有一瓶解药和一瓶毒药" in text
+    assert "猎人死亡时可以开枪" in text
+    assert "白痴首次被放逐时翻牌免死" in text
+    assert "神职全灭或平民全灭时狼人获胜" in text
 
 
 def test_render_rule_text_matches_rule_actions() -> None:

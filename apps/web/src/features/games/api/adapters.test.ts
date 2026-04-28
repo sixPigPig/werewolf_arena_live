@@ -207,4 +207,75 @@ describe("normalizeGameReplay", () => {
       parsed: { summary: "继续隐藏身份。" },
     });
   });
+
+  it("normalizes witch hunter idiot round fields", () => {
+    const replay = normalizeGameReplay({
+      session_id: "session_20260428_120000_abcd1234",
+      status: "complete",
+      state: {
+        session_id: "session_20260428_120000_abcd1234",
+        winner: "好人阵营",
+        error_message: "",
+        rule_set: {
+          id: "classic_12_seer_witch_hunter_idiot",
+          version: "2026.04",
+          name: "12 人预女猎白局",
+          player_count: 12,
+          roles: [],
+        },
+        players: [],
+        rounds: [
+          {
+            number: 1,
+            players: ["Alice", "Bob"],
+            attacked: "Alice",
+            eliminated: null,
+            protected: null,
+            investigated: "Bob",
+            exiled: null,
+            saved_by_witch: "Alice",
+            poisoned: null,
+            hunter_shot: null,
+            idiot_revealed: "Bob",
+            night_deaths: [],
+            day_deaths: [],
+            debate: [],
+            bids: [],
+            votes: [],
+            summaries: {},
+            success: true,
+          },
+        ],
+      },
+      logs: [
+        {
+          number: 1,
+          eliminate: null,
+          protect: null,
+          investigate: null,
+          witch_save: {
+            actor: "Witch",
+            action: "witch_save",
+            options: ["Alice", "不使用解药"],
+            choice: "Alice",
+            lm_log: { prompt: "", raw_response: "", result: { save: "Alice" } },
+          },
+          witch_poison: null,
+          hunter_shoot: null,
+          bid: [],
+          debate: [],
+          votes: [],
+          summaries: [],
+        },
+      ],
+    });
+
+    expect(replay.rounds[0].saved_by_witch).toBe("Alice");
+    expect(replay.rounds[0].idiot_revealed).toBe("Bob");
+    expect(replay.debugItems[0]).toMatchObject({
+      title: "女巫解药",
+      action: "witch_save",
+      choice: "Alice",
+    });
+  });
 });

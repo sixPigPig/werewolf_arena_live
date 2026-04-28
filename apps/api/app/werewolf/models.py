@@ -7,6 +7,16 @@ from app.werewolf.lm import LmLog
 
 
 @dataclass
+class DeathEvent:
+    player: str
+    cause: str
+    source: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"player": self.player, "cause": self.cause, "source": self.source}
+
+
+@dataclass
 class ActionLog:
     actor: str
     action: str
@@ -39,6 +49,7 @@ class GameView:
     current_players: list[str]
     debate: list[DebateEntry] = field(default_factory=list)
     other_wolf: str | None = None
+    wolf_teammates: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +57,7 @@ class GameView:
             "current_players": self.current_players,
             "debate": [entry.to_dict() for entry in self.debate],
             "other_wolf": self.other_wolf,
+            "wolf_teammates": self.wolf_teammates,
         }
 
 
@@ -58,6 +70,11 @@ class Player:
     bidding_rationale: str = ""
     gamestate: GameView | None = None
     known_roles: dict[str, str] = field(default_factory=dict)
+    can_vote: bool = True
+    revealed_role: bool = False
+    witch_antidote_available: bool = False
+    witch_poison_available: bool = False
+    hunter_can_shoot: bool = False
 
     def add_observation(self, observation: str) -> None:
         self.observations.append(observation)
@@ -71,6 +88,11 @@ class Player:
             "bidding_rationale": self.bidding_rationale,
             "gamestate": self.gamestate.to_dict() if self.gamestate else None,
             "known_roles": self.known_roles,
+            "can_vote": self.can_vote,
+            "revealed_role": self.revealed_role,
+            "witch_antidote_available": self.witch_antidote_available,
+            "witch_poison_available": self.witch_poison_available,
+            "hunter_can_shoot": self.hunter_can_shoot,
         }
 
 
@@ -83,6 +105,12 @@ class RoundState:
     protected: str | None = None
     investigated: str | None = None
     exiled: str | None = None
+    night_deaths: list[DeathEvent] = field(default_factory=list)
+    day_deaths: list[DeathEvent] = field(default_factory=list)
+    saved_by_witch: str | None = None
+    poisoned: str | None = None
+    hunter_shot: str | None = None
+    idiot_revealed: str | None = None
     debate: list[DebateEntry] = field(default_factory=list)
     bids: list[dict[str, int]] = field(default_factory=list)
     votes: list[dict[str, str]] = field(default_factory=list)
@@ -98,6 +126,12 @@ class RoundState:
             "protected": self.protected,
             "investigated": self.investigated,
             "exiled": self.exiled,
+            "night_deaths": [death.to_dict() for death in self.night_deaths],
+            "day_deaths": [death.to_dict() for death in self.day_deaths],
+            "saved_by_witch": self.saved_by_witch,
+            "poisoned": self.poisoned,
+            "hunter_shot": self.hunter_shot,
+            "idiot_revealed": self.idiot_revealed,
             "debate": [entry.to_dict() for entry in self.debate],
             "bids": self.bids,
             "votes": self.votes,
@@ -112,6 +146,9 @@ class RoundLog:
     eliminate: ActionLog | None = None
     protect: ActionLog | None = None
     investigate: ActionLog | None = None
+    witch_save: ActionLog | None = None
+    witch_poison: ActionLog | None = None
+    hunter_shoot: ActionLog | None = None
     bid: list[list[ActionLog]] = field(default_factory=list)
     debate: list[ActionLog] = field(default_factory=list)
     votes: list[list[ActionLog]] = field(default_factory=list)
@@ -123,6 +160,9 @@ class RoundLog:
             "eliminate": self.eliminate.to_dict() if self.eliminate else None,
             "protect": self.protect.to_dict() if self.protect else None,
             "investigate": self.investigate.to_dict() if self.investigate else None,
+            "witch_save": self.witch_save.to_dict() if self.witch_save else None,
+            "witch_poison": self.witch_poison.to_dict() if self.witch_poison else None,
+            "hunter_shoot": self.hunter_shoot.to_dict() if self.hunter_shoot else None,
             "bid": [[log.to_dict() for log in turn] for turn in self.bid],
             "debate": [log.to_dict() for log in self.debate],
             "votes": [[log.to_dict() for log in vote_logs] for vote_logs in self.votes],

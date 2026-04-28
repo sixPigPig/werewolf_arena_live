@@ -13,13 +13,21 @@ MODEL_GROUP_WEREWOLF = "werewolf"
 ACTION_REMOVE = "remove"
 ACTION_PROTECT = "protect"
 ACTION_INVESTIGATE = "investigate"
+ACTION_WITCH_SAVE = "witch_save"
+ACTION_WITCH_POISON = "witch_poison"
+ACTION_HUNTER_SHOOT = "hunter_shoot"
 ACTION_BID = "bid"
 ACTION_DEBATE = "debate"
 ACTION_VOTE = "vote"
 ACTION_SUMMARIZE = "summarize"
 
 WIN_CONDITION_WOLVES_GTE_OTHERS = "wolves_gte_others"
+WIN_CONDITION_SLAUGHTER_SIDE = "slaughter_side"
 REVEAL_POLICY_HIDDEN = "hidden"
+
+ROLE_CATEGORY_WEREWOLF = "werewolf"
+ROLE_CATEGORY_GOD = "god"
+ROLE_CATEGORY_CIVILIAN = "civilian"
 
 DEFAULT_RULE_SET_ID = "classic_8"
 RULE_SET_VERSION = "2026.04"
@@ -35,6 +43,7 @@ class RoleSpec:
     count: int
     team: str
     model_group: str
+    category: str = ROLE_CATEGORY_CIVILIAN
 
 
 @dataclass(frozen=True)
@@ -60,10 +69,10 @@ CLASSIC_8 = RuleSet(
     description="包含狼人、预言家、医生与村民的官方标准局。",
     player_count=8,
     roles=(
-        RoleSpec("狼人", 2, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF),
-        RoleSpec("预言家", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER),
-        RoleSpec("医生", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER),
-        RoleSpec("村民", 4, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER),
+        RoleSpec("狼人", 2, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF, ROLE_CATEGORY_WEREWOLF),
+        RoleSpec("预言家", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec("医生", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec("村民", 4, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE, ACTION_PROTECT, ACTION_INVESTIGATE),
     day_actions=(ACTION_BID, ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
@@ -80,10 +89,10 @@ STARTER_6 = RuleSet(
     description="更短的官方入门局，适合快速观察模型策略。",
     player_count=6,
     roles=(
-        RoleSpec("狼人", 1, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF),
-        RoleSpec("预言家", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER),
-        RoleSpec("医生", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER),
-        RoleSpec("村民", 3, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER),
+        RoleSpec("狼人", 1, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF, ROLE_CATEGORY_WEREWOLF),
+        RoleSpec("预言家", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec("医生", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec("村民", 3, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE, ACTION_PROTECT, ACTION_INVESTIGATE),
     day_actions=(ACTION_BID, ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
@@ -100,8 +109,8 @@ SOCIAL_8 = RuleSet(
     description="仅保留狼人夜晚行动的官方心理博弈局。",
     player_count=8,
     roles=(
-        RoleSpec("狼人", 2, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF),
-        RoleSpec("村民", 6, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER),
+        RoleSpec("狼人", 2, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF, ROLE_CATEGORY_WEREWOLF),
+        RoleSpec("村民", 6, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE,),
     day_actions=(ACTION_BID, ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
@@ -111,7 +120,29 @@ SOCIAL_8 = RuleSet(
     estimated_duration="中",
 )
 
-OFFICIAL_RULE_SETS = (CLASSIC_8, STARTER_6, SOCIAL_8)
+CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
+    id="classic_12_seer_witch_hunter_idiot",
+    version=RULE_SET_VERSION,
+    name="12 人预女猎白局",
+    description="4 狼、预言家、女巫、猎人、白痴与 4 民的标准屠边局。",
+    player_count=12,
+    roles=(
+        RoleSpec("狼人", 4, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF, ROLE_CATEGORY_WEREWOLF),
+        RoleSpec("预言家", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec("女巫", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec("猎人", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec("白痴", 1, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_GOD),
+        RoleSpec("村民", 4, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
+    ),
+    night_actions=(ACTION_REMOVE, ACTION_INVESTIGATE, ACTION_WITCH_SAVE, ACTION_WITCH_POISON),
+    day_actions=(ACTION_BID, ACTION_DEBATE, ACTION_VOTE, ACTION_HUNTER_SHOOT, ACTION_SUMMARIZE),
+    win_condition=WIN_CONDITION_SLAUGHTER_SIDE,
+    reveal_policy=REVEAL_POLICY_HIDDEN,
+    complexity="进阶",
+    estimated_duration="长",
+)
+
+OFFICIAL_RULE_SETS = (CLASSIC_8, STARTER_6, SOCIAL_8, CLASSIC_12_SEER_WITCH_HUNTER_IDIOT)
 
 
 def get_rule_set(rule_set_id: str) -> RuleSet:
@@ -153,6 +184,7 @@ def rule_set_snapshot(rule_set: RuleSet) -> dict[str, Any]:
                 "count": role.count,
                 "team": role.team,
                 "model_group": role.model_group,
+                "category": role.category,
             }
             for role in rule_set.roles
         ],
@@ -173,7 +205,7 @@ def render_rule_text(rule_set: RuleSet) -> str:
     role_text = "、".join(f"{role.count} 名{role.role}" for role in rule_set.roles)
     lines = [
         f"{rule_set.name}：共 {rule_set.player_count} 名玩家：{role_text}。",
-        "胜利条件：好人阵营需要放逐/淘汰全部狼人获胜；狼人数量大于或等于其他存活玩家数量时狼人获胜。",
+        _render_win_condition_text(rule_set),
         "夜晚行动：",
     ]
 
@@ -181,15 +213,36 @@ def render_rule_text(rule_set: RuleSet) -> str:
         ACTION_REMOVE: "狼人选择并移除一名玩家",
         ACTION_PROTECT: "医生保护一名玩家",
         ACTION_INVESTIGATE: "预言家查验一名玩家身份",
+        ACTION_WITCH_SAVE: "女巫可以使用解药救下当晚被狼人袭击的玩家",
+        ACTION_WITCH_POISON: "女巫可以使用毒药淘汰一名玩家",
     }
     lines.extend(
         f"- {night_action_text[action]}"
         for action in rule_set.night_actions
         if action in night_action_text
     )
+    if any(role.role == "女巫" for role in rule_set.roles):
+        lines.append("女巫拥有一瓶解药和一瓶毒药，首夜可自救，同一夜只能救或毒二选一。")
+    if any(role.role == "猎人" for role in rule_set.roles):
+        lines.append("猎人死亡时可以开枪带走一名玩家，但被女巫毒死时不能开枪。")
+    if any(role.role == "白痴" for role in rule_set.roles):
+        lines.append("白痴首次被放逐时翻牌免死，之后失去投票权但仍可发言。")
     lines.append("白天行动：竞选、发言、投票与总结。")
     lines.append("身份揭示：游戏过程中隐藏玩家真实身份。")
     return "\n".join(lines)
+
+
+def _render_win_condition_text(rule_set: RuleSet) -> str:
+    if rule_set.win_condition == WIN_CONDITION_SLAUGHTER_SIDE:
+        return (
+            "胜利条件：好人阵营需要放逐/淘汰全部狼人获胜；"
+            "神职全灭或平民全灭时狼人获胜。"
+        )
+    return "胜利条件：好人阵营需要放逐/淘汰全部狼人获胜；狼人数量大于或等于其他存活玩家数量时狼人获胜。"
+
+
+def role_category(rule_set: RuleSet, role: str) -> str:
+    return next(role_spec.category for role_spec in rule_set.roles if role_spec.role == role)
 
 
 def validate_rule_sets(rule_sets: Iterable[RuleSet]) -> None:

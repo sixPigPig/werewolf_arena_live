@@ -6,28 +6,52 @@ from collections import Counter
 from app.werewolf.config import (
     DEFAULT_DEBATE_TURNS,
     DOCTOR,
+    HUNTER,
+    IDIOT,
     SEER,
+    WITCH,
     WINNER_VILLAGERS,
     WINNER_WEREWOLVES,
     choose_player_names,
 )
 from app.werewolf.live import NullEventSink
 from app.werewolf.lm import ModelProvider, generate_action
-from app.werewolf.models import ActionLog, DebateEntry, GameState, GameView, Player, RoundLog, RoundState
+from app.werewolf.models import (
+    ActionLog,
+    DeathEvent,
+    DebateEntry,
+    GameState,
+    GameView,
+    Player,
+    RoundLog,
+    RoundState,
+)
 from app.werewolf.rules import (
     ACTION_INVESTIGATE,
+    ACTION_HUNTER_SHOOT,
     ACTION_PROTECT,
     ACTION_REMOVE,
+    ACTION_WITCH_POISON,
+    ACTION_WITCH_SAVE,
     MODEL_GROUP_WEREWOLF,
+    ROLE_CATEGORY_CIVILIAN,
+    ROLE_CATEGORY_GOD,
     TEAM_WEREWOLVES,
+    WIN_CONDITION_SLAUGHTER_SIDE,
     RuleSet,
     render_rule_text,
+    role_category,
     rule_set_snapshot,
 )
 
 
 class MaxRoundsExceeded(RuntimeError):
     pass
+
+
+NO_WITCH_SAVE = "不使用解药"
+NO_WITCH_POISON = "不使用毒药"
+NO_HUNTER_SHOT = "不发动技能"
 
 
 def initialize_game_state(
@@ -44,20 +68,28 @@ def initialize_game_state(
     for role_spec in rule_set.roles:
         model = werewolf_model if role_spec.model_group == MODEL_GROUP_WEREWOLF else villager_model
         for _ in range(role_spec.count):
-            players.append(Player(player_names[name_index], role_spec.role, model))
+            player = Player(player_names[name_index], role_spec.role, model)
+            if role_spec.role == WITCH:
+                player.witch_antidote_available = True
+                player.witch_poison_available = True
+            elif role_spec.role == HUNTER:
+                player.hunter_can_shoot = True
+            players.append(player)
             name_index += 1
 
     werewolves = [player for player in players if _role_team(rule_set, player.role) == TEAM_WEREWOLVES]
     current_players = [player.name for player in players]
 
     for player in players:
-        other_wolf = None
+        wolf_teammates: list[str] = []
         if _role_team(rule_set, player.role) == TEAM_WEREWOLVES and len(werewolves) > 1:
-            other_wolf = next(wolf.name for wolf in werewolves if wolf.name != player.name)
+            wolf_teammates = [wolf.name for wolf in werewolves if wolf.name != player.name]
+        other_wolf = wolf_teammates[0] if wolf_teammates else None
         player.gamestate = GameView(
             round_number=1,
             current_players=current_players.copy(),
             other_wolf=other_wolf,
+            wolf_teammates=wolf_teammates,
         )
 
     return GameState(session_id=session_id, players=players, rule_set=rule_set_snapshot(rule_set))
@@ -189,12 +221,13 @@ class GameEngine:
                     seer.known_roles[investigated] = role
                     seer.add_observation(f"第{round_state.number}轮：我查验了{investigated}，身份是{role}。")
 
-        if round_state.attacked and round_state.attacked != round_state.protected:
-            round_state.eliminated = round_state.attacked
-            self._remove_player(active_players, round_state.eliminated)
-            self._announce(active_players, f"第{round_state.number}轮：夜晚，{round_state.eliminated}出局。")
+        self._run_witch_phase(round_state, round_log, active_players)
+        self._resolve_night_deaths(round_state, round_log, active_players)
+
+        if round_state.night_deaths:
+            eliminated_names = "、".join(death.player for death in round_state.night_deaths)
+            self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
         else:
-            round_state.eliminated = None
             self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
         self._publish_state_updated(
             round_state=round_state,
@@ -204,9 +237,153 @@ class GameEngine:
                 "eliminated": round_state.eliminated,
                 "protected": round_state.protected,
                 "investigated": round_state.investigated,
+                "saved_by_witch": round_state.saved_by_witch,
+                "poisoned": round_state.poisoned,
+                "night_deaths": [death.to_dict() for death in round_state.night_deaths],
                 "active_players": active_players.copy(),
             },
         )
+
+    def _run_witch_phase(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
+        if (
+            ACTION_WITCH_SAVE not in self.rule_set.night_actions
+            and ACTION_WITCH_POISON not in self.rule_set.night_actions
+        ):
+            return
+
+        players_by_name = self.state.player_by_name()
+        witch_name = self._active_player_for_role(WITCH, active_players)
+        if not witch_name:
+            return
+        witch = players_by_name[witch_name]
+
+        used_antidote = False
+        if (
+            ACTION_WITCH_SAVE in self.rule_set.night_actions
+            and round_state.attacked
+            and witch.witch_antidote_available
+        ):
+            save_choice, round_log.witch_save = self._player_action(
+                player=witch,
+                action=ACTION_WITCH_SAVE,
+                options=[round_state.attacked, NO_WITCH_SAVE],
+                result_key="save",
+                round_state=round_state,
+                phase="night",
+            )
+            if save_choice == round_state.attacked:
+                round_state.saved_by_witch = round_state.attacked
+                witch.witch_antidote_available = False
+                used_antidote = True
+
+        if (
+            used_antidote
+            or ACTION_WITCH_POISON not in self.rule_set.night_actions
+            or not witch.witch_poison_available
+        ):
+            return
+
+        poison_options = [
+            name
+            for name in active_players
+            if name != witch.name and name != round_state.attacked
+        ] + [NO_WITCH_POISON]
+        if poison_options == [NO_WITCH_POISON]:
+            return
+
+        poison_choice, round_log.witch_poison = self._player_action(
+            player=witch,
+            action=ACTION_WITCH_POISON,
+            options=poison_options,
+            result_key="poison",
+            round_state=round_state,
+            phase="night",
+        )
+        if poison_choice and poison_choice != NO_WITCH_POISON:
+            round_state.poisoned = str(poison_choice)
+            witch.witch_poison_available = False
+
+    def _resolve_night_deaths(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
+        deaths: list[DeathEvent] = []
+        if (
+            round_state.attacked
+            and round_state.attacked != round_state.protected
+            and round_state.attacked != round_state.saved_by_witch
+        ):
+            deaths.append(DeathEvent(round_state.attacked, "werewolf_attack", "狼人"))
+
+        witch_name = self._active_player_for_role(WITCH, active_players)
+        if round_state.poisoned:
+            deaths.append(DeathEvent(round_state.poisoned, "witch_poison", witch_name or None))
+
+        seen: set[str] = set()
+        for death in deaths:
+            if death.player in seen:
+                continue
+            seen.add(death.player)
+            round_state.night_deaths.append(death)
+            self._remove_player(active_players, death.player)
+            self._maybe_run_hunter_shot(
+                dead_player=death.player,
+                death_cause=death.cause,
+                round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
+                phase="night",
+            )
+
+        round_state.eliminated = round_state.night_deaths[0].player if round_state.night_deaths else None
+
+    def _maybe_run_hunter_shot(
+        self,
+        *,
+        dead_player: str,
+        death_cause: str,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+        phase: str,
+    ) -> None:
+        players_by_name = self.state.player_by_name()
+        hunter = players_by_name[dead_player]
+        if hunter.role != HUNTER or not hunter.hunter_can_shoot:
+            return
+        if death_cause == "witch_poison":
+            return
+
+        options = [name for name in active_players if name != hunter.name] + [NO_HUNTER_SHOT]
+        if options == [NO_HUNTER_SHOT]:
+            return
+
+        shot, action_log = self._player_action(
+            player=hunter,
+            action=ACTION_HUNTER_SHOOT,
+            options=options,
+            result_key="shoot",
+            round_state=round_state,
+            phase=phase,
+        )
+        round_log.hunter_shoot = action_log
+        hunter.hunter_can_shoot = False
+        if shot and shot != NO_HUNTER_SHOT:
+            shot_player = str(shot)
+            round_state.hunter_shot = shot_player
+            self._remove_player(active_players, shot_player)
+            death = DeathEvent(shot_player, "hunter_shot", hunter.name)
+            if phase == "night":
+                round_state.night_deaths.append(death)
+            else:
+                round_state.day_deaths.append(death)
 
     def _run_day_phase(
         self,
@@ -276,9 +453,7 @@ class GameEngine:
 
         exiled = self._majority_vote(votes, len(active_players))
         if exiled:
-            round_state.exiled = exiled
-            self._remove_player(active_players, exiled)
-            self._announce(active_players, f"第{round_state.number}轮：白天投票，{exiled}被放逐。")
+            self._resolve_day_exile(exiled, round_state, round_log, active_players)
         else:
             self._announce(active_players, f"第{round_state.number}轮：白天投票未形成多数，无人被放逐。")
         self._publish_state_updated(
@@ -286,6 +461,9 @@ class GameEngine:
             phase="vote",
             payload={
                 "exiled": round_state.exiled,
+                "day_deaths": [death.to_dict() for death in round_state.day_deaths],
+                "hunter_shot": round_state.hunter_shot,
+                "idiot_revealed": round_state.idiot_revealed,
                 "active_players": active_players.copy(),
             },
         )
@@ -333,7 +511,7 @@ class GameEngine:
         votes: dict[str, str] = {}
         logs: list[ActionLog] = []
         players_by_name = self.state.player_by_name()
-        for voter in active_players:
+        for voter in self._eligible_voters(active_players):
             vote, action_log = self._player_action(
                 player=players_by_name[voter],
                 action="vote",
@@ -347,6 +525,37 @@ class GameEngine:
             votes[voter] = vote
             logs.append(action_log)
         return votes, logs
+
+    def _resolve_day_exile(
+        self,
+        exiled: str,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
+        player = self.state.player_by_name()[exiled]
+        if player.role == IDIOT and not player.revealed_role:
+            player.revealed_role = True
+            player.can_vote = False
+            round_state.idiot_revealed = exiled
+            self._announce(
+                active_players,
+                f"第{round_state.number}轮：白天投票，{exiled}翻开白痴身份，免于出局但失去投票权。",
+            )
+            return
+
+        round_state.exiled = exiled
+        self._remove_player(active_players, exiled)
+        round_state.day_deaths.append(DeathEvent(exiled, "vote_exile", "投票"))
+        self._announce(active_players, f"第{round_state.number}轮：白天投票，{exiled}被放逐。")
+        self._maybe_run_hunter_shot(
+            dead_player=exiled,
+            death_cause="vote_exile",
+            round_state=round_state,
+            round_log=round_log,
+            active_players=active_players,
+            phase="vote",
+        )
 
     def _run_summaries(
         self,
@@ -382,6 +591,10 @@ class GameEngine:
                 action="summarize",
                 payload={"summaries": round_state.summaries.copy()},
             )
+
+    def _eligible_voters(self, active_players: list[str]) -> list[str]:
+        players_by_name = self.state.player_by_name()
+        return [name for name in active_players if players_by_name[name].can_vote]
 
     def _player_action(
         self,
@@ -510,17 +723,41 @@ class GameEngine:
         }
 
     def _werewolf_context(self, player: Player, active_players: list[str]) -> str:
-        if not self._is_werewolf(player) or not player.gamestate or not player.gamestate.other_wolf:
+        if not self._is_werewolf(player) or not player.gamestate:
             return ""
-        other_wolf = player.gamestate.other_wolf
-        if other_wolf in active_players:
-            return f"你的狼人队友是{other_wolf}。"
-        return f"你的狼人队友{other_wolf}已经出局，只剩你独自行动。"
+        teammates = player.gamestate.wolf_teammates
+        if not teammates and player.gamestate.other_wolf:
+            teammates = [player.gamestate.other_wolf]
+        if not teammates:
+            return ""
+
+        living_teammates = [name for name in teammates if name in active_players]
+        if living_teammates:
+            return f"你的狼人队友是{'、'.join(living_teammates)}。"
+        return f"你的狼人队友{'、'.join(teammates)}已经出局，只剩你独自行动。"
 
     def _get_winner(self, active_players: list[str]) -> str:
         players_by_name = self.state.player_by_name()
         active_wolves = [name for name in active_players if self._is_werewolf(players_by_name[name])]
         active_villagers = [name for name in active_players if name not in active_wolves]
+
+        if self.rule_set.win_condition == WIN_CONDITION_SLAUGHTER_SIDE:
+            active_gods = [
+                name
+                for name in active_players
+                if role_category(self.rule_set, players_by_name[name].role) == ROLE_CATEGORY_GOD
+            ]
+            active_civilians = [
+                name
+                for name in active_players
+                if role_category(self.rule_set, players_by_name[name].role)
+                == ROLE_CATEGORY_CIVILIAN
+            ]
+            if not active_wolves:
+                return WINNER_VILLAGERS
+            if not active_gods or not active_civilians:
+                return WINNER_WEREWOLVES
+            return ""
 
         if not active_wolves:
             return WINNER_VILLAGERS

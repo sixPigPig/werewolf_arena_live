@@ -57,6 +57,7 @@ export function DayPhase({
           <VoteTable tally={round.voteTally} votes={round.votes} />
         </div>
         <VoteResolution round={round} />
+        <SpecialDayResolution round={round} />
       </section>
 
       <section className="mt-4">
@@ -79,6 +80,26 @@ export function DayPhase({
         ))}
       </div>
     </section>
+  );
+}
+
+function SpecialDayResolution({ round }: { round: GameRound }) {
+  if (!round.idiot_revealed && !round.hunter_shot && round.day_deaths.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 space-y-1 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+      {round.idiot_revealed ? (
+        <p>{round.idiot_revealed} 翻牌免死，失去投票权</p>
+      ) : null}
+      {round.hunter_shot ? <p>猎人带走 {round.hunter_shot}</p> : null}
+      {round.day_deaths.length > 0 ? (
+        <p>
+          白天死亡：{round.day_deaths.map((death) => death.player).join("、")}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
