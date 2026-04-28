@@ -84,6 +84,35 @@ describe("normalizeGameReplay", () => {
     });
   });
 
+  it("labels guard protection actions with guard terminology", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      logs: [
+        {
+          ...rawReplay.logs[0],
+          protect: {
+            actor: "李四",
+            action: "protect",
+            options: ["张三", "李四"],
+            choice: "李四",
+            lm_log: {
+              prompt: "请选择今晚守护对象。",
+              raw_response: '{"protect":"李四"}',
+              result: { protect: "李四" },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(replay.debugItems[1]).toMatchObject({
+      id: "round-1-night-protect",
+      title: "守卫保护",
+      actor: "李四",
+      choice: "李四",
+    });
+  });
+
   it("normalizes protected legacy attacks without marking the target eliminated", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,

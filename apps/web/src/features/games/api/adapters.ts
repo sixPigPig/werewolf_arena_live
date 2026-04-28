@@ -11,7 +11,7 @@ import type {
 
 const ACTION_TITLES: Record<string, string> = {
   remove: "狼人击杀",
-  protect: "医生守护",
+  protect: "守卫保护",
   investigate: "预言家查验",
   witch_save: "女巫解药",
   witch_poison: "女巫毒药",

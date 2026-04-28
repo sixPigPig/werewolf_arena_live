@@ -219,7 +219,7 @@ function stateUpdatedCue(
     return {
       ...base,
       title: "平安夜",
-      body: `${savedPlayer} 被袭击，但被医生守护。\n${activePlayersBody(payload)}`,
+      body: `${savedPlayer} 被袭击，但被守卫保护。\n${activePlayersBody(payload)}`,
       importance: "key",
       durationMs: 6000,
       compressible: false,

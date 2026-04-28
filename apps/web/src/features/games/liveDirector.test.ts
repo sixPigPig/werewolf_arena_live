@@ -127,7 +127,7 @@ describe("toDirectorCue", () => {
       durationMs: 6000,
       compressible: false,
     });
-    expect(cue.body).toContain("李四 被袭击，但被医生守护。");
+    expect(cue.body).toContain("李四 被袭击，但被守卫保护。");
     expect(cue.body).toContain("存活玩家：张三");
   });
 
@@ -149,7 +149,7 @@ describe("toDirectorCue", () => {
       durationMs: 6000,
       compressible: false,
     });
-    expect(cue.body).toContain("李四 被袭击，但被医生守护。");
+    expect(cue.body).toContain("李四 被袭击，但被守卫保护。");
     expect(cue.body).toContain("存活玩家：张三、李四");
     expect(cue.title).not.toBe("李四 夜晚出局");
   });
