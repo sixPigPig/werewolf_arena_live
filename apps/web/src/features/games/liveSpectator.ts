@@ -124,7 +124,8 @@ function applyStateUpdate(
   }
 
   const attacked = payload.attacked;
-  const protectedPlayer = payload.protected;
+  const protectedPlayer =
+    typeof payload.protected === "string" ? payload.protected : null;
   const protectedAttack =
     typeof attacked === "string" && protectedPlayer === attacked
       ? attacked
@@ -138,7 +139,7 @@ function applyStateUpdate(
   }
 
   const eliminated = payload.eliminated;
-  if (typeof eliminated === "string" && eliminated !== protectedAttack) {
+  if (typeof eliminated === "string" && eliminated !== protectedPlayer) {
     const player = ensurePlayer(state, eliminated);
     player.isAlive = false;
     player.status = "out";
