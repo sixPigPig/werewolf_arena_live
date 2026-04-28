@@ -113,7 +113,7 @@ def test_list_rule_sets_returns_official_rules() -> None:
         "social_8",
         "classic_12_seer_witch_hunter_idiot",
     ]
-    assert payload["rule_sets"][0]["role_summary"] == "2 狼人 / 1 预言家 / 1 医生 / 4 村民"
+    assert payload["rule_sets"][0]["role_summary"] == "2 狼人 / 1 预言家 / 1 守卫 / 4 村民"
     assert any(
         rule["id"] == "classic_12_seer_witch_hunter_idiot"
         for rule in payload["rule_sets"]

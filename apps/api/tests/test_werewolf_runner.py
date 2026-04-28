@@ -76,7 +76,7 @@ class ProtectedNightProvider:
             )
         if '"protect"' in prompt:
             return json.dumps(
-                {"reasoning": "测试医生守护被袭击目标。", "protect": self.target},
+                {"reasoning": "测试守卫守护被袭击目标。", "protect": self.target},
                 ensure_ascii=False,
             )
         if '"investigate"' in prompt:
@@ -186,7 +186,7 @@ def test_run_game_with_deepseek_models_writes_complete_chinese_logs(tmp_path) ->
     assert state["winner"] == result.winner
     assert len(state["players"]) == 8
     assert state["error_message"] == ""
-    assert {player["role"] for player in state["players"]} == {"狼人", "预言家", "医生", "村民"}
+    assert {player["role"] for player in state["players"]} == {"狼人", "预言家", "守卫", "村民"}
     assert any("第" in observation for player in state["players"] for observation in player["observations"])
     assert logs[0]["debate"]
     assert logs[0]["summaries"]
@@ -378,7 +378,7 @@ def test_run_game_uses_starter_6_rule_set(tmp_path) -> None:
     assert state["rule_set"]["id"] == "starter_6"
     assert state["rule_set"]["name"] == "新手 6 人快局"
     assert len(state["players"]) == 6
-    assert _role_counts(state["players"]) == {"狼人": 1, "预言家": 1, "医生": 1, "村民": 3}
+    assert _role_counts(state["players"]) == {"狼人": 1, "预言家": 1, "守卫": 1, "村民": 3}
 
 
 def test_run_game_uses_social_8_rule_set_without_divine_actions(tmp_path) -> None:
