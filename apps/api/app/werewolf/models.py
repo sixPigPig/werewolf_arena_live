@@ -78,6 +78,7 @@ class Player:
 class RoundState:
     number: int
     players: list[str]
+    attacked: str | None = None
     eliminated: str | None = None
     protected: str | None = None
     investigated: str | None = None
@@ -92,6 +93,7 @@ class RoundState:
         return {
             "number": self.number,
             "players": self.players,
+            "attacked": self.attacked,
             "eliminated": self.eliminated,
             "protected": self.protected,
             "investigated": self.investigated,

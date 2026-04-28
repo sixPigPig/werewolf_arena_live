@@ -145,7 +145,7 @@ class GameEngine:
 
         if ACTION_REMOVE in self.rule_set.night_actions and active_wolves and non_wolves:
             wolf = players_by_name[active_wolves[0]]
-            eliminated, round_log.eliminate = self._player_action(
+            attacked, round_log.eliminate = self._player_action(
                 player=wolf,
                 action=ACTION_REMOVE,
                 options=non_wolves,
@@ -153,7 +153,7 @@ class GameEngine:
                 round_state=round_state,
                 phase="night",
             )
-            round_state.eliminated = eliminated
+            round_state.attacked = str(attacked) if attacked is not None else None
 
         if ACTION_PROTECT in self.rule_set.night_actions and self._is_role_active(DOCTOR, active_players):
             doctor = players_by_name[self._active_player_for_role(DOCTOR, active_players)]
@@ -189,15 +189,18 @@ class GameEngine:
                     seer.known_roles[investigated] = role
                     seer.add_observation(f"第{round_state.number}轮：我查验了{investigated}，身份是{role}。")
 
-        if round_state.eliminated and round_state.eliminated != round_state.protected:
+        if round_state.attacked and round_state.attacked != round_state.protected:
+            round_state.eliminated = round_state.attacked
             self._remove_player(active_players, round_state.eliminated)
             self._announce(active_players, f"第{round_state.number}轮：夜晚，{round_state.eliminated}出局。")
         else:
+            round_state.eliminated = None
             self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
         self._publish_state_updated(
             round_state=round_state,
             phase="night",
             payload={
+                "attacked": round_state.attacked,
                 "eliminated": round_state.eliminated,
                 "protected": round_state.protected,
                 "investigated": round_state.investigated,

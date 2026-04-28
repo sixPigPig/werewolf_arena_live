@@ -48,6 +48,32 @@ class NoInvestigateProvider(ScriptedChineseProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+class ProtectedNightProvider:
+    def __init__(self, target: str) -> None:
+        self.target = target
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        if '"remove"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试狼人袭击被守护目标。", "remove": self.target},
+                ensure_ascii=False,
+            )
+        if '"protect"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试医生守护被袭击目标。", "protect": self.target},
+                ensure_ascii=False,
+            )
+        if '"investigate"' in prompt:
+            options = _extract_options(prompt)
+            choice = next((option for option in options if option != self.target), options[0])
+            return json.dumps(
+                {"reasoning": "测试预言家正常查验。", "investigate": choice},
+                ensure_ascii=False,
+            )
+        raise AssertionError(f"Unexpected prompt: {prompt}")
+
+
 def _extract_options(prompt: str) -> list[str]:
     marker = "候选人："
     if marker not in prompt:
@@ -174,6 +200,42 @@ def test_run_game_publishes_live_events(tmp_path) -> None:
     assert "model_response_received" in event_types
     assert "action_parsed" in event_types
     assert "state_updated" in event_types
+
+
+def test_protected_night_attack_records_attack_without_eliminating_target() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_protected_attack",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=202,
+        rule_set=rule_set,
+    )
+    target = next(player.name for player in state.players if player.role == SEER)
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=ProtectedNightProvider(target),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    engine._run_night_phase(round_state, round_log, active_players)
+
+    assert round_state.attacked == target
+    assert round_state.protected == target
+    assert round_state.eliminated is None
+    assert target in active_players
+    state_event = [event for event in sink.events if event["type"] == "state_updated"][-1]
+    payload = state_event["payload"]
+    assert payload["attacked"] == target
+    assert payload["protected"] == target
+    assert payload["eliminated"] is None
+    assert target in payload["active_players"]
 
 
 def test_run_game_event_sink_does_not_change_final_logs(tmp_path) -> None:
