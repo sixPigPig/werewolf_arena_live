@@ -28,10 +28,14 @@ from app.werewolf.models import (
 )
 from app.werewolf.rules import (
     ACTION_DEBATE,
+    ACTION_SHERIFF_BADGE,
+    ACTION_SHERIFF_RUN,
+    ACTION_SHERIFF_VOTE,
     ACTION_INVESTIGATE,
     ACTION_HUNTER_SHOOT,
     ACTION_PROTECT,
     ACTION_REMOVE,
+    ACTION_SPEECH_ORDER,
     ACTION_WITCH_POISON,
     ACTION_WITCH_SAVE,
     MODEL_GROUP_WEREWOLF,
@@ -54,6 +58,11 @@ class MaxRoundsExceeded(RuntimeError):
 NO_WITCH_SAVE = "不使用解药"
 NO_WITCH_POISON = "不使用毒药"
 NO_HUNTER_SHOT = "不发动技能"
+SHERIFF_RUN = "上警"
+SHERIFF_SKIP = "不上警"
+SPEECH_FROM_LEFT = "警左发言"
+SPEECH_FROM_RIGHT = "警右发言"
+SHERIFF_BADGE_DESTROY = "撕毁警徽"
 
 
 def initialize_game_state(
@@ -343,6 +352,13 @@ class GameEngine:
                 active_players=active_players,
                 phase="night",
             )
+            self._maybe_transfer_sheriff_badge(
+                dead_player=death.player,
+                round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
+                phase="night",
+            )
 
         round_state.eliminated = round_state.night_deaths[0].player if round_state.night_deaths else None
 
@@ -418,7 +434,7 @@ class GameEngine:
             payload={"votes": votes},
         )
 
-        exiled = self._majority_vote(votes, len(active_players))
+        exiled = self._majority_vote(votes, active_players, round_state.vote_weights)
         if exiled:
             self._resolve_day_exile(exiled, round_state, round_log, active_players)
         else:
@@ -496,8 +512,54 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
     ) -> None:
-        del round_log, active_players
         round_state.sheriff = self.state.sheriff
+        if not self.rule_set.sheriff_enabled or round_state.number != 1 or self.state.sheriff:
+            return
+
+        players_by_name = self.state.player_by_name()
+        candidates: list[str] = []
+        for name in active_players:
+            run_choice, action_log = self._player_action(
+                player=players_by_name[name],
+                action=ACTION_SHERIFF_RUN,
+                options=[SHERIFF_RUN, SHERIFF_SKIP],
+                result_key="run",
+                round_state=round_state,
+                phase="day",
+            )
+            round_log.sheriff_run.append(action_log)
+            if run_choice == SHERIFF_RUN:
+                candidates.append(name)
+
+        round_state.sheriff_candidates = candidates
+        if not candidates:
+            self._announce(active_players, f"第{round_state.number}轮：无人上警，本局暂时没有警长。")
+            return
+
+        for name in active_players:
+            vote, action_log = self._player_action(
+                player=players_by_name[name],
+                action=ACTION_SHERIFF_VOTE,
+                options=candidates,
+                result_key="sheriff_vote",
+                round_state=round_state,
+                phase="day",
+            )
+            round_log.sheriff_votes.append(action_log)
+            if isinstance(vote, str) and vote in candidates:
+                round_state.sheriff_votes[name] = vote
+
+        sheriff = self._plurality_winner(round_state.sheriff_votes)
+        if sheriff is None:
+            self._announce(active_players, f"第{round_state.number}轮：警长投票未产生唯一领先者，本局暂时没有警长。")
+            return
+
+        self._set_sheriff(sheriff)
+        round_state.sheriff = sheriff
+        self._announce(
+            active_players,
+            f"第{round_state.number}轮：警长竞选，{sheriff}当选警长，投票计为{self.rule_set.sheriff_vote_weight:g}票。",
+        )
 
     def _sheriff_directed_speech_order(
         self,
@@ -505,8 +567,44 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
     ) -> list[str]:
-        del round_state, round_log
-        return active_players.copy()
+        sheriff = self.state.sheriff
+        if sheriff not in active_players:
+            return active_players.copy()
+
+        players_by_name = self.state.player_by_name()
+        choice, action_log = self._player_action(
+            player=players_by_name[sheriff],
+            action=ACTION_SPEECH_ORDER,
+            options=[SPEECH_FROM_LEFT, SPEECH_FROM_RIGHT],
+            result_key="speech_order",
+            round_state=round_state,
+            phase="day",
+        )
+        round_log.speech_order = action_log
+        round_state.speech_order_choice = str(choice) if choice else None
+
+        sheriff_index = active_players.index(sheriff)
+        before_sheriff = active_players[:sheriff_index]
+        after_sheriff = active_players[sheriff_index + 1 :]
+        if choice == SPEECH_FROM_RIGHT:
+            return list(reversed(before_sheriff)) + list(reversed(after_sheriff)) + [sheriff]
+        return after_sheriff + before_sheriff + [sheriff]
+
+    def _plurality_winner(self, votes: dict[str, str]) -> str | None:
+        if not votes:
+            return None
+        tally = Counter(votes.values())
+        top_count = max(tally.values())
+        winners = [name for name, count in tally.items() if count == top_count]
+        return winners[0] if len(winners) == 1 else None
+
+    def _set_sheriff(self, sheriff: str | None) -> None:
+        players_by_name = self.state.player_by_name()
+        for player in players_by_name.values():
+            player.is_sheriff = player.name == sheriff
+        self.state.sheriff = sheriff
+        if sheriff:
+            self.state.sheriff_badge_lost = False
 
     def _get_next_speaker(
         self,
@@ -561,8 +659,14 @@ class GameEngine:
             if not isinstance(vote, str) or not vote:
                 raise ValueError(f"{voter} did not return a valid vote.")
             votes[voter] = vote
+            round_state.vote_weights[voter] = self._vote_weight(voter)
             logs.append(action_log)
         return votes, logs
+
+    def _vote_weight(self, voter: str) -> float:
+        if self.rule_set.sheriff_enabled and voter == self.state.sheriff:
+            return self.rule_set.sheriff_vote_weight
+        return 1.0
 
     def _resolve_day_exile(
         self,
@@ -594,6 +698,60 @@ class GameEngine:
             active_players=active_players,
             phase="vote",
         )
+        self._maybe_transfer_sheriff_badge(
+            dead_player=exiled,
+            round_state=round_state,
+            round_log=round_log,
+            active_players=active_players,
+            phase="vote",
+        )
+
+    def _maybe_transfer_sheriff_badge(
+        self,
+        *,
+        dead_player: str,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+        phase: str,
+    ) -> None:
+        if (
+            not self.rule_set.sheriff_enabled
+            or dead_player != self.state.sheriff
+            or self.state.sheriff_badge_lost
+        ):
+            return
+
+        if not active_players:
+            self._set_sheriff(None)
+            self.state.sheriff_badge_lost = True
+            round_state.sheriff_badge_lost = True
+            round_state.sheriff = None
+            return
+
+        old_sheriff = self.state.player_by_name()[dead_player]
+        choice, action_log = self._player_action(
+            player=old_sheriff,
+            action=ACTION_SHERIFF_BADGE,
+            options=active_players + [SHERIFF_BADGE_DESTROY],
+            result_key="badge",
+            round_state=round_state,
+            phase=phase,
+        )
+        round_log.sheriff_badge = action_log
+
+        if isinstance(choice, str) and choice in active_players:
+            self._set_sheriff(choice)
+            round_state.sheriff_badge_target = choice
+            round_state.sheriff = choice
+            self._announce(active_players, f"第{round_state.number}轮：{dead_player}出局，将警徽移交给{choice}。")
+            return
+
+        self._set_sheriff(None)
+        self.state.sheriff_badge_lost = True
+        round_state.sheriff_badge_lost = True
+        round_state.sheriff = None
+        self._announce(active_players, f"第{round_state.number}轮：{dead_player}出局，警徽被撕毁。")
 
     def _run_summaries(
         self,
@@ -816,16 +974,27 @@ class GameEngine:
             "",
         )
 
-    def _majority_vote(self, votes: dict[str, str], active_player_count: int) -> str | None:
+    def _majority_vote(
+        self,
+        votes: dict[str, str],
+        active_players: list[str],
+        vote_weights: dict[str, float],
+    ) -> str | None:
+        del active_players
         if not votes:
             return None
 
-        voted_for, count = sorted(
-            Counter(votes.values()).items(),
-            key=lambda item: (-item[1], item[0]),
-        )[0]
-        if count > active_player_count / 2:
-            return voted_for
+        tally: dict[str, float] = {}
+        total_weight = 0.0
+        for voter, target in votes.items():
+            weight = vote_weights.get(voter, 1.0)
+            tally[target] = tally.get(target, 0.0) + weight
+            total_weight += weight
+
+        top_weight = max(tally.values())
+        winners = [name for name, weight in tally.items() if weight == top_weight]
+        if len(winners) == 1 and top_weight > total_weight / 2:
+            return winners[0]
         return None
 
     def _remove_player(self, active_players: list[str], player: str) -> None:
