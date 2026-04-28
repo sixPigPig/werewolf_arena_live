@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
@@ -55,6 +55,31 @@ function runningRunResponse() {
   );
 }
 
+function runResponse(
+  runId: string,
+  status: "running" | "completed" | "failed",
+) {
+  return new Response(
+    JSON.stringify({
+      run_id: runId,
+      session_id: `session_${runId}`,
+      villager_model: "deepseek-chat",
+      werewolf_model: "deepseek-chat",
+      seed: null,
+      max_rounds: 8,
+      status,
+      created_at: "2026-04-24T12:00:00Z",
+      started_at: "2026-04-24T12:00:01Z",
+      completed_at:
+        status === "completed" ? "2026-04-24T12:00:10Z" : null,
+      winner: status === "completed" ? "狼人阵营" : null,
+      error: status === "failed" ? "model timeout" : null,
+      event_count: status === "running" ? 1 : 3,
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 function emitEvent(
   source: MockEventSource,
   partial: Partial<LiveGameEvent>,
@@ -62,8 +87,8 @@ function emitEvent(
   source.emit(partial.type ?? "round_started", {
     id: partial.id ?? 1,
     type: partial.type ?? "round_started",
-    run_id: "run_1234abcd",
-    session_id: "session_20260424_120000_ab12cd34",
+    run_id: partial.run_id ?? "run_1234abcd",
+    session_id: partial.session_id ?? "session_20260424_120000_ab12cd34",
     created_at: partial.created_at ?? "2026-04-24T12:00:03Z",
     round: partial.round ?? null,
     phase: partial.phase ?? null,
@@ -71,6 +96,24 @@ function emitEvent(
     action: partial.action ?? null,
     payload: partial.payload ?? {},
   });
+}
+
+function LiveGameRouteSwitcher() {
+  const navigate = useNavigate();
+
+  return (
+    <>
+      <button type="button" onClick={() => navigate("/games/live/run_a")}>
+        run a
+      </button>
+      <button type="button" onClick={() => navigate("/games/live/run_b")}>
+        run b
+      </button>
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>
+    </>
+  );
 }
 
 describe("LiveGamePage", () => {
@@ -503,6 +546,98 @@ describe("LiveGamePage", () => {
     expect(await screen.findByText("completed")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "运行已创建" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "对局完成" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
+  });
+
+  it("reuses each run's first terminal-start decision when switching routes", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const runAFetches: string[] = [];
+    fetch.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/runs/run_a")) {
+        runAFetches.push(url);
+        return Promise.resolve(
+          runResponse(
+            "run_a",
+            runAFetches.length === 1 ? "running" : "completed",
+          ),
+        );
+      }
+      if (url.endsWith("/api/v1/games/runs/run_b")) {
+        return Promise.resolve(runResponse("run_b", "completed"));
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    renderWithClient(<LiveGameRouteSwitcher />, "/games/live/run_a");
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const runASource = MockEventSource.instances[0];
+    act(() => {
+      emitEvent(runASource, { id: 1, type: "run_created", run_id: "run_a" });
+      emitEvent(runASource, {
+        id: 2,
+        type: "round_started",
+        run_id: "run_a",
+        round: 1,
+      });
+      emitEvent(runASource, {
+        id: 3,
+        type: "game_completed",
+        run_id: "run_a",
+        payload: { winner: "狼人阵营" },
+      });
+    });
+
+    await waitFor(() => expect(runAFetches).toHaveLength(2));
+    expect(await screen.findByText("completed")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "运行已创建" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "对局完成" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "run b" }));
+    await waitFor(() =>
+      expect(MockEventSource.instances.at(-1)?.url).toContain("/run_b/events"),
+    );
+    expect(await screen.findByText("completed")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "run a" }));
+    await waitFor(() =>
+      expect(MockEventSource.instances.at(-1)?.url).toContain("/run_a/events"),
+    );
+    const replayedRunASource = MockEventSource.instances.at(-1)!;
+    act(() => {
+      emitEvent(replayedRunASource, {
+        id: 1,
+        type: "run_created",
+        run_id: "run_a",
+      });
+      emitEvent(replayedRunASource, {
+        id: 2,
+        type: "round_started",
+        run_id: "run_a",
+        round: 1,
+      });
+      emitEvent(replayedRunASource, {
+        id: 3,
+        type: "game_completed",
+        run_id: "run_a",
+        payload: { winner: "狼人阵营" },
+      });
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "运行已创建" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "对局完成" }),

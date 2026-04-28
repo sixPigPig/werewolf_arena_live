@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { getGameRun } from "../features/games/api/getGameRun";
@@ -19,9 +19,8 @@ export function LiveGamePage() {
   const { events, connectionState } = useGameRunEvents(runId);
   const [autoFollow, setAutoFollow] = useState(true);
   const [manualFocusName, setManualFocusName] = useState<string | null>(null);
-  const [initialRunTerminalStart, setInitialRunTerminalStart] = useState<
-    { runId: string | undefined; shouldStart: boolean } | null
-  >(null);
+  const terminalStartByRunIdRef = useRef(new Map<string, boolean>());
+  const [, setTerminalStartVersion] = useState(0);
   const {
     data: run,
     isError,
@@ -44,8 +43,7 @@ export function LiveGamePage() {
     [events],
   );
   const shouldStartAtTerminal =
-    initialRunTerminalStart?.runId === runId &&
-    initialRunTerminalStart.shouldStart;
+    Boolean(runId) && terminalStartByRunIdRef.current.get(runId) === true;
   const director = useLiveDirector(events, {
     startAtLatestTerminal: shouldStartAtTerminal,
   });
@@ -66,15 +64,16 @@ export function LiveGamePage() {
   }, [queryClient, runId, terminalEvent]);
 
   useEffect(() => {
-    if (!run || initialRunTerminalStart?.runId === runId) {
+    if (!run || !runId || terminalStartByRunIdRef.current.has(runId)) {
       return;
     }
 
-    setInitialRunTerminalStart({
+    terminalStartByRunIdRef.current.set(
       runId,
-      shouldStart: run.status === "completed" || run.status === "failed",
-    });
-  }, [initialRunTerminalStart?.runId, run, runId]);
+      run.status === "completed" || run.status === "failed",
+    );
+    setTerminalStartVersion((value) => value + 1);
+  }, [run, runId]);
 
   if (isPending) {
     return (
