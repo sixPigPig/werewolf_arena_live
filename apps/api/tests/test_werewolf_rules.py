@@ -108,7 +108,11 @@ def test_12_player_rule_set_has_sheriff_flow_metadata() -> None:
     assert rule.rule_tags == ("有警长", "警徽 1.5 票", "屠边", "预女猎白")
     assert rule.day_actions == (
         "sheriff_run",
+        "sheriff_speech",
+        "sheriff_withdraw",
         "sheriff_vote",
+        "sheriff_pk_speech",
+        "sheriff_runoff_vote",
         "speech_order",
         "debate",
         "vote",
@@ -159,8 +163,9 @@ def test_12_player_rule_text_describes_confirmed_table_rules() -> None:
     assert "猎人死亡时可以开枪" in text
     assert "白痴首次被放逐时翻牌免死" in text
     assert "神职全灭或平民全灭时狼人获胜" in text
-    assert "首日进行警长竞选和警长投票" in text
-    assert "由警长决定发言顺序" in text
+    assert "首日先上警、警上发言、退水，再由警下玩家投票选出警长" in text
+    assert "平票时进入 PK 发言和二轮警下投票" in text
+    assert "警长在正式白天发言前决定警左或警右" in text
     assert "所有玩家完成完整发言" in text
     assert "警长投票计为 1.5 票" in text
     assert "警徽可移交或撕毁" in text

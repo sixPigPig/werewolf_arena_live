@@ -19,7 +19,11 @@ ACTION_WITCH_SAVE = "witch_save"
 ACTION_WITCH_POISON = "witch_poison"
 ACTION_HUNTER_SHOOT = "hunter_shoot"
 ACTION_SHERIFF_RUN = "sheriff_run"
+ACTION_SHERIFF_SPEECH = "sheriff_speech"
+ACTION_SHERIFF_WITHDRAW = "sheriff_withdraw"
 ACTION_SHERIFF_VOTE = "sheriff_vote"
+ACTION_SHERIFF_PK_SPEECH = "sheriff_pk_speech"
+ACTION_SHERIFF_RUNOFF_VOTE = "sheriff_runoff_vote"
 ACTION_SPEECH_ORDER = "speech_order"
 ACTION_SHERIFF_BADGE = "sheriff_badge"
 ACTION_BID = "bid"
@@ -154,7 +158,11 @@ CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
     night_actions=(ACTION_REMOVE, ACTION_INVESTIGATE, ACTION_WITCH_SAVE, ACTION_WITCH_POISON),
     day_actions=(
         ACTION_SHERIFF_RUN,
+        ACTION_SHERIFF_SPEECH,
+        ACTION_SHERIFF_WITHDRAW,
         ACTION_SHERIFF_VOTE,
+        ACTION_SHERIFF_PK_SPEECH,
+        ACTION_SHERIFF_RUNOFF_VOTE,
         ACTION_SPEECH_ORDER,
         ACTION_DEBATE,
         ACTION_VOTE,
@@ -268,8 +276,11 @@ def render_rule_text(rule_set: RuleSet) -> str:
         lines.append("白痴首次被放逐时翻牌免死，之后失去投票权但仍可发言。")
     if rule_set.sheriff_enabled:
         lines.append(
-            "白天行动：首日进行警长竞选和警长投票，由警长决定发言顺序；"
-            "所有玩家完成完整发言，随后投票放逐并进行总结。"
+            "白天行动：首日先上警、警上发言、退水，再由警下玩家投票选出警长；"
+            "平票时进入 PK 发言和二轮警下投票。"
+        )
+        lines.append(
+            "警长在正式白天发言前决定警左或警右，所有玩家完成完整发言，随后投票放逐并进行总结。"
         )
         lines.append(
             f"警长投票计为 {rule_set.sheriff_vote_weight:g} 票，警长死亡时警徽可移交或撕毁。"

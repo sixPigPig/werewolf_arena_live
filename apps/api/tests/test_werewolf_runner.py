@@ -642,14 +642,26 @@ def test_sheriff_prompt_actions_render_chinese_instructions() -> None:
     }
 
     run_prompt, run_schema = build_prompt("sheriff_run", world_state)
+    speech_prompt, speech_schema = build_prompt("sheriff_speech", world_state)
+    withdraw_prompt, withdraw_schema = build_prompt("sheriff_withdraw", world_state)
     vote_prompt, vote_schema = build_prompt("sheriff_vote", world_state)
+    pk_prompt, pk_schema = build_prompt("sheriff_pk_speech", world_state)
+    runoff_prompt, runoff_schema = build_prompt("sheriff_runoff_vote", world_state)
     order_prompt, order_schema = build_prompt("speech_order", world_state)
     badge_prompt, badge_schema = build_prompt("sheriff_badge", world_state)
 
     assert "警长竞选" in run_prompt
     assert run_schema["required"] == ["reasoning", "run"]
+    assert "警上竞选发言" in speech_prompt
+    assert speech_schema["required"] == ["reasoning", "say"]
+    assert "退水" in withdraw_prompt
+    assert withdraw_schema["required"] == ["reasoning", "withdraw"]
     assert "警长投票" in vote_prompt
     assert vote_schema["required"] == ["reasoning", "sheriff_vote"]
+    assert "PK 发言" in pk_prompt
+    assert pk_schema["required"] == ["reasoning", "say"]
+    assert "二轮警下投票" in runoff_prompt
+    assert runoff_schema["required"] == ["reasoning", "sheriff_vote"]
     assert "发言方向" in order_prompt
     assert order_schema["required"] == ["reasoning", "speech_order"]
     assert "移交警徽" in badge_prompt

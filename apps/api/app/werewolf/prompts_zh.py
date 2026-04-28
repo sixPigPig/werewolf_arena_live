@@ -33,7 +33,27 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {"reasoning": {"type": "string"}, "run": {"type": "string"}},
         "required": ["reasoning", "run"],
     },
+    "sheriff_speech": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
+        "required": ["reasoning", "say"],
+    },
+    "sheriff_withdraw": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "withdraw": {"type": "string"}},
+        "required": ["reasoning", "withdraw"],
+    },
     "sheriff_vote": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "sheriff_vote": {"type": "string"}},
+        "required": ["reasoning", "sheriff_vote"],
+    },
+    "sheriff_pk_speech": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
+        "required": ["reasoning", "say"],
+    },
+    "sheriff_runoff_vote": {
         "type": "object",
         "properties": {"reasoning": {"type": "string"}, "sheriff_vote": {"type": "string"}},
         "required": ["reasoning", "sheriff_vote"],
@@ -90,7 +110,11 @@ RESULT_FIELD_BY_ACTION = {
     "debate": "say",
     "vote": "vote",
     "sheriff_run": "run",
+    "sheriff_speech": "say",
+    "sheriff_withdraw": "withdraw",
     "sheriff_vote": "sheriff_vote",
+    "sheriff_pk_speech": "say",
+    "sheriff_runoff_vote": "sheriff_vote",
     "speech_order": "speech_order",
     "sheriff_badge": "badge",
     "investigate": "investigate",
@@ -108,6 +132,7 @@ FIELD_LABELS = {
     "say": "发言内容",
     "vote": "投票对象",
     "run": "竞选选择",
+    "withdraw": "退水选择",
     "sheriff_vote": "警长投票对象",
     "speech_order": "发言方向",
     "badge": "警徽处理",
@@ -197,10 +222,36 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             f"候选选项：{options}。\n"
             f"请以{role}的目标思考，输出字段 reasoning 和 run。"
         )
+    if action == "sheriff_speech":
+        return (
+            "行动：警上竞选发言。\n"
+            "你已经上警，需要公开说明竞选警长的理由、警徽流思路和当前判断。\n"
+            "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
+        )
+    if action == "sheriff_withdraw":
+        return (
+            "行动：退水选择。\n"
+            "你刚完成警上竞选发言，需要决定是否退水。退水后不再是警长候选，也不会获得警长投票权。\n"
+            f"候选选项：{options}。\n"
+            "输出字段 reasoning 和 withdraw。"
+        )
     if action == "sheriff_vote":
         return (
             "行动：警长投票。\n"
             "警长拥有 1.5 票并决定白天发言方向。你必须从警长候选人中选择一名玩家投票。\n"
+            f"候选人：{options}。\n"
+            "输出字段 reasoning 和 sheriff_vote。"
+        )
+    if action == "sheriff_pk_speech":
+        return (
+            "行动：警长竞选 PK 发言。\n"
+            "首轮警下投票出现最高票平票，你作为 PK 候选需要再次发言争取警下二轮票。\n"
+            "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
+        )
+    if action == "sheriff_runoff_vote":
+        return (
+            "行动：二轮警下投票。\n"
+            "你是警下玩家，只能从 PK 候选中选择一名玩家投票。\n"
             f"候选人：{options}。\n"
             "输出字段 reasoning 和 sheriff_vote。"
         )
