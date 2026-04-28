@@ -630,6 +630,7 @@ def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
     assert payload["sheriff"] == state.players[0].name
     assert payload["players"][0]["is_sheriff"] is True
     round_payload = payload["rounds"][0]
+    assert round_payload["sheriff"] == state.players[0].name
     assert round_payload["sheriff_candidates"] == [state.players[0].name, state.players[1].name]
     assert round_payload["sheriff_speeches"] == [
         {"speaker": state.players[0].name, "message": "我上警争警徽。"}
@@ -675,7 +676,15 @@ def test_sheriff_action_logs_serialize_new_election_steps() -> None:
             lm_log=LmLog(prompt="prompt", raw_response="{}", result={"withdraw": "不退水"}),
         )
     )
-    log.sheriff_pk_speech.append(action)
+    log.sheriff_pk_speech.append(
+        ActionLog(
+            actor="Alice",
+            action="sheriff_pk_speech",
+            options=[],
+            choice="我进行 PK 发言。",
+            lm_log=LmLog(prompt="prompt", raw_response="{}", result={"say": "我进行 PK 发言。"}),
+        )
+    )
     log.sheriff_runoff_votes.append(
         ActionLog(
             actor="Bob",
@@ -690,7 +699,7 @@ def test_sheriff_action_logs_serialize_new_election_steps() -> None:
 
     assert payload["sheriff_speech"][0]["action"] == "sheriff_speech"
     assert payload["sheriff_withdraw"][0]["choice"] == "不退水"
-    assert payload["sheriff_pk_speech"][0]["action"] == "sheriff_speech"
+    assert payload["sheriff_pk_speech"][0]["action"] == "sheriff_pk_speech"
     assert payload["sheriff_runoff_votes"][0]["choice"] == "Alice"
 
 
