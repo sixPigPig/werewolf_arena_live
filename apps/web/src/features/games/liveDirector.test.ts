@@ -131,6 +131,49 @@ describe("toDirectorCue", () => {
     expect(cue.body).toContain("存活玩家：张三");
   });
 
+  it("renders legacy protected eliminations as peaceful night cues", () => {
+    const cue = toDirectorCue(
+      event({
+        type: "state_updated",
+        payload: {
+          protected: "李四",
+          eliminated: "李四",
+          active_players: ["张三", "李四"],
+        },
+      }),
+    );
+
+    expect(cue).toMatchObject({
+      title: "平安夜",
+      importance: "key",
+      durationMs: 6000,
+      compressible: false,
+    });
+    expect(cue.body).toContain("李四 被袭击，但被医生守护。");
+    expect(cue.body).toContain("存活玩家：张三、李四");
+    expect(cue.title).not.toBe("李四 夜晚出局");
+  });
+
+  it("renders confirmed night eliminations when protection differs", () => {
+    const cue = toDirectorCue(
+      event({
+        type: "state_updated",
+        payload: {
+          protected: "李四",
+          eliminated: "王五",
+          active_players: ["张三", "李四"],
+        },
+      }),
+    );
+
+    expect(cue).toMatchObject({
+      title: "王五 夜晚出局",
+      importance: "key",
+      durationMs: 6000,
+      compressible: false,
+    });
+  });
+
   it("falls back safely for unknown or malformed events", () => {
     const unknownCue = toDirectorCue(
       event({

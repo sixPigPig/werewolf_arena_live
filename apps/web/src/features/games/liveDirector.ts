@@ -211,18 +211,21 @@ function stateUpdatedCue(
 
   const attacked = stringField(payload, "attacked");
   const protectedPlayer = stringField(payload, "protected");
-  if (attacked && protectedPlayer === attacked) {
+  const eliminated = stringField(payload, "eliminated");
+  const savedPlayer =
+    (attacked && protectedPlayer === attacked ? attacked : "") ||
+    (eliminated && protectedPlayer === eliminated ? eliminated : "");
+  if (savedPlayer) {
     return {
       ...base,
       title: "平安夜",
-      body: `${attacked} 被袭击，但被医生守护。\n${activePlayersBody(payload)}`,
+      body: `${savedPlayer} 被袭击，但被医生守护。\n${activePlayersBody(payload)}`,
       importance: "key",
       durationMs: 6000,
       compressible: false,
     };
   }
 
-  const eliminated = stringField(payload, "eliminated");
   if (eliminated) {
     return {
       ...base,
