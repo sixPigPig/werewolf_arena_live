@@ -60,6 +60,11 @@ export type RawActionLog = {
   lm_log: RawLmLog;
 };
 
+export type SpeechEntry = {
+  speaker: string;
+  message: string;
+};
+
 export type RawRoundLog = {
   number: number;
   eliminate: RawActionLog | null;
@@ -69,7 +74,11 @@ export type RawRoundLog = {
   witch_poison?: RawActionLog | null;
   hunter_shoot?: RawActionLog | null;
   sheriff_run?: RawActionLog[];
+  sheriff_speech?: RawActionLog[];
+  sheriff_withdraw?: RawActionLog[];
   sheriff_votes?: RawActionLog[];
+  sheriff_pk_speech?: RawActionLog[];
+  sheriff_runoff_votes?: RawActionLog[];
   speech_order?: RawActionLog | null;
   sheriff_badge?: RawActionLog | null;
   bid: RawActionLog[][];
@@ -111,13 +120,21 @@ export type RawRoundState = {
   idiot_revealed?: string | null;
   sheriff?: string | null;
   sheriff_candidates?: string[];
+  sheriff_speeches?: SpeechEntry[];
+  sheriff_withdrawn?: string[];
+  sheriff_final_candidates?: string[];
+  sheriff_voters?: string[];
   sheriff_votes?: Record<string, string>;
+  sheriff_pk_candidates?: string[];
+  sheriff_pk_speeches?: SpeechEntry[];
+  sheriff_runoff_votes?: Record<string, string>;
+  sheriff_elected?: string | null;
   speech_order?: string[];
   speech_order_choice?: string | null;
   vote_weights?: Record<string, number>;
   sheriff_badge_target?: string | null;
   sheriff_badge_lost?: boolean;
-  debate: Array<{ speaker: string; message: string }>;
+  debate: SpeechEntry[];
   bids: Array<Record<string, number>>;
   votes: Array<Record<string, string>>;
   summaries: Record<string, string>;
@@ -191,7 +208,15 @@ export type GameRound = Omit<
   | "idiot_revealed"
   | "sheriff"
   | "sheriff_candidates"
+  | "sheriff_speeches"
+  | "sheriff_withdrawn"
+  | "sheriff_final_candidates"
+  | "sheriff_voters"
   | "sheriff_votes"
+  | "sheriff_pk_candidates"
+  | "sheriff_pk_speeches"
+  | "sheriff_runoff_votes"
+  | "sheriff_elected"
   | "speech_order"
   | "speech_order_choice"
   | "vote_weights"
@@ -208,7 +233,15 @@ export type GameRound = Omit<
   idiot_revealed: string | null;
   sheriff: string | null;
   sheriff_candidates: string[];
+  sheriff_speeches: SpeechEntry[];
+  sheriff_withdrawn: string[];
+  sheriff_final_candidates: string[];
+  sheriff_voters: string[];
   sheriff_votes: Record<string, string>;
+  sheriff_pk_candidates: string[];
+  sheriff_pk_speeches: SpeechEntry[];
+  sheriff_runoff_votes: Record<string, string>;
+  sheriff_elected: string | null;
   speech_order: string[];
   speech_order_choice: string | null;
   vote_weights: Record<string, number>;

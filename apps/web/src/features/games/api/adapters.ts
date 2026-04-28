@@ -16,10 +16,14 @@ const ACTION_TITLES: Record<string, string> = {
   witch_save: "女巫解药",
   witch_poison: "女巫毒药",
   hunter_shoot: "猎人开枪",
-  sheriff_run: "警长竞选",
-  sheriff_vote: "警长投票",
+  sheriff_run: "上警选择",
+  sheriff_speech: "警上发言",
+  sheriff_withdraw: "退水选择",
+  sheriff_vote: "警下投票",
+  sheriff_pk_speech: "PK 发言",
+  sheriff_runoff_vote: "警下二轮投票",
   speech_order: "发言方向",
-  sheriff_badge: "警徽移交",
+  sheriff_badge: "警徽处理",
   bid: "发言竞价",
   debate: "白天发言",
   vote: "放逐投票",
@@ -98,7 +102,15 @@ function normalizeRound(
     idiot_revealed: round.idiot_revealed ?? null,
     sheriff: round.sheriff ?? null,
     sheriff_candidates: round.sheriff_candidates ?? [],
+    sheriff_speeches: round.sheriff_speeches ?? [],
+    sheriff_withdrawn: round.sheriff_withdrawn ?? [],
+    sheriff_final_candidates: round.sheriff_final_candidates ?? [],
+    sheriff_voters: round.sheriff_voters ?? [],
     sheriff_votes: round.sheriff_votes ?? {},
+    sheriff_pk_candidates: round.sheriff_pk_candidates ?? [],
+    sheriff_pk_speeches: round.sheriff_pk_speeches ?? [],
+    sheriff_runoff_votes: round.sheriff_runoff_votes ?? {},
+    sheriff_elected: round.sheriff_elected ?? null,
     speech_order: round.speech_order ?? [],
     speech_order_choice: round.speech_order_choice ?? null,
     vote_weights: voteWeights,
@@ -192,8 +204,38 @@ function debugItemsFromRound(round: RawRoundLog): DebugItem[] {
   (round.sheriff_run ?? []).forEach((action, index) => {
     pushAction(items, round.number, "day", `day-sheriff-run-${index}`, action);
   });
+  (round.sheriff_speech ?? []).forEach((action, index) => {
+    pushAction(items, round.number, "day", `day-sheriff-speech-${index}`, action);
+  });
+  (round.sheriff_withdraw ?? []).forEach((action, index) => {
+    pushAction(
+      items,
+      round.number,
+      "day",
+      `day-sheriff-withdraw-${index}`,
+      action,
+    );
+  });
   (round.sheriff_votes ?? []).forEach((action, index) => {
     pushAction(items, round.number, "day", `day-sheriff-vote-${index}`, action);
+  });
+  (round.sheriff_pk_speech ?? []).forEach((action, index) => {
+    pushAction(
+      items,
+      round.number,
+      "day",
+      `day-sheriff-pk-speech-${index}`,
+      action,
+    );
+  });
+  (round.sheriff_runoff_votes ?? []).forEach((action, index) => {
+    pushAction(
+      items,
+      round.number,
+      "day",
+      `day-sheriff-runoff-vote-${index}`,
+      action,
+    );
   });
   pushAction(
     items,

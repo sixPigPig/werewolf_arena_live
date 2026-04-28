@@ -153,7 +153,7 @@ describe("normalizeGameReplay", () => {
     expect(replay.rounds[0].eliminated).toBe("李四");
   });
 
-  it("normalizes sheriff speech order and weighted votes", () => {
+  it("normalizes full sheriff election fields, speech order, and weighted votes", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,
       state: {
@@ -176,7 +176,20 @@ describe("normalizeGameReplay", () => {
             players: ["Alice", "Bob", "Cora"],
             sheriff: "Alice",
             sheriff_candidates: ["Alice", "Bob"],
+            sheriff_speeches: [
+              { speaker: "Alice", message: "我是好人上警。" },
+              { speaker: "Bob", message: "我竞选警长。" },
+            ],
+            sheriff_withdrawn: ["Bob"],
+            sheriff_final_candidates: ["Alice"],
+            sheriff_voters: ["Bob", "Cora"],
             sheriff_votes: { Bob: "Alice", Cora: "Alice" },
+            sheriff_pk_candidates: ["Alice", "Cora"],
+            sheriff_pk_speeches: [
+              { speaker: "Cora", message: "我进入 PK。" },
+            ],
+            sheriff_runoff_votes: { Bob: "Cora" },
+            sheriff_elected: "Alice",
             speech_order: ["Alice", "Bob", "Cora"],
             speech_order_choice: "clockwise",
             votes: [{ Alice: "Bob" }, { Cora: "Bob" }],
@@ -194,7 +207,20 @@ describe("normalizeGameReplay", () => {
     expect(replay.sheriffBadgeLost).toBe(false);
     expect(round.sheriff).toBe("Alice");
     expect(round.sheriff_candidates).toEqual(["Alice", "Bob"]);
+    expect(round.sheriff_speeches).toEqual([
+      { speaker: "Alice", message: "我是好人上警。" },
+      { speaker: "Bob", message: "我竞选警长。" },
+    ]);
+    expect(round.sheriff_withdrawn).toEqual(["Bob"]);
+    expect(round.sheriff_final_candidates).toEqual(["Alice"]);
+    expect(round.sheriff_voters).toEqual(["Bob", "Cora"]);
     expect(round.sheriff_votes).toEqual({ Bob: "Alice", Cora: "Alice" });
+    expect(round.sheriff_pk_candidates).toEqual(["Alice", "Cora"]);
+    expect(round.sheriff_pk_speeches).toEqual([
+      { speaker: "Cora", message: "我进入 PK。" },
+    ]);
+    expect(round.sheriff_runoff_votes).toEqual({ Bob: "Cora" });
+    expect(round.sheriff_elected).toBe("Alice");
     expect(round.speech_order).toEqual(["Alice", "Bob", "Cora"]);
     expect(round.speech_order_choice).toBe("clockwise");
     expect(round.votes).toEqual([
@@ -207,6 +233,20 @@ describe("normalizeGameReplay", () => {
     expect(round.vote_weights).toEqual({ Alice: 1.5, Cora: 1 });
     expect(round.sheriff_badge_target).toBe("Cora");
     expect(round.sheriff_badge_lost).toBe(false);
+  });
+
+  it("defaults missing sheriff election fields to stable empty values", () => {
+    const replay = normalizeGameReplay(rawReplay);
+    const round = replay.rounds[0];
+
+    expect(round.sheriff_speeches).toEqual([]);
+    expect(round.sheriff_withdrawn).toEqual([]);
+    expect(round.sheriff_final_candidates).toEqual([]);
+    expect(round.sheriff_voters).toEqual([]);
+    expect(round.sheriff_pk_candidates).toEqual([]);
+    expect(round.sheriff_pk_speeches).toEqual([]);
+    expect(round.sheriff_runoff_votes).toEqual({});
+    expect(round.sheriff_elected).toBeNull();
   });
 
   it("preserves legacy normal vote majority display thresholds", () => {
@@ -236,7 +276,7 @@ describe("normalizeGameReplay", () => {
     expect(round.voteMajorityThreshold).toBe(3);
   });
 
-  it("creates debug items for sheriff actions", () => {
+  it("creates ordered debug items for sheriff election actions", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,
       logs: [
@@ -258,6 +298,32 @@ describe("normalizeGameReplay", () => {
               },
             },
           ],
+          sheriff_speech: [
+            {
+              actor: "Alice",
+              action: "sheriff_speech",
+              options: [],
+              choice: "我是好人上警。",
+              lm_log: {
+                prompt: "请发表警上发言。",
+                raw_response: '{"speech":"我是好人上警。"}',
+                result: { speech: "我是好人上警。" },
+              },
+            },
+          ],
+          sheriff_withdraw: [
+            {
+              actor: "Cora",
+              action: "sheriff_withdraw",
+              options: ["退水", "继续竞选"],
+              choice: "退水",
+              lm_log: {
+                prompt: "请选择是否退水。",
+                raw_response: '{"withdraw":"退水"}',
+                result: { withdraw: "退水" },
+              },
+            },
+          ],
           sheriff_votes: [
             {
               actor: "Bob",
@@ -268,6 +334,32 @@ describe("normalizeGameReplay", () => {
                 prompt: "请选择警长候选人。",
                 raw_response: '{"choice":"Alice"}',
                 result: { choice: "Alice" },
+              },
+            },
+          ],
+          sheriff_pk_speech: [
+            {
+              actor: "Cora",
+              action: "sheriff_pk_speech",
+              options: [],
+              choice: "我进入 PK。",
+              lm_log: {
+                prompt: "请发表 PK 发言。",
+                raw_response: '{"speech":"我进入 PK。"}',
+                result: { speech: "我进入 PK。" },
+              },
+            },
+          ],
+          sheriff_runoff_votes: [
+            {
+              actor: "Bob",
+              action: "sheriff_runoff_vote",
+              options: ["Alice", "Cora"],
+              choice: "Cora",
+              lm_log: {
+                prompt: "请选择二轮警长候选人。",
+                raw_response: '{"sheriff_vote":"Cora"}',
+                result: { sheriff_vote: "Cora" },
               },
             },
           ],
@@ -307,12 +399,32 @@ describe("normalizeGameReplay", () => {
       {
         id: "round-1-day-sheriff-run-0",
         phase: "day",
-        title: "警长竞选",
+        title: "上警选择",
+      },
+      {
+        id: "round-1-day-sheriff-speech-0",
+        phase: "day",
+        title: "警上发言",
+      },
+      {
+        id: "round-1-day-sheriff-withdraw-0",
+        phase: "day",
+        title: "退水选择",
       },
       {
         id: "round-1-day-sheriff-vote-0",
         phase: "day",
-        title: "警长投票",
+        title: "警下投票",
+      },
+      {
+        id: "round-1-day-sheriff-pk-speech-0",
+        phase: "day",
+        title: "PK 发言",
+      },
+      {
+        id: "round-1-day-sheriff-runoff-vote-0",
+        phase: "day",
+        title: "警下二轮投票",
       },
       {
         id: "round-1-day-speech-order",
@@ -322,7 +434,7 @@ describe("normalizeGameReplay", () => {
       {
         id: "round-1-day-sheriff-badge",
         phase: "day",
-        title: "警徽移交",
+        title: "警徽处理",
       },
     ]);
   });

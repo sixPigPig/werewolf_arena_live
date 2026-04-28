@@ -6,6 +6,11 @@ type DebugPanelProps = {
 
 const PARSED_FIELD_LABELS: Record<string, string> = {
   reasoning: "推理",
+  run: "上警选择",
+  withdraw: "退水选择",
+  sheriff_vote: "警长投票对象",
+  speech_order: "发言方向",
+  badge: "警徽处理",
   bid: "发言意愿",
   say: "发言内容",
   vote: "投票对象",
