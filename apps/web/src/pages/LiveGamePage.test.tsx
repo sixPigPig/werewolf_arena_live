@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
+import { LiveStatusStrip } from "../features/games/components/LiveStatusStrip";
 import type { LiveGameEvent } from "../features/games/types";
 import { renderWithClient } from "../tests/renderWithClient";
 import { LiveGamePage } from "./LiveGamePage";
@@ -281,6 +282,57 @@ describe("LiveGamePage", () => {
     );
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("已完成")).toBeInTheDocument();
+  });
+
+  it("localizes the idle live connection state", () => {
+    render(
+      <LiveStatusStrip
+        connectionState="idle"
+        run={{
+          run_id: "run_1234abcd",
+          session_id: "session_20260424_120000_ab12cd34",
+          villager_model: "deepseek-chat",
+          werewolf_model: "deepseek-chat",
+          seed: null,
+          max_rounds: 8,
+          status: "running",
+          created_at: "2026-04-24T12:00:00Z",
+          started_at: "2026-04-24T12:00:01Z",
+          completed_at: null,
+          winner: null,
+          error: null,
+          event_count: 1,
+          event_pacing: "off",
+        }}
+      />,
+    );
+
+    expect(screen.getByText("连接：未连接")).toBeInTheDocument();
+  });
+
+  it("allows live grid columns to shrink inside wrapped panels", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+
+    const { container } = renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const liveGrid = container.querySelector(".grid.gap-4");
+    expect(liveGrid).not.toBeNull();
+    const [playerColumn, directorColumn, eventsColumn] = Array.from(
+      liveGrid!.children,
+    );
+
+    expect(playerColumn).toHaveClass("min-w-0");
+    expect(directorColumn).toHaveClass("min-w-0");
+    expect(eventsColumn).toHaveClass("min-w-0");
   });
 
   it("lets users pin a player and re-enable auto follow", async () => {

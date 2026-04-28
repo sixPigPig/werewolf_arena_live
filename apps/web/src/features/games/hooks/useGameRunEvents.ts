@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { LiveGameEvent } from "../types";
 
-type ConnectionState = "idle" | "connecting" | "open" | "error" | "closed";
+export type ConnectionState =
+  | "idle"
+  | "connecting"
+  | "open"
+  | "error"
+  | "closed";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 

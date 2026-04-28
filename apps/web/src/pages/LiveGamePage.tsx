@@ -43,7 +43,7 @@ export function LiveGamePage() {
     [events],
   );
   const shouldStartAtTerminal =
-    Boolean(runId) && terminalStartByRunIdRef.current.get(runId) === true;
+    runId ? terminalStartByRunIdRef.current.get(runId) === true : false;
   const director = useLiveDirector(events, {
     resetKey: runId,
     startAtLatestTerminal: shouldStartAtTerminal,
@@ -112,7 +112,7 @@ export function LiveGamePage() {
         <RuleSetSummary ruleSet={run.rule_set} />
       </div>
       <div className="mt-4 grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)_22rem]">
-        <div className="order-2 lg:order-1">
+        <div className="order-2 min-w-0 lg:order-1">
           <LivePlayerPanel
             activePlayerName={spectatorState.activePlayerName}
             autoFollow={autoFollow}
@@ -130,7 +130,7 @@ export function LiveGamePage() {
             players={spectatorState.players}
           />
         </div>
-        <div className="order-1 space-y-3 lg:order-2">
+        <div className="order-1 min-w-0 space-y-3 lg:order-2">
           <LiveDirectorStage
             backlogCount={director.backlogCount}
             cue={director.currentCue}
@@ -146,7 +146,7 @@ export function LiveGamePage() {
             speed={director.speed}
           />
         </div>
-        <section className="order-3 overflow-hidden rounded-md border border-slate-200 bg-white lg:order-3 lg:max-h-[calc(100vh-8rem)] lg:overflow-auto">
+        <section className="order-3 min-w-0 overflow-hidden rounded-md border border-slate-200 bg-white lg:order-3 lg:max-h-[calc(100vh-8rem)] lg:overflow-auto">
           <div className="border-b border-slate-200 px-4 py-3">
             <h2 className="text-sm font-semibold text-slate-950">原始事件</h2>
           </div>

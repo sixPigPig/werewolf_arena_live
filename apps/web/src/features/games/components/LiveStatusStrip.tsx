@@ -1,3 +1,4 @@
+import type { ConnectionState } from "../hooks/useGameRunEvents";
 import type { GameRun } from "../types";
 
 const statusLabels = {
@@ -7,12 +8,13 @@ const statusLabels = {
   failed: "失败",
 } as const;
 
-const connectionLabels: Record<string, string> = {
+const connectionLabels = {
+  idle: "未连接",
   connecting: "连接中",
   open: "已连接",
   closed: "已关闭",
   error: "连接异常",
-};
+} satisfies Record<ConnectionState, string>;
 
 const eventPacingLabels = {
   off: "快速执行",
@@ -25,7 +27,7 @@ export function LiveStatusStrip({
   connectionState,
 }: {
   run: GameRun;
-  connectionState: string;
+  connectionState: ConnectionState | (string & {});
 }) {
   const eventPacingLabel =
     eventPacingLabels[run.event_pacing as keyof typeof eventPacingLabels] ??
@@ -38,7 +40,9 @@ export function LiveStatusStrip({
       </span>
       <span className="text-slate-600">{run.session_id}</span>
       <span className="text-slate-500">
-        连接：{connectionLabels[connectionState] ?? connectionState}
+        连接：
+        {connectionLabels[connectionState as ConnectionState] ??
+          connectionState}
       </span>
       <span className="text-slate-500">节奏：{eventPacingLabel}</span>
       {run.error ? <span className="text-red-700">{run.error}</span> : null}
