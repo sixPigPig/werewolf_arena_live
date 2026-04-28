@@ -64,6 +64,13 @@ class NoInvestigateProvider(ScriptedChineseProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+class NoBidOrderedSpeechProvider(ScriptedChineseProvider):
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"bid"' in prompt:
+            raise AssertionError("Bid should not be requested in ordered speech flow.")
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 class ProtectedNightProvider:
     def __init__(self, target: str) -> None:
         self.target = target
@@ -883,6 +890,33 @@ def test_revealed_idiot_does_not_vote() -> None:
     votes, _logs = engine._run_voting(round_state, active_players)
 
     assert idiot.name not in votes
+
+
+def test_small_rule_day_phase_uses_full_seat_order_without_bids() -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="session_test_ordered_speech",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=55,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(
+        state=state,
+        provider=NoBidOrderedSpeechProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert [entry.speaker for entry in round_state.debate] == round_state.players
+    assert round_state.speech_order == round_state.players
+    assert round_state.bids == []
+    assert round_log.bid == []
 
 
 def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:

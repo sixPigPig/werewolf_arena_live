@@ -27,6 +27,7 @@ from app.werewolf.models import (
     RoundState,
 )
 from app.werewolf.rules import (
+    ACTION_DEBATE,
     ACTION_INVESTIGATE,
     ACTION_HUNTER_SHOOT,
     ACTION_PROTECT,
@@ -36,6 +37,7 @@ from app.werewolf.rules import (
     MODEL_GROUP_WEREWOLF,
     ROLE_CATEGORY_CIVILIAN,
     ROLE_CATEGORY_GOD,
+    SPEECH_POLICY_SHERIFF_DIRECTED,
     TEAM_WEREWOLVES,
     WIN_CONDITION_SLAUGHTER_SIDE,
     RuleSet,
@@ -397,43 +399,8 @@ class GameEngine:
             phase="day",
             payload={"active_players": active_players.copy()},
         )
-        previous_speaker = ""
-        for _turn in range(min(self.debate_turns, len(active_players))):
-            speaker, bid_logs, bids = self._get_next_speaker(
-                active_players=active_players,
-                previous_speaker=previous_speaker,
-                round_state=round_state,
-            )
-            round_log.bid.append(bid_logs)
-            round_state.bids.append(bids)
-            previous_speaker = speaker
-
-            player = self.state.player_by_name()[speaker]
-            message, action_log = self._player_action(
-                player=player,
-                action="debate",
-                options=[],
-                result_key="say",
-                round_state=round_state,
-                phase="day",
-            )
-            if not isinstance(message, str) or not message:
-                raise ValueError(f"{speaker} did not return a valid debate message.")
-
-            entry = DebateEntry(speaker=speaker, message=message)
-            round_state.debate.append(entry)
-            round_log.debate.append(action_log)
-            self._record_public_debate(active_players, entry)
-            self._publish_state_updated(
-                round_state=round_state,
-                phase="day",
-                actor=speaker,
-                action="debate",
-                payload={
-                    "debate_entry": entry.to_dict(),
-                    "debate": [debate_entry.to_dict() for debate_entry in round_state.debate],
-                },
-            )
+        self._run_sheriff_election_if_needed(round_state, round_log, active_players)
+        self._run_debate_phase(round_state, round_log, active_players)
 
         self._publish(
             "phase_started",
@@ -469,6 +436,77 @@ class GameEngine:
         )
 
         self._run_summaries(round_state, round_log, active_players)
+
+    def _run_debate_phase(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
+        speech_order = self._speech_order(round_state, round_log, active_players)
+        round_state.speech_order = speech_order
+        players_by_name = self.state.player_by_name()
+
+        for speaker in speech_order:
+            player = players_by_name[speaker]
+            message, action_log = self._player_action(
+                player=player,
+                action=ACTION_DEBATE,
+                options=[],
+                result_key="say",
+                round_state=round_state,
+                phase="day",
+            )
+            if not isinstance(message, str) or not message:
+                raise ValueError(f"{speaker} did not return a valid debate message.")
+
+            entry = DebateEntry(speaker=speaker, message=message)
+            round_state.debate.append(entry)
+            round_log.debate.append(action_log)
+            self._record_public_debate(active_players, entry)
+            self._publish_state_updated(
+                round_state=round_state,
+                phase="day",
+                actor=speaker,
+                action=ACTION_DEBATE,
+                payload={
+                    "debate_entry": entry.to_dict(),
+                    "debate": [debate_entry.to_dict() for debate_entry in round_state.debate],
+                    "speech_order": round_state.speech_order.copy(),
+                },
+            )
+
+    def _speech_order(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> list[str]:
+        if (
+            self.rule_set.speech_policy == SPEECH_POLICY_SHERIFF_DIRECTED
+            and self.state.sheriff
+            and self.state.sheriff in active_players
+        ):
+            return self._sheriff_directed_speech_order(round_state, round_log, active_players)
+        return active_players.copy()
+
+    def _run_sheriff_election_if_needed(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
+        del round_log, active_players
+        round_state.sheriff = self.state.sheriff
+
+    def _sheriff_directed_speech_order(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> list[str]:
+        del round_state, round_log
+        return active_players.copy()
 
     def _get_next_speaker(
         self,
