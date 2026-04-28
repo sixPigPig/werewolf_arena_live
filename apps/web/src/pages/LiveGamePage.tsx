@@ -19,6 +19,9 @@ export function LiveGamePage() {
   const { events, connectionState } = useGameRunEvents(runId);
   const [autoFollow, setAutoFollow] = useState(true);
   const [manualFocusName, setManualFocusName] = useState<string | null>(null);
+  const [initialRunTerminalStart, setInitialRunTerminalStart] = useState<
+    { runId: string | undefined; shouldStart: boolean } | null
+  >(null);
   const {
     data: run,
     isError,
@@ -41,7 +44,8 @@ export function LiveGamePage() {
     [events],
   );
   const shouldStartAtTerminal =
-    run?.status === "completed" || run?.status === "failed";
+    initialRunTerminalStart?.runId === runId &&
+    initialRunTerminalStart.shouldStart;
   const director = useLiveDirector(events, {
     startAtLatestTerminal: shouldStartAtTerminal,
   });
@@ -60,6 +64,17 @@ export function LiveGamePage() {
       queryClient.invalidateQueries({ queryKey: ["game-run", runId] });
     }
   }, [queryClient, runId, terminalEvent]);
+
+  useEffect(() => {
+    if (!run || initialRunTerminalStart?.runId === runId) {
+      return;
+    }
+
+    setInitialRunTerminalStart({
+      runId,
+      shouldStart: run.status === "completed" || run.status === "failed",
+    });
+  }, [initialRunTerminalStart?.runId, run, runId]);
 
   if (isPending) {
     return (
