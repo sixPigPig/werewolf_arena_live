@@ -83,10 +83,12 @@ describe("SheriffElectionPanel", () => {
     expect(screen.getByText("警长竞选")).toBeInTheDocument();
     expect(screen.getByText("上警：Alice、Bob")).toBeInTheDocument();
     expect(screen.getByText("警下：Cora、Dan")).toBeInTheDocument();
+    expect(screen.getByText("警上发言")).toBeInTheDocument();
     expect(screen.getByText("Alice：我上警争警徽。")).toBeInTheDocument();
     expect(screen.getByText("退水：Bob")).toBeInTheDocument();
     expect(screen.getByText("最终候选：Alice")).toBeInTheDocument();
     expect(screen.getByText("PK 候选：Alice、Bob")).toBeInTheDocument();
+    expect(screen.getByText("PK 发言")).toBeInTheDocument();
     expect(screen.getByText("Alice：PK 我继续站边自己。")).toBeInTheDocument();
     expect(screen.getByText("二轮投票")).toBeInTheDocument();
     expect(screen.getAllByText("Cora -> Alice")).toHaveLength(2);

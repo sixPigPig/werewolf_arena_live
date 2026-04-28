@@ -25,12 +25,12 @@ export function SheriffElectionPanel({ round }: SheriffElectionPanelProps) {
       <div className="mt-2 space-y-3 text-sm text-slate-700">
         <Line label="上警" values={round.sheriff_candidates} />
         <Line label="警下" values={offSheriffPlayers} />
-        <SpeechList speeches={round.sheriff_speeches} />
+        <SpeechList title="警上发言" speeches={round.sheriff_speeches} />
         <Line label="退水" values={round.sheriff_withdrawn} />
         <Line label="最终候选" values={round.sheriff_final_candidates} />
         <VoteList title="警下投票" votes={round.sheriff_votes} />
         <Line label="PK 候选" values={round.sheriff_pk_candidates} />
-        <SpeechList speeches={round.sheriff_pk_speeches} />
+        <SpeechList title="PK 发言" speeches={round.sheriff_pk_speeches} />
         <VoteList title="二轮投票" votes={round.sheriff_runoff_votes} />
         <ElectionOutcome round={round} />
         <BadgeStatus round={round} />
@@ -67,15 +67,22 @@ function Line({ label, values }: { label: string; values: string[] }) {
   return <p>{label}：{values.join("、")}</p>;
 }
 
-function SpeechList({ speeches }: { speeches: SpeechEntry[] }) {
+function SpeechList({
+  title,
+  speeches,
+}: {
+  title: string;
+  speeches: SpeechEntry[];
+}) {
   if (speeches.length === 0) {
     return null;
   }
 
   return (
-    <div className="space-y-1">
+    <div>
+      <p className="text-xs font-medium uppercase text-slate-500">{title}</p>
       {speeches.map((speech, index) => (
-        <p className="break-words" key={`${speech.speaker}-${index}`}>
+        <p className="mt-1 break-words" key={`${speech.speaker}-${index}`}>
           {speech.speaker}：{speech.message}
         </p>
       ))}
