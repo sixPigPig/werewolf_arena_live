@@ -6,6 +6,7 @@ from app.werewolf.config import SEER
 from app.werewolf.engine import GameEngine, initialize_game_state
 from app.werewolf.live import NullEventSink
 from app.werewolf.models import RoundLog, RoundState
+from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.rules import get_rule_set
 from app.werewolf.runner import GameRunError, run_game
 
@@ -467,6 +468,67 @@ def test_12_player_initialization_sets_role_counts_and_wolf_teammates() -> None:
         assert sorted(wolf.gamestate.wolf_teammates) == sorted(
             teammate.name for teammate in wolves if teammate.name != wolf.name
         )
+
+
+def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
+    state = initialize_game_state(
+        session_id="session_test_sheriff_payload",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=54,
+        rule_set=get_rule_set("classic_12_seer_witch_hunter_idiot"),
+    )
+    state.sheriff = state.players[0].name
+    state.players[0].is_sheriff = True
+    round_state = RoundState(number=1, players=[player.name for player in state.players])
+    round_state.sheriff = state.sheriff
+    round_state.sheriff_candidates = [state.players[0].name, state.players[1].name]
+    round_state.sheriff_votes = {state.players[2].name: state.players[0].name}
+    round_state.speech_order = [player.name for player in state.players]
+    round_state.vote_weights = {state.players[0].name: 1.5}
+    state.rounds.append(round_state)
+
+    payload = state.to_dict()
+
+    assert payload["sheriff"] == state.players[0].name
+    assert payload["players"][0]["is_sheriff"] is True
+    assert payload["rounds"][0]["sheriff"] == state.players[0].name
+    assert payload["rounds"][0]["sheriff_candidates"] == [
+        state.players[0].name,
+        state.players[1].name,
+    ]
+    assert payload["rounds"][0]["sheriff_votes"] == {
+        state.players[2].name: state.players[0].name
+    }
+    assert payload["rounds"][0]["speech_order"] == [player.name for player in state.players]
+    assert payload["rounds"][0]["vote_weights"] == {state.players[0].name: 1.5}
+
+
+def test_sheriff_prompt_actions_render_chinese_instructions() -> None:
+    world_state = {
+        "round": 1,
+        "name": "Alice",
+        "role": "村民",
+        "remaining_players": "Alice、Bob、Cora",
+        "options": "Alice、Bob",
+        "observations": [],
+        "debate": [],
+        "rule_text": "你正在进行一局数字版狼人杀。",
+    }
+
+    run_prompt, run_schema = build_prompt("sheriff_run", world_state)
+    vote_prompt, vote_schema = build_prompt("sheriff_vote", world_state)
+    order_prompt, order_schema = build_prompt("speech_order", world_state)
+    badge_prompt, badge_schema = build_prompt("sheriff_badge", world_state)
+
+    assert "警长竞选" in run_prompt
+    assert run_schema["required"] == ["reasoning", "run"]
+    assert "警长投票" in vote_prompt
+    assert vote_schema["required"] == ["reasoning", "sheriff_vote"]
+    assert "发言方向" in order_prompt
+    assert order_schema["required"] == ["reasoning", "speech_order"]
+    assert "移交警徽" in badge_prompt
+    assert badge_schema["required"] == ["reasoning", "badge"]
 
 
 def test_12_player_wolf_world_state_lists_all_living_teammates() -> None:

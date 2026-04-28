@@ -75,6 +75,7 @@ class Player:
     witch_antidote_available: bool = False
     witch_poison_available: bool = False
     hunter_can_shoot: bool = False
+    is_sheriff: bool = False
 
     def add_observation(self, observation: str) -> None:
         self.observations.append(observation)
@@ -93,6 +94,7 @@ class Player:
             "witch_antidote_available": self.witch_antidote_available,
             "witch_poison_available": self.witch_poison_available,
             "hunter_can_shoot": self.hunter_can_shoot,
+            "is_sheriff": self.is_sheriff,
         }
 
 
@@ -115,6 +117,14 @@ class RoundState:
     bids: list[dict[str, int]] = field(default_factory=list)
     votes: list[dict[str, str]] = field(default_factory=list)
     summaries: dict[str, str] = field(default_factory=dict)
+    sheriff: str | None = None
+    sheriff_candidates: list[str] = field(default_factory=list)
+    sheriff_votes: dict[str, str] = field(default_factory=dict)
+    speech_order: list[str] = field(default_factory=list)
+    speech_order_choice: str | None = None
+    vote_weights: dict[str, float] = field(default_factory=dict)
+    sheriff_badge_target: str | None = None
+    sheriff_badge_lost: bool = False
     success: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -136,6 +146,14 @@ class RoundState:
             "bids": self.bids,
             "votes": self.votes,
             "summaries": self.summaries,
+            "sheriff": self.sheriff,
+            "sheriff_candidates": self.sheriff_candidates,
+            "sheriff_votes": self.sheriff_votes,
+            "speech_order": self.speech_order,
+            "speech_order_choice": self.speech_order_choice,
+            "vote_weights": self.vote_weights,
+            "sheriff_badge_target": self.sheriff_badge_target,
+            "sheriff_badge_lost": self.sheriff_badge_lost,
             "success": self.success,
         }
 
@@ -153,6 +171,10 @@ class RoundLog:
     debate: list[ActionLog] = field(default_factory=list)
     votes: list[list[ActionLog]] = field(default_factory=list)
     summaries: list[ActionLog] = field(default_factory=list)
+    sheriff_run: list[ActionLog] = field(default_factory=list)
+    sheriff_votes: list[ActionLog] = field(default_factory=list)
+    speech_order: ActionLog | None = None
+    sheriff_badge: ActionLog | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -167,6 +189,10 @@ class RoundLog:
             "debate": [log.to_dict() for log in self.debate],
             "votes": [[log.to_dict() for log in vote_logs] for vote_logs in self.votes],
             "summaries": [log.to_dict() for log in self.summaries],
+            "sheriff_run": [log.to_dict() for log in self.sheriff_run],
+            "sheriff_votes": [log.to_dict() for log in self.sheriff_votes],
+            "speech_order": self.speech_order.to_dict() if self.speech_order else None,
+            "sheriff_badge": self.sheriff_badge.to_dict() if self.sheriff_badge else None,
         }
 
 
@@ -178,6 +204,8 @@ class GameState:
     rounds: list[RoundState] = field(default_factory=list)
     winner: str = ""
     error_message: str = ""
+    sheriff: str | None = None
+    sheriff_badge_lost: bool = False
 
     def player_by_name(self) -> dict[str, Player]:
         return {player.name: player for player in self.players}
@@ -190,4 +218,6 @@ class GameState:
             "rounds": [round_state.to_dict() for round_state in self.rounds],
             "winner": self.winner,
             "error_message": self.error_message,
+            "sheriff": self.sheriff,
+            "sheriff_badge_lost": self.sheriff_badge_lost,
         }

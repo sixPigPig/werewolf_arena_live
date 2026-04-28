@@ -28,6 +28,26 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {"reasoning": {"type": "string"}, "vote": {"type": "string"}},
         "required": ["reasoning", "vote"],
     },
+    "sheriff_run": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "run": {"type": "string"}},
+        "required": ["reasoning", "run"],
+    },
+    "sheriff_vote": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "sheriff_vote": {"type": "string"}},
+        "required": ["reasoning", "sheriff_vote"],
+    },
+    "speech_order": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "speech_order": {"type": "string"}},
+        "required": ["reasoning", "speech_order"],
+    },
+    "sheriff_badge": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "badge": {"type": "string"}},
+        "required": ["reasoning", "badge"],
+    },
     "investigate": {
         "type": "object",
         "properties": {"reasoning": {"type": "string"}, "investigate": {"type": "string"}},
@@ -69,6 +89,10 @@ RESULT_FIELD_BY_ACTION = {
     "bid": "bid",
     "debate": "say",
     "vote": "vote",
+    "sheriff_run": "run",
+    "sheriff_vote": "sheriff_vote",
+    "speech_order": "speech_order",
+    "sheriff_badge": "badge",
     "investigate": "investigate",
     "remove": "remove",
     "protect": "protect",
@@ -83,6 +107,10 @@ FIELD_LABELS = {
     "bid": "发言意愿",
     "say": "发言内容",
     "vote": "投票对象",
+    "run": "竞选选择",
+    "sheriff_vote": "警长投票对象",
+    "speech_order": "发言方向",
+    "badge": "警徽处理",
     "investigate": "查验对象",
     "remove": "袭击对象",
     "protect": "保护对象",
@@ -161,6 +189,34 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "你必须从候选人中选择一名玩家投票。结合发言、行为矛盾和阵营目标做判断。\n"
             f"候选人：{options}。\n"
             "输出字段 reasoning 和 vote。"
+        )
+    if action == "sheriff_run":
+        return (
+            "行动：警长竞选报名。\n"
+            "你需要决定是否参与警长竞选，选择上警或不上警。\n"
+            f"候选选项：{options}。\n"
+            f"请以{role}的目标思考，输出字段 reasoning 和 run。"
+        )
+    if action == "sheriff_vote":
+        return (
+            "行动：警长投票。\n"
+            "警长拥有 1.5 票并决定白天发言方向。你必须从警长候选人中选择一名玩家投票。\n"
+            f"候选人：{options}。\n"
+            "输出字段 reasoning 和 sheriff_vote。"
+        )
+    if action == "speech_order":
+        return (
+            "行动：警长决定发言方向。\n"
+            "你需要在警左或警右中选择白天发言方向，警长最后归票发言。\n"
+            f"候选选项：{options}。\n"
+            "输出字段 reasoning 和 speech_order。"
+        )
+    if action == "sheriff_badge":
+        return (
+            "行动：移交警徽。\n"
+            "你可以选择把警徽交给存活玩家，或选择撕毁警徽。\n"
+            f"候选人：{options}。\n"
+            "输出字段 reasoning 和 badge。"
         )
     if action == "investigate":
         return (
