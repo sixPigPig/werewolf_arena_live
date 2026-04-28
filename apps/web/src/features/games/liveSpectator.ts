@@ -110,36 +110,43 @@ function applyStateUpdate(
   event: LiveGameEvent,
 ) {
   const payload = payloadForEvent(event);
-  const activePlayers = payload.active_players;
-  if (Array.isArray(activePlayers)) {
-    const activeNames = new Set(
-      activePlayers.filter((name): name is string => typeof name === "string"),
-    );
-    for (const player of state.playersByName.values()) {
-      player.isAlive = activeNames.has(player.name);
-      if (!player.isAlive) {
-        player.status = "out";
-      }
-    }
-  }
-
   const attacked = payload.attacked;
+  const eliminated = payload.eliminated;
   const protectedPlayer =
     typeof payload.protected === "string" ? payload.protected : null;
   const protectedAttack =
     typeof attacked === "string" && protectedPlayer === attacked
       ? attacked
       : null;
-  if (protectedAttack) {
-    const player = ensurePlayer(state, protectedAttack);
+  const protectedElimination =
+    typeof eliminated === "string" && protectedPlayer === eliminated
+      ? eliminated
+      : null;
+  const protectedSurvival = protectedAttack ?? protectedElimination;
+
+  const activePlayers = payload.active_players;
+  if (Array.isArray(activePlayers)) {
+    const activeNames = new Set(
+      activePlayers.filter((name): name is string => typeof name === "string"),
+    );
+    for (const player of state.playersByName.values()) {
+      player.isAlive =
+        player.name === protectedSurvival || activeNames.has(player.name);
+      if (!player.isAlive) {
+        player.status = "out";
+      }
+    }
+  }
+
+  if (protectedSurvival) {
+    const player = ensurePlayer(state, protectedSurvival);
     player.isAlive = true;
     player.status = "waiting";
     player.lastAction = "remove";
     player.lastDetail = "被守护，未出局";
   }
 
-  const eliminated = payload.eliminated;
-  if (typeof eliminated === "string" && eliminated !== protectedPlayer) {
+  if (typeof eliminated === "string" && eliminated !== protectedSurvival) {
     const player = ensurePlayer(state, eliminated);
     player.isAlive = false;
     player.status = "out";

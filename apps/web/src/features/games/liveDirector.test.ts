@@ -115,8 +115,8 @@ describe("toDirectorCue", () => {
         payload: {
           attacked: "李四",
           protected: "李四",
-          eliminated: null,
-          active_players: ["张三", "李四"],
+          eliminated: "李四",
+          active_players: ["张三"],
         },
       }),
     );
@@ -128,6 +128,7 @@ describe("toDirectorCue", () => {
       compressible: false,
     });
     expect(cue.body).toContain("李四 被袭击，但被医生守护。");
+    expect(cue.body).toContain("存活玩家：张三");
   });
 
   it("falls back safely for unknown or malformed events", () => {

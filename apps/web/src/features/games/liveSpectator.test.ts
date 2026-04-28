@@ -163,7 +163,7 @@ describe("deriveLiveSpectatorState", () => {
         payload: {
           protected: "李四",
           eliminated: "李四",
-          active_players: ["张三", "李四"],
+          active_players: ["张三"],
         },
       }),
     ]);
