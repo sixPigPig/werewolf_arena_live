@@ -61,6 +61,26 @@ describe("useLiveDirector", () => {
     expect(result.current.currentEventId).toBe(2);
   });
 
+  it("starts at the terminal cue when completed replay mode is requested", () => {
+    const events = [
+      event({ id: 1, type: "run_created" }),
+      event({ id: 2, type: "round_started", round: 1 }),
+      event({
+        id: 3,
+        type: "game_completed",
+        payload: { winner: "狼人阵营" },
+      }),
+    ];
+
+    const { result } = renderHook(() =>
+      useLiveDirector(events, { startAtLatestTerminal: true }),
+    );
+
+    expect(result.current.currentEventId).toBe(3);
+    expect(result.current.backlogCount).toBe(0);
+    expect(result.current.currentCue?.title).toBe("对局完成");
+  });
+
   it("pauses and resumes director timing without dropping later events", () => {
     const { result, rerender } = renderHook(
       ({ events }: { events: LiveGameEvent[] }) => useLiveDirector(events),

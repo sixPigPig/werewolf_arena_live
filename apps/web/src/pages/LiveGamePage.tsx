@@ -40,7 +40,11 @@ export function LiveGamePage() {
     () => deriveLiveSpectatorState(events),
     [events],
   );
-  const director = useLiveDirector(events);
+  const shouldStartAtTerminal =
+    run?.status === "completed" || run?.status === "failed";
+  const director = useLiveDirector(events, {
+    startAtLatestTerminal: shouldStartAtTerminal,
+  });
   const autoFocusName =
     director.currentCue?.actor ?? spectatorState.activePlayerName;
   const focusedPlayerName = autoFollow

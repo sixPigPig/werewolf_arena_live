@@ -389,6 +389,71 @@ describe("LiveGamePage", () => {
     vi.useRealTimers();
   });
 
+  it("opens completed runs at the terminal event instead of replaying the full backlog", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            run_id: "run_1234abcd",
+            session_id: "session_20260424_120000_ab12cd34",
+            villager_model: "deepseek-chat",
+            werewolf_model: "deepseek-chat",
+            seed: null,
+            max_rounds: 8,
+            rule_set_id: "starter_6",
+            rule_set: {
+              id: "starter_6",
+              version: "2026.04",
+              name: "新手 6 人快局",
+              player_count: 6,
+              roles: [
+                { role: "狼人", count: 1 },
+                { role: "预言家", count: 1 },
+                { role: "医生", count: 1 },
+                { role: "村民", count: 3 },
+              ],
+              role_summary: "1 狼人 / 1 预言家 / 1 医生 / 3 村民",
+            },
+            status: "completed",
+            created_at: "2026-04-24T12:00:00Z",
+            started_at: "2026-04-24T12:00:01Z",
+            completed_at: "2026-04-24T12:00:10Z",
+            winner: "狼人阵营",
+            error: null,
+            event_count: 3,
+            event_pacing: "off",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+    act(() => {
+      emitEvent(source, { id: 1, type: "run_created" });
+      emitEvent(source, { id: 2, type: "round_started", round: 1 });
+      emitEvent(source, {
+        id: 3,
+        type: "game_completed",
+        payload: { winner: "狼人阵营" },
+      });
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "对局完成" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("队列剩余：0")).toBeInTheDocument();
+  });
+
   it("keeps the director stage paused until users catch up to the latest key event", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>

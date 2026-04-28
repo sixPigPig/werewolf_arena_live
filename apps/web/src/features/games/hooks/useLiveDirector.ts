@@ -23,10 +23,17 @@ export type UseLiveDirectorResult = {
   catchUpToLatest: () => void;
 };
 
+type UseLiveDirectorOptions = {
+  startAtLatestTerminal?: boolean;
+};
+
 const CATCH_UP_BACKLOG_COUNT = 8;
 const MIN_DURATION_MS = 500;
 
-export function useLiveDirector(events: LiveGameEvent[]): UseLiveDirectorResult {
+export function useLiveDirector(
+  events: LiveGameEvent[],
+  options: UseLiveDirectorOptions = {},
+): UseLiveDirectorResult {
   const cues = useMemo(() => events.map(toDirectorCue), [events]);
   const [currentEventId, setCurrentEventId] = useState<number | null>(
     () => cues[0]?.eventId ?? null,
@@ -58,6 +65,25 @@ export function useLiveDirector(events: LiveGameEvent[]): UseLiveDirectorResult 
   const effectiveDurationMs = currentCue
     ? durationForCue(currentCue, speed, isCatchingUp)
     : 0;
+
+  useEffect(() => {
+    if (!options.startAtLatestTerminal) {
+      return;
+    }
+
+    const latestTerminalCue = [...cues]
+      .reverse()
+      .find(
+        (cue) => cue.type === "game_completed" || cue.type === "game_failed",
+      );
+    if (!latestTerminalCue || currentEventId === latestTerminalCue.eventId) {
+      return;
+    }
+
+    setCurrentEventId(latestTerminalCue.eventId);
+    startedAtRef.current = Date.now();
+    lastStartedEventIdRef.current = latestTerminalCue.eventId;
+  }, [cues, currentEventId, options.startAtLatestTerminal]);
 
   const moveToIndex = useCallback(
     (nextIndex: number) => {
