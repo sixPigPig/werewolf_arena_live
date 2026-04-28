@@ -609,7 +609,26 @@ describe("LiveGamePage", () => {
     await waitFor(() =>
       expect(MockEventSource.instances.at(-1)?.url).toContain("/run_b/events"),
     );
+    const runBSource = MockEventSource.instances.at(-1)!;
+    act(() => {
+      emitEvent(runBSource, { id: 1, type: "run_created", run_id: "run_b" });
+      emitEvent(runBSource, {
+        id: 2,
+        type: "round_started",
+        run_id: "run_b",
+        round: 1,
+      });
+      emitEvent(runBSource, {
+        id: 3,
+        type: "game_completed",
+        run_id: "run_b",
+        payload: { winner: "狼人阵营" },
+      });
+    });
     expect(await screen.findByText("completed")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "对局完成" }),
+    ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "run a" }));
     await waitFor(() =>

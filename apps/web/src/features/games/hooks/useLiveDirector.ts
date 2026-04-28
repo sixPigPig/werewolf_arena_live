@@ -24,6 +24,7 @@ export type UseLiveDirectorResult = {
 };
 
 type UseLiveDirectorOptions = {
+  resetKey?: string;
   startAtLatestTerminal?: boolean;
 };
 
@@ -43,6 +44,7 @@ export function useLiveDirector(
   const startedAtRef = useRef(0);
   const lastStartedEventIdRef = useRef<number | null>(null);
   const pausedAtRef = useRef<number | null>(null);
+  const resetKeyRef = useRef(options.resetKey);
 
   const currentIndex = useMemo(() => {
     if (cues.length === 0) {
@@ -65,6 +67,20 @@ export function useLiveDirector(
   const effectiveDurationMs = currentCue
     ? durationForCue(currentCue, speed, isCatchingUp)
     : 0;
+
+  useEffect(() => {
+    if (resetKeyRef.current === options.resetKey) {
+      return;
+    }
+
+    resetKeyRef.current = options.resetKey;
+    startedAtRef.current = Date.now();
+    lastStartedEventIdRef.current = null;
+    pausedAtRef.current = null;
+    setCurrentEventId(null);
+    setIsPaused(false);
+    setSpeedState(1);
+  }, [options.resetKey]);
 
   useEffect(() => {
     if (!options.startAtLatestTerminal) {

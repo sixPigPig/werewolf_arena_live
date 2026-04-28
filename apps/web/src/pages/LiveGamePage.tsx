@@ -45,6 +45,7 @@ export function LiveGamePage() {
   const shouldStartAtTerminal =
     Boolean(runId) && terminalStartByRunIdRef.current.get(runId) === true;
   const director = useLiveDirector(events, {
+    resetKey: runId,
     startAtLatestTerminal: shouldStartAtTerminal,
   });
   const autoFocusName =
