@@ -111,9 +111,20 @@ export type BidEntry = {
   score: number;
 };
 
+export type BidGroup = {
+  turn: number;
+  speaker: string | null;
+  bids: BidEntry[];
+};
+
 export type VoteEntry = {
   voter: string;
   target: string;
+};
+
+export type VoteTallyEntry = {
+  target: string;
+  count: number;
 };
 
 export type DebugItem = {
@@ -136,7 +147,11 @@ export type GameRound = Omit<
   attacked: string | null;
   eliminated: string | null;
   bids: BidEntry[];
+  bidGroups: BidGroup[];
   votes: VoteEntry[];
+  voteTally: VoteTallyEntry[];
+  voteCount: number;
+  voteMajorityThreshold: number | null;
 };
 
 export type GameReplay = {

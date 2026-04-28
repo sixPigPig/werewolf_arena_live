@@ -58,8 +58,10 @@ export function GameDetailPage() {
           onSelect={(item) =>
             setSelection({ itemId: item.id, sessionId: data.sessionId })
           }
+          players={data.players}
           rounds={data.rounds}
           selectedItem={visibleSelectedItem}
+          winner={data.winner}
         />
       }
     />

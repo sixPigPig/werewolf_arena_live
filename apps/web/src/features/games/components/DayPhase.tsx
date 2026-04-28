@@ -22,27 +22,16 @@ export function DayPhase({
     <section className="border-t border-slate-200 pt-4">
       <h3 className="text-sm font-semibold text-slate-950">白天</h3>
 
-      <div className="mt-3 grid gap-4 xl:grid-cols-2">
-        <section>
-          <h4 className="text-xs font-semibold uppercase text-slate-500">Bid</h4>
-          <div className="mt-2">
-            <BidChart bids={round.bids} />
-          </div>
-        </section>
-
-        <section>
-          <h4 className="text-xs font-semibold uppercase text-slate-500">
-            Vote
-          </h4>
-          <div className="mt-2">
-            <VoteTable votes={round.votes} />
-          </div>
-        </section>
-      </div>
+      <section className="mt-3">
+        <h4 className="text-xs font-semibold uppercase text-slate-500">竞价</h4>
+        <div className="mt-2">
+          <BidRounds round={round} />
+        </div>
+      </section>
 
       <section className="mt-4">
         <h4 className="text-xs font-semibold uppercase text-slate-500">
-          Debate
+          发言
         </h4>
         <div className="mt-2 space-y-2">
           {round.debate.length === 0 ? (
@@ -62,7 +51,17 @@ export function DayPhase({
 
       <section className="mt-4">
         <h4 className="text-xs font-semibold uppercase text-slate-500">
-          Summary
+          投票
+        </h4>
+        <div className="mt-2">
+          <VoteTable tally={round.voteTally} votes={round.votes} />
+        </div>
+        <VoteResolution round={round} />
+      </section>
+
+      <section className="mt-4">
+        <h4 className="text-xs font-semibold uppercase text-slate-500">
+          轮次总结
         </h4>
         <div className="mt-2">
           <SummaryStrip summaries={round.summaries} />
@@ -80,5 +79,51 @@ export function DayPhase({
         ))}
       </div>
     </section>
+  );
+}
+
+function BidRounds({ round }: { round: GameRound }) {
+  if (round.bidGroups.length === 0) {
+    return <BidChart bids={round.bids} />;
+  }
+
+  return (
+    <div className="space-y-4">
+      {round.bidGroups.map((group) => (
+        <section
+          className="rounded border border-slate-200 bg-white px-3 py-3"
+          key={group.turn}
+        >
+          <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <h5 className="text-sm font-medium text-slate-950">
+              第 {group.turn} 次发言竞价
+            </h5>
+            {group.speaker ? (
+              <span className="text-xs text-slate-600">
+                发言人：{group.speaker}
+              </span>
+            ) : null}
+          </div>
+          <BidChart bids={group.bids} />
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function VoteResolution({ round }: { round: GameRound }) {
+  if (round.voteCount === 0 || round.voteMajorityThreshold === null) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+      <p className="font-medium text-slate-950">
+        多数门槛 {round.voteMajorityThreshold}/{round.voteCount}
+      </p>
+      <p className="mt-1">
+        {round.exiled ? `${round.exiled} 被放逐` : "无人被放逐"}
+      </p>
+    </div>
   );
 }

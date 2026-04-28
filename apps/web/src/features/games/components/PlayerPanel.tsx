@@ -23,7 +23,7 @@ export function PlayerPanel({ game }: PlayerPanelProps) {
           {game.sessionId}
         </p>
         <div>
-          <p className="text-xs font-medium text-slate-500">Winner</p>
+          <p className="text-xs font-medium text-slate-500">场次胜者</p>
           <p className="text-lg font-semibold text-slate-950">
             {game.winner || "未决出"}
           </p>

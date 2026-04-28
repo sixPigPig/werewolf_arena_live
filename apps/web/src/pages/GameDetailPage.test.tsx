@@ -188,6 +188,62 @@ const nextDetailResponse = {
   ],
 };
 
+const resolvedVoteResponse = {
+  ...detailResponse,
+  state: {
+    ...detailResponse.state,
+    winner: "好人阵营",
+    rule_set: {
+      id: "starter_6",
+      version: "2026.04",
+      name: "新手 6 人快局",
+      player_count: 6,
+      roles: [
+        { role: "狼人", count: 1, team: "werewolves" },
+        { role: "预言家", count: 1, team: "villagers" },
+        { role: "医生", count: 1, team: "villagers" },
+        { role: "村民", count: 3, team: "villagers" },
+      ],
+      role_summary: "1 狼人 / 1 预言家 / 1 医生 / 3 村民",
+    },
+    players: [
+      { name: "Dan", role: "狼人", model: "deepseek-chat" },
+      { name: "Bert", role: "预言家", model: "deepseek-chat" },
+      { name: "David", role: "医生", model: "deepseek-chat" },
+      { name: "Paul", role: "村民", model: "deepseek-chat" },
+      { name: "Jackson", role: "村民", model: "deepseek-chat" },
+      { name: "Scott", role: "村民", model: "deepseek-chat" },
+    ],
+    rounds: [
+      {
+        number: 1,
+        players: ["Dan", "Bert", "David", "Paul", "Jackson", "Scott"],
+        eliminated: "Bert",
+        protected: "David",
+        investigated: "Dan",
+        exiled: "Dan",
+        debate: [
+          { speaker: "Dan", message: "David 昨晚有点安静。" },
+          { speaker: "David", message: "Dan 急着怀疑别人，有点反常。" },
+        ],
+        bids: [{ Dan: 2, David: 0, Paul: 0, Jackson: 0, Scott: 0 }],
+        votes: [
+          {
+            Dan: "David",
+            David: "Dan",
+            Paul: "Dan",
+            Jackson: "Dan",
+            Scott: "Dan",
+          },
+        ],
+        summaries: {},
+        success: true,
+      },
+    ],
+  },
+  logs: detailResponse.logs,
+};
+
 function mockGameDetailFetch() {
   vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
     const url = String(input);
@@ -314,5 +370,81 @@ describe("GameDetailPage", () => {
     expect(await screen.findByText("袭击")).toBeInTheDocument();
     expect(screen.getAllByText("李四").length).toBeGreaterThan(0);
     expect(screen.getByText("李四 被守护，平安夜")).toBeInTheDocument();
+  });
+
+  it("shows vote tally, exile resolution, and final winner", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(resolvedVoteResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/:sessionId" element={<GameDetailPage />} />
+      </Routes>,
+      `/games/${sessionId}`,
+    );
+
+    expect(await screen.findByText("场次胜者：好人阵营")).toBeInTheDocument();
+    expect(screen.getByText("Dan：4票")).toBeInTheDocument();
+    expect(screen.getByText("多数门槛 3/5")).toBeInTheDocument();
+    expect(screen.getByText("Dan 被放逐")).toBeInTheDocument();
+    expect(screen.getByText("Dan 被放逐，狼人全部出局")).toBeInTheDocument();
+  });
+
+  it("keeps repeated bid rounds grouped by speaker selection turn", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...detailResponse,
+          state: {
+            ...detailResponse.state,
+            players: [
+              { name: "Jackson", role: "狼人", model: "deepseek-chat" },
+              { name: "Tyler", role: "预言家", model: "deepseek-chat" },
+              { name: "Hayley", role: "医生", model: "deepseek-chat" },
+              { name: "Mason", role: "村民", model: "deepseek-chat" },
+              { name: "Bert", role: "村民", model: "deepseek-chat" },
+              { name: "Isaac", role: "村民", model: "deepseek-chat" },
+            ],
+            rounds: [
+              {
+                ...detailResponse.state.rounds[0],
+                players: ["Jackson", "Tyler", "Hayley", "Mason", "Bert", "Isaac"],
+                eliminated: "Tyler",
+                protected: "Hayley",
+                investigated: "Mason",
+                debate: [
+                  { speaker: "Bert", message: "Tyler 出局了，先听大家看法。" },
+                  { speaker: "Jackson", message: "Tyler 出局有点突然。" },
+                ],
+                bids: [
+                  { Jackson: 0, Hayley: 0, Mason: 0, Bert: 0, Isaac: 0 },
+                  { Jackson: 1, Hayley: 0, Mason: 0, Isaac: 0 },
+                ],
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/:sessionId" element={<GameDetailPage />} />
+      </Routes>,
+      `/games/${sessionId}`,
+    );
+
+    expect(await screen.findByText("第 1 次发言竞价")).toBeInTheDocument();
+    expect(screen.getByText("发言人：Bert")).toBeInTheDocument();
+    expect(screen.getByText("第 2 次发言竞价")).toBeInTheDocument();
+    expect(screen.getByText("发言人：Jackson")).toBeInTheDocument();
   });
 });

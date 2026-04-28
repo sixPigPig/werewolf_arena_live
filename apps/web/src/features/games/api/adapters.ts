@@ -1,4 +1,5 @@
 import type {
+  BidEntry,
   DebugItem,
   GameReplay,
   GameRound,
@@ -43,18 +44,52 @@ function normalizeRound(
     round.eliminated === round.protected
       ? null
       : round.eliminated;
+  const bidGroups = round.bids.map((entry, index) => {
+    const bids = Object.entries(entry).map(([actor, score]) => ({
+      actor,
+      score,
+    }));
+
+    return {
+      turn: index + 1,
+      speaker: round.debate[index]?.speaker ?? selectedSpeakerFromBids(bids),
+      bids,
+    };
+  });
+  const votes = round.votes.flatMap((entry) =>
+    Object.entries(entry).map(([voter, target]) => ({ voter, target })),
+  );
 
   return {
     ...round,
     attacked,
     eliminated,
-    bids: round.bids.flatMap((entry) =>
-      Object.entries(entry).map(([actor, score]) => ({ actor, score })),
-    ),
-    votes: round.votes.flatMap((entry) =>
-      Object.entries(entry).map(([voter, target]) => ({ voter, target })),
-    ),
+    bids: bidGroups.flatMap((group) => group.bids),
+    bidGroups,
+    votes,
+    voteTally: tallyVotes(votes.map((vote) => vote.target)),
+    voteCount: votes.length,
+    voteMajorityThreshold:
+      votes.length > 0 ? Math.floor(votes.length / 2) + 1 : null,
   };
+}
+
+function selectedSpeakerFromBids(bids: BidEntry[]) {
+  return (
+    [...bids].sort((a, b) => b.score - a.score || a.actor.localeCompare(b.actor))[0]
+      ?.actor ?? null
+  );
+}
+
+function tallyVotes(targets: string[]) {
+  const counts = new Map<string, number>();
+  targets.forEach((target) => {
+    counts.set(target, (counts.get(target) ?? 0) + 1);
+  });
+
+  return Array.from(counts.entries())
+    .map(([target, count]) => ({ target, count }))
+    .sort((a, b) => b.count - a.count || a.target.localeCompare(b.target));
 }
 
 function debugItemsFromRound(round: RawRoundLog): DebugItem[] {
