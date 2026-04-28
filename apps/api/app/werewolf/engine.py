@@ -29,8 +29,12 @@ from app.werewolf.models import (
 from app.werewolf.rules import (
     ACTION_DEBATE,
     ACTION_SHERIFF_BADGE,
+    ACTION_SHERIFF_PK_SPEECH,
     ACTION_SHERIFF_RUN,
+    ACTION_SHERIFF_RUNOFF_VOTE,
+    ACTION_SHERIFF_SPEECH,
     ACTION_SHERIFF_VOTE,
+    ACTION_SHERIFF_WITHDRAW,
     ACTION_INVESTIGATE,
     ACTION_HUNTER_SHOOT,
     ACTION_PROTECT,
@@ -60,6 +64,8 @@ NO_WITCH_POISON = "不使用毒药"
 NO_HUNTER_SHOT = "不发动技能"
 SHERIFF_RUN = "上警"
 SHERIFF_SKIP = "不上警"
+SHERIFF_WITHDRAW = "退水"
+SHERIFF_STAY = "不退水"
 SPEECH_FROM_LEFT = "警左发言"
 SPEECH_FROM_RIGHT = "警右发言"
 SHERIFF_BADGE_DESTROY = "撕毁警徽"
@@ -552,33 +558,143 @@ class GameEngine:
 
         round_state.sheriff_candidates = candidates
         if not candidates:
-            self._announce(active_players, f"第{round_state.number}轮：无人上警，本局暂时没有警长。")
+            round_state.sheriff_final_candidates = []
+            round_state.sheriff_voters = []
+            self._lose_sheriff_badge(round_state, active_players, "无人上警")
             return
 
-        for name in active_players:
+        for name in candidates:
+            message, action_log = self._player_action(
+                player=players_by_name[name],
+                action=ACTION_SHERIFF_SPEECH,
+                options=[],
+                result_key="say",
+                round_state=round_state,
+                phase="day",
+            )
+            round_log.sheriff_speech.append(action_log)
+            if not isinstance(message, str) or not message:
+                raise ValueError(f"{name} did not return a valid sheriff speech.")
+            round_state.sheriff_speeches.append({"speaker": name, "message": message})
+
+        withdrawn: list[str] = []
+        for name in candidates:
+            withdraw_choice, action_log = self._player_action(
+                player=players_by_name[name],
+                action=ACTION_SHERIFF_WITHDRAW,
+                options=[SHERIFF_WITHDRAW, SHERIFF_STAY],
+                result_key="withdraw",
+                round_state=round_state,
+                phase="day",
+            )
+            round_log.sheriff_withdraw.append(action_log)
+            if withdraw_choice == SHERIFF_WITHDRAW:
+                withdrawn.append(name)
+
+        round_state.sheriff_withdrawn = withdrawn
+        final_candidates = [name for name in candidates if name not in set(withdrawn)]
+        voters = [name for name in active_players if name not in set(candidates)]
+        round_state.sheriff_final_candidates = final_candidates
+        round_state.sheriff_voters = voters
+
+        if not final_candidates:
+            self._lose_sheriff_badge(round_state, active_players, "警上候选全部退水")
+            return
+
+        if len(final_candidates) == 1:
+            self._elect_sheriff(final_candidates[0], round_state, active_players)
+            return
+
+        if not voters:
+            self._lose_sheriff_badge(round_state, active_players, "警下无人可投票")
+            return
+
+        for name in voters:
             vote, action_log = self._player_action(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_VOTE,
-                options=candidates,
+                options=final_candidates,
                 result_key="sheriff_vote",
                 round_state=round_state,
                 phase="day",
             )
             round_log.sheriff_votes.append(action_log)
-            if isinstance(vote, str) and vote in candidates:
+            if isinstance(vote, str) and vote in final_candidates:
                 round_state.sheriff_votes[name] = vote
 
-        sheriff = self._plurality_winner(round_state.sheriff_votes)
-        if sheriff is None:
-            self._announce(active_players, f"第{round_state.number}轮：警长投票未产生唯一领先者，本局暂时没有警长。")
+        first_round_winners = self._plurality_winners(round_state.sheriff_votes)
+        if not first_round_winners:
+            self._lose_sheriff_badge(round_state, active_players, "警长投票无人得票")
             return
 
+        if len(first_round_winners) == 1:
+            self._elect_sheriff(first_round_winners[0], round_state, active_players)
+            return
+
+        tied_candidates = set(first_round_winners)
+        pk_candidates = [name for name in final_candidates if name in tied_candidates]
+        round_state.sheriff_pk_candidates = pk_candidates
+
+        for name in pk_candidates:
+            message, action_log = self._player_action(
+                player=players_by_name[name],
+                action=ACTION_SHERIFF_PK_SPEECH,
+                options=[],
+                result_key="say",
+                round_state=round_state,
+                phase="day",
+            )
+            round_log.sheriff_pk_speech.append(action_log)
+            if not isinstance(message, str) or not message:
+                raise ValueError(f"{name} did not return a valid sheriff PK speech.")
+            round_state.sheriff_pk_speeches.append({"speaker": name, "message": message})
+
+        for name in voters:
+            vote, action_log = self._player_action(
+                player=players_by_name[name],
+                action=ACTION_SHERIFF_RUNOFF_VOTE,
+                options=pk_candidates,
+                result_key="sheriff_vote",
+                round_state=round_state,
+                phase="day",
+            )
+            round_log.sheriff_runoff_votes.append(action_log)
+            if isinstance(vote, str) and vote in pk_candidates:
+                round_state.sheriff_runoff_votes[name] = vote
+
+        sheriff = self._plurality_winner(round_state.sheriff_runoff_votes)
+        if sheriff is None:
+            self._lose_sheriff_badge(round_state, active_players, "警长二轮投票未产生唯一领先者")
+            return
+
+        self._elect_sheriff(sheriff, round_state, active_players)
+
+    def _elect_sheriff(
+        self,
+        sheriff: str,
+        round_state: RoundState,
+        active_players: list[str],
+    ) -> None:
         self._set_sheriff(sheriff)
         round_state.sheriff = sheriff
+        round_state.sheriff_elected = sheriff
+        round_state.sheriff_badge_lost = False
         self._announce(
             active_players,
             f"第{round_state.number}轮：警长竞选，{sheriff}当选警长，投票计为{self.rule_set.sheriff_vote_weight:g}票。",
         )
+
+    def _lose_sheriff_badge(
+        self,
+        round_state: RoundState,
+        active_players: list[str],
+        reason: str,
+    ) -> None:
+        self._set_sheriff(None)
+        self.state.sheriff_badge_lost = True
+        round_state.sheriff = None
+        round_state.sheriff_badge_lost = True
+        self._announce(active_players, f"第{round_state.number}轮：{reason}，警徽流失。")
 
     def _sheriff_directed_speech_order(
         self,
@@ -610,12 +726,15 @@ class GameEngine:
         return after_sheriff + before_sheriff + [sheriff]
 
     def _plurality_winner(self, votes: dict[str, str]) -> str | None:
+        winners = self._plurality_winners(votes)
+        return winners[0] if len(winners) == 1 else None
+
+    def _plurality_winners(self, votes: dict[str, str]) -> list[str]:
         if not votes:
-            return None
+            return []
         tally = Counter(votes.values())
         top_count = max(tally.values())
-        winners = [name for name, count in tally.items() if count == top_count]
-        return winners[0] if len(winners) == 1 else None
+        return [name for name, count in tally.items() if count == top_count]
 
     def _set_sheriff(self, sheriff: str | None) -> None:
         players_by_name = self.state.player_by_name()

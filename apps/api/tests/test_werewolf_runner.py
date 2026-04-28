@@ -56,6 +56,11 @@ class ScriptedChineseProvider:
             )
         if '"run"' in prompt:
             return json.dumps({"reasoning": "测试中默认参与警长竞选。", "run": choice}, ensure_ascii=False)
+        if '"withdraw"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试中默认不退水。", "withdraw": "不退水"},
+                ensure_ascii=False,
+            )
         if '"sheriff_vote"' in prompt:
             return json.dumps(
                 {"reasoning": "测试中默认投给首位候选人。", "sheriff_vote": choice},
@@ -79,42 +84,55 @@ class SheriffFlowProvider(ScriptedChineseProvider):
         self,
         *,
         candidates: set[str],
-        sheriff_vote_target: str,
+        sheriff_vote_targets: dict[str, str],
+        withdraw: set[str] | None = None,
+        runoff_vote_targets: dict[str, str] | None = None,
         speech_order_choice: str = "警左发言",
         badge_choice: str = "撕毁警徽",
     ) -> None:
         self.candidates = candidates
-        self.sheriff_vote_target = sheriff_vote_target
+        self.sheriff_vote_targets = sheriff_vote_targets
+        self.withdraw = withdraw or set()
+        self.runoff_vote_targets = runoff_vote_targets or sheriff_vote_targets
         self.speech_order_choice = speech_order_choice
         self.badge_choice = badge_choice
-        self.actions: list[str] = []
+        self.actions: list[tuple[str, str]] = []
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         name = _extract_actor_name(prompt)
         if '"run"' in prompt:
-            self.actions.append("sheriff_run")
+            self.actions.append(("sheriff_run", name))
             choice = "上警" if name in self.candidates else "不上警"
             return json.dumps({"reasoning": "根据身份争取警徽。", "run": choice}, ensure_ascii=False)
+        if '"withdraw"' in prompt:
+            self.actions.append(("sheriff_withdraw", name))
+            choice = "退水" if name in self.withdraw else "不退水"
+            return json.dumps({"reasoning": "根据警上形势决定是否退水。", "withdraw": choice}, ensure_ascii=False)
+        if '"say"' in prompt and "警上竞选发言" in prompt:
+            self.actions.append(("sheriff_speech", name))
+            return json.dumps({"reasoning": "争取警徽。", "say": f"{name} 警上发言。"}, ensure_ascii=False)
+        if '"say"' in prompt and "PK 发言" in prompt:
+            self.actions.append(("sheriff_pk_speech", name))
+            return json.dumps({"reasoning": "争取二轮票。", "say": f"{name} PK 发言。"}, ensure_ascii=False)
+        if '"sheriff_vote"' in prompt and "行动：二轮警下投票" in prompt:
+            self.actions.append(("sheriff_runoff_vote", name))
+            choice = self.runoff_vote_targets[name]
+            return json.dumps({"reasoning": "二轮选择。", "sheriff_vote": choice}, ensure_ascii=False)
         if '"sheriff_vote"' in prompt:
-            self.actions.append("sheriff_vote")
-            return json.dumps(
-                {"reasoning": "选择最适合带队的人。", "sheriff_vote": self.sheriff_vote_target},
-                ensure_ascii=False,
-            )
+            self.actions.append(("sheriff_vote", name))
+            choice = self.sheriff_vote_targets[name]
+            return json.dumps({"reasoning": "选择最适合带队的人。", "sheriff_vote": choice}, ensure_ascii=False)
         if '"speech_order"' in prompt:
-            self.actions.append("speech_order")
+            self.actions.append(("speech_order", name))
             return json.dumps(
                 {"reasoning": "让关键位置最后归票。", "speech_order": self.speech_order_choice},
                 ensure_ascii=False,
             )
         if '"badge"' in prompt:
-            self.actions.append("sheriff_badge")
+            self.actions.append(("sheriff_badge", name))
             options = _extract_options(prompt)
             choice = self.badge_choice if self.badge_choice in options else "撕毁警徽"
-            return json.dumps(
-                {"reasoning": "把警徽交给更可信的人。", "badge": choice},
-                ensure_ascii=False,
-            )
+            return json.dumps({"reasoning": "处理警徽。", "badge": choice}, ensure_ascii=False)
         if '"vote"' in prompt:
             options = _extract_options(prompt)
             living_players = _extract_living_players(prompt)
@@ -124,7 +142,7 @@ class SheriffFlowProvider(ScriptedChineseProvider):
                     choice = options[0] if options else "1"
             else:
                 choice = options[0] if options else "1"
-            return json.dumps({"reasoning": "测试中分散放逐票。", "vote": choice}, ensure_ascii=False)
+            return json.dumps({"reasoning": "测试放逐票。", "vote": choice}, ensure_ascii=False)
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
@@ -1137,7 +1155,9 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
     second_candidate = active_players[1]
     provider = SheriffFlowProvider(
         candidates={sheriff, second_candidate},
-        sheriff_vote_target=sheriff,
+        sheriff_vote_targets={
+            name: sheriff for name in active_players if name not in {sheriff, second_candidate}
+        },
         speech_order_choice="警左发言",
     )
     round_state = RoundState(number=1, players=active_players.copy())
@@ -1156,6 +1176,142 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
     assert round_log.sheriff_run
     assert round_log.sheriff_votes
     assert round_log.speech_order is not None
+
+
+def test_sheriff_election_limits_speeches_to_candidates_and_votes_to_off_sheriff_players() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_sheriff_rights",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=56,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    first_candidate = active_players[0]
+    withdrawn_candidate = active_players[1]
+    voter = active_players[2]
+    provider = SheriffFlowProvider(
+        candidates={first_candidate, withdrawn_candidate},
+        withdraw={withdrawn_candidate},
+        sheriff_vote_targets={name: first_candidate for name in active_players[2:]},
+        speech_order_choice="警左发言",
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.sheriff_candidates == [first_candidate, withdrawn_candidate]
+    assert [entry["speaker"] for entry in round_state.sheriff_speeches] == [
+        first_candidate,
+        withdrawn_candidate,
+    ]
+    assert round_state.sheriff_withdrawn == [withdrawn_candidate]
+    assert round_state.sheriff_final_candidates == [first_candidate]
+    assert round_state.sheriff_voters == active_players[2:]
+    assert round_state.sheriff_votes == {}
+    assert round_state.sheriff_elected == first_candidate
+    assert state.sheriff == first_candidate
+    assert ("sheriff_speech", voter) not in provider.actions
+    assert ("sheriff_vote", first_candidate) not in provider.actions
+    assert ("sheriff_vote", withdrawn_candidate) not in provider.actions
+    assert any(entry.speaker == withdrawn_candidate for entry in round_state.debate)
+    assert any(vote.actor == withdrawn_candidate for vote in round_log.votes[0])
+
+
+def test_sheriff_election_runs_pk_and_runoff_when_first_vote_ties() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_sheriff_pk",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=57,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    first_candidate = active_players[0]
+    second_candidate = active_players[1]
+    off_sheriff = active_players[2:]
+    first_round_votes = {
+        name: first_candidate if index % 2 == 0 else second_candidate
+        for index, name in enumerate(off_sheriff)
+    }
+    runoff_votes = {name: first_candidate for name in off_sheriff}
+    provider = SheriffFlowProvider(
+        candidates={first_candidate, second_candidate},
+        sheriff_vote_targets=first_round_votes,
+        runoff_vote_targets=runoff_votes,
+        speech_order_choice="警左发言",
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.sheriff_pk_candidates == [first_candidate, second_candidate]
+    assert [entry["speaker"] for entry in round_state.sheriff_pk_speeches] == [
+        first_candidate,
+        second_candidate,
+    ]
+    assert round_state.sheriff_runoff_votes == runoff_votes
+    assert round_state.sheriff_elected == first_candidate
+    assert state.sheriff == first_candidate
+
+
+def test_sheriff_badge_is_lost_when_no_candidates_remain_after_withdraw() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_sheriff_all_withdraw",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=58,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    candidate = active_players[0]
+    provider = SheriffFlowProvider(
+        candidates={candidate},
+        withdraw={candidate},
+        sheriff_vote_targets={name: candidate for name in active_players[1:]},
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.sheriff_final_candidates == []
+    assert round_state.sheriff_badge_lost is True
+    assert state.sheriff is None
+    assert round_state.speech_order == active_players
+
+
+def test_sheriff_badge_is_lost_when_all_players_run_and_multiple_candidates_remain() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_sheriff_no_voters",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=59,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    provider = SheriffFlowProvider(
+        candidates=set(active_players),
+        sheriff_vote_targets={},
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.sheriff_voters == []
+    assert round_state.sheriff_badge_lost is True
+    assert state.sheriff is None
 
 
 def test_sheriff_vote_counts_as_one_and_half_votes() -> None:
@@ -1241,7 +1397,7 @@ def test_dead_sheriff_can_transfer_badge() -> None:
     state.player_by_name()[old_sheriff].is_sheriff = True
     provider = SheriffFlowProvider(
         candidates={old_sheriff},
-        sheriff_vote_target=old_sheriff,
+        sheriff_vote_targets={name: old_sheriff for name in active_players if name != old_sheriff},
         badge_choice=new_sheriff,
     )
     round_state = RoundState(number=1, players=active_players.copy())
@@ -1334,7 +1490,7 @@ def test_night_sheriff_badge_cannot_transfer_to_pending_night_death() -> None:
     players_by_name[old_sheriff].is_sheriff = True
     provider = SheriffFlowProvider(
         candidates={old_sheriff},
-        sheriff_vote_target=old_sheriff,
+        sheriff_vote_targets={name: old_sheriff for name in active_players if name != old_sheriff},
         badge_choice=poisoned_player,
     )
     round_state = RoundState(number=1, players=active_players.copy())
