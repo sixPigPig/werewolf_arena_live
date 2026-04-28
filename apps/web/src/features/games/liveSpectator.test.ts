@@ -152,7 +152,7 @@ describe("deriveLiveSpectatorState", () => {
       }),
       event({
         id: 2,
-        type: "state_updated",
+        type: "action_requested",
         round: 1,
         phase: "summary",
         actor: "张三",
@@ -169,6 +169,38 @@ describe("deriveLiveSpectatorState", () => {
     expect(state.players[0]).toMatchObject({
       status: "waiting",
       lastAction: "",
+      lastDetail: "",
+    });
+  });
+
+  it("preserves non-pending action labels without details at terminal", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [{ name: "张三", role: "村民", model: "deepseek-chat" }],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_parsed",
+        actor: "张三",
+        action: "vote",
+        round: 1,
+        phase: "vote",
+        payload: {},
+      }),
+      event({
+        id: 3,
+        type: "game_completed",
+        payload: { winner: "好人阵营" },
+      }),
+    ]);
+
+    expect(state.players[0]).toMatchObject({
+      status: "acted",
+      lastAction: "vote",
       lastDetail: "",
     });
   });

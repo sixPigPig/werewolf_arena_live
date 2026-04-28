@@ -164,10 +164,10 @@ function applyStateUpdate(
 
 function clearPendingPlayerStates(state: MutableLiveSpectatorState) {
   for (const player of state.playersByName.values()) {
-    if (player.status === "thinking" || player.status === "requesting") {
+    const isPending =
+      player.status === "thinking" || player.status === "requesting";
+    if (isPending && !player.lastDetail) {
       player.status = "waiting";
-    }
-    if (!player.lastDetail) {
       player.lastAction = "";
     }
   }
