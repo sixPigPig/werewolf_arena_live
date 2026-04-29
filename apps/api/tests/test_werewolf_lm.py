@@ -122,6 +122,33 @@ class StreamingFakeProvider:
         return self.chunks
 
 
+class CompleteOnlyFakeProvider:
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.calls = 0
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, prompt, temperature
+        self.calls += 1
+        return self.response
+
+
+class FailingStreamProvider:
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, prompt, temperature
+        raise AssertionError("stream_json should be preferred")
+
+    def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+        del model, prompt, temperature
+        raise RuntimeError("boom")
+
+
+class FailingCompleteOnlyProvider:
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, prompt, temperature
+        raise RuntimeError("boom")
+
+
 def test_parse_json_object_accepts_fenced_json() -> None:
     parsed = parse_json_object('```json\n{"reasoning":"观察发言","vote":"老周"}\n```')
 
@@ -274,6 +301,185 @@ def test_generate_action_with_events_suppresses_private_action_deltas() -> None:
     assert log.result == {"reasoning": "夜晚决策", "remove": "Bob"}
     assert log.request_id == "req_private"
     assert [event["type"] for event in sink.events].count("model_response_delta") == 0
+
+
+def test_generate_action_with_events_publishes_started_before_model_output_and_copies_state() -> None:
+    from app.werewolf.lm import generate_action_with_events
+
+    sink = CapturingLmEventSink()
+    world_state = _world_state_for_special_action("村民", "")
+    world_state["observations"] = ["第一条观察"]
+    world_state["seen"] = {"Alice", "Bob"}
+
+    class EventOrderProvider:
+        def __init__(self) -> None:
+            self.event_types_seen_before_output: list[str] = []
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            del model, prompt, temperature
+            raise AssertionError("stream_json should be preferred")
+
+        def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+            del model, prompt, temperature
+            self.event_types_seen_before_output = [event["type"] for event in sink.events]
+            return ['{"reasoning":"试探","say":"我是好人"}']
+
+    provider = EventOrderProvider()
+
+    value, log = generate_action_with_events(
+        provider=provider,
+        action="debate",
+        world_state=world_state,
+        model="deepseek-chat",
+        result_key="say",
+        event_sink=sink,
+        event_context={
+            "round_number": 1,
+            "phase": "day",
+            "actor": "Alice",
+            "action": "debate",
+        },
+        request_id_factory=lambda: "req_started",
+        enable_progress_ticks=False,
+    )
+
+    assert value == "我是好人"
+    assert log.request_id == "req_started"
+    assert provider.event_types_seen_before_output == ["model_request_started"]
+    started = sink.events[0]
+    assert started["type"] == "model_request_started"
+    assert started["payload"]["request_id"] == "req_started"
+    assert started["payload"]["model"] == "deepseek-chat"
+    published_world_state = started["payload"]["world_state"]
+    json.dumps(published_world_state, ensure_ascii=False)
+    assert published_world_state is not world_state
+    assert published_world_state["observations"] == ["第一条观察"]
+    assert isinstance(published_world_state["seen"], str)
+
+    published_world_state["options"] = "__mutated__"
+    published_world_state["observations"].append("__mutated__")
+
+    assert world_state["options"] == ""
+    assert world_state["observations"] == ["第一条观察"]
+
+
+def test_generate_action_with_events_falls_back_to_complete_json_without_stream() -> None:
+    from app.werewolf.lm import generate_action_with_events
+
+    sink = CapturingLmEventSink()
+    provider = CompleteOnlyFakeProvider('{"reasoning":"完整响应","say":"我从完整响应返回"}')
+
+    value, log = generate_action_with_events(
+        provider=provider,
+        action="debate",
+        world_state=_world_state_for_special_action("村民", ""),
+        model="deepseek-chat",
+        result_key="say",
+        event_sink=sink,
+        event_context={
+            "round_number": 1,
+            "phase": "day",
+            "actor": "Alice",
+            "action": "debate",
+        },
+        request_id_factory=lambda: "req_complete",
+        enable_progress_ticks=False,
+    )
+
+    assert value == "我从完整响应返回"
+    assert log.raw_response == '{"reasoning":"完整响应","say":"我从完整响应返回"}'
+    assert log.request_id == "req_complete"
+    assert provider.calls == 1
+    assert [event["type"] for event in sink.events].count("model_response_delta") == 0
+
+
+def test_generate_action_with_events_publishes_failure_and_stops_progress_on_stream_error(
+    monkeypatch,
+) -> None:
+    from app.werewolf.lm import generate_action_with_events
+
+    class FakeProgress:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.started = False
+            self.stopped = False
+            FakeProgress.instances.append(self)
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            self.stopped = True
+
+        def record_delta(self):
+            pass
+
+    monkeypatch.setattr("app.werewolf.lm.ModelRequestProgress", FakeProgress)
+    sink = CapturingLmEventSink()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        generate_action_with_events(
+            provider=FailingStreamProvider(),
+            action="debate",
+            world_state=_world_state_for_special_action("村民", ""),
+            model="deepseek-chat",
+            result_key="say",
+            event_sink=sink,
+            event_context={
+                "round_number": 1,
+                "phase": "day",
+                "actor": "Alice",
+                "action": "debate",
+            },
+            request_id_factory=lambda: "req_stream_fail",
+        )
+
+    assert len(FakeProgress.instances) == 1
+    assert FakeProgress.instances[0].started is True
+    assert FakeProgress.instances[0].stopped is True
+    failed_events = [event for event in sink.events if event["type"] == "model_request_failed"]
+    assert len(failed_events) == 1
+    assert failed_events[0]["payload"] == {
+        "request_id": "req_stream_fail",
+        "model": "deepseek-chat",
+        "error": "boom",
+    }
+
+
+def test_generate_action_with_events_publishes_failure_on_complete_error() -> None:
+    from app.werewolf.lm import generate_action_with_events
+
+    sink = CapturingLmEventSink()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        generate_action_with_events(
+            provider=FailingCompleteOnlyProvider(),
+            action="debate",
+            world_state=_world_state_for_special_action("村民", ""),
+            model="deepseek-chat",
+            result_key="say",
+            event_sink=sink,
+            event_context={
+                "round_number": 1,
+                "phase": "day",
+                "actor": "Alice",
+                "action": "debate",
+            },
+            request_id_factory=lambda: "req_complete_fail",
+            enable_progress_ticks=False,
+        )
+
+    assert [event["type"] for event in sink.events] == [
+        "model_request_started",
+        "model_request_failed",
+    ]
+    assert sink.events[1]["payload"] == {
+        "request_id": "req_complete_fail",
+        "model": "deepseek-chat",
+        "error": "boom",
+    }
 
 
 def test_generate_action_retries_until_allowed_value() -> None:

@@ -213,13 +213,14 @@ def _complete_json_with_optional_stream(
 ) -> str:
     stream_json = getattr(provider, "stream_json", None)
     if callable(stream_json):
-        raw_response = ""
+        raw_chunks: list[str] = []
         visible_field = action_visible_stream_field(action)
         extractor = VisibleJsonFieldExtractor(visible_field) if visible_field else None
         for chunk in stream_json(model=model, prompt=prompt, temperature=temperature):
-            raw_response += chunk
+            raw_chunks.append(chunk)
             if extractor is None:
                 continue
+            raw_response = "".join(raw_chunks)
             visible_text = extractor.update(raw_response)
             if not visible_text:
                 continue
@@ -234,7 +235,7 @@ def _complete_json_with_optional_stream(
                     "visible_text": visible_text,
                 },
             )
-        return raw_response
+        return "".join(raw_chunks)
 
     return provider.complete_json(model=model, prompt=prompt, temperature=temperature)
 
