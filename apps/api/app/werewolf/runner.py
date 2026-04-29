@@ -10,7 +10,7 @@ from app.werewolf.engine import GameEngine, initialize_game_state
 from app.werewolf.live import NullEventSink
 from app.werewolf.logging import save_game
 from app.werewolf.lm import ModelProvider
-from app.werewolf.providers import DeepSeekProvider
+from app.werewolf.providers import create_model_provider, default_model_name
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set
 
 
@@ -29,8 +29,8 @@ class GameRunError(RuntimeError):
 
 def run_game(
     *,
-    villager_model: str = "deepseek-chat",
-    werewolf_model: str = "deepseek-chat",
+    villager_model: str | None = None,
+    werewolf_model: str | None = None,
     seed: int | None = None,
     logs_dir: str | Path = "logs",
     max_rounds: int = DEFAULT_MAX_ROUNDS,
@@ -42,10 +42,13 @@ def run_game(
     session_id = session_id or new_session_id()
     log_directory = Path(logs_dir) / session_id
     rule_set = get_rule_set(rule_set_id)
+    default_model = default_model_name()
+    selected_villager_model = villager_model or default_model
+    selected_werewolf_model = werewolf_model or default_model
     state = initialize_game_state(
         session_id=session_id,
-        villager_model=villager_model,
-        werewolf_model=werewolf_model,
+        villager_model=selected_villager_model,
+        werewolf_model=selected_werewolf_model,
         seed=seed,
         rule_set=rule_set,
     )
@@ -54,7 +57,7 @@ def run_game(
     try:
         engine = GameEngine(
             state=state,
-            provider=provider or DeepSeekProvider(),
+            provider=provider or create_model_provider(),
             max_rounds=max_rounds,
             rule_set=rule_set,
             event_sink=event_sink or NullEventSink(),

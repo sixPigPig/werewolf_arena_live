@@ -7,6 +7,7 @@ from typing import Sequence
 
 import uvicorn
 
+from app.werewolf.providers import default_model_name
 from app.werewolf.runner import GameRunError, run_game
 
 
@@ -21,8 +22,9 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_game_parser = subparsers.add_parser("run-game", help="Run one Werewolf game.")
-    run_game_parser.add_argument("--villager-model", default="deepseek-chat")
-    run_game_parser.add_argument("--werewolf-model", default="deepseek-chat")
+    default_model = default_model_name()
+    run_game_parser.add_argument("--villager-model", default=default_model)
+    run_game_parser.add_argument("--werewolf-model", default=default_model)
     run_game_parser.add_argument("--seed", type=int, default=None)
     run_game_parser.add_argument("--logs-dir", type=Path, default=Path("logs"))
     run_game_parser.add_argument("--max-rounds", type=int, default=8)

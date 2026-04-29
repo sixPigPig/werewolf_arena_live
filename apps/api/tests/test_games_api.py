@@ -149,6 +149,45 @@ def test_create_game_run_accepts_rule_set_id(
     assert captured[0]["rule_set_id"] == "starter_6"
 
 
+def test_create_game_run_defaults_to_minimax_when_only_minimax_key_is_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / ".env").write_text(
+        "#DEEPSEEK_API_KEY=\n"
+        "DEEPSEEK_MODEL=deepseek-chat\n"
+        "MINIMAX_API_KEY=minimax-key\n"
+        "MINIMAX_MODEL=MiniMax-M2.7\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post("/api/v1/games/runs", json={"seed": 21, "max_rounds": 1})
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["villager_model"] == "MiniMax-M2.7"
+    assert payload["werewolf_model"] == "MiniMax-M2.7"
+    assert captured[0]["villager_model"] == "MiniMax-M2.7"
+    assert captured[0]["werewolf_model"] == "MiniMax-M2.7"
+
+
 def test_create_game_run_accepts_event_pacing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

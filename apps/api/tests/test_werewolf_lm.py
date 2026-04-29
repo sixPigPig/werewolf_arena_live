@@ -6,7 +6,12 @@ import pytest
 
 from app.werewolf.lm import FakeProvider, LmLog, generate_action, parse_json_object
 from app.werewolf.prompts_zh import build_prompt
-from app.werewolf.providers import DeepSeekProvider
+from app.werewolf.providers import (
+    DeepSeekProvider,
+    MiniMaxProvider,
+    create_model_provider,
+    default_model_name,
+)
 
 
 def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
@@ -279,10 +284,184 @@ def test_deepseek_provider_raises_clear_error_after_network_retries(monkeypatch)
         )
 
 
+def test_minimax_provider_uses_env_and_reasoning_split(tmp_path, monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    monkeypatch.delenv("MINIMAX_API_HOST", raising=False)
+    monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
+    provider = MiniMaxProvider(transport=fake_transport)
+
+    raw = provider.complete_json(
+        model="MiniMax-M2.7",
+        prompt='请输出 json：{"vote":"老周"}',
+        temperature=0.3,
+    )
+
+    assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
+    assert requests[0]["url"] == "https://api.minimax.io/v1/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer minimax-key"
+    assert requests[0]["payload"]["model"] == "MiniMax-M2.7"
+    assert requests[0]["payload"]["reasoning_split"] is True
+    assert "response_format" not in requests[0]["payload"]
+
+
+def test_minimax_provider_accepts_mainland_api_host(monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    monkeypatch.setenv("MINIMAX_API_HOST", "https://api.minimaxi.com")
+    monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
+    provider = MiniMaxProvider(transport=fake_transport)
+
+    provider.complete_json(
+        model="MiniMax-M2.7",
+        prompt='请输出 json：{"vote":"老周"}',
+        temperature=0.3,
+    )
+
+    assert requests[0]["url"] == "https://api.minimaxi.com/v1/chat/completions"
+
+
+def test_minimax_provider_explains_invalid_key_region_mismatch(monkeypatch) -> None:
+    def failing_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        del url, headers, payload
+        raise urllib.error.HTTPError(
+            url="https://api.minimax.io/v1/chat/completions",
+            code=401,
+            msg="Unauthorized",
+            hdrs={},
+            fp=None,
+        )
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    provider = MiniMaxProvider(transport=failing_transport)
+
+    with pytest.raises(RuntimeError, match="MINIMAX_BASE_URL"):
+        provider.complete_json(model="MiniMax-M2.7", prompt="{}", temperature=0.3)
+
+
+def test_model_provider_router_routes_minimax_without_deepseek_key(tmp_path, monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    monkeypatch.delenv("MINIMAX_API_HOST", raising=False)
+    monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
+
+    provider = create_model_provider(transport=fake_transport)
+    raw = provider.complete_json(
+        model="MiniMax-M2.7",
+        prompt='请输出 json：{"vote":"老周"}',
+        temperature=0.3,
+    )
+
+    assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
+    assert requests[0]["url"] == "https://api.minimax.io/v1/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer minimax-key"
+
+
+def test_model_provider_router_routes_deepseek_models(monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+
+    provider = create_model_provider(transport=fake_transport)
+    provider.complete_json(
+        model="deepseek-chat",
+        prompt='请输出 json：{"vote":"老周"}',
+        temperature=0.3,
+    )
+
+    assert requests[0]["url"] == "https://api.deepseek.com/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer deepseek-key"
+    assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
+
+
+def test_model_provider_router_reports_unknown_models(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+
+    provider = create_model_provider(transport=lambda _url, _headers, _payload: {})
+
+    with pytest.raises(RuntimeError, match="No provider registered for model unknown-model"):
+        provider.complete_json(model="unknown-model", prompt="{}", temperature=0.3)
+
+
+def test_default_model_name_uses_minimax_when_only_minimax_key_is_configured(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    (tmp_path / ".env").write_text(
+        "#DEEPSEEK_API_KEY=\n"
+        "DEEPSEEK_MODEL=deepseek-chat\n"
+        "MINIMAX_API_KEY=minimax-key\n"
+        "MINIMAX_MODEL=MiniMax-M2.7\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+
+    assert default_model_name() == "MiniMax-M2.7"
+
+
 def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
     example = os.path.join(os.path.dirname(__file__), "..", ".env.example")
 
     with open(example, encoding="utf-8") as file:
         contents = file.read()
 
+    assert "WEREWOLF_DEFAULT_MODEL=\n" in contents
     assert "DEEPSEEK_API_KEY=\n" in contents
+    assert "MINIMAX_API_KEY=\n" in contents

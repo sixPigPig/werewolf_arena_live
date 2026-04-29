@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.werewolf.live import EventSink, LiveEvent, LiveRunRegistry, format_sse
 from app.werewolf.pacing import EventPacer, EventPacingMode
+from app.werewolf.providers import default_model_name
 from app.werewolf.replay import ReplayNotFoundError, ReplayStore
 from app.werewolf.rules import (
     DEFAULT_RULE_SET_ID,
@@ -25,8 +26,8 @@ live_registry = LiveRunRegistry()
 
 
 class CreateGameRunRequest(BaseModel):
-    villager_model: str = "deepseek-chat"
-    werewolf_model: str = "deepseek-chat"
+    villager_model: str = Field(default_factory=default_model_name)
+    werewolf_model: str = Field(default_factory=default_model_name)
     seed: int | None = None
     max_rounds: int = Field(default=8, ge=1, le=20)
     rule_set_id: str = DEFAULT_RULE_SET_ID

@@ -493,6 +493,34 @@ def test_run_game_with_deepseek_models_writes_complete_chinese_logs(tmp_path) ->
     assert "我认为" in state["rounds"][0]["debate"][0]["message"]
 
 
+def test_run_game_defaults_to_minimax_when_only_minimax_key_is_configured(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    (tmp_path / ".env").write_text(
+        "#DEEPSEEK_API_KEY=\n"
+        "DEEPSEEK_MODEL=deepseek-chat\n"
+        "MINIMAX_API_KEY=minimax-key\n"
+        "MINIMAX_MODEL=MiniMax-M2.7\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+
+    result = run_game(
+        logs_dir=tmp_path / "logs",
+        seed=7,
+        max_rounds=8,
+        provider=ScriptedChineseProvider(),
+    )
+
+    state = json.loads((result.log_directory / "game_complete.json").read_text())
+
+    assert {player["model"] for player in state["players"]} == {"MiniMax-M2.7"}
+
+
 def test_run_game_is_reproducible_for_same_seed(tmp_path) -> None:
     first = run_game(
         logs_dir=tmp_path / "first",

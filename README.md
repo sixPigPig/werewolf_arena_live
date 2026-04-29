@@ -89,7 +89,13 @@ http://127.0.0.1:5173
 4. 实时观战页会展示玩家列表、当前聚焦玩家、原始事件侧栏。
 5. 对局结束后点击“查看完整复盘”进入 `/games/<session_id>`。
 
-运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。
+运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。当前内置
+DeepSeek 和 MiniMax；如果 `WEREWOLF_DEFAULT_MODEL` 为空，后端会从已配置 API key 的
+provider 中选择默认模型。只配置 MiniMax key 时，默认对局模型会自动使用
+`MINIMAX_MODEL`，也可以在 CLI 或 API 请求中显式传入 `MiniMax-M2.7` 这类模型名。
+MiniMax key 需要和 host 区域匹配：大陆 key 使用 `https://api.minimaxi.com/v1`，Global
+key 使用 `https://api.minimax.io/v1`。新增 OpenAI-compatible 厂商时，优先在
+`apps/api/app/werewolf/providers.py` 增加 provider config。
 
 ## 质量检查
 
