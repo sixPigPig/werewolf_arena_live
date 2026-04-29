@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 PUBLIC_STREAM_FIELD_BY_ACTION = {
     "debate": "say",
@@ -10,8 +14,118 @@ PUBLIC_STREAM_FIELD_BY_ACTION = {
 }
 
 
+class ProgressEventSink(Protocol):
+    def publish(
+        self,
+        event_type: str,
+        *,
+        round_number: int | None = None,
+        phase: str | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> object:
+        pass
+
+
+@dataclass(frozen=True)
+class ModelEventContext:
+    round_number: int | None
+    phase: str | None
+    actor: str | None
+    action: str | None
+
+
+class ModelRequestProgress:
+    def __init__(
+        self,
+        *,
+        event_sink: ProgressEventSink,
+        context: ModelEventContext,
+        request_id: str,
+        model: str,
+        message: str,
+        tick_interval: float = 2.0,
+        delta_suppression_seconds: float = 1.0,
+    ) -> None:
+        self.event_sink = event_sink
+        self.context = context
+        self.request_id = request_id
+        self.model = model
+        self.message = message
+        self.tick_interval = tick_interval
+        self.delta_suppression_seconds = delta_suppression_seconds
+        self._started_at = time.monotonic()
+        self._last_delta_at: float | None = None
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._started_at = time.monotonic()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def record_delta(self) -> None:
+        with self._lock:
+            self._last_delta_at = time.monotonic()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(0.1, self.tick_interval + 0.1))
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self.tick_interval):
+            now = time.monotonic()
+            if self._should_suppress_tick(now):
+                continue
+            self.event_sink.publish(
+                "model_thinking_tick",
+                round_number=self.context.round_number,
+                phase=self.context.phase,
+                actor=self.context.actor,
+                action=self.context.action,
+                payload={
+                    "request_id": self.request_id,
+                    "model": self.model,
+                    "elapsed_ms": int((now - self._started_at) * 1000),
+                    "message": self.message,
+                },
+            )
+
+    def _should_suppress_tick(self, now: float) -> bool:
+        with self._lock:
+            last_delta_at = self._last_delta_at
+        return (
+            last_delta_at is not None
+            and now - last_delta_at < self.delta_suppression_seconds
+        )
+
+
 def action_visible_stream_field(action: str) -> str | None:
     return PUBLIC_STREAM_FIELD_BY_ACTION.get(action)
+
+
+def waiting_message_for_action(action: str) -> str:
+    if action in {"debate", "sheriff_speech", "sheriff_pk_speech"}:
+        return "玩家正在组织公开发言..."
+    if action == "summarize":
+        return "正在整理本轮总结..."
+    if action in {"vote", "sheriff_vote", "sheriff_runoff_vote"}:
+        return "玩家正在权衡投票选择..."
+    if action in {
+        "investigate",
+        "remove",
+        "protect",
+        "witch_save",
+        "witch_poison",
+        "hunter_shoot",
+    }:
+        return "夜晚行动正在秘密决策..."
+    return "模型正在思考下一步行动..."
 
 
 class VisibleJsonFieldExtractor:

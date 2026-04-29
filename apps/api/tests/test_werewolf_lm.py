@@ -98,6 +98,30 @@ def _world_state_for_special_action(role: str, options: str) -> dict[str, object
     }
 
 
+class CapturingLmEventSink:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def publish(self, event_type: str, **kwargs: object) -> None:
+        self.events.append({"type": event_type, **kwargs})
+
+
+class StreamingFakeProvider:
+    def __init__(self, chunks: list[str]) -> None:
+        self.chunks = chunks
+        self.calls = 0
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, prompt, temperature
+        self.calls += 1
+        return "".join(self.chunks)
+
+    def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+        del model, prompt, temperature
+        self.calls += 1
+        return self.chunks
+
+
 def test_parse_json_object_accepts_fenced_json() -> None:
     parsed = parse_json_object('```json\n{"reasoning":"观察发言","vote":"老周"}\n```')
 
@@ -184,6 +208,72 @@ def test_extract_openai_chat_delta_preserves_content_before_done_in_same_chunk()
     ).encode("utf-8")
 
     assert extract_openai_chat_delta(chunk) == "结束前"
+
+
+def test_generate_action_with_events_streams_public_visible_text() -> None:
+    from app.werewolf.lm import generate_action_with_events
+
+    sink = CapturingLmEventSink()
+    provider = StreamingFakeProvider(
+        ['{"reasoning":"试探",', '"say":"我', "不是", '狼"}']
+    )
+
+    value, log = generate_action_with_events(
+        provider=provider,
+        action="debate",
+        world_state=_world_state_for_special_action("村民", ""),
+        model="deepseek-chat",
+        allowed_values=None,
+        result_key="say",
+        event_sink=sink,
+        event_context={
+            "round_number": 1,
+            "phase": "day",
+            "actor": "Alice",
+            "action": "debate",
+        },
+        request_id_factory=lambda: "req_public",
+        enable_progress_ticks=False,
+    )
+
+    assert value == "我不是狼"
+    assert log.raw_response == '{"reasoning":"试探","say":"我不是狼"}'
+    assert log.request_id == "req_public"
+    delta_events = [event for event in sink.events if event["type"] == "model_response_delta"]
+    assert [event["payload"]["visible_text"] for event in delta_events] == ["我", "不是", "狼"]
+    assert all(event["payload"]["request_id"] == "req_public" for event in delta_events)
+
+
+def test_generate_action_with_events_suppresses_private_action_deltas() -> None:
+    from app.werewolf.lm import generate_action_with_events
+
+    sink = CapturingLmEventSink()
+    provider = StreamingFakeProvider(
+        ['{"reasoning":"夜晚决策",', '"remove":"Bob"}']
+    )
+
+    value, log = generate_action_with_events(
+        provider=provider,
+        action="remove",
+        world_state=_world_state_for_special_action("狼人", "Bob、Carol"),
+        model="deepseek-chat",
+        allowed_values=["Bob", "Carol"],
+        result_key="remove",
+        event_sink=sink,
+        event_context={
+            "round_number": 1,
+            "phase": "night",
+            "actor": "Alice",
+            "action": "remove",
+        },
+        request_id_factory=lambda: "req_private",
+        enable_progress_ticks=False,
+    )
+
+    assert value == "Bob"
+    assert log.result == {"reasoning": "夜晚决策", "remove": "Bob"}
+    assert log.request_id == "req_private"
+    assert [event["type"] for event in sink.events].count("model_response_delta") == 0
 
 
 def test_generate_action_retries_until_allowed_value() -> None:
