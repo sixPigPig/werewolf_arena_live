@@ -113,7 +113,7 @@ def _decode_json_string_prefix(raw_value: str) -> str:
 
 def extract_openai_chat_delta(chunk: bytes) -> str | None:
     text = chunk.decode("utf-8", errors="replace").strip()
-    if not text or text.startswith(":"):
+    if not text:
         return None
 
     for line in text.splitlines():
@@ -126,16 +126,16 @@ def extract_openai_chat_delta(chunk: bytes) -> str | None:
         try:
             payload = json.loads(data)
         except json.JSONDecodeError:
-            return None
+            continue
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices:
-            return None
+            continue
         first_choice = choices[0]
         if not isinstance(first_choice, dict):
-            return None
+            continue
         delta = first_choice.get("delta")
         if not isinstance(delta, dict):
-            return None
+            continue
         content = delta.get("content")
         if isinstance(content, str) and content:
             return content
