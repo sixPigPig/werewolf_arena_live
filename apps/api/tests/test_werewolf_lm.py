@@ -13,6 +13,11 @@ from app.werewolf.providers import (
     create_model_provider,
     default_model_name,
 )
+from app.werewolf.streaming import (
+    VisibleJsonFieldExtractor,
+    action_visible_stream_field,
+    extract_openai_chat_delta,
+)
 
 
 def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
@@ -97,6 +102,42 @@ def test_parse_json_object_accepts_fenced_json() -> None:
     parsed = parse_json_object('```json\n{"reasoning":"观察发言","vote":"老周"}\n```')
 
     assert parsed == {"reasoning": "观察发言", "vote": "老周"}
+
+
+def test_visible_json_field_extractor_streams_only_new_public_text() -> None:
+    extractor = VisibleJsonFieldExtractor("say")
+
+    assert extractor.update('{"reasoning":"先观察",') == ""
+    assert extractor.update('{"reasoning":"先观察","say":"我') == "我"
+    assert extractor.update('{"reasoning":"先观察","say":"我不是') == "不是"
+    assert extractor.update('{"reasoning":"先观察","say":"我不是狼"}') == "狼"
+    assert extractor.update('{"reasoning":"先观察","say":"我不是狼"}') == ""
+
+
+def test_visible_json_field_extractor_decodes_escaped_text() -> None:
+    extractor = VisibleJsonFieldExtractor("summary")
+
+    assert extractor.update('{"summary":"第一行\\n') == "第一行"
+    assert extractor.update('{"summary":"第一行\\n第二行"}') == "\n第二行"
+
+
+def test_action_visible_stream_field_only_allows_public_actions() -> None:
+    assert action_visible_stream_field("debate") == "say"
+    assert action_visible_stream_field("sheriff_speech") == "say"
+    assert action_visible_stream_field("sheriff_pk_speech") == "say"
+    assert action_visible_stream_field("summarize") == "summary"
+    assert action_visible_stream_field("vote") is None
+    assert action_visible_stream_field("remove") is None
+
+
+def test_extract_openai_chat_delta_reads_compatible_sse_chunks() -> None:
+    chunk = ('data: {"choices":[{"delta":{"content":"我不是狼"}}]}\n\n').encode(
+        "utf-8"
+    )
+
+    assert extract_openai_chat_delta(chunk) == "我不是狼"
+    assert extract_openai_chat_delta(b"data: [DONE]\n\n") is None
+    assert extract_openai_chat_delta(b": heartbeat\n\n") is None
 
 
 def test_generate_action_retries_until_allowed_value() -> None:
