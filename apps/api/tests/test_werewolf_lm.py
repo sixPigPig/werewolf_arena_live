@@ -308,6 +308,102 @@ def test_openai_compatible_provider_streams_chat_deltas(monkeypatch) -> None:
     assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
 
 
+def test_openai_compatible_provider_stream_wraps_http_error_with_guidance(monkeypatch) -> None:
+    def failing_stream_transport(url: str, headers: dict[str, str], payload: dict) -> list[str]:
+        del headers, payload
+        raise urllib.error.HTTPError(
+            url=url,
+            code=401,
+            msg="Unauthorized",
+            hdrs={},
+            fp=None,
+        )
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    provider = MiniMaxProvider(stream_transport=failing_stream_transport)
+
+    with pytest.raises(RuntimeError, match="MINIMAX_BASE_URL"):
+        list(provider.stream_json(model="MiniMax-M2.7", prompt="{}", temperature=0.3))
+
+
+def test_openai_compatible_provider_stream_retries_pre_yield_network_error(monkeypatch) -> None:
+    attempts = []
+    sleep_calls = []
+
+    def flaky_stream_transport(url: str, headers: dict[str, str], payload: dict) -> list[str]:
+        attempts.append({"url": url, "headers": headers, "payload": payload})
+        if len(attempts) == 1:
+            raise urllib.error.URLError(ConnectionResetError(54, "Connection reset by peer"))
+        return ["重试", "成功"]
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    provider = DeepSeekProvider(
+        stream_transport=flaky_stream_transport,
+        sleep=sleep_calls.append,
+    )
+
+    assert list(provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3)) == [
+        "重试",
+        "成功",
+    ]
+    assert len(attempts) == 2
+    assert sleep_calls == [0.25]
+
+
+def test_openai_compatible_provider_stream_does_not_retry_after_yield(monkeypatch) -> None:
+    attempts = []
+
+    def flaky_stream_transport(url: str, headers: dict[str, str], payload: dict):
+        attempts.append({"url": url, "headers": headers, "payload": payload})
+        yield "已经输出"
+        raise urllib.error.URLError(ConnectionResetError(54, "Connection reset by peer"))
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    provider = DeepSeekProvider(
+        stream_transport=flaky_stream_transport,
+        sleep=lambda _seconds: None,
+    )
+    chunks = provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3)
+
+    assert next(chunks) == "已经输出"
+    with pytest.raises(RuntimeError, match="DeepSeek streaming request failed after partial output"):
+        next(chunks)
+    assert len(attempts) == 1
+
+
+def test_urlopen_stream_transport_yields_sse_deltas(monkeypatch) -> None:
+    requests = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            del exc_type, exc, traceback
+
+        def __iter__(self):
+            return iter(
+                [
+                    'data: {"choices":[{"delta":{"content":"我"}}]}\n\n'.encode("utf-8"),
+                    'data: {"choices":[{"delta":{"content":"不是狼"}}]}\n\n'.encode("utf-8"),
+                    b"data: [DONE]\n\n",
+                ]
+            )
+
+    def fake_urlopen(request, timeout: int):
+        requests.append({"request": request, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    provider = DeepSeekProvider()
+
+    chunks = list(provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3))
+
+    assert chunks == ["我", "不是狼"]
+    assert requests[0]["timeout"] == 120
+
+
 def test_deepseek_provider_requires_api_key(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -662,6 +758,15 @@ def test_model_provider_router_reports_unknown_models(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="No provider registered for model unknown-model"):
         provider.complete_json(model="unknown-model", prompt="{}", temperature=0.3)
+
+
+def test_model_provider_router_stream_reports_unknown_models(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+
+    provider = create_model_provider(stream_transport=lambda _url, _headers, _payload: [])
+
+    with pytest.raises(RuntimeError, match="No provider registered for model unknown-model"):
+        provider.stream_json(model="unknown-model", prompt="{}", temperature=0.3)
 
 
 def test_default_model_name_uses_minimax_when_only_minimax_key_is_configured(

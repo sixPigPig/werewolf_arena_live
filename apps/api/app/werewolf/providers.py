@@ -118,7 +118,7 @@ class OpenAICompatibleProvider:
         payload = self._chat_payload(model=model, prompt=prompt, temperature=temperature)
         payload["stream"] = True
         headers = self._headers()
-        return self.stream_transport(f"{self.base_url}/chat/completions", headers, payload)
+        return self._stream_with_retries(f"{self.base_url}/chat/completions", headers, payload)
 
     def _chat_payload(self, *, model: str, prompt: str, temperature: float) -> dict[str, Any]:
         payload = {
@@ -165,6 +165,37 @@ class OpenAICompatibleProvider:
 
         raise RuntimeError(
             f"{self.config.name} network request failed after "
+            f"{self.max_retries} attempts: {last_error}"
+        ) from last_error
+
+    def _stream_with_retries(
+        self,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+    ) -> Any:
+        last_error: Exception | None = None
+        yielded_any = False
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                for chunk in self.stream_transport(url, headers, payload):
+                    yielded_any = True
+                    yield chunk
+                return
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(_http_error_message(self.config, url, exc)) from exc
+            except (urllib.error.URLError, TimeoutError, ConnectionResetError, OSError) as exc:
+                last_error = exc
+                if yielded_any:
+                    raise RuntimeError(
+                        f"{self.config.name} streaming request failed after partial output: {exc}"
+                    ) from exc
+                if attempt == self.max_retries:
+                    break
+                self.sleep(min(2.0, 0.25 * attempt))
+
+        raise RuntimeError(
+            f"{self.config.name} streaming request failed after "
             f"{self.max_retries} attempts: {last_error}"
         ) from last_error
 
