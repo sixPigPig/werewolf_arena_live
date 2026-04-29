@@ -793,7 +793,41 @@ def test_urlopen_stream_transport_yields_sse_deltas(monkeypatch) -> None:
     chunks = list(provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3))
 
     assert chunks == ["我", "不是狼"]
-    assert requests[0]["timeout"] == 120
+    assert requests[0]["timeout"] == 30
+
+
+def test_urlopen_stream_transport_times_out_when_stream_has_no_content(
+    monkeypatch,
+) -> None:
+    monotonic_values = iter([0.0, 30.0, 61.0])
+    requests = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            del exc_type, exc, traceback
+
+        def __iter__(self):
+            return iter([b": heartbeat\n\n", b": heartbeat\n\n"])
+
+    def fake_urlopen(request, timeout: int):
+        requests.append(request)
+        assert timeout == 30
+        return FakeResponse()
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "app.werewolf.providers.time.monotonic",
+        lambda: next(monotonic_values),
+    )
+    provider = DeepSeekProvider(max_retries=3)
+
+    with pytest.raises(RuntimeError, match="no content"):
+        list(provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3))
+    assert len(requests) == 1
 
 
 def test_deepseek_provider_requires_api_key(tmp_path, monkeypatch) -> None:

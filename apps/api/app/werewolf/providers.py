@@ -16,6 +16,14 @@ Transport = Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]]
 StreamTransport = Callable[[str, dict[str, str], dict[str, Any]], Any]
 Sleep = Callable[[float], None]
 
+STREAM_SOCKET_TIMEOUT_SECONDS = 30
+STREAM_NO_CONTENT_TIMEOUT_SECONDS = 60
+STREAM_TOTAL_TIMEOUT_SECONDS = 180
+
+
+class StreamStalledError(RuntimeError):
+    pass
+
 
 class ProviderLike(Protocol):
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
@@ -459,11 +467,25 @@ def _urlopen_stream_transport(
 ) -> Any:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=120) as response:
+    started_at = time.monotonic()
+    last_content_at = started_at
+    with urllib.request.urlopen(request, timeout=STREAM_SOCKET_TIMEOUT_SECONDS) as response:
         for line in response:
+            now = time.monotonic()
+            if now - started_at > STREAM_TOTAL_TIMEOUT_SECONDS:
+                raise StreamStalledError(
+                    f"streaming response exceeded {STREAM_TOTAL_TIMEOUT_SECONDS} seconds"
+                )
             delta = extract_openai_chat_delta(line)
             if delta is not None:
+                last_content_at = now
                 yield delta
+                continue
+            if now - last_content_at > STREAM_NO_CONTENT_TIMEOUT_SECONDS:
+                raise StreamStalledError(
+                    "streaming response produced no content for "
+                    f"{STREAM_NO_CONTENT_TIMEOUT_SECONDS} seconds"
+                )
 
 
 def _load_dotenv(path: Path, *, prefixes: tuple[str, ...] | None = None) -> dict[str, str]:
