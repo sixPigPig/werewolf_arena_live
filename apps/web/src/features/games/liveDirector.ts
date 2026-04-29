@@ -33,7 +33,12 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
         continue;
       }
 
-      requestCue.visibleText += stringField(payload, "visible_text");
+      const visibleText = stringField(payload, "visible_text");
+      if (!visibleText) {
+        continue;
+      }
+
+      requestCue.visibleText += visibleText;
       const actor = event.actor || requestCue.cue.actor || "未知玩家";
       const body = `${actor}：${requestCue.visibleText}`;
       requestCue.cue.title = `${actor} 正在发言`;
@@ -46,7 +51,7 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
 
     if (event.type === "model_thinking_tick") {
       const requestCue = requestId ? requestCueById.get(requestId) : undefined;
-      if (!requestCue || requestCue.cue.body) {
+      if (!requestCue || requestCue.visibleText) {
         continue;
       }
 
@@ -428,10 +433,10 @@ function thinkingTickBody(payload: Record<string, unknown>): string {
     return "";
   }
 
-  const elapsedSeconds = numberField(payload, "elapsed_seconds");
-  return elapsedSeconds === null
+  const elapsedMs = numberField(payload, "elapsed_ms");
+  return elapsedMs === null
     ? message
-    : `${message}（${elapsedSeconds}s）`;
+    : `${message}（${Math.round(elapsedMs / 1000)} 秒）`;
 }
 
 function longTextDuration(text: string): number {

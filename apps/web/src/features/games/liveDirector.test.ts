@@ -240,4 +240,102 @@ describe("toDirectorCue", () => {
       compressible: false,
     });
   });
+
+  it("coalesces thinking ticks with elapsed milliseconds into the matching request cue", () => {
+    const cues = buildDirectorCues([
+      event({
+        id: 2,
+        type: "model_request_started",
+        actor: "张三",
+        action: "debate",
+        payload: { request_id: "req_123", model: "deepseek-chat" },
+      }),
+      event({
+        id: 3,
+        type: "model_thinking_tick",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          message: "正在组织发言",
+          elapsed_ms: 3200,
+        },
+      }),
+    ]);
+
+    expect(cues).toHaveLength(1);
+    expect(cues[0]).toMatchObject({
+      eventId: 2,
+      body: "正在组织发言（3 秒）",
+    });
+  });
+
+  it("ignores orphan streaming deltas and thinking ticks", () => {
+    const cues = buildDirectorCues([
+      event({
+        id: 3,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_missing",
+          visible_text: "我不是狼",
+        },
+      }),
+      event({
+        id: 4,
+        type: "model_thinking_tick",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_missing",
+          message: "正在思考",
+          elapsed_ms: 1000,
+        },
+      }),
+    ]);
+
+    expect(cues).toHaveLength(0);
+  });
+
+  it("ignores empty streaming deltas without promoting the request cue", () => {
+    const cues = buildDirectorCues([
+      event({
+        id: 2,
+        type: "model_request_started",
+        actor: "张三",
+        action: "debate",
+        payload: { request_id: "req_123", model: "deepseek-chat" },
+      }),
+      event({
+        id: 3,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          visible_text: "",
+        },
+      }),
+      event({
+        id: 4,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          visible_text: 42,
+        },
+      }),
+    ]);
+
+    expect(cues).toHaveLength(1);
+    expect(cues[0]).toMatchObject({
+      eventId: 2,
+      title: "张三 请求模型",
+      body: "deepseek-chat",
+      importance: "action",
+      compressible: true,
+    });
+  });
 });
