@@ -84,6 +84,64 @@ describe("normalizeGameReplay", () => {
     });
   });
 
+  it("omits no-op sheriff badge debug items", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        players: [
+          { name: "Mason", role: "村民", model: "deepseek-chat" },
+          { name: "Bert", role: "狼人", model: "deepseek-chat" },
+        ],
+        rounds: [
+          {
+            number: 1,
+            players: ["Mason", "Bert"],
+            eliminated: null,
+            protected: null,
+            investigated: null,
+            exiled: "Bert",
+            day_deaths: [{ player: "Bert", cause: "vote_exile", source: "投票" }],
+            sheriff: "Mason",
+            sheriff_badge_target: "Mason",
+            debate: [],
+            bids: [],
+            votes: [],
+            summaries: {},
+            success: true,
+          },
+        ],
+      },
+      logs: [
+        {
+          number: 1,
+          eliminate: null,
+          protect: null,
+          investigate: null,
+          sheriff_badge: {
+            actor: "Mason",
+            action: "sheriff_badge",
+            options: ["Mason", "撕毁警徽"],
+            choice: "移交给 Mason",
+            lm_log: {
+              prompt: "请选择警徽处理方式。",
+              raw_response: '{"badge":"Mason"}',
+              result: { badge: "Mason" },
+            },
+          },
+          bid: [],
+          debate: [],
+          votes: [],
+          summaries: [],
+        },
+      ],
+    });
+
+    expect(
+      replay.debugItems.some((item) => item.action === "sheriff_badge"),
+    ).toBe(false);
+  });
+
   it("labels guard protection actions with guard terminology", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,

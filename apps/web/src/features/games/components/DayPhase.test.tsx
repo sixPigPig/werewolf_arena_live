@@ -188,6 +188,72 @@ describe("DayPhase", () => {
     ).toBeInTheDocument();
   });
 
+  it("hides sheriff badge handling when the day badge owner does not change", () => {
+    render(
+      <DayPhase
+        round={{
+          ...baseRound,
+          hunter_shot: null,
+          idiot_revealed: null,
+          exiled: "Bert",
+          day_deaths: [{ player: "Bert", cause: "vote_exile", source: "投票" }],
+          sheriff: "Mason",
+          sheriff_badge_target: "Mason",
+          votes: [
+            { voter: "Will", target: "Bert", weight: 1 },
+            { voter: "Mason", target: "Bert", weight: 1.5 },
+          ],
+          voteTally: [{ target: "Bert", count: 2.5 }],
+          voteCount: 2.5,
+          voteMajorityThreshold: 2,
+        }}
+        items={[
+          {
+            ...sheriffBadgeItem,
+            actor: "Mason",
+            choice: "Mason",
+          },
+        ]}
+        selectedItem={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Bert 被放逐")).toBeInTheDocument();
+    expect(screen.getByText("白天死亡：Bert")).toBeInTheDocument();
+    expect(screen.queryByText(/警徽处理/)).not.toBeInTheDocument();
+  });
+
+  it("shows changed sheriff badge handling when the new sheriff is the target", () => {
+    render(
+      <DayPhase
+        round={{
+          ...baseRound,
+          hunter_shot: null,
+          idiot_revealed: null,
+          exiled: "Alice",
+          day_deaths: [{ player: "Alice", cause: "vote_exile", source: "投票" }],
+          sheriff: "Cora",
+          sheriff_badge_target: "Cora",
+          votes: [
+            { voter: "Bob", target: "Alice", weight: 1 },
+            { voter: "Dan", target: "Alice", weight: 1 },
+          ],
+          voteTally: [{ target: "Alice", count: 2 }],
+          voteCount: 2,
+          voteMajorityThreshold: 2,
+        }}
+        items={[]}
+        selectedItem={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Alice 被放逐")).toBeInTheDocument();
+    expect(screen.getByText("白天死亡：Alice")).toBeInTheDocument();
+    expect(screen.getAllByText("警徽处理：移交给 Cora").length).toBeGreaterThan(0);
+  });
+
   it("does not treat a failed sheriff election as an exiled player destroying the badge", () => {
     render(
       <DayPhase

@@ -9,6 +9,7 @@ import type {
   RawRoundLog,
   VoteEntry,
 } from "../types";
+import { isSelfBadgeTransfer } from "../sheriffBadgeDisplay";
 
 const ACTION_TITLES: Record<string, string> = {
   remove: "狼人击杀",
@@ -179,7 +180,11 @@ function debugItemsFromRound(
   stateRound?: RawRoundState,
 ): DebugItem[] {
   const items: DebugItem[] = [];
-  const sheriffBadge = round.sheriff_badge ?? null;
+  const sheriffBadge =
+    round.sheriff_badge &&
+    !isSelfBadgeTransfer(round.sheriff_badge.actor, round.sheriff_badge.choice)
+      ? round.sheriff_badge
+      : null;
   const sheriffBadgePlacement = sheriffBadge
     ? placementForSheriffBadge(sheriffBadge, stateRound)
     : null;

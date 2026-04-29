@@ -1,10 +1,16 @@
-import type { DeathEvent, GameRound, SpeechEntry } from "../types";
+import type { DeathEvent, DebugItem, GameRound, SpeechEntry } from "../types";
+
+import { isSelfBadgeTransfer } from "../sheriffBadgeDisplay";
 
 type SheriffElectionPanelProps = {
+  items?: DebugItem[];
   round: GameRound;
 };
 
-export function SheriffElectionPanel({ round }: SheriffElectionPanelProps) {
+export function SheriffElectionPanel({
+  items = [],
+  round,
+}: SheriffElectionPanelProps) {
   if (!hasSheriffDisplayData(round)) {
     return null;
   }
@@ -37,7 +43,7 @@ export function SheriffElectionPanel({ round }: SheriffElectionPanelProps) {
         <SpeechList title="PK 发言" speeches={round.sheriff_pk_speeches} />
         <VoteList title="二轮投票" votes={round.sheriff_runoff_votes} />
         <ElectionOutcome round={round} />
-        <BadgeStatus round={round} />
+        <BadgeStatus items={items} round={round} />
         <SpeechDirection round={round} />
       </div>
     </section>
@@ -222,16 +228,23 @@ function hasElectionAttempt(round: GameRound) {
   );
 }
 
-function BadgeStatus({ round }: { round: GameRound }) {
-  if (
-    !round.sheriff &&
-    !round.sheriff_badge_target &&
-    !round.sheriff_badge_lost
-  ) {
+function BadgeStatus({
+  items,
+  round,
+}: {
+  items: DebugItem[];
+  round: GameRound;
+}) {
+  const badgeTarget = visibleBadgeTarget(round, items);
+
+  if (!round.sheriff && !badgeTarget && !round.sheriff_badge_lost) {
     return null;
   }
 
-  if (hasBadgeChange(round) && !shouldShowBadgeChangeInElectionPanel(round)) {
+  if (
+    hasBadgeChange(badgeTarget, round) &&
+    !shouldShowBadgeChangeInElectionPanel(round)
+  ) {
     return null;
   }
 
@@ -243,9 +256,9 @@ function BadgeStatus({ round }: { round: GameRound }) {
   return (
     <div className="space-y-2 border-t border-slate-200 pt-3">
       {round.sheriff ? <p>当前警长：{round.sheriff}</p> : null}
-      {round.sheriff_badge_target ? (
+      {badgeTarget ? (
         <p>
-          {badgeTriggerText}警徽处理：移交给 {round.sheriff_badge_target}
+          {badgeTriggerText}警徽处理：移交给 {badgeTarget}
         </p>
       ) : null}
       {round.sheriff_badge_lost ? <p>{lostBadgeText}</p> : null}
@@ -253,8 +266,28 @@ function BadgeStatus({ round }: { round: GameRound }) {
   );
 }
 
-function hasBadgeChange(round: GameRound) {
-  return round.sheriff_badge_target !== null || round.sheriff_badge_lost;
+function visibleBadgeTarget(round: GameRound, items: DebugItem[]) {
+  if (!round.sheriff_badge_target) {
+    return null;
+  }
+
+  if (items.some(isNoopDayBadgeItem)) {
+    return null;
+  }
+
+  return round.sheriff_badge_target;
+}
+
+function isNoopDayBadgeItem(item: DebugItem) {
+  return (
+    item.phase === "day" &&
+    item.action === "sheriff_badge" &&
+    isSelfBadgeTransfer(item.actor, item.choice)
+  );
+}
+
+function hasBadgeChange(badgeTarget: string | null, round: GameRound) {
+  return badgeTarget !== null || round.sheriff_badge_lost;
 }
 
 function shouldShowBadgeChangeInElectionPanel(round: GameRound) {

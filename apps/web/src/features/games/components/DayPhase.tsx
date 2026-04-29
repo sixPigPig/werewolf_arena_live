@@ -1,5 +1,6 @@
 import type { DebugItem, GameRound } from "../types";
 
+import { isSelfBadgeTransfer } from "../sheriffBadgeDisplay";
 import { ActionCard } from "./ActionCard";
 import { BidChart } from "./BidChart";
 import { SheriffElectionPanel } from "./SheriffElectionPanel";
@@ -20,6 +21,8 @@ export function DayPhase({
   selectedItem,
   onSelect,
 }: DayPhaseProps) {
+  const visibleItems = items.filter((item) => !isNoopDayBadgeItem(item));
+
   return (
     <section className="border-t border-slate-200 pt-4">
       <h3 className="text-sm font-semibold text-slate-950">白天</h3>
@@ -35,7 +38,7 @@ export function DayPhase({
         </section>
       ) : null}
 
-      <SheriffElectionPanel round={round} />
+      <SheriffElectionPanel items={items} round={round} />
 
       <section className="mt-4">
         <h4 className="text-xs font-semibold uppercase text-slate-500">
@@ -78,7 +81,7 @@ export function DayPhase({
       </section>
 
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <ActionCard
             item={item}
             key={item.id}
@@ -88,6 +91,14 @@ export function DayPhase({
         ))}
       </div>
     </section>
+  );
+}
+
+function isNoopDayBadgeItem(item: DebugItem) {
+  return (
+    item.phase === "day" &&
+    item.action === "sheriff_badge" &&
+    isSelfBadgeTransfer(item.actor, item.choice)
   );
 }
 
@@ -133,12 +144,19 @@ function hasDayResolution(round: GameRound) {
 
 function sheriffBadgeResolution(round: GameRound, items: DebugItem[]) {
   const badgeItem = items.find(
-    (item) => item.phase === "day" && item.action === "sheriff_badge",
+    (item) =>
+      item.phase === "day" &&
+      item.action === "sheriff_badge" &&
+      !isSelfBadgeTransfer(item.actor, item.choice),
   );
   if (badgeItem?.actor && badgeItem.choice) {
     return `警徽处理：${badgeItem.actor} 选择 ${formatBadgeChoice(
       badgeItem.choice,
     )}`;
+  }
+
+  if (items.some(isNoopDayBadgeItem)) {
+    return null;
   }
 
   if (!round.sheriff_badge_target && !round.sheriff_badge_lost) {
@@ -181,7 +199,7 @@ function sheriffBadgeActorFromDayResolution(round: GameRound) {
     knownSheriffs.includes(death.player),
   );
 
-  return sheriffDeath?.player ?? knownSheriffs[0] ?? null;
+  return sheriffDeath?.player ?? null;
 }
 
 function BidRounds({ round }: { round: GameRound }) {
