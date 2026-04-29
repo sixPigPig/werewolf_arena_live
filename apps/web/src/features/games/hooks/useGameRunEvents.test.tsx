@@ -180,4 +180,52 @@ describe("useGameRunEvents", () => {
       "/api/v1/games/runs/run_second/events",
     );
   });
+
+  it("subscribes to model streaming progress events", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const { result } = renderHook(() => useGameRunEvents("run_1234abcd"));
+    const source = MockEventSource.instances[0];
+    act(() => {
+      source.emit("model_response_delta", {
+        id: 3,
+        type: "model_response_delta",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:04Z",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          visible_text: "我不是狼",
+          field: "say",
+          is_public: true,
+        },
+      });
+      source.emit("model_thinking_tick", {
+        id: 4,
+        type: "model_thinking_tick",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:05Z",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          elapsed_ms: 3000,
+          message: "正在组织发言...",
+        },
+      });
+    });
+
+    await waitFor(() => expect(result.current.events).toHaveLength(2));
+    expect(result.current.events.map((event) => event.type)).toEqual([
+      "model_response_delta",
+      "model_thinking_tick",
+    ]);
+  });
 });

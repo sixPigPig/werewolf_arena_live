@@ -237,4 +237,49 @@ describe("deriveLiveSpectatorState", () => {
       lastDetail: "",
     });
   });
+
+  it("accumulates streamed visible text for the active player", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [{ name: "张三", role: "村民", model: "deepseek-chat" }],
+        },
+      }),
+      event({
+        id: 2,
+        type: "model_request_started",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", model: "deepseek-chat" },
+      }),
+      event({
+        id: 3,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", visible_text: "我", is_public: true },
+      }),
+      event({
+        id: 4,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", visible_text: "不是狼", is_public: true },
+      }),
+    ]);
+
+    expect(state.players[0]).toMatchObject({
+      status: "streaming",
+      lastAction: "debate",
+      lastDetail: "我不是狼",
+    });
+  });
 });

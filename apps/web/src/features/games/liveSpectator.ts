@@ -4,6 +4,7 @@ export type LivePlayerStatus =
   | "waiting"
   | "thinking"
   | "requesting"
+  | "streaming"
   | "responded"
   | "acted"
   | "out";
@@ -16,6 +17,7 @@ export type LivePlayer = {
   isAlive: boolean;
   lastAction: string;
   lastDetail: string;
+  activeRequestId: string | null;
 };
 
 export type LiveSpectatorState = {
@@ -59,10 +61,39 @@ export function deriveLiveSpectatorState(
 
     if (event.actor) {
       const player = ensurePlayer(state, event.actor);
+      const payload = payloadForEvent(event);
+      const requestId =
+        typeof payload.request_id === "string" ? payload.request_id : null;
       state.activePlayerName = event.actor;
       state.latestActorEvent = event;
       player.lastAction = event.action ?? event.type;
-      player.lastDetail = detailForEvent(event);
+
+      if (event.type === "model_request_started") {
+        player.activeRequestId = requestId;
+        player.lastDetail = "";
+      } else if (event.type === "model_response_delta") {
+        if (requestId !== player.activeRequestId) {
+          player.activeRequestId = requestId;
+          player.lastDetail = "";
+        }
+        const visibleText = payload.visible_text;
+        if (typeof visibleText === "string") {
+          player.lastDetail += visibleText;
+        }
+      } else if (event.type === "model_thinking_tick") {
+        if (requestId && !player.activeRequestId) {
+          player.activeRequestId = requestId;
+        }
+        if (!player.lastDetail) {
+          player.lastDetail = detailForEvent(event);
+        }
+      } else {
+        player.lastDetail = detailForEvent(event);
+        if (event.type === "action_parsed") {
+          player.activeRequestId = null;
+        }
+      }
+
       player.status = statusForActorEvent(event.type);
     }
 
@@ -173,7 +204,9 @@ function applyStateUpdate(
 function clearPendingPlayerStates(state: MutableLiveSpectatorState) {
   for (const player of state.playersByName.values()) {
     const isPending =
-      player.status === "thinking" || player.status === "requesting";
+      player.status === "thinking" ||
+      player.status === "requesting" ||
+      player.status === "streaming";
     if (isPending && !player.lastDetail) {
       player.status = "waiting";
       player.lastAction = "";
@@ -198,6 +231,7 @@ function ensurePlayer(
     isAlive: true,
     lastAction: "",
     lastDetail: "",
+    activeRequestId: null,
   };
   state.playersByName.set(name, player);
   state.playerOrder.push(name);
@@ -211,6 +245,12 @@ function statusForActorEvent(type: string): LivePlayerStatus {
   if (type === "model_request_started") {
     return "requesting";
   }
+  if (type === "model_thinking_tick") {
+    return "requesting";
+  }
+  if (type === "model_response_delta") {
+    return "streaming";
+  }
   if (type === "model_response_received") {
     return "responded";
   }
@@ -222,6 +262,16 @@ function statusForActorEvent(type: string): LivePlayerStatus {
 
 function detailForEvent(event: LiveGameEvent): string {
   const payload = payloadForEvent(event);
+  const visibleText = payload.visible_text;
+  if (typeof visibleText === "string") {
+    return visibleText;
+  }
+
+  const message = payload.message;
+  if (typeof message === "string") {
+    return message;
+  }
+
   const raw = payload.raw_response;
   if (typeof raw === "string") {
     return raw;
