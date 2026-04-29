@@ -121,6 +121,16 @@ def test_visible_json_field_extractor_decodes_escaped_text() -> None:
     assert extractor.update('{"summary":"第一行\\n第二行"}') == "\n第二行"
 
 
+def test_visible_json_field_extractor_waits_for_complete_unicode_surrogate_pair() -> None:
+    extractor = VisibleJsonFieldExtractor("say")
+
+    assert extractor.update('{"say":"\\ud83d') == ""
+    delta = extractor.update('{"say":"\\ud83d\\ude00')
+
+    assert delta == "😀"
+    assert delta.encode("utf-8") == b"\xf0\x9f\x98\x80"
+
+
 def test_action_visible_stream_field_only_allows_public_actions() -> None:
     assert action_visible_stream_field("debate") == "say"
     assert action_visible_stream_field("sheriff_speech") == "say"
@@ -138,6 +148,15 @@ def test_extract_openai_chat_delta_reads_compatible_sse_chunks() -> None:
     assert extract_openai_chat_delta(chunk) == "我不是狼"
     assert extract_openai_chat_delta(b"data: [DONE]\n\n") is None
     assert extract_openai_chat_delta(b": heartbeat\n\n") is None
+
+
+def test_extract_openai_chat_delta_skips_role_only_events_in_same_chunk() -> None:
+    chunk = (
+        'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+        'data: {"choices":[{"delta":{"content":"你好"}}]}\n\n'
+    ).encode("utf-8")
+
+    assert extract_openai_chat_delta(chunk) == "你好"
 
 
 def test_generate_action_retries_until_allowed_value() -> None:

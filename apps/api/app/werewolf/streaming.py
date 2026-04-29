@@ -62,6 +62,14 @@ def _raw_json_string_prefix(text: str) -> str:
             if next_char == "u":
                 if index + 6 >= len(text):
                     break
+                if _is_high_surrogate_escape(text[index : index + 6]):
+                    if index + 12 > len(text):
+                        break
+                    if not _is_low_surrogate_escape(text[index + 6 : index + 12]):
+                        break
+                    chars.append(text[index : index + 12])
+                    index += 12
+                    continue
                 chars.append(text[index : index + 6])
                 index += 6
                 continue
@@ -73,6 +81,24 @@ def _raw_json_string_prefix(text: str) -> str:
         chars.append(char)
         index += 1
     return "".join(chars)
+
+
+def _is_high_surrogate_escape(text: str) -> bool:
+    return len(text) == 6 and _is_surrogate_escape_in_range(text, 0xD800, 0xDBFF)
+
+
+def _is_low_surrogate_escape(text: str) -> bool:
+    return len(text) == 6 and _is_surrogate_escape_in_range(text, 0xDC00, 0xDFFF)
+
+
+def _is_surrogate_escape_in_range(text: str, start: int, end: int) -> bool:
+    if not text.startswith("\\u"):
+        return False
+    try:
+        codepoint = int(text[2:], 16)
+    except ValueError:
+        return False
+    return start <= codepoint <= end
 
 
 def _decode_json_string_prefix(raw_value: str) -> str:
@@ -111,5 +137,6 @@ def extract_openai_chat_delta(chunk: bytes) -> str | None:
         if not isinstance(delta, dict):
             return None
         content = delta.get("content")
-        return content if isinstance(content, str) and content else None
+        if isinstance(content, str) and content:
+            return content
     return None
