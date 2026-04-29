@@ -148,6 +148,23 @@ describe("SheriffElectionPanel", () => {
     expect(screen.getByText("发言顺序：Alice -> Bob")).toBeInTheDocument();
   });
 
+  it("shows double explosion badge loss reason", () => {
+    render(
+      <SheriffElectionPanel
+        round={{
+          ...baseRound,
+          werewolf_self_exploded: "Bob",
+          day_ended_by_self_explosion: true,
+          sheriff_pre_election_bomb_count: 2,
+          sheriff_badge_lost: true,
+          sheriff_badge_lost_reason: "双爆吞警徽",
+        }}
+      />,
+    );
+
+    expect(screen.getByText("警徽状态：双爆吞警徽，警徽流失")).toBeInTheDocument();
+  });
+
   it("explains when police-down voting is skipped because one final candidate remains", () => {
     render(
       <SheriffElectionPanel

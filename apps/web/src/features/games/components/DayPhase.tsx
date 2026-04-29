@@ -39,6 +39,7 @@ export function DayPhase({
       ) : null}
 
       <SheriffElectionPanel items={items} round={round} />
+      <SelfExplosionNotice round={round} />
 
       <section className="mt-4">
         <h4 className="text-xs font-semibold uppercase text-slate-500">
@@ -91,6 +92,28 @@ export function DayPhase({
         ))}
       </div>
     </section>
+  );
+}
+
+function SelfExplosionNotice({ round }: { round: GameRound }) {
+  if (!round.day_ended_by_self_explosion || !round.werewolf_self_exploded) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+      <p className="font-medium">
+        {round.werewolf_self_exploded} 自爆为狼人，白天提前结束
+      </p>
+      {round.sheriff_badge_lost_reason === "首爆中断警长竞选" ? (
+        <p className="mt-1">首爆中断警长竞选，下一天继续竞选</p>
+      ) : null}
+      {round.sheriff &&
+      round.sheriff_badge_lost_reason !== "首爆中断警长竞选" &&
+      round.sheriff_badge_lost_reason !== "双爆吞警徽" ? (
+        <p className="mt-1">警长已产生，自爆不吞警徽</p>
+      ) : null}
+    </div>
   );
 }
 

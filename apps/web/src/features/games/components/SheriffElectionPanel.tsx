@@ -249,9 +249,12 @@ function BadgeStatus({
   }
 
   const badgeTriggerText = badgeTriggerForElectedSheriff(round);
-  const lostBadgeText = round.sheriff_elected
-    ? `${badgeTriggerText}警徽处理：撕毁警徽`
-    : "警徽状态：警徽流失";
+  const lostBadgeText =
+    round.sheriff_badge_lost_reason === "双爆吞警徽"
+      ? "警徽状态：双爆吞警徽，警徽流失"
+      : round.sheriff_elected
+        ? `${badgeTriggerText}警徽处理：撕毁警徽`
+        : "警徽状态：警徽流失";
 
   return (
     <div className="space-y-2 border-t border-slate-200 pt-3">

@@ -138,6 +138,100 @@ describe("DayPhase", () => {
     expect(screen.getByText("放逐投票")).toBeInTheDocument();
   });
 
+  it("shows when a werewolf self explosion ends the day early", () => {
+    render(
+      <DayPhase
+        round={{
+          ...baseRound,
+          hunter_shot: null,
+          idiot_revealed: null,
+          werewolf_self_exploded: "Bob",
+          day_ended_by_self_explosion: true,
+          sheriff_pre_election_bomb_count: 1,
+          sheriff_election_pending: true,
+          sheriff_badge_lost_reason: "首爆中断警长竞选",
+          day_deaths: [
+            {
+              player: "Bob",
+              cause: "werewolf_self_explosion",
+              source: "Bob",
+            },
+          ],
+        }}
+        items={[]}
+        selectedItem={null}
+        onSelect={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Bob 自爆为狼人，白天提前结束")).toBeInTheDocument();
+    expect(
+      screen.getByText("首爆中断警长竞选，下一天继续竞选"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("警长竞选")).not.toBeInTheDocument();
+  });
+
+  it("shows double explosion badge loss only in sheriff badge status", () => {
+    render(
+      <DayPhase
+        round={{
+          ...baseRound,
+          hunter_shot: null,
+          idiot_revealed: null,
+          werewolf_self_exploded: "Bob",
+          day_ended_by_self_explosion: true,
+          sheriff_pre_election_bomb_count: 2,
+          sheriff_badge_lost: true,
+          sheriff_badge_lost_reason: "双爆吞警徽",
+          day_deaths: [
+            {
+              player: "Bob",
+              cause: "werewolf_self_explosion",
+              source: "Bob",
+            },
+          ],
+        }}
+        items={[]}
+        selectedItem={null}
+        onSelect={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Bob 自爆为狼人，白天提前结束")).toBeInTheDocument();
+    expect(screen.getByText("警徽状态：双爆吞警徽，警徽流失")).toBeInTheDocument();
+    expect(screen.queryByText("双爆吞警徽，警徽流失")).not.toBeInTheDocument();
+  });
+
+  it("shows post-sheriff self explosion keeps the badge", () => {
+    render(
+      <DayPhase
+        round={{
+          ...baseRound,
+          hunter_shot: null,
+          idiot_revealed: null,
+          sheriff: "Alice",
+          werewolf_self_exploded: "Bob",
+          day_ended_by_self_explosion: true,
+          sheriff_badge_lost: false,
+          sheriff_badge_lost_reason: null,
+          day_deaths: [
+            {
+              player: "Bob",
+              cause: "werewolf_self_explosion",
+              source: "Bob",
+            },
+          ],
+        }}
+        items={[]}
+        selectedItem={null}
+        onSelect={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Bob 自爆为狼人，白天提前结束")).toBeInTheDocument();
+    expect(screen.getByText("警长已产生，自爆不吞警徽")).toBeInTheDocument();
+  });
+
   it("shows sheriff vote weight in vote table", () => {
     render(
       <DayPhase
