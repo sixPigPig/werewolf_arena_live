@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { toDirectorCue } from "../liveDirector";
+import { buildDirectorCues } from "../liveDirector";
 import type { DirectorCue } from "../liveDirector";
 import type { LiveGameEvent } from "../types";
 
@@ -35,7 +35,7 @@ export function useLiveDirector(
   events: LiveGameEvent[],
   options: UseLiveDirectorOptions = {},
 ): UseLiveDirectorResult {
-  const cues = useMemo(() => events.map(toDirectorCue), [events]);
+  const cues = useMemo(() => buildDirectorCues(events), [events]);
   const [currentEventId, setCurrentEventId] = useState<number | null>(
     () => cues[0]?.eventId ?? null,
   );

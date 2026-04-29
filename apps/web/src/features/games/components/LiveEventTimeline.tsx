@@ -1,5 +1,10 @@
 import type { LiveGameEvent } from "../types";
 
+const HIDDEN_TIMELINE_EVENT_TYPES = new Set([
+  "model_response_delta",
+  "model_thinking_tick",
+]);
+
 function titleForEvent(event: LiveGameEvent) {
   if (event.type === "action_requested" && event.actor && event.action) {
     return `${event.actor} 正在 ${event.action}`;
@@ -57,13 +62,17 @@ export function LiveEventTimeline({
   events,
   currentEventId = null,
 }: LiveEventTimelineProps) {
-  if (events.length === 0) {
+  const visibleEvents = events.filter(
+    (event) => !HIDDEN_TIMELINE_EVENT_TYPES.has(event.type),
+  );
+
+  if (visibleEvents.length === 0) {
     return <p className="p-4 text-sm text-slate-600">等待实时事件...</p>;
   }
 
   return (
     <ol className="divide-y divide-slate-200">
-      {events.map((event) => {
+      {visibleEvents.map((event) => {
         const detail = detailForEvent(event);
         const isCurrent = event.id === currentEventId;
 

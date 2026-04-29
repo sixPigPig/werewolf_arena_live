@@ -16,9 +16,62 @@ export type DirectorCue = {
   compressible: boolean;
 };
 
+export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
+  const cues: DirectorCue[] = [];
+  const requestCueById = new Map<
+    string,
+    { cue: DirectorCue; visibleText: string }
+  >();
+
+  for (const event of events) {
+    const payload = payloadForEvent(event);
+    const requestId = stringField(payload, "request_id");
+
+    if (event.type === "model_response_delta") {
+      const requestCue = requestId ? requestCueById.get(requestId) : undefined;
+      if (!requestCue) {
+        continue;
+      }
+
+      requestCue.visibleText += stringField(payload, "visible_text");
+      const actor = event.actor || requestCue.cue.actor || "未知玩家";
+      const body = `${actor}：${requestCue.visibleText}`;
+      requestCue.cue.title = `${actor} 正在发言`;
+      requestCue.cue.body = body;
+      requestCue.cue.importance = "key";
+      requestCue.cue.durationMs = longTextDuration(body);
+      requestCue.cue.compressible = false;
+      continue;
+    }
+
+    if (event.type === "model_thinking_tick") {
+      const requestCue = requestId ? requestCueById.get(requestId) : undefined;
+      if (!requestCue || requestCue.cue.body) {
+        continue;
+      }
+
+      const body = thinkingTickBody(payload);
+      if (body) {
+        requestCue.cue.body = body;
+        requestCue.cue.durationMs = longTextDuration(body);
+      }
+      continue;
+    }
+
+    const cue = toDirectorCue(event);
+    cues.push(cue);
+
+    if (event.type === "model_request_started" && requestId) {
+      requestCueById.set(requestId, { cue, visibleText: "" });
+    }
+  }
+
+  return cues;
+}
+
 export function toDirectorCue(event: LiveGameEvent): DirectorCue {
   const rawPayload = event.payload as unknown;
-  const payload = isRecord(rawPayload) ? rawPayload : {};
+  const payload = payloadForEvent(event);
   const base = cueBase(event);
 
   if (event.type === "run_created") {
@@ -145,6 +198,10 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
     body: readablePayload(rawPayload),
     durationMs: 2000,
   };
+}
+
+function payloadForEvent(event: LiveGameEvent): Record<string, unknown> {
+  return isRecord(event.payload) ? event.payload : {};
 }
 
 function cueBase(event: LiveGameEvent): DirectorCue {
@@ -355,6 +412,26 @@ function stringField(
 ): string {
   const value = payload[field];
   return typeof value === "string" ? value : "";
+}
+
+function numberField(
+  payload: Record<string, unknown>,
+  field: string,
+): number | null {
+  const value = payload[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function thinkingTickBody(payload: Record<string, unknown>): string {
+  const message = stringField(payload, "message");
+  if (!message) {
+    return "";
+  }
+
+  const elapsedSeconds = numberField(payload, "elapsed_seconds");
+  return elapsedSeconds === null
+    ? message
+    : `${message}（${elapsedSeconds}s）`;
 }
 
 function longTextDuration(text: string): number {

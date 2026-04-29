@@ -246,8 +246,67 @@ describe("LiveGamePage", () => {
         action: "debate",
         payload: { options: [] },
       });
-      source.emit("model_response_received", {
+      source.emit("model_request_started", {
         id: 3,
+        type: "model_request_started",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:03Z",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+        payload: { request_id: "req_123", model: "deepseek-chat" },
+      });
+      source.emit("model_response_delta", {
+        id: 4,
+        type: "model_response_delta",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:03Z",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          visible_text: "我",
+          is_public: true,
+        },
+      });
+      source.emit("model_response_delta", {
+        id: 5,
+        type: "model_response_delta",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:03Z",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          visible_text: "不是狼",
+          is_public: true,
+        },
+      });
+    });
+
+    expect(
+      await screen.findByRole("button", { name: /张三/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /李四/ })).toBeInTheDocument();
+    expect(await screen.findByText("张三 正在 debate")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "追到最新" }));
+    expect(
+      screen.getByRole("heading", { name: "张三 正在发言" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("张三：我不是狼")).toBeInTheDocument();
+    expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
+
+    act(() => {
+      source.emit("model_response_received", {
+        id: 6,
         type: "model_response_received",
         run_id: "run_1234abcd",
         session_id: "session_20260424_120000_ab12cd34",
@@ -259,7 +318,7 @@ describe("LiveGamePage", () => {
         payload: { raw_response: "{\"say\":\"我不是狼\"}" },
       });
       source.emit("game_completed", {
-        id: 4,
+        id: 7,
         type: "game_completed",
         run_id: "run_1234abcd",
         session_id: "session_20260424_120000_ab12cd34",
@@ -272,10 +331,8 @@ describe("LiveGamePage", () => {
       });
     });
 
-    expect(await screen.findByRole("button", { name: /张三/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /李四/ })).toBeInTheDocument();
-    expect(await screen.findByText("张三 正在 debate")).toBeInTheDocument();
     expect(screen.getAllByText('{"say":"我不是狼"}').length).toBeGreaterThan(0);
+    expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看完整复盘" })).toHaveAttribute(
       "href",
       "/games/session_20260424_120000_ab12cd34",

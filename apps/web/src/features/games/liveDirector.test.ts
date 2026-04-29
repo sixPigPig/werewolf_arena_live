@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { toDirectorCue } from "./liveDirector";
+import { buildDirectorCues, toDirectorCue } from "./liveDirector";
 import type { LiveGameEvent } from "./types";
 
 function event(partial: Partial<LiveGameEvent>): LiveGameEvent {
@@ -196,5 +196,48 @@ describe("toDirectorCue", () => {
 
     expect(malformedCue.title).toBe("state_updated");
     expect(malformedCue.body).toContain("not an object");
+  });
+
+  it("coalesces streaming deltas into the matching request cue", () => {
+    const cues = buildDirectorCues([
+      event({
+        id: 2,
+        type: "model_request_started",
+        actor: "张三",
+        action: "debate",
+        payload: { request_id: "req_123", model: "deepseek-chat" },
+      }),
+      event({
+        id: 3,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          visible_text: "我",
+          is_public: true,
+        },
+      }),
+      event({
+        id: 4,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          visible_text: "不是狼",
+          is_public: true,
+        },
+      }),
+    ]);
+
+    expect(cues).toHaveLength(1);
+    expect(cues[0]).toMatchObject({
+      eventId: 2,
+      title: "张三 正在发言",
+      body: "张三：我不是狼",
+      importance: "key",
+      compressible: false,
+    });
   });
 });
