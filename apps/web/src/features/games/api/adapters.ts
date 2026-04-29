@@ -24,6 +24,7 @@ const ACTION_TITLES: Record<string, string> = {
   sheriff_vote: "警下投票",
   sheriff_pk_speech: "PK 发言",
   sheriff_runoff_vote: "警下二轮投票",
+  werewolf_self_explosion: "狼人自爆",
   speech_order: "发言方向",
   sheriff_badge: "警徽处理",
   bid: "发言竞价",
@@ -127,6 +128,12 @@ function normalizeRound(
     vote_weights: voteWeights,
     sheriff_badge_target: round.sheriff_badge_target ?? null,
     sheriff_badge_lost: round.sheriff_badge_lost ?? false,
+    werewolf_self_exploded: round.werewolf_self_exploded ?? null,
+    day_ended_by_self_explosion: round.day_ended_by_self_explosion ?? false,
+    sheriff_pre_election_bomb_count:
+      round.sheriff_pre_election_bomb_count ?? 0,
+    sheriff_election_pending: round.sheriff_election_pending ?? false,
+    sheriff_badge_lost_reason: round.sheriff_badge_lost_reason ?? null,
     bids: bidGroups.flatMap((group) => group.bids),
     bidGroups,
     votes,
@@ -188,6 +195,10 @@ function debugItemsFromRound(
   const sheriffBadgePlacement = sheriffBadge
     ? placementForSheriffBadge(sheriffBadge, stateRound)
     : null;
+  const selfExplosion = round.werewolf_self_explosion ?? null;
+  const isDebatePhaseSelfExplosion =
+    selfExplosion !== null &&
+    (round.speech_order != null || (stateRound?.speech_order?.length ?? 0) > 0);
 
   pushAction(items, round.number, "night", "night-eliminate", round.eliminate);
   pushAction(items, round.number, "night", "night-protect", round.protect);
@@ -268,6 +279,15 @@ function debugItemsFromRound(
       action,
     );
   });
+  if (!isDebatePhaseSelfExplosion) {
+    pushAction(
+      items,
+      round.number,
+      "day",
+      "day-werewolf-self-explosion",
+      selfExplosion,
+    );
+  }
   pushAction(
     items,
     round.number,
@@ -281,6 +301,15 @@ function debugItemsFromRound(
   round.debate.forEach((action, index) => {
     pushAction(items, round.number, "day", `day-debate-${index}`, action);
   });
+  if (isDebatePhaseSelfExplosion) {
+    pushAction(
+      items,
+      round.number,
+      "day",
+      "day-werewolf-self-explosion",
+      selfExplosion,
+    );
+  }
   round.votes.flat().forEach((action, index) => {
     pushAction(items, round.number, "day", `day-vote-${index}`, action);
   });

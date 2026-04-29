@@ -503,6 +503,215 @@ describe("normalizeGameReplay", () => {
     ]);
   });
 
+  it("normalizes self explosion state and debug item", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        rounds: [
+          {
+            ...rawReplay.state.rounds[0],
+            werewolf_self_exploded: "Bob",
+            day_ended_by_self_explosion: true,
+            sheriff_pre_election_bomb_count: 1,
+            sheriff_election_pending: true,
+            sheriff_badge_lost_reason: "首爆中断警长竞选",
+            day_deaths: [
+              {
+                player: "Bob",
+                cause: "werewolf_self_explosion",
+                source: "Bob",
+              },
+            ],
+          },
+        ],
+      },
+      logs: [
+        {
+          ...rawReplay.logs[0],
+          eliminate: null,
+          sheriff_run: [
+            {
+              actor: "Alice",
+              action: "sheriff_run",
+              options: ["参选", "退选"],
+              choice: "参选",
+              lm_log: {
+                prompt: "是否参与警长竞选？",
+                raw_response: '{"choice":"参选"}',
+                result: { choice: "参选" },
+              },
+            },
+          ],
+          werewolf_self_explosion: {
+            actor: "Bob",
+            action: "werewolf_self_explosion",
+            options: ["自爆", "不自爆"],
+            choice: "自爆",
+            lm_log: {
+              prompt: "是否自爆？",
+              raw_response: '{"self_explode":"自爆"}',
+              result: { self_explode: "自爆" },
+            },
+          },
+          debate: [
+            {
+              actor: "Cora",
+              action: "debate",
+              options: [],
+              choice: "先发言。",
+              lm_log: {
+                prompt: "请发表白天发言。",
+                raw_response: '{"speech":"先发言。"}',
+                result: { speech: "先发言。" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const round = replay.rounds[0];
+    expect(round.werewolf_self_exploded).toBe("Bob");
+    expect(round.day_ended_by_self_explosion).toBe(true);
+    expect(round.sheriff_pre_election_bomb_count).toBe(1);
+    expect(round.sheriff_election_pending).toBe(true);
+    expect(round.sheriff_badge_lost_reason).toBe("首爆中断警长竞选");
+    expect(
+      replay.debugItems.map(({ id, phase, title }) => ({ id, phase, title })),
+    ).toEqual([
+      {
+        id: "round-1-day-sheriff-run-0",
+        phase: "day",
+        title: "上警选择",
+      },
+      {
+        id: "round-1-day-werewolf-self-explosion",
+        phase: "day",
+        title: "狼人自爆",
+      },
+      { id: "round-1-day-debate-0", phase: "day", title: "白天发言" },
+    ]);
+    expect(replay.debugItems[1]).toMatchObject({
+      actor: "Bob",
+      choice: "自爆",
+    });
+  });
+
+  it("places debate-phase self explosion after existing debate actions", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        rounds: [
+          {
+            ...rawReplay.state.rounds[0],
+            speech_order: ["Alice", "Bob", "Cora"],
+            werewolf_self_exploded: "Bob",
+            day_ended_by_self_explosion: true,
+            day_deaths: [
+              {
+                player: "Bob",
+                cause: "werewolf_self_explosion",
+                source: "Bob",
+              },
+            ],
+          },
+        ],
+      },
+      logs: [
+        {
+          number: 1,
+          eliminate: null,
+          protect: null,
+          investigate: null,
+          bid: [],
+          speech_order: {
+            actor: "Alice",
+            action: "speech_order",
+            options: ["clockwise", "counterclockwise"],
+            choice: "clockwise",
+            lm_log: {
+              prompt: "请选择发言方向。",
+              raw_response: '{"choice":"clockwise"}',
+              result: { choice: "clockwise" },
+            },
+          },
+          debate: [
+            {
+              actor: "Alice",
+              action: "debate",
+              options: [],
+              choice: "先听发言。",
+              lm_log: {
+                prompt: "请发表白天发言。",
+                raw_response: '{"speech":"先听发言。"}',
+                result: { speech: "先听发言。" },
+              },
+            },
+          ],
+          werewolf_self_explosion: {
+            actor: "Bob",
+            action: "werewolf_self_explosion",
+            options: ["自爆", "不自爆"],
+            choice: "自爆",
+            lm_log: {
+              prompt: "是否自爆？",
+              raw_response: '{"self_explode":"自爆"}',
+              result: { self_explode: "自爆" },
+            },
+          },
+          votes: [
+            [
+              {
+                actor: "Cora",
+                action: "vote",
+                options: ["Alice", "Bob"],
+                choice: "Bob",
+                lm_log: {
+                  prompt: "请选择放逐对象。",
+                  raw_response: '{"vote":"Bob"}',
+                  result: { vote: "Bob" },
+                },
+              },
+            ],
+          ],
+          summaries: [
+            {
+              actor: "Alice",
+              action: "summarize",
+              options: [],
+              choice: "Bob 自爆后结束白天。",
+              lm_log: {
+                prompt: "请总结本轮信息。",
+                raw_response: '{"summary":"Bob 自爆后结束白天。"}',
+                result: { summary: "Bob 自爆后结束白天。" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      replay.debugItems.map(({ id, phase, title }) => ({ id, phase, title })),
+    ).toEqual([
+      { id: "round-1-day-speech-order", phase: "day", title: "发言方向" },
+      { id: "round-1-day-debate-0", phase: "day", title: "白天发言" },
+      {
+        id: "round-1-day-werewolf-self-explosion",
+        phase: "day",
+        title: "狼人自爆",
+      },
+      { id: "round-1-day-vote-0", phase: "day", title: "放逐投票" },
+      { id: "round-1-summary-0", phase: "summary", title: "轮次总结" },
+    ]);
+    expect(replay.debugItems[2]).toMatchObject({
+      actor: "Bob",
+      choice: "自爆",
+    });
+  });
+
   it("creates ordered debug items for day and summary actions", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,

@@ -80,6 +80,7 @@ export type RawRoundLog = {
   sheriff_votes?: RawActionLog[];
   sheriff_pk_speech?: RawActionLog[];
   sheriff_runoff_votes?: RawActionLog[];
+  werewolf_self_explosion?: RawActionLog | null;
   speech_order?: RawActionLog | null;
   sheriff_badge?: RawActionLog | null;
   bid: RawActionLog[][];
@@ -137,6 +138,11 @@ export type RawRoundState = {
   vote_weights?: Record<string, number>;
   sheriff_badge_target?: string | null;
   sheriff_badge_lost?: boolean;
+  werewolf_self_exploded?: string | null;
+  day_ended_by_self_explosion?: boolean;
+  sheriff_pre_election_bomb_count?: number;
+  sheriff_election_pending?: boolean;
+  sheriff_badge_lost_reason?: string | null;
   debate: SpeechEntry[];
   bids: Array<Record<string, number>>;
   votes: Array<Record<string, string>>;
@@ -227,6 +233,11 @@ export type GameRound = Omit<
   | "vote_weights"
   | "sheriff_badge_target"
   | "sheriff_badge_lost"
+  | "werewolf_self_exploded"
+  | "day_ended_by_self_explosion"
+  | "sheriff_pre_election_bomb_count"
+  | "sheriff_election_pending"
+  | "sheriff_badge_lost_reason"
 > & {
   attacked: string | null;
   eliminated: string | null;
@@ -254,6 +265,11 @@ export type GameRound = Omit<
   vote_weights: Record<string, number>;
   sheriff_badge_target: string | null;
   sheriff_badge_lost: boolean;
+  werewolf_self_exploded: string | null;
+  day_ended_by_self_explosion: boolean;
+  sheriff_pre_election_bomb_count: number;
+  sheriff_election_pending: boolean;
+  sheriff_badge_lost_reason: string | null;
   bids: BidEntry[];
   bidGroups: BidGroup[];
   votes: VoteEntry[];

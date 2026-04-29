@@ -43,6 +43,11 @@ const baseRound: GameRound = {
   vote_weights: {},
   sheriff_badge_target: null,
   sheriff_badge_lost: false,
+  werewolf_self_exploded: null,
+  day_ended_by_self_explosion: false,
+  sheriff_pre_election_bomb_count: 0,
+  sheriff_election_pending: false,
+  sheriff_badge_lost_reason: null,
   summaries: {},
   success: true,
 };
