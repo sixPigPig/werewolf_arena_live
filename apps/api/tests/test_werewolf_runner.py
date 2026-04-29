@@ -1041,6 +1041,28 @@ def test_sheriff_prompt_actions_render_chinese_instructions() -> None:
     assert badge_schema["required"] == ["reasoning", "badge"]
 
 
+def test_werewolf_self_explosion_prompt_renders_double_badge_context() -> None:
+    world_state = {
+        "round": 1,
+        "name": "Alice",
+        "role": "狼人",
+        "remaining_players": "Alice、Bob、Cora",
+        "rule_text": "你正在进行一局数字版狼人杀。",
+        "options": "自爆、不自爆",
+        "self_explosion_stage": "警上发言前",
+        "sheriff": None,
+        "sheriff_pre_election_bomb_count": 1,
+    }
+
+    prompt, schema = build_prompt("werewolf_self_explosion", world_state)
+
+    assert "行动：狼人自爆判断" in prompt
+    assert "警上发言前" in prompt
+    assert "双爆吞警徽" in prompt
+    assert "第二次警长产生前自爆会导致警徽流失" in prompt
+    assert schema["required"] == ["reasoning", "self_explode"]
+
+
 def test_sheriff_vote_prompt_includes_public_election_context() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(

@@ -91,6 +91,8 @@ def test_rule_set_snapshot_is_json_safe() -> None:
         "estimated_duration": "短",
         "sheriff_enabled": False,
         "sheriff_vote_weight": 1.0,
+        "werewolf_self_explosion_enabled": False,
+        "sheriff_badge_bomb_policy": "none",
         "speech_policy": "sequential",
         "speech_rounds": 1,
         "rule_tags": ["无警长", "顺序发言", "新手"],
@@ -113,14 +115,20 @@ def test_12_player_rule_set_has_sheriff_flow_metadata() -> None:
         "sheriff_vote",
         "sheriff_pk_speech",
         "sheriff_runoff_vote",
+        "werewolf_self_explosion",
         "speech_order",
         "debate",
         "vote",
         "hunter_shoot",
         "summarize",
     )
+    assert rule.werewolf_self_explosion_enabled is True
+    assert rule.sheriff_badge_bomb_policy == "double"
+    assert "werewolf_self_explosion" in rule.day_actions
     assert snapshot["sheriff_enabled"] is True
     assert snapshot["sheriff_vote_weight"] == 1.5
+    assert snapshot["werewolf_self_explosion_enabled"] is True
+    assert snapshot["sheriff_badge_bomb_policy"] == "double"
     assert snapshot["speech_policy"] == "sheriff_directed"
     assert snapshot["speech_rounds"] == 1
     assert snapshot["rule_tags"] == ["有警长", "警徽 1.5 票", "屠边", "预女猎白"]
@@ -132,6 +140,8 @@ def test_rule_summaries_are_frontend_friendly() -> None:
 
     assert summaries[0]["id"] == "classic_8"
     assert summaries[0]["role_summary"] == "2 狼人 / 1 预言家 / 1 守卫 / 4 村民"
+    assert summaries[0]["werewolf_self_explosion_enabled"] is False
+    assert summaries[0]["sheriff_badge_bomb_policy"] == "none"
     assert summaries[0]["rule_tags"] == ["无警长", "顺序发言", "标准"]
     assert summaries[1]["player_count"] == 6
     assert summaries[1]["rule_tags"] == ["无警长", "顺序发言", "新手"]
@@ -141,6 +151,8 @@ def test_rule_summaries_are_frontend_friendly() -> None:
     assert summaries[3]["role_summary"] == "4 狼人 / 1 预言家 / 1 女巫 / 1 猎人 / 1 白痴 / 4 村民"
     assert summaries[3]["sheriff_enabled"] is True
     assert summaries[3]["sheriff_vote_weight"] == 1.5
+    assert summaries[3]["werewolf_self_explosion_enabled"] is True
+    assert summaries[3]["sheriff_badge_bomb_policy"] == "double"
     assert summaries[3]["speech_policy"] == "sheriff_directed"
     assert summaries[3]["rule_tags"] == ["有警长", "警徽 1.5 票", "屠边", "预女猎白"]
 
@@ -169,6 +181,17 @@ def test_12_player_rule_text_describes_confirmed_table_rules() -> None:
     assert "所有玩家完成完整发言" in text
     assert "警长投票计为 1.5 票" in text
     assert "警徽可移交或撕毁" in text
+    assert "狼人白天公开阶段可以自爆" in text
+    assert "采用双爆吞警徽" in text
+
+
+def test_small_rule_sets_do_not_enable_werewolf_self_explosion() -> None:
+    for rule_id in ("classic_8", "starter_6", "social_8"):
+        rule = get_rule_set(rule_id)
+
+        assert rule.werewolf_self_explosion_enabled is False
+        assert rule.sheriff_badge_bomb_policy == "none"
+        assert "werewolf_self_explosion" not in rule.day_actions
 
 
 def test_render_rule_text_matches_rule_actions() -> None:

@@ -24,6 +24,7 @@ ACTION_SHERIFF_WITHDRAW = "sheriff_withdraw"
 ACTION_SHERIFF_VOTE = "sheriff_vote"
 ACTION_SHERIFF_PK_SPEECH = "sheriff_pk_speech"
 ACTION_SHERIFF_RUNOFF_VOTE = "sheriff_runoff_vote"
+ACTION_WEREWOLF_SELF_EXPLOSION = "werewolf_self_explosion"
 ACTION_SPEECH_ORDER = "speech_order"
 ACTION_SHERIFF_BADGE = "sheriff_badge"
 ACTION_BID = "bid"
@@ -78,6 +79,8 @@ class RuleSet:
     speech_policy: str = SPEECH_POLICY_SEQUENTIAL
     speech_rounds: int = 1
     rule_tags: tuple[str, ...] = ()
+    werewolf_self_explosion_enabled: bool = False
+    sheriff_badge_bomb_policy: str = "none"
 
 
 CLASSIC_8 = RuleSet(
@@ -163,6 +166,7 @@ CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
         ACTION_SHERIFF_VOTE,
         ACTION_SHERIFF_PK_SPEECH,
         ACTION_SHERIFF_RUNOFF_VOTE,
+        ACTION_WEREWOLF_SELF_EXPLOSION,
         ACTION_SPEECH_ORDER,
         ACTION_DEBATE,
         ACTION_VOTE,
@@ -175,6 +179,8 @@ CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
     estimated_duration="长",
     sheriff_enabled=True,
     sheriff_vote_weight=1.5,
+    werewolf_self_explosion_enabled=True,
+    sheriff_badge_bomb_policy="double",
     speech_policy=SPEECH_POLICY_SHERIFF_DIRECTED,
     rule_tags=("有警长", "警徽 1.5 票", "屠边", "预女猎白"),
 )
@@ -207,6 +213,8 @@ def rule_set_summary(rule_set: RuleSet) -> dict[str, Any]:
         "estimated_duration": rule_set.estimated_duration,
         "sheriff_enabled": rule_set.sheriff_enabled,
         "sheriff_vote_weight": rule_set.sheriff_vote_weight,
+        "werewolf_self_explosion_enabled": rule_set.werewolf_self_explosion_enabled,
+        "sheriff_badge_bomb_policy": rule_set.sheriff_badge_bomb_policy,
         "speech_policy": rule_set.speech_policy,
         "speech_rounds": rule_set.speech_rounds,
         "rule_tags": list(rule_set.rule_tags),
@@ -238,6 +246,8 @@ def rule_set_snapshot(rule_set: RuleSet) -> dict[str, Any]:
         "estimated_duration": rule_set.estimated_duration,
         "sheriff_enabled": rule_set.sheriff_enabled,
         "sheriff_vote_weight": rule_set.sheriff_vote_weight,
+        "werewolf_self_explosion_enabled": rule_set.werewolf_self_explosion_enabled,
+        "sheriff_badge_bomb_policy": rule_set.sheriff_badge_bomb_policy,
         "speech_policy": rule_set.speech_policy,
         "speech_rounds": rule_set.speech_rounds,
         "rule_tags": list(rule_set.rule_tags),
@@ -285,6 +295,11 @@ def render_rule_text(rule_set: RuleSet) -> str:
         lines.append(
             f"警长投票计为 {rule_set.sheriff_vote_weight:g} 票，警长死亡时警徽可移交或撕毁。"
         )
+        if rule_set.werewolf_self_explosion_enabled:
+            lines.append(
+                "狼人白天公开阶段可以自爆，自爆后该狼人公开出局并直接结束当天。"
+                "本规则采用双爆吞警徽：警长产生前第一次自爆只中断竞选，第二次自爆才会导致警徽流失。"
+            )
     else:
         lines.append("白天行动：按座次顺序进行一轮完整发言，随后投票放逐并进行总结。")
     lines.append("身份揭示：游戏过程中隐藏玩家真实身份。")

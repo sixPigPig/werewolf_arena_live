@@ -68,6 +68,14 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {"reasoning": {"type": "string"}, "badge": {"type": "string"}},
         "required": ["reasoning", "badge"],
     },
+    "werewolf_self_explosion": {
+        "type": "object",
+        "properties": {
+            "reasoning": {"type": "string"},
+            "self_explode": {"type": "string"},
+        },
+        "required": ["reasoning", "self_explode"],
+    },
     "investigate": {
         "type": "object",
         "properties": {"reasoning": {"type": "string"}, "investigate": {"type": "string"}},
@@ -117,6 +125,7 @@ RESULT_FIELD_BY_ACTION = {
     "sheriff_runoff_vote": "sheriff_vote",
     "speech_order": "speech_order",
     "sheriff_badge": "badge",
+    "werewolf_self_explosion": "self_explode",
     "investigate": "investigate",
     "remove": "remove",
     "protect": "protect",
@@ -136,6 +145,7 @@ FIELD_LABELS = {
     "sheriff_vote": "警长投票对象",
     "speech_order": "发言方向",
     "badge": "警徽处理",
+    "self_explode": "自爆选择",
     "investigate": "查验对象",
     "remove": "袭击对象",
     "protect": "保护对象",
@@ -276,6 +286,25 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "你可以选择把警徽交给存活玩家，或选择撕毁警徽。\n"
             f"候选人：{options}。\n"
             "输出字段 reasoning 和 badge。"
+        )
+    if action == "werewolf_self_explosion":
+        stage = world_state.get("self_explosion_stage") or "白天公开阶段"
+        sheriff = world_state.get("sheriff")
+        bomb_count = int(world_state.get("sheriff_pre_election_bomb_count") or 0)
+        badge_context = (
+            "当前还没有警长，采用双爆吞警徽规则：第一次警长产生前自爆只会中断警长竞选，"
+            "第二次警长产生前自爆会导致警徽流失。"
+            if not sheriff
+            else f"当前警长是{sheriff}，此时自爆不会吞警徽；若你是警长，则按死亡警长规则处理警徽。"
+        )
+        return (
+            "行动：狼人自爆判断。\n"
+            f"当前阶段：{stage}。\n"
+            f"警长产生前自爆次数：{bomb_count}。\n"
+            f"{badge_context}\n"
+            "选择自爆会公开你是狼人、你立刻出局，并让当天直接结束进入夜晚。\n"
+            f"候选选项：{options}。\n"
+            "请以狼人阵营收益判断，输出字段 reasoning 和 self_explode。"
         )
     if action == "investigate":
         return (
