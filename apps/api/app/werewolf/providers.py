@@ -27,6 +27,7 @@ class OpenAICompatibleProviderConfig:
     default_model: str
     model_prefixes: tuple[str, ...]
     api_host_base_path: str = ""
+    model_aliases: dict[str, str] = field(default_factory=dict)
     response_format: dict[str, str] | None = None
     extra_payload: dict[str, Any] = field(default_factory=dict)
 
@@ -50,7 +51,20 @@ MINIMAX_CONFIG = OpenAICompatibleProviderConfig(
     extra_payload={"reasoning_split": True},
 )
 
-OPENAI_COMPATIBLE_PROVIDER_CONFIGS = (DEEPSEEK_CONFIG, MINIMAX_CONFIG)
+QWEN_CONFIG = OpenAICompatibleProviderConfig(
+    name="Qwen",
+    env_prefix="DASHSCOPE",
+    default_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    default_model="qwen3.6-plus",
+    model_prefixes=("qwen",),
+    api_host_base_path="/compatible-mode/v1",
+    model_aliases={
+        "qwen3.6-plus": "qwen3.6-plus",
+        "qwen3.6-plus-preview": "qwen3.6-plus-preview",
+    },
+)
+
+OPENAI_COMPATIBLE_PROVIDER_CONFIGS = (DEEPSEEK_CONFIG, MINIMAX_CONFIG, QWEN_CONFIG)
 
 
 class OpenAICompatibleProvider:
@@ -88,7 +102,7 @@ class OpenAICompatibleProvider:
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         payload = {
-            "model": model,
+            "model": self.config.model_aliases.get(model.lower(), model),
             "messages": [
                 {
                     "role": "system",
@@ -167,6 +181,26 @@ class MiniMaxProvider(OpenAICompatibleProvider):
     ) -> None:
         super().__init__(
             config=MINIMAX_CONFIG,
+            api_key=api_key,
+            base_url=base_url,
+            transport=transport,
+            max_retries=max_retries,
+            sleep=sleep,
+        )
+
+
+class QwenProvider(OpenAICompatibleProvider):
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        transport: Transport | None = None,
+        max_retries: int = 3,
+        sleep: Sleep = time.sleep,
+    ) -> None:
+        super().__init__(
+            config=QWEN_CONFIG,
             api_key=api_key,
             base_url=base_url,
             transport=transport,
@@ -321,6 +355,13 @@ def _http_error_message(
             " Check MINIMAX_API_KEY and make sure MINIMAX_BASE_URL/MINIMAX_API_HOST "
             "matches the key region: Global=https://api.minimax.io/v1, "
             "Mainland=https://api.minimaxi.com/v1."
+        )
+    if config.env_prefix == "DASHSCOPE" and exc.code == 401:
+        message += (
+            " Check DASHSCOPE_API_KEY and make sure DASHSCOPE_BASE_URL/DASHSCOPE_API_HOST "
+            "matches the key region: Beijing=https://dashscope.aliyuncs.com/compatible-mode/v1, "
+            "Singapore=https://dashscope-intl.aliyuncs.com/compatible-mode/v1, "
+            "Virginia=https://dashscope-us.aliyuncs.com/compatible-mode/v1."
         )
     return message
 

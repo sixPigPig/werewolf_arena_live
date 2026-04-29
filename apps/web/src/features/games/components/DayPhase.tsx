@@ -65,7 +65,7 @@ export function DayPhase({
           <VoteTable tally={round.voteTally} votes={round.votes} />
         </div>
         <VoteResolution round={round} />
-        <SpecialDayResolution round={round} />
+        <SpecialDayResolution items={items} round={round} />
       </section>
 
       <section className="mt-4">
@@ -91,8 +91,23 @@ export function DayPhase({
   );
 }
 
-function SpecialDayResolution({ round }: { round: GameRound }) {
-  if (!round.idiot_revealed && !round.hunter_shot && round.day_deaths.length === 0) {
+function SpecialDayResolution({
+  items,
+  round,
+}: {
+  items: DebugItem[];
+  round: GameRound;
+}) {
+  const badgeResolution = hasDayResolution(round)
+    ? sheriffBadgeResolution(round, items)
+    : null;
+
+  if (
+    !round.idiot_revealed &&
+    !round.hunter_shot &&
+    round.day_deaths.length === 0 &&
+    !badgeResolution
+  ) {
     return null;
   }
 
@@ -107,8 +122,66 @@ function SpecialDayResolution({ round }: { round: GameRound }) {
           白天死亡：{round.day_deaths.map((death) => death.player).join("、")}
         </p>
       ) : null}
+      {badgeResolution ? <p>{badgeResolution}</p> : null}
     </div>
   );
+}
+
+function hasDayResolution(round: GameRound) {
+  return round.day_deaths.length > 0 || Boolean(round.exiled);
+}
+
+function sheriffBadgeResolution(round: GameRound, items: DebugItem[]) {
+  const badgeItem = items.find(
+    (item) => item.phase === "day" && item.action === "sheriff_badge",
+  );
+  if (badgeItem?.actor && badgeItem.choice) {
+    return `警徽处理：${badgeItem.actor} 选择 ${formatBadgeChoice(
+      badgeItem.choice,
+    )}`;
+  }
+
+  if (!round.sheriff_badge_target && !round.sheriff_badge_lost) {
+    return null;
+  }
+
+  if (!hasKnownBadgeOwner(round)) {
+    return null;
+  }
+
+  const actor = sheriffBadgeActorFromDayResolution(round);
+  if (round.sheriff_badge_target) {
+    return actor
+      ? `警徽处理：${actor} 选择 移交给 ${round.sheriff_badge_target}`
+      : `警徽处理：移交给 ${round.sheriff_badge_target}`;
+  }
+
+  return actor
+    ? `警徽处理：${actor} 选择 撕毁警徽`
+    : "警徽处理：撕毁警徽";
+}
+
+function hasKnownBadgeOwner(round: GameRound) {
+  return Boolean(round.sheriff || round.sheriff_elected);
+}
+
+function formatBadgeChoice(choice: string) {
+  if (choice === "撕毁警徽" || choice.startsWith("移交给")) {
+    return choice;
+  }
+
+  return `移交给 ${choice}`;
+}
+
+function sheriffBadgeActorFromDayResolution(round: GameRound) {
+  const knownSheriffs = [round.sheriff, round.sheriff_elected].filter(
+    (name): name is string => Boolean(name),
+  );
+  const sheriffDeath = round.day_deaths.find((death) =>
+    knownSheriffs.includes(death.player),
+  );
+
+  return sheriffDeath?.player ?? knownSheriffs[0] ?? null;
 }
 
 function BidRounds({ round }: { round: GameRound }) {

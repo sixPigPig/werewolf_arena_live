@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import random
 from collections import Counter
 
 from app.werewolf.config import (
@@ -69,6 +70,8 @@ SHERIFF_STAY = "不退水"
 SPEECH_FROM_LEFT = "警左发言"
 SPEECH_FROM_RIGHT = "警右发言"
 SHERIFF_BADGE_DESTROY = "撕毁警徽"
+SHERIFF_SPEECH_CLOCKWISE = "顺时针"
+SHERIFF_SPEECH_COUNTERCLOCKWISE = "逆时针"
 
 
 def initialize_game_state(
@@ -80,19 +83,23 @@ def initialize_game_state(
     rule_set: RuleSet,
 ) -> GameState:
     player_names = choose_player_names(seed, player_count=rule_set.player_count)
+    role_cards = [
+        role_spec
+        for role_spec in rule_set.roles
+        for _ in range(role_spec.count)
+    ]
+    role_rng = random.Random(f"{seed}:roles") if seed is not None else random.Random()
+    role_rng.shuffle(role_cards)
     players: list[Player] = []
-    name_index = 0
-    for role_spec in rule_set.roles:
+    for player_name, role_spec in zip(player_names, role_cards, strict=True):
         model = werewolf_model if role_spec.model_group == MODEL_GROUP_WEREWOLF else villager_model
-        for _ in range(role_spec.count):
-            player = Player(player_names[name_index], role_spec.role, model)
-            if role_spec.role == WITCH:
-                player.witch_antidote_available = True
-                player.witch_poison_available = True
-            elif role_spec.role == HUNTER:
-                player.hunter_can_shoot = True
-            players.append(player)
-            name_index += 1
+        player = Player(player_name, role_spec.role, model)
+        if role_spec.role == WITCH:
+            player.witch_antidote_available = True
+            player.witch_poison_available = True
+        elif role_spec.role == HUNTER:
+            player.hunter_can_shoot = True
+        players.append(player)
 
     werewolves = [player for player in players if _role_team(rule_set, player.role) == TEAM_WEREWOLVES]
     current_players = [player.name for player in players]
@@ -126,6 +133,7 @@ class GameEngine:
         rule_set: RuleSet,
         debate_turns: int = DEFAULT_DEBATE_TURNS,
         event_sink: object | None = None,
+        rng: random.Random | None = None,
     ) -> None:
         self.state = state
         self.provider = provider
@@ -133,6 +141,7 @@ class GameEngine:
         self.rule_set = rule_set
         self.debate_turns = debate_turns
         self.event_sink = event_sink or NullEventSink()
+        self.rng = rng or random.Random()
 
     def run(self) -> list[RoundLog]:
         logs: list[RoundLog] = []
@@ -661,7 +670,12 @@ class GameEngine:
             self._lose_sheriff_badge(round_state, active_players, "无人上警")
             return
 
-        for name in candidates:
+        sheriff_speech_order = self._choose_sheriff_speech_order(
+            round_state,
+            active_players,
+            candidates,
+        )
+        for name in sheriff_speech_order:
             message, action_log = self._player_action(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_SPEECH,
@@ -764,6 +778,34 @@ class GameEngine:
             return
 
         self._elect_sheriff(sheriff, round_state, active_players)
+
+    def _choose_sheriff_speech_order(
+        self,
+        round_state: RoundState,
+        active_players: list[str],
+        candidates: list[str],
+    ) -> list[str]:
+        if len(candidates) <= 1:
+            round_state.sheriff_speech_order = candidates.copy()
+            round_state.sheriff_speech_direction = None
+            return candidates.copy()
+
+        start = candidates[self.rng.randrange(len(candidates))]
+        direction = self.rng.choice(
+            [SHERIFF_SPEECH_CLOCKWISE, SHERIFF_SPEECH_COUNTERCLOCKWISE]
+        )
+        seated_players = (
+            list(reversed(active_players))
+            if direction == SHERIFF_SPEECH_COUNTERCLOCKWISE
+            else active_players.copy()
+        )
+        start_index = seated_players.index(start)
+        rotated_players = seated_players[start_index:] + seated_players[:start_index]
+        candidate_names = set(candidates)
+        speech_order = [name for name in rotated_players if name in candidate_names]
+        round_state.sheriff_speech_order = speech_order
+        round_state.sheriff_speech_direction = direction
+        return speech_order
 
     def _elect_sheriff(
         self,
@@ -954,6 +996,8 @@ class GameEngine:
             not self.rule_set.sheriff_enabled
             or dead_player != self.state.sheriff
             or self.state.sheriff_badge_lost
+            or dead_player in active_players
+            or not self._is_recorded_round_death(dead_player, round_state)
         ):
             return
 
@@ -991,6 +1035,12 @@ class GameEngine:
         round_state.sheriff_badge_lost = True
         round_state.sheriff = None
         self._announce(active_players, f"第{round_state.number}轮：{dead_player}出局，警徽被撕毁。")
+
+    def _is_recorded_round_death(self, player: str, round_state: RoundState) -> bool:
+        return any(
+            death.player == player
+            for death in [*round_state.night_deaths, *round_state.day_deaths]
+        )
 
     def _run_summaries(
         self,

@@ -94,8 +94,10 @@ DeepSeek 和 MiniMax；如果 `WEREWOLF_DEFAULT_MODEL` 为空，后端会从已�
 provider 中选择默认模型。只配置 MiniMax key 时，默认对局模型会自动使用
 `MINIMAX_MODEL`，也可以在 CLI 或 API 请求中显式传入 `MiniMax-M2.7` 这类模型名。
 MiniMax key 需要和 host 区域匹配：大陆 key 使用 `https://api.minimaxi.com/v1`，Global
-key 使用 `https://api.minimax.io/v1`。新增 OpenAI-compatible 厂商时，优先在
-`apps/api/app/werewolf/providers.py` 增加 provider config。
+key 使用 `https://api.minimax.io/v1`。Qwen 使用阿里云百炼 DashScope OpenAI 兼容接口，
+默认模型为 `qwen3.6-plus`，也支持在对局参数中传入 `Qwen3.6-Plus`；北京地域默认
+base URL 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`。新增 OpenAI-compatible
+厂商时，优先在 `apps/api/app/werewolf/providers.py` 增加 provider config。
 
 ## 质量检查
 

@@ -5,6 +5,7 @@ import type {
   GameRound,
   RawActionLog,
   RawGameReplayResponse,
+  RawRoundState,
   RawRoundLog,
   VoteEntry,
 } from "../types";
@@ -44,7 +45,14 @@ export function normalizeGameReplay(
     players: response.state.players,
     rounds: response.state.rounds.map(normalizeRound),
     logs: response.logs,
-    debugItems: response.logs.flatMap(debugItemsFromRound),
+    debugItems: response.logs.flatMap((round) =>
+      debugItemsFromRound(
+        round,
+        response.state.rounds.find(
+          (stateRound) => stateRound.number === round.number,
+        ),
+      ),
+    ),
   };
 }
 
@@ -102,6 +110,8 @@ function normalizeRound(
     idiot_revealed: round.idiot_revealed ?? null,
     sheriff: round.sheriff ?? null,
     sheriff_candidates: round.sheriff_candidates ?? [],
+    sheriff_speech_order: round.sheriff_speech_order ?? [],
+    sheriff_speech_direction: round.sheriff_speech_direction ?? null,
     sheriff_speeches: round.sheriff_speeches ?? [],
     sheriff_withdrawn: round.sheriff_withdrawn ?? [],
     sheriff_final_candidates: round.sheriff_final_candidates ?? [],
@@ -164,8 +174,15 @@ function minimumWinningVoteWeight(votes: VoteEntry[]): number | null {
   );
 }
 
-function debugItemsFromRound(round: RawRoundLog): DebugItem[] {
+function debugItemsFromRound(
+  round: RawRoundLog,
+  stateRound?: RawRoundState,
+): DebugItem[] {
   const items: DebugItem[] = [];
+  const sheriffBadge = round.sheriff_badge ?? null;
+  const sheriffBadgePlacement = sheriffBadge
+    ? placementForSheriffBadge(sheriffBadge, stateRound)
+    : null;
 
   pushAction(items, round.number, "night", "night-eliminate", round.eliminate);
   pushAction(items, round.number, "night", "night-protect", round.protect);
@@ -197,6 +214,15 @@ function debugItemsFromRound(round: RawRoundLog): DebugItem[] {
     "night-hunter-shoot",
     round.hunter_shoot ?? null,
   );
+  if (sheriffBadgePlacement === "night") {
+    pushAction(
+      items,
+      round.number,
+      "night",
+      "night-sheriff-badge",
+      sheriffBadge,
+    );
+  }
 
   round.bid.flat().forEach((action, index) => {
     pushAction(items, round.number, "day", `day-bid-${index}`, action);
@@ -244,24 +270,52 @@ function debugItemsFromRound(round: RawRoundLog): DebugItem[] {
     "day-speech-order",
     round.speech_order ?? null,
   );
-  pushAction(
-    items,
-    round.number,
-    "day",
-    "day-sheriff-badge",
-    round.sheriff_badge ?? null,
-  );
+  if (sheriffBadgePlacement === "after_speech_order") {
+    pushAction(items, round.number, "day", "day-sheriff-badge", sheriffBadge);
+  }
   round.debate.forEach((action, index) => {
     pushAction(items, round.number, "day", `day-debate-${index}`, action);
   });
   round.votes.flat().forEach((action, index) => {
     pushAction(items, round.number, "day", `day-vote-${index}`, action);
   });
+  if (sheriffBadgePlacement === "after_day_vote") {
+    pushAction(items, round.number, "day", "day-sheriff-badge", sheriffBadge);
+  }
   round.summaries.forEach((action, index) => {
     pushAction(items, round.number, "summary", `summary-${index}`, action);
   });
 
   return items;
+}
+
+function placementForSheriffBadge(
+  action: RawActionLog,
+  stateRound?: RawRoundState,
+) {
+  if (!stateRound) {
+    return "after_speech_order";
+  }
+
+  if (
+    (stateRound.night_deaths ?? []).some(
+      (death) => death.player === action.actor,
+    ) ||
+    stateRound.eliminated === action.actor
+  ) {
+    return "night";
+  }
+
+  if (
+    (stateRound.day_deaths ?? []).some(
+      (death) => death.player === action.actor,
+    ) ||
+    stateRound.exiled === action.actor
+  ) {
+    return "after_day_vote";
+  }
+
+  return "after_speech_order";
 }
 
 function pushAction(

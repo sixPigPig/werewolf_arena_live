@@ -1,11 +1,12 @@
 import json
+import random
 
 import pytest
 
-from app.werewolf.config import SEER
+from app.werewolf.config import SEER, WEREWOLF
 from app.werewolf.engine import GameEngine, MaxRoundsExceeded, initialize_game_state
 from app.werewolf.live import NullEventSink
-from app.werewolf.models import RoundLog, RoundState
+from app.werewolf.models import DeathEvent, RoundLog, RoundState
 from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.rules import get_rule_set
 from app.werewolf.runner import GameRunError, run_game
@@ -821,6 +822,38 @@ def test_12_player_initialization_sets_role_counts_and_wolf_teammates() -> None:
         )
 
 
+def test_12_player_initialization_shuffles_roles_across_seats() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_12_player_shuffled_roles",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=42,
+        rule_set=rule_set,
+    )
+    repeated_state = initialize_game_state(
+        session_id="session_test_12_player_shuffled_roles_repeated",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=42,
+        rule_set=rule_set,
+    )
+    rule_order = [
+        role_spec.role
+        for role_spec in rule_set.roles
+        for _ in range(role_spec.count)
+    ]
+    roles_by_seat = [player.role for player in state.players]
+    non_wolf_roles_by_seat = [role for role in roles_by_seat if role != WEREWOLF]
+
+    assert roles_by_seat != rule_order
+    assert roles_by_seat[:4] != [WEREWOLF, WEREWOLF, WEREWOLF, WEREWOLF]
+    assert non_wolf_roles_by_seat[0] != SEER
+    assert [(player.name, player.role) for player in state.players] == [
+        (player.name, player.role) for player in repeated_state.players
+    ]
+
+
 def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
     state = initialize_game_state(
         session_id="session_test_sheriff_payload",
@@ -837,6 +870,8 @@ def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
     round_state.sheriff_speeches = [
         {"speaker": state.players[0].name, "message": "我上警争警徽。"}
     ]
+    round_state.sheriff_speech_order = [state.players[1].name, state.players[0].name]
+    round_state.sheriff_speech_direction = "逆时针"
     round_state.sheriff_withdrawn = [state.players[1].name]
     round_state.sheriff_final_candidates = [state.players[0].name]
     round_state.sheriff_voters = [state.players[2].name]
@@ -861,6 +896,11 @@ def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
     assert round_payload["sheriff_speeches"] == [
         {"speaker": state.players[0].name, "message": "我上警争警徽。"}
     ]
+    assert round_payload["sheriff_speech_order"] == [
+        state.players[1].name,
+        state.players[0].name,
+    ]
+    assert round_payload["sheriff_speech_direction"] == "逆时针"
     assert round_payload["sheriff_withdrawn"] == [state.players[1].name]
     assert round_payload["sheriff_final_candidates"] == [state.players[0].name]
     assert round_payload["sheriff_voters"] == [state.players[2].name]
@@ -1447,6 +1487,48 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
     assert round_log.speech_order is not None
 
 
+def test_sheriff_candidate_speeches_use_random_start_and_direction() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_random_sheriff_speeches",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=57,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    candidates = active_players[:4]
+    provider = SheriffFlowProvider(
+        candidates=set(candidates),
+        sheriff_vote_targets={name: candidates[0] for name in active_players[4:]},
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        rng=random.Random(0),
+    )
+
+    engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+
+    expected_speech_order = [
+        active_players[3],
+        active_players[2],
+        active_players[1],
+        active_players[0],
+    ]
+    assert round_state.sheriff_candidates == candidates
+    assert round_state.sheriff_speech_order == expected_speech_order
+    assert round_state.sheriff_speech_direction == "逆时针"
+    assert [speech["speaker"] for speech in round_state.sheriff_speeches] == expected_speech_order
+    assert [
+        name for action, name in provider.actions if action == "sheriff_speech"
+    ] == expected_speech_order
+
+
 def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_debate() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -1526,10 +1608,11 @@ def test_sheriff_election_limits_speeches_to_candidates_and_votes_to_off_sheriff
     engine._run_day_phase(round_state, round_log, active_players)
 
     assert round_state.sheriff_candidates == [first_candidate, withdrawn_candidate]
-    assert [entry["speaker"] for entry in round_state.sheriff_speeches] == [
+    assert {entry["speaker"] for entry in round_state.sheriff_speeches} == {
         first_candidate,
         withdrawn_candidate,
-    ]
+    }
+    assert set(round_state.sheriff_speech_order) == {first_candidate, withdrawn_candidate}
     assert round_state.sheriff_withdrawn == [withdrawn_candidate]
     assert round_state.sheriff_final_candidates == [first_candidate]
     assert round_state.sheriff_voters == active_players[2:]
@@ -1753,6 +1836,7 @@ def test_dead_sheriff_can_transfer_badge() -> None:
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
     engine._remove_player(active_players, old_sheriff)
+    round_state.day_deaths.append(DeathEvent(old_sheriff, "vote_exile", "投票"))
     engine._maybe_transfer_sheriff_badge(
         dead_player=old_sheriff,
         round_state=round_state,
@@ -1767,6 +1851,45 @@ def test_dead_sheriff_can_transfer_badge() -> None:
     assert round_state.sheriff_badge_target == new_sheriff
     assert round_state.sheriff_badge_lost is False
     assert round_log.sheriff_badge is not None
+
+
+def test_living_sheriff_cannot_transfer_or_destroy_badge() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_living_sheriff_no_badge_transfer",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=58,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    old_sheriff = active_players[0]
+    new_sheriff = active_players[1]
+    state.sheriff = old_sheriff
+    state.player_by_name()[old_sheriff].is_sheriff = True
+    provider = SheriffFlowProvider(
+        candidates={old_sheriff},
+        sheriff_vote_targets={name: old_sheriff for name in active_players if name != old_sheriff},
+        badge_choice=new_sheriff,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._maybe_transfer_sheriff_badge(
+        dead_player=old_sheriff,
+        round_state=round_state,
+        round_log=round_log,
+        active_players=active_players,
+        phase="vote",
+    )
+
+    assert state.sheriff == old_sheriff
+    assert state.player_by_name()[old_sheriff].is_sheriff is True
+    assert state.player_by_name()[new_sheriff].is_sheriff is False
+    assert round_state.sheriff_badge_target is None
+    assert round_state.sheriff_badge_lost is False
+    assert round_log.sheriff_badge is None
 
 
 def test_hunter_shot_target_sheriff_transfers_badge() -> None:

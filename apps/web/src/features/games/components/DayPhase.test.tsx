@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { GameRound } from "../types";
+import type { DebugItem, GameRound } from "../types";
 import { DayPhase } from "./DayPhase";
 
 const baseRound: GameRound = {
@@ -43,6 +43,19 @@ const baseRound: GameRound = {
   sheriff_badge_lost: false,
   summaries: {},
   success: true,
+};
+
+const sheriffBadgeItem: DebugItem = {
+  id: "round-1-day-sheriff-badge",
+  roundNumber: 1,
+  phase: "day",
+  title: "警徽处理",
+  actor: "Jacob",
+  action: "sheriff_badge",
+  choice: "撕毁警徽",
+  prompt: "请选择警徽处理方式。",
+  rawResponse: '{"badge":"撕毁警徽"}',
+  parsed: { badge: "撕毁警徽" },
 };
 
 describe("DayPhase", () => {
@@ -110,7 +123,9 @@ describe("DayPhase", () => {
     );
 
     expect(screen.getByText("警长竞选")).toBeInTheDocument();
-    expect(screen.getByText("上警：Alice、Bob")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("list", { name: "上警名单" })).getByText("Alice"),
+    ).toBeInTheDocument();
     expect(screen.getByText("发言方向：警左发言")).toBeInTheDocument();
     expect(screen.getByText("白天发言")).toBeInTheDocument();
     expect(screen.getByText("放逐投票")).toBeInTheDocument();
@@ -137,5 +152,68 @@ describe("DayPhase", () => {
 
     expect(screen.getByText("Bob：1.5票")).toBeInTheDocument();
     expect(screen.getByText("Alice（1.5票）")).toBeInTheDocument();
+  });
+
+  it("shows sheriff badge handling with the day exile result", () => {
+    render(
+      <DayPhase
+        round={{
+          ...baseRound,
+          hunter_shot: null,
+          idiot_revealed: null,
+          exiled: "Jacob",
+          day_deaths: [{ player: "Jacob", cause: "vote_exile", source: "投票" }],
+          sheriff_elected: "Jacob",
+          sheriff_badge_lost: true,
+          votes: [
+            { voter: "David", target: "Jacob", weight: 1 },
+            { voter: "Tyler", target: "Jacob", weight: 1 },
+          ],
+          voteTally: [{ target: "Jacob", count: 2 }],
+          voteCount: 2,
+          voteMajorityThreshold: 2,
+        }}
+        items={[sheriffBadgeItem]}
+        selectedItem={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Jacob 被放逐")).toBeInTheDocument();
+    expect(screen.getByText("白天死亡：Jacob")).toBeInTheDocument();
+    expect(
+      screen.getByText("警徽处理：Jacob 选择 撕毁警徽"),
+    ).toBeInTheDocument();
+  });
+
+  it("does not treat a failed sheriff election as an exiled player destroying the badge", () => {
+    render(
+      <DayPhase
+        round={{
+          ...baseRound,
+          hunter_shot: null,
+          idiot_revealed: null,
+          exiled: "Tyler",
+          day_deaths: [{ player: "Tyler", cause: "vote_exile", source: "投票" }],
+          sheriff: null,
+          sheriff_elected: null,
+          sheriff_badge_lost: true,
+          votes: [
+            { voter: "Scott", target: "Tyler", weight: 1 },
+            { voter: "Will", target: "Tyler", weight: 1 },
+          ],
+          voteTally: [{ target: "Tyler", count: 2 }],
+          voteCount: 2,
+          voteMajorityThreshold: 2,
+        }}
+        items={[]}
+        selectedItem={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Tyler 被放逐")).toBeInTheDocument();
+    expect(screen.getByText("白天死亡：Tyler")).toBeInTheDocument();
+    expect(screen.queryByText("警徽处理：Tyler 选择 撕毁警徽")).not.toBeInTheDocument();
   });
 });

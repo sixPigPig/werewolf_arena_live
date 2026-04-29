@@ -9,6 +9,7 @@ from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.providers import (
     DeepSeekProvider,
     MiniMaxProvider,
+    QwenProvider,
     create_model_provider,
     default_model_name,
 )
@@ -366,6 +367,70 @@ def test_minimax_provider_explains_invalid_key_region_mismatch(monkeypatch) -> N
         provider.complete_json(model="MiniMax-M2.7", prompt="{}", temperature=0.3)
 
 
+def test_qwen_provider_uses_dashscope_env_and_model_alias(tmp_path, monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
+    monkeypatch.delenv("DASHSCOPE_API_HOST", raising=False)
+    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+    provider = QwenProvider(transport=fake_transport)
+
+    raw = provider.complete_json(
+        model="Qwen3.6-Plus",
+        prompt='请输出 json：{"vote":"老周"}',
+        temperature=0.3,
+    )
+
+    assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
+    assert requests[0]["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer dashscope-key"
+    assert requests[0]["payload"]["model"] == "qwen3.6-plus"
+
+
+def test_qwen_provider_accepts_dashscope_api_host(monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
+    monkeypatch.setenv("DASHSCOPE_API_HOST", "https://dashscope-intl.aliyuncs.com")
+    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+    provider = QwenProvider(transport=fake_transport)
+
+    provider.complete_json(
+        model="qwen3.6-plus",
+        prompt='请输出 json：{"vote":"老周"}',
+        temperature=0.3,
+    )
+
+    assert requests[0]["url"] == (
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+    )
+
+
 def test_model_provider_router_routes_minimax_without_deepseek_key(tmp_path, monkeypatch) -> None:
     requests = []
 
@@ -397,6 +462,41 @@ def test_model_provider_router_routes_minimax_without_deepseek_key(tmp_path, mon
     assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
     assert requests[0]["url"] == "https://api.minimax.io/v1/chat/completions"
     assert requests[0]["headers"]["Authorization"] == "Bearer minimax-key"
+
+
+def test_model_provider_router_routes_qwen_alias_without_other_keys(tmp_path, monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
+    monkeypatch.delenv("DASHSCOPE_API_HOST", raising=False)
+    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+
+    provider = create_model_provider(transport=fake_transport)
+    raw = provider.complete_json(
+        model="Qwen3.6-Plus",
+        prompt='请输出 json：{"vote":"老周"}',
+        temperature=0.3,
+    )
+
+    assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
+    assert requests[0]["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer dashscope-key"
+    assert requests[0]["payload"]["model"] == "qwen3.6-plus"
 
 
 def test_model_provider_router_routes_deepseek_models(monkeypatch) -> None:
@@ -456,6 +556,26 @@ def test_default_model_name_uses_minimax_when_only_minimax_key_is_configured(
     assert default_model_name() == "MiniMax-M2.7"
 
 
+def test_default_model_name_uses_qwen_when_only_dashscope_key_is_configured(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    (tmp_path / ".env").write_text(
+        "#DEEPSEEK_API_KEY=\n"
+        "#MINIMAX_API_KEY=\n"
+        "DASHSCOPE_API_KEY=dashscope-key\n"
+        "DASHSCOPE_MODEL=qwen3.6-plus\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+
+    assert default_model_name() == "qwen3.6-plus"
+
+
 def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
     example = os.path.join(os.path.dirname(__file__), "..", ".env.example")
 
@@ -465,3 +585,4 @@ def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
     assert "WEREWOLF_DEFAULT_MODEL=\n" in contents
     assert "DEEPSEEK_API_KEY=\n" in contents
     assert "MINIMAX_API_KEY=\n" in contents
+    assert "DASHSCOPE_API_KEY=\n" in contents

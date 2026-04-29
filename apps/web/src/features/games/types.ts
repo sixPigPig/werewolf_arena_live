@@ -120,6 +120,8 @@ export type RawRoundState = {
   idiot_revealed?: string | null;
   sheriff?: string | null;
   sheriff_candidates?: string[];
+  sheriff_speech_order?: string[];
+  sheriff_speech_direction?: string | null;
   sheriff_speeches?: SpeechEntry[];
   sheriff_withdrawn?: string[];
   sheriff_final_candidates?: string[];
@@ -208,6 +210,8 @@ export type GameRound = Omit<
   | "idiot_revealed"
   | "sheriff"
   | "sheriff_candidates"
+  | "sheriff_speech_order"
+  | "sheriff_speech_direction"
   | "sheriff_speeches"
   | "sheriff_withdrawn"
   | "sheriff_final_candidates"
@@ -233,6 +237,8 @@ export type GameRound = Omit<
   idiot_revealed: string | null;
   sheriff: string | null;
   sheriff_candidates: string[];
+  sheriff_speech_order: string[];
+  sheriff_speech_direction: string | null;
   sheriff_speeches: SpeechEntry[];
   sheriff_withdrawn: string[];
   sheriff_final_candidates: string[];

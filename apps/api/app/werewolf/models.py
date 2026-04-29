@@ -119,6 +119,8 @@ class RoundState:
     summaries: dict[str, str] = field(default_factory=dict)
     sheriff: str | None = None
     sheriff_candidates: list[str] = field(default_factory=list)
+    sheriff_speech_order: list[str] = field(default_factory=list)
+    sheriff_speech_direction: str | None = None
     sheriff_speeches: list[dict[str, str]] = field(default_factory=list)
     sheriff_withdrawn: list[str] = field(default_factory=list)
     sheriff_final_candidates: list[str] = field(default_factory=list)
@@ -156,6 +158,8 @@ class RoundState:
             "summaries": self.summaries,
             "sheriff": self.sheriff,
             "sheriff_candidates": self.sheriff_candidates,
+            "sheriff_speech_order": self.sheriff_speech_order,
+            "sheriff_speech_direction": self.sheriff_speech_direction,
             "sheriff_speeches": self.sheriff_speeches,
             "sheriff_withdrawn": self.sheriff_withdrawn,
             "sheriff_final_candidates": self.sheriff_final_candidates,

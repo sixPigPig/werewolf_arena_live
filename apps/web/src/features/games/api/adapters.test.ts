@@ -176,6 +176,8 @@ describe("normalizeGameReplay", () => {
             players: ["Alice", "Bob", "Cora"],
             sheriff: "Alice",
             sheriff_candidates: ["Alice", "Bob"],
+            sheriff_speech_order: ["Bob", "Alice"],
+            sheriff_speech_direction: "逆时针",
             sheriff_speeches: [
               { speaker: "Alice", message: "我是好人上警。" },
               { speaker: "Bob", message: "我竞选警长。" },
@@ -207,6 +209,8 @@ describe("normalizeGameReplay", () => {
     expect(replay.sheriffBadgeLost).toBe(false);
     expect(round.sheriff).toBe("Alice");
     expect(round.sheriff_candidates).toEqual(["Alice", "Bob"]);
+    expect(round.sheriff_speech_order).toEqual(["Bob", "Alice"]);
+    expect(round.sheriff_speech_direction).toBe("逆时针");
     expect(round.sheriff_speeches).toEqual([
       { speaker: "Alice", message: "我是好人上警。" },
       { speaker: "Bob", message: "我竞选警长。" },
@@ -240,6 +244,8 @@ describe("normalizeGameReplay", () => {
     const round = replay.rounds[0];
 
     expect(round.sheriff_speeches).toEqual([]);
+    expect(round.sheriff_speech_order).toEqual([]);
+    expect(round.sheriff_speech_direction).toBeNull();
     expect(round.sheriff_withdrawn).toEqual([]);
     expect(round.sheriff_final_candidates).toEqual([]);
     expect(round.sheriff_voters).toEqual([]);
@@ -521,6 +527,115 @@ describe("normalizeGameReplay", () => {
       prompt: "请总结本轮信息。",
       parsed: { summary: "继续隐藏身份。" },
     });
+  });
+
+  it("places sheriff badge handling after exile voting when the sheriff dies during the day", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        rounds: [
+          {
+            number: 1,
+            players: ["Alice", "Bob", "Cora"],
+            eliminated: null,
+            protected: null,
+            investigated: null,
+            exiled: "Alice",
+            day_deaths: [
+              { player: "Alice", cause: "vote_exile", source: "投票" },
+            ],
+            debate: [{ speaker: "Bob", message: "先听发言。" }],
+            bids: [],
+            votes: [{ Bob: "Alice" }],
+            summaries: { Bob: "Alice 出局后处理警徽。" },
+            success: true,
+          },
+        ],
+      },
+      logs: [
+        {
+          number: 1,
+          eliminate: null,
+          protect: null,
+          investigate: null,
+          bid: [],
+          speech_order: {
+            actor: "Alice",
+            action: "speech_order",
+            options: ["警左发言", "警右发言"],
+            choice: "警左发言",
+            lm_log: {
+              prompt: "请选择发言方向。",
+              raw_response: '{"speech_order":"警左发言"}',
+              result: { speech_order: "警左发言" },
+            },
+          },
+          debate: [
+            {
+              actor: "Bob",
+              action: "debate",
+              options: [],
+              choice: "先听发言。",
+              lm_log: {
+                prompt: "请发表白天发言。",
+                raw_response: '{"say":"先听发言。"}',
+                result: { say: "先听发言。" },
+              },
+            },
+          ],
+          votes: [
+            [
+              {
+                actor: "Bob",
+                action: "vote",
+                options: ["Alice", "Cora"],
+                choice: "Alice",
+                lm_log: {
+                  prompt: "请选择放逐对象。",
+                  raw_response: '{"vote":"Alice"}',
+                  result: { vote: "Alice" },
+                },
+              },
+            ],
+          ],
+          sheriff_badge: {
+            actor: "Alice",
+            action: "sheriff_badge",
+            options: ["Cora", "撕毁警徽"],
+            choice: "撕毁警徽",
+            lm_log: {
+              prompt: "请选择警徽处理方式。",
+              raw_response: '{"badge":"撕毁警徽"}',
+              result: { badge: "撕毁警徽" },
+            },
+          },
+          summaries: [
+            {
+              actor: "Bob",
+              action: "summarize",
+              options: [],
+              choice: "Alice 出局后处理警徽。",
+              lm_log: {
+                prompt: "请总结本轮信息。",
+                raw_response: '{"summary":"Alice 出局后处理警徽。"}',
+                result: { summary: "Alice 出局后处理警徽。" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      replay.debugItems.map(({ id, phase, title }) => ({ id, phase, title })),
+    ).toEqual([
+      { id: "round-1-day-speech-order", phase: "day", title: "发言方向" },
+      { id: "round-1-day-debate-0", phase: "day", title: "白天发言" },
+      { id: "round-1-day-vote-0", phase: "day", title: "放逐投票" },
+      { id: "round-1-day-sheriff-badge", phase: "day", title: "警徽处理" },
+      { id: "round-1-summary-0", phase: "summary", title: "轮次总结" },
+    ]);
   });
 
   it("normalizes witch hunter idiot round fields", () => {
