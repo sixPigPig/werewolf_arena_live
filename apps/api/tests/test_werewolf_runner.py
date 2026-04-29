@@ -55,6 +55,11 @@ class ScriptedChineseProvider:
                 {"reasoning": "我需要记录本轮线索。", "summary": "我会继续关注发言矛盾最大的玩家。"},
                 ensure_ascii=False,
             )
+        if '"self_explode"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试中默认不自爆。", "self_explode": "不自爆"},
+                ensure_ascii=False,
+            )
         if '"run"' in prompt:
             return json.dumps({"reasoning": "测试中默认参与警长竞选。", "run": choice}, ensure_ascii=False)
         if '"withdraw"' in prompt:
@@ -152,6 +157,63 @@ class SheriffFlowProvider(ScriptedChineseProvider):
             else:
                 choice = options[0] if options else "1"
             return json.dumps({"reasoning": "测试放逐票。", "vote": choice}, ensure_ascii=False)
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class SelfExplosionProvider(SheriffFlowProvider):
+    def __init__(
+        self,
+        *,
+        self_exploders: list[str],
+        candidates: set[str],
+        sheriff_vote_targets: dict[str, str] | None = None,
+        badge_choice: str = "撕毁警徽",
+    ) -> None:
+        super().__init__(
+            candidates=candidates,
+            sheriff_vote_targets=sheriff_vote_targets or {},
+            badge_choice=badge_choice,
+        )
+        self.self_exploders = self_exploders
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        name = _extract_actor_name(prompt)
+        if '"self_explode"' in prompt:
+            self.actions.append(("werewolf_self_explosion", name))
+            choice = "自爆" if name in self.self_exploders else "不自爆"
+            if choice == "自爆":
+                self.self_exploders.remove(name)
+            return json.dumps({"reasoning": "测试自爆判断。", "self_explode": choice}, ensure_ascii=False)
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class FirstNightSelfExplosionProvider(SelfExplosionProvider):
+    def __init__(
+        self,
+        *,
+        remove_target: str,
+        self_exploders: list[str],
+        candidates: set[str],
+    ) -> None:
+        super().__init__(self_exploders=self_exploders, candidates=candidates)
+        self.remove_target = remove_target
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"remove"' in prompt:
+            return json.dumps(
+                {"reasoning": "制造首夜 pending 死亡。", "remove": self.remove_target},
+                ensure_ascii=False,
+            )
+        if '"save"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试不救。", "save": "不使用解药"},
+                ensure_ascii=False,
+            )
+        if '"poison"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试不毒。", "poison": "不使用毒药"},
+                ensure_ascii=False,
+            )
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
@@ -1061,6 +1123,194 @@ def test_werewolf_self_explosion_prompt_renders_double_badge_context() -> None:
     assert "双爆吞警徽" in prompt
     assert "第二次警长产生前自爆会导致警徽流失" in prompt
     assert schema["required"] == ["reasoning", "self_explode"]
+
+
+def test_first_pre_sheriff_self_explosion_ends_day_without_losing_badge() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_first_self_explosion",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=70,
+        rule_set=rule_set,
+    )
+    players_by_name = state.player_by_name()
+    active_players = [player.name for player in state.players]
+    exploding_wolf = next(player.name for player in state.players if player.role == "狼人")
+    provider = SelfExplosionProvider(
+        self_exploders=[exploding_wolf],
+        candidates={active_players[0], active_players[1]},
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.werewolf_self_exploded == exploding_wolf
+    assert round_state.day_ended_by_self_explosion is True
+    assert round_state.sheriff_badge_lost is False
+    assert state.sheriff_badge_lost is False
+    assert state.sheriff_election_pending is True
+    assert state.sheriff_pre_election_bomb_count == 1
+    assert exploding_wolf not in active_players
+    assert players_by_name[exploding_wolf].revealed_role is True
+    assert round_state.votes == []
+    assert round_log.summaries == []
+    assert round_log.werewolf_self_explosion is not None
+
+
+def test_second_pre_sheriff_self_explosion_loses_badge() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_second_self_explosion",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=71,
+        rule_set=rule_set,
+    )
+    state.sheriff_pre_election_bomb_count = 1
+    state.sheriff_election_pending = True
+    active_players = [player.name for player in state.players]
+    exploding_wolf = next(player.name for player in state.players if player.role == "狼人")
+    provider = SelfExplosionProvider(self_exploders=[exploding_wolf], candidates={active_players[0]})
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.sheriff_badge_lost is True
+    assert state.sheriff_badge_lost is True
+    assert state.sheriff_election_pending is False
+    assert round_state.sheriff_badge_lost_reason == "双爆吞警徽"
+
+
+def test_pending_sheriff_election_can_resume_after_first_self_explosion() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_resume_sheriff_after_bomb",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=72,
+        rule_set=rule_set,
+    )
+    state.sheriff_pre_election_bomb_count = 1
+    state.sheriff_election_pending = True
+    active_players = [player.name for player in state.players]
+    sheriff = active_players[0]
+    second_candidate = active_players[1]
+    provider = SelfExplosionProvider(
+        self_exploders=[],
+        candidates={sheriff, second_candidate},
+        sheriff_vote_targets={
+            name: sheriff for name in active_players if name not in {sheriff, second_candidate}
+        },
+    )
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.sheriff_elected == sheriff
+    assert state.sheriff == sheriff
+    assert state.sheriff_election_pending is False
+
+
+def test_first_night_pending_deaths_are_announced_after_self_explosion() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_self_explosion_pending_night",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=75,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    exploding_wolf = next(player.name for player in state.players if player.role == "狼人")
+    night_target = next(player.name for player in state.players if player.role != "狼人")
+    provider = FirstNightSelfExplosionProvider(
+        remove_target=night_target,
+        self_exploders=[exploding_wolf],
+        candidates={active_players[0], active_players[1]},
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    state.rounds.append(round_state)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._run_day_phase(round_state, round_log, active_players, pending_deaths)
+
+    assert round_state.werewolf_self_exploded == exploding_wolf
+    assert {death.player for death in round_state.day_deaths} == {exploding_wolf}
+    assert {death.player for death in round_state.night_deaths} == {night_target}
+    assert exploding_wolf not in active_players
+    assert night_target not in active_players
+    assert round_state.votes == []
+    assert round_log.summaries == []
+
+
+def test_post_sheriff_self_explosion_ends_day_without_consuming_badge() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_post_sheriff_self_explosion",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=73,
+        rule_set=rule_set,
+    )
+    players_by_name = state.player_by_name()
+    active_players = [player.name for player in state.players]
+    sheriff = next(player.name for player in state.players if player.role != "狼人")
+    exploding_wolf = next(player.name for player in state.players if player.role == "狼人")
+    state.sheriff = sheriff
+    players_by_name[sheriff].is_sheriff = True
+    provider = SelfExplosionProvider(self_exploders=[exploding_wolf], candidates=set())
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.werewolf_self_exploded == exploding_wolf
+    assert state.sheriff == sheriff
+    assert state.sheriff_badge_lost is False
+    assert state.sheriff_pre_election_bomb_count == 0
+    assert round_log.sheriff_badge is None
+
+
+def test_wolf_sheriff_self_explosion_triggers_badge_handling() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_wolf_sheriff_self_explosion",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=74,
+        rule_set=rule_set,
+    )
+    players_by_name = state.player_by_name()
+    active_players = [player.name for player in state.players]
+    wolf_sheriff = next(player.name for player in state.players if player.role == "狼人")
+    badge_target = next(player.name for player in state.players if player.name != wolf_sheriff)
+    state.sheriff = wolf_sheriff
+    players_by_name[wolf_sheriff].is_sheriff = True
+    provider = SelfExplosionProvider(
+        self_exploders=[wolf_sheriff],
+        candidates=set(),
+        badge_choice=badge_target,
+    )
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.werewolf_self_exploded == wolf_sheriff
+    assert state.sheriff == badge_target
+    assert round_state.sheriff_badge_target == badge_target
+    assert round_log.sheriff_badge is not None
 
 
 def test_sheriff_vote_prompt_includes_public_election_context() -> None:
