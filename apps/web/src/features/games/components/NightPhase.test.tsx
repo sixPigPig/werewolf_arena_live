@@ -18,6 +18,8 @@ const baseRound: GameRound = {
   idiot_revealed: null,
   sheriff: null,
   sheriff_candidates: [],
+  sheriff_speech_order: [],
+  sheriff_speech_direction: null,
   sheriff_speeches: [],
   sheriff_withdrawn: [],
   sheriff_final_candidates: [],

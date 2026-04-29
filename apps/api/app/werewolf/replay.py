@@ -6,6 +6,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.werewolf.checkpoint import (
+    ResumeCheckpointError,
+    has_resume_checkpoint,
+    load_resume_checkpoint,
+)
+
 
 SESSION_ID_RE = r"^session_(\d{8})_(\d{6})_[A-Za-z0-9_-]+$"
 _SESSION_PATTERN = re.compile(SESSION_ID_RE)
@@ -39,13 +45,17 @@ class ReplayStore:
                 continue
 
             state_path, status = self._state_path_for_directory(directory)
+            checkpoint = self._checkpoint_for_directory(directory)
             if state_path is None or status is None:
-                continue
-
-            try:
-                state = self._read_state(state_path)
-            except ReplayNotFoundError:
-                continue
+                if checkpoint is None:
+                    continue
+                status = "partial"
+                state = checkpoint["state_at_round_start"]
+            else:
+                try:
+                    state = self._read_state(state_path)
+                except ReplayNotFoundError:
+                    continue
 
             rounds = state.get("rounds", [])
             sessions.append(
@@ -56,6 +66,7 @@ class ReplayStore:
                     "round_count": len(rounds),
                     "created_at": created_at_from_session_id(directory.name),
                     "rule_set": state.get("rule_set"),
+                    "resumable": checkpoint is not None,
                 }
             )
 
@@ -77,8 +88,17 @@ class ReplayStore:
             raise ReplayNotFoundError from exc
 
         state_path, status = self._state_path_for_directory(session_dir)
+        checkpoint = self._checkpoint_for_directory(session_dir)
         if state_path is None or status is None:
-            raise ReplayNotFoundError
+            if checkpoint is None:
+                raise ReplayNotFoundError
+            return {
+                "session_id": session_id,
+                "status": "partial",
+                "state": checkpoint["state_at_round_start"],
+                "logs": checkpoint.get("logs_before_round", []),
+                "resumable": True,
+            }
 
         logs_path = session_dir / "game_logs.json"
         logs = self._read_logs(logs_path) if self._path_exists(logs_path) else []
@@ -88,6 +108,7 @@ class ReplayStore:
             "status": status,
             "state": state,
             "logs": logs,
+            "resumable": checkpoint is not None,
         }
 
     def _state_path_for_directory(self, directory: Path) -> tuple[Path | None, str | None]:
@@ -157,6 +178,14 @@ class ReplayStore:
             raise ReplayNotFoundError
 
         return logs
+
+    def _checkpoint_for_directory(self, directory: Path) -> dict[str, Any] | None:
+        try:
+            if not has_resume_checkpoint(directory):
+                return None
+            return load_resume_checkpoint(directory)
+        except ResumeCheckpointError:
+            return None
 
 
 def created_at_from_session_id(session_id: str) -> str | None:

@@ -444,6 +444,60 @@ describe("LiveGamePage", () => {
     expect(screen.getAllByText("model timeout").length).toBeGreaterThan(0);
   });
 
+  it("resumes a failed live run from its saved checkpoint", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/runs/run_1234abcd")) {
+        return Promise.resolve(runResponse("run_1234abcd", "failed"));
+      }
+      if (url.endsWith("/api/v1/games/session_run_1234abcd/resume")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              run_id: "run_resumed",
+              session_id: "session_run_1234abcd",
+              villager_model: "deepseek-chat",
+              werewolf_model: "deepseek-chat",
+              seed: null,
+              max_rounds: 8,
+              status: "queued",
+              created_at: "2026-04-24T12:05:00Z",
+              started_at: null,
+              completed_at: null,
+              winner: null,
+              error: null,
+              event_count: 1,
+              event_pacing: "off",
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
+
+    renderWithClient(
+      <Routes>
+        <Route
+          path="/games/live/run_resumed"
+          element={<p>继续后的实时观战</p>}
+        />
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "继续对局" }));
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/games/session_run_1234abcd/resume",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(await screen.findByText("继续后的实时观战")).toBeInTheDocument();
+  });
+
   it("plays the director stage in order instead of jumping to the latest event", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>

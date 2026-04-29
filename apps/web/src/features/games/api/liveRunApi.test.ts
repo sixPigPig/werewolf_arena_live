@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createGameRun } from "./createGameRun";
 import { getGameRun } from "./getGameRun";
+import { resumeGameRun } from "./resumeGameRun";
 
 describe("live run api", () => {
   afterEach(() => {
@@ -89,5 +90,38 @@ describe("live run api", () => {
     expect(run.event_count).toBe(4);
     expect(run.event_pacing).toBe("slow");
     expect(run.winner).toBe("Villagers");
+  });
+
+  it("resumes a game run from a saved checkpoint", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          run_id: "run_resumed",
+          session_id: "session_20260424_120000_ab12cd34",
+          villager_model: "Qwen3.6-Plus",
+          werewolf_model: "MiniMax-M2.7",
+          seed: 21,
+          max_rounds: 8,
+          winner: null,
+          status: "queued",
+          created_at: "2026-04-24T12:05:00Z",
+          started_at: null,
+          completed_at: null,
+          error: null,
+          event_count: 1,
+          event_pacing: "off",
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const run = await resumeGameRun("session_20260424_120000_ab12cd34");
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/games/session_20260424_120000_ab12cd34/resume",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(run.run_id).toBe("run_resumed");
+    expect(run.session_id).toBe("session_20260424_120000_ab12cd34");
   });
 });

@@ -1,13 +1,32 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { listGames } from "../features/games/api/listGames";
+import { resumeGameRun } from "../features/games/api/resumeGameRun";
 import { CreateGameRunForm } from "../features/games/components/CreateGameRunForm";
 import { SessionList } from "../features/games/components/SessionList";
 
 export function GamesPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [resumingSessionId, setResumingSessionId] = useState<string | null>(null);
   const { data, isError, isPending } = useQuery({
     queryKey: ["games"],
     queryFn: listGames,
+  });
+  const resumeMutation = useMutation({
+    mutationFn: resumeGameRun,
+    onMutate: (sessionId) => {
+      setResumingSessionId(sessionId);
+    },
+    onSuccess: (run) => {
+      queryClient.invalidateQueries({ queryKey: ["games"] });
+      navigate(`/games/live/${run.run_id}`);
+    },
+    onSettled: () => {
+      setResumingSessionId(null);
+    },
   });
 
   return (
@@ -24,7 +43,16 @@ export function GamesPage() {
         ) : isError ? (
           <p className="text-sm text-red-700">无法读取对局列表</p>
         ) : data ? (
-          <SessionList sessions={data.sessions} />
+          <>
+            <SessionList
+              onResumeSession={(sessionId) => resumeMutation.mutate(sessionId)}
+              resumingSessionId={resumingSessionId}
+              sessions={data.sessions}
+            />
+            {resumeMutation.isError ? (
+              <p className="mt-2 text-sm text-red-700">无法继续对局</p>
+            ) : null}
+          </>
         ) : null}
       </div>
     </main>

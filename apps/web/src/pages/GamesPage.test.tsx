@@ -129,6 +129,85 @@ describe("GamesPage", () => {
     expect(screen.getByText("警徽 1.5 票")).toBeInTheDocument();
   });
 
+  it("resumes a resumable session from the list", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/session_20260424_120000_ab12cd34/resume")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              run_id: "run_resumed",
+              session_id: "session_20260424_120000_ab12cd34",
+              villager_model: "Qwen3.6-Plus",
+              werewolf_model: "MiniMax-M2.7",
+              seed: 21,
+              max_rounds: 8,
+              status: "queued",
+              created_at: "2026-04-24T12:05:00Z",
+              started_at: null,
+              completed_at: null,
+              winner: null,
+              error: null,
+              event_count: 1,
+              event_pacing: "off",
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sessions: [
+              {
+                session_id: "session_20260424_120000_ab12cd34",
+                status: "partial",
+                winner: null,
+                round_count: 1,
+                created_at: "2026-04-24T12:00:00Z",
+                resumable: true,
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    });
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games" element={<GamesPage />} />
+        <Route
+          path="/games/live/run_resumed"
+          element={<p>继续后的实时观战</p>}
+        />
+      </Routes>,
+      "/games",
+    );
+
+    expect(
+      await screen.findByText("session_20260424_120000_ab12cd34"),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "继续对局" }));
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/games/session_20260424_120000_ab12cd34/resume",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(await screen.findByText("继续后的实时观战")).toBeInTheDocument();
+  });
+
   it("renders an empty state when no sessions exist", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);

@@ -400,7 +400,7 @@ def test_qwen_provider_uses_dashscope_env_and_model_alias(tmp_path, monkeypatch)
     assert requests[0]["payload"]["model"] == "qwen3.6-plus"
 
 
-def test_qwen_provider_accepts_dashscope_api_host(monkeypatch) -> None:
+def test_qwen_provider_accepts_dashscope_api_host(tmp_path, monkeypatch) -> None:
     requests = []
 
     def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
@@ -418,6 +418,7 @@ def test_qwen_provider_accepts_dashscope_api_host(monkeypatch) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
     monkeypatch.setenv("DASHSCOPE_API_HOST", "https://dashscope-intl.aliyuncs.com")
     monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
     provider = QwenProvider(transport=fake_transport)
 
     provider.complete_json(

@@ -40,6 +40,7 @@ export type GameSessionSummary = {
   round_count: number;
   created_at: string | null;
   rule_set?: RuleSetSummary | null;
+  resumable?: boolean;
 };
 
 export type GameSessionsResponse = {

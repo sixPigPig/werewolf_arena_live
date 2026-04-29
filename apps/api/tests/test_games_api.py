@@ -11,6 +11,7 @@ from app.api.routes.games import (
     get_replay_store,
 )
 from app.main import app
+from app.werewolf.checkpoint import RESUME_CHECKPOINT_FILE
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.replay import ReplayStore
 
@@ -256,6 +257,77 @@ def test_create_game_run_rejects_unknown_rule_set(
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Unknown rule set: missing_rule"
+
+
+def test_resume_game_run_creates_live_run_from_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "session_20260424_120000_ab12cd34"
+    write_json(
+        tmp_path / session_id / RESUME_CHECKPOINT_FILE,
+        {
+            "schema_version": 1,
+            "session_id": session_id,
+            "run_params": {
+                "villager_model": "Qwen3.6-Plus",
+                "werewolf_model": "MiniMax-M2.7",
+                "seed": 21,
+                "max_rounds": 8,
+                "rule_set_id": "starter_6",
+            },
+            "round_number": 1,
+            "active_players": ["张三", "李四"],
+            "rng_state": None,
+            "state_at_round_start": sample_state(session_id, winner="", error=""),
+            "logs_before_round": [],
+            "cached_model_responses": [],
+            "failed_request": None,
+            "last_error": None,
+        },
+    )
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_resume_background(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._resume_game_in_background", fake_resume_background)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["session_id"] == session_id
+    assert payload["villager_model"] == "Qwen3.6-Plus"
+    assert payload["werewolf_model"] == "MiniMax-M2.7"
+    assert payload["rule_set"]["id"] == "starter_6"
+    assert captured[0]["session_id"] == session_id
+    assert captured[0]["logs_dir"] == tmp_path
+
+
+def test_resume_game_run_returns_404_without_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post("/api/v1/games/session_20260424_120000_ab12cd34/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Resume checkpoint not found"
 
 
 def test_list_games_includes_rule_set_summary(tmp_path: Path) -> None:

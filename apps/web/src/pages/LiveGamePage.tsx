@@ -1,8 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { getGameRun } from "../features/games/api/getGameRun";
+import { resumeGameRun } from "../features/games/api/resumeGameRun";
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveDirectorStage } from "../features/games/components/LiveDirectorStage";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
@@ -15,6 +16,7 @@ import { deriveLiveSpectatorState } from "../features/games/liveSpectator";
 
 export function LiveGamePage() {
   const { runId } = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { events, connectionState } = useGameRunEvents(runId);
   const [autoFollow, setAutoFollow] = useState(true);
@@ -34,10 +36,19 @@ export function LiveGamePage() {
       return status === "completed" || status === "failed" ? false : 15000;
     },
   });
+  const resumeMutation = useMutation({
+    mutationFn: resumeGameRun,
+    onSuccess: (newRun) => {
+      queryClient.invalidateQueries({ queryKey: ["games"] });
+      navigate(`/games/live/${newRun.run_id}`);
+    },
+  });
 
   const terminalEvent = events.find(
     (event) => event.type === "game_completed" || event.type === "game_failed",
   );
+  const canResumeRun =
+    run?.status === "failed" || terminalEvent?.type === "game_failed";
   const spectatorState = useMemo(
     () => deriveLiveSpectatorState(events),
     [events],
@@ -96,15 +107,30 @@ export function LiveGamePage() {
     <main className="mx-auto w-full max-w-5xl px-4 py-8">
       <div className="mb-4 flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold text-slate-950">实时观战</h1>
-        {terminalEvent ? (
-          <Link
-            className="rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white"
-            to={`/games/${run.session_id}`}
-          >
-            查看完整复盘
-          </Link>
-        ) : null}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {canResumeRun ? (
+            <button
+              className="rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:bg-slate-400"
+              disabled={resumeMutation.isPending}
+              onClick={() => resumeMutation.mutate(run.session_id)}
+              type="button"
+            >
+              {resumeMutation.isPending ? "继续中..." : "继续对局"}
+            </button>
+          ) : null}
+          {terminalEvent ? (
+            <Link
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-800"
+              to={`/games/${run.session_id}`}
+            >
+              查看完整复盘
+            </Link>
+          ) : null}
+        </div>
       </div>
+      {resumeMutation.isError ? (
+        <p className="mb-3 text-sm text-red-700">无法继续对局</p>
+      ) : null}
       <section className="overflow-hidden rounded-md border border-slate-200 bg-white">
         <LiveStatusStrip run={run} connectionState={connectionState} />
       </section>

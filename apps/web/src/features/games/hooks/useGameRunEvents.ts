@@ -19,6 +19,7 @@ const EVENT_TYPES = [
   "phase_started",
   "action_requested",
   "model_request_started",
+  "model_request_failed",
   "model_response_received",
   "action_parsed",
   "state_updated",

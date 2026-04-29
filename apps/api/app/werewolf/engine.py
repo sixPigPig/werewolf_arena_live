@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import random
 from collections import Counter
+from typing import Protocol
 
 from app.werewolf.config import (
     DEFAULT_DEBATE_TURNS,
@@ -58,6 +59,41 @@ from app.werewolf.rules import (
 
 class MaxRoundsExceeded(RuntimeError):
     pass
+
+
+class GameCheckpointManager(Protocol):
+    def start_round(
+        self,
+        *,
+        state: GameState,
+        logs: list[RoundLog],
+        round_number: int,
+        active_players: list[str],
+        rng_state: object,
+    ) -> None:
+        pass
+
+    def record_success(
+        self,
+        *,
+        actor: str,
+        action: str,
+        phase: str,
+        model: str,
+        raw_response: str,
+    ) -> None:
+        pass
+
+    def record_failure(
+        self,
+        *,
+        actor: str,
+        action: str,
+        phase: str,
+        model: str,
+        error: str,
+    ) -> None:
+        pass
 
 
 NO_WITCH_SAVE = "不使用解药"
@@ -134,6 +170,8 @@ class GameEngine:
         debate_turns: int = DEFAULT_DEBATE_TURNS,
         event_sink: object | None = None,
         rng: random.Random | None = None,
+        starting_active_players: list[str] | None = None,
+        checkpoint_manager: GameCheckpointManager | None = None,
     ) -> None:
         self.state = state
         self.provider = provider
@@ -142,10 +180,16 @@ class GameEngine:
         self.debate_turns = debate_turns
         self.event_sink = event_sink or NullEventSink()
         self.rng = rng or random.Random()
+        self.starting_active_players = starting_active_players
+        self.checkpoint_manager = checkpoint_manager
 
     def run(self) -> list[RoundLog]:
         logs: list[RoundLog] = []
-        active_players = [player.name for player in self.state.players]
+        active_players = (
+            self.starting_active_players.copy()
+            if self.starting_active_players is not None
+            else [player.name for player in self.state.players]
+        )
         self.state.winner = self._get_winner(active_players)
         self._publish(
             "game_started",
@@ -163,6 +207,11 @@ class GameEngine:
             self._sync_game_views(active_players, round_number)
             round_state = RoundState(number=round_number, players=active_players.copy())
             round_log = RoundLog(number=round_number)
+            self._checkpoint_round_start(
+                round_number=round_number,
+                active_players=active_players,
+                logs=logs,
+            )
             self.state.rounds.append(round_state)
             logs.append(round_log)
             self._publish(
@@ -1108,20 +1157,46 @@ class GameEngine:
             action=action,
             payload={"model": player.model, "world_state": copy.deepcopy(world_state)},
         )
-        value, lm_log = generate_action(
-            provider=self.provider,
-            action=action,
-            world_state=world_state,
-            model=player.model,
-            allowed_values=options if options else None,
-            result_key=result_key,
-        )
+        try:
+            value, lm_log = generate_action(
+                provider=self.provider,
+                action=action,
+                world_state=world_state,
+                model=player.model,
+                allowed_values=options if options else None,
+                result_key=result_key,
+            )
+        except Exception as exc:
+            error = str(exc)
+            self._checkpoint_model_failure(
+                actor=player.name,
+                action=action,
+                phase=phase,
+                model=player.model,
+                error=error,
+            )
+            self._publish(
+                "model_request_failed",
+                round_number=round_state.number,
+                phase=phase,
+                actor=player.name,
+                action=action,
+                payload={"model": player.model, "error": error},
+            )
+            raise
         action_log = ActionLog(
             actor=player.name,
             action=action,
             options=options,
             choice=str(value) if value is not None else None,
             lm_log=lm_log,
+        )
+        self._checkpoint_model_success(
+            actor=player.name,
+            action=action,
+            phase=phase,
+            model=player.model,
+            raw_response=lm_log.raw_response,
         )
         self._publish(
             "model_response_received",
@@ -1146,6 +1221,61 @@ class GameEngine:
         if options and value not in options:
             raise ValueError(f"{player.name} returned invalid {action}: {value}")
         return value, action_log
+
+    def _checkpoint_round_start(
+        self,
+        *,
+        round_number: int,
+        active_players: list[str],
+        logs: list[RoundLog],
+    ) -> None:
+        if self.checkpoint_manager is None:
+            return
+        self.checkpoint_manager.start_round(
+            state=copy.deepcopy(self.state),
+            logs=copy.deepcopy(logs),
+            round_number=round_number,
+            active_players=active_players.copy(),
+            rng_state=self.rng.getstate(),
+        )
+
+    def _checkpoint_model_success(
+        self,
+        *,
+        actor: str,
+        action: str,
+        phase: str,
+        model: str,
+        raw_response: str,
+    ) -> None:
+        if self.checkpoint_manager is None:
+            return
+        self.checkpoint_manager.record_success(
+            actor=actor,
+            action=action,
+            phase=phase,
+            model=model,
+            raw_response=raw_response,
+        )
+
+    def _checkpoint_model_failure(
+        self,
+        *,
+        actor: str,
+        action: str,
+        phase: str,
+        model: str,
+        error: str,
+    ) -> None:
+        if self.checkpoint_manager is None:
+            return
+        self.checkpoint_manager.record_failure(
+            actor=actor,
+            action=action,
+            phase=phase,
+            model=model,
+            error=error,
+        )
 
     def _publish(
         self,

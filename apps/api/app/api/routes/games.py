@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.werewolf.live import EventSink, LiveEvent, LiveRunRegistry, format_sse
 from app.werewolf.pacing import EventPacer, EventPacingMode
 from app.werewolf.providers import default_model_name
+from app.werewolf.checkpoint import ResumeCheckpointError, load_resume_checkpoint
 from app.werewolf.replay import ReplayNotFoundError, ReplayStore
 from app.werewolf.rules import (
     DEFAULT_RULE_SET_ID,
@@ -18,7 +19,7 @@ from app.werewolf.rules import (
     list_rule_set_summaries,
     rule_set_snapshot,
 )
-from app.werewolf.runner import GameRunError, new_session_id, run_game
+from app.werewolf.runner import GameRunError, new_session_id, resume_game, run_game
 
 
 router = APIRouter()
@@ -121,6 +122,61 @@ def stream_game_run_events(
     )
 
 
+@router.post("/{session_id}/resume", status_code=201)
+def resume_game_run(
+    session_id: Annotated[
+        str,
+        Path(pattern=r"^session_\d{8}_\d{6}_[A-Za-z0-9_-]+$"),
+    ],
+    store: Annotated[ReplayStore, Depends(get_replay_store)],
+    registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
+) -> dict:
+    checkpoint_directory = store.logs_root / session_id
+    try:
+        checkpoint = load_resume_checkpoint(checkpoint_directory)
+    except ResumeCheckpointError as exc:
+        raise HTTPException(status_code=404, detail="Resume checkpoint not found") from exc
+
+    run_params = checkpoint.get("run_params", {})
+    if not isinstance(run_params, dict):
+        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid")
+
+    rule_set_id = str(run_params.get("rule_set_id") or DEFAULT_RULE_SET_ID)
+    try:
+        rule_set = get_rule_set(rule_set_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown rule set: {rule_set_id}",
+        ) from exc
+
+    max_rounds = int(run_params.get("max_rounds") or 8)
+    seed = run_params.get("seed")
+    run = registry.create_run(
+        session_id=session_id,
+        villager_model=str(run_params.get("villager_model") or default_model_name()),
+        werewolf_model=str(run_params.get("werewolf_model") or default_model_name()),
+        seed=seed if isinstance(seed, int) else None,
+        max_rounds=max_rounds,
+        rule_set_id=rule_set.id,
+        rule_set=rule_set_snapshot(rule_set),
+        event_pacing="off",
+    )
+    thread = threading.Thread(
+        target=_resume_game_in_background,
+        kwargs={
+            "run_id": run.run_id,
+            "registry": registry,
+            "session_id": session_id,
+            "logs_dir": store.logs_root,
+            "event_pacing": "off",
+        },
+        daemon=True,
+    )
+    thread.start()
+    return registry.get_run(run.run_id).to_summary()
+
+
 @router.get("/{session_id}")
 def get_game(
     session_id: Annotated[
@@ -159,6 +215,36 @@ def _run_game_in_background(
             logs_dir=settings.werewolf_logs_dir,
             max_rounds=max_rounds,
             session_id=session_id,
+            event_sink=PacedEventSink(EventSink(registry, run_id), pacer),
+        )
+    except GameRunError as exc:
+        pacer.wait("game_failed")
+        registry.mark_failed(run_id, error=str(exc))
+        return
+    except Exception as exc:
+        pacer.wait("game_failed")
+        registry.mark_failed(run_id, error=str(exc))
+        return
+
+    pacer.wait("game_completed")
+    registry.mark_completed(run_id, winner=result.winner)
+
+
+def _resume_game_in_background(
+    *,
+    run_id: str,
+    registry: LiveRunRegistry,
+    session_id: str,
+    logs_dir: FilePath,
+    event_pacing: EventPacingMode,
+) -> None:
+    pacer = EventPacer(event_pacing)
+    pacer.wait("run_started")
+    registry.mark_running(run_id)
+    try:
+        result = resume_game(
+            session_id=session_id,
+            logs_dir=logs_dir,
             event_sink=PacedEventSink(EventSink(registry, run_id), pacer),
         )
     except GameRunError as exc:
