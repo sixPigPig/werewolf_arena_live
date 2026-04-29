@@ -168,6 +168,15 @@ def test_extract_openai_chat_delta_skips_leading_comment_in_same_chunk() -> None
     assert extract_openai_chat_delta(chunk) == "继续"
 
 
+def test_extract_openai_chat_delta_joins_multiple_content_events_in_same_chunk() -> None:
+    chunk = (
+        'data: {"choices":[{"delta":{"content":"你"}}]}\n\n'
+        'data: {"choices":[{"delta":{"content":"好"}}]}\n\n'
+    ).encode("utf-8")
+
+    assert extract_openai_chat_delta(chunk) == "你好"
+
+
 def test_generate_action_retries_until_allowed_value() -> None:
     provider = FakeProvider(
         [

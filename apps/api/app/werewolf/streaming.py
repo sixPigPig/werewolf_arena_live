@@ -116,6 +116,7 @@ def extract_openai_chat_delta(chunk: bytes) -> str | None:
     if not text:
         return None
 
+    contents: list[str] = []
     for line in text.splitlines():
         line = line.strip()
         if not line.startswith("data:"):
@@ -138,5 +139,5 @@ def extract_openai_chat_delta(chunk: bytes) -> str | None:
             continue
         content = delta.get("content")
         if isinstance(content, str) and content:
-            return content
-    return None
+            contents.append(content)
+    return "".join(contents) if contents else None
