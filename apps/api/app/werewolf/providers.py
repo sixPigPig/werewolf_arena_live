@@ -10,12 +10,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.werewolf.streaming import extract_openai_chat_delta
+
 Transport = Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]]
+StreamTransport = Callable[[str, dict[str, str], dict[str, Any]], Any]
 Sleep = Callable[[float], None]
 
 
 class ProviderLike(Protocol):
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        pass
+
+    def stream_json(self, *, model: str, prompt: str, temperature: float) -> Any:
         pass
 
 
@@ -75,6 +81,7 @@ class OpenAICompatibleProvider:
         api_key: str | None = None,
         base_url: str | None = None,
         transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
         max_retries: int = 3,
         sleep: Sleep = time.sleep,
     ) -> None:
@@ -97,10 +104,23 @@ class OpenAICompatibleProvider:
             or config.default_base_url
         ).rstrip("/")
         self.transport = transport or _urlopen_transport
+        self.stream_transport = stream_transport or _urlopen_stream_transport
         self.max_retries = max_retries
         self.sleep = sleep
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        payload = self._chat_payload(model=model, prompt=prompt, temperature=temperature)
+        headers = self._headers()
+        response = self._send_with_retries(f"{self.base_url}/chat/completions", headers, payload)
+        return response["choices"][0]["message"]["content"]
+
+    def stream_json(self, *, model: str, prompt: str, temperature: float) -> Any:
+        payload = self._chat_payload(model=model, prompt=prompt, temperature=temperature)
+        payload["stream"] = True
+        headers = self._headers()
+        return self.stream_transport(f"{self.base_url}/chat/completions", headers, payload)
+
+    def _chat_payload(self, *, model: str, prompt: str, temperature: float) -> dict[str, Any]:
         payload = {
             "model": self.config.model_aliases.get(model.lower(), model),
             "messages": [
@@ -116,14 +136,14 @@ class OpenAICompatibleProvider:
         if self.config.response_format is not None:
             payload["response_format"] = self.config.response_format
         payload.update(self.config.extra_payload)
+        return payload
 
-        headers = {
+    def _headers(self) -> dict[str, str]:
+        return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
             "User-Agent": "werewolf-arena-live/0.1",
         }
-        response = self._send_with_retries(f"{self.base_url}/chat/completions", headers, payload)
-        return response["choices"][0]["message"]["content"]
 
     def _send_with_retries(
         self,
@@ -156,6 +176,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         api_key: str | None = None,
         base_url: str | None = None,
         transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
         max_retries: int = 3,
         sleep: Sleep = time.sleep,
     ) -> None:
@@ -164,6 +185,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             api_key=api_key,
             base_url=base_url,
             transport=transport,
+            stream_transport=stream_transport,
             max_retries=max_retries,
             sleep=sleep,
         )
@@ -176,6 +198,7 @@ class MiniMaxProvider(OpenAICompatibleProvider):
         api_key: str | None = None,
         base_url: str | None = None,
         transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
         max_retries: int = 3,
         sleep: Sleep = time.sleep,
     ) -> None:
@@ -184,6 +207,7 @@ class MiniMaxProvider(OpenAICompatibleProvider):
             api_key=api_key,
             base_url=base_url,
             transport=transport,
+            stream_transport=stream_transport,
             max_retries=max_retries,
             sleep=sleep,
         )
@@ -196,6 +220,7 @@ class QwenProvider(OpenAICompatibleProvider):
         api_key: str | None = None,
         base_url: str | None = None,
         transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
         max_retries: int = 3,
         sleep: Sleep = time.sleep,
     ) -> None:
@@ -204,6 +229,7 @@ class QwenProvider(OpenAICompatibleProvider):
             api_key=api_key,
             base_url=base_url,
             transport=transport,
+            stream_transport=stream_transport,
             max_retries=max_retries,
             sleep=sleep,
         )
@@ -229,6 +255,17 @@ class RoutingModelProvider:
         self._providers: dict[str, ProviderLike] = {}
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        provider = self._provider_for_model(model)
+        return provider.complete_json(model=model, prompt=prompt, temperature=temperature)
+
+    def stream_json(self, *, model: str, prompt: str, temperature: float) -> Any:
+        provider = self._provider_for_model(model)
+        stream_json = getattr(provider, "stream_json", None)
+        if not callable(stream_json):
+            raise RuntimeError(f"Provider for model {model} does not support stream_json.")
+        return stream_json(model=model, prompt=prompt, temperature=temperature)
+
+    def _provider_for_model(self, model: str) -> ProviderLike:
         registration = self._registration_for_model(model)
         if registration is None:
             known_patterns = ", ".join(
@@ -245,7 +282,7 @@ class RoutingModelProvider:
         if provider is None:
             provider = registration.factory()
             self._providers[registration.name] = provider
-        return provider.complete_json(model=model, prompt=prompt, temperature=temperature)
+        return provider
 
     def _registration_for_model(self, model: str) -> ModelProviderRegistration | None:
         for registration in self.registrations:
@@ -257,6 +294,7 @@ class RoutingModelProvider:
 def create_model_provider(
     *,
     transport: Transport | None = None,
+    stream_transport: StreamTransport | None = None,
     max_retries: int = 3,
     sleep: Sleep = time.sleep,
 ) -> RoutingModelProvider:
@@ -267,6 +305,7 @@ def create_model_provider(
                 _openai_provider_factory(
                     config,
                     transport=transport,
+                    stream_transport=stream_transport,
                     max_retries=max_retries,
                     sleep=sleep,
                 ),
@@ -280,12 +319,14 @@ def _openai_provider_factory(
     config: OpenAICompatibleProviderConfig,
     *,
     transport: Transport | None,
+    stream_transport: StreamTransport | None,
     max_retries: int,
     sleep: Sleep,
 ) -> Callable[[], ProviderLike]:
     return lambda: OpenAICompatibleProvider(
         config=config,
         transport=transport,
+        stream_transport=stream_transport,
         max_retries=max_retries,
         sleep=sleep,
     )
@@ -378,6 +419,20 @@ def _urlopen_transport(url: str, headers: dict[str, str], payload: dict[str, Any
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(request, timeout=120) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _urlopen_stream_transport(
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+) -> Any:
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(request, timeout=120) as response:
+        for line in response:
+            delta = extract_openai_chat_delta(line)
+            if delta is not None:
+                yield delta
 
 
 def _load_dotenv(path: Path, *, prefixes: tuple[str, ...] | None = None) -> dict[str, str]:

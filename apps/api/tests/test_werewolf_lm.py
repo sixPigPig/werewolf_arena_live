@@ -282,6 +282,32 @@ def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> Non
     assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
 
 
+def test_openai_compatible_provider_streams_chat_deltas(monkeypatch) -> None:
+    requests = []
+
+    def fake_stream_transport(url: str, headers: dict[str, str], payload: dict) -> list[str]:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return ["我", "不是", "狼"]
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    provider = DeepSeekProvider(stream_transport=fake_stream_transport)
+
+    chunks = list(
+        provider.stream_json(
+            model="deepseek-chat",
+            prompt='请输出 json：{"say":"我不是狼"}',
+            temperature=0.3,
+        )
+    )
+
+    assert chunks == ["我", "不是", "狼"]
+    assert requests[0]["url"] == "https://api.deepseek.com/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer test-key"
+    assert requests[0]["payload"]["stream"] is True
+    assert requests[0]["payload"]["model"] == "deepseek-chat"
+    assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
+
+
 def test_deepseek_provider_requires_api_key(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -614,6 +640,19 @@ def test_model_provider_router_routes_deepseek_models(monkeypatch) -> None:
     assert requests[0]["url"] == "https://api.deepseek.com/chat/completions"
     assert requests[0]["headers"]["Authorization"] == "Bearer deepseek-key"
     assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
+
+
+def test_model_provider_router_exposes_stream_json(monkeypatch) -> None:
+    def fake_stream_transport(url: str, headers: dict[str, str], payload: dict) -> list[str]:
+        del url, headers, payload
+        return ['{"reasoning":"x","say":"你好"}']
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    provider = create_model_provider(stream_transport=fake_stream_transport)
+
+    assert list(provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3)) == [
+        '{"reasoning":"x","say":"你好"}'
+    ]
 
 
 def test_model_provider_router_reports_unknown_models(monkeypatch) -> None:
