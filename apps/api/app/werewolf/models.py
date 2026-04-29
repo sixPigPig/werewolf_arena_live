@@ -136,6 +136,11 @@ class RoundState:
     sheriff_badge_target: str | None = None
     sheriff_badge_lost: bool = False
     success: bool = False
+    werewolf_self_exploded: str | None = None
+    day_ended_by_self_explosion: bool = False
+    sheriff_pre_election_bomb_count: int = 0
+    sheriff_election_pending: bool = False
+    sheriff_badge_lost_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -174,6 +179,11 @@ class RoundState:
             "vote_weights": self.vote_weights,
             "sheriff_badge_target": self.sheriff_badge_target,
             "sheriff_badge_lost": self.sheriff_badge_lost,
+            "werewolf_self_exploded": self.werewolf_self_exploded,
+            "day_ended_by_self_explosion": self.day_ended_by_self_explosion,
+            "sheriff_pre_election_bomb_count": self.sheriff_pre_election_bomb_count,
+            "sheriff_election_pending": self.sheriff_election_pending,
+            "sheriff_badge_lost_reason": self.sheriff_badge_lost_reason,
             "success": self.success,
         }
 
@@ -199,6 +209,7 @@ class RoundLog:
     sheriff_votes: list[ActionLog] = field(default_factory=list)
     speech_order: ActionLog | None = None
     sheriff_badge: ActionLog | None = None
+    werewolf_self_explosion: ActionLog | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -221,6 +232,9 @@ class RoundLog:
             "sheriff_votes": [log.to_dict() for log in self.sheriff_votes],
             "speech_order": self.speech_order.to_dict() if self.speech_order else None,
             "sheriff_badge": self.sheriff_badge.to_dict() if self.sheriff_badge else None,
+            "werewolf_self_explosion": self.werewolf_self_explosion.to_dict()
+            if self.werewolf_self_explosion
+            else None,
         }
 
 
@@ -234,6 +248,8 @@ class GameState:
     error_message: str = ""
     sheriff: str | None = None
     sheriff_badge_lost: bool = False
+    sheriff_pre_election_bomb_count: int = 0
+    sheriff_election_pending: bool = False
 
     def player_by_name(self) -> dict[str, Player]:
         return {player.name: player for player in self.players}
@@ -248,4 +264,6 @@ class GameState:
             "error_message": self.error_message,
             "sheriff": self.sheriff,
             "sheriff_badge_lost": self.sheriff_badge_lost,
+            "sheriff_pre_election_bomb_count": self.sheriff_pre_election_bomb_count,
+            "sheriff_election_pending": self.sheriff_election_pending,
         }

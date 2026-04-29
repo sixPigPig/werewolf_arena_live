@@ -183,6 +183,8 @@ def game_state_from_dict(data: dict[str, Any]) -> GameState:
         error_message=str(data.get("error_message") or ""),
         sheriff=data.get("sheriff"),
         sheriff_badge_lost=bool(data.get("sheriff_badge_lost", False)),
+        sheriff_pre_election_bomb_count=int(data.get("sheriff_pre_election_bomb_count", 0)),
+        sheriff_election_pending=bool(data.get("sheriff_election_pending", False)),
     )
 
 
@@ -262,6 +264,11 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
         vote_weights=copy.deepcopy(data.get("vote_weights", {})),
         sheriff_badge_target=data.get("sheriff_badge_target"),
         sheriff_badge_lost=bool(data.get("sheriff_badge_lost", False)),
+        werewolf_self_exploded=data.get("werewolf_self_exploded"),
+        day_ended_by_self_explosion=bool(data.get("day_ended_by_self_explosion", False)),
+        sheriff_pre_election_bomb_count=int(data.get("sheriff_pre_election_bomb_count", 0)),
+        sheriff_election_pending=bool(data.get("sheriff_election_pending", False)),
+        sheriff_badge_lost_reason=data.get("sheriff_badge_lost_reason"),
         success=bool(data.get("success", False)),
     )
 
@@ -287,6 +294,7 @@ def round_log_from_dict(data: dict[str, Any]) -> RoundLog:
         sheriff_votes=action_logs_from_dict(data.get("sheriff_votes", [])),
         speech_order=optional_action_log_from_dict(data.get("speech_order")),
         sheriff_badge=optional_action_log_from_dict(data.get("sheriff_badge")),
+        werewolf_self_explosion=optional_action_log_from_dict(data.get("werewolf_self_explosion")),
     )
 
 

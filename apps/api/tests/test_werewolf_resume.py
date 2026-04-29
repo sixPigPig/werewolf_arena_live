@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from app.werewolf.checkpoint import RESUME_CHECKPOINT_FILE, ReplayThenLiveProvider
+from app.werewolf.checkpoint import (
+    RESUME_CHECKPOINT_FILE,
+    ReplayThenLiveProvider,
+    game_state_from_dict,
+    round_log_from_dict,
+)
+from app.werewolf.lm import LmLog
+from app.werewolf.models import ActionLog, GameState, Player, RoundLog, RoundState
 from app.werewolf.replay import ReplayStore
 from app.werewolf.runner import GameRunError, resume_game, run_game
 
@@ -169,6 +176,47 @@ def test_replay_store_lists_checkpoint_only_session_as_resumable(tmp_path: Path)
     assert session["status"] == "partial"
     assert session["resumable"] is True
     assert session["round_count"] == 0
+
+
+def test_resume_checkpoint_preserves_self_explosion_state() -> None:
+    state = GameState(
+        session_id="session_self_explosion",
+        players=[Player("Alice", "狼人", "wolf-model"), Player("Bob", "村民", "villager-model")],
+        sheriff_pre_election_bomb_count=1,
+        sheriff_election_pending=True,
+    )
+    round_state = RoundState(
+        number=1,
+        players=["Alice", "Bob"],
+        werewolf_self_exploded="Alice",
+        day_ended_by_self_explosion=True,
+        sheriff_pre_election_bomb_count=1,
+        sheriff_election_pending=True,
+        sheriff_badge_lost_reason="首爆中断警长竞选",
+    )
+    state.rounds.append(round_state)
+    action = ActionLog(
+        actor="Alice",
+        action="werewolf_self_explosion",
+        options=["自爆", "不自爆"],
+        choice="自爆",
+        lm_log=LmLog(prompt="prompt", raw_response='{"self_explode":"自爆"}', result={"self_explode": "自爆"}),
+    )
+    round_log = RoundLog(number=1, werewolf_self_explosion=action)
+
+    restored_state = game_state_from_dict(state.to_dict())
+    restored_log = round_log_from_dict(round_log.to_dict())
+
+    assert restored_state.sheriff_pre_election_bomb_count == 1
+    assert restored_state.sheriff_election_pending is True
+    restored_round = restored_state.rounds[0]
+    assert restored_round.werewolf_self_exploded == "Alice"
+    assert restored_round.day_ended_by_self_explosion is True
+    assert restored_round.sheriff_pre_election_bomb_count == 1
+    assert restored_round.sheriff_election_pending is True
+    assert restored_round.sheriff_badge_lost_reason == "首爆中断警长竞选"
+    assert restored_log.werewolf_self_explosion is not None
+    assert restored_log.werewolf_self_explosion.choice == "自爆"
 
 
 def _extract_options(prompt: str) -> list[str]:
