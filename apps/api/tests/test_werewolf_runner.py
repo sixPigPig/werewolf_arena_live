@@ -80,6 +80,14 @@ class ScriptedChineseProvider:
         raise AssertionError(f"Unexpected prompt: {prompt}")
 
 
+class StreamingSpeechProvider(ScriptedChineseProvider):
+    def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+        del model, temperature
+        if '"say"' in prompt:
+            return ['{"reasoning":"公开发言",', '"say":"我', '不是', '狼"}']
+        return [self.complete_json(model="deepseek-chat", prompt=prompt, temperature=0.4)]
+
+
 class SheriffFlowProvider(ScriptedChineseProvider):
     def __init__(
         self,
@@ -602,10 +610,14 @@ class CapturingEventSink:
 
 
 class MutatingWorldStateSink:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
     def publish(self, event_type: str, **kwargs: object) -> None:
         if event_type != "model_request_started":
             return
 
+        self.events.append({"type": event_type, **kwargs})
         payload = kwargs.get("payload")
         if not isinstance(payload, dict):
             return
@@ -636,6 +648,33 @@ def test_run_game_publishes_live_events(tmp_path) -> None:
     assert "model_response_received" in event_types
     assert "action_parsed" in event_types
     assert "state_updated" in event_types
+
+
+def test_run_game_publishes_streaming_model_events(tmp_path) -> None:
+    sink = CapturingEventSink()
+
+    with pytest.raises(GameRunError, match="Maximum rounds exceeded"):
+        run_game(
+            logs_dir=tmp_path,
+            seed=21,
+            max_rounds=1,
+            provider=StreamingSpeechProvider(),
+            session_id="session_20260424_120000_ab12cd34",
+            event_sink=sink,
+        )
+
+    event_types = [event["type"] for event in sink.events]
+    assert "model_request_started" in event_types
+    assert "model_response_delta" in event_types
+    assert "model_response_received" in event_types
+    assert "action_parsed" in event_types
+
+    started_event = next(event for event in sink.events if event["type"] == "model_request_started")
+    delta_event = next(event for event in sink.events if event["type"] == "model_response_delta")
+    response_event = next(event for event in sink.events if event["type"] == "model_response_received")
+    assert started_event["payload"]["request_id"].startswith("req_")
+    assert delta_event["payload"]["request_id"].startswith("req_")
+    assert response_event["payload"]["request_id"].startswith("req_")
 
 
 def test_protected_night_attack_records_attack_without_eliminating_target() -> None:
@@ -703,15 +742,22 @@ def test_model_request_world_state_event_payload_is_isolated_from_gameplay(tmp_p
         provider=ScriptedChineseProvider(),
         session_id="session_20260424_120000_ab12cd34",
     )
+    sink = MutatingWorldStateSink()
     with_mutating_sink = run_game(
         logs_dir=tmp_path / "with_mutating_sink",
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
         session_id="session_20260424_120000_ab12cd34",
-        event_sink=MutatingWorldStateSink(),
+        event_sink=sink,
     )
 
+    assert any(
+        event["type"] == "model_request_started"
+        and isinstance(event.get("payload"), dict)
+        and "world_state" in event["payload"]
+        for event in sink.events
+    )
     assert _read_json_outputs(with_mutating_sink.log_directory) == _read_json_outputs(
         baseline.log_directory
     )
@@ -2240,7 +2286,19 @@ def test_night_hunter_cannot_shoot_pending_night_death() -> None:
 def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:
     complete = json.loads((log_directory / "game_complete.json").read_text())
     logs = json.loads((log_directory / "game_logs.json").read_text())
-    return complete, logs
+    return _without_request_ids(complete), _without_request_ids(logs)
+
+
+def _without_request_ids(value):
+    if isinstance(value, dict):
+        return {
+            key: _without_request_ids(child)
+            for key, child in value.items()
+            if key != "request_id"
+        }
+    if isinstance(value, list):
+        return [_without_request_ids(child) for child in value]
+    return value
 
 
 def _role_counts(players: list[dict[str, object]]) -> dict[str, int]:

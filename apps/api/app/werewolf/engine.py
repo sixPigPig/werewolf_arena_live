@@ -17,7 +17,7 @@ from app.werewolf.config import (
     choose_player_names,
 )
 from app.werewolf.live import NullEventSink
-from app.werewolf.lm import ModelProvider, generate_action
+from app.werewolf.lm import ModelProvider, generate_action_with_events
 from app.werewolf.models import (
     ActionLog,
     DeathEvent,
@@ -1149,22 +1149,21 @@ class GameEngine:
             action=action,
             payload={"options": options.copy(), "result_key": result_key},
         )
-        self._publish(
-            "model_request_started",
-            round_number=round_state.number,
-            phase=phase,
-            actor=player.name,
-            action=action,
-            payload={"model": player.model, "world_state": copy.deepcopy(world_state)},
-        )
         try:
-            value, lm_log = generate_action(
+            value, lm_log = generate_action_with_events(
                 provider=self.provider,
                 action=action,
                 world_state=world_state,
                 model=player.model,
                 allowed_values=options if options else None,
                 result_key=result_key,
+                event_sink=self.event_sink,
+                event_context={
+                    "round_number": round_state.number,
+                    "phase": phase,
+                    "actor": player.name,
+                    "action": action,
+                },
             )
         except Exception as exc:
             error = str(exc)
@@ -1174,14 +1173,6 @@ class GameEngine:
                 phase=phase,
                 model=player.model,
                 error=error,
-            )
-            self._publish(
-                "model_request_failed",
-                round_number=round_state.number,
-                phase=phase,
-                actor=player.name,
-                action=action,
-                payload={"model": player.model, "error": error},
             )
             raise
         action_log = ActionLog(
@@ -1204,7 +1195,11 @@ class GameEngine:
             phase=phase,
             actor=player.name,
             action=action,
-            payload={"prompt": lm_log.prompt, "raw_response": lm_log.raw_response},
+            payload={
+                "request_id": lm_log.request_id,
+                "prompt": lm_log.prompt,
+                "raw_response": lm_log.raw_response,
+            },
         )
         self._publish(
             "action_parsed",
