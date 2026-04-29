@@ -282,4 +282,156 @@ describe("deriveLiveSpectatorState", () => {
       lastDetail: "我不是狼",
     });
   });
+
+  it("replaces a thinking tick placeholder with the first response delta", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [{ name: "张三", role: "村民", model: "deepseek-chat" }],
+        },
+      }),
+      event({
+        id: 2,
+        type: "model_request_started",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", model: "deepseek-chat" },
+      }),
+      event({
+        id: 3,
+        type: "model_thinking_tick",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", message: "正在组织发言..." },
+      }),
+      event({
+        id: 4,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", visible_text: "我不是狼" },
+      }),
+    ]);
+
+    expect(state.players[0]).toMatchObject({
+      status: "streaming",
+      lastDetail: "我不是狼",
+    });
+  });
+
+  it("keeps streamed detail when a later thinking tick arrives", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [{ name: "张三", role: "村民", model: "deepseek-chat" }],
+        },
+      }),
+      event({
+        id: 2,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", visible_text: "我不是狼" },
+      }),
+      event({
+        id: 3,
+        type: "model_thinking_tick",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", message: "仍在生成..." },
+      }),
+    ]);
+
+    expect(state.players[0]).toMatchObject({
+      status: "streaming",
+      lastDetail: "我不是狼",
+    });
+  });
+
+  it("resets streamed visible text when the request id changes", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [{ name: "张三", role: "村民", model: "deepseek-chat" }],
+        },
+      }),
+      event({
+        id: 2,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", visible_text: "旧请求" },
+      }),
+      event({
+        id: 3,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "summarize",
+        round: 1,
+        phase: "summary",
+        payload: { request_id: "req_456", visible_text: "新请求" },
+      }),
+    ]);
+
+    expect(state.players[0]).toMatchObject({
+      status: "streaming",
+      lastAction: "summarize",
+      lastDetail: "新请求",
+    });
+  });
+
+  it("clears streaming request state when a parsed action arrives", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [{ name: "张三", role: "村民", model: "deepseek-chat" }],
+        },
+      }),
+      event({
+        id: 2,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { request_id: "req_123", visible_text: "临时" },
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        actor: "张三",
+        action: "debate",
+        round: 1,
+        phase: "day",
+        payload: { choice: "最终发言" },
+      }),
+    ]);
+
+    expect(state.players[0]).toMatchObject({
+      status: "acted",
+      lastAction: "debate",
+      lastDetail: "最终发言",
+      activeRequestId: null,
+    });
+  });
 });

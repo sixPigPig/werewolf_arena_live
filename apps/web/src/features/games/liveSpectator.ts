@@ -18,6 +18,7 @@ export type LivePlayer = {
   lastAction: string;
   lastDetail: string;
   activeRequestId: string | null;
+  hasVisibleStreamText: boolean;
 };
 
 export type LiveSpectatorState = {
@@ -71,30 +72,38 @@ export function deriveLiveSpectatorState(
       if (event.type === "model_request_started") {
         player.activeRequestId = requestId;
         player.lastDetail = "";
+        player.hasVisibleStreamText = false;
+        player.status = "requesting";
       } else if (event.type === "model_response_delta") {
         if (requestId !== player.activeRequestId) {
           player.activeRequestId = requestId;
-          player.lastDetail = "";
+          player.hasVisibleStreamText = false;
         }
         const visibleText = payload.visible_text;
         if (typeof visibleText === "string") {
-          player.lastDetail += visibleText;
+          player.lastDetail = player.hasVisibleStreamText
+            ? player.lastDetail + visibleText
+            : visibleText;
+          player.hasVisibleStreamText = true;
         }
+        player.status = "streaming";
       } else if (event.type === "model_thinking_tick") {
-        if (requestId && !player.activeRequestId) {
+        if (requestId && requestId !== player.activeRequestId) {
           player.activeRequestId = requestId;
+          player.hasVisibleStreamText = false;
         }
-        if (!player.lastDetail) {
+        if (!player.hasVisibleStreamText) {
           player.lastDetail = detailForEvent(event);
+          player.status = "requesting";
         }
       } else {
         player.lastDetail = detailForEvent(event);
+        player.hasVisibleStreamText = false;
         if (event.type === "action_parsed") {
           player.activeRequestId = null;
         }
+        player.status = statusForActorEvent(event.type);
       }
-
-      player.status = statusForActorEvent(event.type);
     }
 
     if (event.type === "state_updated") {
@@ -175,6 +184,7 @@ function applyStateUpdate(
     player.status = "waiting";
     player.lastAction = "remove";
     player.lastDetail = "被守护，未出局";
+    player.hasVisibleStreamText = false;
   }
 
   if (typeof eliminated === "string" && eliminated !== protectedSurvival) {
@@ -182,6 +192,7 @@ function applyStateUpdate(
     player.isAlive = false;
     player.status = "out";
     player.lastDetail = "夜晚出局";
+    player.hasVisibleStreamText = false;
   }
 
   const exiled = payload.exiled;
@@ -190,6 +201,7 @@ function applyStateUpdate(
     player.isAlive = false;
     player.status = "out";
     player.lastDetail = "白天放逐";
+    player.hasVisibleStreamText = false;
   }
 
   const debate = payload.debate;
@@ -198,6 +210,7 @@ function applyStateUpdate(
     player.lastAction = "debate";
     player.lastDetail =
       typeof debate.message === "string" ? debate.message : player.lastDetail;
+    player.hasVisibleStreamText = false;
   }
 }
 
@@ -207,9 +220,13 @@ function clearPendingPlayerStates(state: MutableLiveSpectatorState) {
       player.status === "thinking" ||
       player.status === "requesting" ||
       player.status === "streaming";
-    if (isPending && !player.lastDetail) {
-      player.status = "waiting";
-      player.lastAction = "";
+    if (isPending) {
+      if (!player.lastDetail) {
+        player.status = "waiting";
+        player.lastAction = "";
+      }
+      player.activeRequestId = null;
+      player.hasVisibleStreamText = false;
     }
   }
 }
@@ -232,6 +249,7 @@ function ensurePlayer(
     lastAction: "",
     lastDetail: "",
     activeRequestId: null,
+    hasVisibleStreamText: false,
   };
   state.playersByName.set(name, player);
   state.playerOrder.push(name);

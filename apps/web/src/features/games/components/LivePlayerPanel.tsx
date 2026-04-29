@@ -13,7 +13,7 @@ const STATUS_LABELS: Record<LivePlayer["status"], string> = {
   waiting: "等待中",
   thinking: "思考中",
   requesting: "请求模型",
-  streaming: "发言中",
+  streaming: "输出中",
   responded: "已返回",
   acted: "已行动",
   out: "出局",
