@@ -123,7 +123,7 @@ def extract_openai_chat_delta(chunk: bytes) -> str | None:
             continue
         data = line.removeprefix("data:").strip()
         if data == "[DONE]":
-            return None
+            return "".join(contents) if contents else None
         try:
             payload = json.loads(data)
         except json.JSONDecodeError:
