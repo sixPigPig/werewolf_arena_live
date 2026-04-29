@@ -92,11 +92,27 @@ function detailForEvent(event: LiveGameEvent | null): string {
     return "";
   }
   const payload = event.payload;
-  if (typeof payload.raw_response === "string") {
-    return payload.raw_response;
+  if (typeof payload.visible_text === "string") {
+    return payload.visible_text;
+  }
+  if (typeof payload.message === "string") {
+    return payload.message;
   }
   if (typeof payload.choice === "string") {
     return payload.choice;
   }
+  const visibleResult = payload.visible_result;
+  if (isRecord(visibleResult)) {
+    if (typeof visibleResult.say === "string") {
+      return visibleResult.say;
+    }
+    if (typeof visibleResult.summary === "string") {
+      return visibleResult.summary;
+    }
+  }
   return "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

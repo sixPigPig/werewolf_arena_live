@@ -149,14 +149,17 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
   }
 
   if (event.type === "model_response_received") {
-    const body = stringField(payload, "raw_response") || readablePayload(rawPayload);
+    const body =
+      stringField(payload, "visible_text") ||
+      stringField(payload, "message") ||
+      "模型返回已接收，正在解析行动";
     return {
       ...base,
-      title: `${actorLabel(event)} 的模型返回`,
+      title: `${actorLabel(event)} 的模型返回已接收`,
       body,
-      importance: "key",
-      durationMs: longTextDuration(body),
-      compressible: false,
+      importance: "action",
+      durationMs: stringField(payload, "visible_text") ? longTextDuration(body) : 2500,
+      compressible: !stringField(payload, "visible_text"),
     };
   }
 
@@ -381,6 +384,18 @@ function parsedActionBody(payload: Record<string, unknown>): string {
   const choice = stringField(payload, "choice");
   if (choice) {
     return choice;
+  }
+
+  const visibleResult = payload.visible_result;
+  if (isRecord(visibleResult)) {
+    const say = stringField(visibleResult, "say");
+    if (say) {
+      return say;
+    }
+    const summary = stringField(visibleResult, "summary");
+    if (summary) {
+      return summary;
+    }
   }
 
   const result = payload.result;

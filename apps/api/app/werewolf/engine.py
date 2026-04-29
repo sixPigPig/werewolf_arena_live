@@ -18,6 +18,7 @@ from app.werewolf.config import (
 )
 from app.werewolf.live import NullEventSink
 from app.werewolf.lm import ModelProvider, generate_action_with_events
+from app.werewolf.streaming import action_visible_stream_field
 from app.werewolf.models import (
     ActionLog,
     DeathEvent,
@@ -1197,10 +1198,11 @@ class GameEngine:
             action=action,
             payload={
                 "request_id": lm_log.request_id,
-                "prompt": lm_log.prompt,
-                "raw_response": lm_log.raw_response,
+                "model": player.model,
+                "message": "模型返回已接收，正在解析行动",
             },
         )
+        visible_result = _visible_action_result(action, lm_log.result)
         self._publish(
             "action_parsed",
             round_number=round_state.number,
@@ -1209,7 +1211,8 @@ class GameEngine:
             action=action,
             payload={
                 "choice": action_log.choice,
-                "result": lm_log.result,
+                "result": visible_result,
+                "visible_result": visible_result,
                 "options": options.copy(),
             },
         )
@@ -1474,3 +1477,18 @@ class GameEngine:
                 player.gamestate.current_players = active_players.copy()
                 if player.name not in active_players:
                     player.gamestate.debate = []
+
+
+def _visible_action_result(
+    action: str,
+    result: dict[str, object] | None,
+) -> dict[str, object]:
+    if result is None:
+        return {}
+    visible_field = action_visible_stream_field(action)
+    if visible_field is None:
+        return {}
+    visible_value = result.get(visible_field)
+    if isinstance(visible_value, str):
+        return {visible_field: visible_value}
+    return {}

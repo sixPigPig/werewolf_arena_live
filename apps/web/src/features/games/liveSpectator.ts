@@ -290,14 +290,19 @@ function detailForEvent(event: LiveGameEvent): string {
     return message;
   }
 
-  const raw = payload.raw_response;
-  if (typeof raw === "string") {
-    return raw;
-  }
-
   const choice = payload.choice;
   if (typeof choice === "string") {
     return choice;
+  }
+
+  const visibleResult = payload.visible_result;
+  if (isRecord(visibleResult)) {
+    if (typeof visibleResult.say === "string") {
+      return visibleResult.say;
+    }
+    if (typeof visibleResult.summary === "string") {
+      return visibleResult.summary;
+    }
   }
 
   const result = payload.result;

@@ -8,6 +8,8 @@
 
 **Tech Stack:** FastAPI, Python dataclasses/threading/urllib, pytest, React, TypeScript, Vitest, browser `EventSource`.
 
+**Post-review implementation guardrails:** Public live SSE payloads must not include `prompt`, `world_state`, or full `raw_response`. `model_response_delta.delta` is the same sanitized public text as `visible_text`, not raw provider output. `action_parsed.result` is sanitized to public display fields only; internal logs and checkpoints remain the authority for full prompt/response debugging.
+
 ---
 
 ## File Structure

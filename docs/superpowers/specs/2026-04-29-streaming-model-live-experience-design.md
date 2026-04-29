@@ -76,10 +76,17 @@
 字段说明：
 
 - `request_id`：一次模型请求的稳定 ID。
-- `delta`：模型原始增量文本，可用于调试。
+- `delta`：已清洗的公开增量文本，第一版与 `visible_text` 保持一致；不得包含原始模型 token、推理字段或私有行动目标。
 - `visible_text`：适合前端展示的增量文本。
 - `field`：当前可展示字段，如 `say`、`summary`，无法识别时为空。
 - `is_public`：是否适合公开展示。
+
+公开 SSE 事件只承载观众可见信息：
+
+- `model_request_started` 只发布 `request_id`、`model`、等待文案、可流式字段和公开标记。
+- `model_response_received` 只发布 `request_id`、`model` 和“已接收，正在解析”的状态文案。
+- `action_parsed` 可以发布最终 `choice`，但 `result`/`visible_result` 只保留 `say`、`summary` 等白名单展示字段。
+- `prompt`、`world_state`、完整 `raw_response` 只保存在内部日志、检查点或复盘数据中，不进入直播 SSE payload。
 
 ### `model_thinking_tick`
 
@@ -265,7 +272,7 @@ type LivePlayerStatus =
 建议：
 
 - 主舞台消费 delta。
-- 调试面板可以显示 delta 事件。
+- 调试面板可以显示已清洗的 delta 事件，但不展示原始 prompt、world state 或 raw response。
 - 时间线只展示 `model_request_started`、`model_response_received`、`action_parsed`、`state_updated` 等关键节点。
 
 ## 错误与降级

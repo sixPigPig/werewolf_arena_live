@@ -609,25 +609,6 @@ class CapturingEventSink:
         self.events.append({"type": event_type, **kwargs})
 
 
-class MutatingWorldStateSink:
-    def __init__(self) -> None:
-        self.events: list[dict[str, object]] = []
-
-    def publish(self, event_type: str, **kwargs: object) -> None:
-        if event_type != "model_request_started":
-            return
-
-        self.events.append({"type": event_type, **kwargs})
-        payload = kwargs.get("payload")
-        if not isinstance(payload, dict):
-            return
-
-        world_state = payload.get("world_state")
-        if isinstance(world_state, dict):
-            world_state["options"] = "__mutated_by_sink__"
-            world_state["remaining_players"] = "__mutated_by_sink__"
-
-
 def test_run_game_publishes_live_events(tmp_path) -> None:
     sink = CapturingEventSink()
 
@@ -673,8 +654,14 @@ def test_run_game_publishes_streaming_model_events(tmp_path) -> None:
     delta_event = next(event for event in sink.events if event["type"] == "model_response_delta")
     response_event = next(event for event in sink.events if event["type"] == "model_response_received")
     assert started_event["payload"]["request_id"].startswith("req_")
+    assert "world_state" not in started_event["payload"]
+    assert "prompt" not in started_event["payload"]
     assert delta_event["payload"]["request_id"].startswith("req_")
+    assert delta_event["payload"]["field"] == "say"
+    assert delta_event["payload"]["is_public"] is True
     assert response_event["payload"]["request_id"].startswith("req_")
+    assert "prompt" not in response_event["payload"]
+    assert "raw_response" not in response_event["payload"]
 
 
 def test_protected_night_attack_records_attack_without_eliminating_target() -> None:
@@ -734,17 +721,10 @@ def test_run_game_event_sink_does_not_change_final_logs(tmp_path) -> None:
     assert _read_json_outputs(with_sink.log_directory) == _read_json_outputs(baseline.log_directory)
 
 
-def test_model_request_world_state_event_payload_is_isolated_from_gameplay(tmp_path) -> None:
-    baseline = run_game(
-        logs_dir=tmp_path / "baseline",
-        seed=21,
-        max_rounds=4,
-        provider=ScriptedChineseProvider(),
-        session_id="session_20260424_120000_ab12cd34",
-    )
-    sink = MutatingWorldStateSink()
-    with_mutating_sink = run_game(
-        logs_dir=tmp_path / "with_mutating_sink",
+def test_live_model_events_do_not_publish_internal_model_payloads(tmp_path) -> None:
+    sink = CapturingEventSink()
+    run_game(
+        logs_dir=tmp_path,
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -752,15 +732,22 @@ def test_model_request_world_state_event_payload_is_isolated_from_gameplay(tmp_p
         event_sink=sink,
     )
 
-    assert any(
-        event["type"] == "model_request_started"
-        and isinstance(event.get("payload"), dict)
-        and "world_state" in event["payload"]
+    model_events = [
+        event
         for event in sink.events
-    )
-    assert _read_json_outputs(with_mutating_sink.log_directory) == _read_json_outputs(
-        baseline.log_directory
-    )
+        if event["type"]
+        in {"model_request_started", "model_response_received", "action_parsed"}
+    ]
+    assert model_events
+    for event in model_events:
+        payload = event.get("payload")
+        assert isinstance(payload, dict)
+        assert "world_state" not in payload
+        assert "prompt" not in payload
+        assert "raw_response" not in payload
+        result = payload.get("result")
+        if isinstance(result, dict):
+            assert "reasoning" not in result
 
 
 def test_run_game_uses_starter_6_rule_set(tmp_path) -> None:

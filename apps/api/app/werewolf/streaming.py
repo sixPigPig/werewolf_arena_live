@@ -174,7 +174,7 @@ def _raw_json_string_prefix(text: str) -> str:
                 break
             next_char = text[index + 1]
             if next_char == "u":
-                if index + 6 >= len(text):
+                if index + 6 > len(text):
                     break
                 if _is_high_surrogate_escape(text[index : index + 6]):
                     if index + 12 > len(text):
@@ -187,7 +187,7 @@ def _raw_json_string_prefix(text: str) -> str:
                 chars.append(text[index : index + 6])
                 index += 6
                 continue
-            if index + 2 >= len(text):
+            if index + 2 > len(text):
                 break
             chars.append(text[index : index + 2])
             index += 2

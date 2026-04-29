@@ -10,7 +10,7 @@ function titleForEvent(event: LiveGameEvent) {
     return `${event.actor} 正在 ${event.action}`;
   }
   if (event.type === "model_response_received") {
-    return "模型返回原文";
+    return "模型返回已接收";
   }
   if (event.type === "action_parsed") {
     return "行动解析完成";
@@ -34,13 +34,28 @@ function payloadForEvent(event: LiveGameEvent) {
 
 function detailForEvent(event: LiveGameEvent) {
   const payload = payloadForEvent(event);
-  const raw = payload.raw_response;
-  if (typeof raw === "string") {
-    return raw;
+  const visibleText = payload.visible_text;
+  if (typeof visibleText === "string") {
+    return visibleText;
+  }
+  const message = payload.message;
+  if (typeof message === "string") {
+    return message;
   }
   const choice = payload.choice;
   if (typeof choice === "string") {
     return choice;
+  }
+  const visibleResult = payload.visible_result;
+  if (isRecord(visibleResult)) {
+    const say = visibleResult.say;
+    if (typeof say === "string") {
+      return say;
+    }
+    const summary = visibleResult.summary;
+    if (typeof summary === "string") {
+      return summary;
+    }
   }
   const winner = payload.winner;
   if (typeof winner === "string") {
@@ -51,6 +66,10 @@ function detailForEvent(event: LiveGameEvent) {
     return error;
   }
   return "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 type LiveEventTimelineProps = {

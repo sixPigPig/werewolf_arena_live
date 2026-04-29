@@ -256,7 +256,13 @@ describe("LiveGamePage", () => {
         phase: "day",
         actor: "张三",
         action: "debate",
-        payload: { request_id: "req_123", model: "deepseek-chat" },
+        payload: {
+          request_id: "req_123",
+          model: "deepseek-chat",
+          message: "玩家正在组织公开发言...",
+          stream_field: "say",
+          is_public: true,
+        },
       });
       source.emit("model_response_delta", {
         id: 4,
@@ -270,6 +276,7 @@ describe("LiveGamePage", () => {
         action: "debate",
         payload: {
           request_id: "req_123",
+          field: "say",
           visible_text: "我",
           is_public: true,
         },
@@ -286,6 +293,7 @@ describe("LiveGamePage", () => {
         action: "debate",
         payload: {
           request_id: "req_123",
+          field: "say",
           visible_text: "不是狼",
           is_public: true,
         },
@@ -315,7 +323,11 @@ describe("LiveGamePage", () => {
         phase: "day",
         actor: "张三",
         action: "debate",
-        payload: { raw_response: "{\"say\":\"我不是狼\"}" },
+        payload: {
+          request_id: "req_123",
+          model: "deepseek-chat",
+          message: "模型返回已接收，正在解析行动",
+        },
       });
       source.emit("game_completed", {
         id: 7,
@@ -331,7 +343,8 @@ describe("LiveGamePage", () => {
       });
     });
 
-    expect(screen.getAllByText('{"say":"我不是狼"}').length).toBeGreaterThan(0);
+    expect(screen.queryByText('{"say":"我不是狼"}')).not.toBeInTheDocument();
+    expect(screen.getByText("模型返回已接收，正在解析行动")).toBeInTheDocument();
     expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看完整复盘" })).toHaveAttribute(
       "href",

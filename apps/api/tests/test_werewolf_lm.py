@@ -4,7 +4,13 @@ import urllib.error
 
 import pytest
 
-from app.werewolf.lm import FakeProvider, LmLog, generate_action, parse_json_object
+from app.werewolf.lm import (
+    FakeProvider,
+    LmLog,
+    generate_action,
+    generate_action_with_events,
+    parse_json_object,
+)
 from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.providers import (
     DeepSeekProvider,
@@ -138,9 +144,26 @@ class FailingStreamProvider:
         del model, prompt, temperature
         raise AssertionError("stream_json should be preferred")
 
-    def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+    def stream_json(self, *, model: str, prompt: str, temperature: float):
         del model, prompt, temperature
-        raise RuntimeError("boom")
+        yield '{"reasoning":"试探","say":"已输出'
+        raise RuntimeError("partial boom")
+
+
+class StreamFallbackProvider:
+    def __init__(self) -> None:
+        self.stream_calls = 0
+        self.complete_calls = 0
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, prompt, temperature
+        self.complete_calls += 1
+        return '{"reasoning":"完整响应","say":"流式失败后完整返回"}'
+
+    def stream_json(self, *, model: str, prompt: str, temperature: float):
+        del model, prompt, temperature
+        self.stream_calls += 1
+        raise RuntimeError("stream unsupported")
 
 
 class FailingCompleteOnlyProvider:
@@ -168,8 +191,8 @@ def test_visible_json_field_extractor_streams_only_new_public_text() -> None:
 def test_visible_json_field_extractor_decodes_escaped_text() -> None:
     extractor = VisibleJsonFieldExtractor("summary")
 
-    assert extractor.update('{"summary":"第一行\\n') == "第一行"
-    assert extractor.update('{"summary":"第一行\\n第二行"}') == "\n第二行"
+    assert extractor.update('{"summary":"第一行\\n') == "第一行\n"
+    assert extractor.update('{"summary":"第一行\\n第二行"}') == "第二行"
 
 
 def test_visible_json_field_extractor_waits_for_complete_unicode_surrogate_pair() -> None:
@@ -180,6 +203,12 @@ def test_visible_json_field_extractor_waits_for_complete_unicode_surrogate_pair(
 
     assert delta == "😀"
     assert delta.encode("utf-8") == b"\xf0\x9f\x98\x80"
+
+
+def test_visible_json_field_extractor_decodes_complete_bmp_unicode_boundary() -> None:
+    extractor = VisibleJsonFieldExtractor("say")
+
+    assert extractor.update('{"say":"\\u6211') == "我"
 
 
 def test_action_visible_stream_field_only_allows_public_actions() -> None:
@@ -238,8 +267,6 @@ def test_extract_openai_chat_delta_preserves_content_before_done_in_same_chunk()
 
 
 def test_generate_action_with_events_streams_public_visible_text() -> None:
-    from app.werewolf.lm import generate_action_with_events
-
     sink = CapturingLmEventSink()
     provider = StreamingFakeProvider(
         ['{"reasoning":"试探",', '"say":"我', "不是", '狼"}']
@@ -267,13 +294,18 @@ def test_generate_action_with_events_streams_public_visible_text() -> None:
     assert log.raw_response == '{"reasoning":"试探","say":"我不是狼"}'
     assert log.request_id == "req_public"
     delta_events = [event for event in sink.events if event["type"] == "model_response_delta"]
-    assert [event["payload"]["visible_text"] for event in delta_events] == ["我", "不是", "狼"]
-    assert all(event["payload"]["request_id"] == "req_public" for event in delta_events)
+    assert len(delta_events) == 1
+    assert delta_events[0]["payload"] == {
+        "request_id": "req_public",
+        "model": "deepseek-chat",
+        "delta": "我不是狼",
+        "visible_text": "我不是狼",
+        "field": "say",
+        "is_public": True,
+    }
 
 
 def test_generate_action_with_events_suppresses_private_action_deltas() -> None:
-    from app.werewolf.lm import generate_action_with_events
-
     sink = CapturingLmEventSink()
     provider = StreamingFakeProvider(
         ['{"reasoning":"夜晚决策",', '"remove":"Bob"}']
@@ -303,9 +335,7 @@ def test_generate_action_with_events_suppresses_private_action_deltas() -> None:
     assert [event["type"] for event in sink.events].count("model_response_delta") == 0
 
 
-def test_generate_action_with_events_publishes_started_before_model_output_and_copies_state() -> None:
-    from app.werewolf.lm import generate_action_with_events
-
+def test_generate_action_with_events_publishes_sanitized_started_before_model_output() -> None:
     sink = CapturingLmEventSink()
     world_state = _world_state_for_special_action("村民", "")
     world_state["observations"] = ["第一条观察"]
@@ -348,24 +378,18 @@ def test_generate_action_with_events_publishes_started_before_model_output_and_c
     assert provider.event_types_seen_before_output == ["model_request_started"]
     started = sink.events[0]
     assert started["type"] == "model_request_started"
-    assert started["payload"]["request_id"] == "req_started"
-    assert started["payload"]["model"] == "deepseek-chat"
-    published_world_state = started["payload"]["world_state"]
-    json.dumps(published_world_state, ensure_ascii=False)
-    assert published_world_state is not world_state
-    assert published_world_state["observations"] == ["第一条观察"]
-    assert isinstance(published_world_state["seen"], str)
-
-    published_world_state["options"] = "__mutated__"
-    published_world_state["observations"].append("__mutated__")
-
-    assert world_state["options"] == ""
-    assert world_state["observations"] == ["第一条观察"]
+    assert started["payload"] == {
+        "request_id": "req_started",
+        "model": "deepseek-chat",
+        "message": "玩家正在组织公开发言...",
+        "stream_field": "say",
+        "is_public": True,
+    }
+    assert "world_state" not in started["payload"]
+    assert "prompt" not in started["payload"]
 
 
 def test_generate_action_with_events_falls_back_to_complete_json_without_stream() -> None:
-    from app.werewolf.lm import generate_action_with_events
-
     sink = CapturingLmEventSink()
     provider = CompleteOnlyFakeProvider('{"reasoning":"完整响应","say":"我从完整响应返回"}')
 
@@ -393,11 +417,37 @@ def test_generate_action_with_events_falls_back_to_complete_json_without_stream(
     assert [event["type"] for event in sink.events].count("model_response_delta") == 0
 
 
-def test_generate_action_with_events_publishes_failure_and_stops_progress_on_stream_error(
+def test_generate_action_with_events_falls_back_when_stream_fails_before_output() -> None:
+    sink = CapturingLmEventSink()
+    provider = StreamFallbackProvider()
+
+    value, log = generate_action_with_events(
+        provider=provider,
+        action="debate",
+        world_state=_world_state_for_special_action("村民", ""),
+        model="deepseek-chat",
+        result_key="say",
+        event_sink=sink,
+        event_context={
+            "round_number": 1,
+            "phase": "day",
+            "actor": "Alice",
+            "action": "debate",
+        },
+        request_id_factory=lambda: "req_stream_fallback",
+        enable_progress_ticks=False,
+    )
+
+    assert value == "流式失败后完整返回"
+    assert log.raw_response == '{"reasoning":"完整响应","say":"流式失败后完整返回"}'
+    assert provider.stream_calls == 1
+    assert provider.complete_calls == 1
+    assert [event["type"] for event in sink.events] == ["model_request_started"]
+
+
+def test_generate_action_with_events_publishes_failure_and_stops_progress_on_partial_stream_error(
     monkeypatch,
 ) -> None:
-    from app.werewolf.lm import generate_action_with_events
-
     class FakeProgress:
         instances = []
 
@@ -419,7 +469,7 @@ def test_generate_action_with_events_publishes_failure_and_stops_progress_on_str
     monkeypatch.setattr("app.werewolf.lm.ModelRequestProgress", FakeProgress)
     sink = CapturingLmEventSink()
 
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(RuntimeError, match="partial boom"):
         generate_action_with_events(
             provider=FailingStreamProvider(),
             action="debate",
@@ -444,13 +494,11 @@ def test_generate_action_with_events_publishes_failure_and_stops_progress_on_str
     assert failed_events[0]["payload"] == {
         "request_id": "req_stream_fail",
         "model": "deepseek-chat",
-        "error": "boom",
+        "error": "partial boom",
     }
 
 
 def test_generate_action_with_events_publishes_failure_on_complete_error() -> None:
-    from app.werewolf.lm import generate_action_with_events
-
     sink = CapturingLmEventSink()
 
     with pytest.raises(RuntimeError, match="boom"):

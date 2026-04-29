@@ -41,22 +41,26 @@ describe("toDirectorCue", () => {
     });
   });
 
-  it("keeps model responses readable for longer", () => {
+  it("renders sanitized model response receipts", () => {
     const cue = toDirectorCue(
       event({
         id: 3,
         type: "model_response_received",
         actor: "张三",
         action: "debate",
-        payload: { raw_response: "我不是狼人，我建议今天先听李四发言。" },
+        payload: {
+          request_id: "req_123",
+          model: "deepseek-chat",
+          message: "模型返回已接收，正在解析行动",
+        },
       }),
     );
 
-    expect(cue.title).toBe("张三 的模型返回");
-    expect(cue.body).toContain("我不是狼人");
-    expect(cue.importance).toBe("key");
-    expect(cue.compressible).toBe(false);
-    expect(cue.durationMs).toBeGreaterThanOrEqual(6000);
+    expect(cue.title).toBe("张三 的模型返回已接收");
+    expect(cue.body).toBe("模型返回已接收，正在解析行动");
+    expect(cue.importance).toBe("action");
+    expect(cue.compressible).toBe(true);
+    expect(cue.durationMs).toBe(2500);
   });
 
   it("renders state updates for debate, votes, exile and completed games", () => {
