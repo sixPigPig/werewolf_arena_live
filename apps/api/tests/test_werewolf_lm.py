@@ -467,7 +467,14 @@ def test_generate_action_with_events_publishes_failure_and_stops_progress_on_par
             pass
 
     monkeypatch.setattr("app.werewolf.lm.ModelRequestProgress", FakeProgress)
-    sink = CapturingLmEventSink()
+
+    class FailureOrderSink(CapturingLmEventSink):
+        def publish(self, event_type: str, **kwargs: object) -> None:
+            if event_type == "model_request_failed":
+                assert FakeProgress.instances[0].stopped is True
+            super().publish(event_type, **kwargs)
+
+    sink = FailureOrderSink()
 
     with pytest.raises(RuntimeError, match="partial boom"):
         generate_action_with_events(
@@ -494,8 +501,49 @@ def test_generate_action_with_events_publishes_failure_and_stops_progress_on_par
     assert failed_events[0]["payload"] == {
         "request_id": "req_stream_fail",
         "model": "deepseek-chat",
-        "error": "partial boom",
+        "message": "模型请求失败，正在中止本次行动",
     }
+
+
+def test_generate_action_with_events_sanitizes_public_failure_error() -> None:
+    class LeakyErrorProvider:
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            del model, prompt, temperature
+            raise RuntimeError(
+                "upstream body echoed prompt world_state raw_response reasoning"
+            )
+
+    sink = CapturingLmEventSink()
+
+    with pytest.raises(RuntimeError, match="upstream body echoed"):
+        generate_action_with_events(
+            provider=LeakyErrorProvider(),
+            action="debate",
+            world_state=_world_state_for_special_action("村民", ""),
+            model="deepseek-chat",
+            result_key="say",
+            event_sink=sink,
+            event_context={
+                "round_number": 1,
+                "phase": "day",
+                "actor": "Alice",
+                "action": "debate",
+            },
+            request_id_factory=lambda: "req_leaky_fail",
+            enable_progress_ticks=False,
+        )
+
+    failed_event = next(event for event in sink.events if event["type"] == "model_request_failed")
+    assert failed_event["payload"] == {
+        "request_id": "req_leaky_fail",
+        "model": "deepseek-chat",
+        "message": "模型请求失败，正在中止本次行动",
+    }
+    public_payload = json.dumps(failed_event["payload"], ensure_ascii=False)
+    assert "prompt" not in public_payload
+    assert "world_state" not in public_payload
+    assert "raw_response" not in public_payload
+    assert "reasoning" not in public_payload
 
 
 def test_generate_action_with_events_publishes_failure_on_complete_error() -> None:
@@ -526,7 +574,7 @@ def test_generate_action_with_events_publishes_failure_on_complete_error() -> No
     assert sink.events[1]["payload"] == {
         "request_id": "req_complete_fail",
         "model": "deepseek-chat",
-        "error": "boom",
+        "message": "模型请求失败，正在中止本次行动",
     }
 
 

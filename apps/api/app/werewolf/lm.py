@@ -19,6 +19,7 @@ from app.werewolf.streaming import (
 DEFAULT_RETRIES = 3
 STREAM_DELTA_FLUSH_CHARS = 12
 STREAM_DELTA_FLUSH_SECONDS = 0.12
+PUBLIC_MODEL_FAILURE_MESSAGE = "模型请求失败，正在中止本次行动"
 
 
 class ModelProvider(Protocol):
@@ -154,6 +155,7 @@ def generate_action_with_events(
         if enable_progress_ticks:
             progress.start()
 
+        progress_stopped = False
         try:
             raw_response = _complete_json_with_optional_stream(
                 provider=provider,
@@ -167,6 +169,8 @@ def generate_action_with_events(
                 progress=progress,
             )
         except Exception as exc:
+            progress.stop()
+            progress_stopped = True
             _publish_model_event(
                 event_sink,
                 "model_request_failed",
@@ -174,12 +178,13 @@ def generate_action_with_events(
                 payload={
                     "request_id": request_id,
                     "model": model,
-                    "error": str(exc),
+                    "message": PUBLIC_MODEL_FAILURE_MESSAGE,
                 },
             )
             raise
         finally:
-            progress.stop()
+            if not progress_stopped:
+                progress.stop()
 
         raw_responses.append(raw_response)
         try:
