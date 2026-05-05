@@ -1,5 +1,6 @@
+import { Button, Callout, Card, Heading, Text } from "@radix-ui/themes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { getGameRun } from "../features/games/api/getGameRun";
@@ -21,8 +22,9 @@ export function LiveGamePage() {
   const { events, connectionState } = useGameRunEvents(runId);
   const [autoFollow, setAutoFollow] = useState(true);
   const [manualFocusName, setManualFocusName] = useState<string | null>(null);
-  const terminalStartByRunIdRef = useRef(new Map<string, boolean>());
-  const [, setTerminalStartVersion] = useState(0);
+  const [terminalStartByRunId, setTerminalStartByRunId] = useState<
+    Record<string, boolean>
+  >({});
   const {
     data: run,
     isError,
@@ -53,8 +55,17 @@ export function LiveGamePage() {
     () => deriveLiveSpectatorState(events),
     [events],
   );
+  if (run && runId && !(runId in terminalStartByRunId)) {
+    setTerminalStartByRunId({
+      ...terminalStartByRunId,
+      [runId]: isTerminalRunStatus(run.status),
+    });
+  }
+
   const shouldStartAtTerminal =
-    runId ? terminalStartByRunIdRef.current.get(runId) === true : false;
+    run && runId
+      ? terminalStartByRunId[runId] ?? isTerminalRunStatus(run.status)
+      : false;
   const director = useLiveDirector(events, {
     resetKey: runId,
     startAtLatestTerminal: shouldStartAtTerminal,
@@ -75,22 +86,10 @@ export function LiveGamePage() {
     }
   }, [queryClient, runId, terminalEvent]);
 
-  useEffect(() => {
-    if (!run || !runId || terminalStartByRunIdRef.current.has(runId)) {
-      return;
-    }
-
-    terminalStartByRunIdRef.current.set(
-      runId,
-      run.status === "completed" || run.status === "failed",
-    );
-    setTerminalStartVersion((value) => value + 1);
-  }, [run, runId]);
-
   if (isPending) {
     return (
       <main className="mx-auto w-full max-w-5xl px-4 py-8">
-        <p className="text-sm text-slate-600">正在读取实时对局...</p>
+        <Text color="gray" size="2">正在读取实时对局...</Text>
       </main>
     );
   }
@@ -98,46 +97,59 @@ export function LiveGamePage() {
   if (isError || !run) {
     return (
       <main className="mx-auto w-full max-w-5xl px-4 py-8">
-        <p className="text-sm text-red-700">无法读取实时对局</p>
+        <Callout.Root color="red" size="1" variant="soft">
+          <Callout.Text>无法读取实时对局</Callout.Text>
+        </Callout.Root>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto w-full max-w-5xl px-4 py-8">
+    <main className="mx-auto w-full max-w-7xl px-4 py-6">
       <div className="mb-4 flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold text-slate-950">实时观战</h1>
+        <div>
+          <Text color="gray" size="1" weight="medium">
+            WEREWOLF LIVE
+          </Text>
+          <Heading as="h1" size="6">
+            实时观战
+          </Heading>
+        </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {canResumeRun ? (
-            <button
-              className="rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:bg-slate-400"
+            <Button
               disabled={resumeMutation.isPending}
+              highContrast
+              loading={resumeMutation.isPending}
               onClick={() => resumeMutation.mutate(run.session_id)}
               type="button"
             >
-              {resumeMutation.isPending ? "继续中..." : "继续对局"}
-            </button>
+              继续对局
+            </Button>
           ) : null}
           {terminalEvent ? (
-            <Link
-              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-800"
-              to={`/games/${run.session_id}`}
-            >
-              查看完整复盘
-            </Link>
+            <Button asChild color="gray" variant="surface">
+              <Link to={`/games/${run.session_id}`}>查看完整复盘</Link>
+            </Button>
           ) : null}
         </div>
       </div>
       {resumeMutation.isError ? (
-        <p className="mb-3 text-sm text-red-700">无法继续对局</p>
+        <Callout.Root className="mb-3" color="red" size="1" variant="soft">
+          <Callout.Text>无法继续对局</Callout.Text>
+        </Callout.Root>
       ) : null}
-      <section className="overflow-hidden rounded-md border border-slate-200 bg-white">
-        <LiveStatusStrip run={run} connectionState={connectionState} />
-      </section>
+      <div className="sticky top-0 z-10">
+        <Card asChild size="1">
+          <section className="overflow-hidden">
+            <LiveStatusStrip run={run} connectionState={connectionState} />
+          </section>
+        </Card>
+      </div>
       <div className="mt-4">
         <RuleSetSummary ruleSet={run.rule_set} />
       </div>
-      <div className="mt-4 grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)_22rem]">
+      <div className="mt-4 grid gap-4 lg:grid-cols-[20rem_minmax(0,1fr)_22rem]">
         <div className="order-2 min-w-0 lg:order-1">
           <LivePlayerPanel
             activePlayerName={spectatorState.activePlayerName}
@@ -172,16 +184,37 @@ export function LiveGamePage() {
             speed={director.speed}
           />
         </div>
-        <section className="order-3 min-w-0 overflow-hidden rounded-md border border-slate-200 bg-white lg:order-3 lg:max-h-[calc(100vh-8rem)] lg:overflow-auto">
-          <div className="border-b border-slate-200 px-4 py-3">
-            <h2 className="text-sm font-semibold text-slate-950">原始事件</h2>
-          </div>
-          <LiveEventTimeline
-            currentEventId={director.currentEventId}
-            events={events}
-          />
-        </section>
+        <Card asChild size="1">
+          <section className="order-3 min-w-0 overflow-hidden lg:order-3 lg:max-h-[calc(100vh-8rem)] lg:overflow-auto">
+            <div className="border-b border-slate-200 px-4 py-3">
+              <h2 className="text-sm font-semibold text-slate-950">
+                剧情时间线
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                关键阶段、行动和结算
+              </p>
+            </div>
+            <LiveEventTimeline
+              currentEventId={director.currentEventId}
+              events={events}
+              variant="story"
+            />
+            <details className="border-t border-slate-200">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700">
+                调试事件
+              </summary>
+              <LiveEventTimeline
+                currentEventId={director.currentEventId}
+                events={events}
+              />
+            </details>
+          </section>
+        </Card>
       </div>
     </main>
   );
+}
+
+function isTerminalRunStatus(status: string) {
+  return status === "completed" || status === "failed";
 }

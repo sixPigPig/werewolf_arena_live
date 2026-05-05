@@ -174,6 +174,12 @@ function applyStateUpdate(
         player.name === protectedSurvival || activeNames.has(player.name);
       if (!player.isAlive) {
         player.status = "out";
+        player.activeRequestId = null;
+        player.hasVisibleStreamText = false;
+        if (!isOutDetail(player.lastDetail)) {
+          player.lastAction = "";
+          player.lastDetail = "出局";
+        }
       }
     }
   }
@@ -191,6 +197,7 @@ function applyStateUpdate(
     const player = ensurePlayer(state, eliminated);
     player.isAlive = false;
     player.status = "out";
+    player.lastAction = "";
     player.lastDetail = "夜晚出局";
     player.hasVisibleStreamText = false;
   }
@@ -200,6 +207,7 @@ function applyStateUpdate(
     const player = ensurePlayer(state, exiled);
     player.isAlive = false;
     player.status = "out";
+    player.lastAction = "";
     player.lastDetail = "白天放逐";
     player.hasVisibleStreamText = false;
   }
@@ -334,4 +342,8 @@ function payloadForEvent(event: LiveGameEvent): Record<string, unknown> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isOutDetail(value: string) {
+  return value === "出局" || value === "夜晚出局" || value === "白天放逐";
 }

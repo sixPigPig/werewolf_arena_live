@@ -1,11 +1,24 @@
 import type { LiveGameEvent } from "../types";
+import { liveEventTitle } from "../liveLabels";
 
 const HIDDEN_TIMELINE_EVENT_TYPES = new Set([
   "model_response_delta",
   "model_thinking_tick",
 ]);
 
-function titleForEvent(event: LiveGameEvent) {
+const STORY_TIMELINE_EVENT_TYPES = new Set([
+  "run_started",
+  "game_started",
+  "round_started",
+  "phase_started",
+  "action_requested",
+  "action_parsed",
+  "state_updated",
+  "game_completed",
+  "game_failed",
+]);
+
+function rawTitleForEvent(event: LiveGameEvent) {
   if (event.type === "action_requested" && event.actor && event.action) {
     return `${event.actor} 正在 ${event.action}`;
   }
@@ -75,18 +88,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 type LiveEventTimelineProps = {
   events: LiveGameEvent[];
   currentEventId?: number | null;
+  variant?: "raw" | "story";
 };
 
 export function LiveEventTimeline({
   events,
   currentEventId = null,
+  variant = "raw",
 }: LiveEventTimelineProps) {
-  const visibleEvents = events.filter(
-    (event) => !HIDDEN_TIMELINE_EVENT_TYPES.has(event.type),
-  );
+  const visibleEvents = events
+    .filter((event) => !HIDDEN_TIMELINE_EVENT_TYPES.has(event.type))
+    .filter((event) =>
+      variant === "story" ? STORY_TIMELINE_EVENT_TYPES.has(event.type) : true,
+    );
 
   if (visibleEvents.length === 0) {
-    return <p className="p-4 text-sm text-slate-600">等待实时事件...</p>;
+    return (
+      <p className="p-4 text-sm text-slate-600">
+        {variant === "story" ? "等待剧情事件..." : "等待实时事件..."}
+      </p>
+    );
   }
 
   return (
@@ -105,11 +126,11 @@ export function LiveEventTimeline({
           >
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-medium text-slate-950">
-                {titleForEvent(event)}
+                {variant === "story"
+                  ? liveEventTitle(event)
+                  : rawTitleForEvent(event)}
               </p>
-              <p className="text-xs text-slate-500">
-                {event.round ? `第 ${event.round} 轮` : event.type}
-              </p>
+              <p className="text-xs text-slate-500">{metaForEvent(event, variant)}</p>
             </div>
             {detail ? (
               <pre className="mt-2 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-700">
@@ -121,4 +142,14 @@ export function LiveEventTimeline({
       })}
     </ol>
   );
+}
+
+function metaForEvent(event: LiveGameEvent, variant: "raw" | "story") {
+  if (event.round) {
+    return `第 ${event.round} 轮`;
+  }
+  if (variant === "story") {
+    return "流程";
+  }
+  return event.type;
 }

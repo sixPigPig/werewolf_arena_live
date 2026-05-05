@@ -206,6 +206,10 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    expect(screen.getByText("观赛舞台")).toBeInTheDocument();
+    expect(screen.getByText("座位盘")).toBeInTheDocument();
+    expect(screen.getByText("剧情时间线")).toBeInTheDocument();
+    expect(screen.getByText("调试事件")).toBeInTheDocument();
     expect(await screen.findByText("新手 6 人快局")).toBeInTheDocument();
     expect(
       screen.getByText("1 狼人 / 1 预言家 / 1 医生 / 3 村民"),
@@ -303,8 +307,11 @@ describe("LiveGamePage", () => {
     expect(
       await screen.findByRole("button", { name: /张三/ }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /张三/ })).toHaveAccessibleName(
+      /公开发言/,
+    );
     expect(screen.getByRole("button", { name: /李四/ })).toBeInTheDocument();
-    expect(await screen.findByText("张三 正在 debate")).toBeInTheDocument();
+    expect(await screen.findByText("张三 正在公开发言")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "追到最新" }));
     expect(
       screen.getByRole("heading", { name: "张三 正在发言" }),
@@ -475,7 +482,7 @@ describe("LiveGamePage", () => {
     });
     expect(screen.getByRole("button", { name: /李四/ })).toHaveClass("ring-2");
 
-    await userEvent.click(screen.getByRole("checkbox", { name: "自动跟随" }));
+    await userEvent.click(screen.getByRole("switch", { name: "自动跟随" }));
     expect(screen.getByRole("button", { name: /张三/ })).toHaveClass("ring-2");
   });
 
@@ -510,7 +517,9 @@ describe("LiveGamePage", () => {
       });
     });
 
-    expect(await screen.findAllByText("对局失败")).toHaveLength(2);
+    expect((await screen.findAllByText("对局失败")).length).toBeGreaterThanOrEqual(
+      2,
+    );
     expect(screen.getAllByText("model timeout").length).toBeGreaterThan(0);
   });
 
@@ -903,13 +912,13 @@ describe("LiveGamePage", () => {
     vi.useRealTimers();
   });
 
-  it("keeps all raw events visible and highlights the current director event", async () => {
+  it("shows story events by default and keeps raw events in the debug drawer", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(runningRunResponse()),
     );
 
-    const { container } = renderWithClient(
+    renderWithClient(
       <Routes>
         <Route path="/games/live/:runId" element={<LiveGamePage />} />
       </Routes>,
@@ -930,13 +939,28 @@ describe("LiveGamePage", () => {
       });
     });
 
-    const timeline = container.querySelector("ol");
-    expect(timeline).not.toBeNull();
-    expect(within(timeline!).getByText("round_started")).toBeInTheDocument();
-    expect(within(timeline!).getByText("phase_started")).toBeInTheDocument();
-    expect(within(timeline!).getAllByRole("listitem")).toHaveLength(2);
+    const storyHeading = screen.getByRole("heading", { name: "剧情时间线" });
+    const storyPanel = storyHeading.closest("section");
+    expect(storyPanel).not.toBeNull();
+    const storyTimeline = storyPanel!.querySelector(
+      ":scope > ol",
+    ) as HTMLElement | null;
+    expect(storyTimeline).not.toBeNull();
+    const storyTimelineElement = storyTimeline!;
+    expect(
+      within(storyTimelineElement).getByText("第 1 轮开始"),
+    ).toBeInTheDocument();
+    expect(
+      within(storyTimelineElement).getByText("白天阶段开始"),
+    ).toBeInTheDocument();
+    expect(
+      within(storyTimelineElement).queryByText("round_started"),
+    ).not.toBeInTheDocument();
+    expect(within(storyTimelineElement).getAllByRole("listitem")).toHaveLength(
+      2,
+    );
 
-    const rows = within(timeline!).getAllByRole("listitem");
+    const rows = within(storyTimelineElement).getAllByRole("listitem");
     expect(rows[0]).toHaveClass("bg-slate-100", "ring-1");
 
     act(() => {
@@ -944,6 +968,13 @@ describe("LiveGamePage", () => {
     });
 
     expect(rows[1]).toHaveClass("bg-slate-100", "ring-1");
+    act(() => {
+      screen.getByText("调试事件").click();
+    });
+    const debugPanel = screen.getByText("调试事件").closest("details");
+    expect(debugPanel).not.toBeNull();
+    expect(within(debugPanel!).getByText("round_started")).toBeInTheDocument();
+    expect(within(debugPanel!).getByText("phase_started")).toBeInTheDocument();
     vi.useRealTimers();
   });
 
@@ -984,5 +1015,39 @@ describe("LiveGamePage", () => {
 
     expect(screen.getAllByText("custom_diagnostic")).toHaveLength(2);
     expect(container.querySelector("pre")).not.toBeInTheDocument();
+  });
+
+  it("renders a localized story timeline when requested", () => {
+    const events = [
+      {
+        id: 1,
+        type: "action_requested",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:03Z",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+        payload: { options: ["李四"] },
+      },
+      {
+        id: 2,
+        type: "model_request_started",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:04Z",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+        payload: { model: "deepseek-chat" },
+      },
+    ] as LiveGameEvent[];
+
+    render(<LiveEventTimeline events={events} variant="story" />);
+
+    expect(screen.getByText("张三 正在公开发言")).toBeInTheDocument();
+    expect(screen.queryByText("model_request_started")).not.toBeInTheDocument();
   });
 });

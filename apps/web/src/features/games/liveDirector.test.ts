@@ -34,7 +34,7 @@ describe("toDirectorCue", () => {
 
     expect(cue).toMatchObject({
       eventId: 2,
-      title: "张三 准备 debate",
+      title: "张三 正在公开发言",
       body: "可选目标：李四",
       importance: "action",
       compressible: true,
@@ -336,8 +336,8 @@ describe("toDirectorCue", () => {
     expect(cues).toHaveLength(1);
     expect(cues[0]).toMatchObject({
       eventId: 2,
-      title: "张三 请求模型",
-      body: "deepseek-chat",
+      title: "张三 正在思考",
+      body: "deepseek-chat 正在生成下一步。",
       importance: "action",
       compressible: true,
     });

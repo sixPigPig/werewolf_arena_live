@@ -1,4 +1,5 @@
 import type { LiveGameEvent } from "./types";
+import { liveEventTitle } from "./liveLabels";
 
 export type DirectorCueImportance = "normal" | "action" | "key" | "terminal";
 
@@ -83,7 +84,7 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
     return {
       ...base,
       title: "运行已创建",
-      body: readablePayload(rawPayload),
+      body: "对局运行已创建，正在准备玩家、规则和实时事件流。",
       durationMs: 2000,
     };
   }
@@ -92,7 +93,7 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
     return {
       ...base,
       title: "运行已开始",
-      body: readablePayload(rawPayload),
+      body: "后台对局已开始，观赛事件会按导播节奏播放。",
       durationMs: 2000,
     };
   }
@@ -112,7 +113,7 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
     return {
       ...base,
       title: event.round === null ? "新回合开始" : `第 ${event.round} 轮开始`,
-      body: readablePayload(rawPayload),
+      body: event.round === null ? "新的回合即将展开。" : `第 ${event.round} 轮开始。`,
       durationMs: 2500,
     };
   }
@@ -120,7 +121,7 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
   if (event.type === "phase_started") {
     return {
       ...base,
-      title: `${phaseLabel(event.phase)}阶段开始`,
+      title: liveEventTitle(event),
       body: activePlayersBody(payload),
       durationMs: 2500,
     };
@@ -129,7 +130,7 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
   if (event.type === "action_requested") {
     return {
       ...base,
-      title: `${actorLabel(event)} 准备 ${actionLabel(event)}`,
+      title: liveEventTitle(event),
       body: optionsBody(payload),
       importance: "action",
       durationMs: 2500,
@@ -140,8 +141,10 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
   if (event.type === "model_request_started") {
     return {
       ...base,
-      title: `${actorLabel(event)} 请求模型`,
-      body: stringField(payload, "model"),
+      title: liveEventTitle(event),
+      body:
+        stringField(payload, "message") ||
+        `${stringField(payload, "model") || "模型"} 正在生成下一步。`,
       importance: "action",
       durationMs: 2500,
       compressible: true,
@@ -155,7 +158,7 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
       "模型返回已接收，正在解析行动";
     return {
       ...base,
-      title: `${actorLabel(event)} 的模型返回已接收`,
+      title: liveEventTitle(event),
       body,
       importance: "action",
       durationMs: stringField(payload, "visible_text") ? longTextDuration(body) : 2500,
@@ -166,7 +169,7 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
   if (event.type === "action_parsed") {
     return {
       ...base,
-      title: `${actorLabel(event)} 完成 ${actionLabel(event)}`,
+      title: liveEventTitle(event),
       body: parsedActionBody(payload) || readablePayload(rawPayload),
       importance: "action",
       durationMs: 3500,
@@ -334,30 +337,6 @@ function stateUpdatedCue(
     body: readablePayload(rawPayload),
     durationMs: 3000,
   };
-}
-
-function actorLabel(event: LiveGameEvent): string {
-  return event.actor || "未知玩家";
-}
-
-function actionLabel(event: LiveGameEvent): string {
-  return event.action || "行动";
-}
-
-function phaseLabel(phase: string | null): string {
-  if (phase === "night") {
-    return "夜晚";
-  }
-  if (phase === "day") {
-    return "白天";
-  }
-  if (phase === "vote") {
-    return "投票";
-  }
-  if (phase === "summary") {
-    return "总结";
-  }
-  return phase ? `${phase} ` : "";
 }
 
 function gameStartedBody(payload: Record<string, unknown>): string {
