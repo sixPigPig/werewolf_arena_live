@@ -8,7 +8,6 @@ import { resumeGameRun } from "../features/games/api/resumeGameRun";
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveDirectorStage } from "../features/games/components/LiveDirectorStage";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
-import { LivePlayerPanel } from "../features/games/components/LivePlayerPanel";
 import { LiveStatusStrip } from "../features/games/components/LiveStatusStrip";
 import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 import { useGameRunEvents } from "../features/games/hooks/useGameRunEvents";
@@ -149,12 +148,18 @@ export function LiveGamePage() {
       <div className="mt-4">
         <RuleSetSummary ruleSet={run.rule_set} />
       </div>
-      <div className="mt-4 grid gap-4 lg:grid-cols-[20rem_minmax(0,1fr)_22rem]">
-        <div className="order-2 min-w-0 lg:order-1">
-          <LivePlayerPanel
-            activePlayerName={spectatorState.activePlayerName}
+      <div
+        className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]"
+        data-testid="live-stage-layout"
+      >
+        <div className="min-w-0 space-y-3">
+          <LiveDirectorStage
+            activePlayerName={autoFocusName}
             autoFollow={autoFollow}
+            backlogCount={director.backlogCount}
+            cue={director.currentCue}
             focusedPlayerName={focusedPlayerName}
+            isCatchingUp={director.isCatchingUp}
             onAutoFollowChange={(value) => {
               setAutoFollow(value);
               if (value) {
@@ -167,13 +172,6 @@ export function LiveGamePage() {
             }}
             players={spectatorState.players}
           />
-        </div>
-        <div className="order-1 min-w-0 space-y-3 lg:order-2">
-          <LiveDirectorStage
-            backlogCount={director.backlogCount}
-            cue={director.currentCue}
-            isCatchingUp={director.isCatchingUp}
-          />
           <LiveDirectorControls
             backlogCount={director.backlogCount}
             isCatchingUp={director.isCatchingUp}
@@ -185,7 +183,7 @@ export function LiveGamePage() {
           />
         </div>
         <Card asChild size="1">
-          <section className="order-3 min-w-0 overflow-hidden lg:order-3 lg:max-h-[calc(100vh-8rem)] lg:overflow-auto">
+          <section className="min-w-0 overflow-hidden xl:max-h-[calc(100vh-8rem)] xl:overflow-auto">
             <div className="border-b border-slate-200 px-4 py-3">
               <h2 className="text-sm font-semibold text-slate-950">
                 剧情时间线
