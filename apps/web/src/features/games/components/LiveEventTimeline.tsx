@@ -104,14 +104,14 @@ export function LiveEventTimeline({
 
   if (visibleEvents.length === 0) {
     return (
-      <p className="p-4 text-sm text-slate-600">
+      <p className="p-4 text-sm text-slate-400">
         {variant === "story" ? "等待剧情事件..." : "等待实时事件..."}
       </p>
     );
   }
 
   return (
-    <ol className="divide-y divide-slate-200">
+    <ol className="divide-y divide-amber-500/10">
       {visibleEvents.map((event) => {
         const detail = detailForEvent(event);
         const isCurrent = event.id === currentEventId;
@@ -120,20 +120,24 @@ export function LiveEventTimeline({
           <li
             className={[
               "px-4 py-3",
-              isCurrent ? "bg-slate-100 ring-1 ring-inset ring-slate-300" : "",
+              isCurrent
+                ? "bg-amber-300/10 ring-1 ring-inset ring-amber-300/25"
+                : "",
             ].join(" ")}
             key={event.id}
           >
             <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-medium text-slate-950">
+              <p className="text-sm font-medium text-amber-50">
                 {variant === "story"
                   ? liveEventTitle(event)
                   : rawTitleForEvent(event)}
               </p>
-              <p className="text-xs text-slate-500">{metaForEvent(event, variant)}</p>
+              <p className="text-xs text-teal-100/65">
+                {metaForEvent(event, variant)}
+              </p>
             </div>
             {detail ? (
-              <pre className="mt-2 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-700">
+              <pre className="mt-2 overflow-auto rounded-md border border-amber-500/10 bg-black/25 p-2 text-xs text-slate-300">
                 {detail}
               </pre>
             ) : null}

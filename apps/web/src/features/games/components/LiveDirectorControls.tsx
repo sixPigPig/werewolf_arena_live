@@ -1,4 +1,4 @@
-import { Button, Card, SegmentedControl } from "@radix-ui/themes";
+import { Button, SegmentedControl } from "@radix-ui/themes";
 
 import type { LiveDirectorSpeed } from "../hooks/useLiveDirector";
 
@@ -22,20 +22,24 @@ export function LiveDirectorControls({
   onSpeedChange,
 }: LiveDirectorControlsProps) {
   return (
-    <Card asChild size="1">
-      <section>
+    <section
+      className="rounded-lg border border-amber-500/20 bg-slate-950/65 p-4 text-slate-100 shadow-[0_18px_50px_rgba(0,0,0,0.24)] backdrop-blur-xl"
+      data-testid="director-controls"
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-36">
-          <h2 className="text-sm font-semibold text-slate-950">观赛节奏</h2>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-            {isCatchingUp ? <span>自动追进度</span> : null}
+          <h2 className="text-sm font-semibold text-amber-50">观赛节奏</h2>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            {isCatchingUp ? (
+              <span className="text-teal-200">自动追进度</span>
+            ) : null}
             <span>队列 {backlogCount} 条</span>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <Button
-            color="gray"
+            color="amber"
             onClick={onTogglePaused}
             type="button"
             variant="surface"
@@ -58,16 +62,11 @@ export function LiveDirectorControls({
             }
             value={String(speed)}
           >
-            <SegmentedControl.Item value="1">
-              1x
-            </SegmentedControl.Item>
-            <SegmentedControl.Item value="1.5">
-              1.5x
-            </SegmentedControl.Item>
+            <SegmentedControl.Item value="1">1x</SegmentedControl.Item>
+            <SegmentedControl.Item value="1.5">1.5x</SegmentedControl.Item>
           </SegmentedControl.Root>
         </div>
       </div>
-      </section>
-    </Card>
+    </section>
   );
 }

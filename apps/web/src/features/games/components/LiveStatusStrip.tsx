@@ -36,18 +36,23 @@ export function LiveStatusStrip({
     eventPacingLabels.off;
 
   return (
-    <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 px-4 py-3 text-sm">
-      <Badge color={run.status === "failed" ? "red" : "gray"} variant="surface">
+    <div
+      className="flex flex-wrap items-center gap-3 border-b border-amber-500/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-300 backdrop-blur-xl"
+      data-testid="live-status-strip"
+    >
+      <Badge color={run.status === "failed" ? "red" : "amber"} variant="surface">
         {statusLabels[run.status] ?? run.status}
       </Badge>
-      <span className="text-slate-600">{run.session_id}</span>
-      <span className="text-slate-500">
+      <span className="font-mono text-xs text-amber-50/80">
+        {run.session_id}
+      </span>
+      <span className="text-slate-400">
         连接：
         {connectionLabels[connectionState as ConnectionState] ??
           connectionState}
       </span>
-      <span className="text-slate-500">节奏：{eventPacingLabel}</span>
-      {run.error ? <span className="text-red-700">{run.error}</span> : null}
+      <span className="text-slate-400">节奏：{eventPacingLabel}</span>
+      {run.error ? <span className="text-red-300">{run.error}</span> : null}
     </div>
   );
 }

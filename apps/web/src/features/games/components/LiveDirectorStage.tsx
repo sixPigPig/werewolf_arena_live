@@ -33,33 +33,39 @@ export function LiveDirectorStage({
     players.find((player) => player.name === focusedPlayerName) ?? null;
   const title = cue?.title ?? "等待导播事件";
   const body = cue?.body ?? "对局运行已创建，正在等待下一条实时事件。";
+  const isTerminalCue = cue?.importance === "terminal";
 
   return (
     <section
-      className={`relative overflow-hidden rounded-lg border border-amber-900/40 bg-slate-950 text-slate-100 shadow-2xl ${tone.surface}`}
+      className={`relative overflow-hidden rounded-lg border border-amber-400/25 bg-[#070b12] text-slate-100 shadow-[0_32px_100px_rgba(0,0,0,0.55)] ${tone.surface}`}
+      data-testid="live-director-stage"
     >
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_8%,rgba(30,64,175,0.28),transparent_28%),radial-gradient(circle_at_50%_48%,rgba(146,64,14,0.42),transparent_42%),linear-gradient(180deg,#07111f_0%,#111827_48%,#030712_100%)]" />
-      <div className="absolute inset-x-0 top-0 h-32 bg-[linear-gradient(180deg,rgba(15,23,42,0.15),rgba(15,23,42,0.82)),repeating-linear-gradient(90deg,rgba(148,163,184,0.12)_0_1px,transparent_1px_72px)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_18%,rgba(20,184,166,0.16),transparent_30%),radial-gradient(ellipse_at_50%_52%,rgba(180,83,9,0.45),transparent_46%),linear-gradient(180deg,#07131d_0%,#0c1017_46%,#030507_100%)]" />
+      <div className="absolute inset-0 opacity-[0.16] bg-[repeating-linear-gradient(90deg,rgba(251,191,36,0.2)_0_1px,transparent_1px_72px),repeating-linear-gradient(0deg,rgba(45,212,191,0.16)_0_1px,transparent_1px_64px)]" />
+      <div className="absolute inset-x-0 top-0 h-36 bg-[linear-gradient(180deg,rgba(8,13,18,0.08),rgba(8,13,18,0.9)),repeating-linear-gradient(90deg,rgba(148,163,184,0.08)_0_18px,transparent_18px_54px)]" />
 
-      <div className="relative min-h-[42rem] px-4 py-4 sm:min-h-[44rem] sm:px-6 lg:min-h-[46rem]">
-        <div className="mx-auto flex w-fit items-center gap-3 rounded-full border border-amber-500/50 bg-slate-950/85 px-4 py-2 text-sm shadow-[0_0_24px_rgba(245,158,11,0.24)]">
+      <div
+        className="relative min-h-[36rem] px-4 py-3 sm:min-h-[38rem] sm:px-6 lg:min-h-[40rem]"
+        data-testid="live-director-stage-shell"
+      >
+        <div className="relative z-40 mx-auto flex w-fit items-center gap-3 rounded-full border border-amber-300/35 bg-black/45 px-4 py-2 text-sm shadow-[0_0_28px_rgba(245,158,11,0.2)] backdrop-blur-xl">
           <span className="text-slate-400">观赛舞台</span>
           <span className="font-semibold text-amber-200">
             {cue?.round ? `第 ${cue.round} 轮` : "等待回合"}
           </span>
-          <span className="text-slate-500">|</span>
-          <span className="font-semibold text-amber-100">
+          <span className="text-amber-500/40">|</span>
+          <span className="font-semibold text-teal-100">
             {cue?.phase ? phaseLabel(cue.phase) : "阶段未开始"}
           </span>
         </div>
 
-        <div className="absolute left-1/2 top-[52%] h-[58%] w-[78%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-amber-700/45 bg-[radial-gradient(circle_at_50%_45%,rgba(120,78,40,0.96),rgba(54,34,19,0.96)_48%,rgba(20,13,9,0.98)_76%)] shadow-[inset_0_0_70px_rgba(0,0,0,0.72),0_30px_90px_rgba(0,0,0,0.55)] sm:w-[70%]" />
-        <div className="absolute left-1/2 top-[52%] h-[44%] w-[58%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-amber-400/20 shadow-[inset_0_0_45px_rgba(251,191,36,0.12)]" />
-        <div className="absolute left-1/2 top-[45%] -translate-x-1/2 -translate-y-1/2 select-none text-7xl font-black text-amber-100/10 sm:text-9xl">
+        <div className="absolute left-1/2 top-[55%] h-[58%] w-[78%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-amber-600/45 bg-[radial-gradient(circle_at_50%_45%,rgba(92,62,34,0.98),rgba(40,28,19,0.98)_52%,rgba(10,8,7,0.99)_78%)] shadow-[inset_0_0_82px_rgba(0,0,0,0.76),inset_0_0_0_1px_rgba(251,191,36,0.08),0_34px_95px_rgba(0,0,0,0.58)] sm:w-[70%]" />
+        <div className="absolute left-1/2 top-[55%] h-[44%] w-[58%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-amber-300/18 bg-[conic-gradient(from_210deg,rgba(251,191,36,0.04),transparent_18%,rgba(20,184,166,0.06)_32%,transparent_48%,rgba(251,191,36,0.05)_72%,transparent)] shadow-[inset_0_0_50px_rgba(251,191,36,0.13)]" />
+        <div className="absolute left-1/2 top-[48%] -translate-x-1/2 -translate-y-1/2 select-none text-7xl font-black text-amber-100/10 sm:text-9xl">
           狼
         </div>
 
-        <div className="absolute left-1/2 top-[50%] z-30 w-[min(24rem,48vw)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-amber-500/30 bg-slate-950/70 p-3 text-center shadow-[0_20px_60px_rgba(0,0,0,0.42)] backdrop-blur-sm sm:top-[54%] sm:w-[min(30rem,64vw)] sm:p-4">
+        <div className="absolute left-1/2 top-[51%] z-30 w-[min(24rem,48vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-amber-300/25 bg-slate-950/72 p-3 text-center shadow-[0_24px_68px_rgba(0,0,0,0.48)] backdrop-blur-xl sm:top-[55%] sm:w-[min(30rem,64vw)] sm:p-4">
           <div className="mb-3 flex flex-wrap justify-center gap-2 text-xs">
             {cue ? (
               <>
@@ -84,7 +90,7 @@ export function LiveDirectorStage({
             {title}
           </h2>
           <div
-            className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-amber-500/20 bg-black/20 p-3 text-left text-sm leading-6 text-slate-200 sm:max-h-48 sm:text-base"
+            className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-amber-300/15 bg-black/25 p-3 text-left text-sm leading-6 text-slate-200 shadow-[inset_0_0_24px_rgba(0,0,0,0.24)] sm:max-h-48 sm:text-base"
             tabIndex={0}
           >
             {body}
@@ -93,7 +99,7 @@ export function LiveDirectorStage({
 
         <div
           aria-label="圆桌座位"
-          className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-20 sm:bottom-24 lg:bottom-20"
+          className="pointer-events-none absolute inset-x-0 top-0 bottom-24 z-20 sm:bottom-20 lg:bottom-16"
           role="group"
         >
           <p className="sr-only">圆桌座位</p>
@@ -103,18 +109,34 @@ export function LiveDirectorStage({
             </p>
           ) : (
             players.map((player, index) => {
-              const isActive =
-                player.name === activePlayerName && player.isAlive;
+              const isCurrentSpeaker =
+                !isTerminalCue &&
+                player.name === activePlayerName &&
+                player.isAlive;
+              const isLastActive =
+                isTerminalCue &&
+                player.name === activePlayerName &&
+                player.isAlive;
               const isFocused = player.name === focusedPlayerName;
               const role = roleTone(player.role);
               const lastAction = player.lastAction
                 ? actionLabel(player.lastAction)
                 : "";
-              const status = player.isAlive
-                ? isActive
-                  ? "发言中"
-                  : STATUS_LABELS[player.status]
-                : "出局";
+              const status = playerSeatStatus(
+                player,
+                isTerminalCue,
+                isCurrentSpeaker,
+                isLastActive,
+              );
+              const seatState = !player.isAlive
+                ? "out"
+                : isCurrentSpeaker
+                  ? "speaking"
+                  : isLastActive
+                    ? "last-active"
+                    : isFocused
+                      ? "focused"
+                      : "idle";
 
               return (
                 <button
@@ -124,6 +146,7 @@ export function LiveDirectorStage({
                   className={`pointer-events-auto absolute left-[var(--seat-x)] top-[var(--seat-y)] w-14 translate-x-[var(--seat-offset-x)] -translate-y-1/2 text-center transition duration-200 hover:translate-x-[var(--seat-offset-x)] hover:-translate-y-1/2 hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 sm:left-[var(--seat-sm-x)] sm:top-[var(--seat-sm-y)] sm:w-24 sm:-translate-x-1/2 sm:hover:-translate-x-1/2 lg:w-28 ${
                     isFocused ? "is-focused" : ""
                   } ${!player.isAlive ? "opacity-60 grayscale" : ""}`}
+                  data-seat-state={seatState}
                   key={player.name}
                   onClick={() => onSelectPlayer(player.name)}
                   style={seatStyle(index, players.length)}
@@ -133,11 +156,13 @@ export function LiveDirectorStage({
                     {index + 1}
                   </span>
                   <span
-                    className={`mx-auto flex h-10 w-10 items-center justify-center rounded-full border-2 bg-gradient-to-br ${avatarGradient(
+                    className={`relative mx-auto flex h-10 w-10 items-center justify-center rounded-full border-2 bg-gradient-to-br ${avatarGradient(
                       player.name,
-                    )} text-sm font-bold text-slate-100 shadow-lg sm:h-16 sm:w-16 sm:text-lg ${role.ring} ${
-                      isActive
-                        ? "border-amber-200 shadow-[0_0_26px_rgba(250,204,21,0.85),0_0_42px_rgba(34,197,94,0.42)]"
+                    )} text-sm font-bold text-slate-100 shadow-lg sm:h-12 sm:w-12 sm:text-base md:h-16 md:w-16 md:text-lg ${role.ring} ${
+                      isCurrentSpeaker
+                        ? "border-teal-100 shadow-[0_0_28px_rgba(45,212,191,0.88),0_0_48px_rgba(250,204,21,0.28)]"
+                        : isLastActive
+                          ? "border-amber-200 shadow-[0_0_22px_rgba(251,191,36,0.45)]"
                         : ""
                     } ${
                       isFocused
@@ -145,13 +170,19 @@ export function LiveDirectorStage({
                         : ""
                     }`}
                   >
-                    {avatarText(player.name)}
+                    {isCurrentSpeaker ? (
+                      <span
+                        aria-hidden="true"
+                        className="absolute -inset-2 rounded-full border border-teal-200/55 shadow-[0_0_24px_rgba(45,212,191,0.42)] animate-pulse"
+                      />
+                    ) : null}
+                    <span className="relative z-10">{avatarText(player.name)}</span>
                   </span>
                   <span className="mt-1 block truncate text-xs font-semibold text-slate-50 drop-shadow sm:text-sm">
                     {player.name}
                   </span>
                   <span
-                    className={`mx-auto mt-1 hidden max-w-full items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 sm:inline-flex ${role.badge}`}
+                    className={`mx-auto mt-1 hidden max-w-full items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 md:inline-flex ${role.badge}`}
                   >
                     <span
                       className={`h-1.5 w-1.5 rounded-full ${
@@ -161,9 +192,11 @@ export function LiveDirectorStage({
                     <span className="truncate">{player.role}</span>
                   </span>
                   <span
-                    className={`mx-auto mt-1 hidden w-fit rounded-md px-2 py-0.5 text-[11px] font-semibold sm:block ${
-                      isActive
-                        ? "bg-green-500/20 text-green-200 ring-1 ring-green-300/40"
+                    className={`mx-auto mt-1 hidden w-fit rounded-md px-2 py-0.5 text-[11px] font-semibold md:block ${
+                      isCurrentSpeaker
+                        ? "bg-teal-400/15 text-teal-100 ring-1 ring-teal-200/40"
+                        : isLastActive
+                          ? "bg-amber-500/15 text-amber-100 ring-1 ring-amber-300/35"
                         : "bg-black/35 text-slate-300"
                     }`}
                   >
@@ -175,7 +208,7 @@ export function LiveDirectorStage({
           )}
         </div>
 
-        <div className="absolute inset-x-4 bottom-4 z-40 flex flex-col gap-3 rounded-lg border border-amber-500/25 bg-slate-950/78 p-3 text-sm text-slate-200 backdrop-blur sm:inset-x-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="absolute inset-x-4 bottom-4 z-40 flex flex-col gap-3 rounded-lg border border-amber-300/20 bg-slate-950/78 p-3 text-sm text-slate-200 shadow-[0_16px_45px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:inset-x-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <p className="text-xs font-semibold text-amber-200">当前关注</p>
             <p className="mt-1 truncate">
@@ -212,54 +245,89 @@ const STATUS_LABELS: Record<LivePlayer["status"], string> = {
   out: "出局",
 };
 
+function playerSeatStatus(
+  player: LivePlayer,
+  isTerminalCue: boolean,
+  isCurrentSpeaker: boolean,
+  isLastActive: boolean,
+): string {
+  if (!player.isAlive) {
+    return "出局";
+  }
+  if (isTerminalCue) {
+    return terminalPlayerStatus(player.status, isLastActive);
+  }
+  if (isCurrentSpeaker) {
+    return "发言中";
+  }
+  return STATUS_LABELS[player.status];
+}
+
+function terminalPlayerStatus(
+  status: LivePlayer["status"],
+  isLastActive: boolean,
+): string {
+  if (isLastActive) {
+    return "最后行动";
+  }
+  if (
+    status === "thinking" ||
+    status === "requesting" ||
+    status === "streaming"
+  ) {
+    return "已行动";
+  }
+  return STATUS_LABELS[status];
+}
+
 const AVATAR_GRADIENTS = [
-  "from-slate-700 to-slate-950",
-  "from-stone-600 to-slate-950",
-  "from-zinc-700 to-stone-950",
-  "from-neutral-600 to-slate-900",
-  "from-amber-900 to-slate-950",
-  "from-red-950 to-slate-950",
+  "from-[#26323b] to-[#05070a]",
+  "from-[#3b3226] to-[#060504]",
+  "from-[#173136] to-[#030607]",
+  "from-[#33263a] to-[#050407]",
+  "from-[#4a271f] to-[#070404]",
+  "from-[#1f2937] to-[#030507]",
 ];
 
 function roleTone(role: string) {
   if (role.includes("狼")) {
     return {
       ring: "border-red-400 shadow-red-500/45",
-      badge: "bg-red-950/80 text-red-100 ring-red-500/40",
+      badge: "bg-red-950/75 text-red-100 ring-red-400/35",
       dot: "bg-red-400",
     };
   }
   if (role.includes("预言家")) {
     return {
-      ring: "border-amber-300 shadow-amber-300/45",
-      badge: "bg-amber-900/80 text-amber-100 ring-amber-400/50",
+      ring: "border-amber-200 shadow-amber-300/40",
+      badge: "bg-amber-950/70 text-amber-100 ring-amber-300/35",
       dot: "bg-amber-300",
     };
   }
   if (role.includes("女巫")) {
     return {
-      ring: "border-violet-300 shadow-violet-300/45",
-      badge: "bg-violet-950/80 text-violet-100 ring-violet-400/50",
-      dot: "bg-violet-300",
+      ring: "border-teal-200 shadow-teal-300/35",
+      badge: "bg-teal-950/70 text-teal-100 ring-teal-300/35",
+      dot: "bg-teal-300",
     };
   }
   if (role.includes("守卫") || role.includes("医生")) {
     return {
-      ring: "border-cyan-300 shadow-cyan-300/35",
-      badge: "bg-cyan-950/80 text-cyan-100 ring-cyan-400/40",
-      dot: "bg-cyan-300",
+      ring: "border-teal-200 shadow-teal-300/35",
+      badge: "bg-teal-950/70 text-teal-100 ring-teal-300/35",
+      dot: "bg-teal-300",
     };
   }
   if (role.includes("猎人")) {
     return {
-      ring: "border-sky-300 shadow-sky-300/35",
-      badge: "bg-sky-950/80 text-sky-100 ring-sky-400/40",
-      dot: "bg-sky-300",
+      ring: "border-amber-200 shadow-amber-300/35",
+      badge: "bg-amber-950/70 text-amber-100 ring-amber-300/35",
+      dot: "bg-amber-300",
     };
   }
   return {
     ring: "border-stone-300 shadow-stone-300/25",
-    badge: "bg-stone-900/80 text-stone-100 ring-stone-400/30",
+    badge: "bg-stone-950/70 text-stone-100 ring-stone-300/25",
     dot: "bg-stone-300",
   };
 }
@@ -291,9 +359,9 @@ function seatStyle(index: number, total: number): SeatStyle {
   const radians = (angle * Math.PI) / 180;
   const xVector = Math.cos(radians);
   const baseX = 50 + 46 * xVector;
-  const baseY = 50 + 45 * Math.sin(radians);
+  const baseY = 50 + 40 * Math.sin(radians);
   const smX = 50 + 41 * xVector;
-  const smY = 50 + 37 * Math.sin(radians);
+  const smY = 50 + 32 * Math.sin(radians);
   const seatOffsetX =
     xVector > 0.92 ? "-85%" : xVector < -0.92 ? "-15%" : "-50%";
 

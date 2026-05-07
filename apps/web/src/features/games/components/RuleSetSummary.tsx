@@ -1,4 +1,4 @@
-import { Badge, Card } from "@radix-ui/themes";
+import { Badge } from "@radix-ui/themes";
 
 import type { RuleSetSummary as RuleSetSummaryType } from "../types";
 
@@ -27,24 +27,27 @@ export function RuleSetSummary({ ruleSet }: RuleSetSummaryProps) {
     rule.roles.map((role) => `${role.count} ${role.role}`).join(" / ");
 
   return (
-    <Card asChild size="1">
-      <section>
+    <section
+      className="rounded-lg border border-amber-500/20 bg-slate-950/60 p-4 text-slate-100 shadow-[0_18px_50px_rgba(0,0,0,0.24)] backdrop-blur-xl"
+      data-testid="rule-set-summary"
+    >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h2 className="text-sm font-semibold text-slate-950">{rule.name}</h2>
-        <span className="text-xs text-slate-500">v{rule.version}</span>
-        <span className="text-xs text-slate-500">{rule.player_count} 人</span>
+        <h2 className="text-sm font-semibold text-amber-50">{rule.name}</h2>
+        <span className="text-xs text-amber-200/70">v{rule.version}</span>
+        <span className="text-xs text-teal-100/70">
+          {rule.player_count} 人
+        </span>
       </div>
-      <p className="mt-1 text-sm text-slate-700">{roleSummary}</p>
+      <p className="mt-1 text-sm text-slate-300">{roleSummary}</p>
       {rule.rule_tags && rule.rule_tags.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {rule.rule_tags.map((tag) => (
-            <Badge color="gray" key={tag} variant="surface">
+            <Badge color="amber" key={tag} variant="surface">
               {tag}
             </Badge>
           ))}
         </div>
       ) : null}
-      </section>
-    </Card>
+    </section>
   );
 }

@@ -341,6 +341,20 @@ describe("LiveGamePage", () => {
     expect(screen.getByRole("button", { name: /张三/ })).toHaveAccessibleName(
       /发言中/,
     );
+    expect(screen.getByRole("button", { name: /张三/ })).toHaveAttribute(
+      "data-seat-state",
+      "speaking",
+    );
+    const activePlayerRoleLabel = within(
+      screen.getByRole("button", { name: /张三/ }),
+    ).getByText("狼人");
+    expect(activePlayerRoleLabel.parentElement).toHaveClass(
+      "hidden",
+      "md:inline-flex",
+    );
+    expect(
+      within(screen.getByRole("button", { name: /张三/ })).getByText("发言中"),
+    ).toHaveClass("hidden", "md:block");
     expect(screen.getByRole("button", { name: /李四/ })).toHaveAccessibleName(
       /出局/,
     );
@@ -427,6 +441,11 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    expect(screen.getByTestId("live-game-page")).toHaveClass(
+      "min-h-screen",
+      "bg-[#071015]",
+      "text-slate-100",
+    );
     const liveGrid = container.querySelector('[data-testid="live-stage-layout"]');
     expect(liveGrid).not.toBeNull();
     const columns = Array.from(liveGrid!.children);
@@ -442,8 +461,81 @@ describe("LiveGamePage", () => {
     expect(
       within(eventsColumn as HTMLElement).getByText("剧情时间线"),
     ).toBeInTheDocument();
+    expect(screen.getByTestId("live-status-strip")).toHaveClass(
+      "bg-slate-950/70",
+      "text-slate-300",
+    );
+    expect(screen.getByTestId("live-status-strip").closest("section")).toHaveClass(
+      "bg-slate-950/65",
+    );
+    expect(screen.getByTestId("rule-set-summary")).toHaveClass(
+      "bg-slate-950/60",
+      "text-slate-100",
+    );
+    expect(screen.getByTestId("rule-set-summary")).not.toHaveClass("rt-Card");
+    expect(screen.getByTestId("director-controls")).toHaveClass(
+      "bg-slate-950/65",
+      "text-slate-100",
+    );
+    expect(screen.getByTestId("director-controls")).not.toHaveClass("rt-Card");
+    expect(screen.getByTestId("live-timeline-panel")).toHaveClass(
+      "bg-slate-950/65",
+      "text-slate-100",
+    );
+    expect(screen.getByTestId("live-timeline-panel")).not.toHaveClass(
+      "rt-Card",
+    );
+    expect(screen.getByTestId("live-director-stage-shell")).toHaveClass(
+      "min-h-[36rem]",
+      "lg:min-h-[40rem]",
+    );
     expect(stageColumn).toHaveClass("min-w-0");
     expect(eventsColumn).toHaveClass("min-w-0");
+
+    const statusShell = container.querySelector(
+      '[data-testid="live-status-shell"]',
+    );
+    expect(statusShell).not.toBeNull();
+    expect(statusShell).toHaveClass("lg:sticky");
+    expect(statusShell).not.toHaveClass("sticky");
+  });
+
+  it("keeps the first seat clear of the stage phase badge", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+    act(() => {
+      emitEvent(source, {
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "村民", model: "deepseek-chat" },
+            { name: "王五", role: "预言家", model: "deepseek-chat" },
+            { name: "赵六", role: "守卫", model: "deepseek-chat" },
+            { name: "孙七", role: "村民", model: "deepseek-chat" },
+            { name: "周八", role: "村民", model: "deepseek-chat" },
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByRole("button", { name: /张三/ })).toHaveStyle({
+      "--seat-y": "10%",
+      "--seat-sm-y": "18%",
+    });
   });
 
   it("lets users pin a player and re-enable auto follow", async () => {
@@ -712,9 +804,41 @@ describe("LiveGamePage", () => {
     const source = MockEventSource.instances[0];
     act(() => {
       emitEvent(source, { id: 1, type: "run_created" });
-      emitEvent(source, { id: 2, type: "round_started", round: 1 });
       emitEvent(source, {
-        id: 3,
+        id: 2,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "村民", model: "deepseek-chat" },
+          ],
+        },
+      });
+      emitEvent(source, { id: 3, type: "round_started", round: 1 });
+      emitEvent(source, {
+        id: 4,
+        type: "model_response_delta",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+        payload: { visible_text: "我是好人" },
+      });
+      emitEvent(source, {
+        id: 5,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "李四",
+        action: "debate",
+      });
+      emitEvent(source, {
+        id: 6,
+        type: "state_updated",
+        payload: { active_players: ["张三", "李四"] },
+      });
+      emitEvent(source, {
+        id: 7,
         type: "game_completed",
         payload: { winner: "狼人阵营" },
       });
@@ -724,6 +848,12 @@ describe("LiveGamePage", () => {
       await screen.findByRole("heading", { name: "对局完成" }),
     ).toBeInTheDocument();
     expect(screen.getByText("队列剩余：0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /李四/ })).toHaveAccessibleName(
+      /最后行动/,
+    );
+    expect(screen.getByRole("button", { name: /张三/ })).not.toHaveAccessibleName(
+      /发言中/,
+    );
   });
 
   it("keeps ordered playback when a live-opened run later completes", async () => {
@@ -1001,13 +1131,13 @@ describe("LiveGamePage", () => {
     );
 
     const rows = within(storyTimelineElement).getAllByRole("listitem");
-    expect(rows[0]).toHaveClass("bg-slate-100", "ring-1");
+    expect(rows[0]).toHaveClass("bg-amber-300/10", "ring-1");
 
     act(() => {
       vi.advanceTimersByTime(2500);
     });
 
-    expect(rows[1]).toHaveClass("bg-slate-100", "ring-1");
+    expect(rows[1]).toHaveClass("bg-amber-300/10", "ring-1");
     act(() => {
       screen.getByText("调试事件").click();
     });
