@@ -1,4 +1,4 @@
-import { Badge, Card, Switch } from "@radix-ui/themes";
+import { Badge, Switch } from "@radix-ui/themes";
 import type { CSSProperties } from "react";
 
 import type { DirectorCue } from "../liveDirector";
@@ -28,96 +28,177 @@ export function LiveDirectorStage({
   onSelectPlayer = noopSelectPlayer,
   onAutoFollowChange = noopAutoFollowChange,
 }: LiveDirectorStageProps) {
-  const stagedPlayer =
-    players.find(
-      (player) => player.name === (focusedPlayerName ?? activePlayerName),
-    ) ??
-    players[0] ??
-    null;
-  const helperPreview = [
-    actionLabel(stagedPlayer?.lastAction || cue?.action || null),
-    autoFollow,
-    Switch,
-    avatarGradient(stagedPlayer?.name ?? ""),
-    roleTone(stagedPlayer?.role ?? ""),
-    seatStyle(stagedPlayer ? players.indexOf(stagedPlayer) : 0, players.length),
-    onSelectPlayer,
-    onAutoFollowChange,
-    stagedPlayer
-      ? STATUS_LABELS[stagedPlayer.status]
-      : STATUS_LABELS.waiting,
-    avatarText(stagedPlayer?.name ?? ""),
-  ] as const;
-  // Task 3 renders these helpers into the cinematic table; keep them checked.
-  void helperPreview;
-
-  if (!cue) {
-    return (
-      <Card asChild size="3">
-        <section className="min-h-80">
-          <p className="text-xs font-semibold text-slate-500">观赛舞台</p>
-          <p className="mt-3 text-sm text-slate-600">等待导播事件...</p>
-        </section>
-      </Card>
-    );
-  }
-
   const tone = stageTone(cue);
+  const focusedPlayer =
+    players.find((player) => player.name === focusedPlayerName) ?? null;
+  const title = cue?.title ?? "等待导播事件";
+  const body = cue?.body ?? "对局运行已创建，正在等待下一条实时事件。";
 
   return (
-    <Card asChild size="1">
-      <section className={`min-h-80 overflow-hidden ${tone.surface}`}>
-      <div className={`border-b px-5 py-4 ${tone.header}`}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-slate-500">观赛舞台</p>
-            <h2 className="mt-1 break-words text-2xl font-semibold text-slate-950">
-              {cue.title}
-            </h2>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge color="gray" variant="surface">
-              #{cue.eventId}
-            </Badge>
-            <Badge color="gray" variant="surface">
-              {importanceLabel(cue.importance)}
-            </Badge>
-          </div>
-        </div>
-      </div>
+    <section
+      className={`relative overflow-hidden rounded-lg border border-amber-900/40 bg-slate-950 text-slate-100 shadow-2xl ${tone.surface}`}
+    >
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_8%,rgba(30,64,175,0.28),transparent_28%),radial-gradient(circle_at_50%_48%,rgba(146,64,14,0.42),transparent_42%),linear-gradient(180deg,#07111f_0%,#111827_48%,#030712_100%)]" />
+      <div className="absolute inset-x-0 top-0 h-32 bg-[linear-gradient(180deg,rgba(15,23,42,0.15),rgba(15,23,42,0.82)),repeating-linear-gradient(90deg,rgba(148,163,184,0.12)_0_1px,transparent_1px_72px)]" />
 
-      <div className="space-y-4 px-5 py-5">
-        <div className="flex flex-wrap gap-2 text-sm text-slate-600">
-          <span>{cue.round ? `第 ${cue.round} 轮` : "等待回合"}</span>
-          <span>
-            {cue.phase ? `阶段：${phaseLabel(cue.phase)}` : "阶段未开始"}
+      <div className="relative min-h-[38rem] px-4 py-4 sm:min-h-[42rem] sm:px-6 lg:min-h-[46rem]">
+        <div className="mx-auto flex w-fit items-center gap-3 rounded-full border border-amber-500/50 bg-slate-950/85 px-4 py-2 text-sm shadow-[0_0_24px_rgba(245,158,11,0.24)]">
+          <span className="text-slate-400">观赛舞台</span>
+          <span className="font-semibold text-amber-200">
+            {cue?.round ? `第 ${cue.round} 轮` : "等待回合"}
           </span>
-          {cue.actor ? <span>玩家：{cue.actor}</span> : null}
+          <span className="text-slate-500">|</span>
+          <span className="font-semibold text-amber-100">
+            {cue?.phase ? phaseLabel(cue.phase) : "阶段未开始"}
+          </span>
         </div>
 
-        {cue.body ? (
-          <div className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-white/80 p-4 text-base leading-7 text-slate-800 shadow-sm">
-            {cue.body}
-          </div>
-        ) : (
-          <p className="rounded-md border border-slate-200 bg-white/80 p-4 text-sm text-slate-600">
-            这条事件没有额外内容。
-          </p>
-        )}
+        <div className="absolute left-1/2 top-[52%] h-[58%] w-[78%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-amber-700/45 bg-[radial-gradient(circle_at_50%_45%,rgba(120,78,40,0.96),rgba(54,34,19,0.96)_48%,rgba(20,13,9,0.98)_76%)] shadow-[inset_0_0_70px_rgba(0,0,0,0.72),0_30px_90px_rgba(0,0,0,0.55)] sm:w-[70%]" />
+        <div className="absolute left-1/2 top-[52%] h-[44%] w-[58%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-amber-400/20 shadow-[inset_0_0_45px_rgba(251,191,36,0.12)]" />
+        <div className="absolute left-1/2 top-[45%] -translate-x-1/2 -translate-y-1/2 select-none text-7xl font-black text-amber-100/10 sm:text-9xl">
+          狼
+        </div>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-          <Badge color="gray" variant="surface">
-            队列剩余：{backlogCount}
-          </Badge>
-          {isCatchingUp ? (
-            <Badge color="amber" variant="surface">
-              自动追进度中
+        <div className="absolute left-1/2 top-[54%] z-30 w-[min(30rem,72vw)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-amber-500/30 bg-slate-950/70 p-4 text-center shadow-[0_20px_60px_rgba(0,0,0,0.42)] backdrop-blur-sm">
+          <div className="mb-3 flex flex-wrap justify-center gap-2 text-xs">
+            {cue ? (
+              <>
+                <Badge color="amber" variant="surface">
+                  #{cue.eventId}
+                </Badge>
+                <Badge color="gray" variant="surface">
+                  {importanceLabel(cue.importance)}
+                </Badge>
+              </>
+            ) : null}
+            <Badge color="gray" variant="surface">
+              队列剩余：{backlogCount}
             </Badge>
-          ) : null}
+            {isCatchingUp ? (
+              <Badge color="amber" variant="surface">
+                自动追进度中
+              </Badge>
+            ) : null}
+          </div>
+          <h2 className="text-xl font-semibold text-amber-50 sm:text-2xl">
+            {title}
+          </h2>
+          <div
+            className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-amber-500/20 bg-black/20 p-3 text-left text-sm leading-6 text-slate-200 sm:max-h-48 sm:text-base"
+            tabIndex={0}
+          >
+            {body}
+          </div>
+        </div>
+
+        <div
+          aria-label="圆桌座位"
+          className="pointer-events-none absolute inset-0 z-20"
+          role="group"
+        >
+          <p className="sr-only">圆桌座位</p>
+          {players.length === 0 ? (
+            <p className="absolute left-1/2 top-[72%] -translate-x-1/2 text-sm text-slate-400">
+              等待玩家加入
+            </p>
+          ) : (
+            players.map((player, index) => {
+              const isActive =
+                player.name === activePlayerName && player.isAlive;
+              const isFocused = player.name === focusedPlayerName;
+              const role = roleTone(player.role);
+              const lastAction = player.lastAction
+                ? actionLabel(player.lastAction)
+                : "";
+              const status = player.isAlive
+                ? isActive
+                  ? "发言中"
+                  : STATUS_LABELS[player.status]
+                : "出局";
+
+              return (
+                <button
+                  aria-label={`${index + 1}号 ${player.name} ${
+                    player.role
+                  } ${status} ${lastAction} ${player.lastDetail}`}
+                  className={`pointer-events-auto absolute left-[var(--seat-x)] top-[var(--seat-y)] w-24 -translate-x-1/2 -translate-y-1/2 text-center transition duration-200 hover:-translate-x-1/2 hover:-translate-y-1/2 hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 sm:left-[var(--seat-sm-x)] sm:top-[var(--seat-sm-y)] sm:w-28 ${
+                    isFocused ? "is-focused" : ""
+                  } ${!player.isAlive ? "opacity-60 grayscale" : ""}`}
+                  key={player.name}
+                  onClick={() => onSelectPlayer(player.name)}
+                  style={seatStyle(index, players.length)}
+                  type="button"
+                >
+                  <span className="mx-auto mb-1 flex h-7 w-7 items-center justify-center rounded-full border border-amber-300/50 bg-slate-950 text-xs font-semibold text-amber-100 shadow-md">
+                    {index + 1}
+                  </span>
+                  <span
+                    className={`mx-auto flex h-16 w-16 items-center justify-center rounded-full border-2 bg-gradient-to-br ${avatarGradient(
+                      player.name,
+                    )} text-lg font-bold text-slate-100 shadow-lg ${role.ring} ${
+                      isActive
+                        ? "border-amber-200 shadow-[0_0_26px_rgba(250,204,21,0.85),0_0_42px_rgba(34,197,94,0.42)]"
+                        : ""
+                    } ${
+                      isFocused
+                        ? "ring-2 ring-amber-100 ring-offset-2 ring-offset-slate-950"
+                        : ""
+                    }`}
+                  >
+                    {avatarText(player.name)}
+                  </span>
+                  <span className="mt-1 block truncate text-sm font-semibold text-slate-50 drop-shadow">
+                    {player.name}
+                  </span>
+                  <span
+                    className={`mx-auto mt-1 inline-flex max-w-full items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ${role.badge}`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        player.isAlive ? role.dot : "bg-slate-400"
+                      }`}
+                    />
+                    <span className="truncate">{player.role}</span>
+                  </span>
+                  <span
+                    className={`mx-auto mt-1 block w-fit rounded-md px-2 py-0.5 text-[11px] font-semibold ${
+                      isActive
+                        ? "bg-green-500/20 text-green-200 ring-1 ring-green-300/40"
+                        : "bg-black/35 text-slate-300"
+                    }`}
+                  >
+                    {status}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        <div className="absolute inset-x-4 bottom-4 z-40 flex flex-col gap-3 rounded-lg border border-amber-500/25 bg-slate-950/78 p-3 text-sm text-slate-200 backdrop-blur sm:inset-x-6 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-amber-200">当前关注</p>
+            <p className="mt-1 truncate">
+              {focusedPlayer
+                ? `${focusedPlayer.name} · ${focusedPlayer.role} · ${
+                    focusedPlayer.lastAction
+                      ? actionLabel(focusedPlayer.lastAction)
+                      : "等待行动"
+                  }`
+                : "等待玩家行动"}
+            </p>
+          </div>
+          <label className="flex shrink-0 items-center gap-2 text-xs text-slate-300">
+            <Switch
+              checked={autoFollow}
+              color="amber"
+              onCheckedChange={onAutoFollowChange}
+            />
+            自动跟随
+          </label>
         </div>
       </div>
-      </section>
-    </Card>
+    </section>
   );
 }
 
@@ -195,17 +276,22 @@ function avatarText(name: string) {
   return Array.from(name).slice(0, 2).join("");
 }
 
-function seatStyle(index: number, total: number): CSSProperties {
+type SeatStyle = CSSProperties &
+  Record<"--seat-x" | "--seat-y" | "--seat-sm-x" | "--seat-sm-y", string>;
+
+function seatStyle(index: number, total: number): SeatStyle {
   const angle = -90 + (360 / Math.max(total, 1)) * index;
-  const radiusX = 43;
-  const radiusY = 38;
-  const x = 50 + radiusX * Math.cos((angle * Math.PI) / 180);
-  const y = 50 + radiusY * Math.sin((angle * Math.PI) / 180);
+  const radians = (angle * Math.PI) / 180;
+  const baseX = 50 + 34 * Math.cos(radians);
+  const baseY = 50 + 34 * Math.sin(radians);
+  const smX = 50 + 41 * Math.cos(radians);
+  const smY = 50 + 37 * Math.sin(radians);
 
   return {
-    left: `${x}%`,
-    top: `${y}%`,
-    transform: "translate(-50%, -50%)",
+    "--seat-x": `${baseX}%`,
+    "--seat-y": `${baseY}%`,
+    "--seat-sm-x": `${smX}%`,
+    "--seat-sm-y": `${smY}%`,
   };
 }
 
@@ -230,33 +316,21 @@ function importanceLabel(importance: DirectorCue["importance"]) {
   return "流程";
 }
 
-function stageTone(cue: DirectorCue) {
+function stageTone(cue: DirectorCue | null) {
+  if (!cue) {
+    return { surface: "" };
+  }
   if (cue.importance === "terminal") {
-    return {
-      surface: "bg-emerald-50/60",
-      header: "border-emerald-200 bg-emerald-50/80",
-    };
+    return { surface: "ring-1 ring-emerald-400/30" };
   }
   if (cue.phase === "night") {
-    return {
-      surface: "bg-indigo-50/70",
-      header: "border-indigo-200 bg-indigo-50/90",
-    };
+    return { surface: "ring-1 ring-indigo-300/25" };
   }
   if (cue.phase === "vote") {
-    return {
-      surface: "bg-amber-50/70",
-      header: "border-amber-200 bg-amber-50/90",
-    };
+    return { surface: "ring-1 ring-amber-300/30" };
   }
   if (cue.importance === "key") {
-    return {
-      surface: "bg-sky-50/60",
-      header: "border-sky-200 bg-sky-50/80",
-    };
+    return { surface: "ring-1 ring-cyan-300/25" };
   }
-  return {
-    surface: "bg-white",
-    header: "border-slate-200 bg-white",
-  };
+  return { surface: "" };
 }
