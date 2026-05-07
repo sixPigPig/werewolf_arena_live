@@ -1,31 +1,82 @@
+import { Flex, RadioCards, Text } from "@radix-ui/themes";
+import type { ComponentProps } from "react";
+
 import type { DebugItem } from "../types";
 
-type ActionCardProps = {
-  item: DebugItem;
-  selected: boolean;
+type ActionCardGroupProps = {
+  ariaLabel: string;
+  className?: string;
+  columns?: ComponentProps<typeof RadioCards.Root>["columns"];
+  emptyText?: string;
+  items: DebugItem[];
+  selectedItem: DebugItem | null;
   onSelect: (item: DebugItem) => void;
 };
 
-export function ActionCard({ item, selected, onSelect }: ActionCardProps) {
+export function ActionCardGroup({
+  ariaLabel,
+  className,
+  columns,
+  emptyText,
+  items,
+  selectedItem,
+  onSelect,
+}: ActionCardGroupProps) {
+  if (items.length === 0) {
+    return emptyText ? (
+      <p className={`${className ?? ""} text-sm text-slate-500`.trim()}>
+        {emptyText}
+      </p>
+    ) : null;
+  }
+
+  const selectedValue = selectedItem?.id ?? "";
+
   return (
-    <button
-      aria-label={`${item.title} ${item.actor} 选择 ${item.choice ?? "无"}`}
-      className={`w-full rounded border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-slate-500 ${
-        selected
-          ? "border-slate-900 bg-slate-900 text-white"
-          : "border-slate-200 bg-white text-slate-800 hover:border-slate-400 hover:bg-slate-50"
-      }`}
-      onClick={() => onSelect(item)}
-      type="button"
+    <RadioCards.Root
+      aria-label={ariaLabel}
+      className={className}
+      columns={columns}
+      color="gray"
+      gap="2"
+      highContrast
+      onValueChange={(value) => {
+        const item = items.find((candidate) => candidate.id === value);
+        if (item) {
+          onSelect(item);
+        }
+      }}
+      value={selectedValue}
+      variant="surface"
     >
-      <span className="block font-medium">{item.title}</span>
-      <span
-        className={`mt-1 block break-words text-xs ${
-          selected ? "text-slate-200" : "text-slate-500"
-        }`}
-      >
-        {item.actor} 选择 {item.choice ?? "无"}
-      </span>
-    </button>
+      {items.map((item) => {
+        return (
+          <RadioCards.Item
+            aria-label={`${item.title} ${item.actor} 选择 ${item.choice ?? "无"}`}
+            className="min-h-[4.5rem]"
+            key={item.id}
+            value={item.id}
+          >
+            <Flex direction="column" width="100%" height="100%">
+              <Text
+                as="span"
+                className="break-words leading-5 text-slate-950"
+                size="2"
+                weight="bold"
+              >
+                {item.title}
+              </Text>
+              <Text
+                as="span"
+                className="min-w-0 break-words leading-5 text-slate-600"
+                size="2"
+              >
+                {item.actor} 选择 {item.choice ?? "无"}
+              </Text>
+            </Flex>
+          </RadioCards.Item>
+        );
+      })}
+    </RadioCards.Root>
   );
 }

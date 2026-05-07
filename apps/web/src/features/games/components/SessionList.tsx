@@ -1,3 +1,4 @@
+import { Button, Card } from "@radix-ui/themes";
 import { Link } from "react-router-dom";
 
 import type { GameSessionSummary } from "../types";
@@ -19,14 +20,17 @@ export function SessionList({
 }: SessionListProps) {
   if (sessions.length === 0) {
     return (
-      <p className="rounded border border-dashed border-slate-300 px-4 py-6 text-sm text-slate-600">
+      <Card asChild size="2" variant="surface">
+      <p className="text-sm text-slate-600">
         还没有可复盘的对局
       </p>
+      </Card>
     );
   }
 
   return (
-    <div className="divide-y divide-slate-200 rounded border border-slate-200 bg-white">
+    <Card asChild size="1">
+      <div className="divide-y divide-slate-200">
       {sessions.map((session) => (
         <div
           className="flex flex-col gap-3 px-4 py-3 transition hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between"
@@ -51,17 +55,20 @@ export function SessionList({
             </div>
           </Link>
           {session.resumable && onResumeSession ? (
-            <button
-              className="h-9 shrink-0 rounded-md bg-slate-950 px-3 text-sm font-medium text-white disabled:bg-slate-400"
+            <Button
+              className="shrink-0"
               disabled={resumingSessionId === session.session_id}
+              highContrast
+              loading={resumingSessionId === session.session_id}
               onClick={() => onResumeSession(session.session_id)}
               type="button"
             >
-              {resumingSessionId === session.session_id ? "继续中..." : "继续对局"}
-            </button>
+              继续对局
+            </Button>
           ) : null}
         </div>
       ))}
-    </div>
+      </div>
+    </Card>
   );
 }

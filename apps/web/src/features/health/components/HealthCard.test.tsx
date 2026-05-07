@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AppTheme } from "../../../app/AppTheme";
 import { HealthCard } from "./HealthCard";
 
 describe("HealthCard", () => {
@@ -20,9 +21,11 @@ describe("HealthCard", () => {
     const queryClient = new QueryClient();
 
     render(
-      <QueryClientProvider client={queryClient}>
-        <HealthCard />
-      </QueryClientProvider>,
+      <AppTheme>
+        <QueryClientProvider client={queryClient}>
+          <HealthCard />
+        </QueryClientProvider>
+      </AppTheme>,
     );
 
     await waitFor(() =>

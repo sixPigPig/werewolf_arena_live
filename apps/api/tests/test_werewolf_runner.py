@@ -3,7 +3,7 @@ import random
 
 import pytest
 
-from app.werewolf.config import SEER, WEREWOLF
+from app.werewolf.config import HUNTER, SEER, WEREWOLF
 from app.werewolf.engine import GameEngine, MaxRoundsExceeded, initialize_game_state
 from app.werewolf.live import NullEventSink
 from app.werewolf.models import DeathEvent, RoundLog, RoundState
@@ -354,6 +354,26 @@ class ProtectedNightProvider:
         raise AssertionError(f"Unexpected prompt: {prompt}")
 
 
+class TargetedInvestigationProvider(ScriptedChineseProvider):
+    def __init__(self, *, investigate_target: str, remove_target: str) -> None:
+        self.investigate_target = investigate_target
+        self.remove_target = remove_target
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        if '"remove"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试狼人夜晚袭击。", "remove": self.remove_target},
+                ensure_ascii=False,
+            )
+        if '"investigate"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试预言家查验神职。", "investigate": self.investigate_target},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 class NoWinnerRoundProvider(ScriptedChineseProvider):
     def __init__(self, *, protected_target: str) -> None:
         self.protected_target = protected_target
@@ -570,7 +590,7 @@ def test_run_game_defaults_to_minimax_when_only_minimax_key_is_configured(
 ) -> None:
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
-        "DEEPSEEK_MODEL=deepseek-chat\n"
+        "DEEPSEEK_MODEL=deepseek-v4-flash\n"
         "MINIMAX_API_KEY=minimax-key\n"
         "MINIMAX_MODEL=MiniMax-M2.7\n",
         encoding="utf-8",
@@ -1464,6 +1484,40 @@ def test_slaughter_side_villagers_win_when_all_wolves_are_dead() -> None:
     active_players = [player.name for player in state.players if player.role != "狼人"]
 
     assert engine._get_winner(active_players) == "好人阵营"
+
+
+def test_seer_investigation_records_alignment_not_exact_god_role() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_seer_alignment_result",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=47,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    seer = next(player for player in state.players if player.role == SEER)
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    active_players = [wolf.name, seer.name, hunter.name]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(
+        state=state,
+        provider=TargetedInvestigationProvider(
+            investigate_target=hunter.name,
+            remove_target=seer.name,
+        ),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    engine._run_night_phase(round_state, round_log, active_players)
+
+    assert round_state.investigated == hunter.name
+    assert seer.known_roles[hunter.name] == "好人阵营"
+    assert f"第1轮：我查验了{hunter.name}，阵营是好人阵营。" in seer.observations
+    assert HUNTER not in seer.known_roles.values()
+    assert all(HUNTER not in observation for observation in seer.observations)
 
 
 def test_night_phase_skips_investigate_when_seer_has_no_candidates() -> None:

@@ -1,3 +1,5 @@
+import { Badge, Card } from "@radix-ui/themes";
+
 import type { RuleSetSummary as RuleSetSummaryType } from "../types";
 
 type RuleSetSummaryProps = {
@@ -25,7 +27,8 @@ export function RuleSetSummary({ ruleSet }: RuleSetSummaryProps) {
     rule.roles.map((role) => `${role.count} ${role.role}`).join(" / ");
 
   return (
-    <section className="rounded-md border border-slate-200 bg-white px-4 py-3">
+    <Card asChild size="1">
+      <section>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 className="text-sm font-semibold text-slate-950">{rule.name}</h2>
         <span className="text-xs text-slate-500">v{rule.version}</span>
@@ -35,15 +38,13 @@ export function RuleSetSummary({ ruleSet }: RuleSetSummaryProps) {
       {rule.rule_tags && rule.rule_tags.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {rule.rule_tags.map((tag) => (
-            <span
-              className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-xs text-slate-600"
-              key={tag}
-            >
+            <Badge color="gray" key={tag} variant="surface">
               {tag}
-            </span>
+            </Badge>
           ))}
         </div>
       ) : null}
-    </section>
+      </section>
+    </Card>
   );
 }

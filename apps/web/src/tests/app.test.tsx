@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AppTheme } from "../app/AppTheme";
 import { routes } from "../routes/definitions";
 
 describe("App", () => {
@@ -21,9 +22,11 @@ describe("App", () => {
     const router = createMemoryRouter(routes, { initialEntries });
 
     render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
+      <AppTheme>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </AppTheme>,
     );
   }
 
@@ -40,6 +43,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "狼人杀对局复盘" }),
     ).toBeInTheDocument();
+    expect(document.querySelector(".radix-themes")).toBeInTheDocument();
   });
 
   it("routes a game session path to the replay detail", async () => {

@@ -1,7 +1,9 @@
+import { Callout, Card } from "@radix-ui/themes";
+
 import type { DebugItem, GameRound } from "../types";
 
 import { isSelfBadgeTransfer } from "../sheriffBadgeDisplay";
-import { ActionCard } from "./ActionCard";
+import { ActionCardGroup } from "./ActionCard";
 import { BidChart } from "./BidChart";
 import { SheriffElectionPanel } from "./SheriffElectionPanel";
 import { SummaryStrip } from "./SummaryStrip";
@@ -45,17 +47,16 @@ export function DayPhase({
         <h4 className="text-xs font-semibold uppercase text-slate-500">
           白天发言
         </h4>
-        <div className="mt-2 space-y-2">
+        <div className="mt-2 grid gap-2">
           {round.debate.length === 0 ? (
             <p className="text-sm text-slate-500">无发言记录</p>
           ) : (
             round.debate.map((entry, index) => (
-              <p
-                className="break-words rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
-                key={`${entry.speaker}-${index}`}
-              >
-                {entry.speaker} -&gt; {entry.message}
-              </p>
+              <Card asChild key={`${entry.speaker}-${index}`} size="1" variant="surface">
+                <p className="break-words text-sm text-slate-700">
+                  {entry.speaker} -&gt; {entry.message}
+                </p>
+              </Card>
             ))
           )}
         </div>
@@ -81,16 +82,14 @@ export function DayPhase({
         </div>
       </section>
 
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {visibleItems.map((item) => (
-          <ActionCard
-            item={item}
-            key={item.id}
-            onSelect={onSelect}
-            selected={selectedItem?.id === item.id}
-          />
-        ))}
-      </div>
+      <ActionCardGroup
+        ariaLabel="白天行动记录"
+        className="mt-4"
+        columns={{ initial: "1", sm: "2", xl: "3" }}
+        items={visibleItems}
+        onSelect={onSelect}
+        selectedItem={selectedItem}
+      />
     </section>
   );
 }
@@ -101,19 +100,19 @@ function SelfExplosionNotice({ round }: { round: GameRound }) {
   }
 
   return (
-    <div className="mt-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
-      <p className="font-medium">
+    <Callout.Root className="mt-4" color="red" size="1" variant="soft">
+      <Callout.Text className="font-medium">
         {round.werewolf_self_exploded} 自爆为狼人，白天提前结束
-      </p>
+      </Callout.Text>
       {round.sheriff_badge_lost_reason === "首爆中断警长竞选" ? (
-        <p className="mt-1">首爆中断警长竞选，下一天继续竞选</p>
+        <Callout.Text>首爆中断警长竞选，下一天继续竞选</Callout.Text>
       ) : null}
       {round.sheriff &&
       round.sheriff_badge_lost_reason !== "首爆中断警长竞选" &&
       round.sheriff_badge_lost_reason !== "双爆吞警徽" ? (
-        <p className="mt-1">警长已产生，自爆不吞警徽</p>
+        <Callout.Text>警长已产生，自爆不吞警徽</Callout.Text>
       ) : null}
-    </div>
+    </Callout.Root>
   );
 }
 
@@ -146,7 +145,7 @@ function SpecialDayResolution({
   }
 
   return (
-    <div className="mt-3 space-y-1 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+    <Card className="mt-3 space-y-1 text-sm text-slate-700" size="1" variant="surface">
       {round.idiot_revealed ? (
         <p>{round.idiot_revealed} 翻牌免死，失去投票权</p>
       ) : null}
@@ -157,7 +156,7 @@ function SpecialDayResolution({
         </p>
       ) : null}
       {badgeResolution ? <p>{badgeResolution}</p> : null}
-    </div>
+    </Card>
   );
 }
 
@@ -233,10 +232,8 @@ function BidRounds({ round }: { round: GameRound }) {
   return (
     <div className="space-y-4">
       {round.bidGroups.map((group) => (
-        <section
-          className="rounded border border-slate-200 bg-white px-3 py-3"
-          key={group.turn}
-        >
+        <Card asChild key={group.turn} size="1">
+          <section>
           <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <h5 className="text-sm font-medium text-slate-950">
               第 {group.turn} 次发言竞价
@@ -248,7 +245,8 @@ function BidRounds({ round }: { round: GameRound }) {
             ) : null}
           </div>
           <BidChart bids={group.bids} />
-        </section>
+          </section>
+        </Card>
       ))}
     </div>
   );
@@ -260,7 +258,7 @@ function VoteResolution({ round }: { round: GameRound }) {
   }
 
   return (
-    <div className="mt-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+    <Card className="mt-3 text-sm text-slate-700" size="1" variant="surface">
       <p className="font-medium text-slate-950">
         {`多数门槛 ${formatVoteCount(round.voteMajorityThreshold)}/${formatVoteCount(
           round.voteCount,
@@ -269,6 +267,6 @@ function VoteResolution({ round }: { round: GameRound }) {
       <p className="mt-1">
         {round.exiled ? `${round.exiled} 被放逐` : "无人被放逐"}
       </p>
-    </div>
+    </Card>
   );
 }

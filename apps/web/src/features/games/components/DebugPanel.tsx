@@ -1,3 +1,5 @@
+import { Card, DataList } from "@radix-ui/themes";
+
 import type { DebugItem } from "../types";
 
 type DebugPanelProps = {
@@ -59,30 +61,35 @@ function formatParsed(parsed: unknown) {
 export function DebugPanel({ item }: DebugPanelProps) {
   if (!item) {
     return (
-      <aside className="rounded border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">
-        选择一条行动查看模型输入输出
-      </aside>
+      <Card asChild size="2" variant="surface">
+        <aside className="text-sm text-slate-600">
+          选择一条行动查看模型输入输出
+        </aside>
+      </Card>
     );
   }
 
   return (
-    <aside className="rounded border border-slate-200 bg-white">
+    <Card asChild size="1">
+      <aside>
       <div className="border-b border-slate-200 px-4 py-3">
         <h2 className="text-base font-semibold text-slate-950">{item.title}</h2>
-        <dl className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
-          <div>
-            <dt className="font-medium text-slate-500">轮次</dt>
-            <dd>{item.roundNumber}</dd>
-          </div>
-          <div>
-            <dt className="font-medium text-slate-500">玩家</dt>
-            <dd className="break-words">{item.actor}</dd>
-          </div>
-          <div className="col-span-2">
-            <dt className="font-medium text-slate-500">选择</dt>
-            <dd className="break-words">{item.choice ?? "无"}</dd>
-          </div>
-        </dl>
+        <DataList.Root className="mt-2" size="1">
+          <DataList.Item>
+            <DataList.Label>轮次</DataList.Label>
+            <DataList.Value>{item.roundNumber}</DataList.Value>
+          </DataList.Item>
+          <DataList.Item>
+            <DataList.Label>玩家</DataList.Label>
+            <DataList.Value className="break-words">{item.actor}</DataList.Value>
+          </DataList.Item>
+          <DataList.Item>
+            <DataList.Label>选择</DataList.Label>
+            <DataList.Value className="break-words">
+              {item.choice ?? "无"}
+            </DataList.Value>
+          </DataList.Item>
+        </DataList.Root>
       </div>
 
       <div className="space-y-4 p-4">
@@ -90,7 +97,8 @@ export function DebugPanel({ item }: DebugPanelProps) {
         <DebugBlock label="模型原文" value={item.rawResponse || "无内容"} />
         <DebugBlock label="解析结果" value={formatParsed(item.parsed)} />
       </div>
-    </aside>
+      </aside>
+    </Card>
   );
 }
 

@@ -1,3 +1,5 @@
+import { Badge, Table } from "@radix-ui/themes";
+
 import type { VoteEntry, VoteTallyEntry } from "../types";
 
 import { formatVoteCount } from "./voteFormatting";
@@ -18,39 +20,35 @@ export function VoteTable({ votes, tally }: VoteTableProps) {
         <p className="text-xs font-medium uppercase text-slate-500">票型统计</p>
         <ul className="mt-2 flex flex-wrap gap-2 text-sm">
           {tally.map((entry) => (
-            <li
-              className="rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-800"
-              key={entry.target}
-            >
-              {entry.target}：{formatVoteCount(entry.count)}票
+            <li key={entry.target}>
+              <Badge color="gray" variant="surface">
+                {entry.target}：{formatVoteCount(entry.count)}票
+              </Badge>
             </li>
           ))}
         </ul>
       </div>
 
-      <table className="w-full table-fixed text-sm">
-        <thead>
-          <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
-            <th className="py-2 font-medium">投票者</th>
-            <th className="py-2 font-medium">投票对象</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table.Root size="1" variant="surface">
+        <Table.Header>
+          <Table.Row>
+            <Table.ColumnHeaderCell>投票者</Table.ColumnHeaderCell>
+            <Table.ColumnHeaderCell>投票对象</Table.ColumnHeaderCell>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
           {votes.map((vote, index) => (
-            <tr
-              className="border-b border-slate-100 last:border-0"
-              key={`${vote.voter}-${index}`}
-            >
-              <td className="break-words py-2 pr-2 text-slate-700">
+            <Table.Row key={`${vote.voter}-${index}`}>
+              <Table.Cell className="break-words">
                 {vote.weight === 1
                   ? vote.voter
                   : `${vote.voter}（${formatVoteCount(vote.weight)}票）`}
-              </td>
-              <td className="break-words py-2 text-slate-950">{vote.target}</td>
-            </tr>
+              </Table.Cell>
+              <Table.Cell className="break-words">{vote.target}</Table.Cell>
+            </Table.Row>
           ))}
-        </tbody>
-      </table>
+        </Table.Body>
+      </Table.Root>
     </div>
   );
 }

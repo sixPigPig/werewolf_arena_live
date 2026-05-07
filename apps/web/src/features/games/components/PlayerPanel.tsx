@@ -1,27 +1,31 @@
+import { Badge, Callout, Card } from "@radix-ui/themes";
+import type { BadgeProps } from "@radix-ui/themes";
+
 import type { GameReplay, RawPlayer } from "../types";
 
 type PlayerPanelProps = {
   game: GameReplay;
 };
 
-const ROLE_STYLES: Record<string, string> = {
-  werewolf: "border-red-200 bg-red-50 text-red-800",
-  狼人: "border-red-200 bg-red-50 text-red-800",
-  villager: "border-slate-200 bg-slate-50 text-slate-700",
-  村民: "border-slate-200 bg-slate-50 text-slate-700",
-  seer: "border-violet-200 bg-violet-50 text-violet-800",
-  预言家: "border-violet-200 bg-violet-50 text-violet-800",
-  doctor: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  守卫: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  医生: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  女巫: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800",
-  猎人: "border-orange-200 bg-orange-50 text-orange-800",
-  白痴: "border-cyan-200 bg-cyan-50 text-cyan-800",
+const ROLE_COLORS: Record<string, BadgeProps["color"]> = {
+  werewolf: "red",
+  狼人: "red",
+  villager: "gray",
+  村民: "gray",
+  seer: "violet",
+  预言家: "violet",
+  doctor: "green",
+  守卫: "green",
+  医生: "green",
+  女巫: "pink",
+  猎人: "orange",
+  白痴: "cyan",
 };
 
 export function PlayerPanel({ game }: PlayerPanelProps) {
   return (
-    <aside className="rounded border border-slate-200 bg-white">
+    <Card asChild size="1">
+      <aside>
       <div className="space-y-3 border-b border-slate-200 px-4 py-4">
         <p className="break-all font-mono text-xs text-slate-500">
           {game.sessionId}
@@ -34,9 +38,9 @@ export function PlayerPanel({ game }: PlayerPanelProps) {
         </div>
         <p className="text-sm text-slate-600">{game.rounds.length} 轮</p>
         {game.errorMessage ? (
-          <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {game.errorMessage}
-          </p>
+          <Callout.Root color="red" size="1" variant="soft">
+            <Callout.Text>{game.errorMessage}</Callout.Text>
+          </Callout.Root>
         ) : null}
       </div>
 
@@ -45,13 +49,13 @@ export function PlayerPanel({ game }: PlayerPanelProps) {
           <PlayerRow key={player.name} player={player} />
         ))}
       </div>
-    </aside>
+      </aside>
+    </Card>
   );
 }
 
 function PlayerRow({ player }: { player: RawPlayer }) {
-  const roleClass =
-    ROLE_STYLES[player.role] ?? "border-amber-200 bg-amber-50 text-amber-800";
+  const roleColor = ROLE_COLORS[player.role] ?? "amber";
 
   return (
     <div className="px-4 py-3">
@@ -59,11 +63,9 @@ function PlayerRow({ player }: { player: RawPlayer }) {
         <p className="min-w-0 truncate text-sm font-medium text-slate-950">
           {player.name}
         </p>
-        <span
-          className={`shrink-0 rounded border px-2 py-0.5 text-xs font-medium ${roleClass}`}
-        >
+        <Badge color={roleColor} variant="surface">
           {player.role}
-        </span>
+        </Badge>
       </div>
       <p className="mt-1 break-all font-mono text-xs text-slate-500">
         {player.model}

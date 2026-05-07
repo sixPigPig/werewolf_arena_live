@@ -10,6 +10,7 @@ export type ConnectionState =
   | "closed";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+const EMPTY_EVENTS: LiveGameEvent[] = [];
 
 const EVENT_TYPES = [
   "run_created",
@@ -29,20 +30,40 @@ const EVENT_TYPES = [
   "game_failed",
 ];
 
+type EventStreamState = {
+  runId: string | undefined;
+  events: LiveGameEvent[];
+  connectionState: ConnectionState;
+};
+
 export function useGameRunEvents(runId: string | undefined) {
-  const [events, setEvents] = useState<LiveGameEvent[]>([]);
-  const [connectionState, setConnectionState] =
-    useState<ConnectionState>("idle");
+  const [streamState, setStreamState] = useState<EventStreamState>(() => ({
+    runId,
+    events: [],
+    connectionState: runId ? "connecting" : "idle",
+  }));
+
+  if (streamState.runId !== runId) {
+    setStreamState({
+      runId,
+      events: [],
+      connectionState: runId ? "connecting" : "idle",
+    });
+  }
+
+  const events = streamState.runId === runId ? streamState.events : EMPTY_EVENTS;
+  const connectionState =
+    streamState.runId === runId
+      ? streamState.connectionState
+      : runId
+        ? "connecting"
+        : "idle";
 
   useEffect(() => {
     if (!runId) {
-      setEvents([]);
-      setConnectionState("idle");
       return;
     }
 
-    setConnectionState("connecting");
-    setEvents([]);
     let isActive = true;
     const source = new EventSource(
       `${API_BASE_URL}/api/v1/games/runs/${runId}/events`,
@@ -59,13 +80,21 @@ export function useGameRunEvents(runId: string | undefined) {
       if (!isActive) {
         return;
       }
-      setConnectionState("open");
+      setStreamState((current) =>
+        current.runId === runId
+          ? { ...current, connectionState: "open" }
+          : current,
+      );
     };
     source.onerror = () => {
       if (!isActive) {
         return;
       }
-      setConnectionState("error");
+      setStreamState((current) =>
+        current.runId === runId
+          ? { ...current, connectionState: "error" }
+          : current,
+      );
     };
 
     const handleEvent = (message: MessageEvent) => {
@@ -73,15 +102,25 @@ export function useGameRunEvents(runId: string | undefined) {
         return;
       }
       const event = JSON.parse(message.data) as LiveGameEvent;
-      setEvents((current) => {
-        if (current.some((item) => item.id === event.id)) {
+      const isTerminalEvent =
+        event.type === "game_completed" || event.type === "game_failed";
+      setStreamState((current) => {
+        if (current.runId !== runId) {
           return current;
         }
-        return [...current, event].sort((a, b) => a.id - b.id);
+
+        const nextEvents = current.events.some((item) => item.id === event.id)
+          ? current.events
+          : [...current.events, event].sort((a, b) => a.id - b.id);
+
+        return {
+          ...current,
+          events: nextEvents,
+          connectionState: isTerminalEvent ? "closed" : current.connectionState,
+        };
       });
-      if (event.type === "game_completed" || event.type === "game_failed") {
+      if (isTerminalEvent) {
         isActive = false;
-        setConnectionState("closed");
         closeSource();
       }
     };
@@ -93,7 +132,11 @@ export function useGameRunEvents(runId: string | undefined) {
     return () => {
       isActive = false;
       closeSource();
-      setConnectionState("closed");
+      setStreamState((current) =>
+        current.runId === runId
+          ? { ...current, connectionState: "closed" }
+          : current,
+      );
     };
   }, [runId]);
 

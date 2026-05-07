@@ -294,7 +294,7 @@ describe("GameDetailPage", () => {
     expect(screen.getByText('{"choice":"李四"}')).toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", {
+      screen.getByRole("radio", {
         name: /发言竞价 张三 选择 0.82/i,
       }),
     );
@@ -302,6 +302,183 @@ describe("GameDetailPage", () => {
     expect(screen.queryByText("请选择今晚击杀对象。")).not.toBeInTheDocument();
     expect(screen.getByText("是否争取发言？")).toBeInTheDocument();
     expect(screen.getByText('{"score":0.82}')).toBeInTheDocument();
+  });
+
+  it("shows replay rounds as tabs and switches the visible round", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...detailResponse,
+          state: {
+            ...detailResponse.state,
+            rounds: [
+              detailResponse.state.rounds[0],
+              {
+                ...detailResponse.state.rounds[0],
+                number: 2,
+                eliminated: null,
+                protected: null,
+                investigated: null,
+                debate: [{ speaker: "张三", message: "第二轮发言。" }],
+                bids: [],
+                votes: [],
+                summaries: {},
+                success: false,
+              },
+            ],
+          },
+          logs: [
+            detailResponse.logs[0],
+            {
+              number: 2,
+              eliminate: {
+                actor: "张三",
+                action: "remove",
+                options: ["张三", "李四"],
+                choice: "李四",
+                lm_log: {
+                  prompt: "第二轮请选择今晚击杀对象。",
+                  raw_response: "{\"choice\":\"李四\"}",
+                  result: { choice: "李四" },
+                },
+              },
+              protect: null,
+              investigate: null,
+              bid: [],
+              debate: [
+                {
+                  actor: "张三",
+                  action: "debate",
+                  options: [],
+                  choice: "第二轮发言。",
+                  lm_log: {
+                    prompt: "第二轮请发表白天发言。",
+                    raw_response: "{\"message\":\"第二轮发言。\"}",
+                    result: { message: "第二轮发言。" },
+                  },
+                },
+              ],
+              votes: [],
+              summaries: [],
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/:sessionId" element={<GameDetailPage />} />
+      </Routes>,
+      `/games/${sessionId}`,
+    );
+
+    expect(await screen.findByRole("tab", { name: /第 1 轮/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByText("李四 -> 我不是狼。")).toBeInTheDocument();
+    expect(screen.queryByText("张三 -> 第二轮发言。")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: /第 2 轮/ }));
+
+    expect(screen.getByRole("tab", { name: /第 2 轮/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByText("李四 -> 我不是狼。")).not.toBeInTheDocument();
+    expect(screen.getByText("张三 -> 第二轮发言。")).toBeInTheDocument();
+    expect(screen.getByText("第二轮请选择今晚击杀对象。")).toBeInTheDocument();
+  });
+
+  it("hides night fields for god roles that are absent from the game", async () => {
+    mockGameDetailFetch();
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/:sessionId" element={<GameDetailPage />} />
+      </Routes>,
+      `/games/${sessionId}`,
+    );
+
+    expect(await screen.findByText("无神职心理局")).toBeInTheDocument();
+    expect(screen.getByText("袭击")).toBeInTheDocument();
+    expect(screen.getByText("夜晚死亡")).toBeInTheDocument();
+    expect(screen.getByText("结果")).toBeInTheDocument();
+    expect(screen.queryByText("守护")).not.toBeInTheDocument();
+    expect(screen.queryByText("查验")).not.toBeInTheDocument();
+    expect(screen.queryByText("解药")).not.toBeInTheDocument();
+    expect(screen.queryByText("毒药")).not.toBeInTheDocument();
+  });
+
+  it("hides guard protection while keeping seer and witch fields when only those god roles exist", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...detailResponse,
+          state: {
+            ...detailResponse.state,
+            winner: "好人阵营",
+            rule_set: {
+              id: "classic_12_seer_witch_hunter_idiot",
+              version: "2026.04",
+              name: "12 人预女猎白局",
+              player_count: 12,
+              roles: [
+                { role: "狼人", count: 4 },
+                { role: "预言家", count: 1 },
+                { role: "女巫", count: 1 },
+                { role: "猎人", count: 1 },
+                { role: "白痴", count: 1 },
+                { role: "村民", count: 4 },
+              ],
+              role_summary: "4 狼人 / 1 预言家 / 1 女巫 / 1 猎人 / 1 白痴 / 4 村民",
+            },
+            players: [
+              { name: "Jacob", role: "狼人", model: "deepseek-chat" },
+              { name: "Jackson", role: "预言家", model: "deepseek-chat" },
+              { name: "Alice", role: "女巫", model: "deepseek-chat" },
+              { name: "Bert", role: "猎人", model: "deepseek-chat" },
+              { name: "Cora", role: "白痴", model: "deepseek-chat" },
+              { name: "Dan", role: "村民", model: "deepseek-chat" },
+            ],
+            rounds: [
+              {
+                ...detailResponse.state.rounds[0],
+                attacked: "Jacob",
+                eliminated: null,
+                protected: null,
+                investigated: "Jackson",
+                saved_by_witch: "Jacob",
+                poisoned: null,
+                night_deaths: [],
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/:sessionId" element={<GameDetailPage />} />
+      </Routes>,
+      `/games/${sessionId}`,
+    );
+
+    expect(await screen.findByText("12 人预女猎白局")).toBeInTheDocument();
+    expect(screen.queryByText("守护")).not.toBeInTheDocument();
+    expect(screen.getByText("查验")).toBeInTheDocument();
+    expect(screen.getByText("解药")).toBeInTheDocument();
+    expect(screen.getByText("毒药")).toBeInTheDocument();
   });
 
   it("resets the selected debug item when navigating to another session", async () => {
@@ -320,7 +497,7 @@ describe("GameDetailPage", () => {
     expect(await screen.findByText("请选择今晚击杀对象。")).toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", {
+      screen.getByRole("radio", {
         name: /发言竞价 张三 选择 0.82/i,
       }),
     );
@@ -342,6 +519,25 @@ describe("GameDetailPage", () => {
           ...detailResponse,
           state: {
             ...detailResponse.state,
+            rule_set: {
+              id: "classic_8",
+              version: "2026.04",
+              name: "经典 8 人局",
+              player_count: 8,
+              roles: [
+                { role: "狼人", count: 2 },
+                { role: "预言家", count: 1 },
+                { role: "守卫", count: 1 },
+                { role: "村民", count: 4 },
+              ],
+              role_summary: "2 狼人 / 1 预言家 / 1 守卫 / 4 村民",
+            },
+            players: [
+              { name: "张三", role: "狼人", model: "deepseek-chat" },
+              { name: "李四", role: "村民", model: "minimax" },
+              { name: "王五", role: "守卫", model: "deepseek-chat" },
+              { name: "赵六", role: "预言家", model: "deepseek-chat" },
+            ],
             rounds: [
               {
                 ...detailResponse.state.rounds[0],

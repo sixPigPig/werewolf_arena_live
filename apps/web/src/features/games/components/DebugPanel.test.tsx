@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { AppTheme } from "../../../app/AppTheme";
 import { DebugPanel } from "./DebugPanel";
 import type { DebugItem } from "../types";
 
@@ -19,7 +20,11 @@ describe("DebugPanel", () => {
       parsed: { reasoning: "他发言矛盾", vote: "老周" },
     };
 
-    render(<DebugPanel item={item} />);
+    render(
+      <AppTheme>
+        <DebugPanel item={item} />
+      </AppTheme>,
+    );
 
     expect(screen.getByText("轮次")).toBeInTheDocument();
     expect(screen.getByText("玩家")).toBeInTheDocument();

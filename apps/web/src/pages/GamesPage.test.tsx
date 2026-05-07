@@ -8,6 +8,7 @@ import {
   createTestQueryClient,
   renderWithClient,
 } from "../tests/renderWithClient";
+import { AppTheme } from "../app/AppTheme";
 import { GamesPage } from "./GamesPage";
 
 function ruleSetsResponse() {
@@ -125,7 +126,13 @@ describe("GamesPage", () => {
     expect(screen.getByText("快速少人局")).toBeInTheDocument();
     expect(screen.getAllByText("无警长")[0]).toBeInTheDocument();
     expect(screen.getAllByText("顺序发言")[0]).toBeInTheDocument();
+    expect(
+      screen.getByRole("radiogroup", { name: "快速少人局" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("标准警长局")).toBeInTheDocument();
+    expect(
+      screen.getByRole("radiogroup", { name: "标准警长局" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("警徽 1.5 票")).toBeInTheDocument();
   });
 
@@ -435,10 +442,10 @@ describe("GamesPage", () => {
       "/games",
     );
 
-    await userEvent.selectOptions(
-      await screen.findByLabelText("演示慢速"),
-      "standard",
+    await userEvent.click(
+      await screen.findByRole("combobox", { name: "演示慢速" }),
     );
+    await userEvent.click(screen.getByRole("option", { name: "标准演示" }));
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
 
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -518,11 +525,13 @@ describe("GamesPage", () => {
     });
 
     render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/games"]}>
-          <GamesPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
+      <AppTheme>
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/games"]}>
+            <GamesPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      </AppTheme>,
     );
 
     expect(await screen.findByText("无法读取对局列表")).toBeInTheDocument();

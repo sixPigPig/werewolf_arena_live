@@ -35,7 +35,7 @@ def test_settings_ignores_deepseek_env_values(tmp_path) -> None:
         "APP_NAME=Werewolf API\n"
         "DEEPSEEK_API_KEY=test-key\n"
         "DEEPSEEK_BASE_URL=https://api.deepseek.com\n"
-        "DEEPSEEK_MODEL=deepseek-chat\n",
+        "DEEPSEEK_MODEL=deepseek-v4-flash\n",
         encoding="utf-8",
     )
 

@@ -1,3 +1,14 @@
+import {
+  Badge,
+  Button,
+  Callout,
+  Card,
+  Flex,
+  RadioCards,
+  Select,
+  Text,
+  TextField,
+} from "@radix-ui/themes";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -31,77 +42,73 @@ export function CreateGameRunForm() {
     mutation.isPending || ruleSetsQuery.isPending || ruleSetsQuery.isError;
 
   const renderRuleCard = (rule: RuleSetSummary) => {
-    const isSelected = selectedRuleSetId === rule.id;
     const roleSummary =
       rule.role_summary ??
       rule.roles.map((role) => `${role.count} ${role.role}`).join(" / ");
 
     return (
-      <label
-        className={`block rounded-md border p-3 text-sm transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-slate-950 has-[:focus-visible]:ring-offset-2 ${
-          isSelected
-            ? "border-slate-950 bg-slate-100"
-            : "border-slate-200 bg-white"
-        }`}
+      <RadioCards.Item
+        aria-label={rule.name}
+        className="min-h-36"
         key={rule.id}
+        value={rule.id}
       >
-        <input
-          aria-label={rule.name}
-          checked={isSelected}
-          className="sr-only"
-          name="rule_set_id"
-          type="radio"
-          value={rule.id}
-          onChange={() => setSelectedRuleSetId(rule.id)}
-        />
-        <span className="block font-semibold text-slate-950">{rule.name}</span>
-        <span className="mt-1 block text-slate-600">
-          {rule.player_count} 人 · {rule.complexity ?? "标准"} ·{" "}
-          {rule.estimated_duration ?? "中"}
-        </span>
-        <span className="mt-2 block text-slate-700">{roleSummary}</span>
-        {rule.rule_tags && rule.rule_tags.length > 0 ? (
-          <span className="mt-2 flex flex-wrap gap-1.5">
-            {rule.rule_tags.map((tag) => (
-              <span
-                className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600"
-                key={tag}
-              >
-                {tag}
-              </span>
-            ))}
-          </span>
-        ) : null}
-      </label>
+        <Flex className="min-w-0" direction="column" gap="2" width="100%">
+          <Text
+            as="span"
+            className="break-words text-slate-950"
+            size="3"
+            weight="bold"
+          >
+            {rule.name}
+          </Text>
+          <Text as="span" className="break-words text-slate-600" size="2">
+            {rule.player_count} 人 · {rule.complexity ?? "标准"} ·{" "}
+            {rule.estimated_duration ?? "中"}
+          </Text>
+          <Text as="span" className="break-words text-slate-700" size="2">
+            {roleSummary}
+          </Text>
+          {rule.rule_tags && rule.rule_tags.length > 0 ? (
+            <Flex gap="1" wrap="wrap">
+              {rule.rule_tags.map((tag) => (
+                <Badge color="gray" key={tag} variant="surface">
+                  {tag}
+                </Badge>
+              ))}
+            </Flex>
+          ) : null}
+        </Flex>
+      </RadioCards.Item>
     );
   };
 
   return (
-    <form
-      className="rounded-md border border-slate-200 bg-white p-4"
-      noValidate
-      onSubmit={(event) => {
-        event.preventDefault();
-        const parsedMaxRounds = Number(maxRounds);
-        if (
-          !maxRounds ||
-          !Number.isInteger(parsedMaxRounds) ||
-          parsedMaxRounds < 1 ||
-          parsedMaxRounds > 20
-        ) {
-          setValidationError("最大轮数必须是 1 到 20 的整数");
-          return;
-        }
+    <Card asChild size="2">
+      <form
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          const parsedMaxRounds = Number(maxRounds);
+          if (
+            !maxRounds ||
+            !Number.isInteger(parsedMaxRounds) ||
+            parsedMaxRounds < 1 ||
+            parsedMaxRounds > 20
+          ) {
+            setValidationError("最大轮数必须是 1 到 20 的整数");
+            return;
+          }
 
-        setValidationError(null);
-        mutation.mutate({
-          rule_set_id: selectedRuleSetId,
-          seed: seed ? Number(seed) : null,
-          max_rounds: parsedMaxRounds,
-          event_pacing: eventPacing,
-        });
-      }}
-    >
+          setValidationError(null);
+          mutation.mutate({
+            rule_set_id: selectedRuleSetId,
+            seed: seed ? Number(seed) : null,
+            max_rounds: parsedMaxRounds,
+            event_pacing: eventPacing,
+          });
+        }}
+      >
       <fieldset className="mb-4">
         <legend className="text-sm font-semibold text-slate-900">
           官方规则
@@ -119,9 +126,18 @@ export function CreateGameRunForm() {
                 <h3 className="text-xs font-semibold uppercase text-slate-500">
                   快速少人局
                 </h3>
-                <div className="mt-2 grid gap-3 md:grid-cols-2">
+                <RadioCards.Root
+                  aria-label="快速少人局"
+                  className="mt-2"
+                  columns={{ initial: "1", md: "2" }}
+                  gap="3"
+                  highContrast
+                  onValueChange={setSelectedRuleSetId}
+                  value={selectedRuleSetId}
+                  variant="surface"
+                >
                   {quickRuleSets.map(renderRuleCard)}
-                </div>
+                </RadioCards.Root>
               </section>
             ) : null}
             {sheriffRuleSets.length > 0 ? (
@@ -129,9 +145,18 @@ export function CreateGameRunForm() {
                 <h3 className="text-xs font-semibold uppercase text-slate-500">
                   标准警长局
                 </h3>
-                <div className="mt-2 grid gap-3 md:grid-cols-2">
+                <RadioCards.Root
+                  aria-label="标准警长局"
+                  className="mt-2"
+                  columns={{ initial: "1", md: "2" }}
+                  gap="3"
+                  highContrast
+                  onValueChange={setSelectedRuleSetId}
+                  value={selectedRuleSetId}
+                  variant="surface"
+                >
                   {sheriffRuleSets.map(renderRuleCard)}
-                </div>
+                </RadioCards.Root>
               </section>
             ) : null}
           </div>
@@ -140,18 +165,16 @@ export function CreateGameRunForm() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-slate-700">
           随机种子
-          <input
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          <TextField.Root
             inputMode="numeric"
+            placeholder="可留空"
             value={seed}
             onChange={(event) => setSeed(event.target.value)}
-            placeholder="可留空"
           />
         </label>
         <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-slate-700">
           最大轮数
-          <input
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          <TextField.Root
             min={1}
             max={20}
             required
@@ -163,34 +186,40 @@ export function CreateGameRunForm() {
             }}
           />
         </label>
-        <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-slate-700">
-          演示慢速
-          <select
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+        <div className="flex flex-1 flex-col gap-1 text-sm font-medium text-slate-700">
+          <span id="event-pacing-label">演示慢速</span>
+          <Select.Root
             value={eventPacing}
-            onChange={(event) =>
-              setEventPacing(event.target.value as EventPacingMode)
-            }
+            onValueChange={(value) => setEventPacing(value as EventPacingMode)}
           >
-            <option value="off">关闭</option>
-            <option value="standard">标准演示</option>
-            <option value="slow">慢速讲解</option>
-          </select>
-        </label>
-        <button
-          className="rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:bg-slate-400"
+            <Select.Trigger aria-labelledby="event-pacing-label" />
+            <Select.Content>
+              <Select.Item value="off">关闭</Select.Item>
+              <Select.Item value="standard">标准演示</Select.Item>
+              <Select.Item value="slow">慢速讲解</Select.Item>
+            </Select.Content>
+          </Select.Root>
+        </div>
+        <Button
           disabled={isSubmitDisabled}
+          highContrast
+          loading={mutation.isPending}
           type="submit"
         >
-          {mutation.isPending ? "正在发起..." : "发起对局"}
-        </button>
+          发起对局
+        </Button>
       </div>
       {validationError ? (
-        <p className="mt-3 text-sm text-red-700">{validationError}</p>
+        <Callout.Root className="mt-3" color="red" size="1" variant="soft">
+          <Callout.Text>{validationError}</Callout.Text>
+        </Callout.Root>
       ) : null}
       {mutation.isError ? (
-        <p className="mt-3 text-sm text-red-700">无法发起对局</p>
+        <Callout.Root className="mt-3" color="red" size="1" variant="soft">
+          <Callout.Text>无法发起对局</Callout.Text>
+        </Callout.Root>
       ) : null}
-    </form>
+      </form>
+    </Card>
   );
 }

@@ -1,3 +1,5 @@
+import { Badge, Card } from "@radix-ui/themes";
+
 import type { LiveGameEvent } from "../types";
 import type { LivePlayer } from "../liveSpectator";
 
@@ -26,16 +28,19 @@ export function LiveFocusStage({
 }: LiveFocusStageProps) {
   if (!player) {
     return (
-      <section className="min-h-80 rounded-md border border-slate-200 bg-white p-6">
+      <Card asChild size="3">
+      <section className="min-h-80">
         <p className="text-sm text-slate-600">等待玩家行动...</p>
       </section>
+      </Card>
     );
   }
 
   const detail = player.lastDetail || detailForEvent(latestEvent);
 
   return (
-    <section className="min-h-80 rounded-md border border-slate-200 bg-white">
+    <Card asChild size="1">
+      <section className="min-h-80">
       <div className="border-b border-slate-200 px-5 py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -45,16 +50,16 @@ export function LiveFocusStage({
             </h2>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="rounded border border-slate-200 px-2 py-1 text-slate-700">
+            <Badge color="gray" variant="surface">
               {player.role}
-            </span>
-            <span className="rounded border border-slate-200 px-2 py-1 text-slate-700">
+            </Badge>
+            <Badge color="gray" variant="surface">
               {STATUS_LABELS[player.status]}
-            </span>
+            </Badge>
             {!player.isAlive ? (
-              <span className="rounded border border-red-200 bg-red-50 px-2 py-1 text-red-700">
+              <Badge color="red" variant="surface">
                 出局
-              </span>
+              </Badge>
             ) : null}
           </div>
         </div>
@@ -83,7 +88,8 @@ export function LiveFocusStage({
           </p>
         )}
       </div>
-    </section>
+      </section>
+    </Card>
   );
 }
 

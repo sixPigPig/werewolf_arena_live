@@ -200,7 +200,7 @@ def test_render_rule_text_matches_rule_actions() -> None:
 
     assert "共 8 名玩家：2 名狼人、1 名预言家、1 名守卫、4 名村民。" in classic_text
     assert "守卫保护一名玩家" in classic_text
-    assert "预言家查验一名玩家身份" in classic_text
+    assert "预言家查验一名玩家阵营" in classic_text
     assert "共 8 名玩家：2 名狼人、6 名村民。" in social_text
     assert "守卫保护" not in social_text
     assert "预言家查验" not in social_text

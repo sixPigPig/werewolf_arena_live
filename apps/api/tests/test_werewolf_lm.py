@@ -1201,7 +1201,7 @@ def test_default_model_name_uses_minimax_when_only_minimax_key_is_configured(
 ) -> None:
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
-        "DEEPSEEK_MODEL=deepseek-chat\n"
+        "DEEPSEEK_MODEL=deepseek-v4-flash\n"
         "MINIMAX_API_KEY=minimax-key\n"
         "MINIMAX_MODEL=MiniMax-M2.7\n",
         encoding="utf-8",
@@ -1234,6 +1234,19 @@ def test_default_model_name_uses_qwen_when_only_dashscope_key_is_configured(
     assert default_model_name() == "qwen3.6-plus"
 
 
+def test_default_model_name_falls_back_to_deepseek_flash_without_configured_keys(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+
+    assert default_model_name() == "deepseek-v4-flash"
+
+
 def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
     example = os.path.join(os.path.dirname(__file__), "..", ".env.example")
 
@@ -1242,5 +1255,6 @@ def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
 
     assert "WEREWOLF_DEFAULT_MODEL=\n" in contents
     assert "DEEPSEEK_API_KEY=\n" in contents
+    assert "DEEPSEEK_MODEL=deepseek-v4-flash\n" in contents
     assert "MINIMAX_API_KEY=\n" in contents
     assert "DASHSCOPE_API_KEY=\n" in contents

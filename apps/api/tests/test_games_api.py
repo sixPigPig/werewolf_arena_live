@@ -156,7 +156,7 @@ def test_create_game_run_defaults_to_minimax_when_only_minimax_key_is_configured
 ) -> None:
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
-        "DEEPSEEK_MODEL=deepseek-chat\n"
+        "DEEPSEEK_MODEL=deepseek-v4-flash\n"
         "MINIMAX_API_KEY=minimax-key\n"
         "MINIMAX_MODEL=MiniMax-M2.7\n",
         encoding="utf-8",

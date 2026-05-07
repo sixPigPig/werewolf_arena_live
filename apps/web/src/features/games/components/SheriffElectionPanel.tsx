@@ -1,3 +1,5 @@
+import { Badge, Card } from "@radix-ui/themes";
+
 import type { DeathEvent, DebugItem, GameRound, SpeechEntry } from "../types";
 
 import { isSelfBadgeTransfer } from "../sheriffBadgeDisplay";
@@ -23,7 +25,8 @@ export function SheriffElectionPanel({
         : [];
 
   return (
-    <section className="mt-4 rounded border border-slate-200 bg-white px-4 py-4">
+    <Card asChild className="mt-4" size="2">
+      <section>
       <h4 className="text-xs font-semibold text-slate-500">
         警长竞选
       </h4>
@@ -46,7 +49,8 @@ export function SheriffElectionPanel({
         <BadgeStatus items={items} round={round} />
         <SpeechDirection round={round} />
       </div>
-    </section>
+      </section>
+    </Card>
   );
 }
 
@@ -109,9 +113,7 @@ function PlayerChips({ label, values }: { label: string; values: string[] }) {
       <ul aria-label={`${label}名单`} className="flex flex-wrap gap-1.5">
         {values.map((value) => (
           <li key={`${label}-${value}`}>
-            <span className="inline-flex min-h-6 items-center rounded bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
-              {value}
-            </span>
+            <Badge color="gray" variant="surface">{value}</Badge>
           </li>
         ))}
       </ul>
@@ -168,11 +170,10 @@ function VoteList({
       <p className="text-xs font-medium text-slate-500">{title}</p>
       <ul className="mt-1 flex flex-wrap gap-2">
         {entries.map(([voter, target]) => (
-          <li
-            className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-slate-800"
-            key={`${voter}-${target}`}
-          >
-            {voter} -&gt; {target}
+          <li key={`${voter}-${target}`}>
+            <Badge color="gray" variant="surface">
+              {voter} -&gt; {target}
+            </Badge>
           </li>
         ))}
       </ul>

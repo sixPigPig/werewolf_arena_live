@@ -1,3 +1,5 @@
+import { Progress } from "@radix-ui/themes";
+
 import type { BidEntry } from "../types";
 
 type BidChartProps = {
@@ -19,14 +21,11 @@ export function BidChart({ bids }: BidChartProps) {
           key={`${bid.actor}-${index}`}
         >
           <span className="truncate text-sm text-slate-700">{bid.actor}</span>
-          <div className="h-2 overflow-hidden rounded bg-slate-100">
-            <div
-              className="h-full bg-cyan-600"
-              style={{
-                width: `${Math.max(8, (bid.score / maxScore) * 100)}%`,
-              }}
-            />
-          </div>
+          <Progress
+            color="cyan"
+            max={100}
+            value={Math.max(8, (bid.score / maxScore) * 100)}
+          />
           <span className="text-right font-mono text-xs text-slate-600">
             {bid.score}
           </span>

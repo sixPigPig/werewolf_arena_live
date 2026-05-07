@@ -45,19 +45,38 @@ export function useLiveDirector(
   const lastStartedEventIdRef = useRef<number | null>(null);
   const pausedAtRef = useRef<number | null>(null);
   const resetKeyRef = useRef(options.resetKey);
+  const latestTerminalCue = useMemo(
+    () =>
+      [...cues]
+        .reverse()
+        .find(
+          (cue) => cue.type === "game_completed" || cue.type === "game_failed",
+        ),
+    [cues],
+  );
+  const selectedCurrentEventId =
+    options.startAtLatestTerminal && latestTerminalCue
+      ? latestTerminalCue.eventId
+      : currentEventId;
+
+  if (selectedCurrentEventId !== currentEventId) {
+    setCurrentEventId(selectedCurrentEventId);
+  }
 
   const currentIndex = useMemo(() => {
     if (cues.length === 0) {
       return -1;
     }
 
-    if (currentEventId === null) {
+    if (selectedCurrentEventId === null) {
       return 0;
     }
 
-    const matchingIndex = cues.findIndex((cue) => cue.eventId === currentEventId);
+    const matchingIndex = cues.findIndex(
+      (cue) => cue.eventId === selectedCurrentEventId,
+    );
     return matchingIndex === -1 ? 0 : matchingIndex;
-  }, [cues, currentEventId]);
+  }, [cues, selectedCurrentEventId]);
 
   const currentCue = currentIndex === -1 ? null : cues[currentIndex];
   const resolvedCurrentEventId = currentCue?.eventId ?? null;
@@ -81,25 +100,6 @@ export function useLiveDirector(
     setIsPaused(false);
     setSpeedState(1);
   }, [options.resetKey]);
-
-  useEffect(() => {
-    if (!options.startAtLatestTerminal) {
-      return;
-    }
-
-    const latestTerminalCue = [...cues]
-      .reverse()
-      .find(
-        (cue) => cue.type === "game_completed" || cue.type === "game_failed",
-      );
-    if (!latestTerminalCue || currentEventId === latestTerminalCue.eventId) {
-      return;
-    }
-
-    setCurrentEventId(latestTerminalCue.eventId);
-    startedAtRef.current = Date.now();
-    lastStartedEventIdRef.current = latestTerminalCue.eventId;
-  }, [cues, currentEventId, options.startAtLatestTerminal]);
 
   const moveToIndex = useCallback(
     (nextIndex: number) => {

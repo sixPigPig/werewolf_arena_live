@@ -1,3 +1,4 @@
+import { Callout, Text } from "@radix-ui/themes";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
@@ -25,7 +26,7 @@ export function GameDetailPage() {
   if (isPending) {
     return (
       <main className="mx-auto w-full max-w-4xl px-4 py-8">
-        <p className="text-sm text-slate-600">正在读取对局...</p>
+        <Text color="gray" size="2">正在读取对局...</Text>
       </main>
     );
   }
@@ -33,7 +34,9 @@ export function GameDetailPage() {
   if (isError || !data) {
     return (
       <main className="mx-auto w-full max-w-4xl px-4 py-8">
-        <p className="text-sm text-red-700">无法读取该对局</p>
+        <Callout.Root color="red" size="1" variant="soft">
+          <Callout.Text>无法读取该对局</Callout.Text>
+        </Callout.Root>
       </main>
     );
   }
@@ -59,6 +62,7 @@ export function GameDetailPage() {
             setSelection({ itemId: item.id, sessionId: data.sessionId })
           }
           players={data.players}
+          ruleSet={data.ruleSet}
           rounds={data.rounds}
           selectedItem={visibleSelectedItem}
           winner={data.winner}

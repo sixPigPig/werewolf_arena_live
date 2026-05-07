@@ -1,3 +1,4 @@
+import { Callout, Heading } from "@radix-ui/themes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -31,7 +32,7 @@ export function GamesPage() {
 
   return (
     <main className="mx-auto w-full max-w-4xl px-4 py-8">
-      <h1 className="text-2xl font-semibold text-slate-950">狼人杀对局复盘</h1>
+      <Heading as="h1" size="6">狼人杀对局复盘</Heading>
 
       <div className="mt-6">
         <CreateGameRunForm />
@@ -50,7 +51,9 @@ export function GamesPage() {
               sessions={data.sessions}
             />
             {resumeMutation.isError ? (
-              <p className="mt-2 text-sm text-red-700">无法继续对局</p>
+              <Callout.Root className="mt-2" color="red" size="1" variant="soft">
+                <Callout.Text>无法继续对局</Callout.Text>
+              </Callout.Root>
             ) : null}
           </>
         ) : null}

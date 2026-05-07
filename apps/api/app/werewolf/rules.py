@@ -269,7 +269,7 @@ def render_rule_text(rule_set: RuleSet) -> str:
     night_action_text = {
         ACTION_REMOVE: "狼人选择并移除一名玩家",
         ACTION_PROTECT: "守卫保护一名玩家",
-        ACTION_INVESTIGATE: "预言家查验一名玩家身份",
+        ACTION_INVESTIGATE: "预言家查验一名玩家阵营",
         ACTION_WITCH_SAVE: "女巫可以使用解药救下当晚被狼人袭击的玩家",
         ACTION_WITCH_POISON: "女巫可以使用毒药淘汰一名玩家",
     }

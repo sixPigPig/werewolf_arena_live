@@ -43,8 +43,8 @@ def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
     assert "胜利阵营=狼人阵营" in output
     assert "session_id=session_test" in output
     assert "日志目录=" in output
-    assert calls["villager_model"] == "deepseek-chat"
-    assert calls["werewolf_model"] == "deepseek-chat"
+    assert calls["villager_model"] == "deepseek-v4-flash"
+    assert calls["werewolf_model"] == "deepseek-v4-flash"
 
 
 def test_run_game_command_defaults_to_minimax_when_only_minimax_key_is_configured(
@@ -54,7 +54,7 @@ def test_run_game_command_defaults_to_minimax_when_only_minimax_key_is_configure
 ) -> None:
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
-        "DEEPSEEK_MODEL=deepseek-chat\n"
+        "DEEPSEEK_MODEL=deepseek-v4-flash\n"
         "MINIMAX_API_KEY=minimax-key\n"
         "MINIMAX_MODEL=MiniMax-M2.7\n",
         encoding="utf-8",

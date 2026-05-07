@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { GameRound } from "../types";
+import type { DebugItem, GameRound } from "../types";
 import { NightPhase } from "./NightPhase";
 
 const baseRound: GameRound = {
@@ -69,5 +70,39 @@ describe("NightPhase", () => {
     expect(screen.getAllByText("Bob").length).toBeGreaterThan(0);
     expect(screen.getByText("夜晚死亡")).toBeInTheDocument();
     expect(screen.getByText("Bob 出局")).toBeInTheDocument();
+  });
+
+  it("renders night action debug items as selectable radio cards", async () => {
+    const item: DebugItem = {
+      id: "round-1-night-eliminate",
+      roundNumber: 1,
+      phase: "night",
+      title: "狼人击杀",
+      actor: "Alice",
+      action: "remove",
+      choice: "Bob",
+      prompt: "请选择今晚击杀对象。",
+      rawResponse: '{"choice":"Bob"}',
+      parsed: { choice: "Bob" },
+    };
+    const onSelect = vi.fn();
+
+    render(
+      <NightPhase
+        round={baseRound}
+        items={[item]}
+        selectedItem={null}
+        onSelect={onSelect}
+      />,
+    );
+
+    const actionGroup = screen.getByRole("radiogroup", { name: "夜晚行动" });
+    const actionCard = within(actionGroup).getByRole("radio", {
+      name: "狼人击杀 Alice 选择 Bob",
+    });
+
+    expect(actionCard).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(actionCard);
+    expect(onSelect).toHaveBeenCalledWith(item);
   });
 });

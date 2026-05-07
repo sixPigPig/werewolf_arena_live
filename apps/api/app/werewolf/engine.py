@@ -299,9 +299,11 @@ class GameEngine:
                 )
                 round_state.investigated = investigated
                 if investigated:
-                    role = players_by_name[investigated].role
-                    seer.known_roles[investigated] = role
-                    seer.add_observation(f"第{round_state.number}轮：我查验了{investigated}，身份是{role}。")
+                    alignment = self._investigation_alignment(players_by_name[investigated].role)
+                    seer.known_roles[investigated] = alignment
+                    seer.add_observation(
+                        f"第{round_state.number}轮：我查验了{investigated}，阵营是{alignment}。"
+                    )
 
         self._run_witch_phase(round_state, round_log, active_players)
         pending_deaths = self._pending_night_deaths(round_state, active_players)
@@ -1598,6 +1600,11 @@ class GameEngine:
         if living_teammates:
             return f"你的狼人队友是{'、'.join(living_teammates)}。"
         return f"你的狼人队友{'、'.join(teammates)}已经出局，只剩你独自行动。"
+
+    def _investigation_alignment(self, role: str) -> str:
+        if _role_team(self.rule_set, role) == TEAM_WEREWOLVES:
+            return WINNER_WEREWOLVES
+        return WINNER_VILLAGERS
 
     def _get_winner(self, active_players: list[str]) -> str:
         players_by_name = self.state.player_by_name()

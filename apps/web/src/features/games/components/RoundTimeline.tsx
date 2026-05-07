@@ -1,4 +1,7 @@
-import type { DebugItem, GameRound, RawPlayer } from "../types";
+import { Card, Tabs } from "@radix-ui/themes";
+import { useMemo, useState } from "react";
+
+import type { DebugItem, GameRound, RawPlayer, RuleSetSummary } from "../types";
 
 import { DayPhase } from "./DayPhase";
 import { NightPhase } from "./NightPhase";
@@ -7,6 +10,7 @@ type RoundTimelineProps = {
   rounds: GameRound[];
   debugItems: DebugItem[];
   players: RawPlayer[];
+  ruleSet?: RuleSetSummary | null;
   winner: string;
   selectedItem: DebugItem | null;
   onSelect: (item: DebugItem) => void;
@@ -16,54 +20,112 @@ export function RoundTimeline({
   rounds,
   debugItems,
   players,
+  ruleSet = null,
   winner,
   selectedItem,
   onSelect,
 }: RoundTimelineProps) {
+  const roundTabs = useMemo(
+    () =>
+      rounds.map((round) => {
+        const roundItems = debugItems.filter(
+          (item) => item.roundNumber === round.number,
+        );
+
+        return {
+          round,
+          value: roundValue(round),
+          items: roundItems,
+          nightItems: roundItems.filter((item) => item.phase === "night"),
+          dayItems: roundItems.filter((item) => item.phase !== "night"),
+        };
+      }),
+    [debugItems, rounds],
+  );
+  const firstRoundValue = roundTabs[0]?.value ?? "";
+  const [activeRoundValue, setActiveRoundValue] = useState<string | null>(null);
+  const currentRoundValue =
+    roundTabs.some((tab) => tab.value === activeRoundValue) && activeRoundValue
+      ? activeRoundValue
+      : firstRoundValue;
+
+  function handleRoundChange(value: string) {
+    setActiveRoundValue(value);
+
+    const firstItemInRound = roundTabs.find((tab) => tab.value === value)
+      ?.items[0];
+    if (firstItemInRound) {
+      onSelect(firstItemInRound);
+    }
+  }
+
   return (
-    <section className="rounded border border-slate-200 bg-white">
+    <Card asChild size="1">
+      <section>
       <div className="border-b border-slate-200 px-4 py-4">
         <h1 className="text-xl font-semibold text-slate-950">对局时间线</h1>
       </div>
 
-      <div className="divide-y divide-slate-200">
-        {rounds.map((round) => {
-          const roundItems = debugItems.filter(
-            (item) => item.roundNumber === round.number,
-          );
-          const nightItems = roundItems.filter((item) => item.phase === "night");
-          const dayItems = roundItems.filter((item) => item.phase !== "night");
+      <div>
+        {roundTabs.length > 0 ? (
+          <Tabs.Root
+            onValueChange={handleRoundChange}
+            value={currentRoundValue}
+          >
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+              <Tabs.List
+                aria-label="回放轮次"
+                className="w-full overflow-x-auto"
+                justify="start"
+              >
+                {roundTabs.map(({ round, value }) => (
+                  <Tabs.Trigger key={value} value={value}>
+                    第 {round.number} 轮
+                  </Tabs.Trigger>
+                ))}
+              </Tabs.List>
+            </div>
 
-          return (
-            <article className="space-y-4 px-4 py-5" key={round.number}>
-              <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <h2 className="text-lg font-semibold text-slate-950">
-                  第 {round.number} 轮
-                </h2>
-                <p className="text-sm text-slate-600">
-                  {round.success ? "已完成" : "未完成"}
-                </p>
-              </header>
+            {roundTabs.map(({ dayItems, nightItems, round, value }) => (
+              <Tabs.Content className="px-4 py-5" key={value} value={value}>
+                <article className="space-y-4">
+                  <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <h2 className="text-lg font-semibold text-slate-950">
+                      第 {round.number} 轮
+                    </h2>
+                    <p className="text-sm text-slate-600">
+                      {round.success ? "已完成" : "未完成"}
+                    </p>
+                  </header>
 
-              <NightPhase
-                items={nightItems}
-                onSelect={onSelect}
-                round={round}
-                selectedItem={selectedItem}
-              />
-              <DayPhase
-                items={dayItems}
-                onSelect={onSelect}
-                round={round}
-                selectedItem={selectedItem}
-              />
-            </article>
-          );
-        })}
+                  <NightPhase
+                    items={nightItems}
+                    onSelect={onSelect}
+                    players={players}
+                    round={round}
+                    ruleSet={ruleSet}
+                    selectedItem={selectedItem}
+                  />
+                  <DayPhase
+                    items={dayItems}
+                    onSelect={onSelect}
+                    round={round}
+                    selectedItem={selectedItem}
+                  />
+                </article>
+              </Tabs.Content>
+            ))}
+          </Tabs.Root>
+        ) : null}
         <GameConclusion players={players} rounds={rounds} winner={winner} />
       </div>
-    </section>
+      </section>
+    </Card>
   );
+}
+
+function roundValue(round: GameRound) {
+  return `round-${round.number}`;
 }
 
 function GameConclusion({

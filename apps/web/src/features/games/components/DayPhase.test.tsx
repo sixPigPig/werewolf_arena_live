@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DebugItem, GameRound } from "../types";
@@ -382,5 +383,39 @@ describe("DayPhase", () => {
     expect(screen.getByText("Tyler 被放逐")).toBeInTheDocument();
     expect(screen.getByText("白天死亡：Tyler")).toBeInTheDocument();
     expect(screen.queryByText("警徽处理：Tyler 选择 撕毁警徽")).not.toBeInTheDocument();
+  });
+
+  it("renders day debug items as selectable radio cards", async () => {
+    const item: DebugItem = {
+      id: "round-1-day-sheriff-run",
+      roundNumber: 1,
+      phase: "day",
+      title: "上警选择",
+      actor: "Harold",
+      action: "sheriff_run",
+      choice: "上警",
+      prompt: "是否参与警长竞选？",
+      rawResponse: '{"run":true}',
+      parsed: { run: true },
+    };
+    const onSelect = vi.fn();
+
+    render(
+      <DayPhase
+        round={{ ...baseRound, hunter_shot: null, idiot_revealed: null }}
+        items={[item]}
+        selectedItem={null}
+        onSelect={onSelect}
+      />,
+    );
+
+    const actionGroup = screen.getByRole("radiogroup", { name: "白天行动记录" });
+    const actionCard = within(actionGroup).getByRole("radio", {
+      name: "上警选择 Harold 选择 上警",
+    });
+
+    expect(actionCard).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(actionCard);
+    expect(onSelect).toHaveBeenCalledWith(item);
   });
 });

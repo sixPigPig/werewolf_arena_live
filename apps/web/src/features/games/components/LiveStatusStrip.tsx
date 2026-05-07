@@ -1,3 +1,5 @@
+import { Badge } from "@radix-ui/themes";
+
 import type { ConnectionState } from "../hooks/useGameRunEvents";
 import type { GameRun } from "../types";
 
@@ -35,9 +37,9 @@ export function LiveStatusStrip({
 
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 px-4 py-3 text-sm">
-      <span className="font-medium text-slate-950">
+      <Badge color={run.status === "failed" ? "red" : "gray"} variant="surface">
         {statusLabels[run.status] ?? run.status}
-      </span>
+      </Badge>
       <span className="text-slate-600">{run.session_id}</span>
       <span className="text-slate-500">
         连接：
