@@ -207,7 +207,8 @@ describe("LiveGamePage", () => {
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
     expect(screen.getByText("观赛舞台")).toBeInTheDocument();
-    expect(screen.getByText("座位盘")).toBeInTheDocument();
+    expect(screen.getByText("圆桌座位")).toBeInTheDocument();
+    expect(screen.queryByText("座位盘")).not.toBeInTheDocument();
     expect(screen.getByText("剧情时间线")).toBeInTheDocument();
     expect(screen.getByText("调试事件")).toBeInTheDocument();
     expect(await screen.findByText("新手 6 人快局")).toBeInTheDocument();
@@ -320,8 +321,33 @@ describe("LiveGamePage", () => {
     expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
 
     act(() => {
-      source.emit("model_response_received", {
+      source.emit("state_updated", {
         id: 6,
+        type: "state_updated",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:04Z",
+        round: 1,
+        phase: "day",
+        actor: null,
+        action: null,
+        payload: {
+          active_players: ["张三"],
+          exiled: "李四",
+        },
+      });
+    });
+
+    expect(screen.getByRole("button", { name: /张三/ })).toHaveAccessibleName(
+      /发言中/,
+    );
+    expect(screen.getByRole("button", { name: /李四/ })).toHaveAccessibleName(
+      /出局/,
+    );
+
+    act(() => {
+      source.emit("model_response_received", {
+        id: 7,
         type: "model_response_received",
         run_id: "run_1234abcd",
         session_id: "session_20260424_120000_ab12cd34",
@@ -337,7 +363,7 @@ describe("LiveGamePage", () => {
         },
       });
       source.emit("game_completed", {
-        id: 7,
+        id: 8,
         type: "game_completed",
         run_id: "run_1234abcd",
         session_id: "session_20260424_120000_ab12cd34",
@@ -387,7 +413,7 @@ describe("LiveGamePage", () => {
     expect(screen.getByText("连接：未连接")).toBeInTheDocument();
   });
 
-  it("allows live grid columns to shrink inside wrapped panels", async () => {
+  it("uses a stage-first live layout with a separate timeline column", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(runningRunResponse()),
@@ -401,14 +427,22 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
-    const liveGrid = container.querySelector(".grid.gap-4");
+    const liveGrid = container.querySelector('[data-testid="live-stage-layout"]');
     expect(liveGrid).not.toBeNull();
-    const [playerColumn, directorColumn, eventsColumn] = Array.from(
-      liveGrid!.children,
-    );
+    const columns = Array.from(liveGrid!.children);
+    expect(columns).toHaveLength(2);
+    const [stageColumn, eventsColumn] = columns;
 
-    expect(playerColumn).toHaveClass("min-w-0");
-    expect(directorColumn).toHaveClass("min-w-0");
+    expect(
+      within(stageColumn as HTMLElement).getByText("观赛舞台"),
+    ).toBeInTheDocument();
+    expect(
+      within(stageColumn as HTMLElement).getByText("圆桌座位"),
+    ).toBeInTheDocument();
+    expect(
+      within(eventsColumn as HTMLElement).getByText("剧情时间线"),
+    ).toBeInTheDocument();
+    expect(stageColumn).toHaveClass("min-w-0");
     expect(eventsColumn).toHaveClass("min-w-0");
   });
 
@@ -460,11 +494,13 @@ describe("LiveGamePage", () => {
     });
 
     expect(await screen.findByRole("button", { name: /张三/ })).toHaveClass(
-      "ring-2",
+      "is-focused",
     );
 
     await userEvent.click(screen.getByRole("button", { name: /李四/ }));
-    expect(screen.getByRole("button", { name: /李四/ })).toHaveClass("ring-2");
+    expect(screen.getByRole("button", { name: /李四/ })).toHaveClass(
+      "is-focused",
+    );
 
     act(() => {
       source.emit("action_requested", {
@@ -480,10 +516,14 @@ describe("LiveGamePage", () => {
         payload: { options: ["李四"] },
       });
     });
-    expect(screen.getByRole("button", { name: /李四/ })).toHaveClass("ring-2");
+    expect(screen.getByRole("button", { name: /李四/ })).toHaveClass(
+      "is-focused",
+    );
 
     await userEvent.click(screen.getByRole("switch", { name: "自动跟随" }));
-    expect(screen.getByRole("button", { name: /张三/ })).toHaveClass("ring-2");
+    expect(screen.getByRole("button", { name: /张三/ })).toHaveClass(
+      "is-focused",
+    );
   });
 
   it("renders failed event errors", async () => {
