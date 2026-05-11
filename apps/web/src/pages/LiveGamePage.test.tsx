@@ -345,6 +345,24 @@ describe("LiveGamePage", () => {
       "data-seat-state",
       "speaking",
     );
+    const roster = screen.getByTestId("player-roster-panel");
+    expect(
+      within(roster).getByRole("heading", { name: "玩家列表（2人局）" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("player-roster-row-张三")).toHaveAttribute(
+      "data-roster-state",
+      "speaking",
+    );
+    expect(screen.getByTestId("player-roster-row-李四")).toHaveAttribute(
+      "data-roster-state",
+      "dead",
+    );
+    expect(
+      within(screen.getByTestId("player-roster-row-张三")).getByText("发言中"),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("player-roster-row-张三")).getByText("麦"),
+    ).toBeInTheDocument();
     const activePlayerRoleLabel = within(
       screen.getByRole("button", { name: /张三/ }),
     ).getByText("狼人");
@@ -441,17 +459,54 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    expect(screen.getByTestId("app-top-nav")).toBeInTheDocument();
+    expect(screen.getByTestId("app-logo-placeholder")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
+      "href",
+      "/games",
+    );
+    expect(screen.getByRole("link", { name: "返回大厅" })).toHaveAttribute(
+      "href",
+      "/games",
+    );
     expect(screen.getByTestId("live-game-page")).toHaveClass(
       "min-h-screen",
       "bg-[#071015]",
       "text-slate-100",
     );
+    expect(
+      container.querySelector('[data-testid="live-game-page"] > div'),
+    ).toHaveClass("max-w-none", "w-full");
+    expect(
+      container.querySelector('[data-testid="live-game-page"] > div'),
+    ).not.toHaveClass("max-w-7xl");
+    expect(screen.getByTestId("live-game-page")).toHaveClass(
+      "live-game-page",
+    );
+    expect(
+      container.querySelector('[data-testid="live-game-page"] > div'),
+    ).toHaveClass("live-game-content");
+    expect(screen.getByTestId("live-page-heading")).toHaveClass(
+      "live-page-heading",
+    );
     const liveGrid = container.querySelector('[data-testid="live-stage-layout"]');
     expect(liveGrid).not.toBeNull();
+    expect(liveGrid).toHaveClass("live-stage-layout");
     const columns = Array.from(liveGrid!.children);
-    expect(columns).toHaveLength(2);
-    const [stageColumn, eventsColumn] = columns;
+    expect(columns).toHaveLength(3);
+    const [rosterColumn, stageColumn, eventsColumn] = columns;
 
+    expect(rosterColumn).toHaveClass("live-roster-column");
+    expect(stageColumn).toHaveClass("live-stage-column");
+    expect(
+      within(rosterColumn as HTMLElement).getByText("玩家列表（0人局）"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("player-roster-panel")).toHaveClass(
+      "player-roster-panel",
+    );
+    expect(screen.getByTestId("player-roster-list")).toHaveClass(
+      "player-roster-list",
+    );
     expect(
       within(stageColumn as HTMLElement).getByText("观赛舞台"),
     ).toBeInTheDocument();
@@ -496,8 +551,11 @@ describe("LiveGamePage", () => {
       '[data-testid="live-status-shell"]',
     );
     expect(statusShell).not.toBeNull();
-    expect(statusShell).toHaveClass("lg:sticky");
+    expect(statusShell).toHaveClass("live-status-shell", "lg:sticky");
     expect(statusShell).not.toHaveClass("sticky");
+    expect(screen.getByTestId("live-rule-summary-shell")).toHaveClass(
+      "live-rule-summary-shell",
+    );
   });
 
   it("keeps the first seat clear of the stage phase badge", async () => {

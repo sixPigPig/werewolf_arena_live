@@ -116,11 +116,27 @@ describe("GamesPage", () => {
       );
     });
 
-    renderWithClient(<GamesPage />, "/games");
+    const { container } = renderWithClient(<GamesPage />, "/games");
 
     expect(
       screen.getByRole("heading", { name: "狼人杀对局复盘" }),
     ).toBeInTheDocument();
+    expect(screen.getByTestId("app-top-nav")).toBeInTheDocument();
+    expect(screen.getByTestId("app-logo-placeholder")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
+      "href",
+      "/games",
+    );
+    expect(
+      screen.getByRole("button", { name: "刷新列表" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建对局" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "返回大厅" })).not.toBeInTheDocument();
+    expect(container.querySelector("main")).toHaveClass(
+      "max-w-none",
+      "w-full",
+    );
+    expect(container.querySelector("main")).not.toHaveClass("max-w-4xl");
     expect(await screen.findByText("session_20260424_001")).toBeInTheDocument();
     expect(screen.getByText("狼人阵营")).toBeInTheDocument();
     expect(screen.getByText("快速少人局")).toBeInTheDocument();

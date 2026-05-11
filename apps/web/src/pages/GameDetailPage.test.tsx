@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Link, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -276,15 +276,47 @@ describe("GameDetailPage", () => {
     );
 
     expect(await screen.findByText("狼人阵营")).toBeInTheDocument();
+    expect(screen.getByTestId("app-top-nav")).toBeInTheDocument();
+    expect(screen.getByTestId("app-logo-placeholder")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
+      "href",
+      "/games",
+    );
+    expect(screen.getByRole("link", { name: "返回大厅" })).toHaveAttribute(
+      "href",
+      "/games",
+    );
+    expect(
+      screen.getByRole("button", { name: "刷新复盘" }),
+    ).toBeInTheDocument();
     const pageMain = container.querySelector("main");
     expect(container.querySelectorAll("main")).toHaveLength(1);
     expect(pageMain).toHaveClass(
-      "max-w-7xl",
+      "max-w-none",
       "grid",
-      "lg:grid-cols-[18rem_minmax(0,1fr)_22rem]",
+      "lg:grid-cols-[20rem_minmax(0,1fr)_22rem]",
     );
+    expect(pageMain).not.toHaveClass("max-w-7xl");
     expect(await screen.findByText("无神职心理局")).toBeInTheDocument();
     expect(screen.getByText("2 狼人 / 6 村民")).toBeInTheDocument();
+    const roster = screen.getByTestId("player-roster-panel");
+    expect(
+      within(roster).getByRole("heading", { name: "玩家列表（2人局）" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("player-roster-row-张三")).toHaveAttribute(
+      "data-roster-state",
+      "alive",
+    );
+    expect(screen.getByTestId("player-roster-row-李四")).toHaveAttribute(
+      "data-roster-state",
+      "dead",
+    );
+    expect(
+      within(screen.getByTestId("player-roster-row-张三")).getByText("狼人"),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("player-roster-row-李四")).getByText("死亡"),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("张三").length).toBeGreaterThan(0);
     expect(
       screen.getByRole("heading", { name: "第 1 轮" }),

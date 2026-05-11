@@ -28,7 +28,7 @@ export function RuleSetSummary({ ruleSet }: RuleSetSummaryProps) {
 
   return (
     <section
-      className="rounded-lg border border-amber-500/20 bg-slate-950/60 p-4 text-slate-100 shadow-[0_18px_50px_rgba(0,0,0,0.24)] backdrop-blur-xl"
+      className="rule-set-summary rounded-lg border border-amber-500/20 bg-slate-950/60 p-4 text-slate-100 shadow-[0_18px_50px_rgba(0,0,0,0.24)] backdrop-blur-xl"
       data-testid="rule-set-summary"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">

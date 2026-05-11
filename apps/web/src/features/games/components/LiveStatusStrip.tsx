@@ -37,7 +37,7 @@ export function LiveStatusStrip({
 
   return (
     <div
-      className="flex flex-wrap items-center gap-3 border-b border-amber-500/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-300 backdrop-blur-xl"
+      className="live-status-strip flex flex-wrap items-center gap-3 border-b border-amber-500/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-300 backdrop-blur-xl"
       data-testid="live-status-strip"
     >
       <Badge color={run.status === "failed" ? "red" : "amber"} variant="surface">

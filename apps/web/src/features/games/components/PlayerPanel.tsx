@@ -1,75 +1,107 @@
-import { Badge, Callout, Card } from "@radix-ui/themes";
-import type { BadgeProps } from "@radix-ui/themes";
+import { Callout } from "@radix-ui/themes";
 
-import type { GameReplay, RawPlayer } from "../types";
+import type { GameReplay } from "../types";
+import {
+  PlayerRosterPanel,
+  type PlayerRosterItem,
+} from "./PlayerRosterPanel";
 
 type PlayerPanelProps = {
   game: GameReplay;
 };
 
-const ROLE_COLORS: Record<string, BadgeProps["color"]> = {
-  werewolf: "red",
-  狼人: "red",
-  villager: "gray",
-  村民: "gray",
-  seer: "violet",
-  预言家: "violet",
-  doctor: "green",
-  守卫: "green",
-  医生: "green",
-  女巫: "pink",
-  猎人: "orange",
-  白痴: "cyan",
-};
-
 export function PlayerPanel({ game }: PlayerPanelProps) {
-  return (
-    <Card asChild size="1">
-      <aside>
-      <div className="space-y-3 border-b border-slate-200 px-4 py-4">
-        <p className="break-all font-mono text-xs text-slate-500">
-          {game.sessionId}
-        </p>
-        <div>
-          <p className="text-xs font-medium text-slate-500">场次胜者</p>
-          <p className="text-lg font-semibold text-slate-950">
-            {game.winner || "未决出"}
-          </p>
-        </div>
-        <p className="text-sm text-slate-600">{game.rounds.length} 轮</p>
-        {game.errorMessage ? (
-          <Callout.Root color="red" size="1" variant="soft">
-            <Callout.Text>{game.errorMessage}</Callout.Text>
-          </Callout.Root>
-        ) : null}
-      </div>
+  const deadPlayers = deadPlayerNames(game);
+  const sheriffName = currentSheriffName(game);
+  const rosterPlayers = game.players.map<PlayerRosterItem>((player, index) => {
+    const isDead = deadPlayers.has(player.name);
 
-      <div className="divide-y divide-slate-100">
-        {game.players.map((player) => (
-          <PlayerRow key={player.name} player={player} />
-        ))}
-      </div>
-      </aside>
-    </Card>
+    return {
+      seatNumber: index + 1,
+      name: player.name,
+      role: player.role,
+      model: player.model,
+      state: isDead ? "dead" : "alive",
+      statusLabel: isDead ? "死亡" : "存活",
+      isSheriff: player.is_sheriff || player.name === sheriffName,
+    };
+  });
+
+  return (
+    <PlayerRosterPanel
+      meta={
+        <div className="space-y-2 text-xs text-slate-400">
+          <p className="break-all font-mono text-[11px] text-slate-500">
+          {game.sessionId}
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-md bg-emerald-400/10 px-2 py-0.5 font-semibold text-emerald-200">
+              <span>胜者：</span>
+              <span>{game.winner || "未决出"}</span>
+            </span>
+            <span className="rounded-md bg-slate-800 px-2 py-0.5">
+              {game.rounds.length} 轮
+            </span>
+          </div>
+          {game.errorMessage ? (
+            <Callout.Root color="red" size="1" variant="soft">
+              <Callout.Text>{game.errorMessage}</Callout.Text>
+            </Callout.Root>
+          ) : null}
+        </div>
+      }
+      players={rosterPlayers}
+    />
   );
 }
 
-function PlayerRow({ player }: { player: RawPlayer }) {
-  const roleColor = ROLE_COLORS[player.role] ?? "amber";
+function deadPlayerNames(game: GameReplay) {
+  const deadPlayers = new Set<string>();
 
-  return (
-    <div className="px-4 py-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-sm font-medium text-slate-950">
-          {player.name}
-        </p>
-        <Badge color={roleColor} variant="surface">
-          {player.role}
-        </Badge>
-      </div>
-      <p className="mt-1 break-all font-mono text-xs text-slate-500">
-        {player.model}
-      </p>
-    </div>
-  );
+  for (const round of game.rounds) {
+    if (round.eliminated && round.eliminated !== round.protected) {
+      deadPlayers.add(round.eliminated);
+    }
+    if (round.exiled) {
+      deadPlayers.add(round.exiled);
+    }
+    if (round.poisoned) {
+      deadPlayers.add(round.poisoned);
+    }
+    if (round.hunter_shot) {
+      deadPlayers.add(round.hunter_shot);
+    }
+    if (round.werewolf_self_exploded) {
+      deadPlayers.add(round.werewolf_self_exploded);
+    }
+    for (const death of [...round.night_deaths, ...round.day_deaths]) {
+      deadPlayers.add(death.player);
+    }
+  }
+
+  return deadPlayers;
+}
+
+function currentSheriffName(game: GameReplay) {
+  if (game.sheriff && !game.sheriffBadgeLost) {
+    return game.sheriff;
+  }
+
+  for (let index = game.rounds.length - 1; index >= 0; index -= 1) {
+    const round = game.rounds[index];
+    if (round.sheriff_badge_lost) {
+      return null;
+    }
+    if (round.sheriff_badge_target) {
+      return round.sheriff_badge_target;
+    }
+    if (round.sheriff_elected) {
+      return round.sheriff_elected;
+    }
+    if (round.sheriff) {
+      return round.sheriff;
+    }
+  }
+
+  return null;
 }

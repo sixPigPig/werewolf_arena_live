@@ -1,8 +1,9 @@
-import { Callout, Text } from "@radix-ui/themes";
+import { Button, Callout, Text } from "@radix-ui/themes";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { AppTopNav } from "../app/AppTopNav";
 import { getGameDetail } from "../features/games/api/getGameDetail";
 import { DebugPanel } from "../features/games/components/DebugPanel";
 import { GameLayout } from "../features/games/components/GameLayout";
@@ -17,27 +18,50 @@ export function GameDetailPage() {
     sessionId: string;
   } | null>(null);
 
-  const { data, isError, isPending } = useQuery({
+  const { data, isError, isFetching, isPending, refetch } = useQuery({
     queryKey: ["games", sessionId],
     queryFn: () => getGameDetail(sessionId!),
     enabled: Boolean(sessionId),
   });
+  const topNav = (
+    <AppTopNav
+      actions={
+        <Button
+          color="gray"
+          disabled={isFetching}
+          loading={isFetching && !isPending}
+          onClick={() => void refetch()}
+          type="button"
+          variant="surface"
+        >
+          刷新复盘
+        </Button>
+      }
+      showLobbyBack
+    />
+  );
 
   if (isPending) {
     return (
-      <main className="mx-auto w-full max-w-4xl px-4 py-8">
-        <Text color="gray" size="2">正在读取对局...</Text>
-      </main>
+      <>
+        {topNav}
+        <main className="mx-auto w-full max-w-none px-4 py-8">
+          <Text color="gray" size="2">正在读取对局...</Text>
+        </main>
+      </>
     );
   }
 
   if (isError || !data) {
     return (
-      <main className="mx-auto w-full max-w-4xl px-4 py-8">
-        <Callout.Root color="red" size="1" variant="soft">
-          <Callout.Text>无法读取该对局</Callout.Text>
-        </Callout.Root>
-      </main>
+      <>
+        {topNav}
+        <main className="mx-auto w-full max-w-none px-4 py-8">
+          <Callout.Root color="red" size="1" variant="soft">
+            <Callout.Text>无法读取该对局</Callout.Text>
+          </Callout.Root>
+        </main>
+      </>
     );
   }
 
@@ -51,23 +75,26 @@ export function GameDetailPage() {
     null;
 
   return (
-    <GameLayout
-      debug={<DebugPanel item={visibleSelectedItem} />}
-      header={<RuleSetSummary ruleSet={data.ruleSet} />}
-      players={<PlayerPanel game={data} />}
-      timeline={
-        <RoundTimeline
-          debugItems={data.debugItems}
-          onSelect={(item) =>
-            setSelection({ itemId: item.id, sessionId: data.sessionId })
-          }
-          players={data.players}
-          ruleSet={data.ruleSet}
-          rounds={data.rounds}
-          selectedItem={visibleSelectedItem}
-          winner={data.winner}
-        />
-      }
-    />
+    <>
+      {topNav}
+      <GameLayout
+        debug={<DebugPanel item={visibleSelectedItem} />}
+        header={<RuleSetSummary ruleSet={data.ruleSet} />}
+        players={<PlayerPanel game={data} />}
+        timeline={
+          <RoundTimeline
+            debugItems={data.debugItems}
+            onSelect={(item) =>
+              setSelection({ itemId: item.id, sessionId: data.sessionId })
+            }
+            players={data.players}
+            ruleSet={data.ruleSet}
+            rounds={data.rounds}
+            selectedItem={visibleSelectedItem}
+            winner={data.winner}
+          />
+        }
+      />
+    </>
   );
 }
