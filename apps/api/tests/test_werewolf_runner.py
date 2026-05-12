@@ -360,7 +360,6 @@ class TargetedInvestigationProvider(ScriptedChineseProvider):
         self.remove_target = remove_target
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, temperature
         if '"remove"' in prompt:
             return json.dumps(
                 {"reasoning": "测试狼人夜晚袭击。", "remove": self.remove_target},

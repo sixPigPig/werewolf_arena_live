@@ -101,7 +101,17 @@ export function useGameRunEvents(runId: string | undefined) {
       if (!isActive) {
         return;
       }
-      const event = JSON.parse(message.data) as LiveGameEvent;
+      let event: LiveGameEvent;
+      try {
+        event = JSON.parse(message.data) as LiveGameEvent;
+      } catch {
+        setStreamState((current) =>
+          current.runId === runId
+            ? { ...current, connectionState: "error" }
+            : current,
+        );
+        return;
+      }
       const isTerminalEvent =
         event.type === "game_completed" || event.type === "game_failed";
       setStreamState((current) => {

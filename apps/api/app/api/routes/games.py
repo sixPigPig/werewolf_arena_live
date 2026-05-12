@@ -3,7 +3,7 @@ import queue
 import threading
 from typing import Annotated, Any, Iterator
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -111,12 +111,18 @@ def get_game_run(
 def stream_game_run_events(
     run_id: str,
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
+    after_id: Annotated[int | None, Query(ge=0)] = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> StreamingResponse:
     if registry.try_get_run(run_id) is None:
         raise HTTPException(status_code=404, detail="Game run not found")
 
     return StreamingResponse(
-        _event_stream(registry, run_id),
+        _event_stream(
+            registry,
+            run_id,
+            after_id=_resolve_event_resume_id(after_id, last_event_id),
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
@@ -286,9 +292,14 @@ class PacedEventSink:
         )
 
 
-def _event_stream(registry: LiveRunRegistry, run_id: str) -> Iterator[str]:
-    last_event_id: int | None = None
-    for event in registry.events_after(run_id, after_id=None):
+def _event_stream(
+    registry: LiveRunRegistry,
+    run_id: str,
+    *,
+    after_id: int | None = None,
+) -> Iterator[str]:
+    last_event_id = after_id
+    for event in registry.events_after(run_id, after_id=after_id):
         last_event_id = event.id
         yield format_sse(event)
         if _is_terminal_event(event):
@@ -314,3 +325,17 @@ def _event_stream(registry: LiveRunRegistry, run_id: str) -> Iterator[str]:
 
 def _is_terminal_event(event: LiveEvent) -> bool:
     return event.type in {"game_completed", "game_failed"}
+
+
+def _resolve_event_resume_id(
+    after_id: int | None,
+    last_event_id: str | None,
+) -> int | None:
+    if after_id is not None:
+        return after_id
+    if last_event_id is None:
+        return None
+    try:
+        return int(last_event_id)
+    except ValueError:
+        return None

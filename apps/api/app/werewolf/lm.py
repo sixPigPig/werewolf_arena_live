@@ -168,7 +168,7 @@ def generate_action_with_events(
                 request_id=request_id,
                 progress=progress,
             )
-        except Exception as exc:
+        except Exception:
             progress.stop()
             progress_stopped = True
             _publish_model_event(

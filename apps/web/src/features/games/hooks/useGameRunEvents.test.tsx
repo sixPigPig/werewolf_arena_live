@@ -30,6 +30,12 @@ class MockEventSource {
     this.listeners.get(type)?.(event);
     this.onmessage?.(event);
   }
+
+  emitRaw(type: string, data: string) {
+    const event = new MessageEvent(type, { data });
+    this.listeners.get(type)?.(event);
+    this.onmessage?.(event);
+  }
 }
 
 describe("useGameRunEvents", () => {
@@ -227,5 +233,37 @@ describe("useGameRunEvents", () => {
       "model_response_delta",
       "model_thinking_tick",
     ]);
+  });
+
+  it("keeps prior events and reports an error when a stream event is malformed", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const { result } = renderHook(() => useGameRunEvents("run_1234abcd"));
+    const source = MockEventSource.instances[0];
+    act(() => {
+      source.onopen?.();
+      source.emit("game_started", {
+        id: 1,
+        type: "game_started",
+        run_id: "run_1234abcd",
+        session_id: "session_20260424_120000_ab12cd34",
+        created_at: "2026-04-24T12:00:00Z",
+        round: null,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: { players: [] },
+      });
+    });
+
+    await waitFor(() => expect(result.current.events).toHaveLength(1));
+
+    act(() => {
+      source.emitRaw("round_started", "{not-json");
+    });
+
+    await waitFor(() => expect(result.current.connectionState).toBe("error"));
+    expect(result.current.events).toHaveLength(1);
+    expect(result.current.latestEvent?.type).toBe("game_started");
   });
 });

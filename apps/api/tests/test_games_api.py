@@ -482,6 +482,87 @@ def test_game_run_events_replays_existing_events() -> None:
     assert "event: game_completed" in body
 
 
+def test_game_run_events_honors_after_id_query() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="session_20260424_120000_ab12cd34",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+        rule_set_id="classic_8",
+        rule_set={
+            "id": "classic_8",
+            "version": "2026.04",
+            "name": "经典 8 人局",
+            "player_count": 8,
+            "roles": [],
+        },
+    )
+    registry.publish(run.run_id, "game_started", payload={"players": []})
+    registry.publish(run.run_id, "round_started", round_number=1, payload={"round": 1})
+    registry.mark_completed(run.run_id, winner="狼人阵营")
+    override_live_registry(registry)
+
+    try:
+        response = client.get(f"/api/v1/games/runs/{run.run_id}/events?after_id=2")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    body = response.text
+    assert "id: 1" not in body
+    assert "id: 2" not in body
+    assert "event: run_created" not in body
+    assert "event: game_started" not in body
+    assert "id: 3" in body
+    assert "event: round_started" in body
+    assert "id: 4" in body
+    assert "event: game_completed" in body
+
+
+def test_game_run_events_honors_last_event_id_header() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="session_20260424_120000_ab12cd34",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+        rule_set_id="classic_8",
+        rule_set={
+            "id": "classic_8",
+            "version": "2026.04",
+            "name": "经典 8 人局",
+            "player_count": 8,
+            "roles": [],
+        },
+    )
+    registry.publish(run.run_id, "game_started", payload={"players": []})
+    registry.publish(run.run_id, "round_started", round_number=1, payload={"round": 1})
+    registry.mark_completed(run.run_id, winner="狼人阵营")
+    override_live_registry(registry)
+
+    try:
+        response = client.get(
+            f"/api/v1/games/runs/{run.run_id}/events",
+            headers={"Last-Event-ID": "2"},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    body = response.text
+    assert "id: 1" not in body
+    assert "id: 2" not in body
+    assert "event: run_created" not in body
+    assert "event: game_started" not in body
+    assert "id: 3" in body
+    assert "event: round_started" in body
+    assert "id: 4" in body
+    assert "event: game_completed" in body
+
+
 def test_list_games_returns_complete_and_partial_sessions(tmp_path: Path) -> None:
     complete_id = "session_20260424_050950_66ea9f38"
     partial_id = "session_20260424_060000_abcd1234"

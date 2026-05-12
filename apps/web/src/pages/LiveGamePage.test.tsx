@@ -1014,6 +1014,9 @@ describe("LiveGamePage", () => {
 
   it("reuses each run's first terminal-start decision when switching routes", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const fetch = vi.spyOn(globalThis, "fetch");
     const runAFetches: string[] = [];
     fetch.mockImplementation((input) => {
@@ -1121,6 +1124,9 @@ describe("LiveGamePage", () => {
       screen.queryByRole("heading", { name: "对局完成" }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
+    expect(consoleError.mock.calls.flat().join("\n")).not.toContain(
+      "Cannot update a component",
+    );
   });
 
   it("keeps the director stage paused until users catch up to the latest key event", async () => {
