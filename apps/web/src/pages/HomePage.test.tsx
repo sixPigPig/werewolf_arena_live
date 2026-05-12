@@ -25,9 +25,14 @@ describe("HomePage", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByTestId("app-top-nav")).toHaveClass(
+      "fixed",
+      "inset-x-0",
+      "top-0",
+      "z-50",
       "h-[56px]",
       "min-h-[56px]",
     );
+    expect(document.querySelector(".site-content-layer")).toHaveClass("pt-14");
     expect(screen.getByTestId("app-logo-placeholder")).toHaveClass(
       "h-12",
       "w-12",

@@ -30,9 +30,10 @@ export function AppTopNav({
     tone === "nocturne"
       ? "border-amber-500/20 text-amber-50 shadow-[0_18px_55px_rgba(0,0,0,0.36)]"
       : "border-slate-800 text-slate-50 shadow-[0_12px_40px_rgba(15,23,42,0.18)]";
+  const fixedTopClass = "fixed inset-x-0 top-0 z-50";
   const headerClass = isCommand
-    ? "app-top-nav live-command-nav h-[56px] min-h-[56px] w-full border-b border-amber-500/20 text-amber-50"
-    : `app-top-nav h-[56px] min-h-[56px] w-full border-b backdrop-blur-xl ${toneClass}`;
+    ? `app-top-nav live-command-nav ${fixedTopClass} h-[56px] min-h-[56px] w-full border-b border-amber-500/20 text-amber-50`
+    : `app-top-nav ${fixedTopClass} h-[56px] min-h-[56px] w-full border-b backdrop-blur-xl ${toneClass}`;
   const innerClass = isCommand
     ? "app-top-nav-inner live-command-nav-inner mx-auto flex h-full w-full max-w-none flex-row items-center justify-between gap-3 overflow-x-auto rounded-none px-3 shadow-[0_18px_55px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-xl"
     : "app-top-nav-inner mx-auto flex h-full w-full max-w-none flex-row items-center justify-between gap-3 px-3";
