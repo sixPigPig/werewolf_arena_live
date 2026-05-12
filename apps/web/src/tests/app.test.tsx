@@ -30,18 +30,25 @@ describe("App", () => {
     );
   }
 
-  it("routes the root path to the replay workbench", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ sessions: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+  it("routes the root path to the game lobby", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ rule_sets: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
 
     renderRoute(["/"]);
 
     expect(
-      await screen.findByRole("heading", { name: "狼人杀对局复盘" }),
+      await screen.findByRole("heading", { name: "狼人杀对局大厅" }),
     ).toBeInTheDocument();
     expect(document.querySelector(".app-theme")).toBeInTheDocument();
     expect(document.querySelector(".app-theme")?.className).not.toContain(
@@ -55,6 +62,35 @@ describe("App", () => {
     expect(screen.getByTestId("site-background").getAttribute("style")).toContain(
       "werewolf-site-background",
     );
+  });
+
+  it("routes the game history path to the history page", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          sessions: [
+            {
+              session_id: "session_history_route",
+              status: "complete",
+              winner: "狼人阵营",
+              round_count: 4,
+              created_at: "2026-04-24T10:00:00Z",
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    renderRoute(["/games/history"]);
+
+    expect(
+      await screen.findByRole("heading", { name: "对局历史" }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("session_history_route")).toBeInTheDocument();
   });
 
   it("routes a game session path to the replay detail", async () => {
