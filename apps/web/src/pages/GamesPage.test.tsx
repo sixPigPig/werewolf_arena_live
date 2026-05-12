@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -162,17 +162,68 @@ describe("GamesPage", () => {
     );
     expect(await screen.findByText("session_20260424_001")).toBeInTheDocument();
     expect(screen.getByText("狼人阵营")).toBeInTheDocument();
-    expect(screen.getByText("快速少人局")).toBeInTheDocument();
+    const officialRuleCards = screen.getByRole("radiogroup", {
+      name: "官方规则",
+    });
+    expect(
+      within(officialRuleCards).getByLabelText("经典 8 人局"),
+    ).toBeInTheDocument();
+    expect(
+      within(officialRuleCards).getByLabelText("新手 6 人快局"),
+    ).toBeInTheDocument();
+    expect(
+      within(officialRuleCards).getByLabelText("标准 12 人警长局"),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("无警长")[0]).toBeInTheDocument();
     expect(screen.getAllByText("顺序发言")[0]).toBeInTheDocument();
-    expect(
-      screen.getByRole("radiogroup", { name: "快速少人局" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("标准警长局")).toBeInTheDocument();
-    expect(
-      screen.getByRole("radiogroup", { name: "标准警长局" }),
-    ).toBeInTheDocument();
     expect(screen.getByText("警徽 1.5 票")).toBeInTheDocument();
+  });
+
+  it("shows the selected rule details below the official rule cards", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(<GamesPage />, "/games");
+
+    const initialDetails = within(
+      await screen.findByTestId("selected-rule-details"),
+    );
+    expect(
+      initialDetails.getByRole("heading", { name: "经典 8 人局规则" }),
+    ).toBeInTheDocument();
+    expect(initialDetails.getByText("阵营配置")).toBeInTheDocument();
+    expect(
+      initialDetails.getByText("2 狼人 / 4 村民 / 1 预言家 / 1 守卫"),
+    ).toBeInTheDocument();
+    expect(initialDetails.getByText("无警长")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText("标准 12 人警长局"));
+
+    const updatedDetails = within(screen.getByTestId("selected-rule-details"));
+    expect(
+      updatedDetails.getByRole("heading", { name: "标准 12 人警长局规则" }),
+    ).toBeInTheDocument();
+    expect(
+      updatedDetails.getByText(
+        "4 狼人 / 4 村民 / 1 预言家 / 1 女巫 / 1 猎人 / 1 白痴",
+      ),
+    ).toBeInTheDocument();
+    expect(updatedDetails.getByText("有警长，警徽 1.5 票")).toBeInTheDocument();
   });
 
   it("resumes a resumable session from the list", async () => {
