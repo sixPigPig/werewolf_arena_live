@@ -1,9 +1,11 @@
-import { Badge } from "@radix-ui/themes";
+import { Badge } from "../../../components/ui";
+import { withGlassPanel } from "../../../components/ui/glass";
 
 import type { RuleSetSummary as RuleSetSummaryType } from "../types";
 
 type RuleSetSummaryProps = {
   ruleSet?: RuleSetSummaryType | null;
+  variant?: "panel" | "nav";
 };
 
 const FALLBACK_RULE: RuleSetSummaryType = {
@@ -20,25 +22,53 @@ const FALLBACK_RULE: RuleSetSummaryType = {
   role_summary: "2 狼人 / 1 预言家 / 1 守卫 / 4 村民",
 };
 
-export function RuleSetSummary({ ruleSet }: RuleSetSummaryProps) {
+export function RuleSetSummary({
+  ruleSet,
+  variant = "panel",
+}: RuleSetSummaryProps) {
   const rule = ruleSet ?? FALLBACK_RULE;
   const roleSummary =
     rule.role_summary ??
     rule.roles.map((role) => `${role.count} ${role.role}`).join(" / ");
+  const isNav = variant === "nav";
 
   return (
     <section
-      className="rule-set-summary rounded-lg border border-amber-500/20 bg-slate-950/60 p-4 text-slate-100 shadow-[0_18px_50px_rgba(0,0,0,0.24)] backdrop-blur-xl"
+      className={
+        isNav
+          ? "rule-set-summary live-command-rule-summary flex min-w-0 shrink-0 flex-nowrap items-center gap-x-3 text-slate-100"
+          : withGlassPanel("rule-set-summary rounded-lg p-4 text-slate-100")
+      }
       data-testid="rule-set-summary"
     >
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h2 className="text-sm font-semibold text-amber-50">{rule.name}</h2>
-        <span className="text-xs text-amber-200/70">v{rule.version}</span>
-        <span className="text-xs text-teal-100/70">
-          {rule.player_count} 人
+      <div
+        className={`flex items-center gap-x-3 ${
+          isNav ? "min-w-0" : ""
+        }`}
+      >
+        <h2
+          className={
+            isNav
+              ? "max-w-[13rem] truncate text-sm font-semibold text-amber-50"
+              : "text-sm font-semibold text-amber-50"
+          }
+        >
+          {rule.name}
+        </h2>
+        <span className="text-xs font-semibold text-amber-300/85">
+          v{rule.version}
         </span>
+        <span className="text-xs text-teal-100/70">{rule.player_count} 人</span>
       </div>
-      <p className="mt-1 text-sm text-slate-300">{roleSummary}</p>
+      <p
+        className={
+          isNav
+            ? "sr-only"
+            : "mt-1 text-sm text-slate-300"
+        }
+      >
+        {roleSummary}
+      </p>
       {rule.rule_tags && rule.rule_tags.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {rule.rule_tags.map((tag) => (

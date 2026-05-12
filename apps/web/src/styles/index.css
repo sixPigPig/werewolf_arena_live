@@ -2,8 +2,14 @@
 
 :root {
   color: #e2e8f0;
-  background: #020617;
   font-family: "Inter", "Segoe UI", sans-serif;
+}
+
+html,
+body,
+#root,
+.app-theme {
+  background: transparent;
 }
 
 body {
@@ -14,6 +20,48 @@ body {
 
 #root {
   min-height: 100vh;
+}
+
+.glass-panel {
+  background:
+    linear-gradient(135deg, rgb(2 6 23 / 22%), rgb(15 23 42 / 10%));
+  backdrop-filter: blur(2px) saturate(120%);
+}
+
+.glass-panel-subtle {
+  background:
+    linear-gradient(135deg, rgb(2 6 23 / 16%), rgb(15 23 42 / 8%));
+  backdrop-filter: blur(10px) saturate(115%);
+}
+
+.site-content-layer .text-slate-950,
+.site-content-layer .text-slate-900,
+.site-content-layer .text-slate-800,
+.site-content-layer .text-slate-700 {
+  color: #f8fafc;
+}
+
+.site-content-layer .text-slate-600,
+.site-content-layer .text-slate-500 {
+  color: #cbd5e1;
+}
+
+.site-content-layer .border-slate-200 {
+  border-color: rgb(226 232 240 / 24%);
+}
+
+.site-content-layer .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgb(226 232 240 / 22%);
+}
+
+.site-content-layer .bg-slate-50,
+.site-content-layer .bg-slate-100,
+.site-content-layer .bg-slate-950,
+.site-content-layer .bg-emerald-50,
+.site-content-layer .hover\:bg-slate-50:hover {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
 }
 
 @media (orientation: landscape) and (max-height: 820px) {
@@ -163,7 +211,8 @@ body {
     gap: 0.35rem;
   }
 
-  .app-top-nav-actions .rt-Button {
+  .app-top-nav-actions button,
+  .app-top-nav-actions a {
     min-height: 2rem;
     padding-inline: 0.75rem;
     font-size: 0.75rem;

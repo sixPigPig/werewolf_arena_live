@@ -1,4 +1,4 @@
-import { Badge, Table } from "@radix-ui/themes";
+import { Badge, Table } from "../../../components/ui";
 
 import type { VoteEntry, VoteTallyEntry } from "../types";
 

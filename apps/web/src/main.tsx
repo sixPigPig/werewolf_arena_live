@@ -1,7 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import ReactDOM from "react-dom/client";
-import "@radix-ui/themes/styles.css";
 
 import { App } from "./app/App";
 import { AppTheme } from "./app/AppTheme";

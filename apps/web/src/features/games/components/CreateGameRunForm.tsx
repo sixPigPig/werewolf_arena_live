@@ -5,10 +5,10 @@ import {
   Card,
   Flex,
   RadioCards,
-  Select,
+  SelectField,
   Text,
   TextField,
-} from "@radix-ui/themes";
+} from "../../../components/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -86,6 +86,8 @@ export function CreateGameRunForm() {
   return (
     <Card asChild size="2">
       <form
+        className="games-create-module"
+        data-testid="games-create-module"
         noValidate
         onSubmit={(event) => {
           event.preventDefault();
@@ -188,17 +190,17 @@ export function CreateGameRunForm() {
         </label>
         <div className="flex flex-1 flex-col gap-1 text-sm font-medium text-slate-700">
           <span id="event-pacing-label">演示慢速</span>
-          <Select.Root
+          <SelectField
+            aria-labelledby="event-pacing-label"
             value={eventPacing}
-            onValueChange={(value) => setEventPacing(value as EventPacingMode)}
+            onChange={(event) =>
+              setEventPacing(event.target.value as EventPacingMode)
+            }
           >
-            <Select.Trigger aria-labelledby="event-pacing-label" />
-            <Select.Content>
-              <Select.Item value="off">关闭</Select.Item>
-              <Select.Item value="standard">标准演示</Select.Item>
-              <Select.Item value="slow">慢速讲解</Select.Item>
-            </Select.Content>
-          </Select.Root>
+            <option value="off">关闭</option>
+            <option value="standard">标准演示</option>
+            <option value="slow">慢速讲解</option>
+          </SelectField>
         </div>
         <Button
           disabled={isSubmitDisabled}

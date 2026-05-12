@@ -121,8 +121,21 @@ describe("GamesPage", () => {
     expect(
       screen.getByRole("heading", { name: "狼人杀对局复盘" }),
     ).toBeInTheDocument();
-    expect(screen.getByTestId("app-top-nav")).toBeInTheDocument();
-    expect(screen.getByTestId("app-logo-placeholder")).toBeInTheDocument();
+    expect(screen.getByTestId("app-top-nav")).toHaveClass(
+      "h-[56px]",
+      "min-h-[56px]",
+    );
+    expect(screen.getByTestId("app-logo-placeholder")).toHaveClass(
+      "h-12",
+      "w-12",
+    );
+    expect(screen.getByTestId("app-logo-image")).toHaveClass(
+      "h-full",
+      "w-full",
+    );
+    expect(screen.getByTestId("app-logo-image").getAttribute("src")).toContain(
+      "langrensha-c-logo",
+    );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
       "href",
       "/games",
@@ -136,7 +149,17 @@ describe("GamesPage", () => {
       "max-w-none",
       "w-full",
     );
+    expect(container.querySelector("main")?.className).not.toContain("bg-");
     expect(container.querySelector("main")).not.toHaveClass("max-w-4xl");
+    expect(screen.getByTestId("games-workspace-module")).toHaveClass(
+      "games-workspace-module",
+    );
+    expect(screen.getByTestId("games-create-module")).toHaveClass(
+      "glass-panel",
+    );
+    expect(screen.getByTestId("games-sessions-module")).toHaveClass(
+      "glass-panel",
+    );
     expect(await screen.findByText("session_20260424_001")).toBeInTheDocument();
     expect(screen.getByText("狼人阵营")).toBeInTheDocument();
     expect(screen.getByText("快速少人局")).toBeInTheDocument();
@@ -458,10 +481,10 @@ describe("GamesPage", () => {
       "/games",
     );
 
-    await userEvent.click(
+    await userEvent.selectOptions(
       await screen.findByRole("combobox", { name: "演示慢速" }),
+      "standard",
     );
-    await userEvent.click(screen.getByRole("option", { name: "标准演示" }));
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
 
     expect(fetchSpy).toHaveBeenCalledWith(

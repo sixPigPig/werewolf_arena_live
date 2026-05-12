@@ -1,4 +1,4 @@
-import { Button, Callout, Heading } from "@radix-ui/themes";
+import { Button } from "../components/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -6,8 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { AppTopNav } from "../app/AppTopNav";
 import { listGames } from "../features/games/api/listGames";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
-import { CreateGameRunForm } from "../features/games/components/CreateGameRunForm";
-import { SessionList } from "../features/games/components/SessionList";
+import { GamesWorkspace } from "./components/GamesWorkspace";
 
 export function GamesPage() {
   const navigate = useNavigate();
@@ -53,50 +52,27 @@ export function GamesPage() {
               disabled={isFetching}
               loading={isFetching && !isPending}
               onClick={() => void refetch()}
+              size="1"
               type="button"
               variant="surface"
             >
               刷新列表
             </Button>
-            <Button highContrast onClick={focusCreateForm} type="button">
+            <Button highContrast onClick={focusCreateForm} size="1" type="button">
               新建对局
             </Button>
           </>
         }
       />
-      <main className="mx-auto w-full max-w-none px-4 py-8">
-        <Heading as="h1" size="6">狼人杀对局复盘</Heading>
-
-        <div className="mt-6" ref={createFormRef}>
-          <CreateGameRunForm />
-        </div>
-
-        <div className="mt-6">
-          {isPending ? (
-            <p className="text-sm text-slate-600">正在读取对局列表...</p>
-          ) : isError ? (
-            <p className="text-sm text-red-700">无法读取对局列表</p>
-          ) : data ? (
-            <>
-              <SessionList
-                onResumeSession={(sessionId) => resumeMutation.mutate(sessionId)}
-                resumingSessionId={resumingSessionId}
-                sessions={data.sessions}
-              />
-              {resumeMutation.isError ? (
-                <Callout.Root
-                  className="mt-2"
-                  color="red"
-                  size="1"
-                  variant="soft"
-                >
-                  <Callout.Text>无法继续对局</Callout.Text>
-                </Callout.Root>
-              ) : null}
-            </>
-          ) : null}
-        </div>
-      </main>
+      <GamesWorkspace
+        createFormRef={createFormRef}
+        data={data}
+        isError={isError}
+        isPending={isPending}
+        isResumeError={resumeMutation.isError}
+        onResumeSession={(sessionId) => resumeMutation.mutate(sessionId)}
+        resumingSessionId={resumingSessionId}
+      />
     </>
   );
 }

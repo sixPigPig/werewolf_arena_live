@@ -1,4 +1,4 @@
-import { Callout } from "@radix-ui/themes";
+import { Callout } from "../../../components/ui";
 
 import type { GameReplay } from "../types";
 import {

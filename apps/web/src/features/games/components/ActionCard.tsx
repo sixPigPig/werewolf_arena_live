@@ -1,4 +1,4 @@
-import { Flex, RadioCards, Text } from "@radix-ui/themes";
+import { Flex, RadioCards, Text } from "../../../components/ui";
 import type { ComponentProps } from "react";
 
 import type { DebugItem } from "../types";

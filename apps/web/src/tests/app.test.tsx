@@ -43,7 +43,18 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "狼人杀对局复盘" }),
     ).toBeInTheDocument();
-    expect(document.querySelector(".radix-themes")).toBeInTheDocument();
+    expect(document.querySelector(".app-theme")).toBeInTheDocument();
+    expect(document.querySelector(".app-theme")?.className).not.toContain(
+      "bg-",
+    );
+    expect(screen.getByTestId("site-background")).toHaveClass(
+      "fixed",
+      "inset-0",
+      "bg-cover",
+    );
+    expect(screen.getByTestId("site-background").getAttribute("style")).toContain(
+      "werewolf-site-background",
+    );
   });
 
   it("routes a game session path to the replay detail", async () => {

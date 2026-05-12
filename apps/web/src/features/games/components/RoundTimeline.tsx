@@ -1,4 +1,4 @@
-import { Card, Tabs } from "@radix-ui/themes";
+import { Card, Tabs } from "../../../components/ui";
 import { useMemo, useState } from "react";
 
 import type { DebugItem, GameRound, RawPlayer, RuleSetSummary } from "../types";
@@ -72,7 +72,7 @@ export function RoundTimeline({
             onValueChange={handleRoundChange}
             value={currentRoundValue}
           >
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="border-b border-slate-200 px-4 py-3">
               <Tabs.List
                 aria-label="回放轮次"
                 className="w-full overflow-x-auto"
@@ -142,7 +142,7 @@ function GameConclusion({
   }
 
   return (
-    <section className="bg-emerald-50 px-4 py-5">
+    <section className="px-4 py-5">
       <p className="text-sm font-semibold text-emerald-950">
         场次胜者：{winner}
       </p>

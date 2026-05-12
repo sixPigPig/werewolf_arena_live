@@ -1,4 +1,5 @@
-import { Badge, Switch } from "@radix-ui/themes";
+import { Badge, Switch } from "../../../components/ui";
+import { withGlassPanel } from "../../../components/ui/glass";
 import type { CSSProperties } from "react";
 
 import type { DirectorCue } from "../liveDirector";
@@ -37,18 +38,17 @@ export function LiveDirectorStage({
 
   return (
     <section
-      className={`relative overflow-hidden rounded-lg border border-amber-400/25 bg-[#070b12] text-slate-100 shadow-[0_32px_100px_rgba(0,0,0,0.55)] ${tone.surface}`}
+      className={withGlassPanel(
+        "relative overflow-hidden rounded-lg text-slate-100 shadow-[0_32px_100px_rgba(0,0,0,0.42)]",
+        tone.surface,
+      )}
       data-testid="live-director-stage"
     >
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_18%,rgba(20,184,166,0.16),transparent_30%),radial-gradient(ellipse_at_50%_52%,rgba(180,83,9,0.45),transparent_46%),linear-gradient(180deg,#07131d_0%,#0c1017_46%,#030507_100%)]" />
-      <div className="absolute inset-0 opacity-[0.16] bg-[repeating-linear-gradient(90deg,rgba(251,191,36,0.2)_0_1px,transparent_1px_72px),repeating-linear-gradient(0deg,rgba(45,212,191,0.16)_0_1px,transparent_1px_64px)]" />
-      <div className="absolute inset-x-0 top-0 h-36 bg-[linear-gradient(180deg,rgba(8,13,18,0.08),rgba(8,13,18,0.9)),repeating-linear-gradient(90deg,rgba(148,163,184,0.08)_0_18px,transparent_18px_54px)]" />
-
       <div
         className="relative min-h-[36rem] px-4 py-3 sm:min-h-[38rem] sm:px-6 lg:min-h-[40rem]"
         data-testid="live-director-stage-shell"
       >
-        <div className="relative z-40 mx-auto flex w-fit items-center gap-3 rounded-full border border-amber-300/35 bg-black/45 px-4 py-2 text-sm shadow-[0_0_28px_rgba(245,158,11,0.2)] backdrop-blur-xl">
+        <div className="glass-panel-subtle relative z-40 mx-auto flex w-fit items-center gap-3 rounded-full border border-amber-300/35 px-4 py-2 text-sm shadow-[0_0_28px_rgba(245,158,11,0.2)]">
           <span className="text-slate-400">观赛舞台</span>
           <span className="font-semibold text-amber-200">
             {cue?.round ? `第 ${cue.round} 轮` : "等待回合"}
@@ -65,7 +65,7 @@ export function LiveDirectorStage({
           狼
         </div>
 
-        <div className="absolute left-1/2 top-[51%] z-30 w-[min(24rem,48vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-amber-300/25 bg-slate-950/72 p-3 text-center shadow-[0_24px_68px_rgba(0,0,0,0.48)] backdrop-blur-xl sm:top-[55%] sm:w-[min(30rem,64vw)] sm:p-4">
+        <div className="glass-panel-subtle absolute left-1/2 top-[51%] z-30 w-[min(24rem,48vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-amber-300/25 p-3 text-center shadow-[0_24px_68px_rgba(0,0,0,0.38)] sm:top-[55%] sm:w-[min(30rem,64vw)] sm:p-4">
           <div className="mb-3 flex flex-wrap justify-center gap-2 text-xs">
             {cue ? (
               <>
@@ -90,7 +90,7 @@ export function LiveDirectorStage({
             {title}
           </h2>
           <div
-            className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-amber-300/15 bg-black/25 p-3 text-left text-sm leading-6 text-slate-200 shadow-[inset_0_0_24px_rgba(0,0,0,0.24)] sm:max-h-48 sm:text-base"
+            className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-amber-300/15 p-3 text-left text-sm leading-6 text-slate-200 shadow-[inset_0_0_24px_rgba(0,0,0,0.24)] sm:max-h-48 sm:text-base"
             tabIndex={0}
           >
             {body}
@@ -152,7 +152,7 @@ export function LiveDirectorStage({
                   style={seatStyle(index, players.length)}
                   type="button"
                 >
-                  <span className="mx-auto mb-1 flex h-5 w-5 items-center justify-center rounded-full border border-amber-300/50 bg-slate-950 text-[10px] font-semibold text-amber-100 shadow-md sm:h-7 sm:w-7 sm:text-xs">
+                  <span className="mx-auto mb-1 flex h-5 w-5 items-center justify-center rounded-full border border-amber-300/50 text-[10px] font-semibold text-amber-100 shadow-md sm:h-7 sm:w-7 sm:text-xs">
                     {index + 1}
                   </span>
                   <span
@@ -197,7 +197,7 @@ export function LiveDirectorStage({
                         ? "bg-teal-400/15 text-teal-100 ring-1 ring-teal-200/40"
                         : isLastActive
                           ? "bg-amber-500/15 text-amber-100 ring-1 ring-amber-300/35"
-                        : "bg-black/35 text-slate-300"
+                        : "text-slate-300"
                     }`}
                   >
                     {status}
@@ -208,7 +208,7 @@ export function LiveDirectorStage({
           )}
         </div>
 
-        <div className="absolute inset-x-4 bottom-4 z-40 flex flex-col gap-3 rounded-lg border border-amber-300/20 bg-slate-950/78 p-3 text-sm text-slate-200 shadow-[0_16px_45px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:inset-x-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="glass-panel-subtle absolute inset-x-4 bottom-4 z-40 flex flex-col gap-3 rounded-lg border border-amber-300/20 p-3 text-sm text-slate-200 shadow-[0_16px_45px_rgba(0,0,0,0.24)] sm:inset-x-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <p className="text-xs font-semibold text-amber-200">当前关注</p>
             <p className="mt-1 truncate">

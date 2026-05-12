@@ -276,8 +276,21 @@ describe("GameDetailPage", () => {
     );
 
     expect(await screen.findByText("狼人阵营")).toBeInTheDocument();
-    expect(screen.getByTestId("app-top-nav")).toBeInTheDocument();
-    expect(screen.getByTestId("app-logo-placeholder")).toBeInTheDocument();
+    expect(screen.getByTestId("app-top-nav")).toHaveClass(
+      "h-[56px]",
+      "min-h-[56px]",
+    );
+    expect(screen.getByTestId("app-logo-placeholder")).toHaveClass(
+      "h-12",
+      "w-12",
+    );
+    expect(screen.getByTestId("app-logo-image")).toHaveClass(
+      "h-full",
+      "w-full",
+    );
+    expect(screen.getByTestId("app-logo-image").getAttribute("src")).toContain(
+      "langrensha-c-logo",
+    );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
       "href",
       "/games",
@@ -296,7 +309,13 @@ describe("GameDetailPage", () => {
       "grid",
       "lg:grid-cols-[20rem_minmax(0,1fr)_22rem]",
     );
+    expect(pageMain?.className).not.toContain("bg-");
     expect(pageMain).not.toHaveClass("max-w-7xl");
+    expect(screen.getByTestId("game-detail-workbench")).toHaveClass(
+      "game-detail-workbench",
+    );
+    expect(screen.getByTestId("rule-set-summary")).toHaveClass("glass-panel");
+    expect(screen.getByTestId("player-roster-panel")).toHaveClass("glass-panel");
     expect(await screen.findByText("无神职心理局")).toBeInTheDocument();
     expect(screen.getByText("2 狼人 / 6 村民")).toBeInTheDocument();
     const roster = screen.getByTestId("player-roster-panel");

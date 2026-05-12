@@ -1,4 +1,4 @@
-import { Progress } from "@radix-ui/themes";
+import { Progress } from "../../../components/ui";
 
 import type { BidEntry } from "../types";
 

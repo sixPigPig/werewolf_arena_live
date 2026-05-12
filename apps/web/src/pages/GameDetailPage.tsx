@@ -1,22 +1,13 @@
-import { Button, Callout, Text } from "@radix-ui/themes";
+import { Button, Callout, Text } from "../components/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { AppTopNav } from "../app/AppTopNav";
 import { getGameDetail } from "../features/games/api/getGameDetail";
-import { DebugPanel } from "../features/games/components/DebugPanel";
-import { GameLayout } from "../features/games/components/GameLayout";
-import { PlayerPanel } from "../features/games/components/PlayerPanel";
-import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
-import { RoundTimeline } from "../features/games/components/RoundTimeline";
+import { GameDetailWorkbench } from "./components/GameDetailWorkbench";
 
 export function GameDetailPage() {
   const { sessionId } = useParams();
-  const [selection, setSelection] = useState<{
-    itemId: string;
-    sessionId: string;
-  } | null>(null);
 
   const { data, isError, isFetching, isPending, refetch } = useQuery({
     queryKey: ["games", sessionId],
@@ -31,6 +22,7 @@ export function GameDetailPage() {
           disabled={isFetching}
           loading={isFetching && !isPending}
           onClick={() => void refetch()}
+          size="1"
           type="button"
           variant="surface"
         >
@@ -65,36 +57,10 @@ export function GameDetailPage() {
     );
   }
 
-  const selectedItem =
-    selection?.sessionId === data.sessionId
-      ? data.debugItems.find((item) => item.id === selection.itemId)
-      : undefined;
-  const visibleSelectedItem =
-    selectedItem ??
-    data.debugItems[0] ??
-    null;
-
   return (
     <>
       {topNav}
-      <GameLayout
-        debug={<DebugPanel item={visibleSelectedItem} />}
-        header={<RuleSetSummary ruleSet={data.ruleSet} />}
-        players={<PlayerPanel game={data} />}
-        timeline={
-          <RoundTimeline
-            debugItems={data.debugItems}
-            onSelect={(item) =>
-              setSelection({ itemId: item.id, sessionId: data.sessionId })
-            }
-            players={data.players}
-            ruleSet={data.ruleSet}
-            rounds={data.rounds}
-            selectedItem={visibleSelectedItem}
-            winner={data.winner}
-          />
-        }
-      />
+      <GameDetailWorkbench game={data} />
     </>
   );
 }

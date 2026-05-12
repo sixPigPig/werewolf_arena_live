@@ -1,4 +1,4 @@
-import { Callout, Card } from "@radix-ui/themes";
+import { Callout, Card } from "../../../components/ui";
 
 import type { DebugItem, GameRound } from "../types";
 

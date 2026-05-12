@@ -1,4 +1,4 @@
-import { Card, DataList } from "@radix-ui/themes";
+import { Card, DataList } from "../../../components/ui";
 
 import type { DebugItem } from "../types";
 
@@ -106,7 +106,7 @@ function DebugBlock({ label, value }: { label: string; value: string }) {
   return (
     <section>
       <h3 className="text-xs font-semibold uppercase text-slate-500">{label}</h3>
-      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-slate-500/30 p-3 text-xs leading-5 text-slate-50">
         {value}
       </pre>
     </section>

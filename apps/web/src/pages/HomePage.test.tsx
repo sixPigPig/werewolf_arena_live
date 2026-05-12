@@ -24,8 +24,22 @@ describe("HomePage", () => {
         name: "Python + React monorepo is ready.",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByTestId("app-top-nav")).toBeInTheDocument();
-    expect(screen.getByTestId("app-logo-placeholder")).toBeInTheDocument();
+    expect(screen.getByTestId("app-top-nav")).toHaveClass(
+      "h-[56px]",
+      "min-h-[56px]",
+    );
+    expect(screen.getByTestId("app-logo-placeholder")).toHaveClass(
+      "h-12",
+      "w-12",
+    );
+    expect(screen.getByTestId("app-logo-placeholder")).not.toHaveClass("border");
+    expect(screen.getByTestId("app-logo-image")).toHaveClass(
+      "h-full",
+      "w-full",
+    );
+    expect(screen.getByTestId("app-logo-image").getAttribute("src")).toContain(
+      "langrensha-c-logo",
+    );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
       "href",
       "/games",
@@ -35,6 +49,11 @@ describe("HomePage", () => {
       "/games",
     );
     expect(screen.queryByRole("link", { name: "返回大厅" })).not.toBeInTheDocument();
+    expect(container.querySelector("main")?.className).not.toContain("bg-");
+    expect(screen.getByTestId("home-hero-module")).toHaveClass(
+      "home-hero-module",
+      "glass-panel",
+    );
     const hero = container.querySelector("section");
     expect(hero).toHaveClass("max-w-none", "w-full");
     expect(hero).not.toHaveClass("max-w-4xl");

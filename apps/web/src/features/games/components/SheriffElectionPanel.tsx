@@ -1,4 +1,4 @@
-import { Badge, Card } from "@radix-ui/themes";
+import { Badge, Card } from "../../../components/ui";
 
 import type { DeathEvent, DebugItem, GameRound, SpeechEntry } from "../types";
 
@@ -89,12 +89,12 @@ function SheriffSpeechOrder({ round }: { round: GameRound }) {
   return (
     <div className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-2">
       {sheriffSpeechDirection ? (
-        <p className="rounded bg-slate-50 px-3 py-2">
+        <p className="rounded border border-slate-500/30 px-3 py-2">
           警上发言方向：{sheriffSpeechDirection}
         </p>
       ) : null}
       {sheriffSpeechOrder.length > 0 ? (
-        <p className="rounded bg-slate-50 px-3 py-2">
+        <p className="rounded border border-slate-500/30 px-3 py-2">
           警上发言顺序：{sheriffSpeechOrder.join(" -> ")}
         </p>
       ) : null}

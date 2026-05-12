@@ -1,4 +1,4 @@
-import { Badge, Card } from "@radix-ui/themes";
+import { Badge, Card } from "../../../components/ui";
 
 import type { LiveGameEvent } from "../types";
 import type { LivePlayer } from "../liveSpectator";
@@ -79,11 +79,11 @@ export function LiveFocusStage({
         </div>
 
         {detail ? (
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-100 p-4 text-sm leading-6 text-slate-800">
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-500/30 p-4 text-sm leading-6 text-slate-100">
             {detail}
           </pre>
         ) : (
-          <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-600">
+          <p className="rounded-md border border-slate-500/30 p-4 text-sm text-slate-300">
             正在等待这个玩家的下一条可展示内容。
           </p>
         )}

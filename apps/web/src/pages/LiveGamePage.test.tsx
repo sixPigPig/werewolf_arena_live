@@ -459,8 +459,26 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
-    expect(screen.getByTestId("app-top-nav")).toBeInTheDocument();
-    expect(screen.getByTestId("app-logo-placeholder")).toBeInTheDocument();
+    expect(screen.getByTestId("app-top-nav")).toHaveClass(
+      "h-[56px]",
+      "min-h-[56px]",
+      "live-command-nav",
+    );
+    expect(screen.getByTestId("app-logo-placeholder")).toHaveClass(
+      "h-12",
+      "w-12",
+    );
+    expect(screen.getByTestId("app-logo-placeholder")).not.toHaveClass("border");
+    expect(screen.getByRole("link", { name: "狼人杀竞技场" })).not.toHaveClass(
+      "border",
+    );
+    expect(screen.getByTestId("app-logo-image")).toHaveClass(
+      "h-full",
+      "w-full",
+    );
+    expect(screen.getByTestId("app-logo-image").getAttribute("src")).toContain(
+      "langrensha-c-logo",
+    );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
       "href",
       "/games",
@@ -469,11 +487,39 @@ describe("LiveGamePage", () => {
       "href",
       "/games",
     );
+    const topNav = screen.getByTestId("app-top-nav");
+    const liveNavContext = within(topNav).getByTestId("live-nav-context");
+    expect(liveNavContext).toHaveClass("live-command-context");
+    expect(
+      within(liveNavContext).getByRole("heading", { name: "实时观战" }),
+    ).toBeInTheDocument();
+    expect(
+      within(liveNavContext).getByTestId("live-status-strip"),
+    ).toBeInTheDocument();
+    expect(
+      within(liveNavContext).getByTestId("rule-set-summary"),
+    ).toBeInTheDocument();
+    expect(liveNavContext).toHaveTextContent("快速执行");
+    expect(
+      within(topNav).getByTestId("director-controls"),
+    ).toBeInTheDocument();
+    expect(
+      within(liveNavContext).queryByTestId("director-controls"),
+    ).not.toBeInTheDocument();
+    expect(within(topNav).getByLabelText("播放速度")).toBeInTheDocument();
+    expect(within(topNav).getByRole("button", { name: "暂停" })).toHaveClass(
+      "h-10",
+      "w-10",
+    );
+    expect(within(topNav).getByRole("button", { name: "追到最新" })).toHaveClass(
+      "h-10",
+      "w-10",
+    );
     expect(screen.getByTestId("live-game-page")).toHaveClass(
       "min-h-screen",
-      "bg-[#071015]",
       "text-slate-100",
     );
+    expect(screen.getByTestId("live-game-page").className).not.toContain("bg-");
     expect(
       container.querySelector('[data-testid="live-game-page"] > div'),
     ).toHaveClass("max-w-none", "w-full");
@@ -486,12 +532,17 @@ describe("LiveGamePage", () => {
     expect(
       container.querySelector('[data-testid="live-game-page"] > div'),
     ).toHaveClass("live-game-content");
-    expect(screen.getByTestId("live-page-heading")).toHaveClass(
-      "live-page-heading",
+    expect(screen.getByTestId("live-page-shell-module")).toHaveClass(
+      "live-page-shell-module",
     );
+    expect(screen.queryByTestId("live-page-heading")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("live-status-shell")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("live-rule-summary-shell"),
+    ).not.toBeInTheDocument();
     const liveGrid = container.querySelector('[data-testid="live-stage-layout"]');
     expect(liveGrid).not.toBeNull();
-    expect(liveGrid).toHaveClass("live-stage-layout");
+    expect(liveGrid).toHaveClass("live-stage-layout", "live-stage-module");
     const columns = Array.from(liveGrid!.children);
     expect(columns).toHaveLength(3);
     const [rosterColumn, stageColumn, eventsColumn] = columns;
@@ -517,28 +568,22 @@ describe("LiveGamePage", () => {
       within(eventsColumn as HTMLElement).getByText("剧情时间线"),
     ).toBeInTheDocument();
     expect(screen.getByTestId("live-status-strip")).toHaveClass(
-      "bg-slate-950/70",
+      "live-command-status",
       "text-slate-300",
     );
-    expect(screen.getByTestId("live-status-strip").closest("section")).toHaveClass(
-      "bg-slate-950/65",
-    );
     expect(screen.getByTestId("rule-set-summary")).toHaveClass(
-      "bg-slate-950/60",
+      "live-command-rule-summary",
       "text-slate-100",
     );
-    expect(screen.getByTestId("rule-set-summary")).not.toHaveClass("rt-Card");
     expect(screen.getByTestId("director-controls")).toHaveClass(
-      "bg-slate-950/65",
+      "live-command-controls",
       "text-slate-100",
     );
-    expect(screen.getByTestId("director-controls")).not.toHaveClass("rt-Card");
     expect(screen.getByTestId("live-timeline-panel")).toHaveClass(
-      "bg-slate-950/65",
       "text-slate-100",
     );
-    expect(screen.getByTestId("live-timeline-panel")).not.toHaveClass(
-      "rt-Card",
+    expect(screen.getByTestId("live-timeline-panel").className).not.toContain(
+      "bg-",
     );
     expect(screen.getByTestId("live-director-stage-shell")).toHaveClass(
       "min-h-[36rem]",
@@ -547,15 +592,12 @@ describe("LiveGamePage", () => {
     expect(stageColumn).toHaveClass("min-w-0");
     expect(eventsColumn).toHaveClass("min-w-0");
 
-    const statusShell = container.querySelector(
-      '[data-testid="live-status-shell"]',
-    );
-    expect(statusShell).not.toBeNull();
-    expect(statusShell).toHaveClass("live-status-shell", "lg:sticky");
-    expect(statusShell).not.toHaveClass("sticky");
-    expect(screen.getByTestId("live-rule-summary-shell")).toHaveClass(
-      "live-rule-summary-shell",
-    );
+    expect(
+      within(stageColumn as HTMLElement).queryByTestId("director-controls"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("live-rule-summary-shell"),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the first seat clear of the stage phase badge", async () => {

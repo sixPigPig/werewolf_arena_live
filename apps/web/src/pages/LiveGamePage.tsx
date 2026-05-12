@@ -1,4 +1,5 @@
-import { Button, Callout, Heading, Text } from "@radix-ui/themes";
+import { Button, Callout, Text } from "../components/ui";
+import { withGlassPanel } from "../components/ui/glass";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -21,6 +22,8 @@ import {
   deriveLiveSpectatorState,
   type LivePlayerStatus,
 } from "../features/games/liveSpectator";
+import { LivePageShell } from "./components/LivePageShell";
+import { LiveStageModule } from "./components/LiveStageModule";
 
 export function LiveGamePage() {
   const { runId } = useParams();
@@ -84,24 +87,66 @@ export function LiveGamePage() {
     : manualFocusName ?? autoFocusName;
   const topNavActions = (
     <>
+      {run ? (
+        <LiveDirectorControls
+          backlogCount={director.backlogCount}
+          isCatchingUp={director.isCatchingUp}
+          isPaused={director.isPaused}
+          onCatchUpToLatest={director.catchUpToLatest}
+          onSpeedChange={director.setSpeed}
+          onTogglePaused={director.togglePaused}
+          speed={director.speed}
+          variant="nav"
+        />
+      ) : null}
       {canResumeRun && run ? (
         <Button
           disabled={resumeMutation.isPending}
           highContrast
           loading={resumeMutation.isPending}
           onClick={() => resumeMutation.mutate(run.session_id)}
+          size="1"
           type="button"
         >
           继续对局
         </Button>
       ) : null}
       {terminalEvent && run ? (
-        <Button asChild color="gray" highContrast variant="surface">
+        <Button asChild color="gray" highContrast size="1" variant="surface">
           <Link to={`/games/${run.session_id}`}>查看完整复盘</Link>
         </Button>
       ) : null}
+      <Link
+        aria-label="返回大厅"
+        className="live-command-exit flex h-10 w-10 items-center justify-center rounded-md border border-slate-500/35 bg-white/5 text-lg text-slate-100 shadow-[inset_0_0_12px_rgba(255,255,255,0.04)] transition hover:border-amber-300/55 hover:bg-amber-300/10 focus:outline-none focus:ring-2 focus:ring-amber-300/70"
+        to="/games"
+      >
+        <span className="sr-only">返回大厅</span>
+        <span aria-hidden="true">↪</span>
+      </Link>
     </>
   );
+  const topNavContext = run ? (
+    <div
+      className="live-nav-context live-command-context flex min-w-0 flex-1 flex-nowrap items-center gap-x-3 overflow-hidden"
+      data-testid="live-nav-context"
+    >
+      <h1 className="sr-only">实时观战</h1>
+      <LiveStatusStrip run={run} connectionState={connectionState} variant="nav" />
+      <span
+        aria-hidden="true"
+        className="h-6 w-px bg-slate-500/45"
+        data-testid="live-command-rule-separator"
+      />
+      <RuleSetSummary ruleSet={run.rule_set} variant="nav" />
+      <span
+        aria-hidden="true"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-500/35 bg-white/5 text-slate-300"
+      >
+        ⌄
+      </span>
+    </div>
+  ) : null;
   const rosterPlayers = spectatorState.players.map<PlayerRosterItem>(
     (player, index) => {
       const state = liveRosterState(
@@ -135,8 +180,13 @@ export function LiveGamePage() {
   if (isPending) {
     return (
       <>
-        <AppTopNav actions={topNavActions} showLobbyBack tone="nocturne" />
-        <main className="min-h-screen bg-[#071015] px-4 py-8 text-slate-100">
+        <AppTopNav
+          actions={topNavActions}
+          context={topNavContext}
+          layout="command"
+          tone="nocturne"
+        />
+        <main className="min-h-screen px-4 py-8 text-slate-100">
           <div className="mx-auto w-full max-w-none">
             <Text className="text-slate-300" size="2">
               正在读取实时对局...
@@ -150,8 +200,13 @@ export function LiveGamePage() {
   if (isError || !run) {
     return (
       <>
-        <AppTopNav actions={topNavActions} showLobbyBack tone="nocturne" />
-        <main className="min-h-screen bg-[#071015] px-4 py-8 text-slate-100">
+        <AppTopNav
+          actions={topNavActions}
+          context={topNavContext}
+          layout="command"
+          tone="nocturne"
+        />
+        <main className="min-h-screen px-4 py-8 text-slate-100">
           <div className="mx-auto w-full max-w-none">
             <Callout.Root color="red" size="1" variant="soft">
               <Callout.Text>无法读取实时对局</Callout.Text>
@@ -164,50 +219,24 @@ export function LiveGamePage() {
 
   return (
     <>
-      <AppTopNav actions={topNavActions} showLobbyBack tone="nocturne" />
+      <AppTopNav
+        actions={topNavActions}
+        context={topNavContext}
+        layout="command"
+        tone="nocturne"
+      />
       <main
-        className="live-game-page min-h-screen bg-[#071015] bg-[radial-gradient(circle_at_12%_0%,rgba(20,184,166,0.14),transparent_28%),radial-gradient(circle_at_88%_4%,rgba(180,83,9,0.18),transparent_30%),linear-gradient(180deg,#071015_0%,#0d1117_48%,#05070a_100%)] px-4 py-6 text-slate-100"
+        className="live-game-page min-h-screen px-4 py-6 text-slate-100"
         data-testid="live-game-page"
       >
-        <div className="live-game-content mx-auto w-full max-w-none">
-          <div className="live-page-heading mb-4" data-testid="live-page-heading">
-            <div>
-              <Text
-                className="tracking-[0.28em] text-amber-200/75"
-                size="1"
-                weight="medium"
-              >
-                WEREWOLF LIVE
-              </Text>
-              <Heading as="h1" className="text-amber-50" size="6">
-                实时观战
-              </Heading>
-            </div>
-          </div>
+        <LivePageShell>
           {resumeMutation.isError ? (
             <Callout.Root className="mb-3" color="red" size="1" variant="soft">
               <Callout.Text>无法继续对局</Callout.Text>
             </Callout.Root>
           ) : null}
-          <div
-            className="live-status-shell lg:sticky lg:top-0 lg:z-10"
-            data-testid="live-status-shell"
-          >
-            <section className="overflow-hidden rounded-lg border border-amber-500/20 bg-slate-950/65 shadow-[0_18px_50px_rgba(0,0,0,0.24)] backdrop-blur-xl">
-              <LiveStatusStrip run={run} connectionState={connectionState} />
-            </section>
-          </div>
-          <div
-            className="live-rule-summary-shell mt-4"
-            data-testid="live-rule-summary-shell"
-          >
-            <RuleSetSummary ruleSet={run.rule_set} />
-          </div>
-          <div
-            className="live-stage-layout mt-4 grid gap-4 md:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_22rem]"
-            data-testid="live-stage-layout"
-          >
-            <div className="live-roster-column min-w-0 md:sticky md:top-4 md:self-start">
+          <LiveStageModule
+            roster={
               <PlayerRosterPanel
                 onSelectPlayer={(name) => {
                   setAutoFollow(false);
@@ -215,8 +244,8 @@ export function LiveGamePage() {
                 }}
                 players={rosterPlayers}
               />
-            </div>
-            <div className="live-stage-column min-w-0 space-y-3">
+            }
+            stage={
               <LiveDirectorStage
                 activePlayerName={autoFocusName}
                 autoFollow={autoFollow}
@@ -236,45 +265,40 @@ export function LiveGamePage() {
                 }}
                 players={spectatorState.players}
               />
-              <LiveDirectorControls
-                backlogCount={director.backlogCount}
-                isCatchingUp={director.isCatchingUp}
-                isPaused={director.isPaused}
-                onCatchUpToLatest={director.catchUpToLatest}
-                onSpeedChange={director.setSpeed}
-                onTogglePaused={director.togglePaused}
-                speed={director.speed}
-              />
-            </div>
-            <section
-              className="live-timeline-panel min-w-0 overflow-hidden rounded-lg border border-amber-500/20 bg-slate-950/65 text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl md:col-span-2 xl:col-span-1 xl:max-h-[calc(100vh-8rem)] xl:overflow-auto"
-              data-testid="live-timeline-panel"
-            >
-              <div className="border-b border-amber-500/15 bg-gradient-to-r from-amber-500/10 via-transparent to-teal-400/10 px-4 py-3">
-                <h2 className="text-sm font-semibold text-amber-50">
-                  剧情时间线
-                </h2>
-                <p className="mt-1 text-xs text-slate-400">
-                  关键阶段、行动和结算
-                </p>
-              </div>
-              <LiveEventTimeline
-                currentEventId={director.currentEventId}
-                events={events}
-                variant="story"
-              />
-              <details className="border-t border-amber-500/15">
-                <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-300">
-                  调试事件
-                </summary>
+            }
+            timeline={
+              <section
+                className={withGlassPanel(
+                  "live-timeline-panel min-w-0 overflow-hidden rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.26)] md:col-span-2 xl:col-span-1 xl:max-h-[calc(100vh-8rem)] xl:overflow-auto",
+                )}
+                data-testid="live-timeline-panel"
+              >
+                <div className="border-b border-amber-500/15 px-4 py-3">
+                  <h2 className="text-sm font-semibold text-amber-50">
+                    剧情时间线
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-400">
+                    关键阶段、行动和结算
+                  </p>
+                </div>
                 <LiveEventTimeline
                   currentEventId={director.currentEventId}
                   events={events}
+                  variant="story"
                 />
-              </details>
-            </section>
-          </div>
-        </div>
+                <details className="border-t border-amber-500/15">
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-300">
+                    调试事件
+                  </summary>
+                  <LiveEventTimeline
+                    currentEventId={director.currentEventId}
+                    events={events}
+                  />
+                </details>
+              </section>
+            }
+          />
+        </LivePageShell>
       </main>
     </>
   );

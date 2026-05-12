@@ -1,5 +1,5 @@
-import { Badge, Card, Switch } from "@radix-ui/themes";
-import type { BadgeProps } from "@radix-ui/themes";
+import { Badge, Card, Switch } from "../../../components/ui";
+import type { BadgeProps } from "../../../components/ui";
 
 import type { LivePlayer } from "../liveSpectator";
 import { actionLabel } from "../liveLabels";
@@ -109,8 +109,8 @@ function PlayerButton({
 }) {
   const roleColor = ROLE_COLORS[player.role] ?? "amber";
   const activeClass = active
-    ? "border-slate-950 bg-slate-50"
-    : "border-slate-200 bg-white";
+    ? "border-slate-100"
+    : "border-slate-200";
   const focusedClass = focused ? "ring-2 ring-slate-950 ring-inset" : "";
   const mutedClass = player.isAlive ? "" : "opacity-60";
   const lastAction = player.lastAction ? actionLabel(player.lastAction) : "";
@@ -120,7 +120,7 @@ function PlayerButton({
       aria-label={`${player.name} ${player.role} ${
         player.isAlive ? STATUS_LABELS[player.status] : "出局"
       } ${lastAction} ${player.lastDetail ?? ""}`}
-      className={`min-h-28 w-full rounded-md border p-3 text-left transition hover:bg-slate-50 ${activeClass} ${focusedClass} ${mutedClass}`}
+      className={`min-h-28 w-full rounded-md border p-3 text-left transition ${activeClass} ${focusedClass} ${mutedClass}`}
       onClick={onClick}
       type="button"
     >
@@ -175,7 +175,7 @@ function FocusedPlayerDetail({ player }: { player: LivePlayer | null }) {
             </Badge>
           </div>
           <p className="text-xs text-slate-500">{player.model}</p>
-          <p className="rounded-md bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+          <p className="rounded-md border border-slate-500/30 p-3 text-sm leading-6 text-slate-300">
             {player.lastAction || player.lastDetail
               ? `${lastAction ? `${lastAction}：` : ""}${
                   player.lastDetail || "处理中"

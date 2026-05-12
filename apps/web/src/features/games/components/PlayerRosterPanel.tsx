@@ -1,5 +1,7 @@
 import type { KeyboardEvent, ReactNode } from "react";
 
+import { withGlassPanel } from "../../../components/ui/glass";
+
 export type PlayerRosterState =
   | "alive"
   | "dead"
@@ -31,10 +33,12 @@ export function PlayerRosterPanel({
 }: PlayerRosterPanelProps) {
   return (
     <aside
-      className="player-roster-panel overflow-hidden rounded-lg border border-amber-500/20 bg-slate-950/70 text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl"
+      className={withGlassPanel(
+        "player-roster-panel overflow-hidden rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.28)]",
+      )}
       data-testid="player-roster-panel"
     >
-      <div className="player-roster-header border-b border-amber-500/15 bg-gradient-to-r from-amber-500/10 via-transparent to-teal-400/10 px-4 py-3">
+      <div className="player-roster-header border-b border-amber-500/15 px-4 py-3">
         <h2 className="player-roster-title text-base font-semibold text-amber-50">
           玩家列表（{players.length}人局）
         </h2>
@@ -47,7 +51,7 @@ export function PlayerRosterPanel({
         role="list"
       >
         {players.length === 0 ? (
-          <p className="rounded-md border border-slate-700/60 bg-slate-900/60 px-3 py-4 text-sm text-slate-400">
+          <p className="rounded-md border border-slate-700/60 px-3 py-4 text-sm text-slate-400">
             等待玩家加入
           </p>
         ) : (

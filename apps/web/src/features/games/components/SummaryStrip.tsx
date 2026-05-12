@@ -1,4 +1,4 @@
-import { Card } from "@radix-ui/themes";
+import { Card } from "../../../components/ui";
 
 type SummaryStripProps = {
   summaries: Record<string, string>;
