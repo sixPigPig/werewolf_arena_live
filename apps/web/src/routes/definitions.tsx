@@ -1,5 +1,6 @@
 import { Navigate, type RouteObject } from "react-router-dom";
 
+import { ComponentButtonShowcasePage } from "../pages/ComponentButtonShowcasePage";
 import { GameDetailPage } from "../pages/GameDetailPage";
 import { GameHistoryPage } from "../pages/GameHistoryPage";
 import { GamesPage } from "../pages/GamesPage";
@@ -21,6 +22,10 @@ export const routes: RouteObject[] = [
   {
     path: "/games/live/:runId",
     element: <LiveGamePage />,
+  },
+  {
+    path: "/components/buttons",
+    element: <ComponentButtonShowcasePage />,
   },
   {
     path: "/games/:sessionId",

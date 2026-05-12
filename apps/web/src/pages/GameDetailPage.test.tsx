@@ -280,16 +280,14 @@ describe("GameDetailPage", () => {
       "h-[56px]",
       "min-h-[56px]",
     );
-    expect(screen.getByTestId("app-logo-placeholder")).toHaveClass(
-      "h-12",
-      "w-12",
+    expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
+    expect(screen.getByTestId("app-brand-logo")).toHaveClass(
+      "h-16",
+      "w-auto",
     );
-    expect(screen.getByTestId("app-logo-image")).toHaveClass(
-      "h-full",
-      "w-full",
-    );
-    expect(screen.getByTestId("app-logo-image").getAttribute("src")).toContain(
-      "langrensha-c-logo",
+    expect(screen.getByTestId("app-brand-logo").getAttribute("src")).toContain(
+      "langrensha-arena-nav-logo",
     );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
       "href",

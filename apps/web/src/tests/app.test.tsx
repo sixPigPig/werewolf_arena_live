@@ -93,6 +93,19 @@ describe("App", () => {
     expect(await screen.findByText("session_history_route")).toBeInTheDocument();
   });
 
+  it("routes the gothic button showcase path to the component example page", async () => {
+    renderRoute(["/components/buttons"]);
+
+    expect(
+      await screen.findByRole("heading", { name: "Gothic Button" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Primary" })).toHaveAttribute(
+      "data-intent",
+      "primary",
+    );
+    expect(screen.getByRole("button", { name: "Danger Disabled" })).toBeDisabled();
+  });
+
   it("routes a game session path to the replay detail", async () => {
     const sessionId = "session_20260424_050950_66ea9f38";
 

@@ -868,11 +868,6 @@ body {
     padding: 0.45rem 0.75rem;
   }
 
-  .app-logo-placeholder {
-    height: 2rem;
-    width: 2rem;
-  }
-
   .app-project-name {
     font-size: 0.9rem;
   }
@@ -943,4 +938,163 @@ body {
   .player-roster-status {
     font-size: 0.58rem;
   }
+}
+
+.gothic-button {
+  --gothic-button-border: 18px;
+  --gothic-button-slice: 92 150 72 150;
+  --gothic-button-text: #f4e3cd;
+  --gothic-button-focus: #d8b58a;
+  --gothic-button-glow: rgb(216 181 138 / 32%);
+  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-default.png");
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  color: var(--gothic-button-text);
+  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+  text-align: center;
+  text-decoration: none;
+  text-shadow:
+    0 1px 0 rgb(0 0 0 / 78%),
+    0 0 12px var(--gothic-button-glow);
+  transition:
+    filter 160ms ease,
+    transform 160ms ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.gothic-button::before,
+.gothic-button::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+}
+
+.gothic-button::before {
+  z-index: -2;
+  border: var(--gothic-button-border) solid transparent;
+  border-image-source: var(--gothic-button-image);
+  border-image-slice: var(--gothic-button-slice) fill;
+  border-image-width: var(--gothic-button-border);
+  border-image-repeat: stretch;
+  filter: drop-shadow(0 12px 20px rgb(0 0 0 / 30%));
+}
+
+.gothic-button::after {
+  z-index: -1;
+  opacity: 0;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 10%), transparent 45%),
+    radial-gradient(circle at 50% 100%, var(--gothic-button-glow), transparent 62%);
+  transition: opacity 160ms ease;
+}
+
+.gothic-button-label {
+  position: relative;
+  z-index: 1;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gothic-button-sm {
+  min-width: 8rem;
+  min-height: 2.5rem;
+  padding: 0.2rem 1.75rem 0.28rem;
+  font-size: 0.82rem;
+}
+
+.gothic-button-md {
+  min-width: 9.75rem;
+  min-height: 3rem;
+  padding: 0.24rem 2.125rem 0.34rem;
+  font-size: 0.95rem;
+}
+
+.gothic-button-lg {
+  min-width: 11.875rem;
+  min-height: 3.625rem;
+  padding: 0.28rem 2.625rem 0.4rem;
+  font-size: 1.08rem;
+}
+
+.gothic-button[data-intent="default"] {
+  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-default.png");
+  --gothic-button-text: #f4e3cd;
+  --gothic-button-focus: #d8b58a;
+  --gothic-button-glow: rgb(216 181 138 / 32%);
+}
+
+.gothic-button[data-intent="info"] {
+  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-info.png");
+  --gothic-button-text: #d9e7f3;
+  --gothic-button-focus: #9bc6e8;
+  --gothic-button-glow: rgb(155 198 232 / 36%);
+}
+
+.gothic-button[data-intent="primary"] {
+  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-primary.png");
+  --gothic-button-text: #d7ecff;
+  --gothic-button-focus: #67b7ff;
+  --gothic-button-glow: rgb(103 183 255 / 38%);
+}
+
+.gothic-button[data-intent="danger"] {
+  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-danger.png");
+  --gothic-button-text: #ffd1c8;
+  --gothic-button-focus: #ff765f;
+  --gothic-button-glow: rgb(255 118 95 / 38%);
+}
+
+.gothic-button[data-intent="success"] {
+  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-success.png");
+  --gothic-button-text: #d8f2d2;
+  --gothic-button-focus: #7edb7a;
+  --gothic-button-glow: rgb(126 219 122 / 34%);
+}
+
+.gothic-button[data-intent="warning"] {
+  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-warning.png");
+  --gothic-button-text: #f7dfad;
+  --gothic-button-focus: #e2b765;
+  --gothic-button-glow: rgb(226 183 101 / 36%);
+}
+
+.gothic-button:hover:not(:disabled):not([aria-disabled="true"]) {
+  filter: brightness(1.12) saturate(1.06);
+  transform: translateY(-1px);
+}
+
+.gothic-button:hover:not(:disabled):not([aria-disabled="true"])::after {
+  opacity: 1;
+}
+
+.gothic-button:active:not(:disabled):not([aria-disabled="true"]) {
+  filter: brightness(0.96) saturate(1);
+  transform: translateY(1px);
+}
+
+.gothic-button:focus-visible {
+  outline: 2px solid var(--gothic-button-focus);
+  outline-offset: 3px;
+}
+
+.gothic-button:disabled,
+.gothic-button[aria-disabled="true"] {
+  cursor: not-allowed;
+  filter: grayscale(0.32) brightness(0.72);
+  opacity: 0.58;
+  transform: none;
 }

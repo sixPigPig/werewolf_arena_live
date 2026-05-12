@@ -2,7 +2,7 @@ import { Button } from "../components/ui";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import logoSrc from "../assets/langrensha-c-logo@1x.png";
+import brandLogoSrc from "../assets/langrensha-arena-nav-logo.png";
 
 type AppTopNavProps = {
   actions?: ReactNode;
@@ -43,11 +43,8 @@ export function AppTopNav({
       ? "app-top-nav-primary flex min-w-0 flex-1 flex-row items-center gap-3"
       : "app-top-nav-primary flex min-w-0 flex-row items-center";
   const linkClass = isCommand
-    ? "group flex h-12 w-12 shrink-0 items-center justify-center rounded-md text-left transition focus:outline-none focus:ring-2 focus:ring-amber-300/70"
-    : "group flex min-w-0 shrink-0 items-center gap-2 rounded-md text-left focus:outline-none focus:ring-2 focus:ring-amber-300/70";
-  const logoClass = isCommand
-    ? "app-logo-placeholder flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md"
-    : "app-logo-placeholder h-12 w-12 shrink-0 overflow-hidden rounded-md";
+    ? "group flex min-w-0 shrink-0 items-center rounded-md text-left transition focus:outline-none focus:ring-2 focus:ring-amber-300/70"
+    : "group flex min-w-0 shrink-0 items-center rounded-md text-left focus:outline-none focus:ring-2 focus:ring-amber-300/70";
   const actionsClass = isCommand
     ? "app-top-nav-actions live-command-actions flex w-auto shrink-0 flex-nowrap items-center gap-2"
     : "app-top-nav-actions flex w-auto shrink-0 flex-nowrap items-center justify-end gap-1.5";
@@ -59,36 +56,16 @@ export function AppTopNav({
     >
       <div className={innerClass}>
         <div className={primaryClass}>
-          <Link
-            className={linkClass}
-            to="/games"
-          >
-            <span
-              aria-hidden="true"
-              className={logoClass}
-              data-testid="app-logo-placeholder"
-            >
-              <img
-                alt=""
-                className="h-full w-full rounded-[inherit] object-cover"
-                data-testid="app-logo-image"
-                src={logoSrc}
-              />
-            </span>
-            <span
-              className={
-                isCommand
-                  ? "app-project-name sr-only"
-                  : "app-project-name truncate text-sm font-semibold tracking-wide"
-              }
-            >
-              {projectName}
-            </span>
+          <Link className={linkClass} to="/games">
+            <img
+              alt={projectName}
+              className="app-brand-logo h-16 w-auto max-w-[13rem] shrink-0 object-contain"
+              data-testid="app-brand-logo"
+              src={brandLogoSrc}
+            />
           </Link>
           {context ? (
-            <div className="app-top-nav-context min-w-0 flex-1">
-              {context}
-            </div>
+            <div className="app-top-nav-context min-w-0 flex-1">{context}</div>
           ) : null}
         </div>
         <nav
@@ -97,12 +74,24 @@ export function AppTopNav({
           data-testid="app-top-nav-actions"
         >
           {showHistoryLink ? (
-            <Button asChild color="gray" highContrast size="1" variant="surface">
+            <Button
+              asChild
+              color="gray"
+              highContrast
+              size="1"
+              variant="surface"
+            >
               <Link to="/games/history">对局历史</Link>
             </Button>
           ) : null}
           {showLobbyBack ? (
-            <Button asChild color="gray" highContrast size="1" variant="surface">
+            <Button
+              asChild
+              color="gray"
+              highContrast
+              size="1"
+              variant="surface"
+            >
               <Link to="/games">返回大厅</Link>
             </Button>
           ) : null}

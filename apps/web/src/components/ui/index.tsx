@@ -25,6 +25,22 @@ type Tone =
   | "red"
   | "violet";
 
+export type ButtonIntent =
+  | "default"
+  | "info"
+  | "primary"
+  | "danger"
+  | "success"
+  | "warning";
+
+export type ButtonSkin = "default" | "gothic";
+
+type ChildWithClassName = {
+  className?: string;
+  children?: ReactNode;
+  [key: string]: unknown;
+};
+
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
@@ -54,8 +70,10 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
   color?: Tone;
   highContrast?: boolean;
+  intent?: ButtonIntent;
   loading?: boolean;
   size?: "1" | "2" | "3";
+  skin?: ButtonSkin;
   variant?: "solid" | "surface" | "soft";
 };
 
@@ -66,14 +84,45 @@ export function Button({
   color = "gray",
   disabled,
   highContrast,
+  intent,
   loading,
   size = "2",
+  skin = "default",
   type = "button",
   variant = "solid",
   ...props
 }: ButtonProps) {
-  const sizeClass =
-    size === "1" ? "h-8 px-3 text-sm" : size === "3" ? "h-11 px-5" : "h-10 px-4";
+  const content = loading ? "处理中..." : children;
+
+  if (skin === "gothic") {
+    const gothicIntent = resolveGothicIntent(intent, color);
+    const classes = cx(
+      "gothic-button",
+      gothicButtonSizeClass(size),
+      className,
+    );
+
+    if (renderAsChild) {
+      return renderGothicAsChild(children, classes, gothicIntent, {
+        disabled: Boolean(disabled || loading),
+        loading,
+      });
+    }
+
+    return (
+      <button
+        className={classes}
+        data-intent={gothicIntent}
+        disabled={disabled || loading}
+        type={type}
+        {...props}
+      >
+        <span className="gothic-button-label">{content}</span>
+      </button>
+    );
+  }
+
+  const sizeClass = buttonSizeClass(size);
   const toneClass = buttonTone(color, variant, Boolean(highContrast));
   const classes = cx(
     "inline-flex shrink-0 items-center justify-center gap-2 rounded-md border font-semibold transition focus:outline-none focus:ring-2 focus:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-55",
@@ -81,7 +130,6 @@ export function Button({
     toneClass,
     className,
   );
-  const content = loading ? "处理中..." : children;
 
   if (renderAsChild) {
     return asChild(content, classes, (fallbackClassName) => (
@@ -98,6 +146,71 @@ export function Button({
     >
       {content}
     </button>
+  );
+}
+
+const gothicIntentFromColor: Record<Tone, ButtonIntent> = {
+  amber: "warning",
+  cyan: "info",
+  gray: "default",
+  green: "success",
+  orange: "warning",
+  pink: "primary",
+  red: "danger",
+  violet: "primary",
+};
+
+function resolveGothicIntent(intent: ButtonIntent | undefined, color: Tone) {
+  return intent ?? gothicIntentFromColor[color];
+}
+
+function buttonSizeClass(size: NonNullable<ButtonProps["size"]>) {
+  return size === "1" ? "h-8 px-3 text-sm" : size === "3" ? "h-11 px-5" : "h-10 px-4";
+}
+
+function gothicButtonSizeClass(size: NonNullable<ButtonProps["size"]>) {
+  return size === "1"
+    ? "gothic-button-sm"
+    : size === "3"
+      ? "gothic-button-lg"
+      : "gothic-button-md";
+}
+
+function renderGothicAsChild(
+  children: ReactNode,
+  className: string,
+  intent: ButtonIntent,
+  options: { disabled: boolean; loading?: boolean },
+) {
+  if (isValidElement<ChildWithClassName>(children)) {
+    const label = (
+      <span className="gothic-button-label">
+        {options.loading ? "处理中..." : children.props.children}
+      </span>
+    );
+
+    return cloneElement(children, {
+      "aria-disabled": options.disabled || undefined,
+      children: label,
+      className: cx(className, children.props.className),
+      "data-intent": intent,
+    });
+  }
+
+  const label = (
+    <span className="gothic-button-label">
+      {options.loading ? "处理中..." : children}
+    </span>
+  );
+
+  return (
+    <span
+      aria-disabled={options.disabled || undefined}
+      className={className}
+      data-intent={intent}
+    >
+      {label}
+    </span>
   );
 }
 
