@@ -6,18 +6,22 @@ import logoSrc from "../assets/langrensha-c-logo@1x.png";
 
 type AppTopNavProps = {
   actions?: ReactNode;
+  className?: string;
   context?: ReactNode;
   layout?: "default" | "command";
   projectName?: string;
+  showHistoryLink?: boolean;
   showLobbyBack?: boolean;
   tone?: "default" | "nocturne";
 };
 
 export function AppTopNav({
   actions,
+  className,
   context,
   layout = "default",
   projectName = "狼人杀竞技场",
+  showHistoryLink = false,
   showLobbyBack = false,
   tone = "default",
 }: AppTopNavProps) {
@@ -48,7 +52,10 @@ export function AppTopNav({
     : "app-top-nav-actions flex w-auto shrink-0 flex-nowrap items-center justify-end gap-1.5";
 
   return (
-    <header className={headerClass} data-testid="app-top-nav">
+    <header
+      className={[headerClass, className].filter(Boolean).join(" ")}
+      data-testid="app-top-nav"
+    >
       <div className={innerClass}>
         <div className={primaryClass}>
           <Link
@@ -88,6 +95,11 @@ export function AppTopNav({
           className={actionsClass}
           data-testid="app-top-nav-actions"
         >
+          {showHistoryLink ? (
+            <Button asChild color="gray" highContrast size="1" variant="surface">
+              <Link to="/games/history">对局历史</Link>
+            </Button>
+          ) : null}
           {showLobbyBack ? (
             <Button asChild color="gray" highContrast size="1" variant="surface">
               <Link to="/games">返回大厅</Link>
