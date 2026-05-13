@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ArenaNavButton } from "./ArenaNavButton";
 
@@ -39,5 +39,66 @@ describe("ArenaNavButton", () => {
 
     expect(button).toBeDisabled();
     expect(button).toHaveClass("gothic-button");
+  });
+
+  it("keeps loading navigation links disabled and labelled by Button", () => {
+    render(
+      <MemoryRouter>
+        <ArenaNavButton loading to="/games/history">
+          对局历史
+        </ArenaNavButton>
+      </MemoryRouter>,
+    );
+
+    const link = screen.getByRole("link", { name: "处理中..." });
+
+    expect(link).toHaveAttribute("aria-disabled", "true");
+    expect(link).toHaveClass("gothic-button");
+  });
+
+  it("forwards useful navigation link props through the component button", () => {
+    render(
+      <MemoryRouter>
+        <ArenaNavButton
+          ariaLabel="打开历史"
+          className="nav-history"
+          data-testid="history-link"
+          disabled
+          intent="primary"
+          to="/games/history"
+        >
+          对局历史
+        </ArenaNavButton>
+      </MemoryRouter>,
+    );
+
+    const link = screen.getByRole("link", { name: "打开历史" });
+
+    expect(link).toHaveAttribute("aria-disabled", "true");
+    expect(link).toHaveAttribute("data-testid", "history-link");
+    expect(link).toHaveAttribute("data-intent", "primary");
+    expect(link).toHaveClass(
+      "gothic-button",
+      "gothic-button-sm",
+      "nav-history",
+    );
+  });
+
+  it("forwards navigation link click handlers", () => {
+    const handleClick = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <ArenaNavButton onClick={handleClick} to="/games/history">
+          对局历史
+        </ArenaNavButton>
+      </MemoryRouter>,
+    );
+
+    const link = screen.getByRole("link", { name: "对局历史" });
+
+    fireEvent.click(link);
+
+    expect(handleClick).toHaveBeenCalledTimes(1);
   });
 });

@@ -25,6 +25,8 @@ export function ArenaNavButton({
   ...props
 }: ArenaNavButtonProps) {
   if (to) {
+    const linkAttributes = getSafeLinkAttributes(props);
+
     return (
       <Button
         asChild
@@ -33,8 +35,9 @@ export function ArenaNavButton({
         size={size}
         skin="gothic"
         variant={variant}
+        {...props}
       >
-        <Link aria-label={ariaLabel} to={to}>
+        <Link aria-label={ariaLabel} {...linkAttributes} to={to}>
           {children}
         </Link>
       </Button>
@@ -54,4 +57,20 @@ export function ArenaNavButton({
       {children}
     </Button>
   );
+}
+
+function getSafeLinkAttributes(props: ButtonProps) {
+  const linkAttributes: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(props)) {
+    if (
+      key === "onClick" ||
+      key.startsWith("data-") ||
+      key.startsWith("aria-")
+    ) {
+      linkAttributes[key] = value;
+    }
+  }
+
+  return linkAttributes;
 }
