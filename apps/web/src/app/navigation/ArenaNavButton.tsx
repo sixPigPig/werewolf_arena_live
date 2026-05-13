@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { Button, type ButtonProps } from "../../components/ui";
@@ -22,22 +22,43 @@ export function ArenaNavButton({
   to,
   type = "button",
   variant = "surface",
+  disabled,
+  loading,
+  onClick,
   ...props
 }: ArenaNavButtonProps) {
   if (to) {
     const linkAttributes = getSafeLinkAttributes(props);
+    const linkIsDisabled = Boolean(disabled || loading);
+    const handleLinkClick = (event: MouseEvent<HTMLAnchorElement>) => {
+      if (linkIsDisabled) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
+      onClick?.(event as unknown as MouseEvent<HTMLButtonElement>);
+    };
 
     return (
       <Button
         asChild
         color={color}
+        disabled={disabled}
         intent={intent}
+        loading={loading}
         size={size}
         skin="gothic"
         variant={variant}
         {...props}
       >
-        <Link aria-label={ariaLabel} {...linkAttributes} to={to}>
+        <Link
+          aria-label={ariaLabel}
+          {...linkAttributes}
+          onClick={handleLinkClick}
+          tabIndex={linkIsDisabled ? -1 : undefined}
+          to={to}
+        >
           {children}
         </Link>
       </Button>
@@ -47,7 +68,10 @@ export function ArenaNavButton({
   return (
     <Button
       color={color}
+      disabled={disabled}
       intent={intent}
+      loading={loading}
+      onClick={onClick}
       size={size}
       skin="gothic"
       type={type}
@@ -64,7 +88,6 @@ function getSafeLinkAttributes(props: ButtonProps) {
 
   for (const [key, value] of Object.entries(props)) {
     if (
-      key === "onClick" ||
       key.startsWith("data-") ||
       key.startsWith("aria-")
     ) {

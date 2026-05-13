@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { ArenaNavButton } from "./ArenaNavButton";
@@ -53,7 +54,64 @@ describe("ArenaNavButton", () => {
     const link = screen.getByRole("link", { name: "处理中..." });
 
     expect(link).toHaveAttribute("aria-disabled", "true");
+    expect(link).toHaveAttribute("tabindex", "-1");
     expect(link).toHaveClass("gothic-button");
+  });
+
+  it("prevents disabled navigation links from invoking click handlers or navigating", async () => {
+    const user = userEvent.setup();
+    const handleClick = vi.fn();
+
+    render(
+      <MemoryRouter initialEntries={["/games"]}>
+        <ArenaNavButton disabled onClick={handleClick} to="/games/history">
+          对局历史
+        </ArenaNavButton>
+        <Routes>
+          <Route path="/games" element={<p>大厅</p>} />
+          <Route path="/games/history" element={<p>历史</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const link = screen.getByRole("link", { name: "对局历史" });
+
+    expect(link).toHaveAttribute("aria-disabled", "true");
+    expect(link).toHaveAttribute("tabindex", "-1");
+
+    await user.click(link);
+
+    expect(handleClick).not.toHaveBeenCalled();
+    expect(screen.getByText("大厅")).toBeInTheDocument();
+    expect(screen.queryByText("历史")).not.toBeInTheDocument();
+  });
+
+  it("prevents loading navigation links from invoking click handlers or navigating", async () => {
+    const user = userEvent.setup();
+    const handleClick = vi.fn();
+
+    render(
+      <MemoryRouter initialEntries={["/games"]}>
+        <ArenaNavButton loading onClick={handleClick} to="/games/history">
+          对局历史
+        </ArenaNavButton>
+        <Routes>
+          <Route path="/games" element={<p>大厅</p>} />
+          <Route path="/games/history" element={<p>历史</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const link = screen.getByRole("link", { name: "处理中..." });
+
+    expect(link).toHaveAttribute("aria-disabled", "true");
+    expect(link).toHaveAttribute("tabindex", "-1");
+
+    await user.click(link);
+
+    expect(handleClick).not.toHaveBeenCalled();
+    expect(screen.getByText("大厅")).toBeInTheDocument();
+    expect(screen.queryByText("历史")).not.toBeInTheDocument();
   });
 
   it("forwards useful navigation link props through the component button", () => {
