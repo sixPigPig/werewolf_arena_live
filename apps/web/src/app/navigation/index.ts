@@ -1,4 +1,5 @@
 export { ArenaGlobalNav } from "./ArenaGlobalNav";
+export { ArenaCommandNav } from "./ArenaCommandNav";
 export { ArenaNavButton } from "./ArenaNavButton";
 export { useArenaNavSurface } from "./useArenaNavSurface";
 export type {
