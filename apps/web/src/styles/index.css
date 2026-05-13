@@ -662,10 +662,6 @@ body {
 }
 
 @media (max-width: 520px) {
-  .history-top-nav .app-project-name {
-    display: none;
-  }
-
   .history-top-button {
     min-width: 4.8rem;
     padding-inline: 0.5rem;

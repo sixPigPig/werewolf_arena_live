@@ -32,7 +32,9 @@ describe("HomePage", () => {
       "h-[56px]",
       "min-h-[56px]",
     );
-    expect(document.querySelector(".site-content-layer")).toHaveClass("pt-14");
+    expect(document.querySelector(".site-content-layer")).toHaveClass(
+      "pt-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+    );
     expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
     expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
     expect(screen.getByTestId("app-brand-logo")).toHaveClass(
