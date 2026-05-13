@@ -56,14 +56,19 @@ export function ArenaGlobalNav({
       data-variant="global"
     >
       <div className="arena-nav-inner mx-auto flex h-full w-full max-w-none items-center justify-between gap-3 px-3">
-        <ArenaBrand
-          brandLabel={brandLabel}
-          linkClassName="arena-brand-link flex h-full min-w-0 flex-1 items-center rounded-md text-left focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
-          linkTestId="arena-brand-link"
-          logoClassName="max-w-full"
-          logoTestId="arena-brand-logo"
-          wordmarkTestId="arena-brand-wordmark"
-        />
+        <div
+          className="arena-brand-slot flex h-full min-w-0 flex-1 items-center"
+          data-testid="arena-brand-slot"
+        >
+          <ArenaBrand
+            brandLabel={brandLabel}
+            linkClassName="arena-brand-link flex h-full max-w-full min-w-0 items-center rounded-md text-left focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
+            linkTestId="arena-brand-link"
+            logoClassName="max-w-full"
+            logoTestId="arena-brand-logo"
+            wordmarkTestId="arena-brand-wordmark"
+          />
+        </div>
         <nav
           aria-label="页面功能"
           className="arena-nav-actions flex w-auto shrink-0 flex-nowrap items-center justify-end gap-1.5"

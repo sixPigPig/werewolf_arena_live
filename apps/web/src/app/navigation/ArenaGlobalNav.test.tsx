@@ -124,7 +124,7 @@ describe("ArenaGlobalNav", () => {
     expect(brandLink.className).not.toMatch(/focus[^ ]*(amber|yellow)/);
   });
 
-  it("keeps the brand area shrinkable while actions stay fixed", () => {
+  it("keeps empty nav space outside the brand link click target", () => {
     renderNav(
       <ArenaGlobalNav
         primaryAction={
@@ -136,10 +136,15 @@ describe("ArenaGlobalNav", () => {
       />,
     );
 
-    expect(screen.getByTestId("arena-brand-link")).toHaveClass(
+    expect(screen.getByTestId("arena-brand-slot")).toHaveClass(
       "flex-1",
       "min-w-0",
     );
+    expect(screen.getByTestId("arena-brand-link")).toHaveClass(
+      "max-w-full",
+      "min-w-0",
+    );
+    expect(screen.getByTestId("arena-brand-link")).not.toHaveClass("flex-1");
     expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
       "max-w-full",
       "shrink-0",

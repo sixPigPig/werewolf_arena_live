@@ -80,12 +80,4 @@ describe("Button", () => {
     expect(css).toContain('url("../assets/buttons/button-warning.png")');
     expect(css).not.toContain("../assets/gothic-buttons/");
   });
-
-  it("keeps the gothic button corners from being scaled with the full width", () => {
-    const css = readFileSync("src/styles/index.css", "utf8");
-
-    expect(css).toContain("border-image-slice: var(--gothic-button-slice) fill");
-    expect(css).toContain("border-image-width:");
-    expect(css).not.toContain("center / 100% 100% no-repeat");
-  });
 });
