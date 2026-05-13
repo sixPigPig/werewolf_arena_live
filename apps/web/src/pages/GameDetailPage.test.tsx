@@ -277,8 +277,8 @@ describe("GameDetailPage", () => {
 
     expect(await screen.findByText("狼人阵营")).toBeInTheDocument();
     expect(screen.getByTestId("app-top-nav")).toHaveClass(
-      "h-[56px]",
-      "min-h-[56px]",
+      "h-[var(--app-top-nav-height)]",
+      "min-h-[var(--app-top-nav-height)]",
     );
     expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
     expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
@@ -297,9 +297,15 @@ describe("GameDetailPage", () => {
       "href",
       "/games",
     );
+    expect(screen.getByRole("link", { name: "返回大厅" })).toHaveClass(
+      "gothic-button",
+    );
     expect(
       screen.getByRole("button", { name: "刷新复盘" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新复盘" })).toHaveClass(
+      "gothic-button",
+    );
     const pageMain = container.querySelector("main");
     expect(container.querySelectorAll("main")).toHaveLength(1);
     expect(pageMain).toHaveClass(

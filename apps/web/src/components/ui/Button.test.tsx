@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import { MemoryRouter, Link } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
@@ -59,5 +60,12 @@ describe("Button", () => {
 
     expect(button).toBeDisabled();
     expect(button).toHaveClass("gothic-button");
+  });
+
+  it("keeps global page overrides from erasing component backgrounds", () => {
+    const css = readFileSync("src/styles/index.css", "utf8");
+
+    expect(css).not.toMatch(/\.site-content-layer\s+\.bg-slate-100/);
+    expect(css).not.toMatch(/\.site-content-layer\s+\.bg-slate-950/);
   });
 });

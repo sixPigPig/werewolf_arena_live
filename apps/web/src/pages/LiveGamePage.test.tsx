@@ -415,6 +415,9 @@ describe("LiveGamePage", () => {
       "href",
       "/games/session_20260424_120000_ab12cd34",
     );
+    expect(screen.getByRole("link", { name: "查看完整复盘" })).toHaveClass(
+      "gothic-button",
+    );
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("已完成")).toBeInTheDocument();
   });
@@ -460,8 +463,8 @@ describe("LiveGamePage", () => {
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
     expect(screen.getByTestId("app-top-nav")).toHaveClass(
-      "h-[56px]",
-      "min-h-[56px]",
+      "h-[var(--app-top-nav-height)]",
+      "min-h-[var(--app-top-nav-height)]",
       "live-command-nav",
     );
     expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
@@ -484,6 +487,10 @@ describe("LiveGamePage", () => {
     expect(screen.getByRole("link", { name: "返回大厅" })).toHaveAttribute(
       "href",
       "/games",
+    );
+    expect(screen.getByRole("link", { name: "返回大厅" })).toHaveClass(
+      "inline-flex",
+      "live-command-exit",
     );
     const topNav = screen.getByTestId("app-top-nav");
     const liveNavContext = within(topNav).getByTestId("live-nav-context");

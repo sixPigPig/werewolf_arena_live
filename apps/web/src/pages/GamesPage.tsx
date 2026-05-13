@@ -1,5 +1,6 @@
 import { Button } from "../components/ui";
 import { useRef } from "react";
+import { Link } from "react-router-dom";
 
 import { AppTopNav } from "../app/AppTopNav";
 import { GamesWorkspace } from "./components/GamesWorkspace";
@@ -22,11 +23,21 @@ export function GamesPage() {
     <>
       <AppTopNav
         actions={
-          <Button highContrast onClick={focusCreateForm} size="1" type="button">
+          <Button
+            intent="primary"
+            onClick={focusCreateForm}
+            size="1"
+            skin="gothic"
+            type="button"
+          >
             新建对局
           </Button>
         }
-        showHistoryLink
+        utilityActions={
+          <Button asChild color="gray" size="1" skin="gothic" variant="surface">
+            <Link to="/games/history">对局历史</Link>
+          </Button>
+        }
       />
       <GamesWorkspace createFormRef={createFormRef} />
     </>

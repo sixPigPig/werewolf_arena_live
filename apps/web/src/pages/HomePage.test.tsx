@@ -29,10 +29,12 @@ describe("HomePage", () => {
       "inset-x-0",
       "top-0",
       "z-50",
-      "h-[56px]",
-      "min-h-[56px]",
+      "h-[var(--app-top-nav-height)]",
+      "min-h-[var(--app-top-nav-height)]",
     );
-    expect(document.querySelector(".site-content-layer")).toHaveClass("pt-14");
+    expect(document.querySelector(".site-content-layer")).toHaveClass(
+      "pt-[var(--app-top-nav-height)]",
+    );
     expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
     expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
     expect(screen.getByTestId("app-brand-logo")).toHaveClass(
@@ -49,6 +51,9 @@ describe("HomePage", () => {
     expect(screen.getByRole("link", { name: "进入大厅" })).toHaveAttribute(
       "href",
       "/games",
+    );
+    expect(screen.getByRole("link", { name: "进入大厅" })).toHaveClass(
+      "gothic-button",
     );
     expect(screen.queryByRole("link", { name: "返回大厅" })).not.toBeInTheDocument();
     expect(container.querySelector("main")?.className).not.toContain("bg-");

@@ -117,8 +117,8 @@ describe("GamesPage", () => {
       screen.getByRole("heading", { name: "狼人杀对局大厅" }),
     ).toBeInTheDocument();
     expect(screen.getByTestId("app-top-nav")).toHaveClass(
-      "h-[56px]",
-      "min-h-[56px]",
+      "h-[var(--app-top-nav-height)]",
+      "min-h-[var(--app-top-nav-height)]",
     );
     expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
     expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
@@ -137,10 +137,16 @@ describe("GamesPage", () => {
       "href",
       "/games/history",
     );
+    expect(screen.getByRole("link", { name: "对局历史" })).toHaveClass(
+      "gothic-button",
+    );
     expect(
       screen.queryByRole("button", { name: "刷新列表" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "新建对局" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建对局" })).toHaveClass(
+      "gothic-button",
+    );
     expect(screen.queryByRole("link", { name: "返回大厅" })).not.toBeInTheDocument();
     expect(container.querySelector("main")).toHaveClass(
       "max-w-none",

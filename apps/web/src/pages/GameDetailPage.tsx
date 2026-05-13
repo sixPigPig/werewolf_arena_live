@@ -1,6 +1,6 @@
 import { Button, Callout, Text } from "../components/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { AppTopNav } from "../app/AppTopNav";
 import { getGameDetail } from "../features/games/api/getGameDetail";
@@ -23,13 +23,18 @@ export function GameDetailPage() {
           loading={isFetching && !isPending}
           onClick={() => void refetch()}
           size="1"
+          skin="gothic"
           type="button"
           variant="surface"
         >
           刷新复盘
         </Button>
       }
-      showLobbyBack
+      utilityActions={
+        <Button asChild color="gray" size="1" skin="gothic" variant="surface">
+          <Link to="/games">返回大厅</Link>
+        </Button>
+      }
     />
   );
 

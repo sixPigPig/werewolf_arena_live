@@ -48,9 +48,22 @@ describe("GameHistoryPage", () => {
       "href",
       "/games",
     );
+    expect(screen.getByRole("link", { name: "返回大厅" })).toHaveClass(
+      "gothic-button",
+    );
+    expect(screen.getByRole("link", { name: "返回大厅" })).not.toHaveClass(
+      "history-top-button",
+    );
     expect(
       screen.getByRole("button", { name: "刷新列表" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新列表" })).toHaveClass(
+      "gothic-button",
+    );
+    expect(screen.getByRole("button", { name: "刷新列表" })).not.toHaveClass(
+      "history-top-button",
+      "history-refresh-button",
+    );
     expect(await screen.findByText("session_20260424_001")).toBeInTheDocument();
     expect(screen.getByText("狼人阵营")).toBeInTheDocument();
     expect(screen.getByTestId("games-sessions-module")).toHaveClass(

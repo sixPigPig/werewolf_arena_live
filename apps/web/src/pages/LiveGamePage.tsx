@@ -102,28 +102,34 @@ export function LiveGamePage() {
       {canResumeRun && run ? (
         <Button
           disabled={resumeMutation.isPending}
-          highContrast
+          intent="primary"
           loading={resumeMutation.isPending}
           onClick={() => resumeMutation.mutate(run.session_id)}
           size="1"
+          skin="gothic"
           type="button"
         >
           继续对局
         </Button>
       ) : null}
       {terminalEvent && run ? (
-        <Button asChild color="gray" highContrast size="1" variant="surface">
+        <Button asChild color="gray" size="1" skin="gothic" variant="surface">
           <Link to={`/games/${run.session_id}`}>查看完整复盘</Link>
         </Button>
       ) : null}
-      <Link
-        aria-label="返回大厅"
-        className="live-command-exit flex h-10 w-10 items-center justify-center rounded-md border border-slate-500/35 bg-white/5 text-lg text-slate-100 shadow-[inset_0_0_12px_rgba(255,255,255,0.04)] transition hover:border-amber-300/55 hover:bg-amber-300/10 focus:outline-none focus:ring-2 focus:ring-amber-300/70"
-        to="/games"
+      <Button
+        asChild
+        className="live-command-exit h-10 w-10 px-0 text-lg"
+        color="gray"
+        highContrast
+        size="2"
+        variant="surface"
       >
-        <span className="sr-only">返回大厅</span>
-        <span aria-hidden="true">↪</span>
-      </Link>
+        <Link aria-label="返回大厅" to="/games">
+          <span className="sr-only">返回大厅</span>
+          <span aria-hidden="true">↪</span>
+        </Link>
+      </Button>
     </>
   );
   const topNavContext = run ? (
@@ -183,8 +189,9 @@ export function LiveGamePage() {
         <AppTopNav
           actions={topNavActions}
           context={topNavContext}
-          layout="command"
+          density="compact"
           tone="nocturne"
+          variant="command"
         />
         <main className="min-h-screen px-4 py-8 text-slate-100">
           <div className="mx-auto w-full max-w-none">
@@ -203,8 +210,9 @@ export function LiveGamePage() {
         <AppTopNav
           actions={topNavActions}
           context={topNavContext}
-          layout="command"
+          density="compact"
           tone="nocturne"
+          variant="command"
         />
         <main className="min-h-screen px-4 py-8 text-slate-100">
           <div className="mx-auto w-full max-w-none">
@@ -222,8 +230,9 @@ export function LiveGamePage() {
       <AppTopNav
         actions={topNavActions}
         context={topNavContext}
-        layout="command"
+        density="compact"
         tone="nocturne"
+        variant="command"
       />
       <main
         className="live-game-page min-h-screen px-4 py-6 text-slate-100"

@@ -18,7 +18,7 @@ export function AppTheme({ children }: AppThemeProps) {
           backgroundPosition: "center top",
         }}
       />
-      <div className="site-content-layer relative z-10 min-h-screen pt-14">
+      <div className="site-content-layer relative z-10 min-h-screen pt-[var(--app-top-nav-height)]">
         {children}
       </div>
     </div>

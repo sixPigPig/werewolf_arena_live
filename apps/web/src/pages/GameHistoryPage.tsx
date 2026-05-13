@@ -48,31 +48,31 @@ export function GameHistoryPage() {
       <AppTopNav
         className="history-top-nav"
         actions={
-          <>
-            <Button
-              asChild
-              className="history-top-button"
-              color="gray"
-              size="1"
-              variant="surface"
-            >
-              <Link to="/games">返回大厅</Link>
-            </Button>
-            <Button
-              className="history-top-button history-refresh-button"
-              color="red"
-              disabled={isFetching}
-              loading={isFetching && !isPending}
-              onClick={refreshSessions}
-              size="1"
-              type="button"
-              variant="surface"
-            >
-              刷新列表
-            </Button>
-          </>
+          <Button
+            color="red"
+            disabled={isFetching}
+            loading={isFetching && !isPending}
+            onClick={refreshSessions}
+            size="1"
+            skin="gothic"
+            type="button"
+            variant="surface"
+          >
+            刷新列表
+          </Button>
         }
         tone="nocturne"
+        utilityActions={
+          <Button
+            asChild
+            color="gray"
+            size="1"
+            skin="gothic"
+            variant="surface"
+          >
+            <Link to="/games">返回大厅</Link>
+          </Button>
+        }
       />
       <main
         className="games-history-module history-page-shell mx-auto w-full max-w-none px-4 py-8"
