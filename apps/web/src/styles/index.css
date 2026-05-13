@@ -839,12 +839,13 @@ body {
 }
 
 .gothic-button {
-  --gothic-button-border: 18px;
-  --gothic-button-slice: 92 150 72 150;
+  --gothic-button-border-x: 4.1rem;
+  --gothic-button-border-y: 1.28rem;
   --gothic-button-text: #f4e3cd;
   --gothic-button-focus: #d8b58a;
   --gothic-button-glow: rgb(216 181 138 / 32%);
-  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-default.png");
+  --gothic-button-image: url("../assets/buttons/button-default.png");
+  --gothic-button-slice: 170 305 145 305;
   position: relative;
   isolation: isolate;
   display: inline-flex;
@@ -881,10 +882,12 @@ body {
 
 .gothic-button::before {
   z-index: -2;
-  border: var(--gothic-button-border) solid transparent;
+  border-style: solid;
+  border-color: transparent;
+  border-width: var(--gothic-button-border-y) var(--gothic-button-border-x);
   border-image-source: var(--gothic-button-image);
   border-image-slice: var(--gothic-button-slice) fill;
-  border-image-width: var(--gothic-button-border);
+  border-image-width: var(--gothic-button-border-y) var(--gothic-button-border-x);
   border-image-repeat: stretch;
   filter: drop-shadow(0 12px 20px rgb(0 0 0 / 30%));
 }
@@ -908,6 +911,8 @@ body {
 }
 
 .gothic-button-sm {
+  --gothic-button-border-x: 3.5rem;
+  --gothic-button-border-y: 1.08rem;
   min-width: 8rem;
   min-height: 2.5rem;
   padding: 0.2rem 1.75rem 0.28rem;
@@ -915,6 +920,8 @@ body {
 }
 
 .gothic-button-md {
+  --gothic-button-border-x: 4.1rem;
+  --gothic-button-border-y: 1.28rem;
   min-width: 9.75rem;
   min-height: 3rem;
   padding: 0.24rem 2.125rem 0.34rem;
@@ -922,6 +929,8 @@ body {
 }
 
 .gothic-button-lg {
+  --gothic-button-border-x: 4.8rem;
+  --gothic-button-border-y: 1.52rem;
   min-width: 11.875rem;
   min-height: 3.625rem;
   padding: 0.28rem 2.625rem 0.4rem;
@@ -929,42 +938,42 @@ body {
 }
 
 .gothic-button[data-intent="default"] {
-  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-default.png");
+  --gothic-button-image: url("../assets/buttons/button-default.png");
   --gothic-button-text: #f4e3cd;
   --gothic-button-focus: #d8b58a;
   --gothic-button-glow: rgb(216 181 138 / 32%);
 }
 
 .gothic-button[data-intent="info"] {
-  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-info.png");
+  --gothic-button-image: url("../assets/buttons/button-info.png");
   --gothic-button-text: #d9e7f3;
   --gothic-button-focus: #9bc6e8;
   --gothic-button-glow: rgb(155 198 232 / 36%);
 }
 
 .gothic-button[data-intent="primary"] {
-  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-primary.png");
+  --gothic-button-image: url("../assets/buttons/button-primary.png");
   --gothic-button-text: #d7ecff;
   --gothic-button-focus: #67b7ff;
   --gothic-button-glow: rgb(103 183 255 / 38%);
 }
 
 .gothic-button[data-intent="danger"] {
-  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-danger.png");
+  --gothic-button-image: url("../assets/buttons/button-danger.png");
   --gothic-button-text: #ffd1c8;
   --gothic-button-focus: #ff765f;
   --gothic-button-glow: rgb(255 118 95 / 38%);
 }
 
 .gothic-button[data-intent="success"] {
-  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-success.png");
+  --gothic-button-image: url("../assets/buttons/button-success.png");
   --gothic-button-text: #d8f2d2;
   --gothic-button-focus: #7edb7a;
   --gothic-button-glow: rgb(126 219 122 / 34%);
 }
 
 .gothic-button[data-intent="warning"] {
-  --gothic-button-image: url("../assets/gothic-buttons/gothic-button-warning.png");
+  --gothic-button-image: url("../assets/buttons/button-warning.png");
   --gothic-button-text: #f7dfad;
   --gothic-button-focus: #e2b765;
   --gothic-button-glow: rgb(226 183 101 / 36%);
