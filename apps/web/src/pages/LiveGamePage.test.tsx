@@ -477,11 +477,14 @@ describe("LiveGamePage", () => {
     expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
     expect(screen.getByTestId("arena-command-brand-logo")).toHaveClass(
       "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
-      "w-auto",
+      "w-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
     );
     expect(
       screen.getByTestId("arena-command-brand-logo").getAttribute("src"),
-    ).toContain("langrensha-arena-nav-logo");
+    ).toContain("langrensha-c-logo");
+    expect(
+      screen.queryByTestId("arena-command-brand-wordmark"),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).not.toHaveClass(
       "border",
     );

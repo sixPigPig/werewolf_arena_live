@@ -61,10 +61,15 @@ describe("ArenaCommandNav", () => {
     ).toHaveClass("gothic-button");
     expect(screen.getByTestId("arena-command-brand-logo")).toHaveClass(
       "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
-      "w-auto",
-      "max-w-full",
-      "shrink",
+      "w-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "shrink-0",
     );
+    expect(
+      screen.getByTestId("arena-command-brand-logo").getAttribute("src"),
+    ).toContain("langrensha-c-logo");
+    expect(
+      screen.queryByTestId("arena-command-brand-wordmark"),
+    ).not.toBeInTheDocument();
   });
 
   it("uses the same light frosted surface after scrolling", () => {
@@ -81,7 +86,7 @@ describe("ArenaCommandNav", () => {
     expect(nav).toHaveAttribute("data-surface", "frosted");
     expect(nav).toHaveClass(
       "bg-slate-950/[0.08]",
-      "backdrop-blur-xl",
+      "backdrop-blur-sm",
       "border-white/10",
     );
   });
@@ -100,7 +105,6 @@ describe("ArenaCommandNav", () => {
       "focus-visible:outline-2",
       "focus-visible:outline-offset-2",
       "focus-visible:outline-white/60",
-      "flex-1",
       "min-w-0",
     );
     expect(brandLink.className).not.toMatch(/focus[^ ]*(amber|yellow)/);

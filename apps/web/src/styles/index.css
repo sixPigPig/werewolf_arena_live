@@ -784,32 +784,6 @@ body {
 }
 
 @media (orientation: landscape) and (max-height: 620px) {
-  .app-top-nav-inner {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.45rem 0.75rem;
-  }
-
-  .app-project-name {
-    font-size: 0.9rem;
-  }
-
-  .app-top-nav-actions {
-    width: auto;
-    flex-wrap: nowrap;
-    justify-content: flex-end;
-    gap: 0.35rem;
-  }
-
-  .app-top-nav-actions button,
-  .app-top-nav-actions a {
-    min-height: 2rem;
-    padding-inline: 0.75rem;
-    font-size: 0.75rem;
-  }
-
   .live-game-page {
     padding: 0.45rem 0.75rem 0.75rem;
   }

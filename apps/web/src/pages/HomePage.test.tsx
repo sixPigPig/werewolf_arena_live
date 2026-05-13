@@ -24,25 +24,37 @@ describe("HomePage", () => {
         name: "Python + React monorepo is ready.",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByTestId("app-top-nav")).toHaveClass(
+    expect(screen.queryByTestId("app-top-nav")).not.toBeInTheDocument();
+    expect(screen.getByTestId("arena-global-nav")).toHaveClass(
       "fixed",
       "inset-x-0",
       "top-0",
       "z-50",
-      "h-[var(--app-top-nav-height)]",
-      "min-h-[var(--app-top-nav-height)]",
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "min-h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
     );
     expect(document.querySelector(".site-content-layer")).toHaveClass(
       "pt-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
     );
     expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
     expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
-    expect(screen.getByTestId("app-brand-logo")).toHaveClass(
-      "h-16",
+    expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "w-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+    );
+    expect(screen.getByTestId("arena-brand-logo").getAttribute("src")).toContain(
+      "langrensha-c-logo",
+    );
+    expect(screen.getByTestId("arena-brand-wordmark")).toHaveClass(
+      "hidden",
+      "sm:block",
+      "h-12",
       "w-auto",
     );
-    expect(screen.getByTestId("app-brand-logo").getAttribute("src")).toContain(
-      "langrensha-arena-nav-logo",
+    expect(
+      screen.getByTestId("arena-brand-wordmark").getAttribute("src"),
+    ).toContain(
+      "langrensha-title-wordmark",
     );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
       "href",

@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
 
-import brandLogoSrc from "../../assets/langrensha-arena-nav-logo.png";
+import { ArenaBrand } from "./ArenaBrand";
 import type { ArenaNavDensity, ArenaNavTone } from "./arenaNav.types";
 import { useArenaNavSurface } from "./useArenaNavSurface";
 
@@ -21,7 +20,7 @@ function cx(...classes: Array<string | false | null | undefined>) {
 
 function surfaceClass(surface: ReturnType<typeof useArenaNavSurface>) {
   return surface === "frosted"
-    ? "border-white/10 bg-slate-950/[0.08] shadow-[0_12px_40px_rgba(0,0,0,0.10)] backdrop-blur-xl"
+    ? "border-white/10 bg-slate-950/[0.08] shadow-[0_12px_40px_rgba(0,0,0,0.10)] backdrop-blur-sm"
     : "border-transparent bg-transparent shadow-none";
 }
 
@@ -60,18 +59,14 @@ export function ArenaCommandNav({
     >
       <div className="arena-command-inner mx-auto flex h-full w-full max-w-none items-center justify-between gap-3 overflow-x-auto px-3">
         <div className="arena-command-primary flex min-w-0 flex-1 items-center gap-3">
-          <Link
-            className="arena-command-brand-link flex h-full min-w-0 flex-1 items-center rounded-md text-left focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
-            data-testid="arena-command-brand-link"
-            to="/games"
-          >
-            <img
-              alt={brandLabel}
-              className="arena-command-brand-logo h-[var(--arena-nav-height,var(--app-top-nav-height,56px))] w-auto max-w-full shrink object-contain"
-              data-testid="arena-command-brand-logo"
-              src={brandLogoSrc}
-            />
-          </Link>
+          <ArenaBrand
+            brandLabel={brandLabel}
+            linkClassName="arena-command-brand-link flex h-full min-w-0 shrink-0 items-center rounded-md text-left focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
+            linkTestId="arena-command-brand-link"
+            logoTestId="arena-command-brand-logo"
+            mode="compact"
+            wordmarkTestId="arena-command-brand-wordmark"
+          />
           <div
             className="arena-command-context min-w-0 shrink overflow-hidden whitespace-nowrap text-sm"
             data-testid="arena-command-context"

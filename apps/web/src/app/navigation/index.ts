@@ -1,3 +1,4 @@
+export { ArenaBrand } from "./ArenaBrand";
 export { ArenaGlobalNav } from "./ArenaGlobalNav";
 export { ArenaCommandNav } from "./ArenaCommandNav";
 export { ArenaNavButton } from "./ArenaNavButton";

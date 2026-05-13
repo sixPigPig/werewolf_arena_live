@@ -336,7 +336,7 @@ describe("ArenaGlobalNav", () => {
       "bg-transparent",
       "border-transparent",
     );
-    expect(nav).not.toHaveClass("backdrop-blur-xl");
+    expect(nav).not.toHaveClass("backdrop-blur-sm");
     expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
       "h-[var(--arena-nav-height)]",
       "w-auto",
@@ -369,7 +369,7 @@ describe("ArenaGlobalNav", () => {
     expect(nav).toHaveAttribute("data-surface", "frosted");
     expect(nav).toHaveClass(
       "bg-slate-950/[0.08]",
-      "backdrop-blur-xl",
+      "backdrop-blur-sm",
       "border-white/10",
     );
   });
@@ -422,7 +422,7 @@ function cx(...classes: Array<string | false | null | undefined>) {
 
 function surfaceClass(surface: ReturnType<typeof useArenaNavSurface>) {
   return surface === "frosted"
-    ? "border-white/10 bg-slate-950/[0.08] shadow-[0_12px_40px_rgba(0,0,0,0.10)] backdrop-blur-xl"
+    ? "border-white/10 bg-slate-950/[0.08] shadow-[0_12px_40px_rgba(0,0,0,0.10)] backdrop-blur-sm"
     : "border-transparent bg-transparent shadow-none";
 }
 
@@ -610,7 +610,7 @@ describe("ArenaCommandNav", () => {
     expect(nav).toHaveAttribute("data-surface", "frosted");
     expect(nav).toHaveClass(
       "bg-slate-950/[0.08]",
-      "backdrop-blur-xl",
+      "backdrop-blur-sm",
       "border-white/10",
     );
   });
@@ -655,7 +655,7 @@ function cx(...classes: Array<string | false | null | undefined>) {
 
 function surfaceClass(surface: ReturnType<typeof useArenaNavSurface>) {
   return surface === "frosted"
-    ? "border-white/10 bg-slate-950/[0.08] shadow-[0_12px_40px_rgba(0,0,0,0.12)] backdrop-blur-xl"
+    ? "border-white/10 bg-slate-950/[0.08] shadow-[0_12px_40px_rgba(0,0,0,0.12)] backdrop-blur-sm"
     : "border-transparent bg-transparent shadow-none";
 }
 

@@ -45,10 +45,24 @@ describe("ArenaGlobalNav", () => {
       "bg-transparent",
       "border-transparent",
     );
-    expect(nav).not.toHaveClass("backdrop-blur-xl");
+    expect(nav).not.toHaveClass("backdrop-blur-sm");
     expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
       "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "w-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+    );
+    expect(screen.getByTestId("arena-brand-logo").getAttribute("src")).toContain(
+      "langrensha-c-logo",
+    );
+    expect(screen.getByTestId("arena-brand-wordmark")).toHaveClass(
+      "hidden",
+      "sm:block",
+      "h-12",
       "w-auto",
+    );
+    expect(
+      screen.getByTestId("arena-brand-wordmark").getAttribute("src"),
+    ).toContain(
+      "langrensha-title-wordmark",
     );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
       "href",
@@ -82,7 +96,7 @@ describe("ArenaGlobalNav", () => {
     expect(nav).toHaveAttribute("data-surface", "frosted");
     expect(nav).toHaveClass(
       "bg-slate-950/[0.08]",
-      "backdrop-blur-xl",
+      "backdrop-blur-sm",
       "border-white/10",
     );
   });
@@ -128,12 +142,10 @@ describe("ArenaGlobalNav", () => {
     );
     expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
       "max-w-full",
-      "shrink",
-    );
-    expect(screen.getByTestId("arena-brand-logo")).not.toHaveClass(
-      "max-w-[16rem]",
       "shrink-0",
     );
+    expect(screen.getByTestId("arena-brand-wordmark")).toHaveClass("min-w-0");
+    expect(screen.getByTestId("arena-brand-wordmark")).not.toHaveClass("shrink-0");
     expect(screen.getByTestId("arena-nav-actions")).toHaveClass("shrink-0");
   });
 });

@@ -287,10 +287,13 @@ describe("GameDetailPage", () => {
     );
     expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
       "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
-      "w-auto",
+      "w-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
     );
     expect(screen.getByTestId("arena-brand-logo").getAttribute("src")).toContain(
-      "langrensha-arena-nav-logo",
+      "langrensha-c-logo",
+    );
+    expect(screen.getByTestId("arena-brand-wordmark").getAttribute("src")).toContain(
+      "langrensha-title-wordmark",
     );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
       "href",
