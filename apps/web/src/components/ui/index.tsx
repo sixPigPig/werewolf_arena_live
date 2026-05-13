@@ -319,6 +319,64 @@ export function Card({
   );
 }
 
+type ContainerElement = "article" | "aside" | "div" | "section";
+
+type GothicNightContainerStyle = CSSProperties & {
+  "--gothic-night-container-base-opacity"?: number;
+};
+
+export type ContainerProps = HTMLAttributes<HTMLElement> & {
+  as?: ContainerElement;
+  baseOpacity?: number;
+  contentClassName?: string;
+  size?: "1" | "2" | "3";
+};
+
+export function Container({
+  as: Component = "div",
+  baseOpacity,
+  children,
+  className,
+  contentClassName,
+  size = "2",
+  style,
+  ...props
+}: ContainerProps) {
+  const containerStyle: GothicNightContainerStyle = { ...style };
+
+  if (baseOpacity !== undefined) {
+    containerStyle["--gothic-night-container-base-opacity"] = baseOpacity;
+  }
+
+  return (
+    <Component
+      className={cx(
+        "gothic-night-container",
+        gothicNightContainerSizeClass(size),
+        className,
+      )}
+      style={containerStyle}
+      {...props}
+    >
+      <div
+        className={cx("gothic-night-container-content", contentClassName)}
+      >
+        {children}
+      </div>
+    </Component>
+  );
+}
+
+function gothicNightContainerSizeClass(
+  size: NonNullable<ContainerProps["size"]>,
+) {
+  return size === "1"
+    ? "gothic-night-container-sm"
+    : size === "3"
+      ? "gothic-night-container-lg"
+      : "gothic-night-container-md";
+}
+
 function CalloutRoot({
   children,
   className,
