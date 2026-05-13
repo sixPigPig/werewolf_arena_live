@@ -52,6 +52,9 @@ describe("ArenaCommandNav", () => {
       }),
     ).toBeInTheDocument();
     expect(
+      screen.getByRole("region", { name: "实时控制" }),
+    ).toBe(screen.getByTestId("arena-command-controls"));
+    expect(
       within(screen.getByTestId("arena-command-actions")).getByRole("link", {
         name: "返回大厅",
       }),
@@ -104,5 +107,25 @@ describe("ArenaCommandNav", () => {
     expect(screen.getByTestId("arena-command-action-region")).toHaveClass(
       "shrink-0",
     );
+  });
+
+  it("keeps command controls visible while only clipping non-interactive context", () => {
+    renderNav(
+      <ArenaCommandNav
+        commands={<button type="button">发言顺序</button>}
+        context={<span>很长的实时房间上下文</span>}
+      />,
+    );
+
+    const controls = screen.getByTestId("arena-command-controls");
+
+    expect(screen.getByTestId("arena-command-context")).toHaveClass(
+      "overflow-hidden",
+    );
+    expect(
+      screen.getByTestId("arena-command-nav").firstElementChild,
+    ).toHaveClass("overflow-x-auto");
+    expect(controls).not.toHaveClass("overflow-hidden");
+    expect(controls.closest(".overflow-hidden")).toBeNull();
   });
 });

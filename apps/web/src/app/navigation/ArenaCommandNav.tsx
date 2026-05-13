@@ -58,7 +58,7 @@ export function ArenaCommandNav({
       data-tone={tone}
       data-variant="command"
     >
-      <div className="arena-command-inner mx-auto flex h-full w-full max-w-none items-center justify-between gap-3 px-3">
+      <div className="arena-command-inner mx-auto flex h-full w-full max-w-none items-center justify-between gap-3 overflow-x-auto px-3">
         <div className="arena-command-primary flex min-w-0 flex-1 items-center gap-3">
           <Link
             className="arena-command-brand-link flex h-full min-w-0 flex-1 items-center rounded-md text-left focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
@@ -79,12 +79,13 @@ export function ArenaCommandNav({
             {context}
           </div>
         </div>
-        <div
-          className="arena-command-controls flex min-w-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap"
+        <section
+          aria-label="实时控制"
+          className="arena-command-controls flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap"
           data-testid="arena-command-controls"
         >
           {commands}
-        </div>
+        </section>
         <nav
           aria-label="实时对局操作"
           className="arena-command-action-region flex w-auto shrink-0 flex-nowrap items-center justify-end gap-1.5"
