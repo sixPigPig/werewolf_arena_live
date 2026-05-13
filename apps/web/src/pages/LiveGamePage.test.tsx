@@ -411,10 +411,12 @@ describe("LiveGamePage", () => {
     expect(screen.queryByText('{"say":"我不是狼"}')).not.toBeInTheDocument();
     expect(screen.getByText("模型返回已接收，正在解析行动")).toBeInTheDocument();
     expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "查看完整复盘" })).toHaveAttribute(
+    const replayLink = screen.getByRole("link", { name: "查看完整复盘" });
+    expect(replayLink).toHaveAttribute(
       "href",
       "/games/session_20260424_120000_ab12cd34",
     );
+    expect(replayLink).toHaveClass("gothic-button");
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("已完成")).toBeInTheDocument();
   });
@@ -459,20 +461,27 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
-    expect(screen.getByTestId("app-top-nav")).toHaveClass(
-      "h-[56px]",
-      "min-h-[56px]",
-      "live-command-nav",
+    const commandNav = screen.getByTestId("arena-command-nav");
+    expect(commandNav).toHaveAttribute("data-variant", "command");
+    expect(commandNav).toHaveAttribute("data-density", "compact");
+    expect(commandNav).toHaveAttribute("data-tone", "nocturne");
+    expect(commandNav).toHaveAttribute("data-surface", "transparent");
+    expect(commandNav).toHaveClass(
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "min-h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "bg-transparent",
+      "border-transparent",
     );
+    expect(screen.queryByTestId("app-top-nav")).not.toBeInTheDocument();
     expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
     expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
-    expect(screen.getByTestId("app-brand-logo")).toHaveClass(
-      "h-16",
+    expect(screen.getByTestId("arena-command-brand-logo")).toHaveClass(
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
       "w-auto",
     );
-    expect(screen.getByTestId("app-brand-logo").getAttribute("src")).toContain(
-      "langrensha-arena-nav-logo",
-    );
+    expect(
+      screen.getByTestId("arena-command-brand-logo").getAttribute("src"),
+    ).toContain("langrensha-arena-nav-logo");
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).not.toHaveClass(
       "border",
     );
@@ -485,8 +494,11 @@ describe("LiveGamePage", () => {
       "href",
       "/games",
     );
-    const topNav = screen.getByTestId("app-top-nav");
-    const liveNavContext = within(topNav).getByTestId("live-nav-context");
+    expect(screen.getByTestId("arena-command-context")).toBeInTheDocument();
+    expect(screen.getByTestId("arena-command-controls")).toBeInTheDocument();
+    expect(screen.getByTestId("arena-command-actions")).toBeInTheDocument();
+    const liveNavContext =
+      within(commandNav).getByTestId("live-nav-context");
     expect(liveNavContext).toHaveClass("live-command-context");
     expect(
       within(liveNavContext).getByRole("heading", { name: "实时观战" }),
@@ -499,17 +511,34 @@ describe("LiveGamePage", () => {
     ).toBeInTheDocument();
     expect(liveNavContext).toHaveTextContent("快速执行");
     expect(
-      within(topNav).getByTestId("director-controls"),
+      within(screen.getByTestId("arena-command-controls")).getByTestId(
+        "director-controls",
+      ),
     ).toBeInTheDocument();
     expect(
       within(liveNavContext).queryByTestId("director-controls"),
     ).not.toBeInTheDocument();
-    expect(within(topNav).getByLabelText("播放速度")).toBeInTheDocument();
-    expect(within(topNav).getByRole("button", { name: "暂停" })).toHaveClass(
-      "h-10",
-      "w-10",
-    );
-    expect(within(topNav).getByRole("button", { name: "追到最新" })).toHaveClass(
+    expect(
+      within(screen.getByTestId("arena-command-controls")).getByLabelText(
+        "播放速度",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("arena-command-controls")).getByRole("button", {
+        name: "暂停",
+      }),
+    ).toHaveClass("h-10", "w-10");
+    expect(
+      within(screen.getByTestId("arena-command-controls")).getByRole("button", {
+        name: "追到最新",
+      }),
+    ).toHaveClass("h-10", "w-10");
+    expect(
+      within(screen.getByTestId("arena-command-actions")).getByRole("link", {
+        name: "返回大厅",
+      }),
+    ).toHaveClass(
+      "live-command-exit",
       "h-10",
       "w-10",
     );
@@ -798,7 +827,9 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "继续对局" }));
+    const resumeButton = screen.getByRole("button", { name: "继续对局" });
+    expect(resumeButton).toHaveClass("gothic-button");
+    await userEvent.click(resumeButton);
 
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/v1/games/session_run_1234abcd/resume",

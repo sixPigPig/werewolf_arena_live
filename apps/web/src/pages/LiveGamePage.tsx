@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { AppTopNav } from "../app/AppTopNav";
+import { ArenaCommandNav, ArenaNavButton } from "../app/navigation";
 import { getGameRun } from "../features/games/api/getGameRun";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
@@ -85,45 +85,48 @@ export function LiveGamePage() {
   const focusedPlayerName = autoFollow
     ? autoFocusName
     : manualFocusName ?? autoFocusName;
+  const topNavCommands = run ? (
+    <LiveDirectorControls
+      backlogCount={director.backlogCount}
+      isCatchingUp={director.isCatchingUp}
+      isPaused={director.isPaused}
+      onCatchUpToLatest={director.catchUpToLatest}
+      onSpeedChange={director.setSpeed}
+      onTogglePaused={director.togglePaused}
+      speed={director.speed}
+      variant="nav"
+    />
+  ) : null;
   const topNavActions = (
     <>
-      {run ? (
-        <LiveDirectorControls
-          backlogCount={director.backlogCount}
-          isCatchingUp={director.isCatchingUp}
-          isPaused={director.isPaused}
-          onCatchUpToLatest={director.catchUpToLatest}
-          onSpeedChange={director.setSpeed}
-          onTogglePaused={director.togglePaused}
-          speed={director.speed}
-          variant="nav"
-        />
-      ) : null}
       {canResumeRun && run ? (
-        <Button
+        <ArenaNavButton
           disabled={resumeMutation.isPending}
-          highContrast
+          intent="primary"
           loading={resumeMutation.isPending}
           onClick={() => resumeMutation.mutate(run.session_id)}
-          size="1"
-          type="button"
         >
           继续对局
-        </Button>
+        </ArenaNavButton>
       ) : null}
       {terminalEvent && run ? (
-        <Button asChild color="gray" highContrast size="1" variant="surface">
-          <Link to={`/games/${run.session_id}`}>查看完整复盘</Link>
-        </Button>
+        <ArenaNavButton to={`/games/${run.session_id}`}>
+          查看完整复盘
+        </ArenaNavButton>
       ) : null}
-      <Link
-        aria-label="返回大厅"
-        className="live-command-exit flex h-10 w-10 items-center justify-center rounded-md border border-slate-500/35 bg-white/5 text-lg text-slate-100 shadow-[inset_0_0_12px_rgba(255,255,255,0.04)] transition hover:border-amber-300/55 hover:bg-amber-300/10 focus:outline-none focus:ring-2 focus:ring-amber-300/70"
-        to="/games"
+      <Button
+        asChild
+        className="live-command-exit h-10 w-10 px-0 text-lg"
+        color="gray"
+        highContrast
+        size="2"
+        variant="surface"
       >
-        <span className="sr-only">返回大厅</span>
-        <span aria-hidden="true">↪</span>
-      </Link>
+        <Link aria-label="返回大厅" to="/games">
+          <span className="sr-only">返回大厅</span>
+          <span aria-hidden="true">↪</span>
+        </Link>
+      </Button>
     </>
   );
   const topNavContext = run ? (
@@ -180,11 +183,10 @@ export function LiveGamePage() {
   if (isPending) {
     return (
       <>
-        <AppTopNav
+        <ArenaCommandNav
           actions={topNavActions}
+          commands={topNavCommands}
           context={topNavContext}
-          layout="command"
-          tone="nocturne"
         />
         <main className="min-h-screen px-4 py-8 text-slate-100">
           <div className="mx-auto w-full max-w-none">
@@ -200,11 +202,10 @@ export function LiveGamePage() {
   if (isError || !run) {
     return (
       <>
-        <AppTopNav
+        <ArenaCommandNav
           actions={topNavActions}
+          commands={topNavCommands}
           context={topNavContext}
-          layout="command"
-          tone="nocturne"
         />
         <main className="min-h-screen px-4 py-8 text-slate-100">
           <div className="mx-auto w-full max-w-none">
@@ -219,11 +220,10 @@ export function LiveGamePage() {
 
   return (
     <>
-      <AppTopNav
+      <ArenaCommandNav
         actions={topNavActions}
+        commands={topNavCommands}
         context={topNavContext}
-        layout="command"
-        tone="nocturne"
       />
       <main
         className="live-game-page min-h-screen px-4 py-6 text-slate-100"
