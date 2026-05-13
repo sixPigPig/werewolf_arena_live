@@ -162,20 +162,56 @@ describe("GamesPage", () => {
     expect(screen.getByTestId("games-workspace-module")).toHaveClass(
       "games-workspace-module",
     );
-    expect(screen.getByTestId("games-create-module")).toHaveClass(
-      "glass-panel",
+    const createModule = screen.getByTestId("games-create-module");
+    expect(createModule).toHaveClass(
+      "games-create-module",
+      "lobby-console-form",
     );
+    expect(createModule).not.toHaveClass("glass-panel");
+
+    const consoleBar = within(createModule).getByTestId("lobby-console-bar");
+    expect(
+      within(consoleBar).getByRole("heading", { name: "狼人杀对局大厅" }),
+    ).toBeInTheDocument();
+    expect(within(consoleBar).getByLabelText("随机种子")).toBeInTheDocument();
+    expect(within(consoleBar).getByLabelText("最大轮数")).toBeInTheDocument();
+    expect(
+      within(consoleBar).getByRole("combobox", { name: "演示慢速" }),
+    ).toBeInTheDocument();
+    expect(
+      within(consoleBar).getByRole("button", { name: "发起对局" }),
+    ).toHaveClass("gothic-button");
+
+    const rulesPanel = within(createModule).getByTestId("lobby-rules-panel");
+    expect(within(rulesPanel).getByText("官方规则")).toBeInTheDocument();
     expect(screen.queryByTestId("games-sessions-module")).not.toBeInTheDocument();
     expect(screen.queryByText("session_20260424_001")).not.toBeInTheDocument();
     const officialRuleCards = await screen.findByRole("radiogroup", {
       name: "官方规则",
     });
+    expect(officialRuleCards).toHaveClass("lobby-rule-grid");
+    expect(screen.getByTestId("lobby-rules-panel")).toContainElement(
+      officialRuleCards,
+    );
+    expect(screen.getByTestId("games-create-module")).toContainElement(
+      screen.getByTestId("selected-rule-details"),
+    );
+    expect(screen.getByTestId("selected-rule-details")).toHaveClass(
+      "lobby-rule-details",
+    );
     expect(
       within(officialRuleCards).getByLabelText("经典 8 人局"),
     ).toBeInTheDocument();
+    expect(within(officialRuleCards).getByLabelText("经典 8 人局")).toHaveClass(
+      "lobby-rule-card",
+      "lobby-rule-card-selected",
+    );
     expect(
       within(officialRuleCards).getByLabelText("新手 6 人快局"),
     ).toBeInTheDocument();
+    expect(within(officialRuleCards).getByLabelText("新手 6 人快局")).toHaveClass(
+      "lobby-rule-card",
+    );
     expect(
       within(officialRuleCards).getByLabelText("标准 12 人警长局"),
     ).toBeInTheDocument();

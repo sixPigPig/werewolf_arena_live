@@ -2,7 +2,6 @@ import {
   Badge,
   Button,
   Callout,
-  Card,
   Flex,
   RadioCards,
   SelectField,
@@ -51,57 +50,39 @@ export function CreateGameRunForm() {
       <RadioCards.Item
         aria-label={rule.name}
         className={[
-          "group relative min-h-[10.25rem] overflow-hidden rounded-lg px-4 py-3",
-          "border-slate-400/20 bg-slate-950/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]",
-          "hover:border-amber-200/60 hover:bg-slate-950/55",
-          isSelected
-            ? "border-amber-200/85 bg-amber-950/20 shadow-[0_0_0_1px_rgba(251,191,36,0.38),0_0_28px_rgba(251,191,36,0.24),inset_0_1px_0_rgba(255,255,255,0.08)]"
-            : "",
+          "lobby-rule-card",
+          isSelected ? "lobby-rule-card-selected" : "",
         ].join(" ")}
         key={rule.id}
         value={rule.id}
       >
-        <span
-          aria-hidden="true"
-          className={[
-            "absolute inset-x-3 top-0 h-px bg-gradient-to-r from-transparent via-amber-200/45 to-transparent",
-            isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-70",
-          ].join(" ")}
-        />
-        <Flex className="relative min-w-0 flex-row items-start gap-4" width="100%">
+        <span aria-hidden="true" className="lobby-rule-card-glint" />
+        <div className="lobby-rule-card-body">
           <span
             aria-hidden="true"
             className={[
-              "grid h-16 w-16 shrink-0 place-items-center rounded-full border text-2xl font-semibold",
-              "bg-[radial-gradient(circle_at_50%_35%,rgba(251,191,36,0.18),rgba(15,23,42,0.14)_55%,rgba(2,6,23,0.55))]",
-              isSelected
-                ? "border-amber-200/70 text-amber-100 shadow-[0_0_22px_rgba(251,191,36,0.22)]"
-                : "border-slate-300/25 text-slate-300",
+              "lobby-rule-emblem",
+              isSelected ? "lobby-rule-emblem-selected" : "",
             ].join(" ")}
           >
             {getRuleEmblem(rule)}
           </span>
-          <Flex className="min-w-0" direction="column" gap="2" width="100%">
-            <Text
-              as="span"
-              className="break-words font-serif text-xl leading-7 text-amber-50"
-              size="3"
-              weight="bold"
-            >
+          <div className="lobby-rule-copy">
+            <Text as="span" className="lobby-rule-name" size="3" weight="bold">
               {rule.name}
             </Text>
-            <Text as="span" className="break-words text-slate-300" size="2">
+            <Text as="span" className="lobby-rule-meta" size="2">
               {rule.player_count} 人 · {rule.complexity ?? "标准"} ·{" "}
               {rule.estimated_duration ?? "中"}
             </Text>
-            <Text as="span" className="break-words text-slate-200" size="2">
+            <Text as="span" className="lobby-rule-roles" size="2">
               {roleSummary}
             </Text>
             {rule.rule_tags && rule.rule_tags.length > 0 ? (
-              <Flex gap="1" wrap="wrap">
+              <Flex className="lobby-rule-tags" gap="1" wrap="wrap">
                 {rule.rule_tags.map((tag) => (
                   <Badge
-                    className="border-amber-300/35 bg-slate-950/20 text-amber-100"
+                    className="lobby-rule-tag"
                     color="gray"
                     key={tag}
                     variant="surface"
@@ -111,61 +92,116 @@ export function CreateGameRunForm() {
                 ))}
               </Flex>
             ) : null}
-          </Flex>
-        </Flex>
+          </div>
+        </div>
       </RadioCards.Item>
     );
   };
 
   return (
-    <Card asChild size="2">
-      <form
-        className="games-create-module"
-        data-testid="games-create-module"
-        noValidate
-        onSubmit={(event) => {
-          event.preventDefault();
-          const parsedMaxRounds = Number(maxRounds);
-          if (
-            !maxRounds ||
-            !Number.isInteger(parsedMaxRounds) ||
-            parsedMaxRounds < 1 ||
-            parsedMaxRounds > 20
-          ) {
-            setValidationError("最大轮数必须是 1 到 20 的整数");
-            return;
-          }
+    <form
+      className="games-create-module lobby-console-form"
+      data-testid="games-create-module"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        const parsedMaxRounds = Number(maxRounds);
+        if (
+          !maxRounds ||
+          !Number.isInteger(parsedMaxRounds) ||
+          parsedMaxRounds < 1 ||
+          parsedMaxRounds > 20
+        ) {
+          setValidationError("最大轮数必须是 1 到 20 的整数");
+          return;
+        }
 
-          setValidationError(null);
-          mutation.mutate({
-            rule_set_id: selectedRuleSetId,
-            seed: seed ? Number(seed) : null,
-            max_rounds: parsedMaxRounds,
-            event_pacing: eventPacing,
-          });
-        }}
-      >
-      <fieldset className="mb-5">
-        <legend className="flex items-center gap-2 text-base font-semibold text-amber-50">
-          <span
-            aria-hidden="true"
-            className="h-5 w-5 rotate-45 border border-amber-200/60"
-          />
+        setValidationError(null);
+        mutation.mutate({
+          rule_set_id: selectedRuleSetId,
+          seed: seed ? Number(seed) : null,
+          max_rounds: parsedMaxRounds,
+          event_pacing: eventPacing,
+        });
+      }}
+    >
+      <section className="lobby-console-bar" data-testid="lobby-console-bar">
+        <div className="lobby-console-title-block">
+          <h1 className="lobby-console-title">狼人杀对局大厅</h1>
+        </div>
+        <div className="lobby-console-controls" data-testid="lobby-console-controls">
+          <label className="lobby-console-field lobby-console-field-seed">
+            <span className="lobby-console-field-label">随机种子</span>
+            <TextField.Root
+              className="lobby-console-input"
+              inputMode="numeric"
+              placeholder="可留空"
+              value={seed}
+              onChange={(event) => setSeed(event.target.value)}
+            />
+          </label>
+          <label className="lobby-console-field lobby-console-field-rounds">
+            <span className="lobby-console-field-label">最大轮数</span>
+            <TextField.Root
+              className="lobby-console-input"
+              min={1}
+              max={20}
+              required
+              type="number"
+              value={maxRounds}
+              onChange={(event) => {
+                setMaxRounds(event.target.value);
+                setValidationError(null);
+              }}
+            />
+          </label>
+          <div className="lobby-console-field lobby-console-field-pacing">
+            <span className="lobby-console-field-label" id="event-pacing-label">
+              演示慢速
+            </span>
+            <SelectField
+              aria-labelledby="event-pacing-label"
+              className="lobby-console-select"
+              value={eventPacing}
+              onChange={(event) =>
+                setEventPacing(event.target.value as EventPacingMode)
+              }
+            >
+              <option value="off">关闭</option>
+              <option value="standard">标准演示</option>
+              <option value="slow">慢速讲解</option>
+            </SelectField>
+          </div>
+          <Button
+            className="lobby-console-launch"
+            disabled={isSubmitDisabled}
+            intent="warning"
+            loading={mutation.isPending}
+            size="1"
+            skin="gothic"
+            type="submit"
+          >
+            发起对局
+          </Button>
+        </div>
+      </section>
+
+      <fieldset className="lobby-rules-panel" data-testid="lobby-rules-panel">
+        <legend className="lobby-rules-legend">
+          <span aria-hidden="true" className="lobby-rules-legend-mark" />
           官方规则
         </legend>
         {ruleSetsQuery.isPending ? (
-          <p className="mt-2 text-sm text-slate-600">正在读取官方规则...</p>
+          <p className="lobby-rules-status">正在读取官方规则...</p>
         ) : null}
         {ruleSetsQuery.isError ? (
-          <p className="mt-2 text-sm text-red-700">无法读取官方规则</p>
+          <p className="lobby-rules-error">无法读取官方规则</p>
         ) : null}
         {ruleSets.length > 0 ? (
-          <div className="mt-4 space-y-4">
+          <div className="lobby-rules-content">
             <RadioCards.Root
               aria-label="官方规则"
-              className="mt-2"
-              columns={{ initial: "1", md: "2" }}
-              gap="3"
+              className="lobby-rule-grid"
               highContrast
               onValueChange={setSelectedRuleSetId}
               value={selectedRuleSetId}
@@ -173,71 +209,22 @@ export function CreateGameRunForm() {
             >
               {ruleSets.map(renderRuleCard)}
             </RadioCards.Root>
-            {selectedRuleSet ? (
-              <SelectedRuleDetails rule={selectedRuleSet} />
-            ) : null}
+            {selectedRuleSet ? <SelectedRuleDetails rule={selectedRuleSet} /> : null}
           </div>
         ) : null}
       </fieldset>
-      <div className="flex flex-col gap-3 border-t border-amber-200/15 pt-4 sm:flex-row sm:items-end">
-        <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-slate-200">
-          随机种子
-          <TextField.Root
-            inputMode="numeric"
-            placeholder="可留空"
-            value={seed}
-            onChange={(event) => setSeed(event.target.value)}
-          />
-        </label>
-        <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-slate-200">
-          最大轮数
-          <TextField.Root
-            min={1}
-            max={20}
-            required
-            type="number"
-            value={maxRounds}
-            onChange={(event) => {
-              setMaxRounds(event.target.value);
-              setValidationError(null);
-            }}
-          />
-        </label>
-        <div className="flex flex-1 flex-col gap-1 text-sm font-medium text-slate-200">
-          <span id="event-pacing-label">演示慢速</span>
-          <SelectField
-            aria-labelledby="event-pacing-label"
-            value={eventPacing}
-            onChange={(event) =>
-              setEventPacing(event.target.value as EventPacingMode)
-            }
-          >
-            <option value="off">关闭</option>
-            <option value="standard">标准演示</option>
-            <option value="slow">慢速讲解</option>
-          </SelectField>
-        </div>
-        <Button
-          disabled={isSubmitDisabled}
-          highContrast
-          loading={mutation.isPending}
-          type="submit"
-        >
-          发起对局
-        </Button>
-      </div>
+
       {validationError ? (
-        <Callout.Root className="mt-3" color="red" size="1" variant="soft">
+        <Callout.Root className="lobby-form-callout" color="red" size="1" variant="soft">
           <Callout.Text>{validationError}</Callout.Text>
         </Callout.Root>
       ) : null}
       {mutation.isError ? (
-        <Callout.Root className="mt-3" color="red" size="1" variant="soft">
+        <Callout.Root className="lobby-form-callout" color="red" size="1" variant="soft">
           <Callout.Text>无法发起对局</Callout.Text>
         </Callout.Root>
       ) : null}
-      </form>
-    </Card>
+    </form>
   );
 }
 
@@ -253,39 +240,37 @@ function SelectedRuleDetails({ rule }: { rule: RuleSetSummary }) {
 
   return (
     <section
-      className="relative overflow-hidden rounded-lg border border-amber-200/25 bg-slate-950/35 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+      className="lobby-rule-details"
       data-testid="selected-rule-details"
     >
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute bottom-4 right-7 hidden h-32 w-32 rounded-full border border-amber-200/10 text-center font-serif text-7xl leading-[8rem] text-amber-100/5 md:block"
+        className="lobby-rule-details-glyph"
       >
         狼
       </div>
-      <div className="relative flex items-center gap-3">
+      <div className="lobby-rule-details-header">
         <span
           aria-hidden="true"
-          className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-amber-200/45 bg-amber-300/10 font-serif text-2xl text-amber-100"
+          className="lobby-rule-details-emblem"
         >
           {getRuleEmblem(rule)}
         </span>
-        <div className="min-w-0">
-          <h3 className="break-words font-serif text-2xl font-semibold leading-8 text-amber-100">
-            {rule.name}规则
-          </h3>
+        <div className="lobby-rule-details-title-block">
+          <h3 className="lobby-rule-details-title">{rule.name}规则</h3>
           {rule.description ? (
-            <p className="mt-1 text-sm text-slate-300">{rule.description}</p>
+            <p className="lobby-rule-details-description">{rule.description}</p>
           ) : null}
         </div>
       </div>
-      <dl className="relative mt-4 divide-y divide-amber-200/10">
+      <dl className="lobby-rule-details-list">
         {rows.map((row) => (
           <div
-            className="grid gap-1 py-2 sm:grid-cols-[8rem_1fr]"
+            className="lobby-rule-details-row"
             key={row.label}
           >
-            <dt className="text-sm font-semibold text-amber-100">{row.label}</dt>
-            <dd className="text-sm leading-6 text-slate-100">{row.value}</dd>
+            <dt className="lobby-rule-details-label">{row.label}</dt>
+            <dd className="lobby-rule-details-value">{row.value}</dd>
           </div>
         ))}
       </dl>
