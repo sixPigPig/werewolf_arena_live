@@ -18,7 +18,7 @@ The redesign covers the lobby, history, replay, and live pages. `AppTopNav` stay
 ## Visual Requirements
 
 - Navigation height remains controlled by the global navigation height token.
-- The brand logo uses an absolute square size equal to the navigation height. It must not rely on the logo image's natural rendered height.
+- The full brand logo uses an absolute rendered height equal to the navigation height and keeps width auto so the wordmark remains legible. Compact crest-only branding may use a square size equal to the navigation height.
 - When the page is at the top and has no scroll offset, the navigation is visually transparent and has no border.
 - After the page scrolls, the navigation gains only a light frosted-glass surface: very transparent background, subtle blur, and a light border.
 - The frosted state should be driven by scroll state in the new navigation system, not by each page manually adding classes.
@@ -66,7 +66,7 @@ Scroll detection should be implemented once in the navigation layer. The compone
 - New navigation code is created under a new `app/navigation` module.
 - `AppTopNav` remains unchanged during the rewrite.
 - Lobby, history, replay, and live pages render through the new navigation system.
-- Logo rendered height and width are both tied to the navigation height token.
+- Full logo rendered height is tied to the navigation height token; compact crest logo height and width are both tied to the same token.
 - Top-of-page navigation is transparent and borderless.
 - Scrolled navigation is lightly frosted and still highly transparent.
 - Navigation text buttons share component-library styling without repeated page-level button styling.
