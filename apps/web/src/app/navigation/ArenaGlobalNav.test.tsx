@@ -40,14 +40,14 @@ describe("ArenaGlobalNav", () => {
 
     expect(nav).toHaveAttribute("data-surface", "transparent");
     expect(nav).toHaveClass(
-      "h-[var(--arena-nav-height)]",
-      "min-h-[var(--arena-nav-height)]",
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "min-h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
       "bg-transparent",
       "border-transparent",
     );
     expect(nav).not.toHaveClass("backdrop-blur-xl");
     expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
-      "h-[var(--arena-nav-height)]",
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
       "w-auto",
     );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
@@ -94,5 +94,46 @@ describe("ArenaGlobalNav", () => {
 
     expect(nav).toHaveAttribute("data-density", "compact");
     expect(nav).toHaveAttribute("data-tone", "ornate");
+  });
+
+  it("uses a non-yellow keyboard focus treatment for the brand link", () => {
+    renderNav(<ArenaGlobalNav />);
+
+    const brandLink = screen.getByTestId("arena-brand-link");
+
+    expect(brandLink).toHaveClass(
+      "focus-visible:outline",
+      "focus-visible:outline-2",
+      "focus-visible:outline-offset-2",
+      "focus-visible:outline-white/60",
+    );
+    expect(brandLink.className).not.toMatch(/focus[^ ]*(amber|yellow)/);
+  });
+
+  it("keeps the brand area shrinkable while actions stay fixed", () => {
+    renderNav(
+      <ArenaGlobalNav
+        primaryAction={
+          <ArenaNavButton intent="primary">新建对局</ArenaNavButton>
+        }
+        secondaryAction={
+          <ArenaNavButton to="/games/history">对局历史</ArenaNavButton>
+        }
+      />,
+    );
+
+    expect(screen.getByTestId("arena-brand-link")).toHaveClass(
+      "flex-1",
+      "min-w-0",
+    );
+    expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
+      "max-w-full",
+      "shrink",
+    );
+    expect(screen.getByTestId("arena-brand-logo")).not.toHaveClass(
+      "max-w-[16rem]",
+      "shrink-0",
+    );
+    expect(screen.getByTestId("arena-nav-actions")).toHaveClass("shrink-0");
   });
 });

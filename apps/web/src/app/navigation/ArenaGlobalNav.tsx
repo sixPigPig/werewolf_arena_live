@@ -45,7 +45,7 @@ export function ArenaGlobalNav({
   return (
     <header
       className={cx(
-        "arena-global-nav fixed inset-x-0 top-0 z-50 h-[var(--arena-nav-height)] min-h-[var(--arena-nav-height)] w-full border-b transition-[background-color,border-color,box-shadow,backdrop-filter] duration-200",
+        "arena-global-nav fixed inset-x-0 top-0 z-50 h-[var(--arena-nav-height,var(--app-top-nav-height,56px))] min-h-[var(--arena-nav-height,var(--app-top-nav-height,56px))] w-full border-b transition-[background-color,border-color,box-shadow,backdrop-filter] duration-200",
         surfaceClass(surface),
         toneClass(tone),
         className,
@@ -58,13 +58,13 @@ export function ArenaGlobalNav({
     >
       <div className="arena-nav-inner mx-auto flex h-full w-full max-w-none items-center justify-between gap-3 px-3">
         <Link
-          className="arena-brand-link flex h-full min-w-0 shrink-0 items-center rounded-md text-left focus:outline-none"
+          className="arena-brand-link flex h-full min-w-0 flex-1 items-center rounded-md text-left focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
           data-testid="arena-brand-link"
           to="/games"
         >
           <img
             alt={brandLabel}
-            className="arena-brand-logo h-[var(--arena-nav-height)] w-auto max-w-[16rem] shrink-0 object-contain"
+            className="arena-brand-logo h-[var(--arena-nav-height,var(--app-top-nav-height,56px))] w-auto max-w-full shrink object-contain"
             data-testid="arena-brand-logo"
             src={brandLogoSrc}
           />
