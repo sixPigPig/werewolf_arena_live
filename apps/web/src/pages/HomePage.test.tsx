@@ -29,8 +29,8 @@ describe("HomePage", () => {
       "inset-x-0",
       "top-0",
       "z-50",
-      "h-[56px]",
-      "min-h-[56px]",
+      "h-[var(--app-top-nav-height)]",
+      "min-h-[var(--app-top-nav-height)]",
     );
     expect(document.querySelector(".site-content-layer")).toHaveClass(
       "pt-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
@@ -51,6 +51,9 @@ describe("HomePage", () => {
     expect(screen.getByRole("link", { name: "进入大厅" })).toHaveAttribute(
       "href",
       "/games",
+    );
+    expect(screen.getByRole("link", { name: "进入大厅" })).toHaveClass(
+      "gothic-button",
     );
     expect(screen.queryByRole("link", { name: "返回大厅" })).not.toBeInTheDocument();
     expect(container.querySelector("main")?.className).not.toContain("bg-");

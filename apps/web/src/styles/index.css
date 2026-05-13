@@ -59,8 +59,6 @@ body {
 }
 
 .site-content-layer .bg-slate-50,
-.site-content-layer .bg-slate-100,
-.site-content-layer .bg-slate-950,
 .site-content-layer .bg-emerald-50,
 .site-content-layer .hover\:bg-slate-50:hover {
   background: transparent !important;

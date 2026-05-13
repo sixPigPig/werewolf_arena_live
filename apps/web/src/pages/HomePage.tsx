@@ -9,7 +9,7 @@ export function HomePage() {
     <>
       <AppTopNav
         actions={
-          <Button asChild highContrast size="1">
+          <Button asChild intent="primary" size="1" skin="gothic">
             <Link to="/games">进入大厅</Link>
           </Button>
         }
