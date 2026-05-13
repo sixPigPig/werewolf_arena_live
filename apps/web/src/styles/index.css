@@ -1,6 +1,10 @@
 @import "tailwindcss";
 
 :root {
+  --app-top-nav-height: 56px;
+  --arena-nav-height: var(--app-top-nav-height);
+  --arena-nav-logo-size: var(--arena-nav-height);
+
   color: #e2e8f0;
   font-family: "Inter", "Segoe UI", sans-serif;
 }
@@ -62,16 +66,6 @@ body {
   background: transparent !important;
   background-color: transparent !important;
   background-image: none !important;
-}
-
-.history-top-nav {
-  background:
-    linear-gradient(90deg, rgb(2 6 13 / 86%), rgb(13 18 25 / 72%)),
-    linear-gradient(180deg, rgb(218 169 104 / 14%), transparent 58%);
-}
-
-.history-top-nav .app-top-nav-inner {
-  padding-inline: 1.5rem;
 }
 
 .history-top-button {
@@ -601,10 +595,6 @@ body {
 }
 
 @media (max-width: 760px) {
-  .history-top-nav .app-top-nav-inner {
-    padding-inline: 0.75rem;
-  }
-
   .history-top-button {
     min-width: 5.85rem;
     padding-inline: 0.65rem;
@@ -672,20 +662,6 @@ body {
 }
 
 @media (max-width: 520px) {
-  .history-top-nav .app-top-nav-inner {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .history-top-nav .app-top-nav-primary {
-    min-width: 0;
-  }
-
-  .history-top-nav .app-top-nav-actions {
-    min-width: 0;
-    justify-self: end;
-  }
-
   .history-top-nav .app-project-name {
     display: none;
   }
