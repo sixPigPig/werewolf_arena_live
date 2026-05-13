@@ -40,6 +40,21 @@ describe("GameHistoryPage", () => {
     renderWithClient(<GameHistoryPage />, "/games/history");
 
     expect(screen.getByRole("heading", { name: "对局历史" })).toBeInTheDocument();
+    const nav = screen.getByTestId("arena-global-nav");
+    expect(nav).toHaveAttribute("data-variant", "global");
+    expect(nav).toHaveAttribute("data-surface", "transparent");
+    expect(nav).toHaveAttribute("data-tone", "ornate");
+    expect(nav).toHaveClass(
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "min-h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "bg-transparent",
+      "border-transparent",
+    );
+    expect(nav).not.toHaveClass("history-top-nav");
+    expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "w-auto",
+    );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
       "href",
       "/games",
@@ -48,9 +63,12 @@ describe("GameHistoryPage", () => {
       "href",
       "/games",
     );
-    expect(
-      screen.getByRole("button", { name: "刷新列表" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回大厅" })).toHaveClass(
+      "gothic-button",
+    );
+    expect(screen.getByRole("button", { name: "刷新列表" })).toHaveClass(
+      "gothic-button",
+    );
     expect(await screen.findByText("session_20260424_001")).toBeInTheDocument();
     expect(screen.getByText("狼人阵营")).toBeInTheDocument();
     expect(screen.getByTestId("games-sessions-module")).toHaveClass(

@@ -116,17 +116,20 @@ describe("GamesPage", () => {
     expect(
       screen.getByRole("heading", { name: "狼人杀对局大厅" }),
     ).toBeInTheDocument();
-    expect(screen.getByTestId("app-top-nav")).toHaveClass(
-      "h-[56px]",
-      "min-h-[56px]",
+    const nav = screen.getByTestId("arena-global-nav");
+    expect(nav).toHaveAttribute("data-variant", "global");
+    expect(nav).toHaveAttribute("data-surface", "transparent");
+    expect(nav).toHaveClass(
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "min-h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "bg-transparent",
+      "border-transparent",
     );
-    expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
-    expect(screen.getByTestId("app-brand-logo")).toHaveClass(
-      "h-16",
+    expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
       "w-auto",
     );
-    expect(screen.getByTestId("app-brand-logo").getAttribute("src")).toContain(
+    expect(screen.getByTestId("arena-brand-logo").getAttribute("src")).toContain(
       "langrensha-arena-nav-logo",
     );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
@@ -140,7 +143,12 @@ describe("GamesPage", () => {
     expect(
       screen.queryByRole("button", { name: "刷新列表" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新建对局" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建对局" })).toHaveClass(
+      "gothic-button",
+    );
+    expect(screen.getByRole("link", { name: "对局历史" })).toHaveClass(
+      "gothic-button",
+    );
     expect(screen.queryByRole("link", { name: "返回大厅" })).not.toBeInTheDocument();
     expect(container.querySelector("main")).toHaveClass(
       "max-w-none",

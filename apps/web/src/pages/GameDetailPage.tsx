@@ -1,8 +1,8 @@
-import { Button, Callout, Text } from "../components/ui";
+import { Callout, Text } from "../components/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 
-import { AppTopNav } from "../app/AppTopNav";
+import { ArenaGlobalNav, ArenaNavButton } from "../app/navigation";
 import { getGameDetail } from "../features/games/api/getGameDetail";
 import { GameDetailWorkbench } from "./components/GameDetailWorkbench";
 
@@ -15,21 +15,18 @@ export function GameDetailPage() {
     enabled: Boolean(sessionId),
   });
   const topNav = (
-    <AppTopNav
-      actions={
-        <Button
+    <ArenaGlobalNav
+      primaryAction={
+        <ArenaNavButton
           color="gray"
           disabled={isFetching}
           loading={isFetching && !isPending}
           onClick={() => void refetch()}
-          size="1"
-          type="button"
-          variant="surface"
         >
           刷新复盘
-        </Button>
+        </ArenaNavButton>
       }
-      showLobbyBack
+      secondaryAction={<ArenaNavButton to="/games">返回大厅</ArenaNavButton>}
     />
   );
 

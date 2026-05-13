@@ -1,10 +1,10 @@
-import { Button, Callout, Heading } from "../components/ui";
+import { Callout, Heading } from "../components/ui";
 import { withGlassPanel } from "../components/ui/glass";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
-import { AppTopNav } from "../app/AppTopNav";
+import { ArenaGlobalNav, ArenaNavButton } from "../app/navigation";
 import { listGames } from "../features/games/api/listGames";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
 import { SessionList } from "../features/games/components/SessionList";
@@ -45,34 +45,19 @@ export function GameHistoryPage() {
 
   return (
     <>
-      <AppTopNav
-        className="history-top-nav"
-        actions={
-          <>
-            <Button
-              asChild
-              className="history-top-button"
-              color="gray"
-              size="1"
-              variant="surface"
-            >
-              <Link to="/games">返回大厅</Link>
-            </Button>
-            <Button
-              className="history-top-button history-refresh-button"
-              color="red"
-              disabled={isFetching}
-              loading={isFetching && !isPending}
-              onClick={refreshSessions}
-              size="1"
-              type="button"
-              variant="surface"
-            >
-              刷新列表
-            </Button>
-          </>
+      <ArenaGlobalNav
+        primaryAction={
+          <ArenaNavButton
+            color="red"
+            disabled={isFetching}
+            loading={isFetching && !isPending}
+            onClick={refreshSessions}
+          >
+            刷新列表
+          </ArenaNavButton>
         }
-        tone="nocturne"
+        secondaryAction={<ArenaNavButton to="/games">返回大厅</ArenaNavButton>}
+        tone="ornate"
       />
       <main
         className="games-history-module history-page-shell mx-auto w-full max-w-none px-4 py-8"

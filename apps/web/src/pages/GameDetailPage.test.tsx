@@ -276,17 +276,20 @@ describe("GameDetailPage", () => {
     );
 
     expect(await screen.findByText("狼人阵营")).toBeInTheDocument();
-    expect(screen.getByTestId("app-top-nav")).toHaveClass(
-      "h-[56px]",
-      "min-h-[56px]",
+    const nav = screen.getByTestId("arena-global-nav");
+    expect(nav).toHaveAttribute("data-variant", "global");
+    expect(nav).toHaveAttribute("data-surface", "transparent");
+    expect(nav).toHaveClass(
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "min-h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
+      "bg-transparent",
+      "border-transparent",
     );
-    expect(screen.queryByTestId("app-logo-placeholder")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("app-logo-image")).not.toBeInTheDocument();
-    expect(screen.getByTestId("app-brand-logo")).toHaveClass(
-      "h-16",
+    expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
+      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
       "w-auto",
     );
-    expect(screen.getByTestId("app-brand-logo").getAttribute("src")).toContain(
+    expect(screen.getByTestId("arena-brand-logo").getAttribute("src")).toContain(
       "langrensha-arena-nav-logo",
     );
     expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
@@ -297,9 +300,12 @@ describe("GameDetailPage", () => {
       "href",
       "/games",
     );
-    expect(
-      screen.getByRole("button", { name: "刷新复盘" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新复盘" })).toHaveClass(
+      "gothic-button",
+    );
+    expect(screen.getByRole("link", { name: "返回大厅" })).toHaveClass(
+      "gothic-button",
+    );
     const pageMain = container.querySelector("main");
     expect(container.querySelectorAll("main")).toHaveLength(1);
     expect(pageMain).toHaveClass(

@@ -1,7 +1,6 @@
-import { Button } from "../components/ui";
 import { useRef } from "react";
 
-import { AppTopNav } from "../app/AppTopNav";
+import { ArenaGlobalNav, ArenaNavButton } from "../app/navigation";
 import { GamesWorkspace } from "./components/GamesWorkspace";
 
 export function GamesPage() {
@@ -20,13 +19,13 @@ export function GamesPage() {
 
   return (
     <>
-      <AppTopNav
-        actions={
-          <Button highContrast onClick={focusCreateForm} size="1" type="button">
+      <ArenaGlobalNav
+        primaryAction={
+          <ArenaNavButton intent="primary" onClick={focusCreateForm}>
             新建对局
-          </Button>
+          </ArenaNavButton>
         }
-        showHistoryLink
+        secondaryAction={<ArenaNavButton to="/games/history">对局历史</ArenaNavButton>}
       />
       <GamesWorkspace createFormRef={createFormRef} />
     </>
