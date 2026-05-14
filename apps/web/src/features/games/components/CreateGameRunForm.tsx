@@ -2,6 +2,7 @@ import {
   Badge,
   Button,
   Callout,
+  Container,
   Flex,
   RadioCards,
   SelectField,
@@ -186,11 +187,18 @@ export function CreateGameRunForm() {
         </div>
       </section>
 
-      <fieldset className="lobby-rules-panel" data-testid="lobby-rules-panel">
-        <legend className="lobby-rules-legend">
+      <Container
+        aria-labelledby="lobby-rules-title"
+        as="section"
+        className="lobby-rules-panel"
+        contentClassName="lobby-rules-panel-content"
+        data-testid="lobby-rules-panel"
+        size="2"
+      >
+        <h2 className="lobby-rules-legend" id="lobby-rules-title">
           <span aria-hidden="true" className="lobby-rules-legend-mark" />
           官方规则
-        </legend>
+        </h2>
         {ruleSetsQuery.isPending ? (
           <p className="lobby-rules-status">正在读取官方规则...</p>
         ) : null}
@@ -212,7 +220,7 @@ export function CreateGameRunForm() {
             {selectedRuleSet ? <SelectedRuleDetails rule={selectedRuleSet} /> : null}
           </div>
         ) : null}
-      </fieldset>
+      </Container>
 
       {validationError ? (
         <Callout.Root className="lobby-form-callout" color="red" size="1" variant="soft">

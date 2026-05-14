@@ -183,6 +183,20 @@ describe("GamesPage", () => {
     ).toHaveClass("gothic-button");
 
     const rulesPanel = within(createModule).getByTestId("lobby-rules-panel");
+    expect(rulesPanel).toHaveClass(
+      "lobby-rules-panel",
+      "gothic-night-container",
+      "gothic-night-container-md",
+    );
+    expect(
+      rulesPanel.querySelector(".gothic-night-container-frame"),
+    ).toHaveAttribute("aria-hidden", "true");
+    expect(
+      rulesPanel.querySelectorAll(".gothic-night-container-frame-piece"),
+    ).toHaveLength(8);
+    expect(
+      within(rulesPanel).getByRole("heading", { name: "官方规则" }),
+    ).toBeInTheDocument();
     expect(within(rulesPanel).getByText("官方规则")).toBeInTheDocument();
     expect(screen.queryByTestId("games-sessions-module")).not.toBeInTheDocument();
     expect(screen.queryByText("session_20260424_001")).not.toBeInTheDocument();

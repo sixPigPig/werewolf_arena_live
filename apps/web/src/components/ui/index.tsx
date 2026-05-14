@@ -15,6 +15,14 @@ import {
 
 import { glassPanelClass } from "./glass";
 
+export {
+  Button,
+  type ButtonIntent,
+  type ButtonProps,
+  type ButtonSkin,
+} from "./Button";
+export { Container, type ContainerProps } from "./Container";
+
 type Tone =
   | "amber"
   | "cyan"
@@ -24,22 +32,6 @@ type Tone =
   | "pink"
   | "red"
   | "violet";
-
-export type ButtonIntent =
-  | "default"
-  | "info"
-  | "primary"
-  | "danger"
-  | "success"
-  | "warning";
-
-export type ButtonSkin = "default" | "gothic";
-
-type ChildWithClassName = {
-  className?: string;
-  children?: ReactNode;
-  [key: string]: unknown;
-};
 
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -64,176 +56,6 @@ function asChild(
   }
 
   return fallback(className);
-}
-
-export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  asChild?: boolean;
-  color?: Tone;
-  highContrast?: boolean;
-  intent?: ButtonIntent;
-  loading?: boolean;
-  size?: "1" | "2" | "3";
-  skin?: ButtonSkin;
-  variant?: "solid" | "surface" | "soft";
-};
-
-export function Button({
-  asChild: renderAsChild = false,
-  children,
-  className,
-  color = "gray",
-  disabled,
-  highContrast,
-  intent,
-  loading,
-  size = "2",
-  skin = "default",
-  type = "button",
-  variant = "solid",
-  ...props
-}: ButtonProps) {
-  const content = loading ? "处理中..." : children;
-
-  if (skin === "gothic") {
-    const gothicIntent = resolveGothicIntent(intent, color);
-    const classes = cx(
-      "gothic-button",
-      gothicButtonSizeClass(size),
-      className,
-    );
-
-    if (renderAsChild) {
-      return renderGothicAsChild(children, classes, gothicIntent, {
-        disabled: Boolean(disabled || loading),
-        loading,
-      });
-    }
-
-    return (
-      <button
-        className={classes}
-        data-intent={gothicIntent}
-        disabled={disabled || loading}
-        type={type}
-        {...props}
-      >
-        <span className="gothic-button-label">{content}</span>
-      </button>
-    );
-  }
-
-  const sizeClass = buttonSizeClass(size);
-  const toneClass = buttonTone(color, variant, Boolean(highContrast));
-  const classes = cx(
-    "inline-flex shrink-0 items-center justify-center gap-2 rounded-md border font-semibold transition focus:outline-none focus:ring-2 focus:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-55",
-    sizeClass,
-    toneClass,
-    className,
-  );
-
-  if (renderAsChild) {
-    return asChild(content, classes, (fallbackClassName) => (
-      <span className={fallbackClassName}>{content}</span>
-    ));
-  }
-
-  return (
-    <button
-      className={classes}
-      disabled={disabled || loading}
-      type={type}
-      {...props}
-    >
-      {content}
-    </button>
-  );
-}
-
-const gothicIntentFromColor: Record<Tone, ButtonIntent> = {
-  amber: "warning",
-  cyan: "info",
-  gray: "default",
-  green: "success",
-  orange: "warning",
-  pink: "primary",
-  red: "danger",
-  violet: "primary",
-};
-
-function resolveGothicIntent(intent: ButtonIntent | undefined, color: Tone) {
-  return intent ?? gothicIntentFromColor[color];
-}
-
-function buttonSizeClass(size: NonNullable<ButtonProps["size"]>) {
-  return size === "1" ? "h-8 px-3 text-sm" : size === "3" ? "h-11 px-5" : "h-10 px-4";
-}
-
-function gothicButtonSizeClass(size: NonNullable<ButtonProps["size"]>) {
-  return size === "1"
-    ? "gothic-button-sm"
-    : size === "3"
-      ? "gothic-button-lg"
-      : "gothic-button-md";
-}
-
-function renderGothicAsChild(
-  children: ReactNode,
-  className: string,
-  intent: ButtonIntent,
-  options: { disabled: boolean; loading?: boolean },
-) {
-  if (isValidElement<ChildWithClassName>(children)) {
-    const label = (
-      <span className="gothic-button-label">
-        {options.loading ? "处理中..." : children.props.children}
-      </span>
-    );
-
-    return cloneElement(children, {
-      "aria-disabled": options.disabled || undefined,
-      children: label,
-      className: cx(className, children.props.className),
-      "data-intent": intent,
-    });
-  }
-
-  const label = (
-    <span className="gothic-button-label">
-      {options.loading ? "处理中..." : children}
-    </span>
-  );
-
-  return (
-    <span
-      aria-disabled={options.disabled || undefined}
-      className={className}
-      data-intent={intent}
-    >
-      {label}
-    </span>
-  );
-}
-
-function buttonTone(color: Tone, variant: string, highContrast: boolean) {
-  if (highContrast || variant === "solid") {
-    if (color === "amber") {
-      return "border-amber-300/65 bg-amber-300 text-slate-950 hover:bg-amber-200";
-    }
-    if (color === "red") {
-      return "border-red-300/65 bg-red-500 text-white hover:bg-red-400";
-    }
-
-    return "border-slate-200/70 bg-slate-100 text-slate-950 hover:bg-white";
-  }
-
-  if (color === "amber") {
-    return "border-amber-300/35 bg-transparent text-amber-100 hover:border-amber-200/65";
-  }
-  if (color === "red") {
-    return "border-red-300/35 bg-transparent text-red-100 hover:border-red-200/65";
-  }
-
-  return "border-slate-500/35 bg-transparent text-slate-100 hover:border-slate-200/65";
 }
 
 export type BadgeProps = HTMLAttributes<HTMLSpanElement> & {
@@ -317,64 +139,6 @@ export function Card({
       {children}
     </div>
   );
-}
-
-type ContainerElement = "article" | "aside" | "div" | "section";
-
-type GothicNightContainerStyle = CSSProperties & {
-  "--gothic-night-container-base-opacity"?: number;
-};
-
-export type ContainerProps = HTMLAttributes<HTMLElement> & {
-  as?: ContainerElement;
-  baseOpacity?: number;
-  contentClassName?: string;
-  size?: "1" | "2" | "3";
-};
-
-export function Container({
-  as: Component = "div",
-  baseOpacity,
-  children,
-  className,
-  contentClassName,
-  size = "2",
-  style,
-  ...props
-}: ContainerProps) {
-  const containerStyle: GothicNightContainerStyle = { ...style };
-
-  if (baseOpacity !== undefined) {
-    containerStyle["--gothic-night-container-base-opacity"] = baseOpacity;
-  }
-
-  return (
-    <Component
-      className={cx(
-        "gothic-night-container",
-        gothicNightContainerSizeClass(size),
-        className,
-      )}
-      style={containerStyle}
-      {...props}
-    >
-      <div
-        className={cx("gothic-night-container-content", contentClassName)}
-      >
-        {children}
-      </div>
-    </Component>
-  );
-}
-
-function gothicNightContainerSizeClass(
-  size: NonNullable<ContainerProps["size"]>,
-) {
-  return size === "1"
-    ? "gothic-night-container-sm"
-    : size === "3"
-      ? "gothic-night-container-lg"
-      : "gothic-night-container-md";
 }
 
 function CalloutRoot({

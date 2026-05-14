@@ -161,9 +161,9 @@ CSS 层次：
 哥特按钮比普通按钮需要更大的最小尺寸，以容纳左右装饰：
 
 ```text
-size="1": height 40px, min-width 128px, padding-inline 28px
-size="2": height 48px, min-width 156px, padding-inline 34px
-size="3": height 58px, min-width 190px, padding-inline 42px
+size="1": height 32px, min-width 128px, padding-inline 28px
+size="2": height 40px, min-width 156px, padding-inline 34px
+size="3": height 48px, min-width 190px, padding-inline 42px
 ```
 
 移动端规则：

@@ -851,7 +851,6 @@ body {
 }
 
 .lobby-console-bar,
-.lobby-rules-panel,
 .lobby-rule-details {
   position: relative;
   border: 1px solid rgb(185 147 92 / 44%);
@@ -866,7 +865,6 @@ body {
 }
 
 .lobby-console-bar::before,
-.lobby-rules-panel::before,
 .lobby-rule-details::before {
   position: absolute;
   inset: 0.32rem;
@@ -887,6 +885,7 @@ body {
 
 .lobby-console-title-block,
 .lobby-console-controls,
+.lobby-rules-panel-content,
 .lobby-rules-content,
 .lobby-rule-card-body,
 .lobby-rule-details-header,
@@ -971,7 +970,12 @@ body {
 .lobby-rules-panel {
   min-width: 0;
   margin: 0;
-  padding: 1.8rem 0.78rem 0.78rem;
+}
+
+.lobby-rules-panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.78rem;
 }
 
 .lobby-rules-legend {
@@ -980,7 +984,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  margin-left: 0.28rem;
+  margin: 0 0 0 0.28rem;
   padding: 0 0.4rem;
   color: #e8c982;
   font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
@@ -1281,7 +1285,6 @@ body {
   }
 
   .lobby-console-bar,
-  .lobby-rules-panel,
   .lobby-rule-details {
     border-radius: 0.28rem;
   }
@@ -1314,26 +1317,29 @@ body {
 
 .gothic-night-container {
   --gothic-night-container-base-opacity: 0.68;
-  --gothic-night-container-frame-top: clamp(4.75rem, 8vw, 7rem);
-  --gothic-night-container-frame-inline: clamp(2.4rem, 4.5vw, 4.4rem);
-  --gothic-night-container-frame-bottom: clamp(4rem, 7vw, 6rem);
-  --gothic-night-container-padding-block: clamp(0.9rem, 2vw, 1.4rem);
-  --gothic-night-container-padding-inline: clamp(1rem, 2.4vw, 1.65rem);
-  --gothic-night-container-min-height: 15rem;
+  --gothic-night-container-frame-source: url("../assets/gothic-container/gothic-frame-quality-final.png");
+  --gothic-night-container-corner-inline: 92px;
+  --gothic-night-container-top-block: 156px;
+  --gothic-night-container-bottom-block: 132px;
+  --gothic-night-container-inner-inset-block: 14px;
+  --gothic-night-container-inner-inset-inline: 12px;
+  --gothic-night-container-content-top: clamp(4.5rem, 8vw, 6.8rem);
+  --gothic-night-container-content-inline: clamp(3rem, 7vw, 5.8rem);
+  --gothic-night-container-content-bottom: clamp(4rem, 7vw, 5.6rem);
+  --gothic-night-container-padding-block: clamp(0.8rem, 1.6vw, 1.25rem);
+  --gothic-night-container-padding-inline: clamp(0.95rem, 2vw, 1.55rem);
+  --gothic-night-container-min-height: 24rem;
   position: relative;
   isolation: isolate;
   box-sizing: border-box;
   width: 100%;
   min-height: var(--gothic-night-container-min-height);
   overflow: hidden;
-  border-style: solid;
-  border-color: transparent;
-  border-width: var(--gothic-night-container-frame-top) var(--gothic-night-container-frame-inline) var(--gothic-night-container-frame-bottom);
-  border-image-source: url("../assets/werewolf-gothic-night/werewolf_gothic_night_frame_transparent.png");
-  border-image-slice: 156 92 132 92;
-  border-image-width: 1;
-  border-image-repeat: stretch;
-  background: transparent;
+  padding:
+    calc(var(--gothic-night-container-content-top) + var(--gothic-night-container-padding-block))
+    calc(var(--gothic-night-container-content-inline) + var(--gothic-night-container-padding-inline))
+    calc(var(--gothic-night-container-content-bottom) + var(--gothic-night-container-padding-block));
+  background: rgb(2 7 12 / 92%);
   box-shadow:
     0 18px 34px rgb(0 0 0 / 34%),
     0 0 18px rgb(106 145 178 / 12%);
@@ -1341,62 +1347,248 @@ body {
   text-shadow: 0 1px 0 rgb(0 0 0 / 68%);
 }
 
-.gothic-night-container::before {
+.gothic-night-container-center,
+.gothic-night-container-frame,
+.gothic-night-container-frame-piece,
+.gothic-night-container-moon,
+.gothic-night-container-branch-left,
+.gothic-night-container-branch-right,
+.gothic-night-container-smoke-bottom {
   position: absolute;
-  inset: var(--gothic-night-container-frame-top) var(--gothic-night-container-frame-inline) var(--gothic-night-container-frame-bottom);
-  z-index: 0;
-  content: "";
-  opacity: var(--gothic-night-container-base-opacity);
-  background:
-    linear-gradient(180deg, rgb(1 7 13 / 18%), rgb(1 5 10 / 36%)),
-    url("../assets/werewolf-gothic-night/werewolf_gothic_night_base.png") center / 100% 100% no-repeat;
   pointer-events: none;
+}
+
+.gothic-night-container-center {
+  inset:
+    var(--gothic-night-container-inner-inset-block)
+    var(--gothic-night-container-inner-inset-inline);
+  z-index: 0;
+  opacity: var(--gothic-night-container-base-opacity);
+  background-color: #071018;
+  background-image: url("../assets/gothic-container/gothic-center.webp");
+  background-position: center;
+  background-repeat: repeat;
+  background-size: min(1024px, 100%) auto;
+  box-shadow:
+    inset 0 0 80px rgb(0 0 0 / 46%),
+    inset 0 0 160px rgb(0 0 0 / 28%);
+}
+
+.gothic-night-container-center::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background:
+    radial-gradient(circle at 50% 12%, rgb(60 91 116 / 16%), transparent 42%),
+    linear-gradient(180deg, rgb(0 0 0 / 8%), rgb(0 0 0 / 24%));
+}
+
+.gothic-night-container-frame {
+  inset: 0;
+  z-index: 4;
+}
+
+.gothic-night-container-frame::before,
+.gothic-night-container-frame::after {
+  position: absolute;
+  left: 50%;
+  width: min(260px, calc(100% - (var(--gothic-night-container-corner-inline) * 2)));
+  height: 90px;
+  content: "";
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  mix-blend-mode: screen;
+  transform: translateX(-50%);
+}
+
+.gothic-night-container-frame::before {
+  top: 0;
+  background-image: url("../assets/gothic-container/frame-accent-top.png");
+}
+
+.gothic-night-container-frame::after {
+  bottom: 0;
+  background-image: url("../assets/gothic-container/frame-accent-bottom.png");
+}
+
+.gothic-night-container-frame-piece {
+  display: block;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  mix-blend-mode: screen;
+}
+
+.gothic-night-container-corner-tl,
+.gothic-night-container-corner-tr {
+  top: 0;
+  width: var(--gothic-night-container-corner-inline);
+  height: var(--gothic-night-container-top-block);
+}
+
+.gothic-night-container-corner-bl,
+.gothic-night-container-corner-br {
+  bottom: 0;
+  width: var(--gothic-night-container-corner-inline);
+  height: var(--gothic-night-container-bottom-block);
+}
+
+.gothic-night-container-corner-tl {
+  left: 0;
+  background-image: url("../assets/gothic-container/frame-corner-tl.png");
+}
+
+.gothic-night-container-corner-tr {
+  right: 0;
+  background-image: url("../assets/gothic-container/frame-corner-tr.png");
+}
+
+.gothic-night-container-corner-bl {
+  left: 0;
+  background-image: url("../assets/gothic-container/frame-corner-bl.png");
+}
+
+.gothic-night-container-corner-br {
+  right: 0;
+  background-image: url("../assets/gothic-container/frame-corner-br.png");
+}
+
+.gothic-night-container-edge-top,
+.gothic-night-container-edge-bottom {
+  right: var(--gothic-night-container-corner-inline);
+  left: var(--gothic-night-container-corner-inline);
+  background-position: center;
+  background-repeat: repeat-x;
+  background-size: auto 100%;
+}
+
+.gothic-night-container-edge-top {
+  top: 0;
+  height: var(--gothic-night-container-top-block);
+  background-image: url("../assets/gothic-container/frame-edge-top.png");
+}
+
+.gothic-night-container-edge-bottom {
+  bottom: 0;
+  height: var(--gothic-night-container-bottom-block);
+  background-image: url("../assets/gothic-container/frame-edge-bottom.png");
+}
+
+.gothic-night-container-edge-left,
+.gothic-night-container-edge-right {
+  top: var(--gothic-night-container-top-block);
+  bottom: var(--gothic-night-container-bottom-block);
+  width: var(--gothic-night-container-corner-inline);
+  background-position: center;
+  background-repeat: repeat-y;
+  background-size: 100% auto;
+}
+
+.gothic-night-container-edge-left {
+  left: 0;
+  background-image: url("../assets/gothic-container/frame-edge-left.png");
+}
+
+.gothic-night-container-edge-right {
+  right: 0;
+  background-image: url("../assets/gothic-container/frame-edge-right.png");
+}
+
+.gothic-night-container-moon,
+.gothic-night-container-branch-left,
+.gothic-night-container-branch-right,
+.gothic-night-container-smoke-bottom {
+  z-index: 2;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.gothic-night-container-moon {
+  top: clamp(1rem, 2.5vw, 2.25rem);
+  left: clamp(1rem, 4vw, 4.5rem);
+  width: clamp(7rem, 13vw, 13rem);
+  aspect-ratio: 640 / 340;
+  background-image: url("../assets/gothic-container/moon-decoration.webp");
+  background-size: contain;
+}
+
+.gothic-night-container-branch-left {
+  top: clamp(5.25rem, 17%, 8rem);
+  left: 0;
+  height: min(74%, 43rem);
+  aspect-ratio: 660 / 1220;
+  background-image: url("../assets/gothic-container/branch-left.webp");
+  background-position: left center;
+  background-size: contain;
+  opacity: 0.88;
+}
+
+.gothic-night-container-branch-right {
+  top: 0;
+  right: 0;
+  height: min(88%, 50rem);
+  aspect-ratio: 1080 / 1380;
+  background-image: url("../assets/gothic-container/branch-right.webp");
+  background-position: right center;
+  background-size: contain;
+  opacity: 0.9;
+}
+
+.gothic-night-container-smoke-bottom {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: clamp(5rem, 12.9vw, 16.5rem);
+  background-image: url("../assets/gothic-container/smoke-bottom.webp");
+  background-position: bottom center;
+  background-size: 100% auto;
+  opacity: 0.82;
 }
 
 .gothic-night-container-content {
   position: relative;
-  z-index: 1;
-  min-height: calc(var(--gothic-night-container-min-height) - var(--gothic-night-container-frame-top) - var(--gothic-night-container-frame-bottom));
-  padding: var(--gothic-night-container-padding-block) var(--gothic-night-container-padding-inline);
+  z-index: 5;
+  min-height: max(
+    5rem,
+    calc(
+      var(--gothic-night-container-min-height) -
+      var(--gothic-night-container-content-top) -
+      var(--gothic-night-container-content-bottom) -
+      (var(--gothic-night-container-padding-block) * 2)
+    )
+  );
 }
 
 .gothic-night-container-sm {
-  --gothic-night-container-frame-top: clamp(3.6rem, 7vw, 5.8rem);
-  --gothic-night-container-frame-inline: clamp(1.8rem, 4vw, 3.2rem);
-  --gothic-night-container-frame-bottom: clamp(3.2rem, 6vw, 5rem);
+  --gothic-night-container-content-top: clamp(3.8rem, 7vw, 5.4rem);
+  --gothic-night-container-content-inline: clamp(2.4rem, 6vw, 4.6rem);
+  --gothic-night-container-content-bottom: clamp(3.4rem, 6vw, 4.6rem);
   --gothic-night-container-padding-block: clamp(0.7rem, 1.8vw, 1.1rem);
   --gothic-night-container-padding-inline: clamp(0.85rem, 2vw, 1.25rem);
-  --gothic-night-container-min-height: 10.5rem;
+  --gothic-night-container-min-height: 20rem;
 }
 
 .gothic-night-container-md {
-  --gothic-night-container-frame-top: clamp(4.75rem, 8vw, 7rem);
-  --gothic-night-container-frame-inline: clamp(2.4rem, 4.5vw, 4.4rem);
-  --gothic-night-container-frame-bottom: clamp(4rem, 7vw, 6rem);
-  --gothic-night-container-min-height: 15rem;
+  --gothic-night-container-min-height: 24rem;
 }
 
 .gothic-night-container-lg {
-  --gothic-night-container-frame-top: clamp(5.3rem, 9vw, 8.3rem);
-  --gothic-night-container-frame-inline: clamp(2.65rem, 5vw, 4.75rem);
-  --gothic-night-container-frame-bottom: clamp(4.4rem, 8vw, 7rem);
+  --gothic-night-container-content-top: clamp(5rem, 8vw, 7.4rem);
+  --gothic-night-container-content-inline: clamp(3.2rem, 7vw, 6.2rem);
+  --gothic-night-container-content-bottom: clamp(4.4rem, 7vw, 6.2rem);
   --gothic-night-container-padding-block: clamp(1rem, 2.2vw, 1.65rem);
   --gothic-night-container-padding-inline: clamp(1.1rem, 2.6vw, 1.9rem);
-  --gothic-night-container-min-height: 20rem;
+  --gothic-night-container-min-height: 34rem;
 }
 
 @media (max-width: 640px) {
   .gothic-night-container {
-    --gothic-night-container-frame-top: 4.4rem;
-    --gothic-night-container-frame-inline: 1.25rem;
-    --gothic-night-container-frame-bottom: 3.65rem;
     --gothic-night-container-padding-block: 0.85rem;
     --gothic-night-container-padding-inline: 0.95rem;
   }
 
   .gothic-night-container-lg {
-    --gothic-night-container-frame-top: 4.9rem;
-    --gothic-night-container-frame-bottom: 4rem;
     --gothic-night-container-padding-block: 0.95rem;
     --gothic-night-container-padding-inline: 1rem;
   }
@@ -1407,8 +1599,13 @@ body {
   --gothic-button-focus: #d8b58a;
   --gothic-button-glow: rgb(216 181 138 / 32%);
   --gothic-button-image: url("../assets/buttons/button-default.png");
+  --gothic-button-slice: 235 255 225 255;
+  --gothic-button-border: 24px;
+  --gothic-button-content-padding-block: 0.1rem;
+  --gothic-button-content-padding-inline: 0.45rem;
   position: relative;
   isolation: isolate;
+  box-sizing: border-box;
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
@@ -1442,13 +1639,17 @@ body {
 }
 
 .gothic-button::before {
-  z-index: -2;
-  background: var(--gothic-button-image) center / 100% 100% no-repeat;
+  z-index: 0;
+  border: var(--gothic-button-border) solid transparent;
+  border-image-source: var(--gothic-button-image);
+  border-image-slice: var(--gothic-button-slice) fill;
+  border-image-width: var(--gothic-button-border);
+  border-image-repeat: stretch;
   filter: drop-shadow(0 12px 20px rgb(0 0 0 / 30%));
 }
 
 .gothic-button::after {
-  z-index: -1;
+  z-index: 1;
   opacity: 0;
   background:
     linear-gradient(180deg, rgb(255 255 255 / 10%), transparent 45%),
@@ -1456,33 +1657,46 @@ body {
   transition: opacity 160ms ease;
 }
 
-.gothic-button-label {
+.gothic-button-content {
   position: relative;
-  z-index: 1;
+  z-index: 2;
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: var(--gothic-button-content-padding-block) var(--gothic-button-content-padding-inline);
+}
+
+.gothic-button-label {
   display: block;
+  min-width: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .gothic-button-sm {
+  --gothic-button-border: 16px;
   min-width: 8rem;
-  min-height: 2.5rem;
-  padding: 0.2rem 1.75rem 0.28rem;
+  height: 2rem;
+  padding: 0.16rem 1.75rem;
   font-size: 0.82rem;
 }
 
 .gothic-button-md {
+  --gothic-button-border: 20px;
   min-width: 9.75rem;
-  min-height: 3rem;
-  padding: 0.24rem 2.125rem 0.34rem;
+  height: 2.5rem;
+  padding: 0.2rem 2.125rem;
   font-size: 0.95rem;
 }
 
 .gothic-button-lg {
+  --gothic-button-border: 24px;
   min-width: 11.875rem;
-  min-height: 3.625rem;
-  padding: 0.28rem 2.625rem 0.4rem;
+  height: 3rem;
+  padding: 0.24rem 2.625rem;
   font-size: 1.08rem;
 }
 
