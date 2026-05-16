@@ -914,9 +914,21 @@ body {
 }
 
 .virtual-player-editor input,
-.virtual-player-editor select {
+.virtual-player-editor select,
+.virtual-player-editor textarea {
   width: 100%;
   min-width: 0;
+}
+
+.virtual-player-editor textarea {
+  min-height: 4.1rem;
+  resize: vertical;
+  border: 1px solid rgb(134 146 158 / 42%);
+  border-radius: 0.18rem;
+  background: rgb(3 8 13 / 78%);
+  color: #e8eef4;
+  font: inherit;
+  padding: 0.42rem 0.52rem;
 }
 
 .virtual-player-editor-save {

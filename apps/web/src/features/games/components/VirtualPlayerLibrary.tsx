@@ -50,6 +50,17 @@ function profileToDraft(profile: VirtualPlayerProfile): PlayerProfileRequest {
   };
 }
 
+function parseTagInput(value: string) {
+  return value
+    .split(/[,\uFF0C\s]+/)
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function formatTagInput(tags: string[] | undefined) {
+  return (tags ?? []).join("，");
+}
+
 export function VirtualPlayerLibrary({
   profiles,
   isLoading,
@@ -60,6 +71,7 @@ export function VirtualPlayerLibrary({
   onDeleteProfile,
 }: VirtualPlayerLibraryProps) {
   const [draft, setDraft] = useState<PlayerProfileRequest>(defaultDraft);
+  const [tagInput, setTagInput] = useState("");
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -80,6 +92,7 @@ export function VirtualPlayerLibrary({
     setActionError(null);
     setDeleteCandidateId(null);
     setDraft(defaultDraft());
+    setTagInput("");
     setEditingProfileId(null);
     setIsEditorOpen(true);
   };
@@ -88,6 +101,7 @@ export function VirtualPlayerLibrary({
     setActionError(null);
     setDeleteCandidateId(null);
     setDraft(profileToDraft(profile));
+    setTagInput(formatTagInput(profile.tags));
     setEditingProfileId(profile.id);
     setIsEditorOpen(true);
   };
@@ -101,6 +115,9 @@ export function VirtualPlayerLibrary({
       ...draft,
       display_name: draft.display_name.trim(),
       model: draft.model.trim(),
+      personality_text: draft.personality_text?.trim() ?? "",
+      avatar_prompt: draft.avatar_prompt?.trim() ?? "",
+      tags: draft.tags ?? [],
     };
     try {
       if (editingProfileId) {
@@ -111,6 +128,7 @@ export function VirtualPlayerLibrary({
       setIsEditorOpen(false);
       setEditingProfileId(null);
       setDraft(defaultDraft());
+      setTagInput("");
     } catch {
       setActionError("无法保存虚拟玩家");
     }
@@ -234,6 +252,37 @@ export function VirtualPlayerLibrary({
                 </Option>
               ))}
             </SelectField>
+          </label>
+          <label>
+            <span>性格描述</span>
+            <textarea
+              disabled={isSaving}
+              onChange={(event) =>
+                updateDraft("personality_text", event.target.value)
+              }
+              value={draft.personality_text ?? ""}
+            />
+          </label>
+          <label>
+            <span>形象提示</span>
+            <textarea
+              disabled={isSaving}
+              onChange={(event) =>
+                updateDraft("avatar_prompt", event.target.value)
+              }
+              value={draft.avatar_prompt ?? ""}
+            />
+          </label>
+          <label>
+            <span>标签</span>
+            <TextField.Root
+              disabled={isSaving}
+              onChange={(event) => {
+                setTagInput(event.target.value);
+                updateDraft("tags", parseTagInput(event.target.value));
+              }}
+              value={tagInput}
+            />
           </label>
           <Button
             className="virtual-player-editor-save"

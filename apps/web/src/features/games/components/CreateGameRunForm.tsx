@@ -53,6 +53,11 @@ export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
     null;
   const isSubmitDisabled =
     mutation.isPending || ruleSetsQuery.isPending || ruleSetsQuery.isError;
+  const validProfileIds = new Set(profiles.map((profile) => profile.id));
+  const visiblePlayerConfigs = removeInvalidProfileRefs(
+    playerConfigs,
+    validProfileIds,
+  );
 
   const renderRuleCard = (rule: RuleSetSummary) => {
     const roleSummary = formatRoleSummary(rule);
@@ -130,7 +135,10 @@ export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
 
         setValidationError(null);
         const normalizedPlayerConfigs = selectedRuleSet
-          ? normalizePlayerConfigs(playerConfigs, selectedRuleSet.player_count)
+          ? normalizePlayerConfigs(
+              visiblePlayerConfigs,
+              selectedRuleSet.player_count,
+            )
           : [];
         mutation.mutate({
           rule_set_id: selectedRuleSetId,
@@ -238,7 +246,7 @@ export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
               <>
                 <SelectedRuleDetails rule={selectedRuleSet} />
                 <PlayerConfigPanel
-                  configs={playerConfigs}
+                  configs={visiblePlayerConfigs}
                   onChange={setPlayerConfigs}
                   playerCount={selectedRuleSet.player_count}
                   profiles={profiles}
@@ -283,14 +291,34 @@ function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
       }
       return normalized;
     })
-    .filter(
-      (config) =>
-        config.profile_id ||
-        config.model ||
-        config.personality_id ||
-        config.appearance_id,
-    )
+    .filter((config) => hasPlayerConfig(config))
     .sort((left, right) => left.seat - right.seat);
+}
+
+function hasPlayerConfig(config: PlayerConfig) {
+  return Boolean(
+    config.profile_id ||
+      config.model ||
+      config.personality_id ||
+      config.appearance_id,
+  );
+}
+
+function removeInvalidProfileRefs(
+  configs: PlayerConfig[],
+  validProfileIds: Set<string>,
+) {
+  return configs
+    .map((config) => {
+      if (!config.profile_id || validProfileIds.has(config.profile_id)) {
+        return config;
+      }
+
+      const nextConfig = { ...config };
+      delete nextConfig.profile_id;
+      return hasPlayerConfig(nextConfig) ? nextConfig : null;
+    })
+    .filter((config): config is PlayerConfig => config !== null);
 }
 
 function SelectedRuleDetails({ rule }: { rule: RuleSetSummary }) {

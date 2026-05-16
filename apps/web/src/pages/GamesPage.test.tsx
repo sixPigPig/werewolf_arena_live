@@ -649,6 +649,9 @@ describe("GamesPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
     await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "新玩家");
     await userEvent.type(screen.getByLabelText("默认模型"), "deepseek-chat");
+    await userEvent.type(screen.getByLabelText("性格描述"), "谨慎发言，先听后判");
+    await userEvent.type(screen.getByLabelText("形象提示"), "银发观察者");
+    await userEvent.type(screen.getByLabelText("标签"), "控场 慢热");
     const saveNewProfileButton = screen.getByRole("button", {
       name: "保存虚拟玩家",
     });
@@ -668,6 +671,12 @@ describe("GamesPage", () => {
     await userEvent.click(editProfileButton);
     await userEvent.clear(screen.getByLabelText("虚拟玩家昵称"));
     await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "冷静的阿夜二号");
+    await userEvent.clear(screen.getByLabelText("性格描述"));
+    await userEvent.type(screen.getByLabelText("性格描述"), "二号更谨慎");
+    await userEvent.clear(screen.getByLabelText("形象提示"));
+    await userEvent.type(screen.getByLabelText("形象提示"), "暗夜银发");
+    await userEvent.clear(screen.getByLabelText("标签"));
+    await userEvent.type(screen.getByLabelText("标签"), "控场 追刀");
     const saveEditedProfileButton = screen.getByRole("button", {
       name: "保存虚拟玩家",
     });
@@ -705,10 +714,125 @@ describe("GamesPage", () => {
     expect(postCalls).toHaveLength(2);
     expect(patchCalls).toHaveLength(1);
     expect(deleteCalls).toHaveLength(1);
+    expect(JSON.parse(String(postCalls[0][1]?.body))).toEqual(
+      expect.objectContaining({
+        display_name: "新玩家",
+        model: "deepseek-chat",
+        personality_text: "谨慎发言，先听后判",
+        avatar_prompt: "银发观察者",
+        tags: ["控场", "慢热"],
+      }),
+    );
     expect(JSON.parse(String(postCalls[1][1]?.body))).toEqual(
       expect.objectContaining({
         display_name: "冷静的阿夜 副本",
         model: "MiniMax-M2.7",
+      }),
+    );
+    expect(JSON.parse(String(patchCalls[0][1]?.body))).toEqual(
+      expect.objectContaining({
+        display_name: "冷静的阿夜二号",
+        personality_text: "二号更谨慎",
+        avatar_prompt: "暗夜银发",
+        tags: ["控场", "追刀"],
+      }),
+    );
+  });
+
+  it("drops deleted virtual player selections before launching a run", async () => {
+    let isProfileDeleted = false;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles") && method === "GET") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(isProfileDeleted ? { profiles: [] } : playerProfilesResponse()),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        );
+      }
+      if (
+        url.endsWith("/api/v1/player-profiles/profile-1") &&
+        method === "DELETE"
+      ) {
+        isProfileDeleted = true;
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (url.endsWith("/api/v1/games/runs")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              run_id: "run_1234abcd",
+              session_id: "session_20260424_120000_ab12cd34",
+              villager_model: "deepseek-chat",
+              werewolf_model: "deepseek-chat",
+              seed: null,
+              max_rounds: 8,
+              status: "queued",
+              created_at: "2026-04-24T12:00:00Z",
+              started_at: null,
+              completed_at: null,
+              winner: null,
+              error: null,
+              event_count: 1,
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games" element={<GamesPage />} />
+        <Route
+          path="/games/live/:runId"
+          element={<p>实时观战 run_1234abcd</p>}
+        />
+      </Routes>,
+      "/games",
+    );
+
+    await userEvent.selectOptions(
+      await screen.findByLabelText("1 号座位虚拟玩家"),
+      "profile-1",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "删除 冷静的阿夜" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "确认删除 冷静的阿夜" }),
+    );
+    expect(await screen.findByText("还没有保存的虚拟玩家。")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/games/runs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          rule_set_id: "classic_8",
+          seed: null,
+          max_rounds: 8,
+          event_pacing: "off",
+        }),
+        method: "POST",
       }),
     );
   });
