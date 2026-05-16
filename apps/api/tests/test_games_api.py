@@ -310,7 +310,7 @@ def test_create_game_run_resolves_profile_configs(
                 display_name="控场位",
                 model="profile-model",
                 personality_id="cautious",
-                personality_text="",
+                personality_text="谨慎控场，避免过早暴露身份。",
                 appearance_id="moonlit",
                 avatar_prompt="silver moon portrait",
                 tags=["控场"],
@@ -367,6 +367,41 @@ def test_create_game_run_resolves_profile_configs(
     assert [config.to_dict() for config in background_configs] == [snapshot]
 
 
+def test_create_game_run_rejects_duplicate_effective_player_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "seed": 21,
+                "max_rounds": 1,
+                "player_configs": [
+                    {"seat": 1, "name": "同名玩家"},
+                    {"seat": 2, "name": "同名玩家"},
+                ],
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Duplicate player name: 同名玩家"
+    assert captured == []
+
+
 def test_create_game_run_rejects_missing_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -408,6 +443,19 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
                 "seed": 21,
                 "max_rounds": 8,
                 "rule_set_id": "starter_6",
+                "player_configs": [
+                    {
+                        "seat": 2,
+                        "profile_id": "profile-alpha",
+                        "name": "控场位",
+                        "model": "profile-model",
+                        "personality_id": "cautious",
+                        "personality": "谨慎控场。",
+                        "appearance_id": "moonlit",
+                        "avatar_prompt": "silver moon portrait",
+                        "tags": ["控场"],
+                    }
+                ],
             },
             "round_number": 1,
             "active_players": ["张三", "李四"],
@@ -441,6 +489,19 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     assert payload["villager_model"] == "Qwen3.6-Plus"
     assert payload["werewolf_model"] == "MiniMax-M2.7"
     assert payload["rule_set"]["id"] == "starter_6"
+    assert payload["player_configs"] == [
+        {
+            "seat": 2,
+            "profile_id": "profile-alpha",
+            "name": "控场位",
+            "model": "profile-model",
+            "personality_id": "cautious",
+            "personality": "谨慎控场。",
+            "appearance_id": "moonlit",
+            "avatar_prompt": "silver moon portrait",
+            "tags": ["控场"],
+        }
+    ]
     assert captured[0]["session_id"] == session_id
     assert captured[0]["logs_dir"] == tmp_path
 

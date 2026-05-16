@@ -29,7 +29,10 @@ from app.werewolf.models import (
     RoundLog,
     RoundState,
 )
-from app.werewolf.player_configs import PlayerConfig
+from app.werewolf.player_configs import (
+    PlayerConfig,
+    validate_unique_effective_player_names,
+)
 from app.werewolf.rules import (
     ACTION_DEBATE,
     ACTION_SHERIFF_BADGE,
@@ -127,6 +130,10 @@ def initialize_game_state(
     player_configs: list[PlayerConfig] | None = None,
 ) -> GameState:
     player_names = choose_player_names(seed, player_count=rule_set.player_count)
+    validate_unique_effective_player_names(
+        default_names=player_names,
+        player_configs=player_configs,
+    )
     configs_by_seat = {config.seat: config for config in player_configs or []}
     role_cards = [
         role_spec

@@ -593,6 +593,82 @@ def test_initialize_game_state_applies_player_config_snapshot() -> None:
     assert state.players[1].gamestate.current_players[0] == "控场位"
 
 
+def test_initialize_game_state_rejects_duplicate_config_seats() -> None:
+    rule_set = get_rule_set("classic_8")
+    configs = [
+        PlayerConfig(
+            seat=1,
+            profile_id=None,
+            name="一号位",
+            model="",
+            personality_id="balanced",
+            personality="",
+            appearance_id="default",
+            avatar_prompt="",
+            tags=(),
+        ),
+        PlayerConfig(
+            seat=1,
+            profile_id=None,
+            name="重复一号位",
+            model="",
+            personality_id="balanced",
+            personality="",
+            appearance_id="default",
+            avatar_prompt="",
+            tags=(),
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="Duplicate player config seat: 1"):
+        initialize_game_state(
+            session_id="session_test_duplicate_config_seats",
+            villager_model="villager-model",
+            werewolf_model="wolf-model",
+            seed=7,
+            rule_set=rule_set,
+            player_configs=configs,
+        )
+
+
+def test_initialize_game_state_rejects_duplicate_effective_names() -> None:
+    rule_set = get_rule_set("classic_8")
+    configs = [
+        PlayerConfig(
+            seat=1,
+            profile_id=None,
+            name="同名玩家",
+            model="",
+            personality_id="balanced",
+            personality="",
+            appearance_id="default",
+            avatar_prompt="",
+            tags=(),
+        ),
+        PlayerConfig(
+            seat=2,
+            profile_id=None,
+            name="同名玩家",
+            model="",
+            personality_id="balanced",
+            personality="",
+            appearance_id="default",
+            avatar_prompt="",
+            tags=(),
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="Duplicate player name: 同名玩家"):
+        initialize_game_state(
+            session_id="session_test_duplicate_effective_names",
+            villager_model="villager-model",
+            werewolf_model="wolf-model",
+            seed=7,
+            rule_set=rule_set,
+            player_configs=configs,
+        )
+
+
 def test_player_config_without_model_falls_back_to_role_model() -> None:
     rule_set = get_rule_set("classic_8")
     configs = [

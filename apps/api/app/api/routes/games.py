@@ -17,9 +17,12 @@ from app.werewolf.player_configs import (
     PlayerConfig,
     clean_optional_string,
     player_config_from_profile,
+    player_configs_from_serialized,
+    validate_unique_effective_player_names,
 )
 from app.werewolf.player_presets import is_valid_appearance, is_valid_personality
 from app.werewolf.providers import default_model_name
+from app.werewolf.config import choose_player_names
 from app.werewolf.checkpoint import ResumeCheckpointError, load_resume_checkpoint
 from app.werewolf.replay import ReplayNotFoundError, ReplayStore
 from app.werewolf.rules import (
@@ -155,6 +158,13 @@ def create_game_run(
         rule_set.player_count,
         db,
     )
+    try:
+        validate_unique_effective_player_names(
+            default_names=choose_player_names(request.seed, player_count=rule_set.player_count),
+            player_configs=player_configs,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     session_id = new_session_id()
     run = registry.create_run(
         session_id=session_id,
@@ -249,6 +259,12 @@ def resume_game_run(
 
     max_rounds = int(run_params.get("max_rounds") or 8)
     seed = run_params.get("seed")
+    try:
+        checkpoint_player_configs = player_configs_from_serialized(
+            run_params.get("player_configs")
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
     run = registry.create_run(
         session_id=session_id,
         villager_model=str(run_params.get("villager_model") or default_model_name()),
@@ -257,6 +273,7 @@ def resume_game_run(
         max_rounds=max_rounds,
         rule_set_id=rule_set.id,
         rule_set=rule_set_snapshot(rule_set),
+        player_configs=checkpoint_player_configs,
         event_pacing="off",
     )
     thread = threading.Thread(
