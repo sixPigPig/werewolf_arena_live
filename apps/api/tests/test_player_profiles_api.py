@@ -1,0 +1,187 @@
+from collections.abc import Generator
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.db.base import Base
+from app.db.session import get_db
+from app.main import app
+from app.models.user import User
+from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.werewolf.player_presets import default_personality_text
+
+
+engine = create_engine(
+    "sqlite+pysqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+Base.metadata.create_all(engine)
+
+
+def override_get_db() -> Generator[Session, None, None]:
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@pytest.fixture(autouse=True)
+def isolated_db() -> Generator[None, None, None]:
+    app.dependency_overrides[get_db] = override_get_db
+    with TestingSessionLocal() as session:
+        session.query(VirtualPlayerProfile).delete()
+        session.query(User).delete()
+        session.commit()
+    yield
+    app.dependency_overrides.clear()
+    with TestingSessionLocal() as session:
+        session.query(VirtualPlayerProfile).delete()
+        session.query(User).delete()
+        session.commit()
+
+
+client = TestClient(app)
+
+
+def test_create_profile_normalizes_and_fills_defaults() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "  控场位  ",
+            "model": "  gpt-4.1-mini  ",
+            "personality_id": "cautious",
+            "appearance_id": "moonlit",
+            "personality_text": "   ",
+            "avatar_prompt": "  silver moon portrait  ",
+            "tags": [" 控场 ", "夜晚", "控场", "", " 夜晚 "],
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["display_name"] == "控场位"
+    assert payload["model"] == "gpt-4.1-mini"
+    assert payload["personality_id"] == "cautious"
+    assert payload["personality_text"] == default_personality_text("cautious")
+    assert payload["appearance_id"] == "moonlit"
+    assert payload["avatar_prompt"] == "silver moon portrait"
+    assert payload["tags"] == ["控场", "夜晚"]
+    assert payload["owner_user_id"] is None
+
+    with TestingSessionLocal() as session:
+        profiles = session.query(VirtualPlayerProfile).all()
+
+    assert len(profiles) == 1
+    assert profiles[0].display_name == "控场位"
+
+
+def test_list_profiles_returns_most_recently_updated_first() -> None:
+    created_a = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "A", "model": "model-a"},
+    ).json()
+    created_b = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "B", "model": "model-b"},
+    ).json()
+
+    updated_a = client.patch(
+        f"/api/v1/player-profiles/{created_a['id']}",
+        json={"display_name": "A updated"},
+    ).json()
+
+    response = client.get("/api/v1/player-profiles")
+
+    assert response.status_code == 200
+    profiles = response.json()["profiles"]
+    assert [profile["id"] for profile in profiles] == [created_a["id"], created_b["id"]]
+    assert profiles[0]["display_name"] == updated_a["display_name"]
+
+
+def test_get_patch_delete_profile() -> None:
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "Scout",
+            "model": "gpt-4.1-mini",
+            "personality_id": "balanced",
+            "personality_text": "custom text",
+            "appearance_id": "default",
+            "tags": ["old"],
+        },
+    ).json()
+
+    get_response = client.get(f"/api/v1/player-profiles/{created['id']}")
+    assert get_response.status_code == 200
+    assert get_response.json()["id"] == created["id"]
+
+    patch_response = client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={
+            "display_name": "  Pressure Lead  ",
+            "personality_id": "aggressive",
+            "appearance_id": "crimson",
+            "tags": [" lead ", "push", "lead"],
+        },
+    )
+
+    assert patch_response.status_code == 200
+    patched = patch_response.json()
+    assert patched["display_name"] == "Pressure Lead"
+    assert patched["personality_id"] == "aggressive"
+    assert patched["personality_text"] == default_personality_text("aggressive")
+    assert patched["appearance_id"] == "crimson"
+    assert patched["tags"] == ["lead", "push"]
+
+    delete_response = client.delete(f"/api/v1/player-profiles/{created['id']}")
+    assert delete_response.status_code == 204
+    assert delete_response.content == b""
+
+    missing_response = client.get(f"/api/v1/player-profiles/{created['id']}")
+    assert missing_response.status_code == 404
+    assert missing_response.json()["detail"] == "Player profile not found"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_detail"),
+    [
+        ({"display_name": "   ", "model": "gpt-4.1-mini"}, None),
+        ({"display_name": "Valid", "model": "   "}, None),
+        (
+            {"display_name": "Valid", "model": "gpt-4.1-mini", "personality_id": "mystery"},
+            "Unknown personality_id: mystery",
+        ),
+        (
+            {"display_name": "Valid", "model": "gpt-4.1-mini", "appearance_id": "neon"},
+            "Unknown appearance_id: neon",
+        ),
+        (
+            {
+                "display_name": "Valid",
+                "model": "gpt-4.1-mini",
+                "avatar_prompt": "x" * 1001,
+            },
+            None,
+        ),
+        (
+            {
+                "display_name": "Valid",
+                "model": "gpt-4.1-mini",
+                "tags": ["a", "b", "c", "d", "e", "f", "g", "h", "i"],
+            },
+            None,
+        ),
+    ],
+)
+def test_create_profile_validation_errors(payload: dict, expected_detail: str | None) -> None:
+    response = client.post("/api/v1/player-profiles", json=payload)
+
+    assert response.status_code == 422
+    if expected_detail is not None:
+        assert response.json()["detail"] == expected_detail
