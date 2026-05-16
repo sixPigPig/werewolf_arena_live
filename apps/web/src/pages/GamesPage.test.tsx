@@ -498,7 +498,7 @@ describe("GamesPage", () => {
     expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
   });
 
-  it("creates a live game run with selected virtual player profiles", async () => {
+  it("preserves seat model overrides when selecting and clearing virtual player profiles", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);
       if (url.endsWith("/api/v1/games/rule-sets")) {
@@ -558,10 +558,13 @@ describe("GamesPage", () => {
       "/games",
     );
 
-    await userEvent.selectOptions(
-      await screen.findByLabelText("1 号座位虚拟玩家"),
-      "profile-1",
+    await userEvent.type(
+      await screen.findByLabelText("1 号座位模型覆盖"),
+      "qwen3.6-plus",
     );
+    const seatProfileSelect = screen.getByLabelText("1 号座位虚拟玩家");
+    await userEvent.selectOptions(seatProfileSelect, "profile-1");
+    await userEvent.selectOptions(seatProfileSelect, "");
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
 
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -572,7 +575,7 @@ describe("GamesPage", () => {
           seed: null,
           max_rounds: 8,
           event_pacing: "off",
-          player_configs: [{ seat: 1, profile_id: "profile-1" }],
+          player_configs: [{ seat: 1, model: "qwen3.6-plus" }],
         }),
         method: "POST",
       }),

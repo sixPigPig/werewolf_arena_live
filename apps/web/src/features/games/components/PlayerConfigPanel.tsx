@@ -62,9 +62,20 @@ export function PlayerConfigPanel({
                   value={config?.profile_id ?? ""}
                   onChange={(event) => {
                     const profileId = event.target.value;
-                    updateSeatConfig(seat, () =>
-                      profileId ? { seat, profile_id: profileId } : null,
-                    );
+                    updateSeatConfig(seat, (existing) => {
+                      if (!profileId) {
+                        const nextConfig = { ...(existing ?? { seat }) };
+                        delete nextConfig.profile_id;
+
+                        return hasSeatConfig(nextConfig) ? nextConfig : null;
+                      }
+
+                      return {
+                        ...(existing ?? { seat }),
+                        seat,
+                        profile_id: profileId,
+                      };
+                    });
                   }}
                 >
                   <option value="">随机玩家</option>
