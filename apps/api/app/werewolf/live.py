@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from app.werewolf.pacing import EventPacingMode, validate_event_pacing
+from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
 
 RunStatus = Literal["queued", "running", "completed", "failed"]
@@ -87,6 +88,7 @@ class LiveGameRun:
     rule_set: dict[str, Any] = field(
         default_factory=lambda: rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
     )
+    player_configs: list[dict[str, Any]] = field(default_factory=list)
     event_pacing: EventPacingMode = "off"
     status: RunStatus = "queued"
     created_at: str = field(default_factory=utc_now)
@@ -112,6 +114,7 @@ class LiveGameRun:
             "max_rounds": self.max_rounds,
             "rule_set_id": self.rule_set_id,
             "rule_set": _copy_json_payload(self.rule_set),
+            "player_configs": _copy_json_payload(self.player_configs),
             "event_pacing": self.event_pacing,
             "status": self.status,
             "created_at": self.created_at,
@@ -138,6 +141,7 @@ class LiveRunRegistry:
         max_rounds: int,
         rule_set_id: str = DEFAULT_RULE_SET_ID,
         rule_set: dict[str, Any] | None = None,
+        player_configs: list[PlayerConfig] | None = None,
         event_pacing: EventPacingMode = "off",
     ) -> LiveGameRun:
         validated_event_pacing = validate_event_pacing(event_pacing)
@@ -146,6 +150,7 @@ class LiveRunRegistry:
             if rule_set is not None
             else rule_set_snapshot(get_rule_set(rule_set_id))
         )
+        player_config_data = [config.to_dict() for config in player_configs or []]
         with self._lock:
             run = LiveGameRun(
                 run_id=f"run_{uuid.uuid4().hex[:12]}",
@@ -156,6 +161,7 @@ class LiveRunRegistry:
                 max_rounds=max_rounds,
                 rule_set_id=rule_set_id,
                 rule_set=rule_set_data,
+                player_configs=player_config_data,
                 event_pacing=validated_event_pacing,
             )
             self._runs[run.run_id] = run
@@ -170,6 +176,7 @@ class LiveRunRegistry:
                     "max_rounds": max_rounds,
                     "rule_set_id": rule_set_id,
                     "rule_set": rule_set_data,
+                    "player_configs": player_config_data,
                     "event_pacing": validated_event_pacing,
                 },
             )

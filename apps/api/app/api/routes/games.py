@@ -6,10 +6,19 @@ from typing import Annotated, Any, Iterator
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.db.session import get_db
+from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.live import EventSink, LiveEvent, LiveRunRegistry, format_sse
 from app.werewolf.pacing import EventPacer, EventPacingMode
+from app.werewolf.player_configs import (
+    PlayerConfig,
+    clean_optional_string,
+    player_config_from_profile,
+)
+from app.werewolf.player_presets import is_valid_appearance, is_valid_personality
 from app.werewolf.providers import default_model_name
 from app.werewolf.checkpoint import ResumeCheckpointError, load_resume_checkpoint
 from app.werewolf.replay import ReplayNotFoundError, ReplayStore
@@ -26,6 +35,20 @@ router = APIRouter()
 live_registry = LiveRunRegistry()
 
 
+class CreatePlayerConfigRequest(BaseModel):
+    seat: int = Field(ge=1)
+    profile_id: str | None = Field(default=None, min_length=1)
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    model: str | None = Field(default=None, min_length=1, max_length=120)
+    personality_id: str | None = Field(default=None, min_length=1, max_length=40)
+    personality: str | None = None
+    personality_text: str | None = None
+    appearance_id: str | None = Field(default=None, min_length=1, max_length=40)
+    avatar_prompt: str | None = Field(default=None, max_length=500)
+    tags: list[str] | None = Field(default=None, max_length=8)
+
+
 class CreateGameRunRequest(BaseModel):
     villager_model: str = Field(default_factory=default_model_name)
     werewolf_model: str = Field(default_factory=default_model_name)
@@ -33,6 +56,7 @@ class CreateGameRunRequest(BaseModel):
     max_rounds: int = Field(default=8, ge=1, le=20)
     rule_set_id: str = DEFAULT_RULE_SET_ID
     event_pacing: EventPacingMode = "off"
+    player_configs: list[CreatePlayerConfigRequest] = Field(default_factory=list)
 
 
 def get_replay_store() -> ReplayStore:
@@ -41,6 +65,65 @@ def get_replay_store() -> ReplayStore:
 
 def get_live_registry() -> LiveRunRegistry:
     return live_registry
+
+
+def normalize_player_config_requests(
+    requests: list[CreatePlayerConfigRequest],
+    player_count: int,
+    db: Session,
+) -> list[PlayerConfig]:
+    if len(requests) > player_count:
+        raise HTTPException(status_code=422, detail="Too many player configs")
+
+    seen_seats: set[int] = set()
+    configs: list[PlayerConfig] = []
+    for request in requests:
+        if request.seat > player_count:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Player config seat out of range: {request.seat}",
+            )
+        if request.seat in seen_seats:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Duplicate player config seat: {request.seat}",
+            )
+        seen_seats.add(request.seat)
+
+        profile_id = clean_optional_string(request.profile_id)
+        profile = None
+        if profile_id is not None:
+            profile = db.get(VirtualPlayerProfile, profile_id)
+            if profile is None:
+                raise HTTPException(status_code=422, detail=f"Unknown player profile: {profile_id}")
+
+        personality_id = (
+            clean_optional_string(request.personality_id)
+            or clean_optional_string(getattr(profile, "personality_id", None))
+            or "balanced"
+        )
+        appearance_id = (
+            clean_optional_string(request.appearance_id)
+            or clean_optional_string(getattr(profile, "appearance_id", None))
+            or "default"
+        )
+        if not is_valid_personality(personality_id):
+            raise HTTPException(status_code=422, detail=f"Unknown personality_id: {personality_id}")
+        if not is_valid_appearance(appearance_id):
+            raise HTTPException(status_code=422, detail=f"Unknown appearance_id: {appearance_id}")
+
+        overrides = request.model_dump(exclude_unset=True)
+        if profile_id is not None:
+            overrides["profile_id"] = profile_id
+        configs.append(
+            player_config_from_profile(
+                seat=request.seat,
+                profile=profile,
+                overrides=overrides,
+            )
+        )
+
+    return configs
 
 
 @router.get("")
@@ -57,6 +140,7 @@ def list_rule_sets() -> dict:
 def create_game_run(
     request: CreateGameRunRequest,
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     try:
         rule_set = get_rule_set(request.rule_set_id)
@@ -66,6 +150,11 @@ def create_game_run(
             detail=f"Unknown rule set: {request.rule_set_id}",
         ) from exc
     rule_snapshot = rule_set_snapshot(rule_set)
+    player_configs = normalize_player_config_requests(
+        request.player_configs,
+        rule_set.player_count,
+        db,
+    )
     session_id = new_session_id()
     run = registry.create_run(
         session_id=session_id,
@@ -75,6 +164,7 @@ def create_game_run(
         max_rounds=request.max_rounds,
         rule_set_id=rule_set.id,
         rule_set=rule_snapshot,
+        player_configs=player_configs,
         event_pacing=request.event_pacing,
     )
     thread = threading.Thread(
@@ -89,6 +179,7 @@ def create_game_run(
             "max_rounds": request.max_rounds,
             "rule_set_id": rule_set.id,
             "event_pacing": request.event_pacing,
+            "player_configs": player_configs,
         },
         daemon=True,
     )
@@ -208,6 +299,7 @@ def _run_game_in_background(
     max_rounds: int,
     rule_set_id: str,
     event_pacing: EventPacingMode,
+    player_configs: list[PlayerConfig] | None = None,
 ) -> None:
     pacer = EventPacer(event_pacing)
     pacer.wait("run_started")
@@ -222,6 +314,7 @@ def _run_game_in_background(
             max_rounds=max_rounds,
             session_id=session_id,
             event_sink=PacedEventSink(EventSink(registry, run_id), pacer),
+            player_configs=player_configs,
         )
     except GameRunError as exc:
         pacer.wait("game_failed")

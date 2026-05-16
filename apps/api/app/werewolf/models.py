@@ -66,6 +66,12 @@ class Player:
     name: str
     role: str
     model: str
+    personality_id: str = "balanced"
+    personality: str = ""
+    appearance_id: str = "default"
+    avatar_prompt: str = ""
+    profile_id: str | None = None
+    tags: list[str] = field(default_factory=list)
     observations: list[str] = field(default_factory=list)
     bidding_rationale: str = ""
     gamestate: GameView | None = None
@@ -85,6 +91,12 @@ class Player:
             "name": self.name,
             "role": self.role,
             "model": self.model,
+            "personality_id": self.personality_id,
+            "personality": self.personality,
+            "appearance_id": self.appearance_id,
+            "avatar_prompt": self.avatar_prompt,
+            "profile_id": self.profile_id,
+            "tags": self.tags,
             "observations": self.observations,
             "bidding_rationale": self.bidding_rationale,
             "gamestate": self.gamestate.to_dict() if self.gamestate else None,

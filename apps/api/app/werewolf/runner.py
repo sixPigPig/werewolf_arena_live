@@ -21,6 +21,7 @@ from app.werewolf.engine import GameEngine, initialize_game_state
 from app.werewolf.live import NullEventSink
 from app.werewolf.logging import save_game
 from app.werewolf.lm import ModelProvider
+from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.providers import create_model_provider, default_model_name
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set
 
@@ -49,6 +50,7 @@ def run_game(
     session_id: str | None = None,
     event_sink: object | None = None,
     rule_set_id: str = DEFAULT_RULE_SET_ID,
+    player_configs: list[PlayerConfig] | None = None,
 ) -> RunGameResult:
     session_id = session_id or new_session_id()
     log_directory = Path(logs_dir) / session_id
@@ -62,6 +64,7 @@ def run_game(
         "seed": seed,
         "max_rounds": max_rounds,
         "rule_set_id": rule_set.id,
+        "player_configs": [config.to_dict() for config in player_configs or []],
     }
     state = initialize_game_state(
         session_id=session_id,
@@ -69,6 +72,7 @@ def run_game(
         werewolf_model=selected_werewolf_model,
         seed=seed,
         rule_set=rule_set,
+        player_configs=player_configs,
     )
     logs = []
     checkpoint_manager = ResumeCheckpointManager(

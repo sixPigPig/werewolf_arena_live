@@ -29,6 +29,7 @@ from app.werewolf.models import (
     RoundLog,
     RoundState,
 )
+from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.rules import (
     ACTION_DEBATE,
     ACTION_SHERIFF_BADGE,
@@ -123,8 +124,10 @@ def initialize_game_state(
     werewolf_model: str,
     seed: int | None,
     rule_set: RuleSet,
+    player_configs: list[PlayerConfig] | None = None,
 ) -> GameState:
     player_names = choose_player_names(seed, player_count=rule_set.player_count)
+    configs_by_seat = {config.seat: config for config in player_configs or []}
     role_cards = [
         role_spec
         for role_spec in rule_set.roles
@@ -133,9 +136,26 @@ def initialize_game_state(
     role_rng = random.Random(f"{seed}:roles") if seed is not None else random.Random()
     role_rng.shuffle(role_cards)
     players: list[Player] = []
-    for player_name, role_spec in zip(player_names, role_cards, strict=True):
+    for seat, (player_name, role_spec) in enumerate(
+        zip(player_names, role_cards, strict=True),
+        start=1,
+    ):
+        player_config = configs_by_seat.get(seat)
         model = werewolf_model if role_spec.model_group == MODEL_GROUP_WEREWOLF else villager_model
-        player = Player(player_name, role_spec.role, model)
+        if player_config is not None:
+            player_name = player_config.name or player_name
+            model = player_config.model or model
+        player = Player(
+            player_name,
+            role_spec.role,
+            model,
+            personality_id=player_config.personality_id if player_config else "balanced",
+            personality=player_config.personality if player_config else "",
+            appearance_id=player_config.appearance_id if player_config else "default",
+            avatar_prompt=player_config.avatar_prompt if player_config else "",
+            profile_id=player_config.profile_id if player_config else None,
+            tags=list(player_config.tags) if player_config else [],
+        )
         if role_spec.role == WITCH:
             player.witch_antidote_available = True
             player.witch_poison_available = True
@@ -1543,7 +1563,7 @@ class GameEngine:
             "remaining_players": "、".join(active_players),
             "debate": debate,
             "bidding_rationale": player.bidding_rationale,
-            "personality": "",
+            "personality": player.personality,
             "rule_text": render_rule_text(self.rule_set),
             "werewolf_context": self._werewolf_context(player, active_players),
             "sheriff_election": self._sheriff_election_context(round_state),

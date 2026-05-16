@@ -4,11 +4,13 @@ import random
 import pytest
 
 from app.werewolf.config import HUNTER, SEER, WEREWOLF
+from app.werewolf.checkpoint import player_from_dict
 from app.werewolf.engine import GameEngine, MaxRoundsExceeded, initialize_game_state
 from app.werewolf.live import NullEventSink
 from app.werewolf.models import DeathEvent, RoundLog, RoundState
+from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.prompts_zh import build_prompt
-from app.werewolf.rules import get_rule_set
+from app.werewolf.rules import MODEL_GROUP_WEREWOLF, get_rule_set
 from app.werewolf.runner import GameRunError, run_game
 
 
@@ -553,6 +555,120 @@ def _extract_living_players(prompt: str) -> list[str]:
         return []
     line = prompt.split(marker, 1)[1].splitlines()[0]
     return [name.strip() for name in line.split("、") if name.strip()]
+
+
+def test_initialize_game_state_applies_player_config_snapshot() -> None:
+    rule_set = get_rule_set("classic_8")
+    config = PlayerConfig(
+        seat=1,
+        profile_id="profile-alpha",
+        name="控场位",
+        model="profile-model",
+        personality_id="analytical",
+        personality="重视票型和前后逻辑。",
+        appearance_id="moonlit",
+        avatar_prompt="silver moon portrait",
+        tags=("控场", "夜晚"),
+    )
+
+    state = initialize_game_state(
+        session_id="session_test_player_config",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=7,
+        rule_set=rule_set,
+        player_configs=[config],
+    )
+
+    player = state.players[0]
+    assert player.name == "控场位"
+    assert player.model == "profile-model"
+    assert player.profile_id == "profile-alpha"
+    assert player.personality_id == "analytical"
+    assert player.personality == "重视票型和前后逻辑。"
+    assert player.appearance_id == "moonlit"
+    assert player.avatar_prompt == "silver moon portrait"
+    assert player.tags == ["控场", "夜晚"]
+    assert state.players[1].gamestate is not None
+    assert state.players[1].gamestate.current_players[0] == "控场位"
+
+
+def test_player_config_without_model_falls_back_to_role_model() -> None:
+    rule_set = get_rule_set("classic_8")
+    configs = [
+        PlayerConfig(
+            seat=seat,
+            profile_id=f"profile-{seat}",
+            name=f"席位{seat}",
+            model="",
+            personality_id="balanced",
+            personality="稳健推进。",
+            appearance_id="default",
+            avatar_prompt="",
+            tags=(),
+        )
+        for seat in range(1, rule_set.player_count + 1)
+    ]
+
+    state = initialize_game_state(
+        session_id="session_test_player_config_model_fallback",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=7,
+        rule_set=rule_set,
+        player_configs=configs,
+    )
+
+    model_group_by_role = {role_spec.role: role_spec.model_group for role_spec in rule_set.roles}
+    for player in state.players:
+        if model_group_by_role[player.role] == MODEL_GROUP_WEREWOLF:
+            assert player.model == "wolf-model"
+        else:
+            assert player.model == "villager-model"
+
+
+def test_world_state_includes_player_personality() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_world_state_personality",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=7,
+        rule_set=rule_set,
+    )
+    state.players[0].personality = "主动施压，寻找发言矛盾。"
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    world_state = engine._world_state(
+        state.players[0],
+        ["选项A"],
+        RoundState(number=1, players=[player.name for player in state.players]),
+    )
+
+    assert world_state["personality"] == "主动施压，寻找发言矛盾。"
+
+
+def test_player_from_dict_defaults_legacy_profile_fields() -> None:
+    player = player_from_dict(
+        {
+            "name": "张三",
+            "role": "狼人",
+            "model": "deepseek-chat",
+            "observations": [],
+        }
+    )
+
+    assert player.profile_id is None
+    assert player.personality_id == "balanced"
+    assert player.personality == ""
+    assert player.appearance_id == "default"
+    assert player.avatar_prompt == ""
+    assert player.tags == []
 
 
 def test_run_game_with_deepseek_models_writes_complete_chinese_logs(tmp_path) -> None:

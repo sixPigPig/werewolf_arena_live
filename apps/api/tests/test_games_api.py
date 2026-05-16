@@ -1,22 +1,62 @@
 import json
+from collections.abc import Generator
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.api.routes.games import (
     _run_game_in_background,
     get_live_registry,
     get_replay_store,
 )
+from app.db.base import Base
+from app.db.session import get_db
 from app.main import app
+from app.models.user import User
+from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.checkpoint import RESUME_CHECKPOINT_FILE
 from app.werewolf.live import LiveRunRegistry
+from app.werewolf.player_presets import default_personality_text
 from app.werewolf.replay import ReplayStore
 
 
+engine = create_engine(
+    "sqlite+pysqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+Base.metadata.create_all(engine)
+
 client = TestClient(app)
+
+
+def override_get_db() -> Generator[Session, None, None]:
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@pytest.fixture(autouse=True)
+def isolated_db() -> Generator[None, None, None]:
+    app.dependency_overrides[get_db] = override_get_db
+    with TestingSessionLocal() as session:
+        session.query(VirtualPlayerProfile).delete()
+        session.query(User).delete()
+        session.commit()
+    yield
+    app.dependency_overrides.clear()
+    with TestingSessionLocal() as session:
+        session.query(VirtualPlayerProfile).delete()
+        session.query(User).delete()
+        session.commit()
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -257,6 +297,99 @@ def test_create_game_run_rejects_unknown_rule_set(
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Unknown rule set: missing_rule"
+
+
+def test_create_game_run_resolves_profile_configs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with TestingSessionLocal() as session:
+        session.add(
+            VirtualPlayerProfile(
+                id="profile-alpha",
+                display_name="控场位",
+                model="profile-model",
+                personality_id="cautious",
+                personality_text="",
+                appearance_id="moonlit",
+                avatar_prompt="silver moon portrait",
+                tags=["控场"],
+            )
+        )
+        session.commit()
+
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "seed": 21,
+                "max_rounds": 1,
+                "player_configs": [
+                    {
+                        "seat": 2,
+                        "profile_id": "profile-alpha",
+                        "name": "覆盖名",
+                        "personality_id": "aggressive",
+                        "appearance_id": "crimson",
+                        "tags": ["压迫", "控场"],
+                    }
+                ],
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    snapshot = response.json()["player_configs"][0]
+    assert snapshot == {
+        "seat": 2,
+        "profile_id": "profile-alpha",
+        "name": "覆盖名",
+        "model": "profile-model",
+        "personality_id": "aggressive",
+        "personality": default_personality_text("aggressive"),
+        "appearance_id": "crimson",
+        "avatar_prompt": "silver moon portrait",
+        "tags": ["压迫", "控场"],
+    }
+    background_configs = captured[0]["player_configs"]
+    assert [config.to_dict() for config in background_configs] == [snapshot]
+
+
+def test_create_game_run_rejects_missing_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "seed": 21,
+                "max_rounds": 1,
+                "player_configs": [{"seat": 1, "profile_id": "missing"}],
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Unknown player profile: missing"
 
 
 def test_resume_game_run_creates_live_run_from_checkpoint(
