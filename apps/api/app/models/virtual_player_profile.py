@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, func
+from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -19,7 +20,7 @@ class VirtualPlayerProfile(Base):
     personality_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     appearance_id: Mapped[str] = mapped_column(String(40), nullable=False, default="default")
     avatar_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    tags: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JSON), nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

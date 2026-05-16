@@ -1,3 +1,6 @@
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
 from app.db.base import Base
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -52,3 +55,31 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
     assert table.c.tags.nullable is False
     assert table.c.created_at.server_default is not None
     assert table.c.updated_at.server_default is not None
+
+
+def test_virtual_player_profile_tag_append_is_persisted() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        profile = VirtualPlayerProfile(
+            id="profile-1",
+            display_name="控场位",
+            model="gpt-4.1-mini",
+            personality_id="balanced",
+            personality_text="稳健推进",
+            appearance_id="default",
+            avatar_prompt="",
+            tags=[],
+        )
+        session.add(profile)
+        session.commit()
+
+        profile.tags.append("控场")
+        session.commit()
+        session.expunge_all()
+
+        saved_profile = session.get(VirtualPlayerProfile, "profile-1")
+
+    assert saved_profile is not None
+    assert saved_profile.tags == ["控场"]
