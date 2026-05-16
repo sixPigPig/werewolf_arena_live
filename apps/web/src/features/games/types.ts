@@ -99,6 +99,12 @@ export type RawPlayer = {
   name: string;
   role: string;
   model: string;
+  personality_id?: string;
+  personality?: string;
+  appearance_id?: string;
+  avatar_prompt?: string;
+  profile_id?: string | null;
+  tags?: string[];
   observations?: string[];
   bidding_rationale?: string;
   gamestate?: unknown;
@@ -296,6 +302,48 @@ export type GameRunStatus = "queued" | "running" | "completed" | "failed";
 
 export type EventPacingMode = "off" | "standard" | "slow";
 
+export type VirtualPlayerProfile = {
+  id: string;
+  owner_user_id: number | null;
+  display_name: string;
+  model: string;
+  personality_id: string;
+  personality_text: string;
+  appearance_id: string;
+  avatar_prompt: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlayerProfilesResponse = {
+  profiles: VirtualPlayerProfile[];
+};
+
+export type PlayerProfileRequest = {
+  display_name: string;
+  model: string;
+  personality_id?: string;
+  personality_text?: string;
+  appearance_id?: string;
+  avatar_prompt?: string;
+  tags?: string[];
+};
+
+export type UpdatePlayerProfileRequest = Partial<PlayerProfileRequest>;
+
+export type PlayerConfig = {
+  seat: number;
+  profile_id?: string | null;
+  name?: string | null;
+  model?: string | null;
+  personality_id?: string;
+  personality?: string;
+  appearance_id?: string;
+  avatar_prompt?: string;
+  tags?: string[];
+};
+
 export type GameRun = {
   run_id: string;
   session_id: string;
@@ -312,6 +360,7 @@ export type GameRun = {
   error: string | null;
   event_count: number;
   event_pacing: EventPacingMode;
+  player_configs?: PlayerConfig[];
 };
 
 export type CreateGameRunRequest = {
@@ -321,6 +370,7 @@ export type CreateGameRunRequest = {
   seed?: number | null;
   max_rounds?: number;
   event_pacing?: EventPacingMode;
+  player_configs?: PlayerConfig[];
 };
 
 export type LiveGameEvent = {

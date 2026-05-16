@@ -34,6 +34,20 @@ describe("live run api", () => {
           completed_at: null,
           error: null,
           event_count: 1,
+          event_pacing: "standard",
+          player_configs: [
+            {
+              seat: 1,
+              profile_id: "profile-1",
+              name: "冷静的阿夜",
+              model: "deepseek-chat",
+              personality_id: "cautious",
+              personality: "谨慎观察局势。",
+              appearance_id: "moonlit",
+              avatar_prompt: "银发观察者",
+              tags: ["控场"],
+            },
+          ],
         }),
         { status: 201, headers: { "Content-Type": "application/json" } },
       ),
@@ -43,6 +57,17 @@ describe("live run api", () => {
       rule_set_id: "starter_6",
       seed: 21,
       max_rounds: 8,
+      player_configs: [
+        {
+          seat: 1,
+          profile_id: "profile-1",
+          name: "冷静的阿夜",
+          model: "deepseek-chat",
+          personality_id: "cautious",
+          appearance_id: "moonlit",
+          avatar_prompt: "银发观察者",
+        },
+      ],
     });
 
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -54,11 +79,23 @@ describe("live run api", () => {
           rule_set_id: "starter_6",
           seed: 21,
           max_rounds: 8,
+          player_configs: [
+            {
+              seat: 1,
+              profile_id: "profile-1",
+              name: "冷静的阿夜",
+              model: "deepseek-chat",
+              personality_id: "cautious",
+              appearance_id: "moonlit",
+              avatar_prompt: "银发观察者",
+            },
+          ],
         }),
       }),
     );
     expect(run.run_id).toBe("run_1234abcd");
     expect(run.max_rounds).toBe(8);
+    expect(run.player_configs?.[0]?.profile_id).toBe("profile-1");
   });
 
   it("gets a game run", async () => {
