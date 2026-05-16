@@ -32,6 +32,12 @@ const detailResponse = {
         name: "张三",
         role: "werewolf",
         model: "deepseek-chat",
+        personality_id: "cautious",
+        personality: "谨慎保守。",
+        appearance_id: "moonlit",
+        avatar_prompt: "银发观察者",
+        profile_id: "profile-1",
+        tags: ["控场"],
       },
       {
         name: "李四",
@@ -339,6 +345,11 @@ describe("GameDetailPage", () => {
     );
     expect(
       within(screen.getByTestId("player-roster-row-张三")).getByText("狼人"),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("player-roster-row-张三")).getByText(
+        "deepseek-chat · 谨慎",
+      ),
     ).toBeInTheDocument();
     expect(
       within(screen.getByTestId("player-roster-row-李四")).getByText("死亡"),
