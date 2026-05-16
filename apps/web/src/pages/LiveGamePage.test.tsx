@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
 import { Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -234,7 +235,17 @@ describe("LiveGamePage", () => {
         action: null,
         payload: {
           players: [
-            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            {
+              name: "张三",
+              role: "狼人",
+              model: "deepseek-chat",
+              personality_id: "cautious",
+              personality: "谨慎保守。",
+              appearance_id: "moonlit",
+              avatar_prompt: "银发观察者",
+              profile_id: "profile-1",
+              tags: ["控场"],
+            },
             { name: "李四", role: "村民", model: "deepseek-chat" },
           ],
         },
@@ -363,6 +374,16 @@ describe("LiveGamePage", () => {
     expect(
       within(screen.getByTestId("player-roster-row-张三")).getByText("麦"),
     ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("player-roster-row-张三")).getByText(
+        "deepseek-chat · 谨慎",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen
+        .getByTestId("player-roster-row-张三")
+        .querySelector(".player-roster-avatar"),
+    ).toHaveClass("profile-appearance-moonlit");
     const activePlayerRoleLabel = within(
       screen.getByRole("button", { name: /张三/ }),
     ).getByText("狼人");
@@ -445,6 +466,21 @@ describe("LiveGamePage", () => {
     );
 
     expect(screen.getByText("连接：未连接")).toBeInTheDocument();
+  });
+
+  it("defines appearance backgrounds for every avatar surface", () => {
+    const css = readFileSync("src/styles/index.css", "utf8");
+
+    for (const appearance of [
+      "default",
+      "crimson",
+      "moonlit",
+      "ember",
+      "verdant",
+    ]) {
+      expect(css).toContain(`\n.profile-appearance-${appearance} {`);
+    }
+    expect(css).not.toContain(".virtual-player-card-avatar.profile-appearance-");
   });
 
   it("uses a stage-first live layout with a separate timeline column", async () => {

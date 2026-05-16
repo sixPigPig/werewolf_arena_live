@@ -983,31 +983,31 @@ body {
     0 8px 16px rgb(0 0 0 / 26%);
 }
 
-.virtual-player-card-avatar.profile-appearance-default {
+.profile-appearance-default {
   background:
     radial-gradient(circle at 35% 28%, rgb(216 224 231 / 26%), transparent 42%),
     linear-gradient(135deg, #25313c, #070b10);
 }
 
-.virtual-player-card-avatar.profile-appearance-crimson {
+.profile-appearance-crimson {
   background:
     radial-gradient(circle at 35% 28%, rgb(252 165 165 / 28%), transparent 42%),
     linear-gradient(135deg, #5c1f2a, #13070a);
 }
 
-.virtual-player-card-avatar.profile-appearance-moonlit {
+.profile-appearance-moonlit {
   background:
     radial-gradient(circle at 35% 28%, rgb(191 219 254 / 34%), transparent 42%),
     linear-gradient(135deg, #334155, #090b14);
 }
 
-.virtual-player-card-avatar.profile-appearance-ember {
+.profile-appearance-ember {
   background:
     radial-gradient(circle at 35% 28%, rgb(253 186 116 / 32%), transparent 42%),
     linear-gradient(135deg, #713f12, #120806);
 }
 
-.virtual-player-card-avatar.profile-appearance-verdant {
+.profile-appearance-verdant {
   background:
     radial-gradient(circle at 35% 28%, rgb(134 239 172 / 28%), transparent 42%),
     linear-gradient(135deg, #1f4d37, #07110c);
