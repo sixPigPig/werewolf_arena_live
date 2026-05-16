@@ -839,7 +839,210 @@ body {
 }
 
 .lobby-page-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
   min-height: calc(100svh - var(--arena-nav-height, var(--app-top-nav-height, 56px)));
+}
+
+.virtual-player-library {
+  width: min(92rem, 100%);
+  min-width: 0;
+  margin: 0 auto;
+  --gothic-night-container-min-height: 0;
+  --gothic-night-container-content-top: 1rem;
+  --gothic-night-container-content-inline: 1.05rem;
+  --gothic-night-container-content-bottom: 1rem;
+}
+
+.virtual-player-library-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.62rem;
+}
+
+.virtual-player-library-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.virtual-player-library-title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #f0dfc8;
+  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 0 rgb(0 0 0 / 78%);
+  white-space: nowrap;
+}
+
+.virtual-player-library-action {
+  flex: 0 0 auto;
+}
+
+.virtual-player-library-status,
+.virtual-player-library-error,
+.virtual-player-library-empty {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.virtual-player-library-status,
+.virtual-player-library-empty {
+  color: #c7d0da;
+}
+
+.virtual-player-library-error {
+  color: #fca5a5;
+}
+
+.virtual-player-library-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.virtual-player-card {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.62rem;
+  overflow: hidden;
+  border: 1px solid rgb(134 146 158 / 38%);
+  border-radius: 0.32rem;
+  background:
+    linear-gradient(180deg, rgb(8 15 20 / 74%), rgb(2 7 12 / 82%)),
+    radial-gradient(circle at 8% 20%, rgb(232 201 130 / 10%), transparent 34%);
+  padding: 0.56rem 0.62rem;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 7%),
+    inset 0 -1px 0 rgb(0 0 0 / 44%);
+}
+
+.virtual-player-card-avatar {
+  display: grid;
+  width: 2.45rem;
+  height: 2.45rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgb(232 201 130 / 44%);
+  border-radius: 999px;
+  color: #f7ead4;
+  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-size: 1.08rem;
+  font-weight: 800;
+  box-shadow:
+    inset 0 0 0 0.2rem rgb(0 0 0 / 24%),
+    0 8px 16px rgb(0 0 0 / 26%);
+}
+
+.virtual-player-card-avatar.profile-appearance-default {
+  background:
+    radial-gradient(circle at 35% 28%, rgb(216 224 231 / 26%), transparent 42%),
+    linear-gradient(135deg, #25313c, #070b10);
+}
+
+.virtual-player-card-avatar.profile-appearance-crimson {
+  background:
+    radial-gradient(circle at 35% 28%, rgb(252 165 165 / 28%), transparent 42%),
+    linear-gradient(135deg, #5c1f2a, #13070a);
+}
+
+.virtual-player-card-avatar.profile-appearance-moonlit {
+  background:
+    radial-gradient(circle at 35% 28%, rgb(191 219 254 / 34%), transparent 42%),
+    linear-gradient(135deg, #334155, #090b14);
+}
+
+.virtual-player-card-avatar.profile-appearance-ember {
+  background:
+    radial-gradient(circle at 35% 28%, rgb(253 186 116 / 32%), transparent 42%),
+    linear-gradient(135deg, #713f12, #120806);
+}
+
+.virtual-player-card-avatar.profile-appearance-verdant {
+  background:
+    radial-gradient(circle at 35% 28%, rgb(134 239 172 / 28%), transparent 42%),
+    linear-gradient(135deg, #1f4d37, #07110c);
+}
+
+.virtual-player-card-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+
+.virtual-player-card-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.virtual-player-card-name,
+.virtual-player-card-model,
+.virtual-player-card-personality,
+.virtual-player-card-tag {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.virtual-player-card-name {
+  min-width: 0;
+  color: #f0dfc8;
+  font-size: 0.94rem;
+  font-weight: 800;
+}
+
+.virtual-player-card-personality {
+  max-width: 4.5rem;
+  flex: 0 0 auto;
+  border: 1px solid rgb(232 201 130 / 30%);
+  border-radius: 0.22rem;
+  background: rgb(232 201 130 / 9%);
+  padding: 0.06rem 0.34rem;
+  color: #e8c982;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.virtual-player-card-model {
+  display: block;
+  min-width: 0;
+  color: #c7d0da;
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.virtual-player-card-tags {
+  display: flex;
+  min-width: 0;
+  gap: 0.24rem;
+}
+
+.virtual-player-card-tag {
+  max-width: 5.6rem;
+  border: 1px solid rgb(134 146 158 / 24%);
+  border-radius: 0.2rem;
+  background: rgb(6 10 15 / 42%);
+  padding: 0.04rem 0.3rem;
+  color: #d8e0e7;
+  font-size: 0.7rem;
 }
 
 .lobby-console-form {
@@ -1277,6 +1480,10 @@ body {
   .lobby-rule-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .virtual-player-library-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
@@ -1312,6 +1519,19 @@ body {
 
   .lobby-rule-details-glyph {
     display: none;
+  }
+
+  .virtual-player-library-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .virtual-player-library-action {
+    width: 100%;
+  }
+
+  .virtual-player-library-grid {
+    grid-template-columns: 1fr;
   }
 }
 

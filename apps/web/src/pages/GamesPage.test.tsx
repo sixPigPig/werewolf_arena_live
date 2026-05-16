@@ -74,6 +74,26 @@ function ruleSetsResponse() {
   };
 }
 
+function playerProfilesResponse() {
+  return {
+    profiles: [
+      {
+        id: "profile-1",
+        owner_user_id: null,
+        display_name: "冷静的阿夜",
+        model: "MiniMax-M2.7",
+        personality_id: "cautious",
+        personality_text: "谨慎保守。",
+        appearance_id: "moonlit",
+        avatar_prompt: "银发观察者",
+        tags: ["控场"],
+        created_at: "2026-05-16T00:00:00Z",
+        updated_at: "2026-05-16T00:00:00Z",
+      },
+    ],
+  };
+}
+
 describe("GamesPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -85,6 +105,14 @@ describe("GamesPage", () => {
       if (url.endsWith("/api/v1/games/rule-sets")) {
         return Promise.resolve(
           new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse()), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -162,6 +190,16 @@ describe("GamesPage", () => {
     expect(screen.getByTestId("games-workspace-module")).toHaveClass(
       "games-workspace-module",
     );
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      within(playerLibrary).getByRole("heading", { name: "虚拟玩家库" }),
+    ).toBeInTheDocument();
+    expect(await within(playerLibrary).findByText("冷静的阿夜")).toBeInTheDocument();
+    expect(within(playerLibrary).getByText("MiniMax-M2.7")).toBeInTheDocument();
+    expect(within(playerLibrary).getByText("谨慎")).toBeInTheDocument();
+    expect(
+      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
+    ).toBeInTheDocument();
     const createModule = screen.getByTestId("games-create-module");
     expect(createModule).toHaveClass(
       "games-create-module",
@@ -250,6 +288,14 @@ describe("GamesPage", () => {
           }),
         );
       }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
       return Promise.resolve(
         new Response(JSON.stringify({ sessions: [] }), {
           status: 200,
@@ -292,6 +338,14 @@ describe("GamesPage", () => {
       if (url.endsWith("/api/v1/games/rule-sets")) {
         return Promise.resolve(
           new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse()), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -364,6 +418,14 @@ describe("GamesPage", () => {
       if (url.endsWith("/api/v1/games/rule-sets")) {
         return Promise.resolve(
           new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse()), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -447,6 +509,14 @@ describe("GamesPage", () => {
           }),
         );
       }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
       if (url.endsWith("/api/v1/games/runs")) {
         return Promise.resolve(
           new Response(
@@ -516,6 +586,14 @@ describe("GamesPage", () => {
       if (url.endsWith("/api/v1/games/rule-sets")) {
         return Promise.resolve(
           new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse()), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),

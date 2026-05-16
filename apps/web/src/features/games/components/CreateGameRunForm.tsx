@@ -15,9 +15,19 @@ import { useNavigate } from "react-router-dom";
 
 import { createGameRun } from "../api/createGameRun";
 import { listRuleSets } from "../api/listRuleSets";
-import type { EventPacingMode, RuleSetSummary } from "../types";
+import type {
+  EventPacingMode,
+  RuleSetSummary,
+  VirtualPlayerProfile,
+} from "../types";
 
-export function CreateGameRunForm() {
+type CreateGameRunFormProps = {
+  profiles?: VirtualPlayerProfile[];
+};
+
+export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
+  void profiles;
+
   const navigate = useNavigate();
   const [selectedRuleSetId, setSelectedRuleSetId] = useState("classic_8");
   const [seed, setSeed] = useState("");
