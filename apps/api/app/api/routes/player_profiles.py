@@ -6,10 +6,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.werewolf.player_profile_store import (
+    PlayerProfileFileStore,
+    player_profile_store_for_logs_dir,
+)
 from app.werewolf.player_presets import (
     default_personality_text,
     is_valid_appearance,
@@ -18,6 +24,8 @@ from app.werewolf.player_presets import (
 
 
 router = APIRouter()
+
+RecoverableDatabaseError = (OperationalError, ProgrammingError)
 
 
 def _trim_string(value: str) -> str:
@@ -155,13 +163,23 @@ class PlayerProfileListResponse(BaseModel):
     profiles: list[PlayerProfileResponse]
 
 
+def get_player_profile_store() -> PlayerProfileFileStore:
+    return player_profile_store_for_logs_dir(settings.werewolf_logs_dir)
+
+
 @router.get("", response_model=PlayerProfileListResponse)
-def list_player_profiles(db: Annotated[Session, Depends(get_db)]) -> PlayerProfileListResponse:
-    profiles = (
-        db.query(VirtualPlayerProfile)
-        .order_by(VirtualPlayerProfile.updated_at.desc(), VirtualPlayerProfile.id.desc())
-        .all()
-    )
+def list_player_profiles(
+    db: Annotated[Session, Depends(get_db)],
+    store: Annotated[PlayerProfileFileStore, Depends(get_player_profile_store)],
+) -> PlayerProfileListResponse:
+    try:
+        profiles = (
+            db.query(VirtualPlayerProfile)
+            .order_by(VirtualPlayerProfile.updated_at.desc(), VirtualPlayerProfile.id.desc())
+            .all()
+        )
+    except RecoverableDatabaseError:
+        profiles = store.list_profiles()
     return PlayerProfileListResponse(profiles=profiles)
 
 
@@ -169,6 +187,7 @@ def list_player_profiles(db: Annotated[Session, Depends(get_db)]) -> PlayerProfi
 def create_player_profile(
     request: CreatePlayerProfileRequest,
     db: Annotated[Session, Depends(get_db)],
+    store: Annotated[PlayerProfileFileStore, Depends(get_player_profile_store)],
 ) -> VirtualPlayerProfile:
     _validate_presets(request.personality_id, request.appearance_id)
     personality_text = request.personality_text or default_personality_text(request.personality_id)
@@ -183,18 +202,31 @@ def create_player_profile(
         avatar_prompt=request.avatar_prompt,
         tags=request.tags,
     )
-    db.add(profile)
-    db.commit()
-    db.refresh(profile)
-    return profile
+    try:
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+        return profile
+    except RecoverableDatabaseError:
+        db.rollback()
+        return store.create_profile(
+            display_name=request.display_name,
+            model=request.model,
+            personality_id=request.personality_id,
+            personality_text=personality_text,
+            appearance_id=request.appearance_id,
+            avatar_prompt=request.avatar_prompt,
+            tags=request.tags,
+        )
 
 
 @router.get("/{profile_id}", response_model=PlayerProfileResponse)
 def get_player_profile(
     profile_id: str,
     db: Annotated[Session, Depends(get_db)],
+    store: Annotated[PlayerProfileFileStore, Depends(get_player_profile_store)],
 ) -> VirtualPlayerProfile:
-    return _get_profile_or_404(profile_id, db)
+    return _get_profile_or_404(profile_id, db, store)
 
 
 @router.patch("/{profile_id}", response_model=PlayerProfileResponse)
@@ -202,8 +234,9 @@ def update_player_profile(
     profile_id: str,
     request: UpdatePlayerProfileRequest,
     db: Annotated[Session, Depends(get_db)],
+    store: Annotated[PlayerProfileFileStore, Depends(get_player_profile_store)],
 ) -> VirtualPlayerProfile:
-    profile = _get_profile_or_404(profile_id, db)
+    profile = _get_profile_or_404(profile_id, db, store)
     updates = request.model_dump(exclude_unset=True)
 
     personality_changed = (
@@ -213,33 +246,71 @@ def update_player_profile(
     appearance_id = updates.get("appearance_id", profile.appearance_id)
     _validate_presets(personality_id, appearance_id)
 
-    for field_name, value in updates.items():
-        setattr(profile, field_name, value)
+    if not isinstance(profile, VirtualPlayerProfile):
+        if personality_changed and "personality_text" not in updates:
+            updates["personality_text"] = default_personality_text(personality_id)
+        elif "personality_text" in updates and not updates["personality_text"]:
+            updates["personality_text"] = default_personality_text(personality_id)
+        updated_profile = store.update_profile(profile_id, updates)
+        if updated_profile is None:
+            raise HTTPException(status_code=404, detail="Player profile not found")
+        return updated_profile
 
-    if personality_changed and "personality_text" not in updates:
-        profile.personality_text = default_personality_text(personality_id)
-    elif "personality_text" in updates and not profile.personality_text:
-        profile.personality_text = default_personality_text(profile.personality_id)
+    try:
+        for field_name, value in updates.items():
+            setattr(profile, field_name, value)
 
-    profile.updated_at = datetime.now(UTC)
-    db.commit()
-    db.refresh(profile)
-    return profile
+        if personality_changed and "personality_text" not in updates:
+            profile.personality_text = default_personality_text(personality_id)
+        elif "personality_text" in updates and not profile.personality_text:
+            profile.personality_text = default_personality_text(profile.personality_id)
+
+        profile.updated_at = datetime.now(UTC)
+        db.commit()
+        db.refresh(profile)
+        return profile
+    except RecoverableDatabaseError:
+        db.rollback()
+        fallback_updates = request.model_dump(exclude_unset=True)
+        if personality_changed and "personality_text" not in fallback_updates:
+            fallback_updates["personality_text"] = default_personality_text(personality_id)
+        elif "personality_text" in fallback_updates and not fallback_updates["personality_text"]:
+            fallback_updates["personality_text"] = default_personality_text(personality_id)
+        updated_profile = store.update_profile(profile_id, fallback_updates)
+        if updated_profile is None:
+            raise HTTPException(status_code=404, detail="Player profile not found")
+        return updated_profile
 
 
 @router.delete("/{profile_id}", status_code=204)
 def delete_player_profile(
     profile_id: str,
     db: Annotated[Session, Depends(get_db)],
+    store: Annotated[PlayerProfileFileStore, Depends(get_player_profile_store)],
 ) -> Response:
-    profile = _get_profile_or_404(profile_id, db)
-    db.delete(profile)
-    db.commit()
+    profile = _get_profile_or_404(profile_id, db, store)
+    if not isinstance(profile, VirtualPlayerProfile):
+        store.delete_profile(profile_id)
+        return Response(status_code=204)
+    try:
+        db.delete(profile)
+        db.commit()
+    except RecoverableDatabaseError:
+        db.rollback()
+        if not store.delete_profile(profile_id):
+            raise HTTPException(status_code=404, detail="Player profile not found") from None
     return Response(status_code=204)
 
 
-def _get_profile_or_404(profile_id: str, db: Session) -> VirtualPlayerProfile:
-    profile = db.get(VirtualPlayerProfile, profile_id)
+def _get_profile_or_404(
+    profile_id: str,
+    db: Session,
+    store: PlayerProfileFileStore,
+) -> object:
+    try:
+        profile = db.get(VirtualPlayerProfile, profile_id)
+    except RecoverableDatabaseError:
+        profile = store.get_profile(profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="Player profile not found")
     return profile

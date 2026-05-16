@@ -2,15 +2,18 @@ from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.routes.player_profiles import get_player_profile_store
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.werewolf.player_profile_store import PlayerProfileFileStore
 from app.werewolf.player_presets import default_personality_text
 
 
@@ -47,6 +50,33 @@ def isolated_db() -> Generator[None, None, None]:
 
 
 client = TestClient(app)
+
+
+class BrokenSession:
+    def query(self, *_args: object) -> None:
+        raise OperationalError("select", {}, Exception("database unavailable"))
+
+    def add(self, _value: object) -> None:
+        pass
+
+    def commit(self) -> None:
+        raise OperationalError("commit", {}, Exception("database unavailable"))
+
+    def refresh(self, _value: object) -> None:
+        pass
+
+    def rollback(self) -> None:
+        pass
+
+    def get(self, *_args: object) -> None:
+        raise OperationalError("select", {}, Exception("database unavailable"))
+
+    def close(self) -> None:
+        pass
+
+
+def override_broken_db() -> Generator[BrokenSession, None, None]:
+    yield BrokenSession()
 
 
 def test_create_profile_normalizes_and_fills_defaults() -> None:
@@ -211,3 +241,36 @@ def test_create_profile_validation_errors(payload: dict, expected_detail: str | 
     assert response.status_code == 422
     if expected_detail is not None:
         assert response.json()["detail"] == expected_detail
+
+
+def test_profiles_fall_back_to_local_file_when_database_is_unavailable(
+    tmp_path,
+) -> None:
+    app.dependency_overrides[get_db] = override_broken_db
+    app.dependency_overrides[get_player_profile_store] = lambda: PlayerProfileFileStore(
+        tmp_path / "player_profiles.json"
+    )
+    try:
+        create_response = client.post(
+            "/api/v1/player-profiles",
+            json={
+                "display_name": "  本地玩家  ",
+                "model": "deepseek-v4-flash",
+                "personality_id": "cautious",
+                "appearance_id": "moonlit",
+                "tags": [" 本地 ", "本地"],
+            },
+        )
+        list_response = client.get("/api/v1/player-profiles")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["display_name"] == "本地玩家"
+    assert created["personality_text"] == default_personality_text("cautious")
+    assert created["appearance_id"] == "moonlit"
+    assert created["tags"] == ["本地"]
+
+    assert list_response.status_code == 200
+    assert list_response.json()["profiles"][0]["id"] == created["id"]

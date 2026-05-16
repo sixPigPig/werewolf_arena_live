@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -34,6 +35,18 @@ TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=Fals
 Base.metadata.create_all(engine)
 
 client = TestClient(app)
+
+
+class BrokenSession:
+    def get(self, *_args: object) -> None:
+        raise OperationalError("select", {}, Exception("database unavailable"))
+
+    def close(self) -> None:
+        pass
+
+
+def override_broken_db() -> Generator[BrokenSession, None, None]:
+    yield BrokenSession()
 
 
 def override_get_db() -> Generator[Session, None, None]:
@@ -425,6 +438,72 @@ def test_create_game_run_resolves_profile_configs(
     }
     background_configs = captured[0]["player_configs"]
     assert [config.to_dict() for config in background_configs] == [snapshot]
+
+
+def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_json(
+        tmp_path / "player_profiles.json",
+        {
+            "version": 2,
+            "profiles": [
+                {
+                    "id": "profile-file",
+                    "owner_user_id": None,
+                    "display_name": "文件玩家",
+                    "model": "file-model",
+                    "personality_id": "cautious",
+                    "personality_text": "先听后判。",
+                    "appearance_id": "moonlit",
+                    "avatar_prompt": "silver moon portrait",
+                    "tags": ["本地"],
+                    "created_at": "2026-05-16T00:00:00+00:00",
+                    "updated_at": "2026-05-16T00:00:00+00:00",
+                }
+            ],
+        },
+    )
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    app.dependency_overrides[get_db] = override_broken_db
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games.settings.werewolf_logs_dir", str(tmp_path))
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "seed": 21,
+                "max_rounds": 1,
+                "player_configs": [{"seat": 2, "profile_id": "profile-file"}],
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    snapshot = response.json()["player_configs"][0]
+    assert snapshot == {
+        "seat": 2,
+        "profile_id": "profile-file",
+        "name": "文件玩家",
+        "model": "file-model",
+        "personality_id": "cautious",
+        "personality": "先听后判。",
+        "appearance_id": "moonlit",
+        "avatar_prompt": "silver moon portrait",
+        "tags": ["本地"],
+    }
+    assert [config.to_dict() for config in captured[0]["player_configs"]] == [snapshot]
 
 
 def test_create_game_run_rejects_duplicate_effective_player_names(

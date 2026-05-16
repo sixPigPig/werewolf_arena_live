@@ -6,6 +6,7 @@ from typing import Annotated, Any, Iterator
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -19,6 +20,10 @@ from app.werewolf.player_configs import (
     player_config_from_profile,
     player_configs_from_serialized,
     validate_unique_effective_player_names,
+)
+from app.werewolf.player_profile_store import (
+    PlayerProfileFileStore,
+    player_profile_store_for_logs_dir,
 )
 from app.werewolf.player_presets import is_valid_appearance, is_valid_personality
 from app.werewolf.providers import configured_model_options, default_model_name
@@ -36,6 +41,7 @@ from app.werewolf.runner import GameRunError, new_session_id, resume_game, run_g
 
 router = APIRouter()
 live_registry = LiveRunRegistry()
+RecoverableDatabaseError = (OperationalError, ProgrammingError)
 
 
 class CreatePlayerConfigRequest(BaseModel):
@@ -70,10 +76,15 @@ def get_live_registry() -> LiveRunRegistry:
     return live_registry
 
 
+def get_player_profile_store() -> PlayerProfileFileStore:
+    return player_profile_store_for_logs_dir(settings.werewolf_logs_dir)
+
+
 def normalize_player_config_requests(
     requests: list[CreatePlayerConfigRequest],
     player_count: int,
     db: Session,
+    profile_store: PlayerProfileFileStore,
 ) -> list[PlayerConfig]:
     if len(requests) > player_count:
         raise HTTPException(status_code=422, detail="Too many player configs")
@@ -96,7 +107,10 @@ def normalize_player_config_requests(
         profile_id = clean_optional_string(request.profile_id)
         profile = None
         if profile_id is not None:
-            profile = db.get(VirtualPlayerProfile, profile_id)
+            try:
+                profile = db.get(VirtualPlayerProfile, profile_id)
+            except RecoverableDatabaseError:
+                profile = profile_store.get_profile(profile_id)
             if profile is None:
                 raise HTTPException(status_code=422, detail=f"Unknown player profile: {profile_id}")
 
@@ -149,6 +163,7 @@ def create_game_run(
     request: CreateGameRunRequest,
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
     db: Annotated[Session, Depends(get_db)],
+    profile_store: Annotated[PlayerProfileFileStore, Depends(get_player_profile_store)],
 ) -> dict:
     try:
         rule_set = get_rule_set(request.rule_set_id)
@@ -162,6 +177,7 @@ def create_game_run(
         request.player_configs,
         rule_set.player_count,
         db,
+        profile_store,
     )
     try:
         validate_unique_effective_player_names(
