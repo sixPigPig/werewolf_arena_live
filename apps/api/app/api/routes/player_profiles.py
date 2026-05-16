@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -89,6 +89,28 @@ class UpdatePlayerProfileRequest(BaseModel):
     appearance_id: str | None = Field(default=None, min_length=1, max_length=40)
     avatar_prompt: str | None = Field(default=None, max_length=1000)
     tags: list[str] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_non_nullable_fields(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        null_fields = [
+            field_name
+            for field_name in (
+                "display_name",
+                "model",
+                "personality_id",
+                "personality_text",
+                "appearance_id",
+                "avatar_prompt",
+                "tags",
+            )
+            if field_name in data and data[field_name] is None
+        ]
+        if null_fields:
+            raise ValueError(f"Fields may not be null: {', '.join(null_fields)}")
+        return data
 
     @field_validator(
         "display_name",

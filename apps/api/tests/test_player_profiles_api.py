@@ -148,6 +148,32 @@ def test_get_patch_delete_profile() -> None:
     assert missing_response.json()["detail"] == "Player profile not found"
 
 
+@pytest.mark.parametrize("field_name", ["display_name", "model", "avatar_prompt", "tags"])
+def test_patch_profile_rejects_null_non_nullable_fields(field_name: str) -> None:
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "Scout",
+            "model": "gpt-4.1-mini",
+            "personality_id": "balanced",
+            "personality_text": "custom text",
+            "appearance_id": "default",
+            "avatar_prompt": "moonlit portrait",
+            "tags": ["old"],
+        },
+    ).json()
+    original = client.get(f"/api/v1/player-profiles/{created['id']}").json()
+
+    response = client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={field_name: None},
+    )
+
+    assert response.status_code == 422
+    persisted = client.get(f"/api/v1/player-profiles/{created['id']}").json()
+    assert persisted == original
+
+
 @pytest.mark.parametrize(
     ("payload", "expected_detail"),
     [
