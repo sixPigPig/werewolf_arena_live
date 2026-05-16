@@ -13,6 +13,12 @@ export type LivePlayer = {
   name: string;
   role: string;
   model: string;
+  personalityId: string;
+  personality: string;
+  appearanceId: string;
+  avatarPrompt: string;
+  profileId: string | null;
+  tags: string[];
   status: LivePlayerStatus;
   isAlive: boolean;
   lastAction: string;
@@ -142,6 +148,27 @@ function initializePlayers(state: MutableLiveSpectatorState, event: LiveGameEven
     existing.role = typeof player.role === "string" ? player.role : existing.role;
     existing.model =
       typeof player.model === "string" ? player.model : existing.model;
+    existing.personalityId =
+      typeof player.personality_id === "string"
+        ? player.personality_id
+        : existing.personalityId;
+    existing.personality =
+      typeof player.personality === "string"
+        ? player.personality
+        : existing.personality;
+    existing.appearanceId =
+      typeof player.appearance_id === "string"
+        ? player.appearance_id
+        : existing.appearanceId;
+    existing.avatarPrompt =
+      typeof player.avatar_prompt === "string"
+        ? player.avatar_prompt
+        : existing.avatarPrompt;
+    existing.profileId =
+      typeof player.profile_id === "string" || player.profile_id === null
+        ? player.profile_id
+        : existing.profileId;
+    existing.tags = stringArrayOr(player.tags, existing.tags);
   }
 }
 
@@ -252,6 +279,12 @@ function ensurePlayer(
     name,
     role: "未知",
     model: "未知模型",
+    personalityId: "balanced",
+    personality: "",
+    appearanceId: "default",
+    avatarPrompt: "",
+    profileId: null,
+    tags: [],
     status: "waiting",
     isAlive: true,
     lastAction: "",
@@ -342,6 +375,12 @@ function payloadForEvent(event: LiveGameEvent): Record<string, unknown> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringArrayOr(value: unknown, fallback: string[]) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : fallback;
 }
 
 function isOutDetail(value: string) {

@@ -5,6 +5,7 @@ import type { CSSProperties } from "react";
 import type { DirectorCue } from "../liveDirector";
 import { actionLabel, phaseLabel } from "../liveLabels";
 import type { LivePlayer } from "../liveSpectator";
+import { appearanceClassName } from "../playerProfileOptions";
 
 type LiveDirectorStageProps = {
   cue: DirectorCue | null;
@@ -158,6 +159,8 @@ export function LiveDirectorStage({
                   <span
                     className={`relative mx-auto flex h-10 w-10 items-center justify-center rounded-full border-2 bg-gradient-to-br ${avatarGradient(
                       player.name,
+                    )} ${appearanceClassName(
+                      player.appearanceId,
                     )} text-sm font-bold text-slate-100 shadow-lg sm:h-12 sm:w-12 sm:text-base md:h-16 md:w-16 md:text-lg ${role.ring} ${
                       isCurrentSpeaker
                         ? "border-teal-100 shadow-[0_0_28px_rgba(45,212,191,0.88),0_0_48px_rgba(250,204,21,0.28)]"

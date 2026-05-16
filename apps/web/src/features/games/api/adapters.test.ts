@@ -68,6 +68,19 @@ describe("normalizeGameReplay", () => {
     ]);
   });
 
+  it("defaults missing virtual player snapshot fields for legacy replays", () => {
+    const replay = normalizeGameReplay(rawReplay);
+
+    expect(replay.players[0]).toMatchObject({
+      personality_id: "balanced",
+      personality: "",
+      appearance_id: "default",
+      avatar_prompt: "",
+      profile_id: null,
+      tags: [],
+    });
+  });
+
   it("creates debug items for model actions", () => {
     const replay = normalizeGameReplay(rawReplay);
 

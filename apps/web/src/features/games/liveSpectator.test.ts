@@ -44,6 +44,38 @@ describe("deriveLiveSpectatorState", () => {
     });
   });
 
+  it("initializes virtual player profile snapshot fields from game_started", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            {
+              name: "张三",
+              role: "狼人",
+              model: "deepseek-chat",
+              personality_id: "aggressive",
+              personality: "压迫感强，喜欢带节奏",
+              appearance_id: "crimson",
+              avatar_prompt: "red cloak and sharp eyes",
+              profile_id: "profile_123",
+              tags: ["强势", "控场"],
+            },
+          ],
+        },
+      }),
+    ]);
+
+    expect(state.players[0]).toMatchObject({
+      personalityId: "aggressive",
+      personality: "压迫感强，喜欢带节奏",
+      appearanceId: "crimson",
+      avatarPrompt: "red cloak and sharp eyes",
+      profileId: "profile_123",
+      tags: ["强势", "控场"],
+    });
+  });
+
   it("focuses actor events and records latest action detail", () => {
     const state = deriveLiveSpectatorState([
       event({

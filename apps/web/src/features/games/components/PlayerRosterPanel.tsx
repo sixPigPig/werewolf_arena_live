@@ -1,6 +1,10 @@
 import type { KeyboardEvent, ReactNode } from "react";
 
 import { withGlassPanel } from "../../../components/ui/glass";
+import {
+  appearanceClassName,
+  personalityLabel,
+} from "../playerProfileOptions";
 
 export type PlayerRosterState =
   | "alive"
@@ -14,6 +18,9 @@ export type PlayerRosterItem = {
   name: string;
   role: string;
   model?: string;
+  personalityId?: string;
+  appearanceId?: string;
+  tags?: string[];
   state: PlayerRosterState;
   statusLabel: string;
   isSheriff?: boolean;
@@ -109,6 +116,8 @@ function RosterRow({
       <span
         className={`player-roster-avatar flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-2 bg-gradient-to-br ${avatarGradient(
           player.name,
+        )} ${appearanceClassName(
+          player.appearanceId,
         )} text-sm font-semibold text-slate-100 shadow-lg ${role.ring} ${
           player.state === "dead" ? "grayscale" : ""
         }`}
@@ -126,7 +135,7 @@ function RosterRow({
         </span>
         {player.model ? (
           <span className="player-roster-model mt-1 block truncate font-mono text-[11px] text-slate-500">
-            {player.model}
+            {player.model} · {personalityLabel(player.personalityId)}
           </span>
         ) : null}
       </span>

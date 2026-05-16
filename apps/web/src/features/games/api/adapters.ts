@@ -44,7 +44,7 @@ export function normalizeGameReplay(
     ruleSet: response.state.rule_set ?? null,
     sheriff: response.state.sheriff ?? null,
     sheriffBadgeLost: response.state.sheriff_badge_lost ?? false,
-    players: response.state.players,
+    players: normalizePlayers(response.state.players),
     rounds: response.state.rounds.map(normalizeRound),
     logs: response.logs,
     debugItems: response.logs.flatMap((round) =>
@@ -56,6 +56,18 @@ export function normalizeGameReplay(
       ),
     ),
   };
+}
+
+function normalizePlayers(players: RawGameReplayResponse["state"]["players"]) {
+  return players.map((player) => ({
+    ...player,
+    personality_id: player.personality_id ?? "balanced",
+    personality: player.personality ?? "",
+    appearance_id: player.appearance_id ?? "default",
+    avatar_prompt: player.avatar_prompt ?? "",
+    profile_id: player.profile_id ?? null,
+    tags: player.tags ?? [],
+  }));
 }
 
 function normalizeRound(

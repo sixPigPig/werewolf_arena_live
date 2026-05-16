@@ -3,6 +3,7 @@ import type { BadgeProps } from "../../../components/ui";
 
 import type { LivePlayer } from "../liveSpectator";
 import { actionLabel } from "../liveLabels";
+import { personalityLabel } from "../playerProfileOptions";
 
 type LivePlayerPanelProps = {
   players: LivePlayer[];
@@ -174,7 +175,9 @@ function FocusedPlayerDetail({ player }: { player: LivePlayer | null }) {
               {player.isAlive ? STATUS_LABELS[player.status] : "出局"}
             </Badge>
           </div>
-          <p className="text-xs text-slate-500">{player.model}</p>
+          <p className="text-xs text-slate-500">
+            {player.model} · {personalityLabel(player.personalityId)}
+          </p>
           <p className="rounded-md border border-slate-500/30 p-3 text-sm leading-6 text-slate-300">
             {player.lastAction || player.lastDetail
               ? `${lastAction ? `${lastAction}：` : ""}${
