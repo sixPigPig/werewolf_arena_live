@@ -2,6 +2,7 @@ import { CreateGameRunForm } from "../../features/games/components/CreateGameRun
 import { VirtualPlayerLibrary } from "../../features/games/components/VirtualPlayerLibrary";
 import { createPlayerProfile } from "../../features/games/api/createPlayerProfile";
 import { deletePlayerProfile } from "../../features/games/api/deletePlayerProfile";
+import { listModelOptions } from "../../features/games/api/listModelOptions";
 import { listPlayerProfiles } from "../../features/games/api/listPlayerProfiles";
 import { updatePlayerProfile } from "../../features/games/api/updatePlayerProfile";
 import type { PlayerProfileRequest } from "../../features/games/types";
@@ -17,6 +18,10 @@ export function GamesWorkspace({ createFormRef }: GamesWorkspaceProps) {
   const playerProfilesQuery = useQuery({
     queryKey: ["player-profiles"],
     queryFn: listPlayerProfiles,
+  });
+  const modelOptionsQuery = useQuery({
+    queryKey: ["model-options"],
+    queryFn: listModelOptions,
   });
   const invalidatePlayerProfiles = () =>
     queryClient.invalidateQueries({ queryKey: ["player-profiles"] });
@@ -39,6 +44,7 @@ export function GamesWorkspace({ createFormRef }: GamesWorkspaceProps) {
     onSuccess: invalidatePlayerProfiles,
   });
   const profiles = playerProfilesQuery.data?.profiles ?? [];
+  const modelOptions = modelOptionsQuery.data?.models ?? [];
   const isSaving =
     createProfileMutation.isPending ||
     updateProfileMutation.isPending ||
@@ -53,7 +59,9 @@ export function GamesWorkspace({ createFormRef }: GamesWorkspaceProps) {
         profiles={profiles}
         isError={playerProfilesQuery.isError}
         isLoading={playerProfilesQuery.isPending}
+        isModelOptionsError={modelOptionsQuery.isError}
         isSaving={isSaving}
+        modelOptions={modelOptions}
         onCreateProfile={(request) => createProfileMutation.mutateAsync(request)}
         onUpdateProfile={(profileId, request) =>
           updateProfileMutation.mutateAsync({ profileId, request })

@@ -94,6 +94,15 @@ function playerProfilesResponse() {
   };
 }
 
+function modelOptionsResponse() {
+  return {
+    models: [
+      { id: "deepseek-chat", label: "DeepSeek · deepseek-chat" },
+      { id: "MiniMax-M2.7", label: "MiniMax · MiniMax-M2.7" },
+    ],
+  };
+}
+
 describe("GamesPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -603,6 +612,14 @@ describe("GamesPage", () => {
           }),
         );
       }
+      if (url.endsWith("/api/v1/games/model-options")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(modelOptionsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
       if (url.endsWith("/api/v1/player-profiles") && method === "POST") {
         return Promise.resolve(
           new Response(
@@ -647,8 +664,18 @@ describe("GamesPage", () => {
       ),
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
-    await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "新玩家");
-    await userEvent.type(screen.getByLabelText("默认模型"), "deepseek-chat");
+    const generatedNameInput = screen.getByLabelText("虚拟玩家昵称") as HTMLInputElement;
+    expect(generatedNameInput.value.trim().length).toBeGreaterThan(0);
+    await userEvent.clear(generatedNameInput);
+    await userEvent.type(generatedNameInput, "新玩家");
+    const modelSelect = screen.getByRole("combobox", { name: "默认模型" });
+    expect(modelSelect).toHaveValue("deepseek-chat");
+    expect(
+      within(modelSelect).getByRole("option", {
+        name: "MiniMax · MiniMax-M2.7",
+      }),
+    ).toBeInTheDocument();
+    await userEvent.selectOptions(modelSelect, "deepseek-chat");
     await userEvent.type(screen.getByLabelText("性格描述"), "谨慎发言，先听后判");
     await userEvent.type(screen.getByLabelText("形象提示"), "银发观察者");
     await userEvent.type(screen.getByLabelText("标签"), "控场 慢热");

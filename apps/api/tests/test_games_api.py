@@ -161,6 +161,66 @@ def test_list_rule_sets_returns_official_rules() -> None:
     )
 
 
+def test_list_model_options_returns_configured_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-test")
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    monkeypatch.setenv("MINIMAX_MODEL", "MiniMax-Test")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
+    monkeypatch.setenv("DASHSCOPE_MODEL", "qwen-test")
+
+    response = client.get("/api/v1/games/model-options")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "models": [
+            {"id": "deepseek-test", "label": "DeepSeek · deepseek-test"},
+            {"id": "MiniMax-Test", "label": "MiniMax · MiniMax-Test"},
+            {"id": "qwen-test", "label": "Qwen · qwen-test"},
+        ]
+    }
+
+
+def test_list_model_options_prefers_default_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEREWOLF_DEFAULT_MODEL", "MiniMax-Test")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-test")
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    monkeypatch.setenv("MINIMAX_MODEL", "MiniMax-Test")
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+
+    response = client.get("/api/v1/games/model-options")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "models": [
+            {"id": "MiniMax-Test", "label": "MiniMax · MiniMax-Test"},
+            {"id": "deepseek-test", "label": "DeepSeek · deepseek-test"},
+        ]
+    }
+
+
+def test_list_model_options_falls_back_to_default_without_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+
+    response = client.get("/api/v1/games/model-options")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "models": [
+            {"id": "deepseek-v4-flash", "label": "默认模型 · deepseek-v4-flash"}
+        ]
+    }
+
+
 def test_create_game_run_accepts_rule_set_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

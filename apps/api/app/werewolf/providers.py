@@ -389,6 +389,37 @@ def _configured_model_names(env_prefix: str) -> tuple[str, ...]:
     return (model_name,) if model_name else ()
 
 
+def configured_model_options() -> list[dict[str, str]]:
+    default_model = default_model_name()
+    configured_options: list[dict[str, str]] = []
+    for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS:
+        if not _has_api_key(config.env_prefix):
+            continue
+
+        configured_names = _configured_model_names(config.env_prefix)
+        model_name = configured_names[0] if configured_names else config.default_model
+        configured_options.append(
+            {
+                "id": model_name,
+                "label": f"{config.name} · {model_name}",
+            }
+        )
+
+    options_by_id = {option["id"]: option for option in configured_options}
+    default_option = options_by_id.get(
+        default_model,
+        {"id": default_model, "label": f"默认模型 · {default_model}"},
+    )
+    options = [default_option]
+    seen = {default_model}
+    for option in configured_options:
+        if option["id"] in seen:
+            continue
+        options.append(option)
+        seen.add(option["id"])
+    return options
+
+
 def default_model_name() -> str:
     dotenv = _load_dotenv(Path(".env"), prefixes=("WEREWOLF",))
     explicit_default = os.getenv("WEREWOLF_DEFAULT_MODEL") or dotenv.get("WEREWOLF_DEFAULT_MODEL")

@@ -13,12 +13,18 @@ import {
   PERSONALITY_OPTIONS,
   personalityLabel,
 } from "../playerProfileOptions";
-import type { PlayerProfileRequest, VirtualPlayerProfile } from "../types";
+import type {
+  ModelOption,
+  PlayerProfileRequest,
+  VirtualPlayerProfile,
+} from "../types";
 
 type VirtualPlayerLibraryProps = {
   profiles: VirtualPlayerProfile[];
+  modelOptions: ModelOption[];
   isLoading: boolean;
   isError: boolean;
+  isModelOptionsError: boolean;
   isSaving: boolean;
   onCreateProfile: (request: PlayerProfileRequest) => Promise<unknown>;
   onUpdateProfile: (
@@ -28,15 +34,24 @@ type VirtualPlayerLibraryProps = {
   onDeleteProfile: (profileId: string) => Promise<unknown>;
 };
 
-const defaultDraft = (): PlayerProfileRequest => ({
+const NAME_PREFIXES = ["冷月", "沉默", "银刃", "夜行", "雾隐", "烛影"];
+const NAME_SUFFIXES = ["阿夜", "林川", "青棠", "北辰", "司南", "月白"];
+
+const defaultDraft = (model = ""): PlayerProfileRequest => ({
   display_name: "",
-  model: "",
+  model,
   personality_id: "balanced",
   personality_text: "",
   appearance_id: "default",
   avatar_prompt: "",
   tags: [],
 });
+
+function generateVirtualPlayerName() {
+  const prefix = NAME_PREFIXES[Math.floor(Math.random() * NAME_PREFIXES.length)];
+  const suffix = NAME_SUFFIXES[Math.floor(Math.random() * NAME_SUFFIXES.length)];
+  return `${prefix}${suffix}`;
+}
 
 function profileToDraft(profile: VirtualPlayerProfile): PlayerProfileRequest {
   return {
@@ -61,10 +76,23 @@ function formatTagInput(tags: string[] | undefined) {
   return (tags ?? []).join("，");
 }
 
+function modelOptionsForDraft(
+  options: ModelOption[],
+  draftModel: string | undefined,
+) {
+  if (!draftModel || options.some((option) => option.id === draftModel)) {
+    return options;
+  }
+
+  return [{ id: draftModel, label: `当前模型 · ${draftModel}` }, ...options];
+}
+
 export function VirtualPlayerLibrary({
   profiles,
+  modelOptions,
   isLoading,
   isError,
+  isModelOptionsError,
   isSaving,
   onCreateProfile,
   onUpdateProfile,
@@ -78,6 +106,7 @@ export function VirtualPlayerLibrary({
   const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(
     null,
   );
+  const activeModelOptions = modelOptionsForDraft(modelOptions, draft.model);
   const canSave =
     !isSaving &&
     draft.display_name.trim().length > 0 &&
@@ -91,7 +120,10 @@ export function VirtualPlayerLibrary({
   const startCreate = () => {
     setActionError(null);
     setDeleteCandidateId(null);
-    setDraft(defaultDraft());
+    setDraft({
+      ...defaultDraft(modelOptions[0]?.id ?? ""),
+      display_name: generateVirtualPlayerName(),
+    });
     setTagInput("");
     setEditingProfileId(null);
     setIsEditorOpen(true);
@@ -215,11 +247,20 @@ export function VirtualPlayerLibrary({
           </label>
           <label>
             <span>默认模型</span>
-            <TextField.Root
+            <SelectField
               disabled={isSaving}
               onChange={(event) => updateDraft("model", event.target.value)}
               value={draft.model}
-            />
+            >
+              {activeModelOptions.length === 0 ? (
+                <Option value="">暂无可用模型</Option>
+              ) : null}
+              {activeModelOptions.map((option) => (
+                <Option key={option.id} value={option.id}>
+                  {option.label}
+                </Option>
+              ))}
+            </SelectField>
           </label>
           <label>
             <span>性格</span>
@@ -307,6 +348,9 @@ export function VirtualPlayerLibrary({
       ) : null}
       {isError ? (
         <p className="virtual-player-library-error">无法读取虚拟玩家库</p>
+      ) : null}
+      {isModelOptionsError ? (
+        <p className="virtual-player-library-error">无法读取模型列表</p>
       ) : null}
       {!isLoading && !isError && profiles.length === 0 ? (
         <p className="virtual-player-library-empty">还没有保存的虚拟玩家。</p>

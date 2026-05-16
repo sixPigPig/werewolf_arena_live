@@ -33,6 +33,15 @@ export type RuleSetsResponse = {
   rule_sets: RuleSetSummary[];
 };
 
+export type ModelOption = {
+  id: string;
+  label: string;
+};
+
+export type ModelOptionsResponse = {
+  models: ModelOption[];
+};
+
 export type GameSessionSummary = {
   session_id: string;
   status: GameStatus;

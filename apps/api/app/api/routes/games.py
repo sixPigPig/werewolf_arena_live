@@ -21,7 +21,7 @@ from app.werewolf.player_configs import (
     validate_unique_effective_player_names,
 )
 from app.werewolf.player_presets import is_valid_appearance, is_valid_personality
-from app.werewolf.providers import default_model_name
+from app.werewolf.providers import configured_model_options, default_model_name
 from app.werewolf.config import choose_player_names
 from app.werewolf.checkpoint import ResumeCheckpointError, load_resume_checkpoint
 from app.werewolf.replay import ReplayNotFoundError, ReplayStore
@@ -137,6 +137,11 @@ def list_games(store: Annotated[ReplayStore, Depends(get_replay_store)]) -> dict
 @router.get("/rule-sets")
 def list_rule_sets() -> dict:
     return {"rule_sets": list_rule_set_summaries()}
+
+
+@router.get("/model-options")
+def list_model_options() -> dict:
+    return {"models": configured_model_options()}
 
 
 @router.post("/runs", status_code=201)
