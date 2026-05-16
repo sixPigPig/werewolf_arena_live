@@ -1,21 +1,117 @@
-import { Button, Container } from "../../../components/ui";
+import { useState } from "react";
+
 import {
+  Button,
+  Container,
+  Option,
+  SelectField,
+  TextField,
+} from "../../../components/ui";
+import {
+  APPEARANCE_OPTIONS,
   appearanceClassName,
+  PERSONALITY_OPTIONS,
   personalityLabel,
 } from "../playerProfileOptions";
-import type { VirtualPlayerProfile } from "../types";
+import type { PlayerProfileRequest, VirtualPlayerProfile } from "../types";
 
 type VirtualPlayerLibraryProps = {
   profiles: VirtualPlayerProfile[];
   isLoading: boolean;
   isError: boolean;
+  isSaving: boolean;
+  onCreateProfile: (request: PlayerProfileRequest) => void;
+  onUpdateProfile: (profileId: string, request: PlayerProfileRequest) => void;
+  onDeleteProfile: (profileId: string) => void;
 };
+
+const defaultDraft = (): PlayerProfileRequest => ({
+  display_name: "",
+  model: "",
+  personality_id: "balanced",
+  personality_text: "",
+  appearance_id: "default",
+  avatar_prompt: "",
+  tags: [],
+});
+
+function profileToDraft(profile: VirtualPlayerProfile): PlayerProfileRequest {
+  return {
+    display_name: profile.display_name,
+    model: profile.model,
+    personality_id: profile.personality_id || "balanced",
+    personality_text: profile.personality_text || "",
+    appearance_id: profile.appearance_id || "default",
+    avatar_prompt: profile.avatar_prompt || "",
+    tags: profile.tags,
+  };
+}
 
 export function VirtualPlayerLibrary({
   profiles,
   isLoading,
   isError,
+  isSaving,
+  onCreateProfile,
+  onUpdateProfile,
+  onDeleteProfile,
 }: VirtualPlayerLibraryProps) {
+  const [draft, setDraft] = useState<PlayerProfileRequest>(defaultDraft);
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const canSave =
+    !isSaving &&
+    draft.display_name.trim().length > 0 &&
+    draft.model.trim().length > 0;
+
+  const updateDraft = <Key extends keyof PlayerProfileRequest>(
+    key: Key,
+    value: PlayerProfileRequest[Key],
+  ) => setDraft((current) => ({ ...current, [key]: value }));
+
+  const startCreate = () => {
+    setDraft(defaultDraft());
+    setEditingProfileId(null);
+    setIsEditorOpen(true);
+  };
+
+  const startEdit = (profile: VirtualPlayerProfile) => {
+    setDraft(profileToDraft(profile));
+    setEditingProfileId(profile.id);
+    setIsEditorOpen(true);
+  };
+
+  const saveDraft = () => {
+    if (!canSave) {
+      return;
+    }
+    const request: PlayerProfileRequest = {
+      ...draft,
+      display_name: draft.display_name.trim(),
+      model: draft.model.trim(),
+    };
+    if (editingProfileId) {
+      onUpdateProfile(editingProfileId, request);
+    } else {
+      onCreateProfile(request);
+    }
+    setIsEditorOpen(false);
+    setEditingProfileId(null);
+    setDraft(defaultDraft());
+  };
+
+  const copyProfile = (profile: VirtualPlayerProfile) => {
+    onCreateProfile({
+      display_name: `${profile.display_name} 副本`,
+      model: profile.model,
+      personality_id: profile.personality_id,
+      personality_text: profile.personality_text,
+      appearance_id: profile.appearance_id,
+      avatar_prompt: profile.avatar_prompt,
+      tags: profile.tags,
+    });
+  };
+
   return (
     <Container
       aria-labelledby="virtual-player-library-title"
@@ -35,6 +131,7 @@ export function VirtualPlayerLibrary({
         <Button
           className="virtual-player-library-action"
           intent="primary"
+          onClick={startCreate}
           size="1"
           skin="gothic"
           type="button"
@@ -42,6 +139,77 @@ export function VirtualPlayerLibrary({
           新建虚拟玩家
         </Button>
       </div>
+
+      {isEditorOpen ? (
+        <form
+          className="virtual-player-editor"
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveDraft();
+          }}
+        >
+          <label>
+            <span>虚拟玩家昵称</span>
+            <TextField.Root
+              disabled={isSaving}
+              onChange={(event) =>
+                updateDraft("display_name", event.target.value)
+              }
+              value={draft.display_name}
+            />
+          </label>
+          <label>
+            <span>默认模型</span>
+            <TextField.Root
+              disabled={isSaving}
+              onChange={(event) => updateDraft("model", event.target.value)}
+              value={draft.model}
+            />
+          </label>
+          <label>
+            <span>性格</span>
+            <SelectField
+              disabled={isSaving}
+              onChange={(event) =>
+                updateDraft("personality_id", event.target.value)
+              }
+              value={draft.personality_id}
+            >
+              {PERSONALITY_OPTIONS.map((option) => (
+                <Option key={option.id} value={option.id}>
+                  {option.label}
+                </Option>
+              ))}
+            </SelectField>
+          </label>
+          <label>
+            <span>人物形象</span>
+            <SelectField
+              disabled={isSaving}
+              onChange={(event) =>
+                updateDraft("appearance_id", event.target.value)
+              }
+              value={draft.appearance_id}
+            >
+              {APPEARANCE_OPTIONS.map((option) => (
+                <Option key={option.id} value={option.id}>
+                  {option.label}
+                </Option>
+              ))}
+            </SelectField>
+          </label>
+          <Button
+            className="virtual-player-editor-save"
+            disabled={!canSave}
+            intent="primary"
+            size="1"
+            skin="gothic"
+            type="submit"
+          >
+            保存虚拟玩家
+          </Button>
+        </form>
+      ) : null}
 
       {isLoading ? (
         <p className="virtual-player-library-status">正在读取虚拟玩家...</p>
@@ -89,6 +257,38 @@ export function VirtualPlayerLibrary({
                     ))}
                   </div>
                 ) : null}
+              </div>
+              <div className="virtual-player-card-actions">
+                <Button
+                  aria-label={`编辑 ${profile.display_name}`}
+                  disabled={isSaving}
+                  onClick={() => startEdit(profile)}
+                  size="1"
+                  skin="gothic"
+                  type="button"
+                >
+                  编辑
+                </Button>
+                <Button
+                  aria-label={`复制 ${profile.display_name}`}
+                  disabled={isSaving}
+                  onClick={() => copyProfile(profile)}
+                  size="1"
+                  skin="gothic"
+                  type="button"
+                >
+                  复制
+                </Button>
+                <Button
+                  aria-label={`删除 ${profile.display_name}`}
+                  disabled={isSaving}
+                  onClick={() => onDeleteProfile(profile.id)}
+                  size="1"
+                  skin="gothic"
+                  type="button"
+                >
+                  删除
+                </Button>
               </div>
             </li>
           ))}

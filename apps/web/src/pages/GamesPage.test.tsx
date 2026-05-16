@@ -498,6 +498,114 @@ describe("GamesPage", () => {
     expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
   });
 
+  it("manages virtual player profiles from the library", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles") && method === "GET") {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles") && method === "POST") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...playerProfilesResponse().profiles[0],
+              id: "profile-new",
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (
+        url.endsWith("/api/v1/player-profiles/profile-1") &&
+        method === "PATCH"
+      ) {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse().profiles[0]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (
+        url.endsWith("/api/v1/player-profiles/profile-1") &&
+        method === "DELETE"
+      ) {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(<GamesPage />, "/games");
+
+    await screen.findByText("冷静的阿夜");
+    await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "新玩家");
+    await userEvent.type(screen.getByLabelText("默认模型"), "deepseek-chat");
+    await userEvent.click(
+      screen.getByRole("button", { name: "保存虚拟玩家" }),
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "复制 冷静的阿夜" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "编辑 冷静的阿夜" }),
+    );
+    await userEvent.clear(screen.getByLabelText("虚拟玩家昵称"));
+    await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "冷静的阿夜二号");
+    await userEvent.click(
+      screen.getByRole("button", { name: "保存虚拟玩家" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "删除 冷静的阿夜" }),
+    );
+
+    const postCalls = fetchSpy.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith("/api/v1/player-profiles") &&
+        init?.method === "POST",
+    );
+    const patchCalls = fetchSpy.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith("/api/v1/player-profiles/profile-1") &&
+        init?.method === "PATCH",
+    );
+    const deleteCalls = fetchSpy.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith("/api/v1/player-profiles/profile-1") &&
+        init?.method === "DELETE",
+    );
+
+    expect(postCalls).toHaveLength(2);
+    expect(patchCalls).toHaveLength(1);
+    expect(deleteCalls).toHaveLength(1);
+    expect(JSON.parse(String(postCalls[1][1]?.body))).toEqual(
+      expect.objectContaining({
+        display_name: "冷静的阿夜 副本",
+        model: "MiniMax-M2.7",
+      }),
+    );
+  });
+
   it("creates a live game run with standard event pacing", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);

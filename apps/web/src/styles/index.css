@@ -888,6 +888,41 @@ body {
   flex: 0 0 auto;
 }
 
+.virtual-player-editor {
+  display: grid;
+  grid-template-columns:
+    minmax(9rem, 1.1fr) minmax(9rem, 1.1fr)
+    minmax(8rem, 0.8fr) minmax(8rem, 0.8fr) auto;
+  gap: 0.5rem;
+  align-items: end;
+  min-width: 0;
+  border: 1px solid rgb(232 201 130 / 22%);
+  border-radius: 0.32rem;
+  background: rgb(4 9 14 / 54%);
+  padding: 0.58rem;
+}
+
+.virtual-player-editor label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.22rem;
+  color: #c7d0da;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.virtual-player-editor input,
+.virtual-player-editor select {
+  width: 100%;
+  min-width: 0;
+}
+
+.virtual-player-editor-save {
+  min-width: 6.8rem;
+}
+
 .virtual-player-library-status,
 .virtual-player-library-error,
 .virtual-player-library-empty {
@@ -917,7 +952,7 @@ body {
 .virtual-player-card {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.62rem;
   overflow: hidden;
   border: 1px solid rgb(134 146 158 / 38%);
@@ -1043,6 +1078,23 @@ body {
   padding: 0.04rem 0.3rem;
   color: #d8e0e7;
   font-size: 0.7rem;
+}
+
+.virtual-player-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  max-width: 8.8rem;
+}
+
+.virtual-player-card-actions .gothic-button {
+  min-width: 2.6rem;
+  min-height: 1.72rem;
+  padding-inline: 0.35rem;
+  font-size: 0.72rem;
+  line-height: 1;
 }
 
 .lobby-console-form {
@@ -1484,6 +1536,14 @@ body {
   .virtual-player-library-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .virtual-player-editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .virtual-player-editor-save {
+    width: 100%;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1530,8 +1590,22 @@ body {
     width: 100%;
   }
 
+  .virtual-player-editor {
+    grid-template-columns: 1fr;
+  }
+
   .virtual-player-library-grid {
     grid-template-columns: 1fr;
+  }
+
+  .virtual-player-card {
+    flex-wrap: wrap;
+  }
+
+  .virtual-player-card-actions {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
   }
 }
 
