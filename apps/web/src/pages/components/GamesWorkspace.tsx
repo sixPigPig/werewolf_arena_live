@@ -54,11 +54,13 @@ export function GamesWorkspace({ createFormRef }: GamesWorkspaceProps) {
         isError={playerProfilesQuery.isError}
         isLoading={playerProfilesQuery.isPending}
         isSaving={isSaving}
-        onCreateProfile={(request) => createProfileMutation.mutate(request)}
+        onCreateProfile={(request) => createProfileMutation.mutateAsync(request)}
         onUpdateProfile={(profileId, request) =>
-          updateProfileMutation.mutate({ profileId, request })
+          updateProfileMutation.mutateAsync({ profileId, request })
         }
-        onDeleteProfile={(profileId) => deleteProfileMutation.mutate(profileId)}
+        onDeleteProfile={(profileId) =>
+          deleteProfileMutation.mutateAsync(profileId)
+        }
       />
       <div ref={createFormRef}>
         <CreateGameRunForm profiles={profiles} />

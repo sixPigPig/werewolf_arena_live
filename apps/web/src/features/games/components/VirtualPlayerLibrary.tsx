@@ -20,9 +20,12 @@ type VirtualPlayerLibraryProps = {
   isLoading: boolean;
   isError: boolean;
   isSaving: boolean;
-  onCreateProfile: (request: PlayerProfileRequest) => void;
-  onUpdateProfile: (profileId: string, request: PlayerProfileRequest) => void;
-  onDeleteProfile: (profileId: string) => void;
+  onCreateProfile: (request: PlayerProfileRequest) => Promise<unknown>;
+  onUpdateProfile: (
+    profileId: string,
+    request: PlayerProfileRequest,
+  ) => Promise<unknown>;
+  onDeleteProfile: (profileId: string) => Promise<unknown>;
 };
 
 const defaultDraft = (): PlayerProfileRequest => ({
@@ -59,6 +62,10 @@ export function VirtualPlayerLibrary({
   const [draft, setDraft] = useState<PlayerProfileRequest>(defaultDraft);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(
+    null,
+  );
   const canSave =
     !isSaving &&
     draft.display_name.trim().length > 0 &&
@@ -70,38 +77,48 @@ export function VirtualPlayerLibrary({
   ) => setDraft((current) => ({ ...current, [key]: value }));
 
   const startCreate = () => {
+    setActionError(null);
+    setDeleteCandidateId(null);
     setDraft(defaultDraft());
     setEditingProfileId(null);
     setIsEditorOpen(true);
   };
 
   const startEdit = (profile: VirtualPlayerProfile) => {
+    setActionError(null);
+    setDeleteCandidateId(null);
     setDraft(profileToDraft(profile));
     setEditingProfileId(profile.id);
     setIsEditorOpen(true);
   };
 
-  const saveDraft = () => {
+  const saveDraft = async () => {
     if (!canSave) {
       return;
     }
+    setActionError(null);
     const request: PlayerProfileRequest = {
       ...draft,
       display_name: draft.display_name.trim(),
       model: draft.model.trim(),
     };
-    if (editingProfileId) {
-      onUpdateProfile(editingProfileId, request);
-    } else {
-      onCreateProfile(request);
+    try {
+      if (editingProfileId) {
+        await onUpdateProfile(editingProfileId, request);
+      } else {
+        await onCreateProfile(request);
+      }
+      setIsEditorOpen(false);
+      setEditingProfileId(null);
+      setDraft(defaultDraft());
+    } catch {
+      setActionError("无法保存虚拟玩家");
     }
-    setIsEditorOpen(false);
-    setEditingProfileId(null);
-    setDraft(defaultDraft());
   };
 
   const copyProfile = (profile: VirtualPlayerProfile) => {
-    onCreateProfile({
+    setActionError(null);
+    void onCreateProfile({
       display_name: `${profile.display_name} 副本`,
       model: profile.model,
       personality_id: profile.personality_id,
@@ -109,7 +126,27 @@ export function VirtualPlayerLibrary({
       appearance_id: profile.appearance_id,
       avatar_prompt: profile.avatar_prompt,
       tags: profile.tags,
-    });
+    }).catch(() => setActionError("无法保存虚拟玩家"));
+  };
+
+  const requestDeleteProfile = (profileId: string) => {
+    setActionError(null);
+    setDeleteCandidateId(profileId);
+  };
+
+  const confirmDeleteProfile = async (profileId: string) => {
+    setActionError(null);
+    try {
+      await onDeleteProfile(profileId);
+      setDeleteCandidateId(null);
+    } catch {
+      setActionError("无法删除虚拟玩家");
+    }
+  };
+
+  const cancelDeleteProfile = () => {
+    setActionError(null);
+    setDeleteCandidateId(null);
   };
 
   return (
@@ -145,7 +182,7 @@ export function VirtualPlayerLibrary({
           className="virtual-player-editor"
           onSubmit={(event) => {
             event.preventDefault();
-            saveDraft();
+            void saveDraft();
           }}
         >
           <label>
@@ -211,6 +248,11 @@ export function VirtualPlayerLibrary({
         </form>
       ) : null}
 
+      {actionError ? (
+        <p className="virtual-player-library-error" role="alert">
+          {actionError}
+        </p>
+      ) : null}
       {isLoading ? (
         <p className="virtual-player-library-status">正在读取虚拟玩家...</p>
       ) : null}
@@ -225,73 +267,101 @@ export function VirtualPlayerLibrary({
           aria-label="虚拟玩家列表"
           className="virtual-player-library-grid"
         >
-          {profiles.map((profile) => (
-            <li className="virtual-player-card" key={profile.id}>
-              <span
-                aria-hidden="true"
-                className={[
-                  "virtual-player-card-avatar",
-                  appearanceClassName(profile.appearance_id),
-                ].join(" ")}
-              >
-                {profile.display_name.trim().charAt(0) || "?"}
-              </span>
-              <div className="virtual-player-card-main">
-                <div className="virtual-player-card-heading">
-                  <span className="virtual-player-card-name">
-                    {profile.display_name}
-                  </span>
-                  <span className="virtual-player-card-personality">
-                    {personalityLabel(profile.personality_id)}
-                  </span>
-                </div>
-                <span className="virtual-player-card-model">
-                  {profile.model}
+          {profiles.map((profile) => {
+            const isDeleteCandidate = deleteCandidateId === profile.id;
+            return (
+              <li className="virtual-player-card" key={profile.id}>
+                <span
+                  aria-hidden="true"
+                  className={[
+                    "virtual-player-card-avatar",
+                    appearanceClassName(profile.appearance_id),
+                  ].join(" ")}
+                >
+                  {profile.display_name.trim().charAt(0) || "?"}
                 </span>
-                {profile.tags.length > 0 ? (
-                  <div className="virtual-player-card-tags">
-                    {profile.tags.slice(0, 2).map((tag) => (
-                      <span className="virtual-player-card-tag" key={tag}>
-                        {tag}
-                      </span>
-                    ))}
+                <div className="virtual-player-card-main">
+                  <div className="virtual-player-card-heading">
+                    <span className="virtual-player-card-name">
+                      {profile.display_name}
+                    </span>
+                    <span className="virtual-player-card-personality">
+                      {personalityLabel(profile.personality_id)}
+                    </span>
                   </div>
-                ) : null}
-              </div>
-              <div className="virtual-player-card-actions">
-                <Button
-                  aria-label={`编辑 ${profile.display_name}`}
-                  disabled={isSaving}
-                  onClick={() => startEdit(profile)}
-                  size="1"
-                  skin="gothic"
-                  type="button"
-                >
-                  编辑
-                </Button>
-                <Button
-                  aria-label={`复制 ${profile.display_name}`}
-                  disabled={isSaving}
-                  onClick={() => copyProfile(profile)}
-                  size="1"
-                  skin="gothic"
-                  type="button"
-                >
-                  复制
-                </Button>
-                <Button
-                  aria-label={`删除 ${profile.display_name}`}
-                  disabled={isSaving}
-                  onClick={() => onDeleteProfile(profile.id)}
-                  size="1"
-                  skin="gothic"
-                  type="button"
-                >
-                  删除
-                </Button>
-              </div>
-            </li>
-          ))}
+                  <span className="virtual-player-card-model">
+                    {profile.model}
+                  </span>
+                  {profile.tags.length > 0 ? (
+                    <div className="virtual-player-card-tags">
+                      {profile.tags.slice(0, 2).map((tag) => (
+                        <span className="virtual-player-card-tag" key={tag}>
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="virtual-player-card-actions">
+                  <Button
+                    aria-label={`编辑 ${profile.display_name}`}
+                    disabled={isSaving}
+                    onClick={() => startEdit(profile)}
+                    size="1"
+                    skin="gothic"
+                    type="button"
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    aria-label={`复制 ${profile.display_name}`}
+                    disabled={isSaving}
+                    onClick={() => copyProfile(profile)}
+                    size="1"
+                    skin="gothic"
+                    type="button"
+                  >
+                    复制
+                  </Button>
+                  {isDeleteCandidate ? (
+                    <>
+                      <Button
+                        aria-label={`确认删除 ${profile.display_name}`}
+                        disabled={isSaving}
+                        onClick={() => void confirmDeleteProfile(profile.id)}
+                        size="1"
+                        skin="gothic"
+                        type="button"
+                      >
+                        确认删除
+                      </Button>
+                      <Button
+                        aria-label={`取消删除 ${profile.display_name}`}
+                        disabled={isSaving}
+                        onClick={cancelDeleteProfile}
+                        size="1"
+                        skin="gothic"
+                        type="button"
+                      >
+                        取消
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      aria-label={`删除 ${profile.display_name}`}
+                      disabled={isSaving}
+                      onClick={() => requestDeleteProfile(profile.id)}
+                      size="1"
+                      skin="gothic"
+                      type="button"
+                    >
+                      删除
+                    </Button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </Container>

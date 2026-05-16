@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -560,24 +560,42 @@ describe("GamesPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
     await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "新玩家");
     await userEvent.type(screen.getByLabelText("默认模型"), "deepseek-chat");
-    await userEvent.click(
-      screen.getByRole("button", { name: "保存虚拟玩家" }),
-    );
+    const saveNewProfileButton = screen.getByRole("button", {
+      name: "保存虚拟玩家",
+    });
+    await waitFor(() => expect(saveNewProfileButton).toBeEnabled());
+    await userEvent.click(saveNewProfileButton);
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "复制 冷静的阿夜" }),
-    );
-    await userEvent.click(
-      await screen.findByRole("button", { name: "编辑 冷静的阿夜" }),
-    );
+    const copyProfileButton = await screen.findByRole("button", {
+      name: "复制 冷静的阿夜",
+    });
+    await waitFor(() => expect(copyProfileButton).toBeEnabled());
+    await userEvent.click(copyProfileButton);
+
+    const editProfileButton = await screen.findByRole("button", {
+      name: "编辑 冷静的阿夜",
+    });
+    await waitFor(() => expect(editProfileButton).toBeEnabled());
+    await userEvent.click(editProfileButton);
     await userEvent.clear(screen.getByLabelText("虚拟玩家昵称"));
     await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "冷静的阿夜二号");
-    await userEvent.click(
-      screen.getByRole("button", { name: "保存虚拟玩家" }),
-    );
-    await userEvent.click(
-      await screen.findByRole("button", { name: "删除 冷静的阿夜" }),
-    );
+    const saveEditedProfileButton = screen.getByRole("button", {
+      name: "保存虚拟玩家",
+    });
+    await waitFor(() => expect(saveEditedProfileButton).toBeEnabled());
+    await userEvent.click(saveEditedProfileButton);
+
+    const deleteProfileButton = await screen.findByRole("button", {
+      name: "删除 冷静的阿夜",
+    });
+    await waitFor(() => expect(deleteProfileButton).toBeEnabled());
+    await userEvent.click(deleteProfileButton);
+
+    const confirmDeleteProfileButton = await screen.findByRole("button", {
+      name: "确认删除 冷静的阿夜",
+    });
+    await waitFor(() => expect(confirmDeleteProfileButton).toBeEnabled());
+    await userEvent.click(confirmDeleteProfileButton);
 
     const postCalls = fetchSpy.mock.calls.filter(
       ([input, init]) =>
