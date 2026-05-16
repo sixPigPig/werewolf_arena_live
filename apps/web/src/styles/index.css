@@ -1106,7 +1106,8 @@ body {
 }
 
 .lobby-console-bar,
-.lobby-rule-details {
+.lobby-rule-details,
+.player-config-panel {
   position: relative;
   border: 1px solid rgb(185 147 92 / 44%);
   border-radius: 0.35rem;
@@ -1120,7 +1121,8 @@ body {
 }
 
 .lobby-console-bar::before,
-.lobby-rule-details::before {
+.lobby-rule-details::before,
+.player-config-panel::before {
   position: absolute;
   inset: 0.32rem;
   content: "";
@@ -1144,7 +1146,9 @@ body {
 .lobby-rules-content,
 .lobby-rule-card-body,
 .lobby-rule-details-header,
-.lobby-rule-details-list {
+.lobby-rule-details-list,
+.player-config-panel-header,
+.player-config-panel-grid {
   position: relative;
   z-index: 1;
 }
@@ -1429,6 +1433,96 @@ body {
   color: #efd9b5;
 }
 
+.player-config-panel {
+  overflow: hidden;
+  padding: 0.88rem 1rem 1rem;
+}
+
+.player-config-panel-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.72rem;
+}
+
+.player-config-panel-title {
+  margin: 0;
+  overflow: hidden;
+  color: #f0dfc8;
+  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 0 rgb(0 0 0 / 78%);
+  white-space: nowrap;
+}
+
+.player-config-panel-count {
+  flex: 0 0 auto;
+  color: #c7d0da;
+  font-weight: 800;
+}
+
+.player-config-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.player-config-seat {
+  display: grid;
+  min-width: 0;
+  gap: 0.42rem;
+  border: 1px solid rgb(134 146 158 / 34%);
+  border-radius: 0.28rem;
+  background:
+    linear-gradient(180deg, rgb(8 15 20 / 74%), rgb(2 7 12 / 82%)),
+    radial-gradient(circle at 8% 20%, rgb(232 201 130 / 8%), transparent 34%);
+  padding: 0.58rem;
+}
+
+.player-config-seat-label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.28rem;
+  color: #e8c982;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.player-config-select,
+.player-config-model {
+  width: 100%;
+  min-width: 0;
+  height: 2rem;
+  border-color: rgb(134 146 158 / 42%) !important;
+  border-radius: 0.18rem !important;
+  background: rgb(3 8 13 / 78%) !important;
+  color: #e8eef4 !important;
+  font-size: 0.82rem;
+}
+
+.player-config-select option {
+  background: #050910;
+  color: #e8eef4;
+}
+
+.player-config-summary {
+  min-height: 1rem;
+  margin: -0.04rem 0 0;
+  overflow: hidden;
+  color: #c7d0da;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .lobby-rule-details {
   overflow: hidden;
   padding: 1rem 1.1rem;
@@ -1533,6 +1627,10 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .player-config-panel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .virtual-player-library-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1552,14 +1650,22 @@ body {
   }
 
   .lobby-console-bar,
-  .lobby-rule-details {
+  .lobby-rule-details,
+  .player-config-panel {
     border-radius: 0.28rem;
   }
 
   .lobby-console-controls,
   .lobby-rule-grid,
-  .lobby-rule-details-row {
+  .lobby-rule-details-row,
+  .player-config-panel-grid {
     grid-template-columns: 1fr;
+  }
+
+  .player-config-panel-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.28rem;
   }
 
   .lobby-console-field {

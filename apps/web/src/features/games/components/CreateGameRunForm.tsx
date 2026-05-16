@@ -15,8 +15,10 @@ import { useNavigate } from "react-router-dom";
 
 import { createGameRun } from "../api/createGameRun";
 import { listRuleSets } from "../api/listRuleSets";
+import { PlayerConfigPanel } from "./PlayerConfigPanel";
 import type {
   EventPacingMode,
+  PlayerConfig,
   RuleSetSummary,
   VirtualPlayerProfile,
 } from "../types";
@@ -26,13 +28,12 @@ type CreateGameRunFormProps = {
 };
 
 export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
-  void profiles;
-
   const navigate = useNavigate();
   const [selectedRuleSetId, setSelectedRuleSetId] = useState("classic_8");
   const [seed, setSeed] = useState("");
   const [maxRounds, setMaxRounds] = useState("8");
   const [eventPacing, setEventPacing] = useState<EventPacingMode>("off");
+  const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const ruleSetsQuery = useQuery({
@@ -128,11 +129,17 @@ export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
         }
 
         setValidationError(null);
+        const normalizedPlayerConfigs = selectedRuleSet
+          ? normalizePlayerConfigs(playerConfigs, selectedRuleSet.player_count)
+          : [];
         mutation.mutate({
           rule_set_id: selectedRuleSetId,
           seed: seed ? Number(seed) : null,
           max_rounds: parsedMaxRounds,
           event_pacing: eventPacing,
+          ...(normalizedPlayerConfigs.length > 0
+            ? { player_configs: normalizedPlayerConfigs }
+            : {}),
         });
       }}
     >
@@ -227,7 +234,17 @@ export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
             >
               {ruleSets.map(renderRuleCard)}
             </RadioCards.Root>
-            {selectedRuleSet ? <SelectedRuleDetails rule={selectedRuleSet} /> : null}
+            {selectedRuleSet ? (
+              <>
+                <SelectedRuleDetails rule={selectedRuleSet} />
+                <PlayerConfigPanel
+                  configs={playerConfigs}
+                  onChange={setPlayerConfigs}
+                  playerCount={selectedRuleSet.player_count}
+                  profiles={profiles}
+                />
+              </>
+            ) : null}
           </div>
         ) : null}
       </Container>
@@ -244,6 +261,36 @@ export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
       ) : null}
     </form>
   );
+}
+
+function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
+  return configs
+    .filter((config) => config.seat >= 1 && config.seat <= playerCount)
+    .map((config) => {
+      const normalized: PlayerConfig = { seat: config.seat };
+      const model = config.model?.trim();
+      if (config.profile_id) {
+        normalized.profile_id = config.profile_id;
+      }
+      if (model) {
+        normalized.model = model;
+      }
+      if (config.personality_id) {
+        normalized.personality_id = config.personality_id;
+      }
+      if (config.appearance_id) {
+        normalized.appearance_id = config.appearance_id;
+      }
+      return normalized;
+    })
+    .filter(
+      (config) =>
+        config.profile_id ||
+        config.model ||
+        config.personality_id ||
+        config.appearance_id,
+    )
+    .sort((left, right) => left.seat - right.seat);
 }
 
 function SelectedRuleDetails({ rule }: { rule: RuleSetSummary }) {
