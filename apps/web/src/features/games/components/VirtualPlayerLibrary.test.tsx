@@ -337,7 +337,7 @@ describe("VirtualPlayerLibrary", () => {
       ],
     });
 
-    await user.click(screen.getByLabelText("只看收藏"));
+    await user.click(screen.getByRole("button", { name: "只看收藏" }));
 
     expect(screen.getByText("收藏阿夜")).toBeInTheDocument();
     expect(screen.queryByText("普通月白")).not.toBeInTheDocument();
