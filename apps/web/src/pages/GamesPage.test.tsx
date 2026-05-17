@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -96,15 +96,6 @@ function playerProfilesResponse() {
   };
 }
 
-function modelOptionsResponse() {
-  return {
-    models: [
-      { id: "deepseek-chat", label: "DeepSeek · deepseek-chat" },
-      { id: "MiniMax-M2.7", label: "MiniMax · MiniMax-M2.7" },
-    ],
-  };
-}
-
 describe("GamesPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -182,6 +173,13 @@ describe("GamesPage", () => {
       "href",
       "/games/history",
     );
+    expect(screen.getByRole("link", { name: "玩家库" })).toHaveAttribute(
+      "href",
+      "/players",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "虚拟玩家工作台" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "刷新列表" }),
     ).not.toBeInTheDocument();
@@ -201,19 +199,9 @@ describe("GamesPage", () => {
     expect(screen.getByTestId("games-workspace-module")).toHaveClass(
       "games-workspace-module",
     );
-    const playerLibrary = await screen.findByTestId("virtual-player-library");
     expect(
-      within(playerLibrary).getByRole("heading", { name: "虚拟玩家库" }),
-    ).toBeInTheDocument();
-    expect(await within(playerLibrary).findByText("冷静的阿夜")).toBeInTheDocument();
-    expect(within(playerLibrary).getByText("MiniMax-M2.7")).toBeInTheDocument();
-    expect(within(playerLibrary).getByText("谨慎")).toBeInTheDocument();
-    expect(
-      within(playerLibrary).getByRole("img", { name: "冷静的阿夜 人物形象" }),
-    ).toHaveAttribute("src", "/api/v1/player-profiles/avatar/profile-1.png");
-    expect(
-      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
-    ).toBeInTheDocument();
+      screen.queryByTestId("virtual-player-library"),
+    ).not.toBeInTheDocument();
     const createModule = screen.getByTestId("games-create-module");
     expect(createModule).toHaveClass(
       "games-create-module",
@@ -233,7 +221,9 @@ describe("GamesPage", () => {
     expect(
       within(consoleBar).getByRole("button", { name: "发起对局" }),
     ).toHaveClass("gothic-button");
-    const playerConfigPanel = screen.getByRole("region", { name: "席位模块" });
+    const playerConfigPanel = await screen.findByRole("region", {
+      name: "席位模块",
+    });
     expect(
       within(playerConfigPanel).getByRole("button", { name: "1号空席" }),
     ).toBeInTheDocument();
@@ -607,326 +597,6 @@ describe("GamesPage", () => {
     );
     expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
   });
-
-  it("manages virtual player profiles from the library", async () => {
-    let avatarUploadCount = 0;
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-      const url = String(input);
-      const method = init?.method ?? "GET";
-      if (url.endsWith("/api/v1/games/rule-sets")) {
-        return Promise.resolve(
-          new Response(JSON.stringify(ruleSetsResponse()), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      if (url.endsWith("/api/v1/player-profiles") && method === "GET") {
-        return Promise.resolve(
-          new Response(JSON.stringify(playerProfilesResponse()), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      if (url.endsWith("/api/v1/games/model-options")) {
-        return Promise.resolve(
-          new Response(JSON.stringify(modelOptionsResponse()), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      if (
-        url.endsWith("/api/v1/player-profiles/avatar") &&
-        method === "POST"
-      ) {
-        avatarUploadCount += 1;
-        const filename = avatarUploadCount === 1 ? "uploaded.png" : "edited.png";
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              avatar_image_url: `/api/v1/player-profiles/avatar/${filename}`,
-              avatar_image_mime: "image/png",
-            }),
-            { status: 201, headers: { "Content-Type": "application/json" } },
-          ),
-        );
-      }
-      if (url.endsWith("/api/v1/player-profiles") && method === "POST") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              ...playerProfilesResponse().profiles[0],
-              id: "profile-new",
-            }),
-            { status: 201, headers: { "Content-Type": "application/json" } },
-          ),
-        );
-      }
-      if (
-        url.endsWith("/api/v1/player-profiles/profile-1") &&
-        method === "PATCH"
-      ) {
-        return Promise.resolve(
-          new Response(JSON.stringify(playerProfilesResponse().profiles[0]), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      if (
-        url.endsWith("/api/v1/player-profiles/profile-1") &&
-        method === "DELETE"
-      ) {
-        return Promise.resolve(new Response(null, { status: 204 }));
-      }
-      return Promise.resolve(
-        new Response(JSON.stringify({ sessions: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
-    });
-
-    renderWithClient(<GamesPage />, "/games");
-
-    expect(
-      await within(await screen.findByTestId("virtual-player-library")).findByText(
-        "冷静的阿夜",
-      ),
-    ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
-    const generatedNameInput = screen.getByLabelText("虚拟玩家昵称") as HTMLInputElement;
-    expect(generatedNameInput.value.trim().length).toBeGreaterThan(0);
-    await userEvent.clear(generatedNameInput);
-    await userEvent.type(generatedNameInput, "新玩家");
-    const modelSelect = screen.getByRole("combobox", { name: "默认模型" });
-    expect(modelSelect).toHaveValue("deepseek-chat");
-    expect(
-      within(modelSelect).getByRole("option", {
-        name: "MiniMax · MiniMax-M2.7",
-      }),
-    ).toBeInTheDocument();
-    await userEvent.selectOptions(modelSelect, "deepseek-chat");
-    await userEvent.type(screen.getByLabelText("性格描述"), "谨慎发言，先听后判");
-    await userEvent.upload(
-      screen.getByLabelText("人物形象"),
-      new File([new Uint8Array([137, 80, 78, 71])], "avatar.png", {
-        type: "image/png",
-      }),
-    );
-    expect(
-      await screen.findByRole("img", { name: "新玩家 人物形象" }),
-    ).toHaveAttribute("src", "/api/v1/player-profiles/avatar/uploaded.png");
-    await userEvent.type(screen.getByLabelText("标签"), "控场 慢热");
-    const saveNewProfileButton = screen.getByRole("button", {
-      name: "保存虚拟玩家",
-    });
-    await waitFor(() => expect(saveNewProfileButton).toBeEnabled());
-    await userEvent.click(saveNewProfileButton);
-
-    const copyProfileButton = await screen.findByRole("button", {
-      name: "复制 冷静的阿夜",
-    });
-    await waitFor(() => expect(copyProfileButton).toBeEnabled());
-    await userEvent.click(copyProfileButton);
-
-    const editProfileButton = await screen.findByRole("button", {
-      name: "编辑 冷静的阿夜",
-    });
-    await waitFor(() => expect(editProfileButton).toBeEnabled());
-    await userEvent.click(editProfileButton);
-    await userEvent.clear(screen.getByLabelText("虚拟玩家昵称"));
-    await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "冷静的阿夜二号");
-    await userEvent.clear(screen.getByLabelText("性格描述"));
-    await userEvent.type(screen.getByLabelText("性格描述"), "二号更谨慎");
-    await userEvent.upload(
-      screen.getByLabelText("人物形象"),
-      new File([new Uint8Array([137, 80, 78, 71])], "edited.png", {
-        type: "image/png",
-      }),
-    );
-    expect(
-      await screen.findByRole("img", { name: "冷静的阿夜二号 人物形象" }),
-    ).toHaveAttribute("src", "/api/v1/player-profiles/avatar/edited.png");
-    await userEvent.clear(screen.getByLabelText("标签"));
-    await userEvent.type(screen.getByLabelText("标签"), "控场 追刀");
-    const saveEditedProfileButton = screen.getByRole("button", {
-      name: "保存虚拟玩家",
-    });
-    await waitFor(() => expect(saveEditedProfileButton).toBeEnabled());
-    await userEvent.click(saveEditedProfileButton);
-
-    const deleteProfileButton = await screen.findByRole("button", {
-      name: "删除 冷静的阿夜",
-    });
-    await waitFor(() => expect(deleteProfileButton).toBeEnabled());
-    await userEvent.click(deleteProfileButton);
-
-    const confirmDeleteProfileButton = await screen.findByRole("button", {
-      name: "确认删除 冷静的阿夜",
-    });
-    await waitFor(() => expect(confirmDeleteProfileButton).toBeEnabled());
-    await userEvent.click(confirmDeleteProfileButton);
-
-    const postCalls = fetchSpy.mock.calls.filter(
-      ([input, init]) =>
-        String(input).endsWith("/api/v1/player-profiles") &&
-        init?.method === "POST",
-    );
-    const uploadCalls = fetchSpy.mock.calls.filter(
-      ([input, init]) =>
-        String(input).endsWith("/api/v1/player-profiles/avatar") &&
-        init?.method === "POST",
-    );
-    const patchCalls = fetchSpy.mock.calls.filter(
-      ([input, init]) =>
-        String(input).endsWith("/api/v1/player-profiles/profile-1") &&
-        init?.method === "PATCH",
-    );
-    const deleteCalls = fetchSpy.mock.calls.filter(
-      ([input, init]) =>
-        String(input).endsWith("/api/v1/player-profiles/profile-1") &&
-        init?.method === "DELETE",
-    );
-
-    expect(postCalls).toHaveLength(2);
-    expect(uploadCalls).toHaveLength(2);
-    expect(patchCalls).toHaveLength(1);
-    expect(deleteCalls).toHaveLength(1);
-    expect(JSON.parse(String(postCalls[0][1]?.body))).toEqual(
-      expect.objectContaining({
-        display_name: "新玩家",
-        model: "deepseek-chat",
-        personality_text: "谨慎发言，先听后判",
-        avatar_image_url: "/api/v1/player-profiles/avatar/uploaded.png",
-        avatar_image_mime: "image/png",
-        tags: ["控场", "慢热"],
-      }),
-    );
-    expect(JSON.parse(String(postCalls[1][1]?.body))).toEqual(
-      expect.objectContaining({
-        display_name: "冷静的阿夜 副本",
-        model: "MiniMax-M2.7",
-        avatar_image_url: "/api/v1/player-profiles/avatar/profile-1.png",
-        avatar_image_mime: "image/png",
-      }),
-    );
-    expect(JSON.parse(String(patchCalls[0][1]?.body))).toEqual(
-      expect.objectContaining({
-        display_name: "冷静的阿夜二号",
-        personality_text: "二号更谨慎",
-        avatar_image_url: "/api/v1/player-profiles/avatar/edited.png",
-        avatar_image_mime: "image/png",
-        tags: ["控场", "追刀"],
-      }),
-    );
-  });
-
-  it("drops deleted virtual player selections before launching a run", async () => {
-    let isProfileDeleted = false;
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-      const url = String(input);
-      const method = init?.method ?? "GET";
-      if (url.endsWith("/api/v1/games/rule-sets")) {
-        return Promise.resolve(
-          new Response(JSON.stringify(ruleSetsResponse()), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      if (url.endsWith("/api/v1/player-profiles") && method === "GET") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify(isProfileDeleted ? { profiles: [] } : playerProfilesResponse()),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            },
-          ),
-        );
-      }
-      if (
-        url.endsWith("/api/v1/player-profiles/profile-1") &&
-        method === "DELETE"
-      ) {
-        isProfileDeleted = true;
-        return Promise.resolve(new Response(null, { status: 204 }));
-      }
-      if (url.endsWith("/api/v1/games/runs")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              run_id: "run_1234abcd",
-              session_id: "session_20260424_120000_ab12cd34",
-              villager_model: "deepseek-chat",
-              werewolf_model: "deepseek-chat",
-              seed: null,
-              max_rounds: 8,
-              status: "queued",
-              created_at: "2026-04-24T12:00:00Z",
-              started_at: null,
-              completed_at: null,
-              winner: null,
-              error: null,
-              event_count: 1,
-            }),
-            { status: 201, headers: { "Content-Type": "application/json" } },
-          ),
-        );
-      }
-      return Promise.resolve(
-        new Response(JSON.stringify({ sessions: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
-    });
-
-    renderWithClient(
-      <Routes>
-        <Route path="/games" element={<GamesPage />} />
-        <Route
-          path="/games/live/:runId"
-          element={<p>实时观战 run_1234abcd</p>}
-        />
-      </Routes>,
-      "/games",
-    );
-
-    await userEvent.click(
-      await screen.findByRole(
-        "button",
-        {
-          name: "为 1 号座位选择 冷静的阿夜",
-        },
-        { timeout: 5000 },
-      ),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "确认选择" }));
-    await userEvent.click(screen.getByRole("button", { name: "删除 冷静的阿夜" }));
-    await userEvent.click(
-      await screen.findByRole("button", { name: "确认删除 冷静的阿夜" }),
-    );
-    expect(await screen.findByText("还没有保存的虚拟玩家。")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
-
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/v1/games/runs",
-      expect.objectContaining({
-        body: JSON.stringify({
-          rule_set_id: "classic_8",
-          seed: null,
-          max_rounds: 8,
-          event_pacing: "off",
-        }),
-        method: "POST",
-      }),
-    );
-  }, 10000);
 
   it("creates a live game run with standard event pacing", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {

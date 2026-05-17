@@ -25,7 +25,12 @@ export function GamesPage() {
             新建对局
           </ArenaNavButton>
         }
-        secondaryAction={<ArenaNavButton to="/games/history">对局历史</ArenaNavButton>}
+        secondaryAction={
+          <>
+            <ArenaNavButton to="/players">玩家库</ArenaNavButton>
+            <ArenaNavButton to="/games/history">对局历史</ArenaNavButton>
+          </>
+        }
       />
       <GamesWorkspace createFormRef={createFormRef} />
     </>
