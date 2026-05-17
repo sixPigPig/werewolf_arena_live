@@ -132,7 +132,7 @@ class PlayerProfileBase(BaseModel):
     @classmethod
     def normalize_catchphrases(cls, value: object) -> object:
         if isinstance(value, list):
-            return _normalize_limited_strings(value, max_items=6, max_length=80)
+            return _normalize_limited_strings(value, max_items=6, max_length=40)
         return value
 
     @field_validator("example_messages", mode="before")
@@ -243,7 +243,7 @@ class UpdatePlayerProfileRequest(BaseModel):
     @classmethod
     def normalize_catchphrases(cls, value: object) -> object:
         if isinstance(value, list):
-            return _normalize_limited_strings(value, max_items=6, max_length=80)
+            return _normalize_limited_strings(value, max_items=6, max_length=40)
         return value
 
     @field_validator("example_messages", mode="before")

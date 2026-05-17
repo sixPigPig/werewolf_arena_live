@@ -414,3 +414,35 @@ def test_create_profile_rejects_invalid_strategy_slider_values() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_create_profile_rejects_catchphrase_longer_than_40_characters() -> None:
+    long_catchphrase = "啊" * 41
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "长口头禅玩家",
+            "model": "deepseek-v4-flash",
+            "catchphrases": [long_catchphrase],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_profile_rejects_catchphrase_longer_than_40_characters() -> None:
+    long_catchphrase = "啊" * 41
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "长口头禅更新玩家",
+            "model": "deepseek-v4-flash",
+        },
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={"catchphrases": [long_catchphrase]},
+    )
+
+    assert response.status_code == 422
