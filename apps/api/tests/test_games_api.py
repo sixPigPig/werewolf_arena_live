@@ -532,7 +532,10 @@ def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
     assert [config.to_dict() for config in captured[0]["player_configs"]] == [snapshot]
 
 
-def test_game_run_player_config_composes_rich_profile_prompt() -> None:
+def test_game_run_player_config_composes_rich_profile_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     created = client.post(
         "/api/v1/player-profiles",
         json={
@@ -549,14 +552,27 @@ def test_game_run_player_config_composes_rich_profile_prompt() -> None:
             "example_messages": ["我觉得 2 号的视角漏掉了昨晚信息。"],
         },
     ).json()
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
 
-    response = client.post(
-        "/api/v1/games/runs",
-        json={
-            "rule_set_id": "classic_8",
-            "player_configs": [{"seat": 1, "profile_id": created["id"]}],
-        },
-    )
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "player_configs": [{"seat": 1, "profile_id": created["id"]}],
+            },
+        )
+    finally:
+        clear_overrides()
 
     assert response.status_code == 201
     config = response.json()["player_configs"][0]
@@ -565,6 +581,7 @@ def test_game_run_player_config_composes_rich_profile_prompt() -> None:
     assert "逻辑控场玩家" in config["personality"]
     assert "我先拆一下视角" in config["personality"]
     assert "领导倾向: 5/5" in config["personality"]
+    assert [config.to_dict() for config in captured[0]["player_configs"]] == [config]
 
 
 def test_game_run_player_config_keeps_explicit_personality_text_override(

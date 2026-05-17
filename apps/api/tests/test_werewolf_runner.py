@@ -1,5 +1,6 @@
 import json
 import random
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,7 @@ from app.werewolf.engine import GameEngine, MaxRoundsExceeded, initialize_game_s
 from app.werewolf.live import NullEventSink
 from app.werewolf.models import DeathEvent, RoundLog, RoundState
 from app.werewolf.player_configs import PlayerConfig
+from app.werewolf.player_profile_prompts import compose_player_profile_prompt
 from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.rules import MODEL_GROUP_WEREWOLF, get_rule_set
 from app.werewolf.runner import GameRunError, run_game
@@ -731,6 +733,45 @@ def test_world_state_includes_player_personality() -> None:
     assert world_state["personality"] == "主动施压，寻找发言矛盾。"
     prompt, _schema = build_prompt("debate", world_state)
     assert "- 你的性格设定：主动施压，寻找发言矛盾。" in prompt
+
+
+def test_compose_player_profile_prompt_includes_rich_strategy_fields() -> None:
+    prompt = compose_player_profile_prompt(
+        SimpleNamespace(
+            short_description="",
+            background_story="",
+            speaking_style="分点发言，先归纳再判断。",
+            strategy_profile="logic_leader",
+            risk_tolerance=3,
+            bluffing_tendency=3,
+            trust_tendency=3,
+            leadership_tendency=3,
+            talkativeness=4,
+            catchphrases=[],
+            example_messages=["我先把票型和发言顺序对一下。"],
+        ),
+        "先找矛盾，再给站边。",
+    )
+
+    assert "先找矛盾，再给站边。" in prompt
+    assert "发言风格: 分点发言，先归纳再判断。" in prompt
+    assert "狼人杀策略: 偏逻辑带队，主动整理票型、发言顺序和矛盾链。" in prompt
+    assert "发言活跃: 4/5" in prompt
+    assert "示例发言: 我先把票型和发言顺序对一下。" in prompt
+
+
+def test_compose_player_profile_prompt_falls_back_for_unknown_strategy() -> None:
+    prompt = compose_player_profile_prompt(
+        SimpleNamespace(
+            strategy_profile="legacy_unknown_strategy",
+            catchphrases=[],
+            example_messages=[],
+        ),
+        "稳健观察。",
+    )
+
+    assert "稳健观察。" in prompt
+    assert "狼人杀策略: 稳健观察，按证据推进，不轻易极端站边。" in prompt
 
 
 def test_player_from_dict_defaults_legacy_profile_fields() -> None:

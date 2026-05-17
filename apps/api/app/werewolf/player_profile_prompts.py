@@ -19,7 +19,11 @@ def compose_player_profile_prompt(profile: object, base_personality: str) -> str
         sections.append(f"发言风格: {speaking_style}")
 
     strategy_profile = _profile_string(profile, "strategy_profile") or "balanced"
-    sections.append(f"狼人杀策略: {default_strategy_text(strategy_profile)}")
+    try:
+        strategy_text = default_strategy_text(strategy_profile)
+    except KeyError:
+        strategy_text = default_strategy_text("balanced")
+    sections.append(f"狼人杀策略: {strategy_text}")
 
     for label, field_name in (
         ("冒险倾向", "risk_tolerance"),
