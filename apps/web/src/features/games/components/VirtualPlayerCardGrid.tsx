@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 
-import { Button, TextField } from "../../../components/ui";
+import { Button, SelectField, TextField } from "../../../components/ui";
 import {
+  PERSONALITY_OPTIONS,
   appearanceClassName,
   personalityLabel,
 } from "../playerProfileOptions";
@@ -37,24 +38,68 @@ export function VirtualPlayerCardGrid({
   onConfirmDeleteProfile,
   onCancelDeleteProfile,
 }: VirtualPlayerCardGridProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [favoriteOnly, setFavoriteOnly] = useState(false);
-  const visibleProfiles = useMemo(
+  const [search, setSearch] = useState("");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedPersonality, setSelectedPersonality] = useState("");
+  const [sortMode, setSortMode] = useState<"recent" | "name">("recent");
+  const modelOptions = useMemo(
     () =>
-      profiles.filter((profile) => {
-        if (favoriteOnly && !profile.favorite) {
-          return false;
-        }
-
-        const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
-        if (!normalizedQuery) {
-          return true;
-        }
-
-        return searchableProfileText(profile).includes(normalizedQuery);
-      }),
-    [favoriteOnly, profiles, searchQuery],
+      Array.from(
+        new Set(profiles.map((profile) => profile.model).filter(Boolean)),
+      )
+        .toSorted((left, right) => left.localeCompare(right, "zh-Hans-CN")),
+    [profiles],
   );
+  const personalityOptions = useMemo(
+    () =>
+      PERSONALITY_OPTIONS.filter((option) =>
+        profiles.some((profile) => profile.personality_id === option.id),
+      ),
+    [profiles],
+  );
+  const filteredProfiles = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+
+    return profiles
+      .filter((profile) => {
+        const text = [
+          profile.display_name,
+          profile.short_description,
+          profile.model,
+          profile.personality_id,
+          profile.strategy_profile,
+          ...profile.tags,
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        return (
+          (!favoritesOnly || profile.favorite) &&
+          (!selectedModel || profile.model === selectedModel) &&
+          (!selectedPersonality ||
+            profile.personality_id === selectedPersonality) &&
+          (!normalizedSearch || text.includes(normalizedSearch))
+        );
+      })
+      .toSorted((left, right) => {
+        if (sortMode === "name") {
+          return left.display_name.localeCompare(
+            right.display_name,
+            "zh-Hans-CN",
+          );
+        }
+
+        return right.updated_at.localeCompare(left.updated_at);
+      });
+  }, [
+    favoritesOnly,
+    profiles,
+    search,
+    selectedModel,
+    selectedPersonality,
+    sortMode,
+  ]);
 
   return (
     <>
@@ -80,26 +125,69 @@ export function VirtualPlayerCardGrid({
           <label className="virtual-player-card-search">
             <span>搜索虚拟玩家</span>
             <TextField.Root
-              onChange={(event) => setSearchQuery(event.target.value)}
-              value={searchQuery}
+              onChange={(event) => setSearch(event.target.value)}
+              value={search}
             />
           </label>
-          <label className="virtual-player-card-favorite-filter">
-            <input
-              checked={favoriteOnly}
-              onChange={(event) => setFavoriteOnly(event.target.checked)}
-              type="checkbox"
-            />
-            <span>只看收藏</span>
+          <label className="virtual-player-card-filter">
+            <span>模型筛选</span>
+            <SelectField
+              onChange={(event) => setSelectedModel(event.target.value)}
+              value={selectedModel}
+            >
+              <option value="">全部模型</option>
+              {modelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </SelectField>
           </label>
+          <label className="virtual-player-card-filter">
+            <span>性格筛选</span>
+            <SelectField
+              onChange={(event) => setSelectedPersonality(event.target.value)}
+              value={selectedPersonality}
+            >
+              <option value="">全部性格</option>
+              {personalityOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </SelectField>
+          </label>
+          <label className="virtual-player-card-filter">
+            <span>排序方式</span>
+            <SelectField
+              onChange={(event) =>
+                setSortMode(event.target.value === "name" ? "name" : "recent")
+              }
+              value={sortMode}
+            >
+              <option value="recent">最近更新</option>
+              <option value="name">显示名称</option>
+            </SelectField>
+          </label>
+          <Button
+            aria-pressed={favoritesOnly}
+            className="virtual-player-card-favorite-filter"
+            intent={favoritesOnly ? "warning" : "default"}
+            onClick={() => setFavoritesOnly((current) => !current)}
+            size="1"
+            skin="gothic"
+            type="button"
+          >
+            只看收藏
+          </Button>
         </div>
       ) : null}
-      {profiles.length > 0 && visibleProfiles.length === 0 ? (
+      {profiles.length > 0 && filteredProfiles.length === 0 ? (
         <p className="virtual-player-library-empty">没有符合条件的虚拟玩家。</p>
       ) : null}
-      {visibleProfiles.length > 0 ? (
+      {filteredProfiles.length > 0 ? (
         <ul aria-label="虚拟玩家列表" className="virtual-player-library-grid">
-          {visibleProfiles.map((profile) => {
+          {filteredProfiles.map((profile) => {
             const isDeleteCandidate = deleteCandidateId === profile.id;
             const tags = profile.tags ?? [];
             const strategy =
@@ -223,22 +311,4 @@ export function VirtualPlayerCardGrid({
       ) : null}
     </>
   );
-}
-
-function searchableProfileText(profile: VirtualPlayerProfile) {
-  const strategy =
-    STRATEGY_OPTIONS.find((option) => option.id === profile.strategy_profile) ??
-    STRATEGY_OPTIONS[0];
-
-  return [
-    profile.display_name,
-    profile.short_description,
-    profile.model,
-    profile.strategy_profile,
-    strategy.label,
-    profile.personality_id,
-    ...(profile.tags ?? []),
-  ]
-    .join(" ")
-    .toLocaleLowerCase();
 }

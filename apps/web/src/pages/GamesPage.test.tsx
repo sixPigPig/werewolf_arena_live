@@ -96,6 +96,10 @@ function playerProfilesResponse() {
   };
 }
 
+function emptyPlayerProfilesResponse() {
+  return { profiles: [] };
+}
+
 describe("GamesPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -289,6 +293,83 @@ describe("GamesPage", () => {
     ).toBe(false);
   });
 
+  it("renders seat assignment profile cards in the game lobby", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(<GamesPage />, "/games");
+
+    const playerConfigPanel = await screen.findByRole("region", {
+      name: "席位模块",
+    });
+    expect(
+      within(playerConfigPanel).getByRole("button", {
+        name: "为 1 号座位选择 冷静的阿夜",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("links to the player library when seat assignment has no profiles", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(emptyPlayerProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(<GamesPage />, "/games");
+
+    const createLink = await screen.findByRole("link", {
+      name: "去玩家库创建",
+    });
+    expect(createLink).toHaveAttribute("href", "/players");
+    expect(
+      screen.queryByRole("button", { name: /为 1 号座位选择/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows that seat profiles are still loading separately from an empty library", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);
@@ -316,7 +397,9 @@ describe("GamesPage", () => {
     expect(
       screen.getByText("正在读取虚拟玩家资料，席位选择加载完成后可用。"),
     ).toBeInTheDocument();
-    expect(await screen.findByText("暂无虚拟玩家")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: "去玩家库创建" }),
+    ).toHaveAttribute("href", "/players");
   });
 
   it("shows when seat profiles failed to load separately from an empty library", async () => {
@@ -348,7 +431,9 @@ describe("GamesPage", () => {
         name: "无法读取虚拟玩家资料，席位选择暂时只显示随机角色。",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText("暂无虚拟玩家")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "去玩家库创建" }),
+    ).toHaveAttribute("href", "/players");
   });
 
   it("shows the selected rule details below the official rule cards", async () => {

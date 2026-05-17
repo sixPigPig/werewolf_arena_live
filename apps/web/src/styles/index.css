@@ -1308,7 +1308,8 @@ body {
   display: flex;
   min-width: 0;
   align-items: end;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  justify-content: flex-start;
   gap: 0.55rem;
   border: 1px solid rgb(134 146 158 / 24%);
   border-radius: 0.28rem;
@@ -1332,25 +1333,42 @@ body {
   width: 100%;
 }
 
-.virtual-player-card-favorite-filter {
+.virtual-player-card-filter {
   display: flex;
-  min-height: 2.5rem;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.34rem;
-  border: 1px solid rgb(232 201 130 / 24%);
-  border-radius: 0.22rem;
-  background: rgb(232 201 130 / 7%);
-  padding: 0.42rem 0.55rem;
-  color: #efd9b5;
+  min-width: min(11rem, 100%);
+  flex: 0 1 12rem;
+  flex-direction: column;
+  gap: 0.22rem;
+  color: #c7d0da;
   font-size: 0.75rem;
-  font-weight: 900;
-  white-space: nowrap;
+  font-weight: 800;
+  line-height: 1.25;
 }
 
-.virtual-player-card-favorite-filter input {
-  width: auto;
-  accent-color: #d4a958;
+.virtual-player-card-filter select {
+  width: 100%;
+  min-width: 0;
+  height: 2.5rem;
+  border-color: rgb(134 146 158 / 42%);
+  border-radius: 0.22rem;
+  background: rgb(3 8 13 / 82%);
+  color: #e8eef4;
+  font-size: 0.82rem;
+}
+
+.virtual-player-card-filter option {
+  background: #07111c;
+  color: #e8eef4;
+}
+
+.virtual-player-card-favorite-filter {
+  align-self: end;
+  border: 1px solid rgb(232 201 130 / 24%);
+  color: #efd9b5;
+}
+
+.virtual-player-card-favorite-filter[aria-pressed="true"] {
+  filter: saturate(1.1) brightness(1.06);
 }
 
 .virtual-player-library-grid {
@@ -2081,6 +2099,21 @@ body {
 }
 
 .player-config-role-empty {
+  display: flex;
+  grid-column: 1 / -1;
+  min-height: 3.2rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0;
+  border: 1px solid rgb(232 201 130 / 22%);
+  border-radius: 0.22rem;
+  background: rgb(3 8 13 / 56%);
+  padding: 0.58rem 0.62rem;
+}
+
+.player-config-role-empty-copy {
   margin: 0;
   color: #c7d0da;
   font-size: 0.86rem;
@@ -2343,8 +2376,13 @@ body {
   }
 
   .virtual-player-card-search,
+  .virtual-player-card-filter,
   .virtual-player-card-favorite-filter {
     width: 100%;
+  }
+
+  .virtual-player-card-favorite-filter {
+    align-self: stretch;
   }
 
   .virtual-player-editor {

@@ -39,6 +39,90 @@ function modelOptionsResponse() {
   };
 }
 
+function filteredProfilesResponse() {
+  const baseProfile = {
+    owner_user_id: null,
+    personality_text: "会根据局势调整发言。",
+    short_description: "适合稳定推演。",
+    background_story: "",
+    speaking_style: "",
+    catchphrases: [],
+    strategy_profile: "balanced",
+    risk_tolerance: 3,
+    bluffing_tendency: 3,
+    trust_tendency: 3,
+    leadership_tendency: 3,
+    talkativeness: 3,
+    example_messages: [],
+    appearance_id: "default",
+    avatar_prompt: "",
+    avatar_image_url: "",
+    avatar_image_mime: "",
+    created_at: "2026-05-16T00:00:00Z",
+  };
+
+  return {
+    profiles: [
+      {
+        ...baseProfile,
+        id: "profile-alpha",
+        display_name: "Alpha 阿夜",
+        model: "deepseek-chat",
+        personality_id: "cautious",
+        favorite: true,
+        tags: ["控场", "月相"],
+        updated_at: "2026-05-17T00:00:00Z",
+      },
+      {
+        ...baseProfile,
+        id: "profile-bravo",
+        display_name: "Bravo 青岚",
+        model: "MiniMax-M2.7",
+        personality_id: "aggressive",
+        favorite: false,
+        tags: ["冲锋"],
+        updated_at: "2026-05-18T00:00:00Z",
+      },
+      {
+        ...baseProfile,
+        id: "profile-charlie",
+        display_name: "Charlie 司南",
+        model: "deepseek-chat",
+        personality_id: "analytical",
+        favorite: false,
+        tags: ["复盘"],
+        updated_at: "2026-05-19T00:00:00Z",
+      },
+    ],
+  };
+}
+
+function mockPlayersPageFetch(
+  profilesResponse: ReturnType<typeof filteredProfilesResponse>,
+) {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/player-profiles")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(profilesResponse), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (url.endsWith("/api/v1/games/model-options")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(modelOptionsResponse()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -155,6 +239,111 @@ describe("PlayersPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("filters virtual player cards by display name search", async () => {
+    mockPlayersPageFetch(filteredProfilesResponse());
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      await within(playerLibrary).findByText("Alpha 阿夜"),
+    ).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("搜索虚拟玩家"), "阿夜");
+
+    expect(within(playerLibrary).getByText("Alpha 阿夜")).toBeInTheDocument();
+    expect(within(playerLibrary).queryByText("Bravo 青岚")).not.toBeInTheDocument();
+    expect(
+      within(playerLibrary).queryByText("Charlie 司南"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("filters virtual player cards by tag search", async () => {
+    mockPlayersPageFetch(filteredProfilesResponse());
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      await within(playerLibrary).findByText("Bravo 青岚"),
+    ).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("搜索虚拟玩家"), "冲锋");
+
+    expect(within(playerLibrary).queryByText("Alpha 阿夜")).not.toBeInTheDocument();
+    expect(within(playerLibrary).getByText("Bravo 青岚")).toBeInTheDocument();
+    expect(
+      within(playerLibrary).queryByText("Charlie 司南"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("narrows virtual player cards by model and personality filters", async () => {
+    mockPlayersPageFetch(filteredProfilesResponse());
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      await within(playerLibrary).findByText("Alpha 阿夜"),
+    ).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("模型筛选"), "MiniMax-M2.7");
+
+    expect(within(playerLibrary).queryByText("Alpha 阿夜")).not.toBeInTheDocument();
+    expect(within(playerLibrary).getByText("Bravo 青岚")).toBeInTheDocument();
+    expect(
+      within(playerLibrary).queryByText("Charlie 司南"),
+    ).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("模型筛选"), "");
+    await userEvent.selectOptions(screen.getByLabelText("性格筛选"), "analytical");
+
+    expect(within(playerLibrary).queryByText("Alpha 阿夜")).not.toBeInTheDocument();
+    expect(within(playerLibrary).queryByText("Bravo 青岚")).not.toBeInTheDocument();
+    expect(within(playerLibrary).getByText("Charlie 司南")).toBeInTheDocument();
+  });
+
+  it("shows only favorite virtual player cards when favorite filter is enabled", async () => {
+    mockPlayersPageFetch(filteredProfilesResponse());
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      await within(playerLibrary).findByText("Alpha 阿夜"),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "只看收藏" }));
+
+    expect(within(playerLibrary).getByText("Alpha 阿夜")).toBeInTheDocument();
+    expect(within(playerLibrary).queryByText("Bravo 青岚")).not.toBeInTheDocument();
+    expect(
+      within(playerLibrary).queryByText("Charlie 司南"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("sorts virtual player cards by recent update and display name", async () => {
+    mockPlayersPageFetch(filteredProfilesResponse());
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      await within(playerLibrary).findByText("Alpha 阿夜"),
+    ).toBeInTheDocument();
+
+    const recentCards = within(
+      within(playerLibrary).getByRole("list", { name: "虚拟玩家列表" }),
+    ).getAllByRole("listitem");
+    expect(recentCards[0]).toHaveTextContent("Charlie 司南");
+    expect(recentCards[1]).toHaveTextContent("Bravo 青岚");
+    expect(recentCards[2]).toHaveTextContent("Alpha 阿夜");
+
+    await userEvent.selectOptions(screen.getByLabelText("排序方式"), "name");
+
+    const nameCards = within(
+      within(playerLibrary).getByRole("list", { name: "虚拟玩家列表" }),
+    ).getAllByRole("listitem");
+    expect(nameCards[0]).toHaveTextContent("Alpha 阿夜");
+    expect(nameCards[1]).toHaveTextContent("Bravo 青岚");
+    expect(nameCards[2]).toHaveTextContent("Charlie 司南");
+  });
+
   it("manages virtual player profiles from the player workbench", async () => {
     let avatarUploadCount = 0;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
@@ -227,8 +416,11 @@ describe("PlayersPage", () => {
 
     const playerLibrary = await screen.findByTestId("virtual-player-library");
     expect(await within(playerLibrary).findByText("冷静的阿夜")).toBeInTheDocument();
-    expect(within(playerLibrary).getByText("MiniMax-M2.7")).toBeInTheDocument();
-    expect(within(playerLibrary).getByText("谨慎")).toBeInTheDocument();
+    const playerList = within(playerLibrary).getByRole("list", {
+      name: "虚拟玩家列表",
+    });
+    expect(within(playerList).getByText("MiniMax-M2.7")).toBeInTheDocument();
+    expect(within(playerList).getByText("谨慎")).toBeInTheDocument();
     expect(
       within(playerLibrary).getByRole("img", { name: "冷静的阿夜 人物形象" }),
     ).toHaveAttribute("src", "/api/v1/player-profiles/avatar/profile-1.png");

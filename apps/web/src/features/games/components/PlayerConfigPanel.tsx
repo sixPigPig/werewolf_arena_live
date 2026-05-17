@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import { Button, Text, TextField } from "../../../components/ui";
 
@@ -160,7 +161,12 @@ export function PlayerConfigPanel({
               );
             })}
             {profiles.length === 0 ? (
-              <p className="player-config-role-empty">暂无虚拟玩家</p>
+              <div className="player-config-role-empty">
+                <p className="player-config-role-empty-copy">暂无虚拟玩家</p>
+                <Button asChild intent="primary" size="1" skin="gothic">
+                  <Link to="/players">去玩家库创建</Link>
+                </Button>
+              </div>
             ) : null}
           </div>
           <div className="player-config-role-controls">
