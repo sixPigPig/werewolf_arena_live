@@ -368,3 +368,49 @@ def test_profiles_fall_back_to_local_file_when_database_is_unavailable(
 
     assert list_response.status_code == 200
     assert list_response.json()["profiles"][0]["id"] == created["id"]
+
+
+def test_create_profile_persists_rich_character_settings() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "夜谈控场",
+            "model": "deepseek-v4-flash",
+            "short_description": "沉稳控场，喜欢先盘逻辑再给站边。",
+            "background_story": "长期观察圆桌局的复盘型玩家。",
+            "speaking_style": "短句推进，先列证据，再给结论。",
+            "catchphrases": ["我先盘票型", "这里不急着站死"],
+            "strategy_profile": "logic_leader",
+            "risk_tolerance": 2,
+            "bluffing_tendency": 2,
+            "trust_tendency": 3,
+            "leadership_tendency": 5,
+            "talkativeness": 4,
+            "example_messages": ["我认为 3 号这一轮的视角不完整，先听后置位补充。"],
+            "favorite": True,
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["short_description"] == "沉稳控场，喜欢先盘逻辑再给站边。"
+    assert payload["catchphrases"] == ["我先盘票型", "这里不急着站死"]
+    assert payload["strategy_profile"] == "logic_leader"
+    assert payload["risk_tolerance"] == 2
+    assert payload["leadership_tendency"] == 5
+    assert payload["example_messages"] == ["我认为 3 号这一轮的视角不完整，先听后置位补充。"]
+    assert payload["favorite"] is True
+
+
+def test_create_profile_rejects_invalid_strategy_slider_values() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "越界玩家",
+            "model": "deepseek-v4-flash",
+            "strategy_profile": "unknown",
+            "risk_tolerance": 6,
+        },
+    )
+
+    assert response.status_code == 422

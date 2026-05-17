@@ -23,6 +23,26 @@ class VirtualPlayerProfile(Base):
     avatar_image_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
     avatar_image_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
     avatar_image_mime: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    short_description: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    background_story: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    speaking_style: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    catchphrases: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON),
+        nullable=False,
+        default=list,
+    )
+    strategy_profile: Mapped[str] = mapped_column(String(40), nullable=False, default="balanced")
+    risk_tolerance: Mapped[int] = mapped_column(nullable=False, default=3)
+    bluffing_tendency: Mapped[int] = mapped_column(nullable=False, default=3)
+    trust_tendency: Mapped[int] = mapped_column(nullable=False, default=3)
+    leadership_tendency: Mapped[int] = mapped_column(nullable=False, default=3)
+    talkativeness: Mapped[int] = mapped_column(nullable=False, default=3)
+    example_messages: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON),
+        nullable=False,
+        default=list,
+    )
+    favorite: Mapped[bool] = mapped_column(nullable=False, default=False)
     tags: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JSON), nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

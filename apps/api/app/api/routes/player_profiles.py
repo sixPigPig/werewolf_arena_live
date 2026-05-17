@@ -25,6 +25,7 @@ from app.werewolf.player_presets import (
     default_personality_text,
     is_valid_appearance,
     is_valid_personality,
+    is_valid_strategy,
 )
 
 
@@ -53,6 +54,22 @@ def _normalize_tags(tags: list[str]) -> list[str]:
     return normalized
 
 
+def _normalize_limited_strings(value: list[str], *, max_items: int, max_length: int) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        trimmed = str(item).strip()
+        if not trimmed or trimmed in seen:
+            continue
+        if len(trimmed) > max_length:
+            raise ValueError(f"Items must be {max_length} characters or fewer")
+        normalized.append(trimmed)
+        seen.add(trimmed)
+    if len(normalized) > max_items:
+        raise ValueError(f"At most {max_items} items are allowed")
+    return normalized
+
+
 def _validate_presets(personality_id: str, appearance_id: str) -> None:
     if not is_valid_personality(personality_id):
         raise HTTPException(status_code=422, detail=f"Unknown personality_id: {personality_id}")
@@ -69,6 +86,18 @@ class PlayerProfileBase(BaseModel):
     avatar_prompt: str = Field(default="", max_length=1000)
     avatar_image_url: str = Field(default="", max_length=1000)
     avatar_image_mime: str = Field(default="", max_length=80)
+    short_description: str = Field(default="", max_length=160)
+    background_story: str = ""
+    speaking_style: str = ""
+    catchphrases: list[str] = Field(default_factory=list)
+    strategy_profile: str = Field(default="balanced", min_length=1, max_length=40)
+    risk_tolerance: int = Field(default=3, ge=1, le=5)
+    bluffing_tendency: int = Field(default=3, ge=1, le=5)
+    trust_tendency: int = Field(default=3, ge=1, le=5)
+    leadership_tendency: int = Field(default=3, ge=1, le=5)
+    talkativeness: int = Field(default=3, ge=1, le=5)
+    example_messages: list[str] = Field(default_factory=list)
+    favorite: bool = False
     tags: list[str] = Field(default_factory=list)
 
     @field_validator(
@@ -80,12 +109,37 @@ class PlayerProfileBase(BaseModel):
         "avatar_prompt",
         "avatar_image_url",
         "avatar_image_mime",
+        "short_description",
+        "background_story",
+        "speaking_style",
+        "strategy_profile",
         mode="before",
     )
     @classmethod
     def trim_strings(cls, value: str) -> str:
         if isinstance(value, str):
             return _trim_string(value)
+        return value
+
+    @field_validator("strategy_profile")
+    @classmethod
+    def validate_strategy_profile(cls, value: str) -> str:
+        if not is_valid_strategy(value):
+            raise ValueError(f"Unknown strategy_profile: {value}")
+        return value
+
+    @field_validator("catchphrases", mode="before")
+    @classmethod
+    def normalize_catchphrases(cls, value: object) -> object:
+        if isinstance(value, list):
+            return _normalize_limited_strings(value, max_items=6, max_length=80)
+        return value
+
+    @field_validator("example_messages", mode="before")
+    @classmethod
+    def normalize_example_messages(cls, value: object) -> object:
+        if isinstance(value, list):
+            return _normalize_limited_strings(value, max_items=5, max_length=240)
         return value
 
     @field_validator("tags")
@@ -107,6 +161,18 @@ class UpdatePlayerProfileRequest(BaseModel):
     avatar_prompt: str | None = Field(default=None, max_length=1000)
     avatar_image_url: str | None = Field(default=None, max_length=1000)
     avatar_image_mime: str | None = Field(default=None, max_length=80)
+    short_description: str | None = Field(default=None, max_length=160)
+    background_story: str | None = None
+    speaking_style: str | None = None
+    catchphrases: list[str] | None = None
+    strategy_profile: str | None = Field(default=None, min_length=1, max_length=40)
+    risk_tolerance: int | None = Field(default=None, ge=1, le=5)
+    bluffing_tendency: int | None = Field(default=None, ge=1, le=5)
+    trust_tendency: int | None = Field(default=None, ge=1, le=5)
+    leadership_tendency: int | None = Field(default=None, ge=1, le=5)
+    talkativeness: int | None = Field(default=None, ge=1, le=5)
+    example_messages: list[str] | None = None
+    favorite: bool | None = None
     tags: list[str] | None = None
 
     @model_validator(mode="before")
@@ -125,6 +191,18 @@ class UpdatePlayerProfileRequest(BaseModel):
                 "avatar_prompt",
                 "avatar_image_url",
                 "avatar_image_mime",
+                "short_description",
+                "background_story",
+                "speaking_style",
+                "catchphrases",
+                "strategy_profile",
+                "risk_tolerance",
+                "bluffing_tendency",
+                "trust_tendency",
+                "leadership_tendency",
+                "talkativeness",
+                "example_messages",
+                "favorite",
                 "tags",
             )
             if field_name in data and data[field_name] is None
@@ -142,12 +220,37 @@ class UpdatePlayerProfileRequest(BaseModel):
         "avatar_prompt",
         "avatar_image_url",
         "avatar_image_mime",
+        "short_description",
+        "background_story",
+        "speaking_style",
+        "strategy_profile",
         mode="before",
     )
     @classmethod
     def trim_strings(cls, value: str | None) -> str | None:
         if isinstance(value, str):
             return _trim_string(value)
+        return value
+
+    @field_validator("strategy_profile")
+    @classmethod
+    def validate_strategy_profile(cls, value: str | None) -> str | None:
+        if value is not None and not is_valid_strategy(value):
+            raise ValueError(f"Unknown strategy_profile: {value}")
+        return value
+
+    @field_validator("catchphrases", mode="before")
+    @classmethod
+    def normalize_catchphrases(cls, value: object) -> object:
+        if isinstance(value, list):
+            return _normalize_limited_strings(value, max_items=6, max_length=80)
+        return value
+
+    @field_validator("example_messages", mode="before")
+    @classmethod
+    def normalize_example_messages(cls, value: object) -> object:
+        if isinstance(value, list):
+            return _normalize_limited_strings(value, max_items=5, max_length=240)
         return value
 
     @field_validator("tags")
@@ -171,6 +274,18 @@ class PlayerProfileResponse(BaseModel):
     avatar_prompt: str
     avatar_image_url: str
     avatar_image_mime: str
+    short_description: str
+    background_story: str
+    speaking_style: str
+    catchphrases: list[str]
+    strategy_profile: str
+    risk_tolerance: int
+    bluffing_tendency: int
+    trust_tendency: int
+    leadership_tendency: int
+    talkativeness: int
+    example_messages: list[str]
+    favorite: bool
     tags: list[str]
     created_at: datetime
     updated_at: datetime
@@ -265,6 +380,18 @@ def create_player_profile(
         avatar_image_url=request.avatar_image_url,
         avatar_image_path="",
         avatar_image_mime=request.avatar_image_mime,
+        short_description=request.short_description,
+        background_story=request.background_story,
+        speaking_style=request.speaking_style,
+        catchphrases=request.catchphrases,
+        strategy_profile=request.strategy_profile,
+        risk_tolerance=request.risk_tolerance,
+        bluffing_tendency=request.bluffing_tendency,
+        trust_tendency=request.trust_tendency,
+        leadership_tendency=request.leadership_tendency,
+        talkativeness=request.talkativeness,
+        example_messages=request.example_messages,
+        favorite=request.favorite,
         tags=request.tags,
     )
     try:
@@ -283,6 +410,18 @@ def create_player_profile(
             avatar_prompt=request.avatar_prompt,
             avatar_image_url=request.avatar_image_url,
             avatar_image_mime=request.avatar_image_mime,
+            short_description=request.short_description,
+            background_story=request.background_story,
+            speaking_style=request.speaking_style,
+            catchphrases=request.catchphrases,
+            strategy_profile=request.strategy_profile,
+            risk_tolerance=request.risk_tolerance,
+            bluffing_tendency=request.bluffing_tendency,
+            trust_tendency=request.trust_tendency,
+            leadership_tendency=request.leadership_tendency,
+            talkativeness=request.talkativeness,
+            example_messages=request.example_messages,
+            favorite=request.favorite,
             tags=request.tags,
         )
 

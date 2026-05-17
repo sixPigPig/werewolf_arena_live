@@ -44,6 +44,18 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "avatar_image_url",
         "avatar_image_path",
         "avatar_image_mime",
+        "short_description",
+        "background_story",
+        "speaking_style",
+        "catchphrases",
+        "strategy_profile",
+        "risk_tolerance",
+        "bluffing_tendency",
+        "trust_tendency",
+        "leadership_tendency",
+        "talkativeness",
+        "example_messages",
+        "favorite",
         "tags",
         "created_at",
         "updated_at",
@@ -89,3 +101,24 @@ def test_virtual_player_profile_tag_append_is_persisted() -> None:
 
     assert saved_profile is not None
     assert saved_profile.tags == ["控场"]
+
+
+def test_virtual_player_profile_has_rich_character_columns() -> None:
+    table = VirtualPlayerProfile.__table__
+
+    for column_name in (
+        "short_description",
+        "background_story",
+        "speaking_style",
+        "catchphrases",
+        "strategy_profile",
+        "risk_tolerance",
+        "bluffing_tendency",
+        "trust_tendency",
+        "leadership_tendency",
+        "talkativeness",
+        "example_messages",
+        "favorite",
+    ):
+        assert column_name in table.c
+        assert table.c[column_name].nullable is False
