@@ -22,9 +22,17 @@ const STRATEGY_PROMPT_TEXT: Record<string, string> = {
   cautious_observer: "谨慎慢热，先收集信息，再给出明确判断。",
 };
 
+const DEFAULT_PERSONALITY_TEXT: Record<string, string> = {
+  balanced: "稳健、根据证据推进，不轻易极端站边。",
+  aggressive: "进攻性强，主动施压、抓矛盾、推动投票。",
+  cautious: "谨慎保守，优先收集信息，避免过早暴露关键判断。",
+  deceptive: "善于混淆视听，适合狼人策略，但不改变阵营目标。",
+  analytical: "重视票型、发言顺序和行为一致性。",
+};
+
 export function composeProfilePromptPreview(
   profile: Partial<PlayerProfileRequest>,
-  basePersonality = profile.personality_text ?? "",
+  basePersonality = personalityPromptText(profile),
 ) {
   const sections: string[] = [];
   const baseText = normalizeText(basePersonality);
@@ -87,6 +95,19 @@ export function normalizeTendency(value: unknown) {
 
 function strategyPromptText(strategyProfile = "balanced") {
   return STRATEGY_PROMPT_TEXT[strategyProfile] ?? STRATEGY_PROMPT_TEXT.balanced;
+}
+
+function personalityPromptText(profile: Partial<PlayerProfileRequest>) {
+  const customText = normalizeText(profile.personality_text);
+
+  if (customText) {
+    return customText;
+  }
+
+  const personalityId = profile.personality_id ?? "balanced";
+  return (
+    DEFAULT_PERSONALITY_TEXT[personalityId] ?? DEFAULT_PERSONALITY_TEXT.balanced
+  );
 }
 
 function appendTextSection(

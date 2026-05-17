@@ -88,7 +88,12 @@ export const VirtualPlayerEditor = forwardRef<
   };
 
   return (
-    <form className="virtual-player-editor" ref={ref} onSubmit={handleSubmit}>
+    <form
+      className="virtual-player-editor"
+      noValidate
+      ref={ref}
+      onSubmit={handleSubmit}
+    >
       <div className="virtual-player-editor-main">
         <section
           aria-labelledby="virtual-player-basic-section"

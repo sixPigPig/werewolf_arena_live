@@ -158,6 +158,136 @@ describe("VirtualPlayerLibrary", () => {
     );
   });
 
+  it("shows backend default personality text in the prompt preview when personality text is blank", async () => {
+    const user = userEvent.setup();
+    renderLibrary();
+
+    await user.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await user.selectOptions(screen.getByLabelText("性格"), "cautious");
+
+    expect(
+      screen.getByText(/谨慎保守，优先收集信息，避免过早暴露关键判断。/),
+    ).toBeInTheDocument();
+  });
+
+  it("normalizes empty and out-of-range tendency values before saving", async () => {
+    const user = userEvent.setup();
+    const onCreateProfile = vi.fn().mockResolvedValue({});
+    renderLibrary({ onCreateProfile });
+
+    await user.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await user.clear(screen.getByLabelText("冒险倾向"));
+    await user.clear(screen.getByLabelText("领导倾向"));
+    await user.type(screen.getByLabelText("领导倾向"), "9");
+    await user.click(screen.getByRole("button", { name: "保存虚拟玩家" }));
+
+    expect(onCreateProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        risk_tolerance: 3,
+        leadership_tendency: 5,
+      }),
+    );
+  });
+
+  it("copies a profile with rich virtual player fields", async () => {
+    const user = userEvent.setup();
+    const onCreateProfile = vi.fn().mockResolvedValue({});
+    renderLibrary({
+      onCreateProfile,
+      profiles: [
+        profile({
+          id: "profile-rich-copy",
+          display_name: "复制源阿夜",
+          short_description: "社交控场",
+          background_story: "长期观察关系线。",
+          speaking_style: "先听姿态，再拆票型。",
+          catchphrases: ["我先看关系线", "这票不自然"],
+          strategy_profile: "social_reader",
+          risk_tolerance: 2,
+          bluffing_tendency: 4,
+          trust_tendency: 5,
+          leadership_tendency: 3,
+          talkativeness: 4,
+          example_messages: ["这轮我更看重 2 和 5 的互动。"],
+          favorite: true,
+        }),
+      ],
+    });
+
+    await user.click(screen.getByRole("button", { name: "复制 复制源阿夜" }));
+
+    await waitFor(() =>
+      expect(onCreateProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          display_name: "复制源阿夜 副本",
+          short_description: "社交控场",
+          background_story: "长期观察关系线。",
+          speaking_style: "先听姿态，再拆票型。",
+          catchphrases: ["我先看关系线", "这票不自然"],
+          strategy_profile: "social_reader",
+          risk_tolerance: 2,
+          bluffing_tendency: 4,
+          trust_tendency: 5,
+          leadership_tendency: 3,
+          talkativeness: 4,
+          example_messages: ["这轮我更看重 2 和 5 的互动。"],
+          favorite: true,
+        }),
+      ),
+    );
+  });
+
+  it("updates an edited profile with rich virtual player fields", async () => {
+    const user = userEvent.setup();
+    const onUpdateProfile = vi.fn().mockResolvedValue({});
+    renderLibrary({
+      onUpdateProfile,
+      profiles: [
+        profile({
+          id: "profile-rich-edit",
+          display_name: "编辑源阿夜",
+          short_description: "逻辑站边",
+          background_story: "复盘过多场高阶局。",
+          speaking_style: "旧发言风格",
+          catchphrases: ["先拆视角", "票型有问题"],
+          strategy_profile: "logic_leader",
+          risk_tolerance: 4,
+          bluffing_tendency: 2,
+          trust_tendency: 3,
+          leadership_tendency: 5,
+          talkativeness: 4,
+          example_messages: ["我认为 3 号视角漏了一层。"],
+          favorite: true,
+        }),
+      ],
+    });
+
+    await user.click(screen.getByRole("button", { name: "编辑 编辑源阿夜" }));
+    await user.clear(screen.getByLabelText("发言风格"));
+    await user.type(screen.getByLabelText("发言风格"), "更新后先列证据再站边。");
+    await user.click(screen.getByRole("button", { name: "保存虚拟玩家" }));
+
+    await waitFor(() =>
+      expect(onUpdateProfile).toHaveBeenCalledWith(
+        "profile-rich-edit",
+        expect.objectContaining({
+          short_description: "逻辑站边",
+          background_story: "复盘过多场高阶局。",
+          speaking_style: "更新后先列证据再站边。",
+          catchphrases: ["先拆视角", "票型有问题"],
+          strategy_profile: "logic_leader",
+          risk_tolerance: 4,
+          bluffing_tendency: 2,
+          trust_tendency: 3,
+          leadership_tendency: 5,
+          talkativeness: 4,
+          example_messages: ["我认为 3 号视角漏了一层。"],
+          favorite: true,
+        }),
+      ),
+    );
+  });
+
   it("filters virtual player cards with compact search", async () => {
     const user = userEvent.setup();
     renderLibrary({
