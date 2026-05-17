@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AppTheme } from "../app/AppTheme";
+import { routes } from "../routes/definitions";
 import { PlayersPage } from "./PlayersPage";
 
 function playerProfilesResponse() {
@@ -51,6 +53,21 @@ function renderPage() {
   );
 }
 
+function renderRoute(path: string) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const router = createMemoryRouter(routes, { initialEntries: [path] });
+
+  render(
+    <AppTheme>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </AppTheme>,
+  );
+}
+
 describe("PlayersPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -61,6 +78,39 @@ describe("PlayersPage", () => {
 
     expect(
       screen.getByRole("heading", { name: "虚拟玩家工作台" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "返回大厅" }),
+    ).toHaveAttribute("href", "/games");
+  });
+
+  it("routes /players to the dedicated virtual player workbench", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ profiles: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/model-options")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ models: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+
+    renderRoute("/players");
+
+    expect(
+      await screen.findByRole("heading", { name: "虚拟玩家工作台" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "返回大厅" }),
