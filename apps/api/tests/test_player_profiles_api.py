@@ -520,15 +520,55 @@ def test_create_profile_normalizes_rich_character_lists() -> None:
     assert payload["example_messages"] == ["先听后置位补充。", "票型先记下来。"]
 
 
-def test_create_profile_rejects_invalid_strategy_slider_values() -> None:
+def test_create_profile_rejects_invalid_strategy_profile() -> None:
     response = client.post(
         "/api/v1/player-profiles",
         json={
             "display_name": "越界玩家",
             "model": "deepseek-v4-flash",
             "strategy_profile": "unknown",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_profile_rejects_invalid_numeric_slider_value() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "滑杆越界玩家",
+            "model": "deepseek-v4-flash",
+            "strategy_profile": "balanced",
             "risk_tolerance": 6,
         },
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_profile_rejects_too_long_background_story() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "背景过长玩家",
+            "model": "deepseek-v4-flash",
+            "background_story": "啊" * 1201,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_profile_rejects_too_long_speaking_style() -> None:
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "发言风格过长玩家", "model": "deepseek-v4-flash"},
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={"speaking_style": "啊" * 801},
     )
 
     assert response.status_code == 422

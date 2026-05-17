@@ -87,8 +87,8 @@ class PlayerProfileBase(BaseModel):
     avatar_image_url: str = Field(default="", max_length=1000)
     avatar_image_mime: str = Field(default="", max_length=80)
     short_description: str = Field(default="", max_length=160)
-    background_story: str = ""
-    speaking_style: str = ""
+    background_story: str = Field(default="", max_length=1200)
+    speaking_style: str = Field(default="", max_length=800)
     catchphrases: list[str] = Field(default_factory=list)
     strategy_profile: str = Field(default="balanced", min_length=1, max_length=40)
     risk_tolerance: int = Field(default=3, ge=1, le=5)
@@ -162,8 +162,8 @@ class UpdatePlayerProfileRequest(BaseModel):
     avatar_image_url: str | None = Field(default=None, max_length=1000)
     avatar_image_mime: str | None = Field(default=None, max_length=80)
     short_description: str | None = Field(default=None, max_length=160)
-    background_story: str | None = None
-    speaking_style: str | None = None
+    background_story: str | None = Field(default=None, max_length=1200)
+    speaking_style: str | None = Field(default=None, max_length=800)
     catchphrases: list[str] | None = None
     strategy_profile: str | None = Field(default=None, min_length=1, max_length=40)
     risk_tolerance: int | None = Field(default=None, ge=1, le=5)
