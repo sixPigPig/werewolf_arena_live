@@ -561,6 +561,7 @@ def test_game_run_player_config_composes_rich_profile_prompt() -> None:
     assert response.status_code == 201
     config = response.json()["player_configs"][0]
     assert config["name"] == "控场样本"
+    assert "先找矛盾，再给站边。" in config["personality"]
     assert "逻辑控场玩家" in config["personality"]
     assert "我先拆一下视角" in config["personality"]
     assert "领导倾向: 5/5" in config["personality"]
