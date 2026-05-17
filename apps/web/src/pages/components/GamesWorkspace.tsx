@@ -38,7 +38,10 @@ export function GamesWorkspace({ createFormRef }: GamesWorkspaceProps) {
         </p>
       ) : null}
       <div ref={createFormRef}>
-        <CreateGameRunForm profiles={profiles} />
+        <CreateGameRunForm
+          isProfileListLoaded={playerProfilesQuery.isSuccess}
+          profiles={profiles}
+        />
       </div>
     </main>
   );

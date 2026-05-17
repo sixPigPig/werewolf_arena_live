@@ -314,10 +314,37 @@ describe("VirtualPlayerLibrary", () => {
     expect(screen.getByText("逻辑阿夜")).toBeInTheDocument();
     expect(screen.getByText("社交月白")).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("搜索虚拟玩家"), "logic_leader");
+    await user.type(screen.getByLabelText("搜索虚拟玩家"), "逻辑带队");
 
     expect(screen.getByText("逻辑阿夜")).toBeInTheDocument();
     expect(screen.queryByText("社交月白")).not.toBeInTheDocument();
+  });
+
+  it("sorts recent virtual player cards by parsed timestamps with missing dates last", () => {
+    renderLibrary({
+      profiles: [
+        profile({
+          id: "profile-missing-date",
+          display_name: "无日期阿夜",
+          updated_at: undefined as unknown as string,
+        }),
+        profile({
+          id: "profile-early-offset",
+          display_name: "早场月白",
+          updated_at: "2026-05-18T01:00:00+08:00",
+        }),
+        profile({
+          id: "profile-late-utc",
+          display_name: "晚场司南",
+          updated_at: "2026-05-17T20:00:00Z",
+        }),
+      ],
+    });
+
+    const cards = screen.getAllByRole("listitem");
+    expect(cards[0]).toHaveTextContent("晚场司南");
+    expect(cards[1]).toHaveTextContent("早场月白");
+    expect(cards[2]).toHaveTextContent("无日期阿夜");
   });
 
   it("filters virtual player cards to favorites only", async () => {
@@ -337,8 +364,12 @@ describe("VirtualPlayerLibrary", () => {
       ],
     });
 
-    await user.click(screen.getByRole("button", { name: "只看收藏" }));
+    const favoritesButton = screen.getByRole("button", { name: "只看收藏" });
+    expect(favoritesButton).toHaveAttribute("aria-pressed", "false");
 
+    await user.click(favoritesButton);
+
+    expect(favoritesButton).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("收藏阿夜")).toBeInTheDocument();
     expect(screen.queryByText("普通月白")).not.toBeInTheDocument();
   });

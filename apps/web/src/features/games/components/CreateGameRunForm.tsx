@@ -24,10 +24,14 @@ import type {
 } from "../types";
 
 type CreateGameRunFormProps = {
+  isProfileListLoaded?: boolean;
   profiles?: VirtualPlayerProfile[];
 };
 
-export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
+export function CreateGameRunForm({
+  isProfileListLoaded = true,
+  profiles = [],
+}: CreateGameRunFormProps) {
   const navigate = useNavigate();
   const [selectedRuleSetId, setSelectedRuleSetId] = useState("classic_8");
   const [seed, setSeed] = useState("");
@@ -247,6 +251,7 @@ export function CreateGameRunForm({ profiles = [] }: CreateGameRunFormProps) {
                 <SelectedRuleDetails rule={selectedRuleSet} />
                 <PlayerConfigPanel
                   configs={visiblePlayerConfigs}
+                  isProfileListLoaded={isProfileListLoaded}
                   onChange={setPlayerConfigs}
                   playerCount={selectedRuleSet.player_count}
                   profiles={profiles}

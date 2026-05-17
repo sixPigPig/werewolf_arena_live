@@ -9,6 +9,7 @@ import type { PlayerConfig, VirtualPlayerProfile } from "../types";
 type PlayerConfigPanelProps = {
   playerCount: number;
   profiles: VirtualPlayerProfile[];
+  isProfileListLoaded?: boolean;
   configs: PlayerConfig[];
   onChange: (configs: PlayerConfig[]) => void;
 };
@@ -16,6 +17,7 @@ type PlayerConfigPanelProps = {
 export function PlayerConfigPanel({
   playerCount,
   profiles,
+  isProfileListLoaded = true,
   configs,
   onChange,
 }: PlayerConfigPanelProps) {
@@ -160,7 +162,7 @@ export function PlayerConfigPanel({
                 </button>
               );
             })}
-            {profiles.length === 0 ? (
+            {isProfileListLoaded && profiles.length === 0 ? (
               <div className="player-config-role-empty">
                 <p className="player-config-role-empty-copy">暂无虚拟玩家</p>
                 <Button asChild intent="primary" size="1" skin="gothic">

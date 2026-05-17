@@ -398,8 +398,11 @@ describe("GamesPage", () => {
       screen.getByText("正在读取虚拟玩家资料，席位选择加载完成后可用。"),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("link", { name: "去玩家库创建" }),
-    ).toHaveAttribute("href", "/players");
+      await screen.findByRole("region", { name: "席位模块" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "去玩家库创建" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows when seat profiles failed to load separately from an empty library", async () => {
@@ -432,8 +435,8 @@ describe("GamesPage", () => {
       }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "去玩家库创建" }),
-    ).toHaveAttribute("href", "/players");
+      screen.queryByRole("link", { name: "去玩家库创建" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the selected rule details below the official rule cards", async () => {

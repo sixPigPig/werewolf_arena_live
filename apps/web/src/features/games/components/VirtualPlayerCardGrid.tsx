@@ -63,12 +63,18 @@ export function VirtualPlayerCardGrid({
 
     return profiles
       .filter((profile) => {
+        const strategy =
+          STRATEGY_OPTIONS.find(
+            (option) => option.id === profile.strategy_profile,
+          ) ?? STRATEGY_OPTIONS[0];
         const text = [
           profile.display_name,
           profile.short_description,
           profile.model,
           profile.personality_id,
           profile.strategy_profile,
+          strategy.label,
+          strategy.description,
           ...profile.tags,
         ]
           .join(" ")
@@ -90,7 +96,29 @@ export function VirtualPlayerCardGrid({
           );
         }
 
-        return right.updated_at.localeCompare(left.updated_at);
+        const leftTime = parseUpdatedAt(left.updated_at);
+        const rightTime = parseUpdatedAt(right.updated_at);
+
+        if (leftTime === null && rightTime === null) {
+          return left.display_name.localeCompare(
+            right.display_name,
+            "zh-Hans-CN",
+          );
+        }
+        if (leftTime === null) {
+          return 1;
+        }
+        if (rightTime === null) {
+          return -1;
+        }
+        if (leftTime !== rightTime) {
+          return rightTime - leftTime;
+        }
+
+        return left.display_name.localeCompare(
+          right.display_name,
+          "zh-Hans-CN",
+        );
       });
   }, [
     favoritesOnly,
@@ -311,4 +339,14 @@ export function VirtualPlayerCardGrid({
       ) : null}
     </>
   );
+}
+
+function parseUpdatedAt(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const timestamp = Date.parse(value);
+
+  return Number.isFinite(timestamp) ? timestamp : null;
 }
