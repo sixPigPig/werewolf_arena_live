@@ -4,11 +4,48 @@ import { describe, expect, it, vi } from "vitest";
 
 import { VirtualPlayerLibrary } from "./VirtualPlayerLibrary";
 import { SYSTEM_PLAYER_AVATARS } from "../systemPlayerAvatars";
-import type { ModelOption, PlayerProfileRequest } from "../types";
+import type {
+  ModelOption,
+  PlayerProfileRequest,
+  VirtualPlayerProfile,
+} from "../types";
 
 const modelOptions: ModelOption[] = [
   { id: "deepseek-chat", label: "DeepSeek · deepseek-chat" },
 ];
+
+function profile(
+  overrides: Partial<VirtualPlayerProfile>,
+): VirtualPlayerProfile {
+  return {
+    id: "profile-1",
+    owner_user_id: null,
+    display_name: "冷静的阿夜",
+    model: "deepseek-chat",
+    personality_id: "cautious",
+    personality_text: "谨慎观察局势。",
+    short_description: "逻辑控场玩家",
+    background_story: "",
+    speaking_style: "",
+    catchphrases: [],
+    strategy_profile: "logic_leader",
+    risk_tolerance: 3,
+    bluffing_tendency: 3,
+    trust_tendency: 3,
+    leadership_tendency: 3,
+    talkativeness: 3,
+    example_messages: [],
+    favorite: false,
+    appearance_id: "default",
+    avatar_prompt: "",
+    avatar_image_url: "",
+    avatar_image_mime: "",
+    tags: [],
+    created_at: "2026-05-16T00:00:00Z",
+    updated_at: "2026-05-16T00:00:00Z",
+    ...overrides,
+  };
+}
 
 function renderLibrary(
   overrides: Partial<Parameters<typeof VirtualPlayerLibrary>[0]> = {},
@@ -119,6 +156,61 @@ describe("VirtualPlayerLibrary", () => {
         example_messages: ["我认为 3 号视角漏了一层。"],
       }),
     );
+  });
+
+  it("filters virtual player cards with compact search", async () => {
+    const user = userEvent.setup();
+    renderLibrary({
+      profiles: [
+        profile({
+          id: "profile-logic",
+          display_name: "逻辑阿夜",
+          short_description: "票型复盘控场",
+          strategy_profile: "logic_leader",
+          tags: ["控场"],
+        }),
+        profile({
+          id: "profile-social",
+          display_name: "社交月白",
+          model: "MiniMax-M2.7",
+          personality_id: "balanced",
+          short_description: "情绪阅读玩家",
+          strategy_profile: "social_reader",
+          tags: ["关系线"],
+        }),
+      ],
+    });
+
+    expect(screen.getByText("逻辑阿夜")).toBeInTheDocument();
+    expect(screen.getByText("社交月白")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("搜索虚拟玩家"), "logic_leader");
+
+    expect(screen.getByText("逻辑阿夜")).toBeInTheDocument();
+    expect(screen.queryByText("社交月白")).not.toBeInTheDocument();
+  });
+
+  it("filters virtual player cards to favorites only", async () => {
+    const user = userEvent.setup();
+    renderLibrary({
+      profiles: [
+        profile({
+          id: "profile-favorite",
+          display_name: "收藏阿夜",
+          favorite: true,
+        }),
+        profile({
+          id: "profile-normal",
+          display_name: "普通月白",
+          favorite: false,
+        }),
+      ],
+    });
+
+    await user.click(screen.getByLabelText("只看收藏"));
+
+    expect(screen.getByText("收藏阿夜")).toBeInTheDocument();
+    expect(screen.queryByText("普通月白")).not.toBeInTheDocument();
   });
 
   it("allows choosing a different system avatar", async () => {

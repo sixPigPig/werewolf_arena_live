@@ -1304,6 +1304,55 @@ body {
   color: #fca5a5;
 }
 
+.virtual-player-card-grid-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.55rem;
+  border: 1px solid rgb(134 146 158 / 24%);
+  border-radius: 0.28rem;
+  background: rgb(2 7 12 / 34%);
+  padding: 0.48rem;
+}
+
+.virtual-player-card-search {
+  display: flex;
+  min-width: min(24rem, 100%);
+  flex: 1 1 22rem;
+  flex-direction: column;
+  gap: 0.22rem;
+  color: #c7d0da;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.virtual-player-card-search input {
+  width: 100%;
+}
+
+.virtual-player-card-favorite-filter {
+  display: flex;
+  min-height: 2.5rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.34rem;
+  border: 1px solid rgb(232 201 130 / 24%);
+  border-radius: 0.22rem;
+  background: rgb(232 201 130 / 7%);
+  padding: 0.42rem 0.55rem;
+  color: #efd9b5;
+  font-size: 0.75rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.virtual-player-card-favorite-filter input {
+  width: auto;
+  accent-color: #d4a958;
+}
+
 .virtual-player-library-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2285,6 +2334,16 @@ body {
   }
 
   .virtual-player-library-action {
+    width: 100%;
+  }
+
+  .virtual-player-card-grid-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .virtual-player-card-search,
+  .virtual-player-card-favorite-filter {
     width: 100%;
   }
 
