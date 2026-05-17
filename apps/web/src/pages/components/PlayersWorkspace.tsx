@@ -11,10 +11,14 @@ import { VirtualPlayerLibrary } from "../../features/games/components/VirtualPla
 import type { PlayerProfileRequest } from "../../features/games/types";
 
 type PlayersWorkspaceProps = {
+  onCreateActionReady?: (openCreate: () => void) => void;
   workspaceRef?: RefObject<HTMLDivElement | null>;
 };
 
-export function PlayersWorkspace({ workspaceRef }: PlayersWorkspaceProps) {
+export function PlayersWorkspace({
+  onCreateActionReady,
+  workspaceRef,
+}: PlayersWorkspaceProps) {
   const queryClient = useQueryClient();
   const playerProfilesQuery = useQuery({
     queryKey: ["player-profiles"],
@@ -70,6 +74,7 @@ export function PlayersWorkspace({ workspaceRef }: PlayersWorkspaceProps) {
         isModelOptionsError={modelOptionsQuery.isError}
         isSaving={isSaving}
         modelOptions={modelOptions}
+        onCreateActionReady={onCreateActionReady}
         onCreateProfile={(request) => createProfileMutation.mutateAsync(request)}
         onUploadAvatar={(file) => uploadAvatarMutation.mutateAsync(file)}
         onUpdateProfile={(profileId, request) =>

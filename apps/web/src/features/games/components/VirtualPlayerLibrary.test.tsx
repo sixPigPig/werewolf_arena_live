@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -36,6 +36,17 @@ function renderLibrary(
 }
 
 describe("VirtualPlayerLibrary", () => {
+  it("exposes the create action through a typed callback", async () => {
+    const onCreateActionReady = vi.fn();
+    renderLibrary({ onCreateActionReady });
+
+    expect(onCreateActionReady).toHaveBeenCalledWith(expect.any(Function));
+    const openCreate = onCreateActionReady.mock.calls[0][0] as () => void;
+    await act(async () => openCreate());
+
+    expect(screen.getByLabelText("虚拟玩家昵称")).toBeInTheDocument();
+  });
+
   it("defaults a new player to a random system avatar", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     const onCreateProfile = vi

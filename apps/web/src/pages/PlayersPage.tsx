@@ -1,21 +1,15 @@
-import { useRef } from "react";
+import { useCallback, useRef } from "react";
 
 import { ArenaGlobalNav, ArenaNavButton } from "../app/navigation";
 import { PlayersWorkspace } from "./components/PlayersWorkspace";
 
 export function PlayersPage() {
-  const workspaceRef = useRef<HTMLDivElement>(null);
+  const openCreateRef = useRef<(() => void) | null>(null);
+  const handleCreateActionReady = useCallback((openCreate: () => void) => {
+    openCreateRef.current = openCreate;
+  }, []);
   const startCreatePlayer = () => {
-    const createButton = workspaceRef.current?.querySelector<HTMLButtonElement>(
-      ".virtual-player-library-action",
-    );
-
-    createButton?.scrollIntoView?.({
-      behavior: "smooth",
-      block: "center",
-    });
-    createButton?.focus();
-    createButton?.click();
+    openCreateRef.current?.();
   };
 
   return (
@@ -28,7 +22,7 @@ export function PlayersPage() {
         }
         secondaryAction={<ArenaNavButton to="/games">返回大厅</ArenaNavButton>}
       />
-      <PlayersWorkspace workspaceRef={workspaceRef} />
+      <PlayersWorkspace onCreateActionReady={handleCreateActionReady} />
     </>
   );
 }

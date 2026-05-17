@@ -1,4 +1,10 @@
-import { type ChangeEvent, type DragEvent, useState } from "react";
+import {
+  type ChangeEvent,
+  type DragEvent,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 
 import {
   Button,
@@ -33,6 +39,7 @@ type VirtualPlayerLibraryProps = {
   isSaving: boolean;
   onUploadAvatar: (file: File) => Promise<PlayerAvatarUploadResponse>;
   onCreateProfile: (request: PlayerProfileRequest) => Promise<unknown>;
+  onCreateActionReady?: (openCreate: () => void) => void;
   onUpdateProfile: (
     profileId: string,
     request: PlayerProfileRequest,
@@ -106,6 +113,7 @@ export function VirtualPlayerLibrary({
   isSaving,
   onUploadAvatar,
   onCreateProfile,
+  onCreateActionReady,
   onUpdateProfile,
   onDeleteProfile,
 }: VirtualPlayerLibraryProps) {
@@ -140,7 +148,7 @@ export function VirtualPlayerLibrary({
     }));
   };
 
-  const startCreate = () => {
+  const startCreate = useCallback(() => {
     const avatar = randomSystemPlayerAvatar();
     setActionError(null);
     setDeleteCandidateId(null);
@@ -154,7 +162,16 @@ export function VirtualPlayerLibrary({
     setTagInput("");
     setEditingProfileId(null);
     setIsEditorOpen(true);
-  };
+  }, [modelOptions]);
+
+  useEffect(() => {
+    if (!onCreateActionReady) {
+      return undefined;
+    }
+
+    onCreateActionReady(startCreate);
+    return () => onCreateActionReady(() => undefined);
+  }, [onCreateActionReady, startCreate]);
 
   const startEdit = (profile: VirtualPlayerProfile) => {
     setActionError(null);
