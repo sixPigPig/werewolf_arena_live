@@ -729,6 +729,8 @@ def test_world_state_includes_player_personality() -> None:
     )
 
     assert world_state["personality"] == "主动施压，寻找发言矛盾。"
+    prompt, _schema = build_prompt("debate", world_state)
+    assert "- 你的性格设定：主动施压，寻找发言矛盾。" in prompt
 
 
 def test_player_from_dict_defaults_legacy_profile_fields() -> None:
