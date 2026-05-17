@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 
 import type { DirectorCue } from "../liveDirector";
 import { actionLabel, phaseLabel } from "../liveLabels";
+import type { GodViewState } from "../liveGodView";
 import type { LivePlayer } from "../liveSpectator";
 import { appearanceClassName } from "../playerProfileOptions";
 
@@ -14,6 +15,7 @@ type LiveDirectorStageProps = {
   players: LivePlayer[];
   activePlayerName: string | null;
   focusedPlayerName: string | null;
+  godViewState?: GodViewState;
   autoFollow: boolean;
   onSelectPlayer: (name: string) => void;
   onAutoFollowChange: (value: boolean) => void;
@@ -26,6 +28,7 @@ export function LiveDirectorStage({
   players,
   activePlayerName,
   focusedPlayerName,
+  godViewState,
   autoFollow,
   onSelectPlayer,
   onAutoFollowChange,
@@ -33,6 +36,9 @@ export function LiveDirectorStage({
   const tone = stageTone(cue);
   const focusedPlayer =
     players.find((player) => player.name === focusedPlayerName) ?? null;
+  const focusedGodPlayer =
+    godViewState?.players.find((player) => player.name === focusedPlayerName) ??
+    null;
   const title = cue?.title ?? "等待导播事件";
   const body = cue?.body ?? "对局运行已创建，正在等待下一条实时事件。";
   const isTerminalCue = cue?.importance === "terminal";
@@ -49,15 +55,31 @@ export function LiveDirectorStage({
         className="relative min-h-[36rem] px-4 py-3 sm:min-h-[38rem] sm:px-6 lg:min-h-[40rem]"
         data-testid="live-director-stage-shell"
       >
-        <div className="glass-panel-subtle relative z-40 mx-auto flex w-fit items-center gap-3 rounded-full border border-amber-300/35 px-4 py-2 text-sm shadow-[0_0_28px_rgba(245,158,11,0.2)]">
-          <span className="text-slate-400">观赛舞台</span>
-          <span className="font-semibold text-amber-200">
-            {cue?.round ? `第 ${cue.round} 轮` : "等待回合"}
-          </span>
-          <span className="text-amber-500/40">|</span>
-          <span className="font-semibold text-teal-100">
-            {cue?.phase ? phaseLabel(cue.phase) : "阶段未开始"}
-          </span>
+        <div className="relative z-40 mx-auto flex w-full max-w-5xl flex-col gap-2">
+          <div className="glass-panel-subtle mx-auto flex w-fit items-center gap-3 rounded-full border border-amber-300/35 px-4 py-2 text-sm shadow-[0_0_28px_rgba(245,158,11,0.2)]">
+            <span className="text-slate-400">观赛舞台</span>
+            <span className="font-semibold text-amber-200">
+              {cue?.round ? `第 ${cue.round} 轮` : "等待回合"}
+            </span>
+            <span className="text-amber-500/40">|</span>
+            <span className="font-semibold text-teal-100">
+              {cue?.phase ? phaseLabel(cue.phase) : "阶段未开始"}
+            </span>
+          </div>
+          {godViewState ? (
+            <div
+              className="god-view-stage-strip grid grid-cols-2 gap-1 rounded-md border border-amber-300/20 bg-black/35 px-3 py-2 text-[11px] text-slate-300 shadow-[0_16px_45px_rgba(0,0,0,0.24)] sm:grid-cols-4 lg:grid-cols-7"
+              data-testid="god-view-stage-strip"
+            >
+              <StageStat label="局名" value={godViewState.boardName} />
+              <StageStat label="天夜" value={godViewState.dayNightLabel} />
+              <StageStat label="阶段" value={godViewState.phaseLabel} />
+              <StageStat label="当前席" value={godViewState.currentSeatLabel} />
+              <StageStat label="倒计时" value={godViewState.countdownLabel} />
+              <StageStat label="存活" value={godViewState.aliveLabel} />
+              <StageStat label="胜负" value={godViewState.winMode} />
+            </div>
+          ) : null}
         </div>
 
         <div className="absolute left-1/2 top-[55%] h-[58%] w-[78%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-amber-600/45 bg-[radial-gradient(circle_at_50%_45%,rgba(92,62,34,0.98),rgba(40,28,19,0.98)_52%,rgba(10,8,7,0.99)_78%)] shadow-[inset_0_0_82px_rgba(0,0,0,0.76),inset_0_0_0_1px_rgba(251,191,36,0.08),0_34px_95px_rgba(0,0,0,0.58)] sm:w-[70%]" />
@@ -90,6 +112,21 @@ export function LiveDirectorStage({
           <h2 className="text-xl font-semibold text-amber-50 sm:text-2xl">
             {title}
           </h2>
+          {focusedGodPlayer ? (
+            <div className="mt-2 flex flex-wrap justify-center gap-2 text-xs">
+              <span className="rounded-md border border-amber-300/30 bg-amber-400/10 px-2 py-1 text-amber-100">
+                {focusedGodPlayer.seatNumber}号 · {focusedGodPlayer.role}
+              </span>
+              <span className="rounded-md border border-sky-300/25 bg-sky-400/10 px-2 py-1 text-sky-100">
+                {focusedGodPlayer.camp} · {focusedGodPlayer.identityGroup}
+              </span>
+              {focusedGodPlayer.isSheriff ? (
+                <span className="rounded-md border border-amber-300/35 bg-amber-400/15 px-2 py-1 text-amber-100">
+                  警长发言
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           <div
             className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-amber-300/15 p-3 text-left text-sm leading-6 text-slate-200 shadow-[inset_0_0_24px_rgba(0,0,0,0.24)] sm:max-h-48 sm:text-base"
             tabIndex={0}
@@ -247,6 +284,17 @@ const STATUS_LABELS: Record<LivePlayer["status"], string> = {
   acted: "已行动",
   out: "出局",
 };
+
+function StageStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <span className="block text-[10px] text-slate-500">{label}</span>
+      <span className="block truncate font-semibold text-slate-100">
+        {value}
+      </span>
+    </div>
+  );
+}
 
 function playerSeatStatus(
   player: LivePlayer,

@@ -1,5 +1,4 @@
 import { Button, Callout, Text } from "../components/ui";
-import { withGlassPanel } from "../components/ui/glass";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -7,21 +6,18 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArenaCommandNav, ArenaNavButton } from "../app/navigation";
 import { getGameRun } from "../features/games/api/getGameRun";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
+import { GodViewBottomBoard } from "../features/games/components/GodViewBottomBoard";
+import { GodViewIntelPanel } from "../features/games/components/GodViewIntelPanel";
+import { GodViewRosterPanel } from "../features/games/components/GodViewRosterPanel";
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveDirectorStage } from "../features/games/components/LiveDirectorStage";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
-import {
-  PlayerRosterPanel,
-  type PlayerRosterItem,
-} from "../features/games/components/PlayerRosterPanel";
 import { LiveStatusStrip } from "../features/games/components/LiveStatusStrip";
 import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 import { useGameRunEvents } from "../features/games/hooks/useGameRunEvents";
 import { useLiveDirector } from "../features/games/hooks/useLiveDirector";
-import {
-  deriveLiveSpectatorState,
-  type LivePlayerStatus,
-} from "../features/games/liveSpectator";
+import { deriveGodViewState } from "../features/games/liveGodView";
+import { deriveLiveSpectatorState } from "../features/games/liveSpectator";
 import { LivePageShell } from "./components/LivePageShell";
 import { LiveStageModule } from "./components/LiveStageModule";
 
@@ -64,6 +60,15 @@ export function LiveGamePage() {
   const spectatorState = useMemo(
     () => deriveLiveSpectatorState(events),
     [events],
+  );
+  const godViewState = useMemo(
+    () =>
+      deriveGodViewState(
+        events,
+        spectatorState,
+        run?.rule_set?.name ?? "实时对局",
+      ),
+    [events, run?.rule_set?.name, spectatorState],
   );
   if (run && runId && !(runId in terminalStartByRunId)) {
     setTerminalStartByRunId({
@@ -150,30 +155,6 @@ export function LiveGamePage() {
       </span>
     </div>
   ) : null;
-  const rosterPlayers = spectatorState.players.map<PlayerRosterItem>(
-    (player, index) => {
-      const state = liveRosterState(
-        player.status,
-        player.isAlive,
-        player.name === autoFocusName,
-      );
-
-      return {
-        seatNumber: index + 1,
-        name: player.name,
-        role: player.role,
-        model: player.model,
-        personalityId: player.personalityId,
-        appearanceId: player.appearanceId,
-        avatarImageUrl: player.avatarImageUrl,
-        tags: player.tags,
-        state,
-        statusLabel: liveRosterStatusLabel(state),
-        isFocused: player.name === focusedPlayerName,
-      };
-    },
-  );
-
   useEffect(() => {
     if (!terminalEvent) {
       return;
@@ -240,13 +221,14 @@ export function LiveGamePage() {
             </Callout.Root>
           ) : null}
           <LiveStageModule
+            bottom={<GodViewBottomBoard state={godViewState} />}
             roster={
-              <PlayerRosterPanel
+              <GodViewRosterPanel
                 onSelectPlayer={(name) => {
                   setAutoFollow(false);
                   setManualFocusName(name);
                 }}
-                players={rosterPlayers}
+                players={godViewState.players}
               />
             }
             stage={
@@ -256,6 +238,7 @@ export function LiveGamePage() {
                 backlogCount={director.backlogCount}
                 cue={director.currentCue}
                 focusedPlayerName={focusedPlayerName}
+                godViewState={godViewState}
                 isCatchingUp={director.isCatchingUp}
                 onAutoFollowChange={(value) => {
                   setAutoFollow(value);
@@ -271,35 +254,15 @@ export function LiveGamePage() {
               />
             }
             timeline={
-              <section
-                className={withGlassPanel(
-                  "live-timeline-panel min-w-0 overflow-hidden rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.26)] md:col-span-2 xl:col-span-1 xl:max-h-[calc(100vh-8rem)] xl:overflow-auto",
-                )}
-                data-testid="live-timeline-panel"
-              >
-                <div className="border-b border-amber-500/15 px-4 py-3">
-                  <h2 className="text-sm font-semibold text-amber-50">
-                    剧情时间线
-                  </h2>
-                  <p className="mt-1 text-xs text-slate-400">
-                    关键阶段、行动和结算
-                  </p>
-                </div>
-                <LiveEventTimeline
-                  currentEventId={director.currentEventId}
-                  events={events}
-                  variant="story"
-                />
-                <details className="border-t border-amber-500/15">
-                  <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-300">
-                    调试事件
-                  </summary>
+              <GodViewIntelPanel
+                debugTimeline={
                   <LiveEventTimeline
                     currentEventId={director.currentEventId}
                     events={events}
                   />
-                </details>
-              </section>
+                }
+                state={godViewState}
+              />
             }
           />
         </LivePageShell>
@@ -310,43 +273,4 @@ export function LiveGamePage() {
 
 function isTerminalRunStatus(status: string) {
   return status === "completed" || status === "failed";
-}
-
-function liveRosterState(
-  status: LivePlayerStatus,
-  isAlive: boolean,
-  isActivePlayer: boolean,
-): PlayerRosterItem["state"] {
-  if (!isAlive) {
-    return "dead";
-  }
-  if (isActivePlayer && status === "streaming") {
-    return "speaking";
-  }
-  if (status === "thinking" || status === "requesting") {
-    return "thinking";
-  }
-  if (status === "acted" || status === "responded") {
-    return "acted";
-  }
-  if (isActivePlayer) {
-    return "speaking";
-  }
-  return "alive";
-}
-
-function liveRosterStatusLabel(state: PlayerRosterItem["state"]) {
-  if (state === "dead") {
-    return "死亡";
-  }
-  if (state === "speaking") {
-    return "发言中";
-  }
-  if (state === "thinking") {
-    return "思考中";
-  }
-  if (state === "acted") {
-    return "已行动";
-  }
-  return "存活";
 }

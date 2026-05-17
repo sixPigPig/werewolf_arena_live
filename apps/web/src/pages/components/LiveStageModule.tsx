@@ -4,9 +4,11 @@ type LiveStageModuleProps = {
   roster: ReactNode;
   stage: ReactNode;
   timeline: ReactNode;
+  bottom?: ReactNode;
 };
 
 export function LiveStageModule({
+  bottom,
   roster,
   stage,
   timeline,
@@ -21,6 +23,11 @@ export function LiveStageModule({
       </div>
       <div className="live-stage-column min-w-0 space-y-3">{stage}</div>
       {timeline}
+      {bottom ? (
+        <div className="live-god-bottom-board min-w-0 md:col-span-2 xl:col-span-3">
+          {bottom}
+        </div>
+      ) : null}
     </div>
   );
 }
