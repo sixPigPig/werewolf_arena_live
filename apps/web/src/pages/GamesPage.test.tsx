@@ -289,6 +289,68 @@ describe("GamesPage", () => {
     ).toBe(false);
   });
 
+  it("shows that seat profiles are still loading separately from an empty library", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return new Promise<Response>(() => undefined);
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(<GamesPage />, "/games");
+
+    expect(
+      screen.getByText("正在读取虚拟玩家资料，席位选择加载完成后可用。"),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("暂无虚拟玩家")).toBeInTheDocument();
+  });
+
+  it("shows when seat profiles failed to load separately from an empty library", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(new Response(null, { status: 500 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(<GamesPage />, "/games");
+
+    expect(
+      await screen.findByRole("alert", {
+        name: "无法读取虚拟玩家资料，席位选择暂时只显示随机角色。",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("暂无虚拟玩家")).toBeInTheDocument();
+  });
+
   it("shows the selected rule details below the official rule cards", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);

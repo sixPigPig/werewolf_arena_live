@@ -117,6 +117,43 @@ describe("PlayersPage", () => {
     ).toHaveAttribute("href", "/games");
   });
 
+  it("opens the player editor from the nav-level create action", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ profiles: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/model-options")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(modelOptionsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+
+    renderPage();
+
+    await userEvent.click(
+      within(screen.getByTestId("arena-global-nav")).getByRole("button", {
+        name: "新建虚拟玩家",
+      }),
+    );
+
+    expect(screen.getByLabelText("虚拟玩家昵称")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "保存虚拟玩家" }),
+    ).toBeInTheDocument();
+  });
+
   it("manages virtual player profiles from the player workbench", async () => {
     let avatarUploadCount = 0;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
