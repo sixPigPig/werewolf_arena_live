@@ -96,6 +96,32 @@ function playerProfilesResponse() {
   };
 }
 
+function multiPlayerProfilesResponse() {
+  return {
+    profiles: [
+      {
+        ...playerProfilesResponse().profiles[0],
+        favorite: true,
+        short_description: "谨慎控场玩家",
+        strategy_profile: "cautious_observer",
+      },
+      {
+        ...playerProfilesResponse().profiles[0],
+        id: "profile-2",
+        display_name: "影刃",
+        model: "Qwen",
+        personality_id: "aggressive",
+        personality_text: "主动施压。",
+        favorite: false,
+        short_description: "高压进攻玩家",
+        strategy_profile: "pressure_attacker",
+        avatar_image_url: "/api/v1/player-profiles/avatar/profile-2.png",
+        tags: ["进攻"],
+      },
+    ],
+  };
+}
+
 function emptyPlayerProfilesResponse() {
   return { profiles: [] };
 }
@@ -231,7 +257,7 @@ describe("GamesPage", () => {
     expect(
       within(playerConfigPanel).getByRole("button", { name: "1号空席" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "选择席位角色" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "选择虚拟玩家" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "为 1 号座位选择 冷静的阿夜" }),
     ).toBeInTheDocument();
@@ -330,6 +356,150 @@ describe("GamesPage", () => {
         name: "为 1 号座位选择 冷静的阿夜",
       }),
     ).toBeInTheDocument();
+  });
+
+  it("applies player cards immediately and summarizes the lineup", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(playerProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/runs")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              run_id: "run_1234abcd",
+              session_id: "session_20260424_120000_ab12cd34",
+              villager_model: "deepseek-chat",
+              werewolf_model: "deepseek-chat",
+              seed: null,
+              max_rounds: 8,
+              status: "queued",
+              created_at: "2026-04-24T12:00:00Z",
+              started_at: null,
+              completed_at: null,
+              winner: null,
+              error: null,
+              event_count: 1,
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games" element={<GamesPage />} />
+        <Route
+          path="/games/live/:runId"
+          element={<p>实时观战 run_1234abcd</p>}
+        />
+      </Routes>,
+      "/games",
+    );
+
+    expect(await screen.findByText("已选 0 / 8")).toBeInTheDocument();
+    expect(screen.getByText("空席将由系统随机补齐")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "为 1 号座位选择 冷静的阿夜" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "1号冷静的阿夜" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("已选 1 / 8")).toBeInTheDocument();
+    expect(screen.getByText("已在 1 号位")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/games/runs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          rule_set_id: "classic_8",
+          seed: null,
+          max_rounds: 8,
+          event_pacing: "off",
+          player_configs: [{ seat: 1, profile_id: "profile-1" }],
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("filters the player picker by search and favorites", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(multiPlayerProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(<GamesPage />, "/games");
+
+    await screen.findByRole("button", { name: "为 1 号座位选择 冷静的阿夜" });
+    expect(
+      screen.getByRole("button", { name: "为 1 号座位选择 影刃" }),
+    ).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("搜索可选虚拟玩家"), "影");
+
+    expect(
+      screen.queryByRole("button", { name: "为 1 号座位选择 冷静的阿夜" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "为 1 号座位选择 影刃" }),
+    ).toBeInTheDocument();
+
+    await userEvent.clear(screen.getByLabelText("搜索可选虚拟玩家"));
+    await userEvent.click(screen.getByRole("button", { name: "只看收藏" }));
+
+    expect(
+      screen.getByRole("button", { name: "为 1 号座位选择 冷静的阿夜" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "为 1 号座位选择 影刃" }),
+    ).not.toBeInTheDocument();
   });
 
   it("links to the player library when seat assignment has no profiles", async () => {
@@ -660,7 +830,7 @@ describe("GamesPage", () => {
     expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
   });
 
-  it("preserves seat model overrides when selecting and clearing virtual player profiles", async () => {
+  it("clears the selected seat profile and overrides", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);
       if (url.endsWith("/api/v1/games/rule-sets")) {
@@ -727,9 +897,9 @@ describe("GamesPage", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "为 1 号座位选择 冷静的阿夜" }),
     );
-    await userEvent.click(screen.getByRole("button", { name: "确认选择" }));
-    await userEvent.click(screen.getByRole("button", { name: "随机角色" }));
-    await userEvent.click(screen.getByRole("button", { name: "确认选择" }));
+    expect(screen.getByText("已选 1 / 8")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "清空当前座位" }));
+    expect(screen.getByText("已选 0 / 8")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
 
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -740,7 +910,6 @@ describe("GamesPage", () => {
           seed: null,
           max_rounds: 8,
           event_pacing: "off",
-          player_configs: [{ seat: 1, model: "qwen3.6-plus" }],
         }),
         method: "POST",
       }),

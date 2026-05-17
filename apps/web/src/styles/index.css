@@ -1917,6 +1917,46 @@ body {
   font-weight: 800;
 }
 
+.lineup-summary {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.7rem;
+  border: 1px solid rgb(232 201 130 / 22%);
+  border-radius: 0.24rem;
+  background:
+    linear-gradient(90deg, rgb(232 201 130 / 10%), rgb(6 12 18 / 58%)),
+    rgb(2 7 12 / 66%);
+  padding: 0.62rem 0.72rem;
+}
+
+.lineup-summary-primary,
+.lineup-summary-secondary {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.72rem;
+  align-items: center;
+}
+
+.lineup-summary-stat,
+.lineup-summary-warning {
+  color: #f0dfc8;
+  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.lineup-summary-warning {
+  color: #ffb4b4;
+}
+
+.lineup-summary-secondary {
+  color: #c7d0da;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .player-config-panel-grid {
   display: grid;
   grid-template-columns: minmax(19rem, 0.95fr) minmax(0, 1.35fr);
@@ -1974,6 +2014,10 @@ body {
     0 0 18px rgb(232 201 130 / 16%);
 }
 
+.player-config-seat-card-invalid {
+  border-color: rgb(255 121 121 / 64%);
+}
+
 .player-config-seat-frame {
   display: grid;
   min-height: 5.9rem;
@@ -1985,6 +2029,17 @@ body {
   background:
     radial-gradient(circle at 50% 42%, transparent 34%, rgb(232 201 130 / 18%) 35%, transparent 44%),
     linear-gradient(180deg, rgb(2 7 12 / 70%), rgb(0 3 7 / 86%));
+}
+
+.player-config-seat-placeholder {
+  width: 58%;
+  aspect-ratio: 3 / 4;
+  border: 1px solid rgb(232 201 130 / 26%);
+  border-radius: 999px 999px 0.5rem 0.5rem;
+  background:
+    radial-gradient(circle at 50% 18%, rgb(232 201 130 / 17%), transparent 34%),
+    linear-gradient(180deg, rgb(7 13 20 / 76%), rgb(1 5 10 / 90%));
+  opacity: 0.8;
 }
 
 .player-config-seat-frame img {
@@ -2006,10 +2061,36 @@ body {
   white-space: nowrap;
 }
 
+.player-config-seat-meta {
+  overflow: hidden;
+  color: #aebcca;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .player-config-role-module {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
+}
+
+.profile-picker,
+.seat-detail-panel {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.profile-picker-header,
+.seat-detail-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
 }
 
 .player-config-role-header {
@@ -2041,6 +2122,33 @@ body {
   font-weight: 800;
 }
 
+.profile-picker-filters {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) repeat(3, minmax(7rem, 0.56fr));
+  gap: 0.5rem;
+}
+
+.profile-picker-search {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.24rem;
+  color: #c7d0da;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.profile-picker-select {
+  width: 100%;
+  min-width: 0;
+  height: 2rem;
+  border-color: rgb(134 146 158 / 42%) !important;
+  border-radius: 0.18rem !important;
+  background: rgb(3 8 13 / 78%) !important;
+  color: #e8eef4 !important;
+  font-size: 0.78rem;
+}
+
 .player-config-role-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(7.4rem, 1fr));
@@ -2053,6 +2161,11 @@ body {
   flex-direction: column;
   gap: 0.34rem;
   padding: 0.42rem;
+}
+
+.player-config-role-card-disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .player-config-role-portrait {
@@ -2098,6 +2211,25 @@ body {
   font-size: 0.72rem;
 }
 
+.profile-picker-occupied {
+  align-self: center;
+  border: 1px solid rgb(232 201 130 / 24%);
+  border-radius: 0.16rem;
+  background: rgb(232 201 130 / 9%);
+  padding: 0.12rem 0.34rem;
+  color: #efd9b5;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.profile-picker-empty {
+  grid-column: 1 / -1;
+  padding: 0.75rem;
+  border: 1px solid rgb(232 201 130 / 18%);
+  border-radius: 0.22rem;
+  background: rgb(3 8 13 / 48%);
+}
+
 .player-config-role-empty {
   display: flex;
   grid-column: 1 / -1;
@@ -2117,6 +2249,42 @@ body {
   margin: 0;
   color: #c7d0da;
   font-size: 0.86rem;
+}
+
+.seat-detail-card {
+  display: grid;
+  gap: 0.2rem;
+  border: 1px solid rgb(134 146 158 / 28%);
+  border-radius: 0.22rem;
+  background:
+    linear-gradient(180deg, rgb(5 11 17 / 72%), rgb(1 5 10 / 82%)),
+    radial-gradient(circle at 8% 0%, rgb(232 201 130 / 10%), transparent 36%);
+  padding: 0.58rem 0.65rem;
+}
+
+.seat-detail-name {
+  overflow: hidden;
+  color: #f0dfc8;
+  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-size: 0.98rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seat-detail-meta,
+.seat-detail-copy {
+  margin: 0;
+  color: #c7d0da;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.seat-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
 }
 
 .player-config-role-controls {
@@ -2266,6 +2434,10 @@ body {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
+  .profile-picker-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .virtual-player-library-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2308,6 +2480,22 @@ body {
   .player-config-seat-module,
   .player-config-role-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-picker-header,
+  .seat-detail-header,
+  .lineup-summary-primary,
+  .lineup-summary-secondary {
+    align-items: flex-start;
+  }
+
+  .profile-picker-header,
+  .seat-detail-header {
+    flex-direction: column;
+  }
+
+  .profile-picker-filters {
+    grid-template-columns: 1fr;
   }
 
   .player-config-role-controls {

@@ -15,6 +15,7 @@ import { useNavigate } from "react-router-dom";
 
 import { createGameRun } from "../api/createGameRun";
 import { listRuleSets } from "../api/listRuleSets";
+import { hasPlayerConfig, removeInvalidProfileRefs } from "../lineupUtils";
 import { PlayerConfigPanel } from "./PlayerConfigPanel";
 import type {
   EventPacingMode,
@@ -298,32 +299,6 @@ function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
     })
     .filter((config) => hasPlayerConfig(config))
     .sort((left, right) => left.seat - right.seat);
-}
-
-function hasPlayerConfig(config: PlayerConfig) {
-  return Boolean(
-    config.profile_id ||
-      config.model ||
-      config.personality_id ||
-      config.appearance_id,
-  );
-}
-
-function removeInvalidProfileRefs(
-  configs: PlayerConfig[],
-  validProfileIds: Set<string>,
-) {
-  return configs
-    .map((config) => {
-      if (!config.profile_id || validProfileIds.has(config.profile_id)) {
-        return config;
-      }
-
-      const nextConfig = { ...config };
-      delete nextConfig.profile_id;
-      return hasPlayerConfig(nextConfig) ? nextConfig : null;
-    })
-    .filter((config): config is PlayerConfig => config !== null);
 }
 
 function SelectedRuleDetails({ rule }: { rule: RuleSetSummary }) {
