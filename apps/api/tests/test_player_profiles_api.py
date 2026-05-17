@@ -1,4 +1,5 @@
 import base64
+import json
 from collections.abc import Generator
 
 import pytest
@@ -115,6 +116,28 @@ def test_create_profile_normalizes_and_fills_defaults() -> None:
 
     assert len(profiles) == 1
     assert profiles[0].display_name == "控场位"
+
+
+def test_create_profile_returns_rich_character_defaults() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "默认玩家", "model": "deepseek-v4-flash"},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["short_description"] == ""
+    assert payload["background_story"] == ""
+    assert payload["speaking_style"] == ""
+    assert payload["catchphrases"] == []
+    assert payload["strategy_profile"] == "balanced"
+    assert payload["risk_tolerance"] == 3
+    assert payload["bluffing_tendency"] == 3
+    assert payload["trust_tendency"] == 3
+    assert payload["leadership_tendency"] == 3
+    assert payload["talkativeness"] == 3
+    assert payload["example_messages"] == []
+    assert payload["favorite"] is False
 
 
 def test_upload_avatar_image_returns_served_asset_url(tmp_path) -> None:
@@ -370,6 +393,84 @@ def test_profiles_fall_back_to_local_file_when_database_is_unavailable(
     assert list_response.json()["profiles"][0]["id"] == created["id"]
 
 
+def test_player_profile_file_store_reads_old_payload_with_rich_defaults_and_writes_v3(
+    tmp_path,
+) -> None:
+    path = tmp_path / "player_profiles.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "profiles": [
+                    {
+                        "id": "legacy-profile",
+                        "display_name": "旧档玩家",
+                        "model": "deepseek-v4-flash",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    store = PlayerProfileFileStore(path)
+
+    legacy = store.get_profile("legacy-profile")
+
+    assert legacy is not None
+    assert legacy.short_description == ""
+    assert legacy.background_story == ""
+    assert legacy.speaking_style == ""
+    assert legacy.catchphrases == []
+    assert legacy.strategy_profile == "balanced"
+    assert legacy.risk_tolerance == 3
+    assert legacy.bluffing_tendency == 3
+    assert legacy.trust_tendency == 3
+    assert legacy.leadership_tendency == 3
+    assert legacy.talkativeness == 3
+    assert legacy.example_messages == []
+    assert legacy.favorite is False
+
+    store.create_profile(
+        display_name="新玩家",
+        model="deepseek-v4-flash",
+        personality_id="balanced",
+        personality_text="",
+        appearance_id="default",
+        avatar_prompt="",
+        tags=[],
+    )
+    payload_after_create = json.loads(path.read_text(encoding="utf-8"))
+    legacy_payload = next(
+        profile
+        for profile in payload_after_create["profiles"]
+        if profile["id"] == "legacy-profile"
+    )
+
+    assert payload_after_create["version"] == 3
+    assert legacy_payload["short_description"] == ""
+    assert legacy_payload["catchphrases"] == []
+    assert legacy_payload["strategy_profile"] == "balanced"
+    assert legacy_payload["risk_tolerance"] == 3
+    assert legacy_payload["favorite"] is False
+
+    updated = store.update_profile(
+        "legacy-profile",
+        {
+            "short_description": "旧档补齐简介",
+            "catchphrases": ["补齐口头禅"],
+            "favorite": True,
+        },
+    )
+    payload_after_update = json.loads(path.read_text(encoding="utf-8"))
+
+    assert updated is not None
+    assert updated.short_description == "旧档补齐简介"
+    assert updated.catchphrases == ["补齐口头禅"]
+    assert updated.favorite is True
+    assert payload_after_update["version"] == 3
+
+
 def test_create_profile_persists_rich_character_settings() -> None:
     response = client.post(
         "/api/v1/player-profiles",
@@ -402,6 +503,23 @@ def test_create_profile_persists_rich_character_settings() -> None:
     assert payload["favorite"] is True
 
 
+def test_create_profile_normalizes_rich_character_lists() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "去重玩家",
+            "model": "deepseek-v4-flash",
+            "catchphrases": [" 我先盘票型 ", "", "我先盘票型", " 这里不急 "],
+            "example_messages": [" 先听后置位补充。 ", "", "先听后置位补充。", " 票型先记下来。 "],
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["catchphrases"] == ["我先盘票型", "这里不急"]
+    assert payload["example_messages"] == ["先听后置位补充。", "票型先记下来。"]
+
+
 def test_create_profile_rejects_invalid_strategy_slider_values() -> None:
     response = client.post(
         "/api/v1/player-profiles",
@@ -416,6 +534,19 @@ def test_create_profile_rejects_invalid_strategy_slider_values() -> None:
     assert response.status_code == 422
 
 
+def test_create_profile_rejects_more_than_6_catchphrases() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "口头禅太多",
+            "model": "deepseek-v4-flash",
+            "catchphrases": [f"口头禅{index}" for index in range(7)],
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_create_profile_rejects_catchphrase_longer_than_40_characters() -> None:
     long_catchphrase = "啊" * 41
     response = client.post(
@@ -424,6 +555,26 @@ def test_create_profile_rejects_catchphrase_longer_than_40_characters() -> None:
             "display_name": "长口头禅玩家",
             "model": "deepseek-v4-flash",
             "catchphrases": [long_catchphrase],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "example_messages",
+    [
+        [f"示例发言{index}" for index in range(6)],
+        ["啊" * 241],
+    ],
+)
+def test_create_profile_rejects_invalid_example_messages(example_messages: list[str]) -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "示例发言越界",
+            "model": "deepseek-v4-flash",
+            "example_messages": example_messages,
         },
     )
 
@@ -446,3 +597,54 @@ def test_update_profile_rejects_catchphrase_longer_than_40_characters() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_patch_profile_persists_rich_character_settings() -> None:
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "待更新玩家", "model": "deepseek-v4-flash"},
+    ).json()
+
+    patch_response = client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={
+            "short_description": "更新后的控场简介",
+            "background_story": "复盘多年圆桌局后形成的打法。",
+            "speaking_style": "先拆视角，再压缩狼坑。",
+            "catchphrases": ["先盘票型", "后置位补充"],
+            "strategy_profile": "pressure_attacker",
+            "risk_tolerance": 4,
+            "bluffing_tendency": 2,
+            "trust_tendency": 1,
+            "leadership_tendency": 5,
+            "talkativeness": 4,
+            "example_messages": ["这一轮我会先压 7 号解释票型。"],
+            "favorite": True,
+        },
+    )
+
+    assert patch_response.status_code == 200
+    patched = patch_response.json()
+    assert patched["short_description"] == "更新后的控场简介"
+    assert patched["background_story"] == "复盘多年圆桌局后形成的打法。"
+    assert patched["speaking_style"] == "先拆视角，再压缩狼坑。"
+    assert patched["catchphrases"] == ["先盘票型", "后置位补充"]
+    assert patched["strategy_profile"] == "pressure_attacker"
+    assert patched["risk_tolerance"] == 4
+    assert patched["bluffing_tendency"] == 2
+    assert patched["trust_tendency"] == 1
+    assert patched["leadership_tendency"] == 5
+    assert patched["talkativeness"] == 4
+    assert patched["example_messages"] == ["这一轮我会先压 7 号解释票型。"]
+    assert patched["favorite"] is True
+
+    with TestingSessionLocal() as session:
+        stored = session.get(VirtualPlayerProfile, created["id"])
+
+    assert stored is not None
+    assert stored.short_description == "更新后的控场简介"
+    assert stored.catchphrases == ["先盘票型", "后置位补充"]
+    assert stored.strategy_profile == "pressure_attacker"
+    assert stored.risk_tolerance == 4
+    assert stored.example_messages == ["这一轮我会先压 7 号解释票型。"]
+    assert stored.favorite is True
