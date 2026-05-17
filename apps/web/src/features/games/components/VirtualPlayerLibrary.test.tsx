@@ -41,10 +41,28 @@ describe("VirtualPlayerLibrary", () => {
     renderLibrary({ onCreateActionReady });
 
     expect(onCreateActionReady).toHaveBeenCalledWith(expect.any(Function));
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
     const openCreate = onCreateActionReady.mock.calls[0][0] as () => void;
-    await act(async () => openCreate());
+    try {
+      await act(async () => openCreate());
 
-    expect(screen.getByLabelText("虚拟玩家昵称")).toBeInTheDocument();
+      const nameInput = screen.getByLabelText("虚拟玩家昵称");
+      expect(nameInput).toHaveFocus();
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "start",
+      });
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: originalScrollIntoView,
+      });
+    }
   });
 
   it("defaults a new player to a random system avatar", async () => {

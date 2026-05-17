@@ -148,7 +148,8 @@ describe("PlayersPage", () => {
       }),
     );
 
-    expect(screen.getByLabelText("虚拟玩家昵称")).toBeInTheDocument();
+    const nameInput = screen.getByLabelText("虚拟玩家昵称");
+    expect(nameInput).toHaveFocus();
     expect(
       screen.getByRole("button", { name: "保存虚拟玩家" }),
     ).toBeInTheDocument();

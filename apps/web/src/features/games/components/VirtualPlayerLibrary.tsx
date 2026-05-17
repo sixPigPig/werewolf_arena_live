@@ -3,6 +3,7 @@ import {
   type DragEvent,
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
@@ -121,12 +122,15 @@ export function VirtualPlayerLibrary({
   const [tagInput, setTagInput] = useState("");
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [focusEditorRequest, setFocusEditorRequest] = useState(0);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [isAvatarDragging, setIsAvatarDragging] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(
     null,
   );
+  const editorRef = useRef<HTMLFormElement>(null);
+  const shouldFocusEditorRef = useRef(false);
   const activeModelOptions = modelOptionsForDraft(modelOptions, draft.model);
   const canSave =
     !isSaving &&
@@ -150,6 +154,7 @@ export function VirtualPlayerLibrary({
 
   const startCreate = useCallback(() => {
     const avatar = randomSystemPlayerAvatar();
+    shouldFocusEditorRef.current = true;
     setActionError(null);
     setDeleteCandidateId(null);
     setDraft({
@@ -162,6 +167,7 @@ export function VirtualPlayerLibrary({
     setTagInput("");
     setEditingProfileId(null);
     setIsEditorOpen(true);
+    setFocusEditorRequest((request) => request + 1);
   }, [modelOptions]);
 
   useEffect(() => {
@@ -172,6 +178,23 @@ export function VirtualPlayerLibrary({
     onCreateActionReady(startCreate);
     return () => onCreateActionReady(() => undefined);
   }, [onCreateActionReady, startCreate]);
+
+  useEffect(() => {
+    if (!isEditorOpen || !shouldFocusEditorRef.current) {
+      return;
+    }
+
+    shouldFocusEditorRef.current = false;
+    editorRef.current?.scrollIntoView?.({
+      behavior: "smooth",
+      block: "start",
+    });
+    editorRef.current
+      ?.querySelector<HTMLElement>(
+        "input:not([type='file']):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])",
+      )
+      ?.focus();
+  }, [focusEditorRequest, isEditorOpen]);
 
   const startEdit = (profile: VirtualPlayerProfile) => {
     setActionError(null);
@@ -329,6 +352,7 @@ export function VirtualPlayerLibrary({
       {isEditorOpen ? (
         <form
           className="virtual-player-editor"
+          ref={editorRef}
           onSubmit={(event) => {
             event.preventDefault();
             void saveDraft();

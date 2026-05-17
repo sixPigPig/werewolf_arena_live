@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { RefObject } from "react";
 
 import { createPlayerProfile } from "../../features/games/api/createPlayerProfile";
 import { deletePlayerProfile } from "../../features/games/api/deletePlayerProfile";
@@ -12,13 +11,9 @@ import type { PlayerProfileRequest } from "../../features/games/types";
 
 type PlayersWorkspaceProps = {
   onCreateActionReady?: (openCreate: () => void) => void;
-  workspaceRef?: RefObject<HTMLDivElement | null>;
 };
 
-export function PlayersWorkspace({
-  onCreateActionReady,
-  workspaceRef,
-}: PlayersWorkspaceProps) {
+export function PlayersWorkspace({ onCreateActionReady }: PlayersWorkspaceProps) {
   const queryClient = useQueryClient();
   const playerProfilesQuery = useQuery({
     queryKey: ["player-profiles"],
@@ -62,7 +57,6 @@ export function PlayersWorkspace({
     <main
       className="players-workspace-module lobby-page-shell mx-auto w-full max-w-none px-4 py-5 sm:px-6 lg:px-8"
       data-testid="players-workspace-module"
-      ref={workspaceRef}
     >
       <header className="virtual-player-library-header mb-4">
         <h1 className="virtual-player-library-title">虚拟玩家工作台</h1>
