@@ -58,7 +58,9 @@ def _normalize_limited_strings(value: list[str], *, max_items: int, max_length: 
     normalized: list[str] = []
     seen: set[str] = set()
     for item in value:
-        trimmed = str(item).strip()
+        if not isinstance(item, str):
+            raise ValueError("Items must be strings")
+        trimmed = item.strip()
         if not trimmed or trimmed in seen:
             continue
         if len(trimmed) > max_length:

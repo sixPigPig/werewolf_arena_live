@@ -520,6 +520,26 @@ def test_create_profile_normalizes_rich_character_lists() -> None:
     assert payload["example_messages"] == ["先听后置位补充。", "票型先记下来。"]
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"catchphrases": [{"x": 1}]},
+        {"example_messages": [123]},
+    ],
+)
+def test_create_profile_rejects_non_string_rich_character_list_items(payload: dict) -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "非字符串列表玩家",
+            "model": "deepseek-v4-flash",
+            **payload,
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_create_profile_rejects_invalid_strategy_profile() -> None:
     response = client.post(
         "/api/v1/player-profiles",
