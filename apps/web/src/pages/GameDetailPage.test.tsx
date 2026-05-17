@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithClient } from "../tests/renderWithClient";
 import { GameDetailPage } from "./GameDetailPage";
 
-const sessionId = "session_20260424_050950_66ea9f38";
-const nextSessionId = "session_20260424_060000_next";
+const sessionId = "game_05095066";
+const nextSessionId = "game_06000000";
 
 const detailResponse = {
   session_id: sessionId,

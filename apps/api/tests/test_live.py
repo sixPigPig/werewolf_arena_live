@@ -24,7 +24,7 @@ def test_registry_creates_run_with_initial_event() -> None:
     registry = LiveRunRegistry()
 
     run = registry.create_run(
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=21,
@@ -33,7 +33,7 @@ def test_registry_creates_run_with_initial_event() -> None:
     )
 
     assert run.run_id.startswith("run_")
-    assert run.session_id == "session_20260424_120000_ab12cd34"
+    assert run.session_id == "game_1200abcd"
     assert run.status == "queued"
     assert run.event_count == 1
     assert run.events[0].type == "run_created"
@@ -46,7 +46,7 @@ def test_registry_creates_run_with_event_pacing() -> None:
     registry = LiveRunRegistry()
 
     run = registry.create_run(
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=21,
@@ -65,7 +65,7 @@ def test_registry_rejects_unsupported_event_pacing() -> None:
 
     with pytest.raises(ValueError, match="Unsupported event pacing mode: fast"):
         registry.create_run(
-            session_id="session_20260424_120000_ab12cd34",
+            session_id="game_1200abcd",
             villager_model="deepseek-chat",
             werewolf_model="deepseek-chat",
             seed=21,
@@ -78,7 +78,7 @@ def test_registry_rejects_unsupported_event_pacing() -> None:
 def test_registry_appends_ordered_events_and_replays_after_id() -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=None,
@@ -108,7 +108,7 @@ def test_registry_appends_ordered_events_and_replays_after_id() -> None:
 def test_registry_marks_completed_and_failed() -> None:
     registry = LiveRunRegistry()
     completed = registry.create_run(
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=None,
@@ -116,7 +116,7 @@ def test_registry_marks_completed_and_failed() -> None:
         **classic_rule_kwargs(),
     )
     failed = registry.create_run(
-        session_id="session_20260424_120001_cd34ab12",
+        session_id="game_1201cd34",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=None,
@@ -143,7 +143,7 @@ def test_registry_marks_completed_and_failed() -> None:
 def test_format_sse_preserves_unicode_and_payload_history_is_stable() -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=None,

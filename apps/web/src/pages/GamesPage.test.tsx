@@ -134,7 +134,7 @@ describe("GamesPage", () => {
           JSON.stringify({
             sessions: [
               {
-                session_id: "session_20260424_001",
+                session_id: "game_00000001",
                 status: "complete",
                 winner: "狼人阵营",
                 round_count: 4,
@@ -259,7 +259,7 @@ describe("GamesPage", () => {
     ).toBeInTheDocument();
     expect(within(rulesPanel).getByText("官方规则")).toBeInTheDocument();
     expect(screen.queryByTestId("games-sessions-module")).not.toBeInTheDocument();
-    expect(screen.queryByText("session_20260424_001")).not.toBeInTheDocument();
+    expect(screen.queryByText("game_00000001")).not.toBeInTheDocument();
     const officialRuleCards = await screen.findByRole("radiogroup", {
       name: "官方规则",
     });
@@ -378,7 +378,7 @@ describe("GamesPage", () => {
           new Response(
             JSON.stringify({
               run_id: "run_1234abcd",
-              session_id: "session_20260424_120000_ab12cd34",
+              session_id: "game_1200abcd",
               villager_model: "deepseek-chat",
               werewolf_model: "deepseek-chat",
               seed: null,
@@ -458,7 +458,7 @@ describe("GamesPage", () => {
           new Response(
             JSON.stringify({
               run_id: "run_1234abcd",
-              session_id: "session_20260424_120000_ab12cd34",
+              session_id: "game_1200abcd",
               villager_model: "deepseek-chat",
               werewolf_model: "deepseek-chat",
               rule_set_id: "starter_6",
@@ -544,7 +544,7 @@ describe("GamesPage", () => {
           new Response(
             JSON.stringify({
               run_id: "run_1234abcd",
-              session_id: "session_20260424_120000_ab12cd34",
+              session_id: "game_1200abcd",
               villager_model: "deepseek-chat",
               werewolf_model: "deepseek-chat",
               seed: null,
@@ -860,7 +860,7 @@ describe("GamesPage", () => {
           new Response(
             JSON.stringify({
               run_id: "run_1234abcd",
-              session_id: "session_20260424_120000_ab12cd34",
+              session_id: "game_1200abcd",
               villager_model: "deepseek-chat",
               werewolf_model: "deepseek-chat",
               seed: null,
@@ -952,7 +952,7 @@ describe("GamesPage", () => {
           new Response(
             JSON.stringify({
               run_id: "run_1234abcd",
-              session_id: "session_20260424_120000_ab12cd34",
+              session_id: "game_1200abcd",
               villager_model: "deepseek-chat",
               werewolf_model: "deepseek-chat",
               seed: null,

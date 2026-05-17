@@ -4,10 +4,10 @@ import { normalizeGameReplay } from "./adapters";
 import type { RawGameReplayResponse } from "../types";
 
 const rawReplay: RawGameReplayResponse = {
-  session_id: "session_20260424_050950_66ea9f38",
+  session_id: "game_05095066",
   status: "complete",
   state: {
-    session_id: "session_20260424_050950_66ea9f38",
+    session_id: "game_05095066",
     players: [
       { name: "张三", role: "狼人", model: "deepseek-chat", observations: [] },
       { name: "李四", role: "村民", model: "deepseek-chat", observations: [] },
@@ -58,7 +58,7 @@ describe("normalizeGameReplay", () => {
   it("maps backend replay payload into stable UI fields", () => {
     const replay = normalizeGameReplay(rawReplay);
 
-    expect(replay.sessionId).toBe("session_20260424_050950_66ea9f38");
+    expect(replay.sessionId).toBe("game_05095066");
     expect(replay.status).toBe("complete");
     expect(replay.winner).toBe("狼人阵营");
     expect(replay.players[0]).toMatchObject({ name: "张三", role: "狼人" });
@@ -921,10 +921,10 @@ describe("normalizeGameReplay", () => {
 
   it("normalizes witch hunter idiot round fields", () => {
     const replay = normalizeGameReplay({
-      session_id: "session_20260428_120000_abcd1234",
+      session_id: "game_0428abcd",
       status: "complete",
       state: {
-        session_id: "session_20260428_120000_abcd1234",
+        session_id: "game_0428abcd",
         winner: "好人阵营",
         error_message: "",
         rule_set: {

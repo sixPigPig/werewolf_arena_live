@@ -14,7 +14,7 @@ describe("live run api", () => {
       new Response(
         JSON.stringify({
           run_id: "run_1234abcd",
-          session_id: "session_20260424_120000_ab12cd34",
+          session_id: "game_1200abcd",
           villager_model: "deepseek",
           werewolf_model: "minimax",
           rule_set_id: "starter_6",
@@ -103,7 +103,7 @@ describe("live run api", () => {
       new Response(
         JSON.stringify({
           run_id: "run_1234abcd",
-          session_id: "session_20260424_120000_ab12cd34",
+          session_id: "game_1200abcd",
           villager_model: "deepseek",
           werewolf_model: "minimax",
           seed: 21,
@@ -134,7 +134,7 @@ describe("live run api", () => {
       new Response(
         JSON.stringify({
           run_id: "run_resumed",
-          session_id: "session_20260424_120000_ab12cd34",
+          session_id: "game_1200abcd",
           villager_model: "Qwen3.6-Plus",
           werewolf_model: "MiniMax-M2.7",
           seed: 21,
@@ -152,13 +152,13 @@ describe("live run api", () => {
       ),
     );
 
-    const run = await resumeGameRun("session_20260424_120000_ab12cd34");
+    const run = await resumeGameRun("game_1200abcd");
 
     expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/v1/games/session_20260424_120000_ab12cd34/resume",
+      "/api/v1/games/game_1200abcd/resume",
       expect.objectContaining({ method: "POST" }),
     );
     expect(run.run_id).toBe("run_resumed");
-    expect(run.session_id).toBe("session_20260424_120000_ab12cd34");
+    expect(run.session_id).toBe("game_1200abcd");
   });
 });

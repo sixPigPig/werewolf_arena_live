@@ -22,7 +22,7 @@ describe("GameHistoryPage", () => {
         JSON.stringify({
           sessions: [
             {
-              session_id: "session_20260424_001",
+              session_id: "game_00000001",
               status: "complete",
               winner: "狼人阵营",
               round_count: 4,
@@ -75,7 +75,7 @@ describe("GameHistoryPage", () => {
     expect(screen.getByRole("button", { name: "刷新列表" })).toHaveClass(
       "gothic-button",
     );
-    expect(await screen.findByText("session_20260424_001")).toBeInTheDocument();
+    expect(await screen.findByText("game_00000001")).toBeInTheDocument();
     expect(screen.getByText("狼人阵营")).toBeInTheDocument();
     expect(screen.getByTestId("games-sessions-module")).toHaveClass(
       "glass-panel",
@@ -96,7 +96,7 @@ describe("GameHistoryPage", () => {
                   ? []
                   : [
                       {
-                        session_id: "session_after_refresh",
+                        session_id: "game_00000002",
                         status: "complete",
                         winner: "好人阵营",
                         round_count: 5,
@@ -120,7 +120,7 @@ describe("GameHistoryPage", () => {
     expect(await screen.findByText("还没有可复盘的对局")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "刷新列表" }));
 
-    expect(await screen.findByText("session_after_refresh")).toBeInTheDocument();
+    expect(await screen.findByText("game_00000002")).toBeInTheDocument();
     expect(screen.getByText("好人阵营")).toBeInTheDocument();
   });
 
@@ -129,7 +129,7 @@ describe("GameHistoryPage", () => {
       new Response(
         JSON.stringify({
           sessions: Array.from({ length: 8 }, (_, index) => ({
-            session_id: `session_page_${index + 1}`,
+            session_id: `game_${String(index + 1).padStart(8, "0")}`,
             status: "complete",
             winner: index % 2 === 0 ? "狼人阵营" : "好人阵营",
             round_count: index + 1,
@@ -145,24 +145,24 @@ describe("GameHistoryPage", () => {
 
     renderWithClient(<GameHistoryPage />, "/games/history");
 
-    expect(await screen.findByText("session_page_1")).toBeInTheDocument();
-    expect(screen.queryByText("session_page_8")).not.toBeInTheDocument();
+    expect(await screen.findByText("game_00000001")).toBeInTheDocument();
+    expect(screen.queryByText("game_00000008")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "下一页" }));
 
-    expect(await screen.findByText("session_page_8")).toBeInTheDocument();
-    expect(screen.queryByText("session_page_1")).not.toBeInTheDocument();
+    expect(await screen.findByText("game_00000008")).toBeInTheDocument();
+    expect(screen.queryByText("game_00000001")).not.toBeInTheDocument();
   });
 
   it("resumes a resumable session from the list", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);
-      if (url.endsWith("/api/v1/games/session_20260424_120000_ab12cd34/resume")) {
+      if (url.endsWith("/api/v1/games/game_1200abcd/resume")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({
               run_id: "run_resumed",
-              session_id: "session_20260424_120000_ab12cd34",
+              session_id: "game_1200abcd",
               villager_model: "Qwen3.6-Plus",
               werewolf_model: "MiniMax-M2.7",
               seed: 21,
@@ -186,7 +186,7 @@ describe("GameHistoryPage", () => {
           JSON.stringify({
             sessions: [
               {
-                session_id: "session_20260424_120000_ab12cd34",
+                session_id: "game_1200abcd",
                 status: "partial",
                 winner: null,
                 round_count: 1,
@@ -215,12 +215,12 @@ describe("GameHistoryPage", () => {
     );
 
     expect(
-      await screen.findByText("session_20260424_120000_ab12cd34"),
+      await screen.findByText("game_1200abcd"),
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "继续对局" }));
 
     expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/v1/games/session_20260424_120000_ab12cd34/resume",
+      "/api/v1/games/game_1200abcd/resume",
       expect.objectContaining({ method: "POST" }),
     );
     expect(await screen.findByText("继续后的实时观战")).toBeInTheDocument();
@@ -248,7 +248,7 @@ describe("GameHistoryPage", () => {
     queryClient.setQueryData(["games"], {
       sessions: [
         {
-          session_id: "session_cached",
+          session_id: "game_00000004",
           status: "complete",
           winner: "狼人阵营",
           round_count: 3,
@@ -268,6 +268,6 @@ describe("GameHistoryPage", () => {
     );
 
     expect(await screen.findByText("无法读取对局列表")).toBeInTheDocument();
-    expect(screen.queryByText("session_cached")).not.toBeInTheDocument();
+    expect(screen.queryByText("game_00000004")).not.toBeInTheDocument();
   });
 });

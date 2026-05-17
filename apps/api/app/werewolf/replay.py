@@ -13,7 +13,7 @@ from app.werewolf.checkpoint import (
 )
 
 
-SESSION_ID_RE = r"^session_(\d{8})_(\d{6})_[A-Za-z0-9_-]+$"
+SESSION_ID_RE = r"^game_[0-9a-f]{8}$"
 _SESSION_PATTERN = re.compile(SESSION_ID_RE)
 
 
@@ -64,13 +64,17 @@ class ReplayStore:
                     "status": status,
                     "winner": state.get("winner"),
                     "round_count": len(rounds),
-                    "created_at": created_at_from_session_id(directory.name),
+                    "created_at": self._created_at_for_directory(directory, state_path),
                     "rule_set": state.get("rule_set"),
                     "resumable": checkpoint is not None,
                 }
             )
 
-        return sorted(sessions, key=lambda item: item["session_id"], reverse=True)
+        return sorted(
+            sessions,
+            key=lambda item: (item["created_at"] or "", item["session_id"]),
+            reverse=True,
+        )
 
     def load_session(self, session_id: str) -> dict[str, Any]:
         if not _SESSION_PATTERN.fullmatch(session_id):
@@ -187,16 +191,15 @@ class ReplayStore:
         except ResumeCheckpointError:
             return None
 
+    def _created_at_for_directory(
+        self,
+        directory: Path,
+        state_path: Path | None,
+    ) -> str | None:
+        timestamp_path = state_path or directory
+        try:
+            created_at = datetime.fromtimestamp(timestamp_path.stat().st_mtime, tz=UTC)
+        except OSError:
+            return None
 
-def created_at_from_session_id(session_id: str) -> str | None:
-    match = _SESSION_PATTERN.fullmatch(session_id)
-    if match is None:
-        return None
-
-    raw_value = "".join(match.groups())
-    try:
-        created_at = datetime.strptime(raw_value, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
-    except ValueError:
-        return None
-
-    return created_at.isoformat().replace("+00:00", "Z")
+        return created_at.isoformat().replace("+00:00", "Z")

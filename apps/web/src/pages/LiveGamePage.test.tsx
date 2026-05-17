@@ -40,7 +40,7 @@ function runningRunResponse() {
   return new Response(
     JSON.stringify({
       run_id: "run_1234abcd",
-      session_id: "session_20260424_120000_ab12cd34",
+      session_id: "game_1200abcd",
       villager_model: "deepseek-chat",
       werewolf_model: "deepseek-chat",
       seed: null,
@@ -61,10 +61,16 @@ function runResponse(
   runId: string,
   status: "running" | "completed" | "failed",
 ) {
+  const sessionSuffix = runId
+    .replace(/^run_/, "")
+    .replace(/[^a-f0-9]/g, "")
+    .padEnd(8, "0")
+    .slice(0, 8);
+
   return new Response(
     JSON.stringify({
       run_id: runId,
-      session_id: `session_${runId}`,
+      session_id: `game_${sessionSuffix}`,
       villager_model: "deepseek-chat",
       werewolf_model: "deepseek-chat",
       seed: null,
@@ -90,7 +96,7 @@ function emitEvent(
     id: partial.id ?? 1,
     type: partial.type ?? "round_started",
     run_id: partial.run_id ?? "run_1234abcd",
-    session_id: partial.session_id ?? "session_20260424_120000_ab12cd34",
+    session_id: partial.session_id ?? "game_1200abcd",
     created_at: partial.created_at ?? "2026-04-24T12:00:03Z",
     round: partial.round ?? null,
     phase: partial.phase ?? null,
@@ -134,7 +140,7 @@ describe("LiveGamePage", () => {
         new Response(
           JSON.stringify({
             run_id: "run_1234abcd",
-            session_id: "session_20260424_120000_ab12cd34",
+            session_id: "game_1200abcd",
             villager_model: "deepseek-chat",
             werewolf_model: "deepseek-chat",
             seed: null,
@@ -168,7 +174,7 @@ describe("LiveGamePage", () => {
         new Response(
           JSON.stringify({
             run_id: "run_1234abcd",
-            session_id: "session_20260424_120000_ab12cd34",
+            session_id: "game_1200abcd",
             villager_model: "deepseek-chat",
             werewolf_model: "deepseek-chat",
             seed: null,
@@ -227,7 +233,7 @@ describe("LiveGamePage", () => {
         id: 1,
         type: "game_started",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:01Z",
         round: null,
         phase: null,
@@ -254,7 +260,7 @@ describe("LiveGamePage", () => {
         id: 2,
         type: "action_requested",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:03Z",
         round: 1,
         phase: "day",
@@ -266,7 +272,7 @@ describe("LiveGamePage", () => {
         id: 3,
         type: "model_request_started",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:03Z",
         round: 1,
         phase: "day",
@@ -284,7 +290,7 @@ describe("LiveGamePage", () => {
         id: 4,
         type: "model_response_delta",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:03Z",
         round: 1,
         phase: "day",
@@ -301,7 +307,7 @@ describe("LiveGamePage", () => {
         id: 5,
         type: "model_response_delta",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:03Z",
         round: 1,
         phase: "day",
@@ -336,7 +342,7 @@ describe("LiveGamePage", () => {
         id: 6,
         type: "state_updated",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:04Z",
         round: 1,
         phase: "day",
@@ -403,7 +409,7 @@ describe("LiveGamePage", () => {
         id: 7,
         type: "model_response_received",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:04Z",
         round: 1,
         phase: "day",
@@ -419,7 +425,7 @@ describe("LiveGamePage", () => {
         id: 8,
         type: "game_completed",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:10Z",
         round: null,
         phase: null,
@@ -435,7 +441,7 @@ describe("LiveGamePage", () => {
     const replayLink = screen.getByRole("link", { name: "查看完整复盘" });
     expect(replayLink).toHaveAttribute(
       "href",
-      "/games/session_20260424_120000_ab12cd34",
+      "/games/game_1200abcd",
     );
     expect(replayLink).toHaveClass("gothic-button");
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
@@ -448,7 +454,7 @@ describe("LiveGamePage", () => {
         connectionState="idle"
         run={{
           run_id: "run_1234abcd",
-          session_id: "session_20260424_120000_ab12cd34",
+          session_id: "game_1200abcd",
           villager_model: "deepseek-chat",
           werewolf_model: "deepseek-chat",
           seed: null,
@@ -724,7 +730,7 @@ describe("LiveGamePage", () => {
         id: 1,
         type: "game_started",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:01Z",
         round: null,
         phase: null,
@@ -741,7 +747,7 @@ describe("LiveGamePage", () => {
         id: 2,
         type: "action_requested",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:03Z",
         round: 1,
         phase: "day",
@@ -765,7 +771,7 @@ describe("LiveGamePage", () => {
         id: 3,
         type: "action_requested",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:04Z",
         round: 1,
         phase: "day",
@@ -805,7 +811,7 @@ describe("LiveGamePage", () => {
         id: 2,
         type: "game_failed",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:10Z",
         round: null,
         phase: null,
@@ -828,12 +834,12 @@ describe("LiveGamePage", () => {
       if (url.endsWith("/api/v1/games/runs/run_1234abcd")) {
         return Promise.resolve(runResponse("run_1234abcd", "failed"));
       }
-      if (url.endsWith("/api/v1/games/session_run_1234abcd/resume")) {
+      if (url.endsWith("/api/v1/games/game_1234abcd/resume")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({
               run_id: "run_resumed",
-              session_id: "session_run_1234abcd",
+              session_id: "game_1234abcd",
               villager_model: "deepseek-chat",
               werewolf_model: "deepseek-chat",
               seed: null,
@@ -871,7 +877,7 @@ describe("LiveGamePage", () => {
     await userEvent.click(resumeButton);
 
     expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/v1/games/session_run_1234abcd/resume",
+      "/api/v1/games/game_1234abcd/resume",
       expect.objectContaining({ method: "POST" }),
     );
     expect(await screen.findByText("继续后的实时观战")).toBeInTheDocument();
@@ -928,7 +934,7 @@ describe("LiveGamePage", () => {
         new Response(
           JSON.stringify({
             run_id: "run_1234abcd",
-            session_id: "session_20260424_120000_ab12cd34",
+            session_id: "game_1200abcd",
             villager_model: "deepseek-chat",
             werewolf_model: "deepseek-chat",
             seed: null,
@@ -1033,7 +1039,7 @@ describe("LiveGamePage", () => {
         new Response(
           JSON.stringify({
             run_id: "run_1234abcd",
-            session_id: "session_20260424_120000_ab12cd34",
+            session_id: "game_1200abcd",
             villager_model: "deepseek-chat",
             werewolf_model: "deepseek-chat",
             seed: null,
@@ -1345,7 +1351,7 @@ describe("LiveGamePage", () => {
         id: 1,
         type: "custom_diagnostic",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:03Z",
         round: null,
         phase: null,
@@ -1367,7 +1373,7 @@ describe("LiveGamePage", () => {
         id: 1,
         type: "action_requested",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:03Z",
         round: 1,
         phase: "day",
@@ -1379,7 +1385,7 @@ describe("LiveGamePage", () => {
         id: 2,
         type: "model_request_started",
         run_id: "run_1234abcd",
-        session_id: "session_20260424_120000_ab12cd34",
+        session_id: "game_1200abcd",
         created_at: "2026-04-24T12:00:04Z",
         round: 1,
         phase: "day",

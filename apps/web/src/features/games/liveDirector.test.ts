@@ -8,7 +8,7 @@ function event(partial: Partial<LiveGameEvent>): LiveGameEvent {
     id: partial.id ?? 1,
     type: partial.type ?? "game_started",
     run_id: "run_1234abcd",
-    session_id: "session_20260424_120000_ab12cd34",
+    session_id: "game_1200abcd",
     created_at: "2026-04-24T12:00:00Z",
     round: partial.round ?? null,
     phase: partial.phase ?? null,

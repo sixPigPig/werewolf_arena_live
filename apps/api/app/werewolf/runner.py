@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime as dt
 import random
 import uuid
 from dataclasses import dataclass
@@ -177,5 +176,4 @@ def _new_session_id() -> str:
 
 
 def new_session_id() -> str:
-    timestamp = dt.datetime.now(tz=dt.UTC).strftime("%Y%m%d_%H%M%S")
-    return f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
+    return f"game_{uuid.uuid4().hex[:8]}"

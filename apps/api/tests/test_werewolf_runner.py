@@ -759,7 +759,7 @@ def test_run_game_with_deepseek_models_writes_complete_chinese_logs(tmp_path) ->
     )
 
     assert result.winner in {"好人阵营", "狼人阵营"}
-    assert result.session_id.startswith("session_")
+    assert result.session_id.startswith("game_")
     assert result.log_directory.exists()
     assert (result.log_directory / "game_complete.json").exists()
     assert (result.log_directory / "game_logs.json").exists()
@@ -869,12 +869,12 @@ def test_run_game_accepts_custom_session_id(tmp_path) -> None:
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         event_sink=NullEventSink(),
     )
 
-    assert result.session_id == "session_20260424_120000_ab12cd34"
-    assert result.log_directory == tmp_path / "session_20260424_120000_ab12cd34"
+    assert result.session_id == "game_1200abcd"
+    assert result.log_directory == tmp_path / "game_1200abcd"
 
 
 class CapturingEventSink:
@@ -893,7 +893,7 @@ def test_run_game_publishes_live_events(tmp_path) -> None:
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         event_sink=sink,
     )
 
@@ -916,7 +916,7 @@ def test_run_game_publishes_streaming_model_events(tmp_path) -> None:
             seed=21,
             max_rounds=1,
             provider=StreamingSpeechProvider(),
-            session_id="session_20260424_120000_ab12cd34",
+            session_id="game_1200abcd",
             event_sink=sink,
         )
 
@@ -983,14 +983,14 @@ def test_run_game_event_sink_does_not_change_final_logs(tmp_path) -> None:
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
     )
     with_sink = run_game(
         logs_dir=tmp_path / "with_sink",
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         event_sink=CapturingEventSink(),
     )
 
@@ -1004,7 +1004,7 @@ def test_live_model_events_do_not_publish_internal_model_payloads(tmp_path) -> N
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         event_sink=sink,
     )
 

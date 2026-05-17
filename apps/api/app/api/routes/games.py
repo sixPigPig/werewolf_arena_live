@@ -29,7 +29,7 @@ from app.werewolf.player_presets import is_valid_appearance, is_valid_personalit
 from app.werewolf.providers import configured_model_options, default_model_name
 from app.werewolf.config import choose_player_names
 from app.werewolf.checkpoint import ResumeCheckpointError, load_resume_checkpoint
-from app.werewolf.replay import ReplayNotFoundError, ReplayStore
+from app.werewolf.replay import ReplayNotFoundError, ReplayStore, SESSION_ID_RE
 from app.werewolf.rules import (
     DEFAULT_RULE_SET_ID,
     get_rule_set,
@@ -254,7 +254,7 @@ def stream_game_run_events(
 def resume_game_run(
     session_id: Annotated[
         str,
-        Path(pattern=r"^session_\d{8}_\d{6}_[A-Za-z0-9_-]+$"),
+        Path(pattern=SESSION_ID_RE),
     ],
     store: Annotated[ReplayStore, Depends(get_replay_store)],
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
@@ -316,7 +316,7 @@ def resume_game_run(
 def get_game(
     session_id: Annotated[
         str,
-        Path(pattern=r"^session_\d{8}_\d{6}_[A-Za-z0-9_-]+$"),
+        Path(pattern=SESSION_ID_RE),
     ],
     store: Annotated[ReplayStore, Depends(get_replay_store)],
 ) -> dict:

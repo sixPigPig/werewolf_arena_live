@@ -70,7 +70,7 @@ describe("App", () => {
         JSON.stringify({
           sessions: [
             {
-              session_id: "session_history_route",
+              session_id: "game_00000003",
               status: "complete",
               winner: "狼人阵营",
               round_count: 4,
@@ -90,7 +90,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "对局历史" }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("session_history_route")).toBeInTheDocument();
+    expect(await screen.findByText("game_00000003")).toBeInTheDocument();
   });
 
   it("routes the gothic button showcase path to the component example page", async () => {
@@ -107,7 +107,7 @@ describe("App", () => {
   });
 
   it("routes a game session path to the replay detail", async () => {
-    const sessionId = "session_20260424_050950_66ea9f38";
+    const sessionId = "game_05095066";
 
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

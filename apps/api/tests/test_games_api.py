@@ -574,7 +574,7 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session_id = "session_20260424_120000_ab12cd34"
+    session_id = "game_1200abcd"
     write_json(
         tmp_path / session_id / RESUME_CHECKPOINT_FILE,
         {
@@ -661,7 +661,7 @@ def test_resume_game_run_returns_404_without_checkpoint(
     monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
 
     try:
-        response = client.post("/api/v1/games/session_20260424_120000_ab12cd34/resume")
+        response = client.post("/api/v1/games/game_1200abcd/resume")
     finally:
         clear_overrides()
 
@@ -670,7 +670,7 @@ def test_resume_game_run_returns_404_without_checkpoint(
 
 
 def test_list_games_includes_rule_set_summary(tmp_path: Path) -> None:
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     state = sample_state(session_id)
     state["rule_set"] = {
         "id": "social_8",
@@ -717,7 +717,7 @@ def test_create_game_run_returns_run_status(
     assert response.status_code == 201
     payload = response.json()
     assert payload["run_id"].startswith("run_")
-    assert payload["session_id"].startswith("session_")
+    assert payload["session_id"].startswith("game_")
     assert payload["status"] in {"queued", "running", "completed", "failed"}
     assert payload["event_count"] >= 1
     assert started == [payload["run_id"]]
@@ -742,7 +742,7 @@ def test_run_game_in_background_paces_registry_and_engine_events(
 ) -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=None,
@@ -790,7 +790,7 @@ def test_run_game_in_background_paces_registry_and_engine_events(
 def test_game_run_events_replays_existing_events() -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=None,
@@ -824,7 +824,7 @@ def test_game_run_events_replays_existing_events() -> None:
 def test_game_run_events_honors_after_id_query() -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=None,
@@ -863,7 +863,7 @@ def test_game_run_events_honors_after_id_query() -> None:
 def test_game_run_events_honors_last_event_id_header() -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
-        session_id="session_20260424_120000_ab12cd34",
+        session_id="game_1200abcd",
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=None,
@@ -903,8 +903,8 @@ def test_game_run_events_honors_last_event_id_header() -> None:
 
 
 def test_list_games_returns_complete_and_partial_sessions(tmp_path: Path) -> None:
-    complete_id = "session_20260424_050950_66ea9f38"
-    partial_id = "session_20260424_060000_abcd1234"
+    complete_id = "game_05095066"
+    partial_id = "game_0600abcd"
     write_json(tmp_path / complete_id / "game_complete.json", sample_state(complete_id))
     write_json(tmp_path / complete_id / "game_logs.json", sample_logs())
     write_json(
@@ -928,11 +928,11 @@ def test_list_games_returns_complete_and_partial_sessions(tmp_path: Path) -> Non
     assert payload["sessions"][0]["status"] == "partial"
     assert payload["sessions"][1]["winner"] == "狼人阵营"
     assert payload["sessions"][1]["round_count"] == 1
-    assert payload["sessions"][1]["created_at"] == "2026-04-24T05:09:50Z"
+    assert payload["sessions"][1]["created_at"].endswith("Z")
 
 
 def test_get_game_detail_returns_state_and_logs(tmp_path: Path) -> None:
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     write_json(tmp_path / session_id / "game_complete.json", sample_state(session_id))
     write_json(tmp_path / session_id / "game_logs.json", sample_logs())
     override_logs_root(tmp_path)
@@ -954,7 +954,7 @@ def test_get_game_detail_returns_404_for_missing_valid_session(tmp_path: Path) -
     override_logs_root(tmp_path)
 
     try:
-        response = client.get("/api/v1/games/session_20260424_050950_missing")
+        response = client.get("/api/v1/games/game_0000dead")
     finally:
         clear_overrides()
 
@@ -986,7 +986,7 @@ def test_list_games_returns_empty_when_logs_root_is_missing(tmp_path: Path) -> N
 
 
 def test_list_games_skips_invalid_session_directories(tmp_path: Path) -> None:
-    valid_id = "session_20260424_050950_66ea9f38"
+    valid_id = "game_05095066"
     invalid_id = "not-a-session"
     write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
     write_json(tmp_path / invalid_id / "game_complete.json", sample_state(invalid_id))
@@ -1002,7 +1002,7 @@ def test_list_games_skips_invalid_session_directories(tmp_path: Path) -> None:
 
 
 def test_get_game_detail_prefers_complete_over_partial(tmp_path: Path) -> None:
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     write_json(
         tmp_path / session_id / "game_complete.json",
         sample_state(session_id, winner="狼人阵营"),
@@ -1026,7 +1026,7 @@ def test_get_game_detail_prefers_complete_over_partial(tmp_path: Path) -> None:
 def test_get_game_detail_returns_empty_logs_when_logs_file_is_missing(
     tmp_path: Path,
 ) -> None:
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     write_json(tmp_path / session_id / "game_complete.json", sample_state(session_id))
     override_logs_root(tmp_path)
 
@@ -1042,7 +1042,7 @@ def test_get_game_detail_returns_empty_logs_when_logs_file_is_missing(
 def test_symlinked_session_directory_is_rejected(tmp_path: Path) -> None:
     logs_root = tmp_path / "logs"
     outside_root = tmp_path / "outside"
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     write_json(outside_root / "game_complete.json", sample_state(session_id))
     logs_root.mkdir()
     (logs_root / session_id).symlink_to(outside_root, target_is_directory=True)
@@ -1063,7 +1063,7 @@ def test_symlinked_session_directory_is_rejected(tmp_path: Path) -> None:
 def test_symlinked_json_files_are_rejected(tmp_path: Path) -> None:
     logs_root = tmp_path / "logs"
     outside_root = tmp_path / "outside"
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     write_json(outside_root / "game_complete.json", sample_state(session_id))
     session_dir = logs_root / session_id
     session_dir.mkdir(parents=True)
@@ -1087,7 +1087,7 @@ def test_symlinked_complete_file_rejects_session_even_when_partial_exists(
 ) -> None:
     logs_root = tmp_path / "logs"
     outside_root = tmp_path / "outside"
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     session_dir = logs_root / session_id
     write_json(outside_root / "game_complete.json", sample_state(session_id))
     write_json(
@@ -1112,7 +1112,7 @@ def test_symlinked_complete_file_rejects_session_even_when_partial_exists(
 def test_symlinked_logs_file_is_rejected(tmp_path: Path) -> None:
     logs_root = tmp_path / "logs"
     outside_root = tmp_path / "outside"
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     write_json(logs_root / session_id / "game_complete.json", sample_state(session_id))
     write_json(outside_root / "game_logs.json", sample_logs())
     (logs_root / session_id / "game_logs.json").symlink_to(
@@ -1130,8 +1130,8 @@ def test_symlinked_logs_file_is_rejected(tmp_path: Path) -> None:
 
 
 def test_list_games_skips_corrupt_json_and_detail_returns_404(tmp_path: Path) -> None:
-    valid_id = "session_20260424_050950_66ea9f38"
-    corrupt_id = "session_20260424_060000_abcd1234"
+    valid_id = "game_05095066"
+    corrupt_id = "game_0600abcd"
     write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
     write_text(tmp_path / corrupt_id / "game_complete.json", "{")
     override_logs_root(tmp_path)
@@ -1149,7 +1149,7 @@ def test_list_games_skips_corrupt_json_and_detail_returns_404(tmp_path: Path) ->
 
 
 def test_get_game_detail_returns_404_for_corrupt_logs_json(tmp_path: Path) -> None:
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     write_json(tmp_path / session_id / "game_complete.json", sample_state(session_id))
     write_text(tmp_path / session_id / "game_logs.json", "{")
     override_logs_root(tmp_path)
@@ -1163,7 +1163,7 @@ def test_get_game_detail_returns_404_for_corrupt_logs_json(tmp_path: Path) -> No
     assert response.json()["detail"] == "Game session not found"
 
 
-def test_list_games_does_not_crash_on_invalid_timestamp(tmp_path: Path) -> None:
+def test_list_games_skips_legacy_session_directories(tmp_path: Path) -> None:
     session_id = "session_20261340_250000_abcd1234"
     write_json(tmp_path / session_id / "game_complete.json", sample_state(session_id))
     override_logs_root(tmp_path)
@@ -1174,14 +1174,13 @@ def test_list_games_does_not_crash_on_invalid_timestamp(tmp_path: Path) -> None:
         clear_overrides()
 
     assert response.status_code == 200
-    assert response.json()["sessions"][0]["session_id"] == session_id
-    assert response.json()["sessions"][0]["created_at"] is None
+    assert response.json() == {"sessions": []}
 
 
 def test_list_games_skips_valid_json_malformed_state(tmp_path: Path) -> None:
-    valid_id = "session_20260424_050950_66ea9f38"
-    list_state_id = "session_20260424_060000_abcd1234"
-    null_rounds_id = "session_20260424_070000_abcd1234"
+    valid_id = "game_05095066"
+    list_state_id = "game_0600abcd"
+    null_rounds_id = "game_0700abcd"
     write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
     write_json(tmp_path / list_state_id / "game_complete.json", [])
     write_json(tmp_path / null_rounds_id / "game_complete.json", {"rounds": None})
@@ -1197,8 +1196,8 @@ def test_list_games_skips_valid_json_malformed_state(tmp_path: Path) -> None:
 
 
 def test_get_game_detail_returns_404_for_malformed_state(tmp_path: Path) -> None:
-    list_state_id = "session_20260424_060000_abcd1234"
-    null_rounds_id = "session_20260424_070000_abcd1234"
+    list_state_id = "game_0600abcd"
+    null_rounds_id = "game_0700abcd"
     write_json(tmp_path / list_state_id / "game_complete.json", [])
     write_json(tmp_path / null_rounds_id / "game_complete.json", {"rounds": None})
     override_logs_root(tmp_path)
@@ -1257,8 +1256,8 @@ def test_list_games_skips_entry_when_symlink_stat_raises(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    valid_id = "session_20260424_050950_66ea9f38"
-    bad_id = "session_20260424_060000_abcd1234"
+    valid_id = "game_05095066"
+    bad_id = "game_0600abcd"
     bad_dir = tmp_path / bad_id
     write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
     write_json(bad_dir / "game_complete.json", sample_state(bad_id))
@@ -1285,8 +1284,8 @@ def test_list_games_skips_session_when_state_file_stat_raises(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    valid_id = "session_20260424_050950_66ea9f38"
-    bad_id = "session_20260424_060000_abcd1234"
+    valid_id = "game_05095066"
+    bad_id = "game_0600abcd"
     bad_state_path = tmp_path / bad_id / "game_complete.json"
     write_json(tmp_path / valid_id / "game_complete.json", sample_state(valid_id))
     write_json(bad_state_path, sample_state(bad_id))
@@ -1312,7 +1311,7 @@ def test_list_games_skips_session_when_state_file_stat_raises(
 def test_get_game_detail_returns_404_for_malformed_logs_schema(
     tmp_path: Path,
 ) -> None:
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     write_json(tmp_path / session_id / "game_complete.json", sample_state(session_id))
     write_json(tmp_path / session_id / "game_logs.json", {})
     override_logs_root(tmp_path)
@@ -1330,7 +1329,7 @@ def test_get_game_detail_returns_404_when_session_resolve_raises(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    session_id = "session_20260424_050950_66ea9f38"
+    session_id = "game_05095066"
     session_dir = tmp_path / session_id
     write_json(session_dir / "game_complete.json", sample_state(session_id))
     original_resolve = Path.resolve
