@@ -21,6 +21,18 @@ class StoredPlayerProfile:
     avatar_image_url: str
     avatar_image_path: str
     avatar_image_mime: str
+    short_description: str
+    background_story: str
+    speaking_style: str
+    catchphrases: list[str]
+    strategy_profile: str
+    risk_tolerance: int
+    bluffing_tendency: int
+    trust_tendency: int
+    leadership_tendency: int
+    talkativeness: int
+    example_messages: list[str]
+    favorite: bool
     tags: list[str]
     created_at: datetime
     updated_at: datetime
@@ -56,6 +68,18 @@ class PlayerProfileFileStore:
         avatar_image_url: str = "",
         avatar_image_path: str = "",
         avatar_image_mime: str = "",
+        short_description: str = "",
+        background_story: str = "",
+        speaking_style: str = "",
+        catchphrases: list[str] | None = None,
+        strategy_profile: str = "balanced",
+        risk_tolerance: int = 3,
+        bluffing_tendency: int = 3,
+        trust_tendency: int = 3,
+        leadership_tendency: int = 3,
+        talkativeness: int = 3,
+        example_messages: list[str] | None = None,
+        favorite: bool = False,
     ) -> StoredPlayerProfile:
         now = datetime.now(UTC)
         profile = StoredPlayerProfile(
@@ -70,6 +94,18 @@ class PlayerProfileFileStore:
             avatar_image_url=avatar_image_url,
             avatar_image_path=avatar_image_path,
             avatar_image_mime=avatar_image_mime,
+            short_description=short_description,
+            background_story=background_story,
+            speaking_style=speaking_style,
+            catchphrases=catchphrases or [],
+            strategy_profile=strategy_profile,
+            risk_tolerance=risk_tolerance,
+            bluffing_tendency=bluffing_tendency,
+            trust_tendency=trust_tendency,
+            leadership_tendency=leadership_tendency,
+            talkativeness=talkativeness,
+            example_messages=example_messages or [],
+            favorite=favorite,
             tags=tags,
             created_at=now,
             updated_at=now,
@@ -123,7 +159,7 @@ class PlayerProfileFileStore:
     def _write_profiles(self, profiles: list[StoredPlayerProfile]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "version": 2,
+            "version": 3,
             "profiles": [_profile_to_payload(profile) for profile in profiles],
         }
         temp_path = self.path.with_suffix(f"{self.path.suffix}.tmp")
@@ -163,6 +199,18 @@ def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None
         avatar_image_url=str(payload.get("avatar_image_url") or ""),
         avatar_image_path=str(payload.get("avatar_image_path") or ""),
         avatar_image_mime=str(payload.get("avatar_image_mime") or ""),
+        short_description=str(payload.get("short_description") or ""),
+        background_story=str(payload.get("background_story") or ""),
+        speaking_style=str(payload.get("speaking_style") or ""),
+        catchphrases=_strings_from_payload(payload.get("catchphrases")),
+        strategy_profile=_optional_string(payload.get("strategy_profile")) or "balanced",
+        risk_tolerance=_int_from_payload(payload.get("risk_tolerance"), default=3),
+        bluffing_tendency=_int_from_payload(payload.get("bluffing_tendency"), default=3),
+        trust_tendency=_int_from_payload(payload.get("trust_tendency"), default=3),
+        leadership_tendency=_int_from_payload(payload.get("leadership_tendency"), default=3),
+        talkativeness=_int_from_payload(payload.get("talkativeness"), default=3),
+        example_messages=_strings_from_payload(payload.get("example_messages")),
+        favorite=_bool_from_payload(payload.get("favorite"), default=False),
         tags=_tags_from_payload(payload.get("tags")),
         created_at=created_at,
         updated_at=_parse_datetime(payload.get("updated_at"), fallback=created_at),
@@ -182,6 +230,18 @@ def _profile_to_payload(profile: StoredPlayerProfile) -> dict[str, Any]:
         "avatar_image_url": profile.avatar_image_url,
         "avatar_image_path": profile.avatar_image_path,
         "avatar_image_mime": profile.avatar_image_mime,
+        "short_description": profile.short_description,
+        "background_story": profile.background_story,
+        "speaking_style": profile.speaking_style,
+        "catchphrases": profile.catchphrases,
+        "strategy_profile": profile.strategy_profile,
+        "risk_tolerance": profile.risk_tolerance,
+        "bluffing_tendency": profile.bluffing_tendency,
+        "trust_tendency": profile.trust_tendency,
+        "leadership_tendency": profile.leadership_tendency,
+        "talkativeness": profile.talkativeness,
+        "example_messages": profile.example_messages,
+        "favorite": profile.favorite,
         "tags": profile.tags,
         "created_at": profile.created_at.isoformat(),
         "updated_at": profile.updated_at.isoformat(),
@@ -204,6 +264,27 @@ def _optional_int(value: object) -> int | None:
         return None
 
 
+def _int_from_payload(value: object, *, default: int) -> int:
+    parsed = _optional_int(value)
+    if parsed is None:
+        return default
+    return parsed
+
+
+def _bool_from_payload(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
+
+
 def _parse_datetime(value: object, fallback: datetime | None = None) -> datetime:
     if isinstance(value, str) and value.strip():
         try:
@@ -217,9 +298,13 @@ def _parse_datetime(value: object, fallback: datetime | None = None) -> datetime
 
 
 def _tags_from_payload(value: object) -> list[str]:
+    return _strings_from_payload(value)
+
+
+def _strings_from_payload(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
-    return [str(tag).strip() for tag in value if str(tag).strip()]
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def player_profile_store_for_logs_dir(logs_dir: str | Path) -> PlayerProfileFileStore:

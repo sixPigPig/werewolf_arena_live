@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.werewolf.player_profile_prompts import compose_player_profile_prompt
 from app.werewolf.player_presets import default_personality_text
 
 
@@ -59,11 +60,15 @@ def player_config_from_profile(
     profile_personality = None
     if override_personality_id is None or override_personality_id == profile_personality_id:
         profile_personality = _profile_string(profile, "personality_text")
-    personality = (
-        explicit_personality
-        or profile_personality
-        or default_personality_text(personality_id)
-    )
+    if explicit_personality:
+        personality = explicit_personality
+    else:
+        base_personality = profile_personality or default_personality_text(personality_id)
+        personality = (
+            compose_player_profile_prompt(profile, base_personality)
+            if profile is not None
+            else base_personality
+        )
     profile_id = (
         _override_string(overrides, "profile_id")
         or _profile_string(profile, "id")

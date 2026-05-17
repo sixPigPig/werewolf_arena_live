@@ -1,13 +1,6 @@
 import { CreateGameRunForm } from "../../features/games/components/CreateGameRunForm";
-import { VirtualPlayerLibrary } from "../../features/games/components/VirtualPlayerLibrary";
-import { createPlayerProfile } from "../../features/games/api/createPlayerProfile";
-import { deletePlayerProfile } from "../../features/games/api/deletePlayerProfile";
-import { listModelOptions } from "../../features/games/api/listModelOptions";
 import { listPlayerProfiles } from "../../features/games/api/listPlayerProfiles";
-import { uploadPlayerAvatar } from "../../features/games/api/uploadPlayerAvatar";
-import { updatePlayerProfile } from "../../features/games/api/updatePlayerProfile";
-import type { PlayerProfileRequest } from "../../features/games/types";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { RefObject } from "react";
 
 type GamesWorkspaceProps = {
@@ -15,68 +8,40 @@ type GamesWorkspaceProps = {
 };
 
 export function GamesWorkspace({ createFormRef }: GamesWorkspaceProps) {
-  const queryClient = useQueryClient();
   const playerProfilesQuery = useQuery({
     queryKey: ["player-profiles"],
     queryFn: listPlayerProfiles,
   });
-  const modelOptionsQuery = useQuery({
-    queryKey: ["model-options"],
-    queryFn: listModelOptions,
-  });
-  const invalidatePlayerProfiles = () =>
-    queryClient.invalidateQueries({ queryKey: ["player-profiles"] });
-  const createProfileMutation = useMutation({
-    mutationFn: createPlayerProfile,
-    onSuccess: invalidatePlayerProfiles,
-  });
-  const updateProfileMutation = useMutation({
-    mutationFn: ({
-      profileId,
-      request,
-    }: {
-      profileId: string;
-      request: PlayerProfileRequest;
-    }) => updatePlayerProfile(profileId, request),
-    onSuccess: invalidatePlayerProfiles,
-  });
-  const deleteProfileMutation = useMutation({
-    mutationFn: deletePlayerProfile,
-    onSuccess: invalidatePlayerProfiles,
-  });
-  const uploadAvatarMutation = useMutation({
-    mutationFn: uploadPlayerAvatar,
-  });
   const profiles = playerProfilesQuery.data?.profiles ?? [];
-  const modelOptions = modelOptionsQuery.data?.models ?? [];
-  const isSaving =
-    createProfileMutation.isPending ||
-    updateProfileMutation.isPending ||
-    deleteProfileMutation.isPending;
+  const profileLoadError = "无法读取虚拟玩家资料，席位选择暂时只显示随机角色。";
 
   return (
     <main
       className="games-workspace-module lobby-page-shell mx-auto w-full max-w-none px-4 py-5 sm:px-6 lg:px-8"
       data-testid="games-workspace-module"
     >
-      <VirtualPlayerLibrary
-        profiles={profiles}
-        isError={playerProfilesQuery.isError}
-        isLoading={playerProfilesQuery.isPending}
-        isModelOptionsError={modelOptionsQuery.isError}
-        isSaving={isSaving}
-        modelOptions={modelOptions}
-        onCreateProfile={(request) => createProfileMutation.mutateAsync(request)}
-        onUploadAvatar={(file) => uploadAvatarMutation.mutateAsync(file)}
-        onUpdateProfile={(profileId, request) =>
-          updateProfileMutation.mutateAsync({ profileId, request })
-        }
-        onDeleteProfile={(profileId) =>
-          deleteProfileMutation.mutateAsync(profileId)
-        }
-      />
+      {playerProfilesQuery.isPending ? (
+        <p
+          className="mb-3 rounded-md border border-amber-300/25 bg-slate-950/35 px-3 py-2 text-sm text-amber-100"
+          role="status"
+        >
+          正在读取虚拟玩家资料，席位选择加载完成后可用。
+        </p>
+      ) : null}
+      {playerProfilesQuery.isError ? (
+        <p
+          aria-label={profileLoadError}
+          className="mb-3 rounded-md border border-red-300/30 bg-red-950/35 px-3 py-2 text-sm text-red-100"
+          role="alert"
+        >
+          {profileLoadError}
+        </p>
+      ) : null}
       <div ref={createFormRef}>
-        <CreateGameRunForm profiles={profiles} />
+        <CreateGameRunForm
+          isProfileListLoaded={playerProfilesQuery.isSuccess}
+          profiles={profiles}
+        />
       </div>
     </main>
   );

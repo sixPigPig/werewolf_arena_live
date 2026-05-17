@@ -426,13 +426,24 @@ def test_create_game_run_resolves_profile_configs(
 
     assert response.status_code == 201
     snapshot = response.json()["player_configs"][0]
+    expected_personality = "\n".join(
+        [
+            default_personality_text("aggressive"),
+            "狼人杀策略: 稳健观察，按证据推进，不轻易极端站边。",
+            "冒险倾向: 3/5",
+            "伪装倾向: 3/5",
+            "信任倾向: 3/5",
+            "领导倾向: 3/5",
+            "发言活跃: 3/5",
+        ]
+    )
     assert snapshot == {
         "seat": 2,
         "profile_id": "profile-alpha",
         "name": "覆盖名",
         "model": "profile-model",
         "personality_id": "aggressive",
-        "personality": default_personality_text("aggressive"),
+        "personality": expected_personality,
         "appearance_id": "crimson",
         "avatar_prompt": "silver moon portrait",
         "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
@@ -495,19 +506,132 @@ def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
 
     assert response.status_code == 201
     snapshot = response.json()["player_configs"][0]
+    expected_personality = "\n".join(
+        [
+            "先听后判。",
+            "狼人杀策略: 稳健观察，按证据推进，不轻易极端站边。",
+            "冒险倾向: 3/5",
+            "伪装倾向: 3/5",
+            "信任倾向: 3/5",
+            "领导倾向: 3/5",
+            "发言活跃: 3/5",
+        ]
+    )
     assert snapshot == {
         "seat": 2,
         "profile_id": "profile-file",
         "name": "文件玩家",
         "model": "file-model",
         "personality_id": "cautious",
-        "personality": "先听后判。",
+        "personality": expected_personality,
         "appearance_id": "moonlit",
         "avatar_prompt": "silver moon portrait",
         "avatar_image_url": "/api/v1/player-profiles/avatar/profile-file.png",
         "tags": ["本地"],
     }
     assert [config.to_dict() for config in captured[0]["player_configs"]] == [snapshot]
+
+
+def test_game_run_player_config_composes_rich_profile_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "控场样本",
+            "model": "deepseek-v4-flash",
+            "personality_id": "analytical",
+            "personality_text": "先找矛盾，再给站边。",
+            "short_description": "逻辑控场玩家",
+            "speaking_style": "发言会分点列证据。",
+            "catchphrases": ["我先拆一下视角"],
+            "strategy_profile": "logic_leader",
+            "leadership_tendency": 5,
+            "talkativeness": 4,
+            "example_messages": ["我觉得 2 号的视角漏掉了昨晚信息。"],
+        },
+    ).json()
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "player_configs": [{"seat": 1, "profile_id": created["id"]}],
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    config = response.json()["player_configs"][0]
+    assert config["name"] == "控场样本"
+    assert "先找矛盾，再给站边。" in config["personality"]
+    assert "逻辑控场玩家" in config["personality"]
+    assert "我先拆一下视角" in config["personality"]
+    assert "领导倾向: 5/5" in config["personality"]
+    assert [config.to_dict() for config in captured[0]["player_configs"]] == [config]
+
+
+def test_game_run_player_config_keeps_explicit_personality_text_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "覆盖样本",
+            "model": "deepseek-v4-flash",
+            "personality_id": "analytical",
+            "personality_text": "先找矛盾，再给站边。",
+            "short_description": "这段不应进入运行配置",
+            "catchphrases": ["这句也不应进入"],
+            "leadership_tendency": 5,
+        },
+    ).json()
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "player_configs": [
+                    {
+                        "seat": 1,
+                        "profile_id": created["id"],
+                        "personality_text": "只使用运行时覆盖。",
+                    }
+                ],
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    config = response.json()["player_configs"][0]
+    assert config["personality"] == "只使用运行时覆盖。"
+    assert [config.to_dict() for config in captured[0]["player_configs"]] == [config]
 
 
 def test_create_game_run_rejects_duplicate_effective_player_names(

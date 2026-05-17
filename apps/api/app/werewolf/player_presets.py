@@ -30,9 +30,22 @@ APPEARANCE_PRESETS: dict[str, PlayerPreset] = {
     "gothic-female-2": PlayerPreset(id="gothic-female-2", label="黑纱预言者", description="暗夜哥特女性半身形象。"),
 }
 
+STRATEGY_PRESETS = {
+    "balanced": "稳健观察，按证据推进，不轻易极端站边。",
+    "logic_leader": "偏逻辑带队，主动整理票型、发言顺序和矛盾链。",
+    "shadow_wolf": "擅长隐藏动机，低调拆票，避免过早成为焦点。",
+    "social_reader": "偏社交阅读，重视情绪变化、关系线和发言姿态。",
+    "pressure_attacker": "喜欢强压和快速验人式提问，用压力制造信息。",
+    "cautious_observer": "谨慎慢热，先收集信息，再给出明确判断。",
+}
+
 
 def default_personality_text(personality_id: str) -> str:
     return PERSONALITY_PRESETS[personality_id].description
+
+
+def default_strategy_text(strategy_profile: str) -> str:
+    return STRATEGY_PRESETS[strategy_profile]
 
 
 def is_valid_personality(personality_id: str) -> bool:
@@ -41,3 +54,7 @@ def is_valid_personality(personality_id: str) -> bool:
 
 def is_valid_appearance(appearance_id: str) -> bool:
     return appearance_id in APPEARANCE_PRESETS
+
+
+def is_valid_strategy(strategy_profile: str) -> bool:
+    return strategy_profile in STRATEGY_PRESETS
