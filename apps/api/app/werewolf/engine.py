@@ -160,6 +160,7 @@ def initialize_game_state(
             personality=player_config.personality if player_config else "",
             appearance_id=player_config.appearance_id if player_config else "default",
             avatar_prompt=player_config.avatar_prompt if player_config else "",
+            avatar_image_url=player_config.avatar_image_url if player_config else "",
             profile_id=player_config.profile_id if player_config else None,
             tags=list(player_config.tags) if player_config else [],
         )

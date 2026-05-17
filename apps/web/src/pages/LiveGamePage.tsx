@@ -165,6 +165,7 @@ export function LiveGamePage() {
         model: player.model,
         personalityId: player.personalityId,
         appearanceId: player.appearanceId,
+        avatarImageUrl: player.avatarImageUrl,
         tags: player.tags,
         state,
         statusLabel: liveRosterStatusLabel(state),

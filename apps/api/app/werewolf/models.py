@@ -70,6 +70,7 @@ class Player:
     personality: str = ""
     appearance_id: str = "default"
     avatar_prompt: str = ""
+    avatar_image_url: str = ""
     profile_id: str | None = None
     tags: list[str] = field(default_factory=list)
     observations: list[str] = field(default_factory=list)
@@ -95,6 +96,7 @@ class Player:
             "personality": self.personality,
             "appearance_id": self.appearance_id,
             "avatar_prompt": self.avatar_prompt,
+            "avatar_image_url": self.avatar_image_url,
             "profile_id": self.profile_id,
             "tags": self.tags,
             "observations": self.observations,

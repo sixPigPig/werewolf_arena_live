@@ -24,6 +24,10 @@ APPEARANCE_PRESETS: dict[str, PlayerPreset] = {
     "moonlit": PlayerPreset(id="moonlit", label="冷月", description="冷月银蓝形象。"),
     "ember": PlayerPreset(id="ember", label="余烬", description="琥珀火光形象。"),
     "verdant": PlayerPreset(id="verdant", label="幽林", description="暗绿色森林形象。"),
+    "gothic-male-1": PlayerPreset(id="gothic-male-1", label="夜甲行者", description="暗夜哥特男性半身形象。"),
+    "gothic-male-2": PlayerPreset(id="gothic-male-2", label="银发贵族", description="暗夜哥特男性半身形象。"),
+    "gothic-female-1": PlayerPreset(id="gothic-female-1", label="霜银骑士", description="暗夜哥特女性半身形象。"),
+    "gothic-female-2": PlayerPreset(id="gothic-female-2", label="黑纱预言者", description="暗夜哥特女性半身形象。"),
 }
 
 

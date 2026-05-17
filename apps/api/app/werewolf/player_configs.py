@@ -17,6 +17,7 @@ class PlayerConfig:
     appearance_id: str
     avatar_prompt: str
     tags: tuple[str, ...]
+    avatar_image_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -28,6 +29,7 @@ class PlayerConfig:
             "personality": self.personality,
             "appearance_id": self.appearance_id,
             "avatar_prompt": self.avatar_prompt,
+            "avatar_image_url": self.avatar_image_url,
             "tags": list(self.tags),
         }
 
@@ -89,6 +91,11 @@ def player_config_from_profile(
             or _profile_string(profile, "avatar_prompt")
             or ""
         ),
+        avatar_image_url=(
+            _override_string(overrides, "avatar_image_url")
+            or _profile_string(profile, "avatar_image_url")
+            or ""
+        ),
         tags=_tags_from_value(
             overrides["tags"] if "tags" in overrides else getattr(profile, "tags", ())
         ),
@@ -105,6 +112,7 @@ def player_config_from_dict(data: dict[str, Any]) -> PlayerConfig:
         personality=clean_optional_string(data.get("personality")) or "",
         appearance_id=clean_optional_string(data.get("appearance_id")) or "default",
         avatar_prompt=clean_optional_string(data.get("avatar_prompt")) or "",
+        avatar_image_url=clean_optional_string(data.get("avatar_image_url")) or "",
         tags=_tags_from_value(data.get("tags")),
     )
 

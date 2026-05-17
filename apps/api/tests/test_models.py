@@ -41,6 +41,9 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "personality_text",
         "appearance_id",
         "avatar_prompt",
+        "avatar_image_url",
+        "avatar_image_path",
+        "avatar_image_mime",
         "tags",
         "created_at",
         "updated_at",
@@ -70,6 +73,9 @@ def test_virtual_player_profile_tag_append_is_persisted() -> None:
             personality_text="稳健推进",
             appearance_id="default",
             avatar_prompt="",
+            avatar_image_url="",
+            avatar_image_path="",
+            avatar_image_mime="",
             tags=[],
         )
         session.add(profile)

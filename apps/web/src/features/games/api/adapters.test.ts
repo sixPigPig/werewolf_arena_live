@@ -76,6 +76,7 @@ describe("normalizeGameReplay", () => {
       personality: "",
       appearance_id: "default",
       avatar_prompt: "",
+      avatar_image_url: "",
       profile_id: null,
       tags: [],
     });

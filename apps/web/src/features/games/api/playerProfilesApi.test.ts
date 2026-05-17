@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPlayerProfile } from "./createPlayerProfile";
 import { deletePlayerProfile } from "./deletePlayerProfile";
 import { listPlayerProfiles } from "./listPlayerProfiles";
+import { uploadPlayerAvatar } from "./uploadPlayerAvatar";
 import { updatePlayerProfile } from "./updatePlayerProfile";
 
 const profile = {
@@ -13,6 +14,8 @@ const profile = {
   personality_text: "谨慎观察局势。",
   appearance_id: "moonlit",
   avatar_prompt: "银发观察者",
+  avatar_image_url: "/api/v1/player-profiles/avatar/profile-1.png",
+  avatar_image_mime: "image/png",
   tags: ["控场"],
   created_at: "2026-05-16T08:00:00Z",
   updated_at: "2026-05-16T08:00:00Z",
@@ -53,7 +56,8 @@ describe("player profiles api", () => {
       model: "deepseek-chat",
       personality_id: "cautious",
       appearance_id: "moonlit",
-      avatar_prompt: "银发观察者",
+      avatar_image_url: "/api/v1/player-profiles/avatar/profile-1.png",
+      avatar_image_mime: "image/png",
       tags: ["控场"],
     });
 
@@ -67,10 +71,48 @@ describe("player profiles api", () => {
           model: "deepseek-chat",
           personality_id: "cautious",
           appearance_id: "moonlit",
-          avatar_prompt: "银发观察者",
+          avatar_image_url: "/api/v1/player-profiles/avatar/profile-1.png",
+          avatar_image_mime: "image/png",
           tags: ["控场"],
         }),
       }),
+    );
+  });
+
+  it("uploads a player avatar image as base64 JSON", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          avatar_image_url: "/api/v1/player-profiles/avatar/avatar.png",
+          avatar_image_mime: "image/png",
+        }),
+        {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const file = new File([new Uint8Array([137, 80, 78, 71])], "avatar.png", {
+      type: "image/png",
+    });
+    const response = await uploadPlayerAvatar(file);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/player-profiles/avatar",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body));
+    expect(body).toEqual({
+      filename: "avatar.png",
+      content_type: "image/png",
+      data_base64: "iVBORw==",
+    });
+    expect(response.avatar_image_url).toBe(
+      "/api/v1/player-profiles/avatar/avatar.png",
     );
   });
 

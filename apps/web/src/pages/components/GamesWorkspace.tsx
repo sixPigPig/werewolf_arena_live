@@ -4,6 +4,7 @@ import { createPlayerProfile } from "../../features/games/api/createPlayerProfil
 import { deletePlayerProfile } from "../../features/games/api/deletePlayerProfile";
 import { listModelOptions } from "../../features/games/api/listModelOptions";
 import { listPlayerProfiles } from "../../features/games/api/listPlayerProfiles";
+import { uploadPlayerAvatar } from "../../features/games/api/uploadPlayerAvatar";
 import { updatePlayerProfile } from "../../features/games/api/updatePlayerProfile";
 import type { PlayerProfileRequest } from "../../features/games/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -43,6 +44,9 @@ export function GamesWorkspace({ createFormRef }: GamesWorkspaceProps) {
     mutationFn: deletePlayerProfile,
     onSuccess: invalidatePlayerProfiles,
   });
+  const uploadAvatarMutation = useMutation({
+    mutationFn: uploadPlayerAvatar,
+  });
   const profiles = playerProfilesQuery.data?.profiles ?? [];
   const modelOptions = modelOptionsQuery.data?.models ?? [];
   const isSaving =
@@ -63,6 +67,7 @@ export function GamesWorkspace({ createFormRef }: GamesWorkspaceProps) {
         isSaving={isSaving}
         modelOptions={modelOptions}
         onCreateProfile={(request) => createProfileMutation.mutateAsync(request)}
+        onUploadAvatar={(file) => uploadAvatarMutation.mutateAsync(file)}
         onUpdateProfile={(profileId, request) =>
           updateProfileMutation.mutateAsync({ profileId, request })
         }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type ChangeEvent, type DragEvent, useState } from "react";
 
 import {
   Button,
@@ -8,13 +8,18 @@ import {
   TextField,
 } from "../../../components/ui";
 import {
-  APPEARANCE_OPTIONS,
   appearanceClassName,
   PERSONALITY_OPTIONS,
   personalityLabel,
 } from "../playerProfileOptions";
+import {
+  randomSystemPlayerAvatar,
+  SYSTEM_PLAYER_AVATARS,
+  type SystemPlayerAvatar,
+} from "../systemPlayerAvatars";
 import type {
   ModelOption,
+  PlayerAvatarUploadResponse,
   PlayerProfileRequest,
   VirtualPlayerProfile,
 } from "../types";
@@ -26,6 +31,7 @@ type VirtualPlayerLibraryProps = {
   isError: boolean;
   isModelOptionsError: boolean;
   isSaving: boolean;
+  onUploadAvatar: (file: File) => Promise<PlayerAvatarUploadResponse>;
   onCreateProfile: (request: PlayerProfileRequest) => Promise<unknown>;
   onUpdateProfile: (
     profileId: string,
@@ -44,6 +50,8 @@ const defaultDraft = (model = ""): PlayerProfileRequest => ({
   personality_text: "",
   appearance_id: "default",
   avatar_prompt: "",
+  avatar_image_url: "",
+  avatar_image_mime: "",
   tags: [],
 });
 
@@ -61,6 +69,8 @@ function profileToDraft(profile: VirtualPlayerProfile): PlayerProfileRequest {
     personality_text: profile.personality_text || "",
     appearance_id: profile.appearance_id || "default",
     avatar_prompt: profile.avatar_prompt || "",
+    avatar_image_url: profile.avatar_image_url || "",
+    avatar_image_mime: profile.avatar_image_mime || "",
     tags: profile.tags,
   };
 }
@@ -94,6 +104,7 @@ export function VirtualPlayerLibrary({
   isError,
   isModelOptionsError,
   isSaving,
+  onUploadAvatar,
   onCreateProfile,
   onUpdateProfile,
   onDeleteProfile,
@@ -102,6 +113,8 @@ export function VirtualPlayerLibrary({
   const [tagInput, setTagInput] = useState("");
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [isAvatarDragging, setIsAvatarDragging] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(
     null,
@@ -109,6 +122,7 @@ export function VirtualPlayerLibrary({
   const activeModelOptions = modelOptionsForDraft(modelOptions, draft.model);
   const canSave =
     !isSaving &&
+    !isUploadingAvatar &&
     draft.display_name.trim().length > 0 &&
     draft.model.trim().length > 0;
 
@@ -117,12 +131,25 @@ export function VirtualPlayerLibrary({
     value: PlayerProfileRequest[Key],
   ) => setDraft((current) => ({ ...current, [key]: value }));
 
+  const applySystemAvatar = (avatar: SystemPlayerAvatar) => {
+    setDraft((current) => ({
+      ...current,
+      appearance_id: avatar.id,
+      avatar_image_url: avatar.imageUrl,
+      avatar_image_mime: avatar.mime,
+    }));
+  };
+
   const startCreate = () => {
+    const avatar = randomSystemPlayerAvatar();
     setActionError(null);
     setDeleteCandidateId(null);
     setDraft({
       ...defaultDraft(modelOptions[0]?.id ?? ""),
       display_name: generateVirtualPlayerName(),
+      appearance_id: avatar.id,
+      avatar_image_url: avatar.imageUrl,
+      avatar_image_mime: avatar.mime,
     });
     setTagInput("");
     setEditingProfileId(null);
@@ -149,6 +176,8 @@ export function VirtualPlayerLibrary({
       model: draft.model.trim(),
       personality_text: draft.personality_text?.trim() ?? "",
       avatar_prompt: draft.avatar_prompt?.trim() ?? "",
+      avatar_image_url: draft.avatar_image_url?.trim() ?? "",
+      avatar_image_mime: draft.avatar_image_mime?.trim() ?? "",
       tags: draft.tags ?? [],
     };
     try {
@@ -175,8 +204,61 @@ export function VirtualPlayerLibrary({
       personality_text: profile.personality_text,
       appearance_id: profile.appearance_id,
       avatar_prompt: profile.avatar_prompt,
+      avatar_image_url: profile.avatar_image_url,
+      avatar_image_mime: profile.avatar_image_mime,
       tags: profile.tags,
     }).catch(() => setActionError("无法保存虚拟玩家"));
+  };
+
+  const uploadAvatarFile = async (file: File) => {
+    if (!file) {
+      return;
+    }
+
+    setActionError(null);
+    setIsUploadingAvatar(true);
+    try {
+      const response = await onUploadAvatar(file);
+      setDraft((current) => ({
+        ...current,
+        avatar_image_url: response.avatar_image_url,
+        avatar_image_mime: response.avatar_image_mime,
+      }));
+    } catch {
+      setActionError("无法上传人物形象");
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
+
+  const uploadAvatar = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    try {
+      if (file) {
+        await uploadAvatarFile(file);
+      }
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const handleAvatarDragOver = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setIsAvatarDragging(true);
+  };
+
+  const handleAvatarDragLeave = () => {
+    setIsAvatarDragging(false);
+  };
+
+  const handleAvatarDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    setIsAvatarDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) {
+      void uploadAvatarFile(file);
+    }
   };
 
   const requestDeleteProfile = (profileId: string) => {
@@ -278,22 +360,58 @@ export function VirtualPlayerLibrary({
               ))}
             </SelectField>
           </label>
-          <label>
+          <label
+            className={[
+              "virtual-player-avatar-uploader",
+              isAvatarDragging ? "virtual-player-avatar-uploader-dragging" : "",
+            ].join(" ")}
+            data-testid="virtual-player-avatar-dropzone"
+            onDragLeave={handleAvatarDragLeave}
+            onDragOver={handleAvatarDragOver}
+            onDrop={handleAvatarDrop}
+          >
             <span>人物形象</span>
-            <SelectField
-              disabled={isSaving}
-              onChange={(event) =>
-                updateDraft("appearance_id", event.target.value)
-              }
-              value={draft.appearance_id}
-            >
-              {APPEARANCE_OPTIONS.map((option) => (
-                <Option key={option.id} value={option.id}>
-                  {option.label}
-                </Option>
-              ))}
-            </SelectField>
+            <input
+              accept="image/png,image/jpeg,image/webp"
+              aria-label="人物形象"
+              disabled={isSaving || isUploadingAvatar}
+              onChange={(event) => void uploadAvatar(event)}
+              type="file"
+            />
+            <div className="virtual-player-avatar-preview">
+              {draft.avatar_image_url ? (
+                <img
+                  alt={`${draft.display_name || "虚拟玩家"} 人物形象`}
+                  src={draft.avatar_image_url}
+                />
+              ) : (
+                <span aria-hidden="true" className="virtual-player-avatar-placeholder">
+                  {draft.display_name.trim().charAt(0) || "?"}
+                </span>
+              )}
+            </div>
           </label>
+          <div className="virtual-player-system-avatars">
+            {SYSTEM_PLAYER_AVATARS.map((avatar) => {
+              const isSelected = draft.avatar_image_url === avatar.imageUrl;
+
+              return (
+                <button
+                  aria-label={`选择内设形象 ${avatar.label}`}
+                  className={[
+                    "virtual-player-system-avatar",
+                    isSelected ? "virtual-player-system-avatar-selected" : "",
+                  ].join(" ")}
+                  key={avatar.id}
+                  onClick={() => applySystemAvatar(avatar)}
+                  type="button"
+                >
+                  <img alt="" aria-hidden="true" src={avatar.imageUrl} />
+                  <span>{avatar.label}</span>
+                </button>
+              );
+            })}
+          </div>
           <label>
             <span>性格描述</span>
             <textarea
@@ -302,16 +420,6 @@ export function VirtualPlayerLibrary({
                 updateDraft("personality_text", event.target.value)
               }
               value={draft.personality_text ?? ""}
-            />
-          </label>
-          <label>
-            <span>形象提示</span>
-            <textarea
-              disabled={isSaving}
-              onChange={(event) =>
-                updateDraft("avatar_prompt", event.target.value)
-              }
-              value={draft.avatar_prompt ?? ""}
             />
           </label>
           <label>
@@ -365,13 +473,21 @@ export function VirtualPlayerLibrary({
             return (
               <li className="virtual-player-card" key={profile.id}>
                 <span
-                  aria-hidden="true"
                   className={[
                     "virtual-player-card-avatar",
-                    appearanceClassName(profile.appearance_id),
+                    profile.avatar_image_url
+                      ? "virtual-player-card-avatar-image"
+                      : appearanceClassName(profile.appearance_id),
                   ].join(" ")}
                 >
-                  {profile.display_name.trim().charAt(0) || "?"}
+                  {profile.avatar_image_url ? (
+                    <img
+                      alt={`${profile.display_name} 人物形象`}
+                      src={profile.avatar_image_url}
+                    />
+                  ) : (
+                    profile.display_name.trim().charAt(0) || "?"
+                  )}
                 </span>
                 <div className="virtual-player-card-main">
                   <div className="virtual-player-card-heading">

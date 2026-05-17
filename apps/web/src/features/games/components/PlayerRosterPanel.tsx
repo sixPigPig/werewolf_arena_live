@@ -20,6 +20,7 @@ export type PlayerRosterItem = {
   model?: string;
   personalityId?: string;
   appearanceId?: string;
+  avatarImageUrl?: string;
   tags?: string[];
   state: PlayerRosterState;
   statusLabel: string;
@@ -122,7 +123,15 @@ function RosterRow({
           player.state === "dead" ? "grayscale" : ""
         }`}
       >
-        {avatarText(player.name)}
+        {player.avatarImageUrl ? (
+          <img
+            alt={`${player.name} 人物形象`}
+            className="h-full w-full rounded-full object-cover"
+            src={player.avatarImageUrl}
+          />
+        ) : (
+          avatarText(player.name)
+        )}
       </span>
       <span className="player-roster-main min-w-0 flex-1">
         <span className="player-roster-name block truncate text-sm font-semibold text-slate-100">

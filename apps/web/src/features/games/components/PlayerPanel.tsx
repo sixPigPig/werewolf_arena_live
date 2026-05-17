@@ -23,6 +23,7 @@ export function PlayerPanel({ game }: PlayerPanelProps) {
       model: player.model,
       personalityId: player.personality_id,
       appearanceId: player.appearance_id,
+      avatarImageUrl: player.avatar_image_url,
       tags: player.tags,
       state: isDead ? "dead" : "alive",
       statusLabel: isDead ? "死亡" : "存活",

@@ -18,6 +18,9 @@ class StoredPlayerProfile:
     personality_text: str
     appearance_id: str
     avatar_prompt: str
+    avatar_image_url: str
+    avatar_image_path: str
+    avatar_image_mime: str
     tags: list[str]
     created_at: datetime
     updated_at: datetime
@@ -50,6 +53,9 @@ class PlayerProfileFileStore:
         appearance_id: str,
         avatar_prompt: str,
         tags: list[str],
+        avatar_image_url: str = "",
+        avatar_image_path: str = "",
+        avatar_image_mime: str = "",
     ) -> StoredPlayerProfile:
         now = datetime.now(UTC)
         profile = StoredPlayerProfile(
@@ -61,6 +67,9 @@ class PlayerProfileFileStore:
             personality_text=personality_text,
             appearance_id=appearance_id,
             avatar_prompt=avatar_prompt,
+            avatar_image_url=avatar_image_url,
+            avatar_image_path=avatar_image_path,
+            avatar_image_mime=avatar_image_mime,
             tags=tags,
             created_at=now,
             updated_at=now,
@@ -151,6 +160,9 @@ def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None
         ),
         appearance_id=appearance_id,
         avatar_prompt=str(payload.get("avatar_prompt") or ""),
+        avatar_image_url=str(payload.get("avatar_image_url") or ""),
+        avatar_image_path=str(payload.get("avatar_image_path") or ""),
+        avatar_image_mime=str(payload.get("avatar_image_mime") or ""),
         tags=_tags_from_payload(payload.get("tags")),
         created_at=created_at,
         updated_at=_parse_datetime(payload.get("updated_at"), fallback=created_at),
@@ -167,6 +179,9 @@ def _profile_to_payload(profile: StoredPlayerProfile) -> dict[str, Any]:
         "personality_text": profile.personality_text,
         "appearance_id": profile.appearance_id,
         "avatar_prompt": profile.avatar_prompt,
+        "avatar_image_url": profile.avatar_image_url,
+        "avatar_image_path": profile.avatar_image_path,
+        "avatar_image_mime": profile.avatar_image_mime,
         "tags": profile.tags,
         "created_at": profile.created_at.isoformat(),
         "updated_at": profile.updated_at.isoformat(),

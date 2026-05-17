@@ -86,6 +86,8 @@ function playerProfilesResponse() {
         personality_text: "谨慎保守。",
         appearance_id: "moonlit",
         avatar_prompt: "银发观察者",
+        avatar_image_url: "/api/v1/player-profiles/avatar/profile-1.png",
+        avatar_image_mime: "image/png",
         tags: ["控场"],
         created_at: "2026-05-16T00:00:00Z",
         updated_at: "2026-05-16T00:00:00Z",
@@ -207,6 +209,9 @@ describe("GamesPage", () => {
     expect(within(playerLibrary).getByText("MiniMax-M2.7")).toBeInTheDocument();
     expect(within(playerLibrary).getByText("谨慎")).toBeInTheDocument();
     expect(
+      within(playerLibrary).getByRole("img", { name: "冷静的阿夜 人物形象" }),
+    ).toHaveAttribute("src", "/api/v1/player-profiles/avatar/profile-1.png");
+    expect(
       within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
     ).toBeInTheDocument();
     const createModule = screen.getByTestId("games-create-module");
@@ -228,6 +233,14 @@ describe("GamesPage", () => {
     expect(
       within(consoleBar).getByRole("button", { name: "发起对局" }),
     ).toHaveClass("gothic-button");
+    const playerConfigPanel = screen.getByRole("region", { name: "席位模块" });
+    expect(
+      within(playerConfigPanel).getByRole("button", { name: "1号空席" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "选择席位角色" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "为 1 号座位选择 冷静的阿夜" }),
+    ).toBeInTheDocument();
 
     const rulesPanel = within(createModule).getByTestId("lobby-rules-panel");
     expect(rulesPanel).toHaveClass(
@@ -571,9 +584,12 @@ describe("GamesPage", () => {
       await screen.findByLabelText("1 号座位模型覆盖"),
       "qwen3.6-plus",
     );
-    const seatProfileSelect = screen.getByLabelText("1 号座位虚拟玩家");
-    await userEvent.selectOptions(seatProfileSelect, "profile-1");
-    await userEvent.selectOptions(seatProfileSelect, "");
+    await userEvent.click(
+      screen.getByRole("button", { name: "为 1 号座位选择 冷静的阿夜" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "确认选择" }));
+    await userEvent.click(screen.getByRole("button", { name: "随机角色" }));
+    await userEvent.click(screen.getByRole("button", { name: "确认选择" }));
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
 
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -593,6 +609,7 @@ describe("GamesPage", () => {
   });
 
   it("manages virtual player profiles from the library", async () => {
+    let avatarUploadCount = 0;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -618,6 +635,22 @@ describe("GamesPage", () => {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
+        );
+      }
+      if (
+        url.endsWith("/api/v1/player-profiles/avatar") &&
+        method === "POST"
+      ) {
+        avatarUploadCount += 1;
+        const filename = avatarUploadCount === 1 ? "uploaded.png" : "edited.png";
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              avatar_image_url: `/api/v1/player-profiles/avatar/${filename}`,
+              avatar_image_mime: "image/png",
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
         );
       }
       if (url.endsWith("/api/v1/player-profiles") && method === "POST") {
@@ -677,7 +710,15 @@ describe("GamesPage", () => {
     ).toBeInTheDocument();
     await userEvent.selectOptions(modelSelect, "deepseek-chat");
     await userEvent.type(screen.getByLabelText("性格描述"), "谨慎发言，先听后判");
-    await userEvent.type(screen.getByLabelText("形象提示"), "银发观察者");
+    await userEvent.upload(
+      screen.getByLabelText("人物形象"),
+      new File([new Uint8Array([137, 80, 78, 71])], "avatar.png", {
+        type: "image/png",
+      }),
+    );
+    expect(
+      await screen.findByRole("img", { name: "新玩家 人物形象" }),
+    ).toHaveAttribute("src", "/api/v1/player-profiles/avatar/uploaded.png");
     await userEvent.type(screen.getByLabelText("标签"), "控场 慢热");
     const saveNewProfileButton = screen.getByRole("button", {
       name: "保存虚拟玩家",
@@ -700,8 +741,15 @@ describe("GamesPage", () => {
     await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "冷静的阿夜二号");
     await userEvent.clear(screen.getByLabelText("性格描述"));
     await userEvent.type(screen.getByLabelText("性格描述"), "二号更谨慎");
-    await userEvent.clear(screen.getByLabelText("形象提示"));
-    await userEvent.type(screen.getByLabelText("形象提示"), "暗夜银发");
+    await userEvent.upload(
+      screen.getByLabelText("人物形象"),
+      new File([new Uint8Array([137, 80, 78, 71])], "edited.png", {
+        type: "image/png",
+      }),
+    );
+    expect(
+      await screen.findByRole("img", { name: "冷静的阿夜二号 人物形象" }),
+    ).toHaveAttribute("src", "/api/v1/player-profiles/avatar/edited.png");
     await userEvent.clear(screen.getByLabelText("标签"));
     await userEvent.type(screen.getByLabelText("标签"), "控场 追刀");
     const saveEditedProfileButton = screen.getByRole("button", {
@@ -727,6 +775,11 @@ describe("GamesPage", () => {
         String(input).endsWith("/api/v1/player-profiles") &&
         init?.method === "POST",
     );
+    const uploadCalls = fetchSpy.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith("/api/v1/player-profiles/avatar") &&
+        init?.method === "POST",
+    );
     const patchCalls = fetchSpy.mock.calls.filter(
       ([input, init]) =>
         String(input).endsWith("/api/v1/player-profiles/profile-1") &&
@@ -739,6 +792,7 @@ describe("GamesPage", () => {
     );
 
     expect(postCalls).toHaveLength(2);
+    expect(uploadCalls).toHaveLength(2);
     expect(patchCalls).toHaveLength(1);
     expect(deleteCalls).toHaveLength(1);
     expect(JSON.parse(String(postCalls[0][1]?.body))).toEqual(
@@ -746,7 +800,8 @@ describe("GamesPage", () => {
         display_name: "新玩家",
         model: "deepseek-chat",
         personality_text: "谨慎发言，先听后判",
-        avatar_prompt: "银发观察者",
+        avatar_image_url: "/api/v1/player-profiles/avatar/uploaded.png",
+        avatar_image_mime: "image/png",
         tags: ["控场", "慢热"],
       }),
     );
@@ -754,13 +809,16 @@ describe("GamesPage", () => {
       expect.objectContaining({
         display_name: "冷静的阿夜 副本",
         model: "MiniMax-M2.7",
+        avatar_image_url: "/api/v1/player-profiles/avatar/profile-1.png",
+        avatar_image_mime: "image/png",
       }),
     );
     expect(JSON.parse(String(patchCalls[0][1]?.body))).toEqual(
       expect.objectContaining({
         display_name: "冷静的阿夜二号",
         personality_text: "二号更谨慎",
-        avatar_prompt: "暗夜银发",
+        avatar_image_url: "/api/v1/player-profiles/avatar/edited.png",
+        avatar_image_mime: "image/png",
         tags: ["控场", "追刀"],
       }),
     );
@@ -838,10 +896,16 @@ describe("GamesPage", () => {
       "/games",
     );
 
-    await userEvent.selectOptions(
-      await screen.findByLabelText("1 号座位虚拟玩家"),
-      "profile-1",
+    await userEvent.click(
+      await screen.findByRole(
+        "button",
+        {
+          name: "为 1 号座位选择 冷静的阿夜",
+        },
+        { timeout: 5000 },
+      ),
     );
+    await userEvent.click(screen.getByRole("button", { name: "确认选择" }));
     await userEvent.click(screen.getByRole("button", { name: "删除 冷静的阿夜" }));
     await userEvent.click(
       await screen.findByRole("button", { name: "确认删除 冷静的阿夜" }),
@@ -862,7 +926,7 @@ describe("GamesPage", () => {
         method: "POST",
       }),
     );
-  });
+  }, 10000);
 
   it("creates a live game run with standard event pacing", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {

@@ -569,6 +569,7 @@ def test_initialize_game_state_applies_player_config_snapshot() -> None:
         appearance_id="moonlit",
         avatar_prompt="silver moon portrait",
         tags=("控场", "夜晚"),
+        avatar_image_url="/api/v1/player-profiles/avatar/profile-alpha.png",
     )
 
     state = initialize_game_state(
@@ -588,6 +589,7 @@ def test_initialize_game_state_applies_player_config_snapshot() -> None:
     assert player.personality == "重视票型和前后逻辑。"
     assert player.appearance_id == "moonlit"
     assert player.avatar_prompt == "silver moon portrait"
+    assert player.avatar_image_url == "/api/v1/player-profiles/avatar/profile-alpha.png"
     assert player.tags == ["控场", "夜晚"]
     assert state.players[1].gamestate is not None
     assert state.players[1].gamestate.current_players[0] == "控场位"
@@ -744,6 +746,7 @@ def test_player_from_dict_defaults_legacy_profile_fields() -> None:
     assert player.personality == ""
     assert player.appearance_id == "default"
     assert player.avatar_prompt == ""
+    assert player.avatar_image_url == ""
     assert player.tags == []
 
 

@@ -1,4 +1,6 @@
-import { SelectField, Text, TextField } from "../../../components/ui";
+import { useState } from "react";
+
+import { Button, Text, TextField } from "../../../components/ui";
 
 import { appearanceLabel, personalityLabel } from "../playerProfileOptions";
 import type { PlayerConfig, VirtualPlayerProfile } from "../types";
@@ -17,6 +19,19 @@ export function PlayerConfigPanel({
   onChange,
 }: PlayerConfigPanelProps) {
   const seats = Array.from({ length: playerCount }, (_, index) => index + 1);
+  const [selectedSeat, setSelectedSeat] = useState(1);
+  const selectedConfig = configs.find((item) => item.seat === selectedSeat);
+  const selectedProfile = profiles.find(
+    (profile) => profile.id === selectedConfig?.profile_id,
+  );
+  const [pendingSelection, setPendingSelection] = useState<{
+    seat: number;
+    profileId: string;
+  } | null>(null);
+  const pendingProfileId =
+    pendingSelection?.seat === selectedSeat
+      ? pendingSelection.profileId
+      : (selectedConfig?.profile_id ?? "");
 
   const updateSeatConfig = (
     seat: number,
@@ -32,88 +47,172 @@ export function PlayerConfigPanel({
     onChange(nextConfigs);
   };
 
+  const confirmProfileSelection = () => {
+    updateSeatConfig(selectedSeat, (existing) => {
+      if (!pendingProfileId) {
+        const nextConfig = { ...(existing ?? { seat: selectedSeat }) };
+        delete nextConfig.profile_id;
+
+        return hasSeatConfig(nextConfig) ? nextConfig : null;
+      }
+
+      return {
+        ...(existing ?? { seat: selectedSeat }),
+        seat: selectedSeat,
+        profile_id: pendingProfileId,
+      };
+    });
+    setPendingSelection(null);
+  };
+
   return (
     <section
-      aria-labelledby="player-config-panel-title"
+      aria-labelledby="player-seat-module-title"
       className="player-config-panel"
     >
       <div className="player-config-panel-header">
-        <h3 className="player-config-panel-title" id="player-config-panel-title">
-          虚拟玩家
+        <h3 className="player-config-panel-title" id="player-seat-module-title">
+          席位模块
         </h3>
         <Text as="span" className="player-config-panel-count" size="2">
           {playerCount} 个座位
         </Text>
       </div>
       <div className="player-config-panel-grid">
-        {seats.map((seat) => {
-          const config = configs.find((item) => item.seat === seat);
-          const selectedProfile = profiles.find(
-            (profile) => profile.id === config?.profile_id,
-          );
+        <div className="player-config-seat-module">
+          {seats.map((seat) => {
+            const config = configs.find((item) => item.seat === seat);
+            const profile = profiles.find(
+              (item) => item.id === config?.profile_id,
+            );
+            const isSelected = selectedSeat === seat;
 
-          return (
-            <div className="player-config-seat" key={seat}>
-              <label className="player-config-seat-label">
-                <span>{seat} 号座位</span>
-                <SelectField
-                  aria-label={`${seat} 号座位虚拟玩家`}
-                  className="player-config-select"
-                  value={config?.profile_id ?? ""}
-                  onChange={(event) => {
-                    const profileId = event.target.value;
-                    updateSeatConfig(seat, (existing) => {
-                      if (!profileId) {
-                        const nextConfig = { ...(existing ?? { seat }) };
-                        delete nextConfig.profile_id;
+            return (
+              <button
+                aria-label={`${seat}号${profile ? profile.display_name : "空席"}`}
+                className={[
+                  "player-config-seat-card",
+                  isSelected ? "player-config-seat-card-selected" : "",
+                  profile ? "player-config-seat-card-filled" : "",
+                ].join(" ")}
+                key={seat}
+                onClick={() => setSelectedSeat(seat)}
+                type="button"
+              >
+                <span className="player-config-seat-frame">
+                  {profile?.avatar_image_url ? (
+                    <img
+                      alt=""
+                      aria-hidden="true"
+                      src={profile.avatar_image_url}
+                    />
+                  ) : null}
+                </span>
+                <span className="player-config-seat-name">
+                  {seat}号{profile ? profile.display_name : "空席"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="player-config-role-module">
+          <div className="player-config-role-header">
+            <h3 className="player-config-role-title">选择席位角色</h3>
+            <span className="player-config-role-seat">{selectedSeat} 号座位</span>
+          </div>
+          <div className="player-config-role-cards">
+            {profiles.map((profile) => {
+              const isPending = pendingProfileId === profile.id;
 
-                        return hasSeatConfig(nextConfig) ? nextConfig : null;
-                      }
-
-                      return {
-                        ...(existing ?? { seat }),
-                        seat,
-                        profile_id: profileId,
-                      };
-                    });
-                  }}
+              return (
+                <button
+                  aria-label={`为 ${selectedSeat} 号座位选择 ${profile.display_name}`}
+                  className={[
+                    "player-config-role-card",
+                    isPending ? "player-config-role-card-selected" : "",
+                  ].join(" ")}
+                  key={profile.id}
+                  onClick={() =>
+                    setPendingSelection({ seat: selectedSeat, profileId: profile.id })
+                  }
+                  type="button"
                 >
-                  <option value="">随机玩家</option>
-                  {profiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.display_name}
-                    </option>
-                  ))}
-                </SelectField>
-              </label>
+                  <span className="player-config-role-portrait">
+                    {profile.avatar_image_url ? (
+                      <img
+                        alt={`${profile.display_name} 人物形象`}
+                        src={profile.avatar_image_url}
+                      />
+                    ) : (
+                      <span aria-hidden="true">
+                        {profile.display_name.trim().charAt(0) || "?"}
+                      </span>
+                    )}
+                  </span>
+                  <span className="player-config-role-name">
+                    {profile.display_name}
+                  </span>
+                  <span className="player-config-role-meta">
+                    {personalityLabel(profile.personality_id)} ·{" "}
+                    {appearanceLabel(profile.appearance_id)}
+                  </span>
+                </button>
+              );
+            })}
+            {profiles.length === 0 ? (
+              <p className="player-config-role-empty">暂无虚拟玩家</p>
+            ) : null}
+          </div>
+          <div className="player-config-role-controls">
+            <label className="player-config-seat-model-field">
+              <span>{selectedSeat} 号座位模型覆盖</span>
               <TextField.Root
-                aria-label={`${seat} 号座位模型覆盖`}
+                aria-label={`${selectedSeat} 号座位模型覆盖`}
                 className="player-config-model"
                 placeholder={selectedProfile?.model || "按身份默认"}
-                value={config?.model ?? ""}
+                value={selectedConfig?.model ?? ""}
                 onChange={(event) => {
                   const model = event.target.value;
-                  updateSeatConfig(seat, (existing) => {
+                  updateSeatConfig(selectedSeat, (existing) => {
                     if (!model) {
-                      const nextConfig = { ...(existing ?? { seat }) };
+                      const nextConfig = { ...(existing ?? { seat: selectedSeat }) };
                       delete nextConfig.model;
 
                       return hasSeatConfig(nextConfig) ? nextConfig : null;
                     }
 
-                    return { ...(existing ?? { seat }), seat, model };
+                    return {
+                      ...(existing ?? { seat: selectedSeat }),
+                      seat: selectedSeat,
+                      model,
+                    };
                   });
                 }}
               />
-              {selectedProfile ? (
-                <p className="player-config-summary">
-                  {personalityLabel(selectedProfile.personality_id)} ·{" "}
-                  {appearanceLabel(selectedProfile.appearance_id)}
-                </p>
-              ) : null}
+            </label>
+            <div className="player-config-role-actions">
+              <Button
+                onClick={() =>
+                  setPendingSelection({ seat: selectedSeat, profileId: "" })
+                }
+                size="1"
+                skin="gothic"
+                type="button"
+              >
+                随机角色
+              </Button>
+              <Button
+                intent="warning"
+                onClick={confirmProfileSelection}
+                size="1"
+                skin="gothic"
+                type="button"
+              >
+                确认选择
+              </Button>
             </div>
-          );
-        })}
+          </div>
+        </div>
       </div>
     </section>
   );

@@ -1,17 +1,19 @@
+import base64
 from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import OperationalError
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.routes.player_profiles import get_player_profile_store
+from app.api.routes.player_profiles import get_player_avatar_asset_store, get_player_profile_store
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.user import User
+from app.werewolf.player_avatar_assets import PlayerAvatarAssetStore
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.player_profile_store import PlayerProfileFileStore
 from app.werewolf.player_presets import default_personality_text
@@ -50,6 +52,10 @@ def isolated_db() -> Generator[None, None, None]:
 
 
 client = TestClient(app)
+PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGA"
+    "WjR9awAAAABJRU5ErkJggg=="
+)
 
 
 class BrokenSession:
@@ -109,6 +115,94 @@ def test_create_profile_normalizes_and_fills_defaults() -> None:
 
     assert len(profiles) == 1
     assert profiles[0].display_name == "控场位"
+
+
+def test_upload_avatar_image_returns_served_asset_url(tmp_path) -> None:
+    app.dependency_overrides[get_player_avatar_asset_store] = lambda: PlayerAvatarAssetStore(
+        tmp_path / "player_profile_assets"
+    )
+    try:
+        response = client.post(
+            "/api/v1/player-profiles/avatar",
+            json={
+                "filename": "portrait.png",
+                "content_type": "image/png",
+                "data_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+            },
+        )
+        payload = response.json()
+        served_response = client.get(payload["avatar_image_url"])
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    assert payload["avatar_image_url"].startswith("/api/v1/player-profiles/avatar/")
+    assert payload["avatar_image_mime"] == "image/png"
+    assert served_response.status_code == 200
+    assert served_response.headers["content-type"] == "image/png"
+    assert served_response.content == PNG_BYTES
+
+
+def test_upload_avatar_image_rejects_unsupported_type(tmp_path) -> None:
+    app.dependency_overrides[get_player_avatar_asset_store] = lambda: PlayerAvatarAssetStore(
+        tmp_path / "player_profile_assets"
+    )
+    try:
+        response = client.post(
+            "/api/v1/player-profiles/avatar",
+            json={
+                "filename": "portrait.txt",
+                "content_type": "text/plain",
+                "data_base64": base64.b64encode(b"not an image").decode("ascii"),
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Unsupported avatar image type"
+
+
+def test_create_profile_persists_avatar_image_metadata() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "带图玩家",
+            "model": "gpt-4.1-mini",
+            "avatar_image_url": "/api/v1/player-profiles/avatar/profile.png",
+            "avatar_image_mime": "image/png",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["avatar_image_url"] == "/api/v1/player-profiles/avatar/profile.png"
+    assert payload["avatar_image_mime"] == "image/png"
+
+    with TestingSessionLocal() as session:
+        profile = session.get(VirtualPlayerProfile, payload["id"])
+
+    assert profile is not None
+    assert profile.avatar_image_url == "/api/v1/player-profiles/avatar/profile.png"
+    assert profile.avatar_image_mime == "image/png"
+
+
+def test_create_profile_accepts_system_avatar_appearance_id() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "内设形象玩家",
+            "model": "gpt-4.1-mini",
+            "appearance_id": "gothic-female-2",
+            "avatar_image_url": "/player-avatars/gothic-female-2.png",
+            "avatar_image_mime": "image/png",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["appearance_id"] == "gothic-female-2"
+    assert payload["avatar_image_url"] == "/player-avatars/gothic-female-2.png"
 
 
 def test_list_profiles_returns_most_recently_updated_first() -> None:

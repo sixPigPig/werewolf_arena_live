@@ -17,6 +17,7 @@ export type LivePlayer = {
   personality: string;
   appearanceId: string;
   avatarPrompt: string;
+  avatarImageUrl: string;
   profileId: string | null;
   tags: string[];
   status: LivePlayerStatus;
@@ -164,6 +165,10 @@ function initializePlayers(state: MutableLiveSpectatorState, event: LiveGameEven
       typeof player.avatar_prompt === "string"
         ? player.avatar_prompt
         : existing.avatarPrompt;
+    existing.avatarImageUrl =
+      typeof player.avatar_image_url === "string"
+        ? player.avatar_image_url
+        : existing.avatarImageUrl;
     existing.profileId =
       typeof player.profile_id === "string" || player.profile_id === null
         ? player.profile_id
@@ -283,6 +288,7 @@ function ensurePlayer(
     personality: "",
     appearanceId: "default",
     avatarPrompt: "",
+    avatarImageUrl: "",
     profileId: null,
     tags: [],
     status: "waiting",

@@ -208,6 +208,7 @@ def player_from_dict(data: dict[str, Any]) -> Player:
         personality=str(data.get("personality") or ""),
         appearance_id=str(data.get("appearance_id") or "default"),
         avatar_prompt=str(data.get("avatar_prompt") or ""),
+        avatar_image_url=str(data.get("avatar_image_url") or ""),
         profile_id=str(data["profile_id"]) if data.get("profile_id") is not None else None,
         tags=[str(item) for item in data.get("tags", [])],
         observations=[str(item) for item in data.get("observations", [])],

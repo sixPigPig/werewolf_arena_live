@@ -386,6 +386,7 @@ def test_create_game_run_resolves_profile_configs(
                 personality_text="谨慎控场，避免过早暴露身份。",
                 appearance_id="moonlit",
                 avatar_prompt="silver moon portrait",
+                avatar_image_url="/api/v1/player-profiles/avatar/profile-alpha.png",
                 tags=["控场"],
             )
         )
@@ -434,6 +435,7 @@ def test_create_game_run_resolves_profile_configs(
         "personality": default_personality_text("aggressive"),
         "appearance_id": "crimson",
         "avatar_prompt": "silver moon portrait",
+        "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
         "tags": ["压迫", "控场"],
     }
     background_configs = captured[0]["player_configs"]
@@ -458,6 +460,7 @@ def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
                     "personality_text": "先听后判。",
                     "appearance_id": "moonlit",
                     "avatar_prompt": "silver moon portrait",
+                    "avatar_image_url": "/api/v1/player-profiles/avatar/profile-file.png",
                     "tags": ["本地"],
                     "created_at": "2026-05-16T00:00:00+00:00",
                     "updated_at": "2026-05-16T00:00:00+00:00",
@@ -501,6 +504,7 @@ def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
         "personality": "先听后判。",
         "appearance_id": "moonlit",
         "avatar_prompt": "silver moon portrait",
+        "avatar_image_url": "/api/v1/player-profiles/avatar/profile-file.png",
         "tags": ["本地"],
     }
     assert [config.to_dict() for config in captured[0]["player_configs"]] == [snapshot]
@@ -592,6 +596,7 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
                         "personality": "谨慎控场。",
                         "appearance_id": "moonlit",
                         "avatar_prompt": "silver moon portrait",
+                        "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
                         "tags": ["控场"],
                     }
                 ],
@@ -638,6 +643,7 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
             "personality": "谨慎控场。",
             "appearance_id": "moonlit",
             "avatar_prompt": "silver moon portrait",
+            "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
             "tags": ["控场"],
         }
     ]

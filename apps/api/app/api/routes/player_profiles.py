@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
@@ -12,6 +13,10 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.werewolf.player_avatar_assets import (
+    PlayerAvatarAssetStore,
+    player_avatar_asset_store_for_logs_dir,
+)
 from app.werewolf.player_profile_store import (
     PlayerProfileFileStore,
     player_profile_store_for_logs_dir,
@@ -62,6 +67,8 @@ class PlayerProfileBase(BaseModel):
     personality_text: str = ""
     appearance_id: str = Field(default="default", min_length=1, max_length=40)
     avatar_prompt: str = Field(default="", max_length=1000)
+    avatar_image_url: str = Field(default="", max_length=1000)
+    avatar_image_mime: str = Field(default="", max_length=80)
     tags: list[str] = Field(default_factory=list)
 
     @field_validator(
@@ -71,6 +78,8 @@ class PlayerProfileBase(BaseModel):
         "personality_text",
         "appearance_id",
         "avatar_prompt",
+        "avatar_image_url",
+        "avatar_image_mime",
         mode="before",
     )
     @classmethod
@@ -96,6 +105,8 @@ class UpdatePlayerProfileRequest(BaseModel):
     personality_text: str | None = None
     appearance_id: str | None = Field(default=None, min_length=1, max_length=40)
     avatar_prompt: str | None = Field(default=None, max_length=1000)
+    avatar_image_url: str | None = Field(default=None, max_length=1000)
+    avatar_image_mime: str | None = Field(default=None, max_length=80)
     tags: list[str] | None = None
 
     @model_validator(mode="before")
@@ -112,6 +123,8 @@ class UpdatePlayerProfileRequest(BaseModel):
                 "personality_text",
                 "appearance_id",
                 "avatar_prompt",
+                "avatar_image_url",
+                "avatar_image_mime",
                 "tags",
             )
             if field_name in data and data[field_name] is None
@@ -127,6 +140,8 @@ class UpdatePlayerProfileRequest(BaseModel):
         "personality_text",
         "appearance_id",
         "avatar_prompt",
+        "avatar_image_url",
+        "avatar_image_mime",
         mode="before",
     )
     @classmethod
@@ -154,6 +169,8 @@ class PlayerProfileResponse(BaseModel):
     personality_text: str
     appearance_id: str
     avatar_prompt: str
+    avatar_image_url: str
+    avatar_image_mime: str
     tags: list[str]
     created_at: datetime
     updated_at: datetime
@@ -163,8 +180,53 @@ class PlayerProfileListResponse(BaseModel):
     profiles: list[PlayerProfileResponse]
 
 
+class AvatarUploadRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=180)
+    content_type: str = Field(min_length=1, max_length=80)
+    data_base64: str = Field(min_length=1)
+
+
+class AvatarUploadResponse(BaseModel):
+    avatar_image_url: str
+    avatar_image_mime: str
+
+
 def get_player_profile_store() -> PlayerProfileFileStore:
     return player_profile_store_for_logs_dir(settings.werewolf_logs_dir)
+
+
+def get_player_avatar_asset_store() -> PlayerAvatarAssetStore:
+    return player_avatar_asset_store_for_logs_dir(settings.werewolf_logs_dir)
+
+
+@router.post("/avatar", response_model=AvatarUploadResponse, status_code=201)
+def upload_player_avatar(
+    request: AvatarUploadRequest,
+    store: Annotated[PlayerAvatarAssetStore, Depends(get_player_avatar_asset_store)],
+) -> AvatarUploadResponse:
+    try:
+        asset = store.save(
+            content_type=request.content_type,
+            data_base64=request.data_base64,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return AvatarUploadResponse(
+        avatar_image_url=f"{settings.api_v1_prefix}/player-profiles/avatar/{asset.filename}",
+        avatar_image_mime=asset.content_type,
+    )
+
+
+@router.get("/avatar/{filename}")
+def get_player_avatar(
+    filename: str,
+    store: Annotated[PlayerAvatarAssetStore, Depends(get_player_avatar_asset_store)],
+) -> FileResponse:
+    path = store.path_for(filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Avatar image not found")
+    return FileResponse(path, media_type=store.content_type_for(filename))
 
 
 @router.get("", response_model=PlayerProfileListResponse)
@@ -200,6 +262,9 @@ def create_player_profile(
         personality_text=personality_text,
         appearance_id=request.appearance_id,
         avatar_prompt=request.avatar_prompt,
+        avatar_image_url=request.avatar_image_url,
+        avatar_image_path="",
+        avatar_image_mime=request.avatar_image_mime,
         tags=request.tags,
     )
     try:
@@ -216,6 +281,8 @@ def create_player_profile(
             personality_text=personality_text,
             appearance_id=request.appearance_id,
             avatar_prompt=request.avatar_prompt,
+            avatar_image_url=request.avatar_image_url,
+            avatar_image_mime=request.avatar_image_mime,
             tags=request.tags,
         )
 
