@@ -91,6 +91,36 @@ describe("VirtualPlayerLibrary", () => {
     );
   });
 
+  it("saves rich virtual player settings from the dedicated editor", async () => {
+    const user = userEvent.setup();
+    const onCreateProfile = vi.fn().mockResolvedValue({});
+    renderLibrary({ onCreateProfile });
+
+    await user.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await user.type(screen.getByLabelText("一句话简介"), "逻辑控场玩家");
+    await user.type(screen.getByLabelText("背景故事"), "长期复盘高阶狼人杀对局。");
+    await user.type(screen.getByLabelText("发言风格"), "分点列证据，最后给结论。");
+    await user.type(screen.getByLabelText("常用表达"), "我先拆视角，票型不对劲");
+    await user.selectOptions(screen.getByLabelText("策略模板"), "logic_leader");
+    await user.clear(screen.getByLabelText("领导倾向"));
+    await user.type(screen.getByLabelText("领导倾向"), "5");
+    await user.type(screen.getByLabelText("示例发言"), "我认为 3 号视角漏了一层。");
+
+    await user.click(screen.getByRole("button", { name: "保存虚拟玩家" }));
+
+    expect(onCreateProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        short_description: "逻辑控场玩家",
+        background_story: "长期复盘高阶狼人杀对局。",
+        speaking_style: "分点列证据，最后给结论。",
+        catchphrases: ["我先拆视角", "票型不对劲"],
+        strategy_profile: "logic_leader",
+        leadership_tendency: 5,
+        example_messages: ["我认为 3 号视角漏了一层。"],
+      }),
+    );
+  });
+
   it("allows choosing a different system avatar", async () => {
     const onCreateProfile = vi
       .fn<(request: PlayerProfileRequest) => Promise<unknown>>()

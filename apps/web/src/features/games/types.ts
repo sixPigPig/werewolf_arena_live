@@ -319,6 +319,18 @@ export type VirtualPlayerProfile = {
   model: string;
   personality_id: string;
   personality_text: string;
+  short_description: string;
+  background_story: string;
+  speaking_style: string;
+  catchphrases: string[];
+  strategy_profile: string;
+  risk_tolerance: number;
+  bluffing_tendency: number;
+  trust_tendency: number;
+  leadership_tendency: number;
+  talkativeness: number;
+  example_messages: string[];
+  favorite: boolean;
   appearance_id: string;
   avatar_prompt: string;
   avatar_image_url: string;
@@ -342,11 +354,47 @@ export type PlayerProfileRequest = {
   model: string;
   personality_id?: string;
   personality_text?: string;
+  short_description?: string;
+  background_story?: string;
+  speaking_style?: string;
+  catchphrases?: string[];
+  strategy_profile?: string;
+  risk_tolerance?: number;
+  bluffing_tendency?: number;
+  trust_tendency?: number;
+  leadership_tendency?: number;
+  talkativeness?: number;
+  example_messages?: string[];
+  favorite?: boolean;
   appearance_id?: string;
   avatar_prompt?: string;
   avatar_image_url?: string;
   avatar_image_mime?: string;
   tags?: string[];
+};
+
+export const DEFAULT_PLAYER_PROFILE_DRAFT: PlayerProfileRequest = {
+  display_name: "",
+  model: "",
+  personality_id: "balanced",
+  personality_text: "",
+  short_description: "",
+  background_story: "",
+  speaking_style: "",
+  catchphrases: [],
+  strategy_profile: "balanced",
+  risk_tolerance: 3,
+  bluffing_tendency: 3,
+  trust_tendency: 3,
+  leadership_tendency: 3,
+  talkativeness: 3,
+  example_messages: [],
+  favorite: false,
+  appearance_id: "default",
+  avatar_prompt: "",
+  avatar_image_url: "",
+  avatar_image_mime: "",
+  tags: [],
 };
 
 export type UpdatePlayerProfileRequest = Partial<PlayerProfileRequest>;
