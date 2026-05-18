@@ -114,7 +114,7 @@ describe("toDirectorCue", () => {
 
   it("uses normal speech pace for visible long text at 1x", () => {
     const message =
-      "我现在给出完整发言，先说明昨晚信息，再解释投票理由，最后给出今天建议。";
+      "我现在给出完整的发言，先说明昨晚信息，再解释投票理由，最后给出今天建议。";
     const cue = toDirectorCue(
       event({
         id: 9,
@@ -130,8 +130,7 @@ describe("toDirectorCue", () => {
     expect(cue.body).toBe(`李四：${message}`);
     expect(cue.importance).toBe("key");
     expect(cue.compressible).toBe(false);
-    expect(cue.durationMs).toBeGreaterThanOrEqual(9000);
-    expect(cue.durationMs).toBeLessThanOrEqual(20000);
+    expect(cue.durationMs).toBe(9500);
   });
 
   it("renders protected night attacks as a peaceful night cue", () => {
