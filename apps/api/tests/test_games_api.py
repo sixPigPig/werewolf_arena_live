@@ -302,35 +302,6 @@ def test_create_game_run_defaults_to_minimax_when_only_minimax_key_is_configured
     assert captured[0]["werewolf_model"] == "MiniMax-M2.7"
 
 
-def test_create_game_run_ignores_legacy_event_pacing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry = LiveRunRegistry()
-    override_logs_root(tmp_path)
-    override_live_registry(registry)
-    captured: list[dict[str, object]] = []
-
-    def fake_background_run(**kwargs: object) -> None:
-        captured.append(kwargs)
-
-    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
-    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
-
-    try:
-        response = client.post(
-            "/api/v1/games/runs",
-            json={"seed": 21, "max_rounds": 1, "event_pacing": "turbo"},
-        )
-    finally:
-        clear_overrides()
-
-    assert response.status_code == 201
-    payload = response.json()
-    assert "event_pacing" not in payload
-    assert "event_pacing" not in captured[0]
-
-
 def test_create_game_run_rejects_unknown_rule_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

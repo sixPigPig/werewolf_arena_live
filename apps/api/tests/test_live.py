@@ -37,7 +37,7 @@ def test_registry_creates_run_with_initial_event() -> None:
     assert run.events[0].type == "run_created"
 
 
-def test_registry_summary_and_initial_event_do_not_include_event_pacing() -> None:
+def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
     registry = LiveRunRegistry()
 
     run = registry.create_run(
@@ -46,14 +46,39 @@ def test_registry_summary_and_initial_event_do_not_include_event_pacing() -> Non
         werewolf_model="deepseek-chat",
         seed=21,
         max_rounds=8,
-        event_pacing="standard",
         **classic_rule_kwargs(),
     )
 
     summary = run.to_summary()
 
-    assert "event_pacing" not in summary
-    assert "event_pacing" not in run.events[0].payload
+    assert set(summary) == {
+        "run_id",
+        "session_id",
+        "status",
+        "villager_model",
+        "werewolf_model",
+        "seed",
+        "max_rounds",
+        "rule_set_id",
+        "rule_set",
+        "player_configs",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "winner",
+        "error",
+        "event_count",
+    }
+    assert set(run.events[0].payload) == {
+        "session_id",
+        "villager_model",
+        "werewolf_model",
+        "seed",
+        "max_rounds",
+        "rule_set_id",
+        "rule_set",
+        "player_configs",
+    }
 
 
 def test_registry_appends_ordered_events_and_replays_after_id() -> None:

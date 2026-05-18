@@ -139,7 +139,6 @@ class LiveRunRegistry:
         rule_set_id: str = DEFAULT_RULE_SET_ID,
         rule_set: dict[str, Any] | None = None,
         player_configs: list[PlayerConfig] | None = None,
-        event_pacing: str | None = None,
     ) -> LiveGameRun:
         rule_set_data = (
             _copy_json_payload(rule_set)
