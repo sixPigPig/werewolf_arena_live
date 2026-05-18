@@ -1,7 +1,7 @@
 from pathlib import Path as FilePath
 import queue
 import threading
-from typing import Annotated, Any, Iterator
+from typing import Annotated, Iterator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
@@ -13,7 +13,6 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.live import EventSink, LiveEvent, LiveRunRegistry, format_sse
-from app.werewolf.pacing import EventPacer, EventPacingMode
 from app.werewolf.player_configs import (
     PlayerConfig,
     clean_optional_string,
@@ -64,7 +63,6 @@ class CreateGameRunRequest(BaseModel):
     seed: int | None = None
     max_rounds: int = Field(default=8, ge=1, le=20)
     rule_set_id: str = DEFAULT_RULE_SET_ID
-    event_pacing: EventPacingMode = "off"
     player_configs: list[CreatePlayerConfigRequest] = Field(default_factory=list)
 
 
@@ -196,7 +194,6 @@ def create_game_run(
         rule_set_id=rule_set.id,
         rule_set=rule_snapshot,
         player_configs=player_configs,
-        event_pacing=request.event_pacing,
     )
     thread = threading.Thread(
         target=_run_game_in_background,
@@ -209,7 +206,6 @@ def create_game_run(
             "seed": request.seed,
             "max_rounds": request.max_rounds,
             "rule_set_id": rule_set.id,
-            "event_pacing": request.event_pacing,
             "player_configs": player_configs,
         },
         daemon=True,
@@ -295,7 +291,6 @@ def resume_game_run(
         rule_set_id=rule_set.id,
         rule_set=rule_set_snapshot(rule_set),
         player_configs=checkpoint_player_configs,
-        event_pacing="off",
     )
     thread = threading.Thread(
         target=_resume_game_in_background,
@@ -304,7 +299,6 @@ def resume_game_run(
             "registry": registry,
             "session_id": session_id,
             "logs_dir": store.logs_root,
-            "event_pacing": "off",
         },
         daemon=True,
     )
@@ -336,11 +330,8 @@ def _run_game_in_background(
     seed: int | None,
     max_rounds: int,
     rule_set_id: str,
-    event_pacing: EventPacingMode,
     player_configs: list[PlayerConfig] | None = None,
 ) -> None:
-    pacer = EventPacer(event_pacing)
-    pacer.wait("run_started")
     registry.mark_running(run_id)
     try:
         result = run_game(
@@ -351,19 +342,16 @@ def _run_game_in_background(
             logs_dir=settings.werewolf_logs_dir,
             max_rounds=max_rounds,
             session_id=session_id,
-            event_sink=PacedEventSink(EventSink(registry, run_id), pacer),
+            event_sink=EventSink(registry, run_id),
             player_configs=player_configs,
         )
     except GameRunError as exc:
-        pacer.wait("game_failed")
         registry.mark_failed(run_id, error=str(exc))
         return
     except Exception as exc:
-        pacer.wait("game_failed")
         registry.mark_failed(run_id, error=str(exc))
         return
 
-    pacer.wait("game_completed")
     registry.mark_completed(run_id, winner=result.winner)
 
 
@@ -373,54 +361,22 @@ def _resume_game_in_background(
     registry: LiveRunRegistry,
     session_id: str,
     logs_dir: FilePath,
-    event_pacing: EventPacingMode,
 ) -> None:
-    pacer = EventPacer(event_pacing)
-    pacer.wait("run_started")
     registry.mark_running(run_id)
     try:
         result = resume_game(
             session_id=session_id,
             logs_dir=logs_dir,
-            event_sink=PacedEventSink(EventSink(registry, run_id), pacer),
+            event_sink=EventSink(registry, run_id),
         )
     except GameRunError as exc:
-        pacer.wait("game_failed")
         registry.mark_failed(run_id, error=str(exc))
         return
     except Exception as exc:
-        pacer.wait("game_failed")
         registry.mark_failed(run_id, error=str(exc))
         return
 
-    pacer.wait("game_completed")
     registry.mark_completed(run_id, winner=result.winner)
-
-
-class PacedEventSink:
-    def __init__(self, delegate: EventSink, pacer: EventPacer) -> None:
-        self._delegate = delegate
-        self._pacer = pacer
-
-    def publish(
-        self,
-        event_type: str,
-        *,
-        round_number: int | None = None,
-        phase: str | None = None,
-        actor: str | None = None,
-        action: str | None = None,
-        payload: dict[str, Any] | None = None,
-    ) -> LiveEvent:
-        self._pacer.wait(event_type)
-        return self._delegate.publish(
-            event_type,
-            round_number=round_number,
-            phase=phase,
-            actor=actor,
-            action=action,
-            payload=payload,
-        )
 
 
 def _event_stream(
