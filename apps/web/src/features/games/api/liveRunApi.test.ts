@@ -34,7 +34,6 @@ describe("live run api", () => {
           completed_at: null,
           error: null,
           event_count: 1,
-          event_pacing: "standard",
           player_configs: [
             {
               seat: 1,
@@ -115,7 +114,6 @@ describe("live run api", () => {
           completed_at: null,
           error: null,
           event_count: 4,
-          event_pacing: "slow",
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -125,7 +123,7 @@ describe("live run api", () => {
 
     expect(run.status).toBe("running");
     expect(run.event_count).toBe(4);
-    expect(run.event_pacing).toBe("slow");
+    expect(run).not.toHaveProperty("event_pacing");
     expect(run.winner).toBe("Villagers");
   });
 
@@ -146,7 +144,6 @@ describe("live run api", () => {
           completed_at: null,
           error: null,
           event_count: 1,
-          event_pacing: "off",
         }),
         { status: 201, headers: { "Content-Type": "application/json" } },
       ),

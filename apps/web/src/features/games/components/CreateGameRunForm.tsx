@@ -5,7 +5,6 @@ import {
   Container,
   Flex,
   RadioCards,
-  SelectField,
   Text,
   TextField,
 } from "../../../components/ui";
@@ -18,7 +17,6 @@ import { listRuleSets } from "../api/listRuleSets";
 import { hasPlayerConfig, removeInvalidProfileRefs } from "../lineupUtils";
 import { PlayerConfigPanel } from "./PlayerConfigPanel";
 import type {
-  EventPacingMode,
   PlayerConfig,
   RuleSetSummary,
   VirtualPlayerProfile,
@@ -37,7 +35,6 @@ export function CreateGameRunForm({
   const [selectedRuleSetId, setSelectedRuleSetId] = useState("classic_8");
   const [seed, setSeed] = useState("");
   const [maxRounds, setMaxRounds] = useState("8");
-  const [eventPacing, setEventPacing] = useState<EventPacingMode>("off");
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -149,7 +146,6 @@ export function CreateGameRunForm({
           rule_set_id: selectedRuleSetId,
           seed: seed ? Number(seed) : null,
           max_rounds: parsedMaxRounds,
-          event_pacing: eventPacing,
           ...(normalizedPlayerConfigs.length > 0
             ? { player_configs: normalizedPlayerConfigs }
             : {}),
@@ -186,23 +182,6 @@ export function CreateGameRunForm({
               }}
             />
           </label>
-          <div className="lobby-console-field lobby-console-field-pacing">
-            <span className="lobby-console-field-label" id="event-pacing-label">
-              演示慢速
-            </span>
-            <SelectField
-              aria-labelledby="event-pacing-label"
-              className="lobby-console-select"
-              value={eventPacing}
-              onChange={(event) =>
-                setEventPacing(event.target.value as EventPacingMode)
-              }
-            >
-              <option value="off">关闭</option>
-              <option value="standard">标准演示</option>
-              <option value="slow">慢速讲解</option>
-            </SelectField>
-          </div>
           <Button
             className="lobby-console-launch"
             disabled={isSubmitDisabled}

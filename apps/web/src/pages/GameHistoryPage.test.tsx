@@ -174,7 +174,6 @@ describe("GameHistoryPage", () => {
               winner: null,
               error: null,
               event_count: 1,
-              event_pacing: "off",
             }),
             { status: 201, headers: { "Content-Type": "application/json" } },
           ),
