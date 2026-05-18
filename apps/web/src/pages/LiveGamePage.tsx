@@ -8,7 +8,7 @@ import { getGameRun } from "../features/games/api/getGameRun";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
 import { GodViewBottomBoard } from "../features/games/components/GodViewBottomBoard";
 import { GodViewIntelPanel } from "../features/games/components/GodViewIntelPanel";
-import { GodViewRosterPanel } from "../features/games/components/GodViewRosterPanel";
+import { GodViewTopBar } from "../features/games/components/GodViewTopBar";
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveDirectorStage } from "../features/games/components/LiveDirectorStage";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
@@ -91,6 +91,10 @@ export function LiveGamePage() {
   const focusedPlayerName = autoFollow
     ? autoFocusName
     : manualFocusName ?? autoFocusName;
+  const handleSelectPlayer = (name: string) => {
+    setAutoFollow(false);
+    setManualFocusName(name);
+  };
   const topNavCommands = run ? (
     <LiveDirectorControls
       backlogCount={director.backlogCount}
@@ -223,13 +227,23 @@ export function LiveGamePage() {
           ) : null}
           <LiveStageModule
             bottom={<GodViewBottomBoard state={godViewState} />}
-            roster={
-              <GodViewRosterPanel
-                onSelectPlayer={(name) => {
-                  setAutoFollow(false);
-                  setManualFocusName(name);
-                }}
-                players={godViewState.players}
+            left={
+              <div
+                className="god-view-frame rounded-lg border border-amber-300/20 px-4 py-3 text-sm text-slate-300"
+                data-testid="god-view-left-placeholder"
+              >
+                左侧局势面板准备中
+              </div>
+            }
+            right={
+              <GodViewIntelPanel
+                debugTimeline={
+                  <LiveEventTimeline
+                    currentEventId={director.currentEventId}
+                    events={events}
+                  />
+                }
+                state={godViewState}
               />
             }
             stage={
@@ -247,23 +261,12 @@ export function LiveGamePage() {
                     setManualFocusName(null);
                   }
                 }}
-                onSelectPlayer={(name) => {
-                  setAutoFollow(false);
-                  setManualFocusName(name);
-                }}
+                onSelectPlayer={handleSelectPlayer}
                 players={spectatorState.players}
               />
             }
-            timeline={
-              <GodViewIntelPanel
-                debugTimeline={
-                  <LiveEventTimeline
-                    currentEventId={director.currentEventId}
-                    events={events}
-                  />
-                }
-                state={godViewState}
-              />
+            top={
+              <GodViewTopBar state={godViewState} />
             }
           />
         </LivePageShell>

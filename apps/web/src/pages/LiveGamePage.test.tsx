@@ -710,6 +710,77 @@ describe("LiveGamePage", () => {
     expect(screen.getByText("本局标记（回放点）")).toBeInTheDocument();
   });
 
+  it("renders the recomposed god-view broadcast layout zones", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+
+    expect(screen.getByTestId("god-view-top-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("god-view-left-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("god-view-stage-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("god-view-right-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("god-view-bottom-zone")).toBeInTheDocument();
+    expect(screen.queryByTestId("god-view-roster-panel")).not.toBeInTheDocument();
+
+    const source = MockEventSource.instances[0];
+    act(() => {
+      emitEvent(source, {
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Harold", role: "预言家", model: "deepseek-chat" },
+            { name: "Jackson", role: "村民", model: "deepseek-chat" },
+            { name: "Bert", role: "狼人", model: "deepseek-chat" },
+            { name: "Isaac", role: "守卫", model: "deepseek-chat" },
+          ],
+        },
+      });
+      emitEvent(source, {
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        payload: {
+          active_players: ["Harold", "Jackson", "Bert", "Isaac"],
+          speech_order: ["Harold", "Jackson", "Bert", "Isaac"],
+        },
+      });
+      emitEvent(source, {
+        id: 3,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "Isaac",
+        action: "debate",
+      });
+    });
+
+    const top = screen.getByTestId("god-view-top-zone");
+    expect(within(top).getByText("经典 8 人局")).toBeInTheDocument();
+    expect(within(top).getByText("第 1 天")).toBeInTheDocument();
+    expect(within(top).getByText("白天发言")).toBeInTheDocument();
+    expect(within(top).getByText("发言席：4 号")).toBeInTheDocument();
+    expect(within(top).getByText("00:45")).toBeInTheDocument();
+    expect(within(top).getByText("存活 4/4")).toBeInTheDocument();
+    expect(within(top).getByText("屠边")).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("live-director-stage")).queryByTestId(
+        "god-view-stage-strip",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows the current speaker as a large god-view stage portrait", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>

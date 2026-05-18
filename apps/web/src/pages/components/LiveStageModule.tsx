@@ -1,30 +1,42 @@
 import type { ReactNode } from "react";
 
 type LiveStageModuleProps = {
-  roster: ReactNode;
+  top: ReactNode;
+  left: ReactNode;
   stage: ReactNode;
-  timeline: ReactNode;
+  right: ReactNode;
   bottom?: ReactNode;
 };
 
 export function LiveStageModule({
   bottom,
-  roster,
+  left,
+  right,
   stage,
-  timeline,
+  top,
 }: LiveStageModuleProps) {
   return (
     <div
-      className="live-stage-layout live-stage-module grid gap-4 md:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_22rem]"
+      className="live-stage-layout live-stage-module god-view-broadcast-layout grid gap-3"
       data-testid="live-stage-layout"
     >
-      <div className="live-roster-column min-w-0 md:sticky md:top-4 md:self-start">
-        {roster}
+      <div className="god-view-top-zone min-w-0" data-testid="god-view-top-zone">
+        {top}
       </div>
-      <div className="live-stage-column min-w-0 space-y-3">{stage}</div>
-      {timeline}
+      <div className="god-view-left-zone min-w-0" data-testid="god-view-left-zone">
+        {left}
+      </div>
+      <div className="god-view-stage-zone min-w-0" data-testid="god-view-stage-zone">
+        {stage}
+      </div>
+      <div className="god-view-right-zone min-w-0" data-testid="god-view-right-zone">
+        {right}
+      </div>
       {bottom ? (
-        <div className="live-god-bottom-board min-w-0 md:col-span-2 xl:col-span-3">
+        <div
+          className="god-view-bottom-zone live-god-bottom-board min-w-0"
+          data-testid="god-view-bottom-zone"
+        >
           {bottom}
         </div>
       ) : null}

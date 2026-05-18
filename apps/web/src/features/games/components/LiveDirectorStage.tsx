@@ -67,20 +67,6 @@ export function LiveDirectorStage({
               {cue?.phase ? phaseLabel(cue.phase) : "阶段未开始"}
             </span>
           </div>
-          {godViewState ? (
-            <div
-              className="god-view-stage-strip grid grid-cols-2 gap-1 rounded-md border border-amber-300/35 px-3 py-2 text-[11px] text-slate-300 shadow-[0_16px_45px_rgba(0,0,0,0.24)] sm:grid-cols-4 lg:grid-cols-7"
-              data-testid="god-view-stage-strip"
-            >
-              <StageStat label="局名" value={godViewState.boardName} />
-              <StageStat label="天夜" value={godViewState.dayNightLabel} />
-              <StageStat label="阶段" value={godViewState.phaseLabel} />
-              <StageStat label="当前席" value={godViewState.currentSeatLabel} />
-              <StageStat label="倒计时" value={godViewState.countdownLabel} />
-              <StageStat label="存活" value={godViewState.aliveLabel} />
-              <StageStat label="胜负" value={godViewState.winMode} />
-            </div>
-          ) : null}
         </div>
 
         <div className="absolute left-1/2 top-[55%] h-[58%] w-[78%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-amber-600/45 bg-[radial-gradient(circle_at_50%_45%,rgba(92,62,34,0.98),rgba(40,28,19,0.98)_52%,rgba(10,8,7,0.99)_78%)] shadow-[inset_0_0_82px_rgba(0,0,0,0.76),inset_0_0_0_1px_rgba(251,191,36,0.08),0_34px_95px_rgba(0,0,0,0.58)] sm:w-[70%]" />
@@ -335,17 +321,6 @@ const STATUS_LABELS: Record<LivePlayer["status"], string> = {
   acted: "已行动",
   out: "出局",
 };
-
-function StageStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="relative min-w-0 border-l border-amber-300/10 pl-2 first:border-l-0 first:pl-0">
-      <span className="block text-[10px] text-amber-200/60">{label}</span>
-      <span className="block truncate font-semibold text-amber-50">
-        {value}
-      </span>
-    </div>
-  );
-}
 
 function playerSeatStatus(
   player: LivePlayer,
