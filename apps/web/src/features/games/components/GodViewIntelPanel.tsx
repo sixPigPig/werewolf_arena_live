@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { withGlassPanel } from "../../../components/ui/glass";
 import type {
   GodViewEventLine,
+  GodViewSkillTrigger,
   GodViewState,
 } from "../liveGodView";
 
@@ -73,56 +74,43 @@ export function GodViewIntelPanel({
         )}
       </IntelSection>
 
-      <IntelSection title="身份线索（上帝视角）">
-        <div className="space-y-1.5">
-          {state.players.length === 0 ? (
-            <p className="text-xs text-slate-500">暂无身份线索</p>
-          ) : (
-            state.players.slice(0, 6).map((player) => (
-              <div
-                className="flex items-center justify-between gap-2 rounded-md border border-slate-700/45 bg-black/25 px-2.5 py-1.5 text-xs"
-                key={player.name}
-              >
-                <span className="min-w-0 truncate text-slate-200">
-                  {player.seatNumber} 号 {player.name}
-                </span>
-                <span className="shrink-0 text-amber-100">
-                  {player.role} · {player.identityGroup}
-                </span>
-              </div>
-            ))
-          )}
-        </div>
-      </IntelSection>
-
-      <IntelSection title="警长信息">
-        {state.sheriffRuleState.enabled ? (
-          <div className="space-y-1.5 text-xs text-slate-300">
-            <InfoRow label="当前警长" value={state.sheriff.current ?? "未产生"} />
-            <InfoRow label="警徽流向" value={state.sheriff.badgeFlow} />
-            <InfoRow label="归票目标" value={state.sheriff.callTarget ?? "暂无"} />
-            <InfoRow
-              label="警上玩家"
-              value={
-                state.sheriff.candidates.length > 0
-                  ? state.sheriff.candidates.join("、")
-                  : "暂无"
-              }
-            />
-            <InfoRow
-              label="竞选票型"
-              value={
-                state.sheriff.voters.length > 0
-                  ? state.sheriff.voters.join("、")
-                  : "暂无"
-              }
-            />
+      <IntelSection title="身份线索 / 技能触发">
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            {state.players.length === 0 ? (
+              <p className="text-xs text-slate-500">暂无身份线索</p>
+            ) : (
+              state.players.slice(0, 6).map((player) => (
+                <div
+                  className="flex items-center justify-between gap-2 rounded-md border border-slate-700/45 bg-black/25 px-2.5 py-1.5 text-xs"
+                  key={player.name}
+                >
+                  <span className="min-w-0 truncate text-slate-200">
+                    {player.seatNumber} 号 {player.name}
+                  </span>
+                  <span className="shrink-0 text-amber-100">
+                    {player.role} · {player.identityGroup}
+                  </span>
+                </div>
+              ))
+            )}
           </div>
-        ) : (
-          <p className="rounded-md border border-slate-600/45 bg-slate-950/55 px-3 py-2 text-xs text-slate-300">
-            {state.sheriffRuleState.label}
-          </p>
-        )}
+
+          <div className="space-y-1.5">
+            {state.skillTriggers.length === 0 ? (
+              <p className="rounded-md border border-slate-600/35 bg-slate-950/35 px-3 py-2 text-xs text-slate-400">
+                暂无技能触发
+              </p>
+            ) : (
+              state.skillTriggers.map((trigger) => (
+                <SkillTriggerLine
+                  key={`${trigger.id}-${trigger.label}-${trigger.detail}`}
+                  trigger={trigger}
+                />
+              ))
+            )}
+          </div>
+        </div>
       </IntelSection>
 
       {debugTimeline ? (
@@ -176,15 +164,6 @@ function EventLines({ lines }: { lines: GodViewEventLine[] }) {
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start justify-between gap-3 rounded-md border border-slate-700/45 bg-black/20 px-2.5 py-1.5 text-xs">
-      <span className="shrink-0 text-slate-500">{label}</span>
-      <span className="min-w-0 text-right text-slate-200">{value}</span>
-    </div>
-  );
-}
-
 function eventTone(tone: GodViewEventLine["tone"]) {
   if (tone === "danger") {
     return "min-w-0 text-red-100";
@@ -199,4 +178,36 @@ function eventTone(tone: GodViewEventLine["tone"]) {
     return "min-w-0 text-amber-100";
   }
   return "min-w-0 text-slate-300";
+}
+
+function SkillTriggerLine({ trigger }: { trigger: GodViewSkillTrigger }) {
+  return (
+    <div
+      className={`rounded-md border px-2.5 py-2 text-xs ${skillTriggerTone(
+        trigger.tone,
+      )}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-semibold">{trigger.label}</span>
+        <span className="font-mono text-[10px] opacity-65">#{trigger.id}</span>
+      </div>
+      <p className="mt-1 opacity-85">{trigger.detail}</p>
+    </div>
+  );
+}
+
+function skillTriggerTone(tone: GodViewSkillTrigger["tone"]) {
+  if (tone === "danger") {
+    return "border-red-400/30 bg-red-950/25 text-red-100";
+  }
+  if (tone === "info") {
+    return "border-sky-300/30 bg-sky-950/25 text-sky-100";
+  }
+  if (tone === "success") {
+    return "border-emerald-300/30 bg-emerald-950/25 text-emerald-100";
+  }
+  if (tone === "warning") {
+    return "border-amber-300/30 bg-amber-950/25 text-amber-100";
+  }
+  return "border-slate-600/40 bg-slate-950/40 text-slate-300";
 }

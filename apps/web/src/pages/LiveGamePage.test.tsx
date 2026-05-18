@@ -731,6 +731,15 @@ describe("LiveGamePage", () => {
         actor: "Isaac",
         action: "debate",
       });
+      emitEvent(source, {
+        id: 4,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        payload: {
+          werewolf_self_exploded: "Bert",
+        },
+      });
     });
 
     const top = screen.getByTestId("god-view-top-zone");
@@ -766,6 +775,14 @@ describe("LiveGamePage", () => {
     expect(
       within(right).queryByRole("heading", { name: "夜晚行动回顾" }),
     ).not.toBeInTheDocument();
+    expect(
+      within(right).getByRole("heading", { name: "身份线索 / 技能触发" }),
+    ).toBeInTheDocument();
+    expect(
+      within(right).queryByRole("heading", { name: "警长信息" }),
+    ).not.toBeInTheDocument();
+    expect(within(right).getByText("狼人自爆")).toBeInTheDocument();
+    expect(within(right).getByText("Bert 发动自爆。")).toBeInTheDocument();
   });
 
   it("renders stage side player cards as the only player info entry", async () => {
@@ -957,7 +974,8 @@ describe("LiveGamePage", () => {
       "2守卫守护守护 Isaac",
       "3预言家查验查验 Jackson",
     ]);
-    expect(screen.getByText("本局无警长规则")).toBeInTheDocument();
+    expect(screen.queryByText("本局无警长规则")).not.toBeInTheDocument();
+    expect(screen.getByText("暂无技能触发")).toBeInTheDocument();
   });
 
   it("keeps the first seat clear of the stage phase badge", async () => {
