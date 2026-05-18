@@ -8,6 +8,7 @@ import { getGameRun } from "../features/games/api/getGameRun";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
 import { GodViewBottomBoard } from "../features/games/components/GodViewBottomBoard";
 import { GodViewIntelPanel } from "../features/games/components/GodViewIntelPanel";
+import { GodViewSituationPanel } from "../features/games/components/GodViewSituationPanel";
 import { GodViewTopBar } from "../features/games/components/GodViewTopBar";
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveDirectorStage } from "../features/games/components/LiveDirectorStage";
@@ -227,14 +228,7 @@ export function LiveGamePage() {
           ) : null}
           <LiveStageModule
             bottom={<GodViewBottomBoard state={godViewState} />}
-            left={
-              <div
-                className="god-view-frame rounded-lg border border-amber-300/20 px-4 py-3 text-sm text-slate-300"
-                data-testid="god-view-left-placeholder"
-              >
-                左侧局势面板准备中
-              </div>
-            }
+            left={<GodViewSituationPanel state={godViewState} />}
             right={
               <GodViewIntelPanel
                 debugTimeline={

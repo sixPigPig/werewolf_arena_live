@@ -779,6 +779,26 @@ describe("LiveGamePage", () => {
         "god-view-stage-strip",
       ),
     ).not.toBeInTheDocument();
+
+    const left = screen.getByTestId("god-view-left-zone");
+    expect(
+      within(left).getByRole("heading", { name: "局势总览" }),
+    ).toBeInTheDocument();
+    expect(
+      within(left).getByRole("heading", { name: "阵营进度" }),
+    ).toBeInTheDocument();
+    expect(
+      within(left).getByRole("heading", { name: "夜晚行动回顾" }),
+    ).toBeInTheDocument();
+    expect(within(left).queryByText("身份牌（上帝视角）")).not.toBeInTheDocument();
+
+    const right = screen.getByTestId("god-view-right-zone");
+    expect(
+      within(right).queryByRole("heading", { name: "阵营进度" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(right).queryByRole("heading", { name: "夜晚行动回顾" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the current speaker as a large god-view stage portrait", async () => {
