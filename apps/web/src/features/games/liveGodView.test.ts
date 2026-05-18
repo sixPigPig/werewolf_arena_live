@@ -170,6 +170,151 @@ describe("deriveGodViewState", () => {
     expect(state.replayMarks.map((mark) => mark.text)).toContain("结算：狼人阵营");
   });
 
+  it("derives previous current and next speakers from speech order", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Harold", role: "seer", model: "deepseek-chat" },
+            { name: "Jackson", role: "villager", model: "deepseek-chat" },
+            { name: "Bert", role: "werewolf", model: "deepseek-chat" },
+            { name: "Isaac", role: "guard", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        payload: {
+          active_players: ["Harold", "Jackson", "Bert", "Isaac"],
+          speech_order: ["Harold", "Jackson", "Bert", "Isaac"],
+        },
+      }),
+      event({
+        id: 3,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "Isaac",
+        action: "debate",
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "经典 8 人局");
+
+    expect(state.speakerFlow.previous?.name).toBe("Bert");
+    expect(state.speakerFlow.current?.name).toBe("Isaac");
+    expect(state.speakerFlow.next?.name).toBe("Harold");
+    expect(state.speakerFlow.modeLabel).toBe("顺序发言");
+  });
+
+  it("derives peaceful night resolution and visible night action order", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Harold", role: "seer", model: "deepseek-chat" },
+            { name: "Jackson", role: "villager", model: "deepseek-chat" },
+            { name: "Bert", role: "werewolf", model: "deepseek-chat" },
+            { name: "Isaac", role: "guard", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        payload: {
+          active_players: ["Harold", "Jackson", "Bert", "Isaac"],
+          attacked: "Isaac",
+          protected: "Isaac",
+          investigated: "Jackson",
+          eliminated: null,
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "经典 8 人局");
+
+    expect(state.nightResolution).toMatchObject({
+      label: "平安夜",
+      detail: "Isaac 被狼人袭击，但被守卫守护。",
+      tone: "safe",
+    });
+    expect(state.nightActionOrder.map((item) => item.label)).toEqual([
+      "狼人目标",
+      "守卫守护",
+      "预言家查验",
+    ]);
+    expect(state.replayMarks.map((mark) => mark.text)).not.toContain(
+      "state_updated",
+    );
+    expect(state.replayMarks.map((mark) => mark.text)).toContain("平安夜");
+  });
+
+  it("derives sheriff rule state and neutral win pressure", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Harold", role: "seer", model: "deepseek-chat" },
+            { name: "Jackson", role: "villager", model: "deepseek-chat" },
+            { name: "Bert", role: "werewolf", model: "deepseek-chat" },
+            { name: "Isaac", role: "guard", model: "deepseek-chat" },
+          ],
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "经典 8 人局", {
+      sheriffEnabled: false,
+    });
+
+    expect(state.sheriffRuleState).toEqual({
+      enabled: false,
+      label: "本局无警长规则",
+    });
+    expect(state.winPressure.label).toBe("局势未到临界");
+  });
+
+  it("marks win pressure when wolves are near parity", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Wolf A", role: "werewolf", model: "deepseek-chat" },
+            { name: "Wolf B", role: "werewolf", model: "deepseek-chat" },
+            { name: "Seer", role: "seer", model: "deepseek-chat" },
+            { name: "Villager", role: "villager", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        payload: {
+          active_players: ["Wolf A", "Wolf B", "Seer", "Villager"],
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "压力测试");
+
+    expect(state.winPressure.label).toBe("狼人压制");
+    expect(state.winPressure.tone).toBe("danger");
+  });
+
   it("uses honest fallback states when no live facts are available", () => {
     const spectator = deriveLiveSpectatorState([]);
 

@@ -67,8 +67,9 @@ export function LiveGamePage() {
         events,
         spectatorState,
         run?.rule_set?.name ?? "实时对局",
+        { sheriffEnabled: run?.rule_set?.sheriff_enabled },
       ),
-    [events, run?.rule_set?.name, spectatorState],
+    [events, run?.rule_set?.name, run?.rule_set?.sheriff_enabled, spectatorState],
   );
   if (run && runId && !(runId in terminalStartByRunId)) {
     setTerminalStartByRunId({

@@ -12,7 +12,7 @@ export function GodViewBottomBoard({ state }: GodViewBottomBoardProps) {
   return (
     <section
       className={withGlassPanel(
-        "god-view-bottom-board overflow-x-auto rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.28)]",
+        "god-view-bottom-board god-view-frame overflow-x-auto rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.28)]",
       )}
       data-testid="god-view-bottom-board"
     >
@@ -53,7 +53,7 @@ export function GodViewBottomBoard({ state }: GodViewBottomBoardProps) {
         <BottomColumn title="投票统计">
           <div className="space-y-1.5">
             {state.vote.tallies.length === 0 ? (
-              <EmptyText>暂无投票</EmptyText>
+              <VoteSkeleton />
             ) : (
               state.vote.tallies.map((tally) => (
                 <div key={tally.target}>
@@ -85,7 +85,15 @@ export function GodViewBottomBoard({ state }: GodViewBottomBoardProps) {
         <BottomColumn title="放逐候选排名">
           <div className="space-y-1.5">
             {state.vote.tallies.length === 0 ? (
-              <EmptyText>暂无候选</EmptyText>
+              <div className="flex items-center justify-between gap-2 rounded-md border border-amber-300/20 bg-black/25 px-2 py-1.5 text-xs">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-amber-300/35 text-amber-100">
+                  -
+                </span>
+                <span className="min-w-0 flex-1 truncate text-slate-100">
+                  等待投票
+                </span>
+                <span className="shrink-0 text-slate-400">0 票</span>
+              </div>
             ) : (
               state.vote.tallies.slice(0, 3).map((tally, index) => (
                 <div
@@ -165,6 +173,24 @@ function BottomColumn({
 
 function EmptyText({ children }: { children: ReactNode }) {
   return <span className="text-xs text-slate-500">{children}</span>;
+}
+
+function VoteSkeleton() {
+  return (
+    <>
+      {[1, 2, 3].map((slot) => (
+        <div key={slot}>
+          <div className="flex justify-between gap-2 text-xs">
+            <span className="truncate text-slate-400">候选 {slot}</span>
+            <span className="shrink-0 text-slate-500">0 票</span>
+          </div>
+          <div className="mt-1 h-2 overflow-hidden rounded-full bg-black/45">
+            <span className="block h-full w-0 rounded-full bg-slate-600" />
+          </div>
+        </div>
+      ))}
+    </>
+  );
 }
 
 function VotePair({ source, target }: { source: string; target: string }) {

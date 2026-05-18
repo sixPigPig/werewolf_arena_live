@@ -4,7 +4,7 @@ import type { CSSProperties } from "react";
 
 import type { DirectorCue } from "../liveDirector";
 import { actionLabel, phaseLabel } from "../liveLabels";
-import type { GodViewState } from "../liveGodView";
+import type { GodViewPlayer, GodViewState } from "../liveGodView";
 import type { LivePlayer } from "../liveSpectator";
 import { appearanceClassName } from "../playerProfileOptions";
 
@@ -39,6 +39,7 @@ export function LiveDirectorStage({
   const focusedGodPlayer =
     godViewState?.players.find((player) => player.name === focusedPlayerName) ??
     null;
+  const speakerGodPlayer = godViewState?.speakerFlow.current ?? focusedGodPlayer;
   const title = cue?.title ?? "等待导播事件";
   const body = cue?.body ?? "对局运行已创建，正在等待下一条实时事件。";
   const isTerminalCue = cue?.importance === "terminal";
@@ -46,7 +47,7 @@ export function LiveDirectorStage({
   return (
     <section
       className={withGlassPanel(
-        "relative overflow-hidden rounded-lg text-slate-100 shadow-[0_32px_100px_rgba(0,0,0,0.42)]",
+        "god-view-frame relative overflow-hidden rounded-lg text-slate-100 shadow-[0_32px_100px_rgba(0,0,0,0.42)]",
         tone.surface,
       )}
       data-testid="live-director-stage"
@@ -68,7 +69,7 @@ export function LiveDirectorStage({
           </div>
           {godViewState ? (
             <div
-              className="god-view-stage-strip grid grid-cols-2 gap-1 rounded-md border border-amber-300/20 bg-black/35 px-3 py-2 text-[11px] text-slate-300 shadow-[0_16px_45px_rgba(0,0,0,0.24)] sm:grid-cols-4 lg:grid-cols-7"
+              className="god-view-stage-strip grid grid-cols-2 gap-1 rounded-md border border-amber-300/35 px-3 py-2 text-[11px] text-slate-300 shadow-[0_16px_45px_rgba(0,0,0,0.24)] sm:grid-cols-4 lg:grid-cols-7"
               data-testid="god-view-stage-strip"
             >
               <StageStat label="局名" value={godViewState.boardName} />
@@ -90,6 +91,56 @@ export function LiveDirectorStage({
 
         <div className="glass-panel-subtle absolute left-1/2 top-[51%] z-30 w-[min(24rem,48vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-amber-300/25 p-3 text-center shadow-[0_24px_68px_rgba(0,0,0,0.38)] sm:top-[55%] sm:w-[min(30rem,64vw)] sm:p-4">
           <div className="mb-3 flex flex-wrap justify-center gap-2 text-xs">
+            {speakerGodPlayer ? (
+              <div
+                className="god-view-speaker-stage mb-2 grid w-full grid-cols-[5rem_minmax(0,1fr)] items-center gap-3 rounded-lg border border-amber-300/30 bg-black/45 p-3 text-left shadow-[0_0_36px_rgba(251,191,36,0.16)] sm:grid-cols-[6rem_minmax(0,1fr)]"
+                data-testid="god-view-speaker-stage"
+              >
+                <div
+                  className={`relative flex aspect-[3/4] items-center justify-center overflow-hidden rounded-md border-2 bg-gradient-to-br ${avatarGradient(
+                    speakerGodPlayer.name,
+                  )} ${appearanceClassName(
+                    speakerGodPlayer.appearanceId,
+                  )} ${speakerTone(speakerGodPlayer)}`}
+                >
+                  {speakerGodPlayer.avatarImageUrl ? (
+                    <img
+                      alt={`${speakerGodPlayer.name} 当前发言形象`}
+                      className="h-full w-full object-cover"
+                      src={speakerGodPlayer.avatarImageUrl}
+                    />
+                  ) : (
+                    <span className="text-3xl font-black text-amber-50">
+                      {avatarText(speakerGodPlayer.name)}
+                    </span>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-amber-200">
+                    {speakerGodPlayer.seatNumber} 号
+                  </p>
+                  <p className="truncate text-xl font-semibold text-amber-50">
+                    {speakerGodPlayer.name}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    <span className="rounded border border-amber-300/30 bg-amber-400/10 px-2 py-1 text-amber-100">
+                      {speakerGodPlayer.role}
+                    </span>
+                    <span className="rounded border border-sky-300/25 bg-sky-400/10 px-2 py-1 text-sky-100">
+                      {speakerGodPlayer.camp}
+                    </span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-300 sm:grid-cols-2">
+                    <span>
+                      上一位：{godViewState?.speakerFlow.previous?.name ?? "-"}
+                    </span>
+                    <span>
+                      下一位：{godViewState?.speakerFlow.next?.name ?? "-"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {cue ? (
               <>
                 <Badge color="amber" variant="surface">
@@ -287,9 +338,9 @@ const STATUS_LABELS: Record<LivePlayer["status"], string> = {
 
 function StageStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0">
-      <span className="block text-[10px] text-slate-500">{label}</span>
-      <span className="block truncate font-semibold text-slate-100">
+    <div className="relative min-w-0 border-l border-amber-300/10 pl-2 first:border-l-0 first:pl-0">
+      <span className="block text-[10px] text-amber-200/60">{label}</span>
+      <span className="block truncate font-semibold text-amber-50">
         {value}
       </span>
     </div>
@@ -381,6 +432,16 @@ function roleTone(role: string) {
     badge: "bg-stone-950/70 text-stone-100 ring-stone-300/25",
     dot: "bg-stone-300",
   };
+}
+
+function speakerTone(player: GodViewPlayer) {
+  if (player.camp === "狼人阵营") {
+    return "border-red-400 shadow-[0_0_30px_rgba(248,113,113,0.28)]";
+  }
+  if (player.identityGroup === "神职") {
+    return "border-sky-200 shadow-[0_0_30px_rgba(125,211,252,0.22)]";
+  }
+  return "border-stone-300 shadow-[0_0_30px_rgba(214,211,209,0.16)]";
 }
 
 function avatarGradient(name: string) {

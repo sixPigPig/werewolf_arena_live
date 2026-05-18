@@ -17,7 +17,7 @@ export function GodViewRosterPanel({
   return (
     <aside
       className={withGlassPanel(
-        "god-view-roster-panel overflow-hidden rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.32)]",
+        "god-view-roster-panel god-view-frame overflow-hidden rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.32)]",
       )}
       data-testid="god-view-roster-panel"
     >

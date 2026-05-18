@@ -45,6 +45,21 @@ function runningRunResponse() {
       werewolf_model: "deepseek-chat",
       seed: null,
       max_rounds: 8,
+      rule_set_id: "classic_8",
+      rule_set: {
+        id: "classic_8",
+        version: "2026.04",
+        name: "经典 8 人局",
+        player_count: 8,
+        roles: [
+          { role: "狼人", count: 2 },
+          { role: "预言家", count: 1 },
+          { role: "守卫", count: 1 },
+          { role: "村民", count: 4 },
+        ],
+        role_summary: "2 狼人 / 1 预言家 / 1 守卫 / 4 村民",
+        sheriff_enabled: false,
+      },
       status: "running",
       created_at: "2026-04-24T12:00:00Z",
       started_at: "2026-04-24T12:00:01Z",
@@ -693,6 +708,133 @@ describe("LiveGamePage", () => {
     expect(screen.getByTestId("god-view-bottom-board")).toBeInTheDocument();
     expect(screen.getByText("投票统计")).toBeInTheDocument();
     expect(screen.getByText("本局标记（回放点）")).toBeInTheDocument();
+  });
+
+  it("shows the current speaker as a large god-view stage portrait", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+    act(() => {
+      emitEvent(source, {
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Harold", role: "预言家", model: "deepseek-chat" },
+            { name: "Jackson", role: "村民", model: "deepseek-chat" },
+            { name: "Bert", role: "狼人", model: "deepseek-chat" },
+            { name: "Isaac", role: "守卫", model: "deepseek-chat" },
+          ],
+        },
+      });
+      emitEvent(source, {
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        payload: {
+          active_players: ["Harold", "Jackson", "Bert", "Isaac"],
+          speech_order: ["Harold", "Jackson", "Bert", "Isaac"],
+        },
+      });
+      emitEvent(source, {
+        id: 3,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "Isaac",
+        action: "debate",
+      });
+    });
+
+    const stage = await screen.findByTestId("god-view-speaker-stage");
+    expect(within(stage).getByText("4 号")).toBeInTheDocument();
+    expect(within(stage).getByText("Isaac")).toBeInTheDocument();
+    expect(within(stage).getByText("守卫")).toBeInTheDocument();
+    expect(within(stage).getByText("上一位：Bert")).toBeInTheDocument();
+    expect(within(stage).getByText("下一位：Harold")).toBeInTheDocument();
+
+    const strip = screen.getByTestId("god-view-stage-strip");
+    expect(within(strip).getByText("经典 8 人局")).toBeInTheDocument();
+    expect(within(strip).getByText("第 1 天")).toBeInTheDocument();
+    expect(within(strip).getByText("白天发言")).toBeInTheDocument();
+    expect(within(strip).getByText("发言席：4 号")).toBeInTheDocument();
+    expect(within(strip).getByText("存活 4/4")).toBeInTheDocument();
+    expect(screen.getByText("候选 1")).toBeInTheDocument();
+    expect(screen.getByText("等待投票")).toBeInTheDocument();
+  });
+
+  it("shows peaceful night resolution when a guarded attack causes no death", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+    act(() => {
+      emitEvent(source, {
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Harold", role: "预言家", model: "deepseek-chat" },
+            { name: "Jackson", role: "村民", model: "deepseek-chat" },
+            { name: "Bert", role: "狼人", model: "deepseek-chat" },
+            { name: "Isaac", role: "守卫", model: "deepseek-chat" },
+          ],
+        },
+      });
+      emitEvent(source, {
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        payload: {
+          active_players: ["Harold", "Jackson", "Bert", "Isaac"],
+          attacked: "Isaac",
+          protected: "Isaac",
+          investigated: "Jackson",
+          eliminated: null,
+        },
+      });
+    });
+
+    expect(screen.getAllByText("平安夜").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("Isaac 被狼人袭击，但被守卫守护。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("局势未到临界")).toBeInTheDocument();
+    expect(screen.getByText("双方仍需通过发言和投票推进。")).toBeInTheDocument();
+    const nightOrder = screen.getByTestId("god-view-night-action-order");
+    expect(
+      Array.from(
+        nightOrder.querySelectorAll('[data-testid="god-view-night-action"]'),
+      ).map((item) => item.textContent),
+    ).toEqual([
+      "1狼人目标击杀 Isaac",
+      "2守卫守护守护 Isaac",
+      "3预言家查验查验 Jackson",
+    ]);
+    expect(screen.getByText("本局无警长规则")).toBeInTheDocument();
   });
 
   it("keeps the first seat clear of the stage phase badge", async () => {

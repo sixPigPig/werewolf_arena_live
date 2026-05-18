@@ -36,6 +36,10 @@ export type GodViewActionLine = {
   tone: "danger" | "info" | "success" | "warning" | "muted";
 };
 
+export type GodViewNightActionOrderLine = GodViewActionLine & {
+  order: number;
+};
+
 export type GodViewDeathInfo = {
   player: string;
   cause: string;
@@ -67,6 +71,12 @@ export type GodViewState = {
     totalPlayers: number;
   };
   nightActions: GodViewActionLine[];
+  nightResolution: {
+    label: string;
+    detail: string;
+    tone: "safe" | "danger" | "neutral";
+  };
+  nightActionOrder: GodViewNightActionOrderLine[];
   deaths: GodViewDeathInfo[];
   isPeacefulNight: boolean;
   vote: {
@@ -82,10 +92,29 @@ export type GodViewState = {
     candidates: string[];
     voters: string[];
   };
+  sheriffRuleState: {
+    enabled: boolean;
+    label: string;
+  };
   speechOrder: string[];
+  speakerFlow: {
+    previous: GodViewPlayer | null;
+    current: GodViewPlayer | null;
+    next: GodViewPlayer | null;
+    modeLabel: string;
+  };
   eventLines: GodViewEventLine[];
   publicFacts: string[];
   replayMarks: GodViewEventLine[];
+  winPressure: {
+    label: string;
+    detail: string;
+    tone: "danger" | "warning" | "safe" | "neutral";
+  };
+};
+
+export type GodViewOptions = {
+  sheriffEnabled?: boolean;
 };
 
 type MutableGodView = {
@@ -95,6 +124,7 @@ type MutableGodView = {
   voteTargets: Map<string, string>;
   voteWeights: Map<string, number>;
   nightActions: GodViewActionLine[];
+  latestNightPayload: Record<string, unknown> | null;
   deaths: GodViewDeathInfo[];
   isPeacefulNight: boolean;
   sheriff: GodViewState["sheriff"];
@@ -109,6 +139,7 @@ export function deriveGodViewState(
   events: LiveGameEvent[],
   spectator: LiveSpectatorState,
   boardName: string,
+  options: GodViewOptions = {},
 ): GodViewState {
   const view: MutableGodView = {
     currentRound: spectator.currentRound,
@@ -117,6 +148,7 @@ export function deriveGodViewState(
     voteTargets: new Map(),
     voteWeights: new Map(),
     nightActions: [],
+    latestNightPayload: null,
     deaths: [],
     isPeacefulNight: false,
     sheriff: {
@@ -161,6 +193,17 @@ export function deriveGodViewState(
     (player) => player.isAlive && player.identityGroup === "平民",
   ).length;
   const tallies = buildVoteTallies(view.voteTargets, view.voteWeights);
+  const speechOrder =
+    view.speechOrder.length > 0
+      ? view.speechOrder
+      : players.map((player) => player.name);
+  const progress = {
+    wolvesAlive,
+    godsAlive,
+    villagersAlive,
+    totalAlive,
+    totalPlayers: players.length,
+  };
 
   return {
     boardName,
@@ -172,14 +215,10 @@ export function deriveGodViewState(
     winMode: "屠边",
     winnerLabel: view.winnerLabel,
     players,
-    progress: {
-      wolvesAlive,
-      godsAlive,
-      villagersAlive,
-      totalAlive,
-      totalPlayers: players.length,
-    },
+    progress,
     nightActions: fallbackNightActions(view.nightActions),
+    nightResolution: buildNightResolution(view.latestNightPayload),
+    nightActionOrder: buildNightActionOrder(view.nightActions),
     deaths: view.deaths.slice(-3).reverse(),
     isPeacefulNight: view.isPeacefulNight,
     vote: {
@@ -192,14 +231,49 @@ export function deriveGodViewState(
       topTarget: tallies[0]?.target ?? null,
     },
     sheriff: view.sheriff,
-    speechOrder:
-      view.speechOrder.length > 0
-        ? view.speechOrder
-        : players.map((player) => player.name),
+    sheriffRuleState: buildSheriffRuleState(options.sheriffEnabled),
+    speechOrder,
+    speakerFlow: buildSpeakerFlow(players, speechOrder, view.activePlayerName),
     eventLines: view.eventLines.slice(-7).reverse(),
     publicFacts: dedupe(view.publicFacts).slice(-6).reverse(),
     replayMarks: view.replayMarks.slice(-5).reverse(),
+    winPressure: buildWinPressure(progress),
   };
+}
+
+function buildSpeakerFlow(
+  players: GodViewPlayer[],
+  speechOrder: string[],
+  activePlayerName: string | null,
+): GodViewState["speakerFlow"] {
+  const currentSpeakerIndex = speechOrder.findIndex(
+    (name) => name === activePlayerName,
+  );
+  if (currentSpeakerIndex < 0 || speechOrder.length === 0) {
+    return {
+      previous: null,
+      current: null,
+      next: null,
+      modeLabel: "等待发言",
+    };
+  }
+
+  return {
+    previous: playerByName(
+      players,
+      speechOrder.at(currentSpeakerIndex - 1) ?? speechOrder.at(-1),
+    ),
+    current: playerByName(players, speechOrder[currentSpeakerIndex]),
+    next: playerByName(
+      players,
+      speechOrder[(currentSpeakerIndex + 1) % speechOrder.length],
+    ),
+    modeLabel: "顺序发言",
+  };
+}
+
+function playerByName(players: GodViewPlayer[], name: string | undefined) {
+  return name ? players.find((player) => player.name === name) ?? null : null;
 }
 
 function collectActionLine(view: MutableGodView, event: LiveGameEvent) {
@@ -286,6 +360,18 @@ function collectStateUpdate(view: MutableGodView, event: LiveGameEvent) {
   const investigated = stringField(payload, "investigated");
   const eliminated = stringField(payload, "eliminated");
   const exiled = stringField(payload, "exiled");
+
+  if (
+    event.phase === "night" ||
+    attacked ||
+    protectedPlayer ||
+    savedByWitch ||
+    poisoned ||
+    investigated ||
+    eliminated
+  ) {
+    view.latestNightPayload = payload;
+  }
 
   if (attacked) {
     pushUniqueAction(view, {
@@ -523,33 +609,12 @@ function eventLineFor(event: LiveGameEvent): GodViewEventLine | null {
     };
   }
   if (event.type === "state_updated") {
-    const exiled = stringField(payload, "exiled");
-    const eliminated = stringField(payload, "eliminated");
-    const votes = recordField(payload, "votes");
-    if (exiled) {
-      return {
-        id: event.id,
-        time: timeLabel(event),
-        text: `${exiled} 被放逐`,
-        tone: "danger",
-      };
-    }
-    if (eliminated) {
-      return {
-        id: event.id,
-        time: timeLabel(event),
-        text: `${eliminated} 夜晚死亡`,
-        tone: "danger",
-      };
-    }
-    if (votes) {
-      return {
-        id: event.id,
-        time: timeLabel(event),
-        text: "投票结果更新",
-        tone: "warning",
-      };
-    }
+    return {
+      id: event.id,
+      time: timeLabel(event),
+      text: stateUpdatedReplayText(payload),
+      tone: stateUpdatedReplayTone(payload),
+    };
   }
   if (event.type === "phase_started") {
     return {
@@ -578,6 +643,47 @@ function eventLineFor(event: LiveGameEvent): GodViewEventLine | null {
   return null;
 }
 
+function stateUpdatedReplayText(payload: Record<string, unknown>) {
+  const exiled = stringField(payload, "exiled");
+  if (exiled) {
+    return `放逐 ${exiled}`;
+  }
+  const eliminated = stringField(payload, "eliminated");
+  if (eliminated) {
+    return `夜晚死亡 ${eliminated}`;
+  }
+  const attacked = stringField(payload, "attacked");
+  const protectedPlayer = stringField(payload, "protected");
+  if (attacked && protectedPlayer === attacked) {
+    return "平安夜";
+  }
+  if (recordField(payload, "votes")) {
+    return "投票结果更新";
+  }
+  const debateEntry = payload.debate_entry;
+  if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
+    return `${debateEntry.speaker} 发言`;
+  }
+  return "局势更新";
+}
+
+function stateUpdatedReplayTone(
+  payload: Record<string, unknown>,
+): GodViewEventLine["tone"] {
+  if (stringField(payload, "exiled") || stringField(payload, "eliminated")) {
+    return "danger";
+  }
+  const attacked = stringField(payload, "attacked");
+  const protectedPlayer = stringField(payload, "protected");
+  if (attacked && protectedPlayer === attacked) {
+    return "success";
+  }
+  if (recordField(payload, "votes")) {
+    return "warning";
+  }
+  return "default";
+}
+
 function fallbackNightActions(actions: GodViewActionLine[]) {
   if (actions.length > 0) {
     return actions.slice(-5).reverse();
@@ -588,6 +694,142 @@ function fallbackNightActions(actions: GodViewActionLine[]) {
     { label: "女巫药剂", value: "暂无记录", tone: "muted" },
     { label: "守卫守护", value: "暂无记录", tone: "muted" },
   ] satisfies GodViewActionLine[];
+}
+
+function buildNightResolution(
+  payload: Record<string, unknown> | null,
+): GodViewState["nightResolution"] {
+  if (!payload) {
+    return {
+      label: "等待夜间结算",
+      detail: "暂无夜间结论",
+      tone: "neutral",
+    };
+  }
+
+  const attacked = stringField(payload, "attacked");
+  const protectedPlayer = stringField(payload, "protected");
+  const eliminated = stringField(payload, "eliminated");
+  const poisoned = stringField(payload, "poisoned");
+
+  if (eliminated) {
+    return {
+      label: "昨夜死亡",
+      detail: `${eliminated} 夜晚出局。`,
+      tone: "danger",
+    };
+  }
+  if (poisoned) {
+    return {
+      label: "昨夜死亡",
+      detail: `${poisoned} 被女巫毒杀。`,
+      tone: "danger",
+    };
+  }
+  if (attacked && protectedPlayer === attacked) {
+    return {
+      label: "平安夜",
+      detail: `${attacked} 被狼人袭击，但被守卫守护。`,
+      tone: "safe",
+    };
+  }
+  if (attacked) {
+    return {
+      label: "夜间结算",
+      detail: `${attacked} 遭到狼人袭击，暂无死亡公布。`,
+      tone: "neutral",
+    };
+  }
+  return {
+    label: "夜间结算",
+    detail: "暂无死亡玩家。",
+    tone: "neutral",
+  };
+}
+
+function buildNightActionOrder(
+  actions: GodViewActionLine[],
+): GodViewNightActionOrderLine[] {
+  const preferredOrder = [
+    "狼人目标",
+    "守卫守护",
+    "预言家查验",
+    "女巫解药",
+    "女巫毒药",
+  ];
+  const orderedActions = preferredOrder
+    .map((label) => actions.find((action) => action.label === label))
+    .filter((action): action is GodViewActionLine => Boolean(action));
+
+  if (orderedActions.length === 0) {
+    return [
+      {
+        order: 1,
+        label: "狼人目标",
+        value: "等待夜间行动",
+        tone: "muted",
+      },
+    ];
+  }
+
+  return orderedActions.map((action, index) => ({
+    ...action,
+    order: index + 1,
+  }));
+}
+
+function buildSheriffRuleState(
+  sheriffEnabled: boolean | undefined,
+): GodViewState["sheriffRuleState"] {
+  if (sheriffEnabled === false) {
+    return {
+      enabled: false,
+      label: "本局无警长规则",
+    };
+  }
+  return {
+    enabled: true,
+    label: "警长规则开启",
+  };
+}
+
+function buildWinPressure(
+  progress: GodViewState["progress"],
+): GodViewState["winPressure"] {
+  const goodAlive = progress.godsAlive + progress.villagersAlive;
+  if (progress.totalPlayers === 0) {
+    return {
+      label: "局势未到临界",
+      detail: "等待玩家和身份信息。",
+      tone: "neutral",
+    };
+  }
+  if (progress.wolvesAlive === 0) {
+    return {
+      label: "好人胜势",
+      detail: "狼人已清零。",
+      tone: "safe",
+    };
+  }
+  if (progress.wolvesAlive >= goodAlive) {
+    return {
+      label: "狼人压制",
+      detail: "狼人数量已达到或超过好人数量。",
+      tone: "danger",
+    };
+  }
+  if (progress.godsAlive === 0 || progress.villagersAlive === 0) {
+    return {
+      label: "接近屠边",
+      detail: "神职或平民阵线已到临界。",
+      tone: "warning",
+    };
+  }
+  return {
+    label: "局势未到临界",
+    detail: "双方仍需通过发言和投票推进。",
+    tone: "neutral",
+  };
 }
 
 function pushUniqueAction(view: MutableGodView, action: GodViewActionLine) {

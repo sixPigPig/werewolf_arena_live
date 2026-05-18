@@ -19,7 +19,7 @@ export function GodViewIntelPanel({
   return (
     <aside
       className={withGlassPanel(
-        "god-view-intel-panel min-w-0 overflow-hidden rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.32)] xl:max-h-[calc(100vh-8rem)] xl:overflow-auto",
+        "god-view-intel-panel god-view-frame min-w-0 overflow-hidden rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.32)] xl:max-h-[calc(100vh-8rem)] xl:overflow-auto",
       )}
       data-testid="god-view-intel-panel"
     >
@@ -28,10 +28,24 @@ export function GodViewIntelPanel({
       </IntelSection>
 
       <IntelSection title="死亡信息">
-        {state.deaths.length === 0 ? (
-          <p className="rounded-md border border-emerald-300/20 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-100">
-            {state.isPeacefulNight ? "平安夜" : "暂无死亡信息"}
-          </p>
+        {state.nightResolution.tone === "safe" ? (
+          <div className="rounded-md border border-emerald-300/25 bg-emerald-950/25 px-3 py-2">
+            <p className="text-sm font-semibold text-emerald-100">
+              {state.nightResolution.label}
+            </p>
+            <p className="mt-1 text-xs text-emerald-100/80">
+              {state.nightResolution.detail}
+            </p>
+          </div>
+        ) : state.deaths.length === 0 ? (
+          <div className="rounded-md border border-slate-600/35 bg-slate-950/35 px-3 py-2">
+            <p className="text-sm font-semibold text-slate-200">
+              {state.nightResolution.label}
+            </p>
+            <p className="mt-1 text-xs text-slate-400">
+              {state.isPeacefulNight ? "平安夜" : state.nightResolution.detail}
+            </p>
+          </div>
         ) : (
           <div className="space-y-2">
             {state.deaths.map((death) => (
@@ -51,6 +65,9 @@ export function GodViewIntelPanel({
                   <span>死亡时间：{death.time}</span>
                   <span>{death.publicText}</span>
                 </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  遗言资格：待规则结算
+                </p>
               </div>
             ))}
           </div>
@@ -58,12 +75,19 @@ export function GodViewIntelPanel({
       </IntelSection>
 
       <IntelSection title="夜晚行动回顾">
-        <div className="space-y-1.5">
-          {state.nightActions.map((action) => (
-            <ActionLine
-              action={action}
-              key={`${action.label}-${action.value}`}
-            />
+        <div className="space-y-1.5" data-testid="god-view-night-action-order">
+          {state.nightActionOrder.map((action) => (
+            <div
+              className="grid grid-cols-[1.5rem_5rem_minmax(0,1fr)] gap-2 rounded-md border border-slate-700/45 bg-black/25 px-2.5 py-1.5 text-xs"
+              data-testid="god-view-night-action"
+              key={`${action.order}-${action.label}-${action.value}`}
+            >
+              <span className="text-amber-200">{action.order}</span>
+              <span className={actionTone(action.tone)}>{action.label}</span>
+              <span className="min-w-0 truncate text-slate-200">
+                {action.value}
+              </span>
+            </div>
           ))}
         </div>
       </IntelSection>
@@ -91,27 +115,33 @@ export function GodViewIntelPanel({
       </IntelSection>
 
       <IntelSection title="警长信息">
-        <div className="space-y-1.5 text-xs text-slate-300">
-          <InfoRow label="当前警长" value={state.sheriff.current ?? "未产生"} />
-          <InfoRow label="警徽流向" value={state.sheriff.badgeFlow} />
-          <InfoRow label="归票目标" value={state.sheriff.callTarget ?? "暂无"} />
-          <InfoRow
-            label="警上玩家"
-            value={
-              state.sheriff.candidates.length > 0
-                ? state.sheriff.candidates.join("、")
-                : "暂无"
-            }
-          />
-          <InfoRow
-            label="竞选票型"
-            value={
-              state.sheriff.voters.length > 0
-                ? state.sheriff.voters.join("、")
-                : "暂无"
-            }
-          />
-        </div>
+        {state.sheriffRuleState.enabled ? (
+          <div className="space-y-1.5 text-xs text-slate-300">
+            <InfoRow label="当前警长" value={state.sheriff.current ?? "未产生"} />
+            <InfoRow label="警徽流向" value={state.sheriff.badgeFlow} />
+            <InfoRow label="归票目标" value={state.sheriff.callTarget ?? "暂无"} />
+            <InfoRow
+              label="警上玩家"
+              value={
+                state.sheriff.candidates.length > 0
+                  ? state.sheriff.candidates.join("、")
+                  : "暂无"
+              }
+            />
+            <InfoRow
+              label="竞选票型"
+              value={
+                state.sheriff.voters.length > 0
+                  ? state.sheriff.voters.join("、")
+                  : "暂无"
+              }
+            />
+          </div>
+        ) : (
+          <p className="rounded-md border border-slate-600/45 bg-slate-950/55 px-3 py-2 text-xs text-slate-300">
+            {state.sheriffRuleState.label}
+          </p>
+        )}
       </IntelSection>
 
       <IntelSection title="阵营进度">
@@ -136,6 +166,14 @@ export function GodViewIntelPanel({
           />
           <InfoRow label="胜负条件" value={state.winMode} />
           <InfoRow label="结算阵营" value={state.winnerLabel} />
+          <div
+            className={`rounded-md border px-2.5 py-2 text-xs ${winPressureTone(
+              state.winPressure.tone,
+            )}`}
+          >
+            <p className="font-semibold">{state.winPressure.label}</p>
+            <p className="mt-1 opacity-80">{state.winPressure.detail}</p>
+          </div>
         </div>
       </IntelSection>
 
@@ -187,15 +225,6 @@ function EventLines({ lines }: { lines: GodViewEventLine[] }) {
         </li>
       ))}
     </ol>
-  );
-}
-
-function ActionLine({ action }: { action: GodViewActionLine }) {
-  return (
-    <div className="grid grid-cols-[5.2rem_minmax(0,1fr)] gap-2 rounded-md border border-slate-700/45 bg-black/25 px-2.5 py-1.5 text-xs">
-      <span className={actionTone(action.tone)}>{action.label}</span>
-      <span className="min-w-0 truncate text-slate-200">{action.value}</span>
-    </div>
   );
 }
 
@@ -273,4 +302,17 @@ function actionTone(tone: GodViewActionLine["tone"]) {
     return "text-amber-200";
   }
   return "text-slate-500";
+}
+
+function winPressureTone(tone: GodViewState["winPressure"]["tone"]) {
+  if (tone === "danger") {
+    return "border-red-400/30 bg-red-950/25 text-red-100";
+  }
+  if (tone === "warning") {
+    return "border-amber-300/30 bg-amber-950/25 text-amber-100";
+  }
+  if (tone === "safe") {
+    return "border-emerald-300/30 bg-emerald-950/25 text-emerald-100";
+  }
+  return "border-slate-600/45 bg-slate-950/40 text-slate-200";
 }
