@@ -94,6 +94,28 @@ def clear_overrides() -> None:
     app.dependency_overrides.clear()
 
 
+def add_virtual_profiles(count: int, *, prefix: str = "profile") -> list[str]:
+    profile_ids = [f"{prefix}-{index}" for index in range(1, count + 1)]
+    with TestingSessionLocal() as session:
+        session.add_all(
+            [
+                VirtualPlayerProfile(
+                    id=profile_id,
+                    display_name=f"虚拟玩家{index}",
+                    model="profile-model",
+                    personality_id="balanced",
+                    personality_text="稳健推进。",
+                    appearance_id="default",
+                    avatar_prompt="",
+                    tags=[],
+                )
+                for index, profile_id in enumerate(profile_ids, start=1)
+            ]
+        )
+        session.commit()
+    return profile_ids
+
+
 class ImmediateThread:
     def __init__(self, *, target, kwargs, daemon):
         self.target = target
@@ -238,6 +260,7 @@ def test_create_game_run_accepts_rule_set_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    add_virtual_profiles(6)
     registry = LiveRunRegistry()
     override_logs_root(tmp_path)
     override_live_registry(registry)
@@ -263,10 +286,76 @@ def test_create_game_run_accepts_rule_set_id(
     assert captured[0]["rule_set_id"] == "starter_6"
 
 
+def test_create_game_run_randomly_fills_profiles_when_no_lineup_selected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(6)
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"rule_set_id": "starter_6", "seed": 21, "max_rounds": 1},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    configs = response.json()["player_configs"]
+    assert [config["seat"] for config in configs] == [1, 2, 3, 4, 5, 6]
+    assert {config["profile_id"] for config in configs} == {
+        f"profile-{index}" for index in range(1, 7)
+    }
+    assert len({config["name"] for config in configs}) == 6
+    assert [config.to_dict() for config in captured[0]["player_configs"]] == configs
+
+
+def test_create_game_run_rejects_when_player_library_is_too_small(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(1)
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"rule_set_id": "classic_8", "seed": 21, "max_rounds": 1},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "Player profile library has 1 available players, but 8 seats require virtual players"
+    )
+    assert captured == []
+
+
 def test_create_game_run_defaults_to_minimax_when_only_minimax_key_is_configured(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    add_virtual_profiles(8)
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
         "DEEPSEEK_MODEL=deepseek-v4-flash\n"
@@ -342,6 +431,7 @@ def test_create_game_run_resolves_profile_configs(
             )
         )
         session.commit()
+    add_virtual_profiles(7)
 
     registry = LiveRunRegistry()
     override_logs_root(tmp_path)
@@ -376,7 +466,8 @@ def test_create_game_run_resolves_profile_configs(
         clear_overrides()
 
     assert response.status_code == 201
-    snapshot = response.json()["player_configs"][0]
+    configs = response.json()["player_configs"]
+    snapshot = next(config for config in configs if config["seat"] == 2)
     expected_personality = "\n".join(
         [
             default_personality_text("aggressive"),
@@ -401,7 +492,8 @@ def test_create_game_run_resolves_profile_configs(
         "tags": ["压迫", "控场"],
     }
     background_configs = captured[0]["player_configs"]
-    assert [config.to_dict() for config in background_configs] == [snapshot]
+    assert len(background_configs) == 8
+    assert snapshot in [config.to_dict() for config in background_configs]
 
 
 def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
@@ -426,7 +518,24 @@ def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
                     "tags": ["本地"],
                     "created_at": "2026-05-16T00:00:00+00:00",
                     "updated_at": "2026-05-16T00:00:00+00:00",
-                }
+                },
+                *[
+                    {
+                        "id": f"profile-file-{index}",
+                        "owner_user_id": None,
+                        "display_name": f"文件补位{index}",
+                        "model": "file-model",
+                        "personality_id": "balanced",
+                        "personality_text": "补位玩家。",
+                        "appearance_id": "default",
+                        "avatar_prompt": "",
+                        "avatar_image_url": "",
+                        "tags": [],
+                        "created_at": "2026-05-16T00:00:00+00:00",
+                        "updated_at": "2026-05-16T00:00:00+00:00",
+                    }
+                    for index in range(1, 8)
+                ],
             ],
         },
     )
@@ -456,7 +565,8 @@ def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
         clear_overrides()
 
     assert response.status_code == 201
-    snapshot = response.json()["player_configs"][0]
+    configs = response.json()["player_configs"]
+    snapshot = next(config for config in configs if config["seat"] == 2)
     expected_personality = "\n".join(
         [
             "先听后判。",
@@ -480,7 +590,8 @@ def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
         "avatar_image_url": "/api/v1/player-profiles/avatar/profile-file.png",
         "tags": ["本地"],
     }
-    assert [config.to_dict() for config in captured[0]["player_configs"]] == [snapshot]
+    assert len(captured[0]["player_configs"]) == 8
+    assert snapshot in [config.to_dict() for config in captured[0]["player_configs"]]
 
 
 def test_game_run_player_config_composes_rich_profile_prompt(
@@ -503,6 +614,7 @@ def test_game_run_player_config_composes_rich_profile_prompt(
             "example_messages": ["我觉得 2 号的视角漏掉了昨晚信息。"],
         },
     ).json()
+    add_virtual_profiles(7)
     registry = LiveRunRegistry()
     override_logs_root(tmp_path)
     override_live_registry(registry)
@@ -526,13 +638,13 @@ def test_game_run_player_config_composes_rich_profile_prompt(
         clear_overrides()
 
     assert response.status_code == 201
-    config = response.json()["player_configs"][0]
+    config = next(item for item in response.json()["player_configs"] if item["seat"] == 1)
     assert config["name"] == "控场样本"
     assert "先找矛盾，再给站边。" in config["personality"]
     assert "逻辑控场玩家" in config["personality"]
     assert "我先拆一下视角" in config["personality"]
     assert "领导倾向: 5/5" in config["personality"]
-    assert [config.to_dict() for config in captured[0]["player_configs"]] == [config]
+    assert config in [item.to_dict() for item in captured[0]["player_configs"]]
 
 
 def test_game_run_player_config_keeps_explicit_personality_text_override(
@@ -551,6 +663,7 @@ def test_game_run_player_config_keeps_explicit_personality_text_override(
             "leadership_tendency": 5,
         },
     ).json()
+    add_virtual_profiles(7)
     registry = LiveRunRegistry()
     override_logs_root(tmp_path)
     override_live_registry(registry)
@@ -580,15 +693,16 @@ def test_game_run_player_config_keeps_explicit_personality_text_override(
         clear_overrides()
 
     assert response.status_code == 201
-    config = response.json()["player_configs"][0]
+    config = next(item for item in response.json()["player_configs"] if item["seat"] == 1)
     assert config["personality"] == "只使用运行时覆盖。"
-    assert [config.to_dict() for config in captured[0]["player_configs"]] == [config]
+    assert config in [item.to_dict() for item in captured[0]["player_configs"]]
 
 
 def test_create_game_run_rejects_duplicate_effective_player_names(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    add_virtual_profiles(8)
     registry = LiveRunRegistry()
     override_logs_root(tmp_path)
     override_live_registry(registry)
@@ -607,8 +721,8 @@ def test_create_game_run_rejects_duplicate_effective_player_names(
                 "seed": 21,
                 "max_rounds": 1,
                 "player_configs": [
-                    {"seat": 1, "name": "同名玩家"},
-                    {"seat": 2, "name": "同名玩家"},
+                    {"seat": 1, "profile_id": "profile-1", "name": "同名玩家"},
+                    {"seat": 2, "profile_id": "profile-2", "name": "同名玩家"},
                 ],
             },
         )
@@ -770,6 +884,7 @@ def test_create_game_run_returns_run_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    add_virtual_profiles(8)
     registry = LiveRunRegistry()
     override_logs_root(tmp_path)
     override_live_registry(registry)

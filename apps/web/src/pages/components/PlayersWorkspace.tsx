@@ -2,12 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { createPlayerProfile } from "../../features/games/api/createPlayerProfile";
 import { deletePlayerProfile } from "../../features/games/api/deletePlayerProfile";
+import { generatePlayerProfileAiDraft } from "../../features/games/api/generatePlayerProfileAiDraft";
 import { listModelOptions } from "../../features/games/api/listModelOptions";
 import { listPlayerProfiles } from "../../features/games/api/listPlayerProfiles";
 import { updatePlayerProfile } from "../../features/games/api/updatePlayerProfile";
 import { uploadPlayerAvatar } from "../../features/games/api/uploadPlayerAvatar";
 import { VirtualPlayerLibrary } from "../../features/games/components/VirtualPlayerLibrary";
-import type { PlayerProfileRequest } from "../../features/games/types";
+import type {
+  PlayerProfileAiDraftRequest,
+  PlayerProfileRequest,
+} from "../../features/games/types";
 
 type PlayersWorkspaceProps = {
   onCreateActionReady?: (openCreate: () => void) => void;
@@ -46,6 +50,9 @@ export function PlayersWorkspace({ onCreateActionReady }: PlayersWorkspaceProps)
   const uploadAvatarMutation = useMutation({
     mutationFn: uploadPlayerAvatar,
   });
+  const generateAiDraftMutation = useMutation({
+    mutationFn: generatePlayerProfileAiDraft,
+  });
   const profiles = playerProfilesQuery.data?.profiles ?? [];
   const modelOptions = modelOptionsQuery.data?.models ?? [];
   const isSaving =
@@ -70,6 +77,9 @@ export function PlayersWorkspace({ onCreateActionReady }: PlayersWorkspaceProps)
         modelOptions={modelOptions}
         onCreateActionReady={onCreateActionReady}
         onCreateProfile={(request) => createProfileMutation.mutateAsync(request)}
+        onGenerateAiDraft={(request: PlayerProfileAiDraftRequest) =>
+          generateAiDraftMutation.mutateAsync(request)
+        }
         onUploadAvatar={(file) => uploadAvatarMutation.mutateAsync(file)}
         onUpdateProfile={(profileId, request) =>
           updateProfileMutation.mutateAsync({ profileId, request })

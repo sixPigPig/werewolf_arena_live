@@ -155,6 +155,7 @@ function renderRoute(path: string) {
 describe("PlayersPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    window.localStorage.clear();
   });
 
   it("renders the dedicated virtual player workbench", async () => {
@@ -344,6 +345,297 @@ describe("PlayersPage", () => {
     expect(nameCards[2]).toHaveTextContent("Charlie 司南");
   });
 
+  it("applies player creation templates to new drafts", async () => {
+    mockPlayersPageFetch(filteredProfilesResponse());
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      await within(playerLibrary).findByText("Alpha 阿夜"),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /高压进攻/ }));
+
+    expect(screen.getByLabelText("一句话简介")).toHaveValue(
+      "用连续提问制造压力，快速逼出视角漏洞。",
+    );
+    expect(screen.getByLabelText("策略模板")).toHaveValue("pressure_attacker");
+    expect(screen.getByLabelText("标签")).toHaveValue("强压，提问");
+    expect(screen.getByText("昵称")).toBeInTheDocument();
+    expect(screen.getByText("模型")).toBeInTheDocument();
+  });
+
+  it("generates a new player nickname from the AI draft endpoint only when requested", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(filteredProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/model-options")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(modelOptionsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles/ai-draft")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ display_name: "银刃听雪" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    await userEvent.click(
+      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
+    );
+
+    const nameInput = screen.getByLabelText("虚拟玩家昵称") as HTMLInputElement;
+    expect(
+      fetchSpy.mock.calls.some(([input]) =>
+        String(input).endsWith("/api/v1/player-profiles/ai-draft"),
+      ),
+    ).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: "AI 生成昵称" }));
+
+    await waitFor(() => expect(nameInput).toHaveValue("银刃听雪"));
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "手动改名");
+
+    expect(nameInput).toHaveValue("手动改名");
+    const aiDraftCall = fetchSpy.mock.calls.find(([input]) =>
+      String(input).endsWith("/api/v1/player-profiles/ai-draft"),
+    );
+    expect(JSON.parse(String(aiDraftCall?.[1]?.body))).toEqual(
+      expect.objectContaining({
+        mode: "name",
+        existing_names: [],
+      }),
+    );
+  });
+
+  it("applies an AI generated creation template to the editor fields", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(filteredProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/model-options")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(modelOptionsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles/ai-draft")) {
+        const body = JSON.parse(String(init?.body));
+        const payload =
+          body.mode === "template"
+            ? {
+                display_name: "雾灯司南",
+                personality_id: "analytical",
+                personality_text: "习惯从票型和发言顺序里拆阵营。",
+                short_description: "冷静复盘，擅长拆票型。",
+                background_story: "长期在高阶圆桌局做复盘记录。",
+                speaking_style: "先列证据，再给结论。",
+                catchphrases: ["我先盘票型", "这里别急着出"],
+                strategy_profile: "logic_leader",
+                risk_tolerance: 2,
+                bluffing_tendency: 2,
+                trust_tendency: 3,
+                leadership_tendency: 5,
+                talkativeness: 4,
+                example_messages: ["3 号这一轮补视角太晚，我会先标记。"],
+                tags: ["复盘", "控场"],
+              }
+            : { display_name: "银刃听雪" };
+        return Promise.resolve(
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    await userEvent.click(
+      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /^AI 生成请求/ }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("一句话简介")).toHaveValue(
+        "冷静复盘，擅长拆票型。",
+      ),
+    );
+    expect(screen.getByLabelText("虚拟玩家昵称")).toHaveValue("雾灯司南");
+    expect(screen.getByLabelText("策略模板")).toHaveValue("logic_leader");
+    expect(screen.getByLabelText("领导倾向")).toHaveValue(5);
+    expect(screen.getByLabelText("标签")).toHaveValue("复盘，控场");
+  });
+
+  it("saves the current draft as a reusable creation template", async () => {
+    mockPlayersPageFetch(filteredProfilesResponse());
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    await userEvent.click(
+      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /高压进攻/ }));
+    await userEvent.click(screen.getByRole("button", { name: "保存为模板" }));
+    const dialog = screen.getByRole("dialog", { name: "保存为模板" });
+    await userEvent.type(within(dialog).getByLabelText("模板名"), "追刀模板");
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存模板" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "保存为模板" })).not.toBeInTheDocument(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /逻辑控场/ }));
+    expect(screen.getByLabelText("策略模板")).toHaveValue("logic_leader");
+
+    await userEvent.click(screen.getByRole("button", { name: /追刀模板/ }));
+
+    expect(screen.getByLabelText("一句话简介")).toHaveValue(
+      "用连续提问制造压力，快速逼出视角漏洞。",
+    );
+    expect(screen.getByLabelText("策略模板")).toHaveValue("pressure_attacker");
+    expect(screen.getByLabelText("标签")).toHaveValue("强压，提问");
+  });
+
+  it("blocks duplicate player names while creating", async () => {
+    mockPlayersPageFetch(filteredProfilesResponse());
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      await within(playerLibrary).findByText("Alpha 阿夜"),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
+    );
+    await userEvent.clear(screen.getByLabelText("虚拟玩家昵称"));
+    await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), " alpha 阿夜 ");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("已有同名虚拟玩家");
+    expect(
+      screen.getByRole("button", { name: "保存虚拟玩家" }),
+    ).toBeDisabled();
+  });
+
+  it("saves a new player and keeps the editor open for the next draft", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/v1/player-profiles") && method === "GET") {
+        return Promise.resolve(
+          new Response(JSON.stringify(filteredProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/model-options")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(modelOptionsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles") && method === "POST") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...filteredProfilesResponse().profiles[0],
+              id: "profile-created",
+              display_name: "连创玩家",
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+
+    renderPage();
+
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      await within(playerLibrary).findByText("Alpha 阿夜"),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /高压进攻/ }));
+    await userEvent.clear(screen.getByLabelText("虚拟玩家昵称"));
+    await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "连创玩家");
+
+    const saveAndContinueButton = screen.getByRole("button", {
+      name: "保存并继续新建",
+    });
+    await waitFor(() => expect(saveAndContinueButton).toBeEnabled());
+    await userEvent.click(saveAndContinueButton);
+
+    await waitFor(() => {
+      const postCalls = fetchSpy.mock.calls.filter(
+        ([input, init]) =>
+          String(input).endsWith("/api/v1/player-profiles") &&
+          init?.method === "POST",
+      );
+      expect(postCalls).toHaveLength(1);
+    });
+    const postCall = fetchSpy.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/api/v1/player-profiles") &&
+        init?.method === "POST",
+    );
+    expect(JSON.parse(String(postCall?.[1]?.body))).toEqual(
+      expect.objectContaining({
+        display_name: "连创玩家",
+        strategy_profile: "pressure_attacker",
+        tags: ["强压", "提问"],
+      }),
+    );
+    expect(
+      screen.getByRole("button", { name: "保存并继续新建" }),
+    ).toBeInTheDocument();
+    expect(
+      (screen.getByLabelText("虚拟玩家昵称") as HTMLInputElement).value.trim(),
+    ).not.toBe("");
+  });
+
   it("manages virtual player profiles from the player workbench", async () => {
     let avatarUploadCount = 0;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
@@ -440,6 +732,7 @@ describe("PlayersPage", () => {
       }),
     ).toBeInTheDocument();
     await userEvent.selectOptions(modelSelect, "deepseek-chat");
+    await userEvent.clear(screen.getByLabelText("性格描述"));
     await userEvent.type(screen.getByLabelText("性格描述"), "谨慎发言，先听后判");
     await userEvent.upload(
       screen.getByLabelText("人物形象"),
@@ -450,6 +743,7 @@ describe("PlayersPage", () => {
     expect(
       await screen.findByRole("img", { name: "新玩家 人物形象" }),
     ).toHaveAttribute("src", "/api/v1/player-profiles/avatar/uploaded.png");
+    await userEvent.clear(screen.getByLabelText("标签"));
     await userEvent.type(screen.getByLabelText("标签"), "控场 慢热");
     const saveNewProfileButton = screen.getByRole("button", {
       name: "保存虚拟玩家",

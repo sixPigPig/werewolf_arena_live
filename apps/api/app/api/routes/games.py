@@ -1,5 +1,6 @@
 from pathlib import Path as FilePath
 import queue
+import random
 import threading
 from typing import Annotated, Iterator
 
@@ -41,6 +42,7 @@ from app.werewolf.runner import GameRunError, new_session_id, resume_game, run_g
 router = APIRouter()
 live_registry = LiveRunRegistry()
 RecoverableDatabaseError = (OperationalError, ProgrammingError)
+RecoverableProfileListError = (AttributeError, OperationalError, ProgrammingError)
 
 
 class CreatePlayerConfigRequest(BaseModel):
@@ -141,6 +143,84 @@ def normalize_player_config_requests(
     return configs
 
 
+def complete_player_configs_from_library(
+    *,
+    requests: list[CreatePlayerConfigRequest],
+    player_count: int,
+    seed: int | None,
+    db: Session,
+    profile_store: PlayerProfileFileStore,
+) -> list[PlayerConfig]:
+    configs = normalize_player_config_requests(
+        requests,
+        player_count,
+        db,
+        profile_store,
+    )
+    configs_by_seat = {config.seat: config for config in configs}
+    missing_profile_seats = [
+        seat
+        for seat in range(1, player_count + 1)
+        if not configs_by_seat.get(seat) or not configs_by_seat[seat].profile_id
+    ]
+    if not missing_profile_seats:
+        return sorted(configs, key=lambda config: config.seat)
+
+    used_profile_ids = {
+        config.profile_id
+        for config in configs
+        if config.profile_id is not None
+    }
+    available_profiles = [
+        profile
+        for profile in list_available_player_profiles(db, profile_store)
+        if clean_optional_string(getattr(profile, "id", None)) not in used_profile_ids
+    ]
+    available_count = len(used_profile_ids) + len(available_profiles)
+    if len(available_profiles) < len(missing_profile_seats):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Player profile library has {available_count} available players, "
+                f"but {player_count} seats require virtual players"
+            ),
+        )
+
+    rng = random.Random(f"{seed}:player-profiles") if seed is not None else random.Random()
+    selected_profiles = rng.sample(available_profiles, len(missing_profile_seats))
+    next_configs = list(configs)
+    for seat, profile in zip(missing_profile_seats, selected_profiles, strict=True):
+        existing = configs_by_seat.get(seat)
+        overrides = existing.to_dict() if existing is not None else {"seat": seat}
+        if existing is not None and existing.profile_id is None:
+            overrides.pop("name", None)
+        overrides["profile_id"] = str(getattr(profile, "id"))
+        next_config = player_config_from_profile(
+            seat=seat,
+            profile=profile,
+            overrides=overrides,
+        )
+        next_configs = [
+            config for config in next_configs if config.seat != seat
+        ] + [next_config]
+
+    return sorted(next_configs, key=lambda config: config.seat)
+
+
+def list_available_player_profiles(
+    db: Session,
+    profile_store: PlayerProfileFileStore,
+) -> list[object]:
+    try:
+        return list(
+            db.query(VirtualPlayerProfile)
+            .order_by(VirtualPlayerProfile.updated_at.desc(), VirtualPlayerProfile.id.desc())
+            .all()
+        )
+    except RecoverableProfileListError:
+        return list(profile_store.list_profiles())
+
+
 @router.get("")
 def list_games(store: Annotated[ReplayStore, Depends(get_replay_store)]) -> dict:
     return {"sessions": store.list_sessions()}
@@ -171,11 +251,12 @@ def create_game_run(
             detail=f"Unknown rule set: {request.rule_set_id}",
         ) from exc
     rule_snapshot = rule_set_snapshot(rule_set)
-    player_configs = normalize_player_config_requests(
-        request.player_configs,
-        rule_set.player_count,
-        db,
-        profile_store,
+    player_configs = complete_player_configs_from_library(
+        requests=request.player_configs,
+        player_count=rule_set.player_count,
+        seed=request.seed,
+        db=db,
+        profile_store=profile_store,
     )
     try:
         validate_unique_effective_player_names(

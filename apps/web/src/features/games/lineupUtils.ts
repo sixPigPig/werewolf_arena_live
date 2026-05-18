@@ -65,8 +65,12 @@ export function randomFillEmptySeats(
       .map((config) => config.profile_id)
       .filter((profileId): profileId is string => Boolean(profileId)),
   );
-  const emptySeats = Array.from({ length: playerCount }, (_, index) => index + 1)
-    .filter((seat) => !configs.some((config) => config.seat === seat));
+  const seatsNeedingProfiles = Array.from(
+    { length: playerCount },
+    (_, index) => index + 1,
+  ).filter(
+    (seat) => !configs.some((config) => config.seat === seat && config.profile_id),
+  );
   const availableProfiles = profiles.filter(
     (profile) =>
       !usedProfileIds.has(profile.id) && (!options.favoritesOnly || profile.favorite),
@@ -74,7 +78,7 @@ export function randomFillEmptySeats(
   let nextConfigs = [...configs];
   const nextProfiles = [...availableProfiles];
 
-  for (const seat of emptySeats) {
+  for (const seat of seatsNeedingProfiles) {
     if (nextProfiles.length === 0) {
       break;
     }
@@ -87,7 +91,9 @@ export function randomFillEmptySeats(
     if (!profile) {
       break;
     }
+    const existingConfig = nextConfigs.find((config) => config.seat === seat);
     nextConfigs = upsertSeatConfig(nextConfigs, {
+      ...existingConfig,
       seat,
       profile_id: profile.id,
     });

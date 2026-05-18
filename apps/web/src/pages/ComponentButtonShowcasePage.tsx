@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   Button,
   Container,
+  GothicPanel,
   Heading,
   Text,
   type ButtonIntent,
@@ -163,6 +164,59 @@ export function ComponentButtonShowcasePage() {
             </div>
           </div>
         </Container>
+      </section>
+
+      <section aria-labelledby="gothic-panel" className="space-y-4">
+        <Heading
+          as="h2"
+          className="font-serif text-2xl text-[#ead8bf]"
+          id="gothic-panel"
+          size="4"
+        >
+          Gothic Panel
+        </Heading>
+        <GothicPanel
+          aria-labelledby="gothic-panel-title"
+          baseOpacity={0.92}
+          contentClassName="flex flex-col justify-between gap-7"
+          size="3"
+        >
+          <div className="grid gap-7 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
+            <div className="min-w-0">
+              <Text className="text-sm font-semibold uppercase tracking-[0.18em] text-amber-200/80">
+                Golden Trial Chamber
+              </Text>
+              <Heading
+                as="h3"
+                className="mt-3 font-serif text-3xl font-black text-[#f8ead2] sm:text-4xl"
+                id="gothic-panel-title"
+                size="6"
+              >
+                审判议席
+              </Heading>
+              <Text
+                as="p"
+                className="mt-4 max-w-2xl text-sm leading-6 text-slate-100/88 sm:text-base"
+              >
+                金色边框承载关键结算、身份揭示与阶段摘要，暗纹底板保留足够留白给密集信息。
+              </Text>
+            </div>
+            <div className="grid gap-3 border border-amber-200/18 bg-black/18 p-4 shadow-[inset_0_0_34px_rgba(0,0,0,0.3)]">
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="text-slate-300">审判席位</span>
+                <span className="font-serif font-bold text-amber-100">7 号</span>
+              </div>
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="text-slate-300">票型压力</span>
+                <span className="font-serif font-bold text-red-100">2 票</span>
+              </div>
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="text-slate-300">裁决状态</span>
+                <span className="font-serif font-bold text-[#f8ead2]">等待发言</span>
+              </div>
+            </div>
+          </div>
+        </GothicPanel>
       </section>
     </main>
   );

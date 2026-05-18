@@ -128,19 +128,61 @@ describe("VirtualPlayerLibrary", () => {
     );
   });
 
+  it("builds a new player nickname from werewolf-themed materials without auto AI", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const onGenerateAiDraft = vi.fn().mockResolvedValue({
+      display_name: "月蚀归票",
+    });
+    renderLibrary({ onGenerateAiDraft });
+
+    await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+
+    expect(screen.getByLabelText("虚拟玩家昵称")).toHaveValue("夜幕听风");
+    expect(onGenerateAiDraft).not.toHaveBeenCalled();
+  });
+
+  it("generates a player nickname from AI only when requested", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const onGenerateAiDraft = vi.fn().mockResolvedValue({
+      display_name: "月蚀归票",
+    });
+    renderLibrary({
+      onGenerateAiDraft,
+      profiles: [profile({ display_name: "夜幕听风" })],
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    expect(onGenerateAiDraft).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "AI 生成昵称" }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("虚拟玩家昵称")).toHaveValue("月蚀归票"),
+    );
+    expect(onGenerateAiDraft).toHaveBeenCalledWith({
+      mode: "name",
+      existing_names: [],
+    });
+  });
+
   it("saves rich virtual player settings from the dedicated editor", async () => {
     const user = userEvent.setup();
     const onCreateProfile = vi.fn().mockResolvedValue({});
     renderLibrary({ onCreateProfile });
 
     await user.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await user.clear(screen.getByLabelText("一句话简介"));
     await user.type(screen.getByLabelText("一句话简介"), "逻辑控场玩家");
+    await user.clear(screen.getByLabelText("背景故事"));
     await user.type(screen.getByLabelText("背景故事"), "长期复盘高阶狼人杀对局。");
+    await user.clear(screen.getByLabelText("发言风格"));
     await user.type(screen.getByLabelText("发言风格"), "分点列证据，最后给结论。");
+    await user.clear(screen.getByLabelText("常用表达"));
     await user.type(screen.getByLabelText("常用表达"), "我先拆视角，票型不对劲");
     await user.selectOptions(screen.getByLabelText("策略模板"), "logic_leader");
     await user.clear(screen.getByLabelText("领导倾向"));
     await user.type(screen.getByLabelText("领导倾向"), "5");
+    await user.clear(screen.getByLabelText("示例发言"));
     await user.type(screen.getByLabelText("示例发言"), "我认为 3 号视角漏了一层。");
 
     await user.click(screen.getByRole("button", { name: "保存虚拟玩家" }));

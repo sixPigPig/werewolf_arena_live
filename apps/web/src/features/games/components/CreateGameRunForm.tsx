@@ -10,11 +10,15 @@ import {
 } from "../../../components/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { createGameRun } from "../api/createGameRun";
 import { listRuleSets } from "../api/listRuleSets";
-import { hasPlayerConfig, removeInvalidProfileRefs } from "../lineupUtils";
+import {
+  hasPlayerConfig,
+  randomFillEmptySeats,
+  removeInvalidProfileRefs,
+} from "../lineupUtils";
 import { PlayerConfigPanel } from "./PlayerConfigPanel";
 import type {
   PlayerConfig,
@@ -37,6 +41,10 @@ export function CreateGameRunForm({
   const [maxRounds, setMaxRounds] = useState("8");
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [playerLibraryShortage, setPlayerLibraryShortage] = useState<{
+    availableCount: number;
+    requiredCount: number;
+  } | null>(null);
 
   const ruleSetsQuery = useQuery({
     queryKey: ["rule-sets"],
@@ -54,7 +62,10 @@ export function CreateGameRunForm({
     ruleSets[0] ??
     null;
   const isSubmitDisabled =
-    mutation.isPending || ruleSetsQuery.isPending || ruleSetsQuery.isError;
+    mutation.isPending ||
+    ruleSetsQuery.isPending ||
+    ruleSetsQuery.isError ||
+    !isProfileListLoaded;
   const validProfileIds = new Set(profiles.map((profile) => profile.id));
   const visiblePlayerConfigs = removeInvalidProfileRefs(
     playerConfigs,
@@ -132,23 +143,45 @@ export function CreateGameRunForm({
           parsedMaxRounds > 20
         ) {
           setValidationError("最大轮数必须是 1 到 20 的整数");
+          setPlayerLibraryShortage(null);
           return;
         }
 
         setValidationError(null);
-        const normalizedPlayerConfigs = selectedRuleSet
+        setPlayerLibraryShortage(null);
+        const basePlayerConfigs = selectedRuleSet
           ? normalizePlayerConfigs(
               visiblePlayerConfigs,
               selectedRuleSet.player_count,
             )
           : [];
+        const filledPlayerConfigs = selectedRuleSet
+          ? normalizePlayerConfigs(
+              randomFillEmptySeats(
+                basePlayerConfigs,
+                profiles,
+                selectedRuleSet.player_count,
+              ),
+              selectedRuleSet.player_count,
+            )
+          : [];
+        const selectedProfileCount = new Set(
+          filledPlayerConfigs
+            .map((config) => config.profile_id)
+            .filter((profileId): profileId is string => Boolean(profileId)),
+        ).size;
+        if (selectedRuleSet && selectedProfileCount < selectedRuleSet.player_count) {
+          setPlayerLibraryShortage({
+            availableCount: profiles.length,
+            requiredCount: selectedRuleSet.player_count,
+          });
+          return;
+        }
         mutation.mutate({
           rule_set_id: selectedRuleSetId,
           seed: seed ? Number(seed) : null,
           max_rounds: parsedMaxRounds,
-          ...(normalizedPlayerConfigs.length > 0
-            ? { player_configs: normalizedPlayerConfigs }
-            : {}),
+          player_configs: filledPlayerConfigs,
         });
       }}
     >
@@ -252,7 +285,54 @@ export function CreateGameRunForm({
           <Callout.Text>无法发起对局</Callout.Text>
         </Callout.Root>
       ) : null}
+      {playerLibraryShortage ? (
+        <PlayerLibraryShortageDialog
+          availableCount={playerLibraryShortage.availableCount}
+          onClose={() => setPlayerLibraryShortage(null)}
+          requiredCount={playerLibraryShortage.requiredCount}
+        />
+      ) : null}
     </form>
+  );
+}
+
+function PlayerLibraryShortageDialog({
+  availableCount,
+  onClose,
+  requiredCount,
+}: {
+  availableCount: number;
+  onClose: () => void;
+  requiredCount: number;
+}) {
+  return (
+    <div className="lobby-profile-shortage-dialog-backdrop">
+      <section
+        aria-labelledby="lobby-profile-shortage-title"
+        aria-modal="true"
+        className="lobby-profile-shortage-dialog"
+        role="dialog"
+      >
+        <h3
+          className="lobby-profile-shortage-title"
+          id="lobby-profile-shortage-title"
+        >
+          玩家库玩家不足
+        </h3>
+        <p className="lobby-profile-shortage-copy">
+          当前规则需要 {requiredCount} 名虚拟玩家，玩家库当前只有{" "}
+          {availableCount} 名可用玩家。请先新建玩家后再发起对局。
+        </p>
+        <div className="lobby-profile-shortage-actions">
+          <Button asChild intent="primary" size="1" skin="gothic">
+            <Link to="/players">去新建玩家</Link>
+          </Button>
+          <Button onClick={onClose} size="1" skin="gothic" type="button">
+            继续调整
+          </Button>
+        </div>
+      </section>
+    </div>
   );
 }
 

@@ -96,6 +96,22 @@ function playerProfilesResponse() {
   };
 }
 
+function fullPlayerProfilesResponse(count = 8) {
+  const [firstProfile] = playerProfilesResponse().profiles;
+
+  return {
+    profiles: Array.from({ length: count }, (_, index) => ({
+      ...firstProfile,
+      id: `profile-${index + 1}`,
+      display_name: index === 0 ? "冷静的阿夜" : `随机玩家${index + 1}`,
+      avatar_image_url: `/api/v1/player-profiles/avatar/profile-${index + 1}.png`,
+      favorite: index === 0,
+      short_description: index === 0 ? "谨慎控场玩家" : "",
+      strategy_profile: "balanced",
+    })),
+  };
+}
+
 function multiPlayerProfilesResponse() {
   return {
     profiles: [
@@ -120,6 +136,18 @@ function multiPlayerProfilesResponse() {
       },
     ],
   };
+}
+
+function findGameRunRequest(fetchSpy: {
+  mock: { calls: Array<[unknown, RequestInit?]> };
+}) {
+  const call = fetchSpy.mock.calls.find((mockCall) =>
+    String(mockCall[0]).endsWith("/api/v1/games/runs"),
+  );
+  if (!call) {
+    throw new Error("Expected a game run request");
+  }
+  return JSON.parse(String(call[1]?.body));
 }
 
 function emptyPlayerProfilesResponse() {
@@ -329,7 +357,7 @@ describe("GamesPage", () => {
       }
       if (url.endsWith("/api/v1/player-profiles")) {
         return Promise.resolve(
-          new Response(JSON.stringify(playerProfilesResponse()), {
+          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -368,7 +396,7 @@ describe("GamesPage", () => {
       }
       if (url.endsWith("/api/v1/player-profiles")) {
         return Promise.resolve(
-          new Response(JSON.stringify(playerProfilesResponse()), {
+          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -430,18 +458,13 @@ describe("GamesPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
 
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/v1/games/runs",
-      expect.objectContaining({
-        body: JSON.stringify({
-          rule_set_id: "classic_8",
-          seed: null,
-          max_rounds: 8,
-          player_configs: [{ seat: 1, profile_id: "profile-1" }],
-        }),
-        method: "POST",
-      }),
-    );
+    const body = findGameRunRequest(fetchSpy);
+    expect(body.rule_set_id).toBe("classic_8");
+    expect(body.player_configs).toHaveLength(8);
+    expect(body.player_configs[0]).toEqual({ seat: 1, profile_id: "profile-1" });
+    expect(
+      new Set(body.player_configs.map((config: { profile_id: string }) => config.profile_id)).size,
+    ).toBe(8);
   });
 
   it("filters the player picker by search and favorites", async () => {
@@ -597,7 +620,7 @@ describe("GamesPage", () => {
 
     expect(
       await screen.findByRole("alert", {
-        name: "无法读取虚拟玩家资料，席位选择暂时只显示随机角色。",
+        name: "无法读取虚拟玩家资料，暂时不能发起对局。",
       }),
     ).toBeInTheDocument();
     expect(
@@ -618,7 +641,7 @@ describe("GamesPage", () => {
       }
       if (url.endsWith("/api/v1/player-profiles")) {
         return Promise.resolve(
-          new Response(JSON.stringify(playerProfilesResponse()), {
+          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -660,7 +683,81 @@ describe("GamesPage", () => {
     expect(updatedDetails.getByText("有警长，警徽 1.5 票")).toBeInTheDocument();
   });
 
-  it("creates a live game run and navigates to the live page", async () => {
+  it("randomly fills all seats from the virtual player library when launching without manual selections", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/games/runs")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              run_id: "run_1234abcd",
+              session_id: "game_1200abcd",
+              villager_model: "deepseek-chat",
+              werewolf_model: "deepseek-chat",
+              seed: null,
+              max_rounds: 8,
+              status: "queued",
+              created_at: "2026-04-24T12:00:00Z",
+              started_at: null,
+              completed_at: null,
+              winner: null,
+              error: null,
+              event_count: 1,
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games" element={<GamesPage />} />
+        <Route
+          path="/games/live/:runId"
+          element={<p>实时观战 run_1234abcd</p>}
+        />
+      </Routes>,
+      "/games",
+    );
+
+    await screen.findByText("已选 0 / 8");
+    await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
+
+    const body = findGameRunRequest(fetchSpy);
+    expect(body.player_configs).toHaveLength(8);
+    expect(body.player_configs.map((config: { seat: number }) => config.seat)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+    expect(
+      new Set(body.player_configs.map((config: { profile_id: string }) => config.profile_id)).size,
+    ).toBe(8);
+    expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
+  });
+
+  it("opens a player-library shortage dialog instead of launching when not enough virtual players exist", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);
       if (url.endsWith("/api/v1/games/rule-sets")) {
@@ -674,6 +771,52 @@ describe("GamesPage", () => {
       if (url.endsWith("/api/v1/player-profiles")) {
         return Promise.resolve(
           new Response(JSON.stringify(playerProfilesResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    renderWithClient(<GamesPage />, "/games");
+
+    await screen.findByText("已选 0 / 8");
+    await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
+
+    const dialog = screen.getByRole("dialog", { name: "玩家库玩家不足" });
+    expect(dialog).toHaveTextContent("当前规则需要 8 名虚拟玩家");
+    expect(dialog).toHaveTextContent("玩家库当前只有 1 名可用玩家");
+    expect(within(dialog).getByRole("link", { name: "去新建玩家" })).toHaveAttribute(
+      "href",
+      "/players",
+    );
+    expect(
+      fetchSpy.mock.calls.some(([input]) =>
+        String(input).endsWith("/api/v1/games/runs"),
+      ),
+    ).toBe(false);
+  });
+
+  it("creates a live game run and navigates to the live page", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -725,17 +868,9 @@ describe("GamesPage", () => {
     expect(launchButton).toBeEnabled();
     await userEvent.click(launchButton);
 
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/v1/games/runs",
-      expect.objectContaining({
-        body: JSON.stringify({
-          rule_set_id: "classic_8",
-          seed: null,
-          max_rounds: 8,
-        }),
-        method: "POST",
-      }),
-    );
+    const body = findGameRunRequest(fetchSpy);
+    expect(body.rule_set_id).toBe("classic_8");
+    expect(body.player_configs).toHaveLength(8);
     expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
   });
 
@@ -752,7 +887,7 @@ describe("GamesPage", () => {
       }
       if (url.endsWith("/api/v1/player-profiles")) {
         return Promise.resolve(
-          new Response(JSON.stringify(playerProfilesResponse()), {
+          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -810,17 +945,9 @@ describe("GamesPage", () => {
     await userEvent.click(await screen.findByLabelText("新手 6 人快局"));
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
 
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/v1/games/runs",
-      expect.objectContaining({
-        body: JSON.stringify({
-          rule_set_id: "starter_6",
-          seed: null,
-          max_rounds: 8,
-        }),
-        method: "POST",
-      }),
-    );
+    const body = findGameRunRequest(fetchSpy);
+    expect(body.rule_set_id).toBe("starter_6");
+    expect(body.player_configs).toHaveLength(6);
     expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
   });
 
@@ -837,7 +964,7 @@ describe("GamesPage", () => {
       }
       if (url.endsWith("/api/v1/player-profiles")) {
         return Promise.resolve(
-          new Response(JSON.stringify(playerProfilesResponse()), {
+          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -896,17 +1023,9 @@ describe("GamesPage", () => {
     expect(screen.getByText("已选 0 / 8")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
 
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/v1/games/runs",
-      expect.objectContaining({
-        body: JSON.stringify({
-          rule_set_id: "classic_8",
-          seed: null,
-          max_rounds: 8,
-        }),
-        method: "POST",
-      }),
-    );
+    const body = findGameRunRequest(fetchSpy);
+    expect(body.rule_set_id).toBe("classic_8");
+    expect(body.player_configs).toHaveLength(8);
     expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
   });
 

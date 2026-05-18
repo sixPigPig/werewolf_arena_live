@@ -137,6 +137,20 @@ describe("lineupUtils", () => {
     ]);
   });
 
+  it("fills seats that only have overrides with a virtual player", () => {
+    const result = randomFillEmptySeats(
+      [{ seat: 1, model: "Kimi" }],
+      profiles,
+      2,
+      { random: () => 0 },
+    );
+
+    expect(result).toEqual([
+      { seat: 1, model: "Kimi", profile_id: "profile-1" },
+      { seat: 2, profile_id: "profile-2" },
+    ]);
+  });
+
   it("can fill empty seats with favorites only", () => {
     const result = randomFillEmptySeats([], profiles, 3, {
       favoritesOnly: true,

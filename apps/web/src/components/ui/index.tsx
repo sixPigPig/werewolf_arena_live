@@ -22,6 +22,7 @@ export {
   type ButtonSkin,
 } from "./Button";
 export { Container, type ContainerProps } from "./Container";
+export { GothicPanel, type GothicPanelProps } from "./GothicPanel";
 
 type Tone =
   | "amber"

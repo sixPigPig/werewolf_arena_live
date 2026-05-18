@@ -11,6 +11,11 @@ import {
   SelectField,
   TextField,
 } from "../../../components/ui";
+import type {
+  PlayerCreationPreset,
+  PlayerCreationPresetId,
+  PlayerProfileCreationReadiness,
+} from "../playerProfileCreation";
 import { PERSONALITY_OPTIONS } from "../playerProfileOptions";
 import {
   STRATEGY_OPTIONS,
@@ -27,27 +32,43 @@ import { VirtualPlayerPreview } from "./VirtualPlayerPreview";
 type VirtualPlayerEditorProps = {
   draft: PlayerProfileRequest;
   modelOptions: ModelOption[];
+  creationPresets: PlayerCreationPreset[];
+  selectedCreationPresetId: PlayerCreationPresetId;
+  creationReadiness: PlayerProfileCreationReadiness;
   tagInput: string;
   catchphraseInput: string;
   exampleMessageInput: string;
   isSaving: boolean;
+  isGeneratingAiDraft: boolean;
+  isGeneratingAiName: boolean;
   isUploadingAvatar: boolean;
   isAvatarDragging: boolean;
+  isEditing: boolean;
+  isTemplateDialogOpen: boolean;
   canSave: boolean;
+  templateNameInput: string;
+  templateSaveError: string | null;
   onDraftChange: <Key extends keyof PlayerProfileRequest>(
     key: Key,
     value: PlayerProfileRequest[Key],
   ) => void;
+  onCreationPresetChange: (presetId: PlayerCreationPresetId) => void;
   onTagInputChange: (value: string) => void;
   onCatchphraseInputChange: (value: string) => void;
   onExampleMessageInputChange: (value: string) => void;
+  onGenerateAiName: () => void;
   onApplySystemAvatar: (avatar: SystemPlayerAvatar) => void;
   onAvatarFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onAvatarDragLeave: () => void;
   onAvatarDragOver: (event: DragEvent<HTMLLabelElement>) => void;
   onAvatarDrop: (event: DragEvent<HTMLLabelElement>) => void;
   onCancel: () => void;
+  onOpenSaveTemplate: () => void;
+  onCancelSaveTemplate: () => void;
+  onConfirmSaveTemplate: () => void;
   onSave: () => void;
+  onSaveAndContinue: () => void;
+  onTemplateNameInputChange: (value: string) => void;
 };
 
 export const VirtualPlayerEditor = forwardRef<
@@ -57,24 +78,40 @@ export const VirtualPlayerEditor = forwardRef<
   {
     draft,
     modelOptions,
+    creationPresets,
+    selectedCreationPresetId,
+    creationReadiness,
     tagInput,
     catchphraseInput,
     exampleMessageInput,
     isSaving,
+    isGeneratingAiDraft,
+    isGeneratingAiName,
     isUploadingAvatar,
     isAvatarDragging,
+    isEditing,
+    isTemplateDialogOpen,
     canSave,
+    templateNameInput,
+    templateSaveError,
     onDraftChange,
+    onCreationPresetChange,
     onTagInputChange,
     onCatchphraseInputChange,
     onExampleMessageInputChange,
+    onGenerateAiName,
     onApplySystemAvatar,
     onAvatarFileChange,
     onAvatarDragLeave,
     onAvatarDragOver,
     onAvatarDrop,
     onCancel,
+    onOpenSaveTemplate,
+    onCancelSaveTemplate,
+    onConfirmSaveTemplate,
     onSave,
+    onSaveAndContinue,
+    onTemplateNameInputChange,
   },
   ref,
 ) {
@@ -96,6 +133,57 @@ export const VirtualPlayerEditor = forwardRef<
     >
       <div className="virtual-player-editor-main">
         <section
+          aria-labelledby="virtual-player-creation-section"
+          className="virtual-player-editor-section virtual-player-creation-section"
+        >
+          <h3
+            className="virtual-player-editor-section-title"
+            id="virtual-player-creation-section"
+          >
+            创作模板
+          </h3>
+          <div className="virtual-player-preset-grid">
+            {creationPresets.map((preset) => (
+              <button
+                aria-pressed={selectedCreationPresetId === preset.id}
+                className="virtual-player-preset-option"
+                data-ai={preset.isAiGenerated ? "true" : undefined}
+                data-custom={preset.isCustom ? "true" : undefined}
+                disabled={isSaving || isGeneratingAiDraft}
+                key={preset.id}
+                onClick={() => onCreationPresetChange(preset.id)}
+                type="button"
+              >
+                <span className="virtual-player-preset-name">
+                  {preset.isAiGenerated && isGeneratingAiDraft
+                    ? "AI 生成中"
+                    : preset.label}
+                </span>
+                <span className="virtual-player-preset-description">
+                  {preset.description}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div aria-label="创建状态" className="virtual-player-readiness">
+            {creationReadiness.items.map((item) => (
+              <span
+                className="virtual-player-readiness-chip"
+                data-complete={item.isComplete ? "true" : "false"}
+                key={item.id}
+              >
+                {item.label}
+              </span>
+            ))}
+          </div>
+          {creationReadiness.issueText ? (
+            <p className="virtual-player-readiness-alert" role="alert">
+              {creationReadiness.issueText}
+            </p>
+          ) : null}
+        </section>
+
+        <section
           aria-labelledby="virtual-player-basic-section"
           className="virtual-player-editor-section"
         >
@@ -105,16 +193,35 @@ export const VirtualPlayerEditor = forwardRef<
           >
             基础
           </h3>
-          <label>
-            <span>虚拟玩家昵称</span>
-            <TextField.Root
-              disabled={isSaving}
-              onChange={(event) =>
-                onDraftChange("display_name", event.target.value)
-              }
-              value={draft.display_name}
-            />
-          </label>
+          <div className="virtual-player-name-control">
+            <label>
+              <span>虚拟玩家昵称</span>
+              <TextField.Root
+                aria-invalid={
+                  creationReadiness.items.find((item) => item.id === "name")
+                    ?.isComplete === false
+                    ? true
+                    : undefined
+                }
+                disabled={isSaving || isGeneratingAiName}
+                onChange={(event) =>
+                  onDraftChange("display_name", event.target.value)
+                }
+                value={draft.display_name}
+              />
+            </label>
+            <Button
+              className="virtual-player-ai-name-button"
+              disabled={isSaving || isGeneratingAiName || isGeneratingAiDraft}
+              intent="info"
+              onClick={onGenerateAiName}
+              size="1"
+              skin="gothic"
+              type="button"
+            >
+              {isGeneratingAiName ? "生成中" : "AI 生成昵称"}
+            </Button>
+          </div>
           <label>
             <span>一句话简介</span>
             <TextField.Root
@@ -129,6 +236,12 @@ export const VirtualPlayerEditor = forwardRef<
           <label>
             <span>默认模型</span>
             <SelectField
+              aria-invalid={
+                creationReadiness.items.find((item) => item.id === "model")
+                  ?.isComplete === false
+                  ? true
+                  : undefined
+              }
               disabled={isSaving}
               onChange={(event) => onDraftChange("model", event.target.value)}
               value={draft.model}
@@ -377,6 +490,30 @@ export const VirtualPlayerEditor = forwardRef<
             保存虚拟玩家
           </Button>
           <Button
+            className="virtual-player-editor-save-template"
+            disabled={isSaving || isGeneratingAiDraft}
+            intent="info"
+            onClick={onOpenSaveTemplate}
+            size="1"
+            skin="gothic"
+            type="button"
+          >
+            保存为模板
+          </Button>
+          {!isEditing ? (
+            <Button
+              className="virtual-player-editor-save-more"
+              disabled={!canSave}
+              intent="warning"
+              onClick={onSaveAndContinue}
+              size="1"
+              skin="gothic"
+              type="button"
+            >
+              保存并继续新建
+            </Button>
+          ) : null}
+          <Button
             disabled={isSaving}
             onClick={onCancel}
             size="1"
@@ -386,6 +523,57 @@ export const VirtualPlayerEditor = forwardRef<
             取消
           </Button>
         </div>
+        {isTemplateDialogOpen ? (
+          <div
+            aria-labelledby="virtual-player-template-dialog-title"
+            aria-modal="true"
+            className="virtual-player-template-dialog"
+            role="dialog"
+          >
+            <div className="virtual-player-template-dialog-panel">
+              <h3
+                className="virtual-player-template-dialog-title"
+                id="virtual-player-template-dialog-title"
+              >
+                保存为模板
+              </h3>
+              <label>
+                <span>模板名</span>
+                <TextField.Root
+                  autoFocus
+                  onChange={(event) =>
+                    onTemplateNameInputChange(event.target.value)
+                  }
+                  value={templateNameInput}
+                />
+              </label>
+              {templateSaveError ? (
+                <p className="virtual-player-template-dialog-error" role="alert">
+                  {templateSaveError}
+                </p>
+              ) : null}
+              <div className="virtual-player-template-dialog-actions">
+                <Button
+                  intent="primary"
+                  onClick={onConfirmSaveTemplate}
+                  size="1"
+                  skin="gothic"
+                  type="button"
+                >
+                  保存模板
+                </Button>
+                <Button
+                  onClick={onCancelSaveTemplate}
+                  size="1"
+                  skin="gothic"
+                  type="button"
+                >
+                  取消
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
       <VirtualPlayerPreview draft={draft} modelLabel={modelLabel} />
     </form>

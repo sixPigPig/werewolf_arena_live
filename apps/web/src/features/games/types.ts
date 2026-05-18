@@ -347,6 +347,31 @@ export type PlayerAvatarUploadResponse = {
   avatar_image_mime: string;
 };
 
+export type PlayerProfileAiDraftMode = "name" | "template";
+
+export type PlayerProfileAiDraftRequest = {
+  mode: PlayerProfileAiDraftMode;
+  existing_names: string[];
+};
+
+export type PlayerProfileAiDraftResponse = {
+  display_name: string;
+  personality_id?: string;
+  personality_text?: string;
+  short_description?: string;
+  background_story?: string;
+  speaking_style?: string;
+  catchphrases?: string[];
+  strategy_profile?: string;
+  risk_tolerance?: number;
+  bluffing_tendency?: number;
+  trust_tendency?: number;
+  leadership_tendency?: number;
+  talkativeness?: number;
+  example_messages?: string[];
+  tags?: string[];
+};
+
 export type PlayerProfileRequest = {
   display_name: string;
   model: string;

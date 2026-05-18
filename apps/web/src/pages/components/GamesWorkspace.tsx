@@ -13,7 +13,7 @@ export function GamesWorkspace({ createFormRef }: GamesWorkspaceProps) {
     queryFn: listPlayerProfiles,
   });
   const profiles = playerProfilesQuery.data?.profiles ?? [];
-  const profileLoadError = "无法读取虚拟玩家资料，席位选择暂时只显示随机角色。";
+  const profileLoadError = "无法读取虚拟玩家资料，暂时不能发起对局。";
 
   return (
     <main

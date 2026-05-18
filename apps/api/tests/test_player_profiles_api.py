@@ -9,6 +9,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.routes import player_profiles as player_profiles_routes
 from app.api.routes.player_profiles import get_player_avatar_asset_store, get_player_profile_store
 from app.db.base import Base
 from app.db.session import get_db
@@ -84,6 +85,153 @@ class BrokenSession:
 
 def override_broken_db() -> Generator[BrokenSession, None, None]:
     yield BrokenSession()
+
+
+class FakeAiProvider:
+    def __init__(self, response: object) -> None:
+        self.response = response
+        self.calls: list[dict[str, object]] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        self.calls.append({"model": model, "prompt": prompt, "temperature": temperature})
+        return json.dumps(self.response, ensure_ascii=False)
+
+
+def test_generate_ai_player_name_uses_deepseek_v4_flash_and_avoids_duplicates() -> None:
+    provider = FakeAiProvider({"display_name": "银刃听雪"})
+    app.dependency_overrides[player_profiles_routes.get_player_profile_ai_provider] = (
+        lambda: provider
+    )
+    try:
+        response = client.post(
+            "/api/v1/player-profiles/ai-draft",
+            json={"mode": "name", "existing_names": ["银刃听雪"]},
+        )
+    finally:
+        app.dependency_overrides.pop(player_profiles_routes.get_player_profile_ai_provider, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert provider.calls[0]["model"] == "deepseek-v4-flash"
+    assert "狼人杀" in str(provider.calls[0]["prompt"])
+    assert "票型" in str(provider.calls[0]["prompt"])
+    assert payload["display_name"] == "银刃听雪 2"
+
+
+def test_generate_ai_player_template_normalizes_generated_fields() -> None:
+    provider = FakeAiProvider(
+        {
+            "display_name": "雾灯司南",
+            "personality_id": "analytical",
+            "personality_text": "习惯从票型和发言顺序里拆阵营。",
+            "short_description": "冷静复盘，擅长拆票型。",
+            "background_story": "长期在高阶圆桌局做复盘记录。",
+            "speaking_style": "先列证据，再给结论。",
+            "catchphrases": ["我先盘票型", "这里别急着出"],
+            "strategy_profile": "logic_leader",
+            "risk_tolerance": 2,
+            "bluffing_tendency": 2,
+            "trust_tendency": 3,
+            "leadership_tendency": 5,
+            "talkativeness": 4,
+            "example_messages": ["3 号这一轮补视角太晚，我会先标记。"],
+            "tags": ["复盘", "控场", "复盘"],
+        }
+    )
+    app.dependency_overrides[player_profiles_routes.get_player_profile_ai_provider] = (
+        lambda: provider
+    )
+    try:
+        response = client.post(
+            "/api/v1/player-profiles/ai-draft",
+            json={"mode": "template", "existing_names": []},
+        )
+    finally:
+        app.dependency_overrides.pop(player_profiles_routes.get_player_profile_ai_provider, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert provider.calls[0]["model"] == "deepseek-v4-flash"
+    assert payload["display_name"] == "雾灯司南"
+    assert payload["personality_id"] == "analytical"
+    assert payload["strategy_profile"] == "logic_leader"
+    assert payload["leadership_tendency"] == 5
+    assert payload["catchphrases"] == ["我先盘票型", "这里别急着出"]
+    assert payload["tags"] == ["复盘", "控场"]
+
+
+def test_generate_ai_player_template_accepts_nested_model_payload() -> None:
+    provider = FakeAiProvider(
+        {
+            "Alpha_阿夜": {
+                "display_name": "Alpha 阿夜",
+                "personality_id": "aggressive",
+                "short_description": "高压追问，快速拆矛盾。",
+                "strategy_profile": "pressure_attacker",
+                "risk_tolerance": 5,
+                "leadership_tendency": 4,
+                "tags": ["强压", "提问"],
+            },
+            "Bravo_青岚": {
+                "display_name": "Bravo 青岚",
+                "personality_id": "analytical",
+                "short_description": "冷静复盘，擅长拆票型。",
+                "strategy_profile": "logic_leader",
+                "risk_tolerance": 2,
+                "leadership_tendency": 5,
+                "tags": ["复盘", "控场"],
+            },
+        }
+    )
+    app.dependency_overrides[player_profiles_routes.get_player_profile_ai_provider] = (
+        lambda: provider
+    )
+    try:
+        response = client.post(
+            "/api/v1/player-profiles/ai-draft",
+            json={"mode": "template", "existing_names": ["Alpha 阿夜", "Bravo 青岚"]},
+        )
+    finally:
+        app.dependency_overrides.pop(player_profiles_routes.get_player_profile_ai_provider, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["display_name"] == "Alpha 阿夜 2"
+    assert payload["personality_id"] == "aggressive"
+    assert payload["strategy_profile"] == "pressure_attacker"
+    assert payload["tags"] == ["强压", "提问"]
+
+
+def test_generate_ai_player_template_accepts_list_model_payload() -> None:
+    provider = FakeAiProvider(
+        [
+            {
+                "display_name": "雾灯司南",
+                "personality_id": "analytical",
+                "short_description": "冷静复盘，擅长拆票型。",
+                "strategy_profile": "logic_leader",
+                "risk_tolerance": 2,
+                "leadership_tendency": 5,
+                "tags": ["复盘", "控场"],
+            }
+        ]
+    )
+    app.dependency_overrides[player_profiles_routes.get_player_profile_ai_provider] = (
+        lambda: provider
+    )
+    try:
+        response = client.post(
+            "/api/v1/player-profiles/ai-draft",
+            json={"mode": "template", "existing_names": []},
+        )
+    finally:
+        app.dependency_overrides.pop(player_profiles_routes.get_player_profile_ai_provider, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["display_name"] == "雾灯司南"
+    assert payload["personality_id"] == "analytical"
+    assert payload["strategy_profile"] == "logic_leader"
 
 
 def test_create_profile_normalizes_and_fills_defaults() -> None:
