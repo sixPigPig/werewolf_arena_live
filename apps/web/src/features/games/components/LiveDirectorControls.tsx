@@ -49,7 +49,7 @@ export function LiveDirectorControls({
           value={String(speed)}
         >
           <option value="1">1x</option>
-          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
         </select>
         <span
           aria-hidden="true"

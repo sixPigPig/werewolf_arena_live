@@ -197,9 +197,47 @@ describe("useLiveDirector", () => {
     expect(result.current.effectiveDurationMs).toBe(500);
 
     act(() => {
-      result.current.setSpeed(1.5);
+      result.current.setSpeed(2);
     });
-    expect(result.current.speed).toBe(1.5);
+    expect(result.current.speed).toBe(2);
     expect(result.current.effectiveDurationMs).toBe(500);
+  });
+
+  it("halves normal cue duration at 2x speed", () => {
+    const events = [
+      event({ id: 1, type: "round_started", round: 1 }),
+      event({ id: 2, type: "phase_started", round: 1, phase: "day" }),
+    ];
+    const { result } = renderHook(() => useLiveDirector(events));
+
+    expect(result.current.effectiveDurationMs).toBe(2500);
+
+    act(() => {
+      result.current.setSpeed(2);
+    });
+
+    expect(result.current.speed).toBe(2);
+    expect(result.current.effectiveDurationMs).toBe(1250);
+  });
+
+  it("resets speed to 1x when reset key changes", () => {
+    const events = [
+      event({ id: 1, type: "round_started", round: 1 }),
+      event({ id: 2, type: "phase_started", round: 1, phase: "day" }),
+    ];
+    const { result, rerender } = renderHook(
+      ({ resetKey }: { resetKey: string }) =>
+        useLiveDirector(events, { resetKey }),
+      { initialProps: { resetKey: "run_a" } },
+    );
+
+    act(() => {
+      result.current.setSpeed(2);
+    });
+    expect(result.current.speed).toBe(2);
+
+    rerender({ resetKey: "run_b" });
+
+    expect(result.current.speed).toBe(1);
   });
 });

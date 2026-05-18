@@ -451,7 +451,6 @@ describe("LiveGamePage", () => {
           winner: null,
           error: null,
           event_count: 1,
-          event_pacing: "off",
         }}
       />,
     );
@@ -563,6 +562,17 @@ describe("LiveGamePage", () => {
         "播放速度",
       ),
     ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("arena-command-controls")).getByRole("option", {
+        name: "2x",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("arena-command-controls")).queryByRole(
+        "option",
+        { name: "1.5x" },
+      ),
+    ).not.toBeInTheDocument();
     expect(
       within(screen.getByTestId("arena-command-controls")).getByRole("button", {
         name: "暂停",
@@ -1200,7 +1210,6 @@ describe("LiveGamePage", () => {
               winner: null,
               error: null,
               event_count: 1,
-              event_pacing: "off",
             }),
             { status: 201, headers: { "Content-Type": "application/json" } },
           ),
@@ -1309,7 +1318,6 @@ describe("LiveGamePage", () => {
             winner: "狼人阵营",
             error: null,
             event_count: 3,
-            event_pacing: "off",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),

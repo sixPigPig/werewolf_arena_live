@@ -4,7 +4,7 @@ import { buildDirectorCues } from "../liveDirector";
 import type { DirectorCue } from "../liveDirector";
 import type { LiveGameEvent } from "../types";
 
-export type LiveDirectorSpeed = 1 | 1.5;
+export type LiveDirectorSpeed = 1 | 2;
 
 export type UseLiveDirectorResult = {
   cues: DirectorCue[];
