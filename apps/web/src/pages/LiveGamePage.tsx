@@ -1,7 +1,7 @@
-import { Button, Callout, Text } from "../components/ui";
+import { Callout, Text } from "../components/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { ArenaCommandNav, ArenaNavButton } from "../app/navigation";
 import { getGameRun } from "../features/games/api/getGameRun";
@@ -10,11 +10,11 @@ import { GodViewBottomBoard } from "../features/games/components/GodViewBottomBo
 import { GodViewIntelPanel } from "../features/games/components/GodViewIntelPanel";
 import { GodViewSituationPanel } from "../features/games/components/GodViewSituationPanel";
 import { GodViewTopBar } from "../features/games/components/GodViewTopBar";
-import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveDirectorStage } from "../features/games/components/LiveDirectorStage";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
+import { LiveNavSessionBadge } from "../features/games/components/LiveNavSessionBadge";
+import { LiveNavSettingsMenu } from "../features/games/components/LiveNavSettingsMenu";
 import { LiveNavStatusBadge } from "../features/games/components/LiveNavStatusBadge";
-import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 import { useGameRunEvents } from "../features/games/hooks/useGameRunEvents";
 import { useLiveDirector } from "../features/games/hooks/useLiveDirector";
 import { deriveGodViewState } from "../features/games/liveGodView";
@@ -106,56 +106,37 @@ export function LiveGamePage() {
     setAutoFollow(false);
     setManualFocusName(name);
   };
-  const topNavCommands = run ? (
-    <LiveDirectorControls
-      backlogCount={director.backlogCount}
-      isPaused={director.isPaused}
-      onCatchUpToLatest={director.catchUpToLatest}
-      onSpeedChange={director.setSpeed}
-      onTogglePaused={director.togglePaused}
-      speed={director.speed}
-    />
-  ) : null;
-  const topNavActions = (
+  const topNavCommands = null;
+  const topNavActions = run ? (
     <>
-      {canResumeRun && run ? (
-        <ArenaNavButton
-          disabled={resumeMutation.isPending}
-          intent="primary"
-          loading={resumeMutation.isPending}
-          onClick={() => resumeMutation.mutate(run.session_id)}
-        >
-          继续对局
-        </ArenaNavButton>
-      ) : null}
-      {terminalEvent && run ? (
+      {terminalEvent ? (
         <ArenaNavButton to={`/games/${run.session_id}`}>
           查看完整复盘
         </ArenaNavButton>
       ) : null}
-      <Button
-        asChild
-        className="h-10 w-10 px-0 text-lg"
-        color="gray"
-        highContrast
-        size="2"
-        variant="surface"
-      >
-        <Link aria-label="返回大厅" to="/games">
-          <span aria-hidden="true">↪</span>
-        </Link>
-      </Button>
+      <LiveNavSettingsMenu
+        backlogCount={director.backlogCount}
+        canResumeRun={canResumeRun}
+        isPaused={director.isPaused}
+        isResuming={resumeMutation.isPending}
+        onCatchUpToLatest={director.catchUpToLatest}
+        onResumeRun={() => resumeMutation.mutate(run.session_id)}
+        onSpeedChange={director.setSpeed}
+        onTogglePaused={director.togglePaused}
+        run={run}
+        speed={director.speed}
+        status={liveNavStatus}
+      />
     </>
-  );
+  ) : null;
   const topNavContext = run ? (
     <div
       className="live-nav-context flex min-w-0 flex-1 flex-nowrap items-center gap-x-3 overflow-hidden"
       data-testid="live-nav-context"
     >
       <h1 className="sr-only">实时观战</h1>
+      <LiveNavSessionBadge sessionId={run.session_id} />
       <LiveNavStatusBadge status={liveNavStatus} />
-      <span aria-hidden="true" className="h-6 w-px bg-slate-500/45" />
-      <RuleSetSummary ruleSet={run.rule_set} variant="nav" />
     </div>
   ) : null;
   useEffect(() => {

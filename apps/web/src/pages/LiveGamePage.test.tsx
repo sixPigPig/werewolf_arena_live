@@ -350,7 +350,14 @@ describe("LiveGamePage", () => {
     );
     expect(screen.getByRole("button", { name: /李四/ })).toBeInTheDocument();
     expect(await screen.findByText("张三 开始发言")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "追到最新" }));
+    await userEvent.click(screen.getByRole("button", { name: "实时设置" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "实时设置" })).getByRole(
+        "button",
+        { name: "追到最新" },
+      ),
+    );
+    await userEvent.keyboard("{Escape}");
     expect(
       screen.getByRole("heading", { name: "张三 正在发言" }),
     ).toBeInTheDocument();
@@ -424,12 +431,25 @@ describe("LiveGamePage", () => {
     expect(screen.queryByText('{"say":"我不是狼"}')).not.toBeInTheDocument();
     expect(screen.getByText("模型返回已接收，正在解析行动")).toBeInTheDocument();
     expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
-    const replayLink = screen.getByRole("link", { name: "查看完整复盘" });
+    const actions = screen.getByTestId("arena-command-actions");
+    const replayLink = within(actions).getByRole("link", {
+      name: "查看完整复盘",
+    });
     expect(replayLink).toHaveAttribute(
       "href",
       "/games/game_1200abcd",
     );
     expect(replayLink).toHaveClass("gothic-button");
+    const settingsButton = within(actions).getByRole("button", {
+      name: "实时设置",
+    });
+    expect(
+      replayLink.compareDocumentPosition(settingsButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      within(actions).queryByRole("link", { name: "返回大厅" }),
+    ).not.toBeInTheDocument();
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("已完成")).toBeInTheDocument();
   });
@@ -522,10 +542,6 @@ describe("LiveGamePage", () => {
       "href",
       "/games",
     );
-    expect(screen.getByRole("link", { name: "返回大厅" })).toHaveAttribute(
-      "href",
-      "/games",
-    );
     expect(screen.getByTestId("arena-command-context")).toBeInTheDocument();
     expect(screen.getByTestId("arena-command-controls")).toBeInTheDocument();
     expect(screen.getByTestId("arena-command-actions")).toBeInTheDocument();
@@ -536,14 +552,20 @@ describe("LiveGamePage", () => {
       within(liveNavContext).getByRole("heading", { name: "实时观战" }),
     ).toBeInTheDocument();
     const navStatus = within(liveNavContext).getByTestId("live-nav-status");
+    const navSession = within(liveNavContext).getByTestId("live-nav-session");
+    expect(navSession).toHaveTextContent("game_1200abcd");
+    expect(
+      navSession.compareDocumentPosition(navStatus) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(navStatus).toHaveTextContent("连接中");
     expect(navStatus).toHaveAttribute("data-status-kind", "connecting");
     expect(
       within(liveNavContext).queryByTestId("live-status-strip"),
     ).not.toBeInTheDocument();
     expect(
-      within(liveNavContext).getByTestId("rule-set-summary"),
-    ).toBeInTheDocument();
+      within(liveNavContext).queryByTestId("rule-set-summary"),
+    ).not.toBeInTheDocument();
     expect(liveNavContext).not.toHaveTextContent("连接：连接中");
     expect(liveNavContext).not.toHaveTextContent("节奏：");
     expect(liveNavContext).not.toHaveTextContent("进行中");
@@ -555,45 +577,43 @@ describe("LiveGamePage", () => {
     expect(
       within(liveNavContext).queryByTestId("live-command-rule-separator"),
     ).not.toBeInTheDocument();
+    const commandControls = screen.getByTestId("arena-command-controls");
+    expect(commandControls).toBeEmptyDOMElement();
     expect(
-      within(screen.getByTestId("arena-command-controls")).getByTestId(
-        "director-controls",
-      ),
-    ).toBeInTheDocument();
+      within(commandControls).queryByTestId("director-controls"),
+    ).not.toBeInTheDocument();
     expect(
       within(liveNavContext).queryByTestId("director-controls"),
     ).not.toBeInTheDocument();
     expect(
-      within(screen.getByTestId("arena-command-controls")).getByLabelText(
-        "播放速度",
-      ),
+      screen.queryByTestId("director-controls"),
+    ).not.toBeInTheDocument();
+    const actionRegion = screen.getByTestId("arena-command-action-region");
+    expect(
+      within(actionRegion).queryByRole("link", { name: "返回大厅" }),
+    ).not.toBeInTheDocument();
+    const actionControls = screen.getByTestId("arena-command-actions");
+    const settingsButton = within(actionControls).getByRole("button", {
+      name: "实时设置",
+    });
+    expect(actionControls.lastElementChild).toContainElement(settingsButton);
+
+    await userEvent.click(settingsButton);
+    const settingsDialog = screen.getByRole("dialog", { name: "实时设置" });
+    expect(settingsDialog).toHaveTextContent("经典 8 人局");
+    expect(settingsDialog).toHaveTextContent(
+      "2 狼人 / 1 预言家 / 1 守卫 / 4 村民",
+    );
+    expect(
+      within(settingsDialog).getByRole("button", { name: "暂停" }),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByTestId("arena-command-controls")).getByRole("option", {
-        name: "2x",
-      }),
+      within(settingsDialog).getByRole("button", { name: "追到最新" }),
     ).toBeInTheDocument();
+    expect(within(settingsDialog).getByLabelText("播放速度")).toBeInTheDocument();
     expect(
-      within(screen.getByTestId("arena-command-controls")).getByRole("button", {
-        name: "暂停",
-      }),
-    ).toHaveClass("h-10", "w-10");
-    expect(
-      within(screen.getByTestId("arena-command-controls")).getByRole("button", {
-        name: "追到最新",
-      }),
-    ).toHaveClass("h-10", "w-10");
-    expect(
-      within(screen.getByTestId("arena-command-actions")).getByRole("link", {
-        name: "返回大厅",
-      }),
-    ).toHaveClass(
-      "h-10",
-      "w-10",
-    );
-    expect(screen.getByRole("link", { name: "返回大厅" })).not.toHaveClass(
-      "live-command-exit",
-    );
+      within(settingsDialog).getByRole("link", { name: "返回大厅" }),
+    ).toHaveAttribute("href", "/games");
     expect(screen.getByTestId("live-game-page")).toHaveClass(
       "min-h-screen",
       "text-slate-100",
@@ -641,23 +661,11 @@ describe("LiveGamePage", () => {
     expect(within(rightZone as HTMLElement).getByText("事件记录")).toBeInTheDocument();
     expect(within(bottomZone as HTMLElement).getByText("投票统计")).toBeInTheDocument();
     expect(bottomZone).toHaveClass("live-god-bottom-board");
-    expect(screen.getByTestId("live-nav-status")).toHaveClass(
+    expect(navStatus).toHaveClass(
       "text-sky-100",
     );
-    expect(screen.getByTestId("live-nav-status")).not.toHaveClass(
+    expect(navStatus).not.toHaveClass(
       "live-command-status",
-    );
-    expect(screen.getByTestId("rule-set-summary")).toHaveClass(
-      "text-slate-100",
-    );
-    expect(screen.getByTestId("rule-set-summary")).not.toHaveClass(
-      "live-command-rule-summary",
-    );
-    expect(screen.getByTestId("director-controls")).toHaveClass(
-      "text-slate-100",
-    );
-    expect(screen.getByTestId("director-controls")).not.toHaveClass(
-      "live-command-controls",
     );
     expect(screen.getByTestId("god-view-intel-panel")).toHaveClass(
       "text-slate-100",
@@ -1230,8 +1238,18 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
-    const resumeButton = screen.getByRole("button", { name: "继续对局" });
+    await userEvent.click(screen.getByRole("button", { name: "实时设置" }));
+    const settingsDialog = screen.getByRole("dialog", { name: "实时设置" });
+    const resumeButton = within(settingsDialog).getByRole("button", {
+      name: "继续对局",
+    });
     expect(resumeButton).toHaveClass("gothic-button");
+    expect(
+      within(settingsDialog).queryByRole("button", { name: "暂停" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(settingsDialog).queryByLabelText("播放速度"),
+    ).not.toBeInTheDocument();
     await userEvent.click(resumeButton);
 
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -1597,7 +1615,11 @@ describe("LiveGamePage", () => {
       screen.getByRole("heading", { name: "第 1 轮开始" }),
     ).toBeInTheDocument();
     act(() => {
-      screen.getByRole("button", { name: "暂停" }).click();
+      screen.getByRole("button", { name: "实时设置" }).click();
+    });
+    const settingsDialog = screen.getByRole("dialog", { name: "实时设置" });
+    act(() => {
+      within(settingsDialog).getByRole("button", { name: "暂停" }).click();
     });
 
     act(() => {
@@ -1609,7 +1631,7 @@ describe("LiveGamePage", () => {
     ).toBeInTheDocument();
 
     act(() => {
-      screen.getByRole("button", { name: "追到最新" }).click();
+      within(settingsDialog).getByRole("button", { name: "追到最新" }).click();
     });
 
     expect(
