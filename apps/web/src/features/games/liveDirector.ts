@@ -241,12 +241,13 @@ function stateUpdatedCue(
   if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
     const message =
       typeof debateEntry.message === "string" ? debateEntry.message : "";
+    const body = `${debateEntry.speaker}：${message}`;
     return {
       ...base,
       title: `${debateEntry.speaker} 发言`,
-      body: `${debateEntry.speaker}：${message}`,
+      body,
       importance: "key",
-      durationMs: longTextDuration(message),
+      durationMs: longTextDuration(body),
       compressible: false,
     };
   }
@@ -433,8 +434,27 @@ function thinkingTickBody(payload: Record<string, unknown>): string {
     : `${message}（${Math.round(elapsedMs / 1000)} 秒）`;
 }
 
+const NORMAL_CHARS_PER_SECOND = 4;
+const NORMAL_WORDS_PER_MINUTE = 150;
+const LONG_TEXT_LEAD_IN_MS = 1000;
+const MIN_TEXT_DURATION_MS = 6000;
+const MAX_TEXT_DURATION_MS = 20000;
+
 function longTextDuration(text: string): number {
-  return Math.min(12000, Math.max(6000, 3500 + text.length * 45));
+  const cjkChars = Array.from(text).filter((char) =>
+    /[\u3400-\u9fff]/u.test(char),
+  ).length;
+  const words = text.match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*/g)?.length ?? 0;
+  const chineseMs = (cjkChars / NORMAL_CHARS_PER_SECOND) * 1000;
+  const wordMs = (words / NORMAL_WORDS_PER_MINUTE) * 60 * 1000;
+  const estimatedMs = Math.round(
+    LONG_TEXT_LEAD_IN_MS + Math.max(chineseMs, wordMs),
+  );
+
+  return Math.min(
+    MAX_TEXT_DURATION_MS,
+    Math.max(MIN_TEXT_DURATION_MS, estimatedMs),
+  );
 }
 
 function readablePayload(payload: unknown): string {

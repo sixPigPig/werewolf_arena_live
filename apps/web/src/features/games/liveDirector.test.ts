@@ -112,6 +112,28 @@ describe("toDirectorCue", () => {
     });
   });
 
+  it("uses normal speech pace for visible long text at 1x", () => {
+    const message =
+      "我现在给出完整发言，先说明昨晚信息，再解释投票理由，最后给出今天建议。";
+    const cue = toDirectorCue(
+      event({
+        id: 9,
+        type: "state_updated",
+        actor: "李四",
+        action: "debate",
+        payload: {
+          debate_entry: { speaker: "李四", message },
+        },
+      }),
+    );
+
+    expect(cue.body).toBe(`李四：${message}`);
+    expect(cue.importance).toBe("key");
+    expect(cue.compressible).toBe(false);
+    expect(cue.durationMs).toBeGreaterThanOrEqual(9000);
+    expect(cue.durationMs).toBeLessThanOrEqual(20000);
+  });
+
   it("renders protected night attacks as a peaceful night cue", () => {
     const cue = toDirectorCue(
       event({
@@ -243,6 +265,32 @@ describe("toDirectorCue", () => {
       importance: "key",
       compressible: false,
     });
+  });
+
+  it("caps very long visible text duration", () => {
+    const message = "重要发言".repeat(80);
+    const cues = buildDirectorCues([
+      event({
+        id: 2,
+        type: "model_request_started",
+        actor: "张三",
+        action: "debate",
+        payload: { request_id: "req_long", model: "deepseek-chat" },
+      }),
+      event({
+        id: 3,
+        type: "model_response_delta",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_long",
+          visible_text: message,
+          is_public: true,
+        },
+      }),
+    ]);
+
+    expect(cues[0].durationMs).toBe(20000);
   });
 
   it("coalesces thinking ticks with elapsed milliseconds into the matching request cue", () => {
