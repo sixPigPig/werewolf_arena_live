@@ -40,6 +40,13 @@ export type GodViewNightActionOrderLine = GodViewActionLine & {
   order: number;
 };
 
+export type GodViewSkillTrigger = {
+  id: number;
+  label: string;
+  detail: string;
+  tone: "danger" | "info" | "success" | "warning" | "muted";
+};
+
 export type GodViewDeathInfo = {
   player: string;
   cause: string;
@@ -106,6 +113,7 @@ export type GodViewState = {
   eventLines: GodViewEventLine[];
   publicFacts: string[];
   replayMarks: GodViewEventLine[];
+  skillTriggers: GodViewSkillTrigger[];
   winPressure: {
     label: string;
     detail: string;
@@ -133,6 +141,7 @@ type MutableGodView = {
   eventLines: GodViewEventLine[];
   publicFacts: string[];
   replayMarks: GodViewEventLine[];
+  skillTriggers: GodViewSkillTrigger[];
 };
 
 export function deriveGodViewState(
@@ -163,6 +172,7 @@ export function deriveGodViewState(
     eventLines: [],
     publicFacts: [],
     replayMarks: [],
+    skillTriggers: [],
   };
 
   for (const event of events) {
@@ -237,6 +247,7 @@ export function deriveGodViewState(
     eventLines: view.eventLines.slice(-7).reverse(),
     publicFacts: dedupe(view.publicFacts).slice(-6).reverse(),
     replayMarks: view.replayMarks.slice(-5).reverse(),
+    skillTriggers: view.skillTriggers.slice(-5),
     winPressure: buildWinPressure(progress),
   };
 }
@@ -415,6 +426,7 @@ function collectStateUpdate(view: MutableGodView, event: LiveGameEvent) {
   collectDeaths(view, event, payload, eliminated, exiled);
   collectSheriff(view, payload);
   collectFacts(view, payload);
+  collectSkillTriggers(view, event, payload);
 }
 
 function collectDeaths(
@@ -508,6 +520,62 @@ function collectFacts(view: MutableGodView, payload: Record<string, unknown>) {
   const selfExploded = stringField(payload, "werewolf_self_exploded");
   if (selfExploded) {
     view.publicFacts.push(`${selfExploded} 自爆`);
+  }
+}
+
+function collectSkillTriggers(
+  view: MutableGodView,
+  event: LiveGameEvent,
+  payload: Record<string, unknown>,
+) {
+  const selfExploded = stringField(payload, "werewolf_self_exploded");
+  if (selfExploded) {
+    pushUniqueSkillTrigger(view, {
+      id: event.id,
+      label: "狼人自爆",
+      detail: `${selfExploded} 发动自爆。`,
+      tone: "danger",
+    });
+  }
+
+  const hunterShot = stringField(payload, "hunter_shot");
+  if (hunterShot) {
+    const hunter = event.actor || "猎人";
+    pushUniqueSkillTrigger(view, {
+      id: event.id,
+      label: "猎人带走",
+      detail: `${hunter} 带走 ${hunterShot}。`,
+      tone: "warning",
+    });
+  }
+
+  const idiotRevealed = stringField(payload, "idiot_revealed");
+  if (idiotRevealed) {
+    pushUniqueSkillTrigger(view, {
+      id: event.id,
+      label: "白痴翻牌",
+      detail: `${idiotRevealed} 翻牌留在场上。`,
+      tone: "info",
+    });
+  }
+
+  const badgeTarget = stringField(payload, "sheriff_badge_target");
+  if (badgeTarget) {
+    pushUniqueSkillTrigger(view, {
+      id: event.id,
+      label: "警徽移交",
+      detail: `警徽移交给 ${badgeTarget}。`,
+      tone: "success",
+    });
+  }
+
+  if (payload.sheriff_badge_lost === true) {
+    pushUniqueSkillTrigger(view, {
+      id: event.id,
+      label: "警徽撕毁",
+      detail: "警徽被撕毁。",
+      tone: "muted",
+    });
   }
 }
 
@@ -850,6 +918,21 @@ function pushUniqueDeath(view: MutableGodView, death: GodViewDeathInfo) {
     return;
   }
   view.deaths.push(death);
+}
+
+function pushUniqueSkillTrigger(
+  view: MutableGodView,
+  trigger: GodViewSkillTrigger,
+) {
+  const key = `${trigger.id}:${trigger.label}:${trigger.detail}`;
+  if (
+    view.skillTriggers.some(
+      (item) => `${item.id}:${item.label}:${item.detail}` === key,
+    )
+  ) {
+    return;
+  }
+  view.skillTriggers.push(trigger);
 }
 
 function roundLabel(round: number | null, phase: string | null) {

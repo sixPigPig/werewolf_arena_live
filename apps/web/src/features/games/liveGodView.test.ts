@@ -315,6 +315,48 @@ describe("deriveGodViewState", () => {
     expect(state.winPressure.tone).toBe("danger");
   });
 
+  it("derives skill trigger lines from state updates", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Wolf", role: "werewolf", model: "deepseek-chat" },
+            { name: "Hunter", role: "hunter", model: "deepseek-chat" },
+            { name: "Villager", role: "villager", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 2,
+        phase: "day",
+        actor: "Hunter",
+        payload: {
+          werewolf_self_exploded: "Wolf",
+          hunter_shot: "Villager",
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "技能测试");
+
+    expect(state.skillTriggers).toEqual([
+      expect.objectContaining({
+        label: "狼人自爆",
+        detail: "Wolf 发动自爆。",
+        tone: "danger",
+      }),
+      expect.objectContaining({
+        label: "猎人带走",
+        detail: "Hunter 带走 Villager。",
+        tone: "warning",
+      }),
+    ]);
+  });
+
   it("uses honest fallback states when no live facts are available", () => {
     const spectator = deriveLiveSpectatorState([]);
 
