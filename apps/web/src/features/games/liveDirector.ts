@@ -167,13 +167,14 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
   }
 
   if (event.type === "action_parsed") {
+    const parsedBody = parsedActionBody(payload);
     return {
       ...base,
       title: liveEventTitle(event),
-      body: parsedActionBody(payload) || readablePayload(rawPayload),
+      body: parsedBody || readablePayload(rawPayload),
       importance: "action",
-      durationMs: 3500,
-      compressible: true,
+      durationMs: parsedBody ? longTextDuration(parsedBody) : 3500,
+      compressible: !parsedBody,
     };
   }
 

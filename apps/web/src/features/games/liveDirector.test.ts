@@ -133,6 +133,26 @@ describe("toDirectorCue", () => {
     expect(cue.durationMs).toBe(9500);
   });
 
+  it("uses normal speech pace for parsed visible action text", () => {
+    const message =
+      "我现在给出完整的发言，先说明昨晚信息，再解释投票理由，最后给出今天建议。";
+    const cue = toDirectorCue(
+      event({
+        id: 11,
+        type: "action_parsed",
+        actor: "李四",
+        action: "debate",
+        payload: {
+          visible_result: { say: message },
+        },
+      }),
+    );
+
+    expect(cue.body).toBe(message);
+    expect(cue.durationMs).toBe(9000);
+    expect(cue.compressible).toBe(false);
+  });
+
   it("uses normal speech pace for kana visible text", () => {
     const message = "こんにちは".repeat(5);
     const cue = toDirectorCue(
