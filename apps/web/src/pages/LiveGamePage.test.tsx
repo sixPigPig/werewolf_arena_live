@@ -456,6 +456,11 @@ describe("LiveGamePage", () => {
     );
 
     expect(screen.getByText("连接：未连接")).toBeInTheDocument();
+    const statusStrip = screen.getByTestId("live-status-strip");
+    expect(statusStrip).not.toHaveTextContent("快速执行");
+    expect(statusStrip).not.toHaveTextContent("标准演示");
+    expect(statusStrip).not.toHaveTextContent("慢速讲解");
+    expect(statusStrip).not.toHaveTextContent("节奏：");
   });
 
   it("defines appearance backgrounds for every avatar surface", () => {
@@ -538,9 +543,11 @@ describe("LiveGamePage", () => {
     expect(
       within(liveNavContext).getByTestId("rule-set-summary"),
     ).toBeInTheDocument();
-    expect(liveNavContext).toHaveTextContent("快速执行");
+    expect(liveNavContext).not.toHaveTextContent("快速执行");
+    expect(liveNavContext).not.toHaveTextContent("标准演示");
+    expect(liveNavContext).not.toHaveTextContent("慢速讲解");
     expect(liveNavContext).not.toHaveTextContent("连接：连接中");
-    expect(liveNavContext).not.toHaveTextContent("节奏：快速执行");
+    expect(liveNavContext).not.toHaveTextContent("节奏：");
     expect(liveNavContext).not.toHaveTextContent("2 狼人 / 1 预言家 / 1 守卫 / 4 村民");
     expect(within(liveNavContext).queryByText("⌄")).not.toBeInTheDocument();
     expect(

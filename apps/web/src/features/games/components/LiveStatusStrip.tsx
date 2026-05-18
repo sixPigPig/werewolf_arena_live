@@ -19,12 +19,6 @@ const connectionLabels = {
   error: "连接异常",
 } satisfies Record<ConnectionState, string>;
 
-const eventPacingLabels = {
-  off: "快速执行",
-  standard: "标准演示",
-  slow: "慢速讲解",
-} as const;
-
 export function LiveStatusStrip({
   run,
   connectionState,
@@ -34,9 +28,6 @@ export function LiveStatusStrip({
   connectionState: ConnectionState | (string & {});
   variant?: "panel" | "nav";
 }) {
-  const eventPacingLabel =
-    eventPacingLabels[run.event_pacing as keyof typeof eventPacingLabels] ??
-    eventPacingLabels.off;
   const isNav = variant === "nav";
   const connectionLabel =
     connectionLabels[connectionState as ConnectionState] ?? connectionState;
@@ -64,12 +55,6 @@ export function LiveStatusStrip({
             </span>
             {statusLabels[run.status] ?? run.status}
           </span>
-          <span className="text-amber-200">
-            <span aria-hidden="true" className="mr-2 leading-none">
-              ⚡
-            </span>
-            {eventPacingLabel}
-          </span>
           <span aria-hidden="true" className="h-6 w-px bg-slate-500/45" />
           <span className="max-w-[15rem] truncate font-mono text-xs tracking-wide text-slate-300">
             {run.session_id}
@@ -84,7 +69,6 @@ export function LiveStatusStrip({
             {run.session_id}
           </span>
           <span className="text-slate-400">连接：{connectionLabel}</span>
-          <span className="text-slate-400">节奏：{eventPacingLabel}</span>
         </>
       )}
       {run.error ? <span className="text-red-300">{run.error}</span> : null}
