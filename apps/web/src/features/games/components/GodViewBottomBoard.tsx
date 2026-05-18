@@ -16,7 +16,7 @@ export function GodViewBottomBoard({ state }: GodViewBottomBoardProps) {
       )}
       data-testid="god-view-bottom-board"
     >
-      <div className="grid min-w-[68rem] grid-cols-[1.1fr_1.15fr_1fr_1fr_1.1fr_1fr] divide-x divide-amber-500/15">
+      <div className="grid min-w-[48rem] grid-cols-[1.1fr_1.15fr_1fr_1.1fr] divide-x divide-amber-500/15">
         <BottomColumn title="发言顺序">
           <div className="flex flex-wrap gap-1.5">
             {state.speechOrder.length === 0 ? (
@@ -82,39 +82,6 @@ export function GodViewBottomBoard({ state }: GodViewBottomBoardProps) {
           </div>
         </BottomColumn>
 
-        <BottomColumn title="放逐候选排名">
-          <div className="space-y-1.5">
-            {state.vote.tallies.length === 0 ? (
-              <div className="flex items-center justify-between gap-2 rounded-md border border-amber-300/20 bg-black/25 px-2 py-1.5 text-xs">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-amber-300/35 text-amber-100">
-                  -
-                </span>
-                <span className="min-w-0 flex-1 truncate text-slate-100">
-                  等待投票
-                </span>
-                <span className="shrink-0 text-slate-400">0 票</span>
-              </div>
-            ) : (
-              state.vote.tallies.slice(0, 3).map((tally, index) => (
-                <div
-                  className="flex items-center justify-between gap-2 rounded-md border border-amber-300/20 bg-black/25 px-2 py-1.5 text-xs"
-                  key={tally.target}
-                >
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-amber-300/35 text-amber-100">
-                    {index + 1}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-slate-100">
-                    {seatLabel(state, tally.target)}
-                  </span>
-                  <span className="shrink-0 text-slate-400">
-                    {formatVoteCount(tally.count)} 票
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </BottomColumn>
-
         <BottomColumn title="公开信息">
           <ul className="space-y-1.5 text-xs">
             {state.publicFacts.length === 0 ? (
@@ -130,26 +97,6 @@ export function GodViewBottomBoard({ state }: GodViewBottomBoardProps) {
               ))
             )}
           </ul>
-        </BottomColumn>
-
-        <BottomColumn title="本局标记（回放点）">
-          <ol className="space-y-1.5 text-xs">
-            {state.replayMarks.length === 0 ? (
-              <EmptyText>暂无标记</EmptyText>
-            ) : (
-              state.replayMarks.map((mark) => (
-                <li
-                  className="grid grid-cols-[2.8rem_minmax(0,1fr)] gap-2 rounded-md border border-slate-700/45 bg-black/25 px-2 py-1.5"
-                  key={mark.id}
-                >
-                  <span className="font-mono text-slate-500">{mark.time}</span>
-                  <span className="min-w-0 truncate text-slate-200">
-                    {mark.text}
-                  </span>
-                </li>
-              ))
-            )}
-          </ol>
         </BottomColumn>
       </div>
     </section>

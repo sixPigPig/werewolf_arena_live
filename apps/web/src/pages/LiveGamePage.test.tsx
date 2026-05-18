@@ -674,7 +674,8 @@ describe("LiveGamePage", () => {
     expect(screen.getByText("死亡信息")).toBeInTheDocument();
     expect(screen.getByTestId("god-view-bottom-board")).toBeInTheDocument();
     expect(screen.getByText("投票统计")).toBeInTheDocument();
-    expect(screen.getByText("本局标记（回放点）")).toBeInTheDocument();
+    expect(screen.queryByText("放逐候选排名")).not.toBeInTheDocument();
+    expect(screen.queryByText("本局标记（回放点）")).not.toBeInTheDocument();
   });
 
   it("renders the recomposed god-view broadcast layout zones", async () => {
@@ -783,6 +784,26 @@ describe("LiveGamePage", () => {
     ).not.toBeInTheDocument();
     expect(within(right).getByText("狼人自爆")).toBeInTheDocument();
     expect(within(right).getByText("Bert 发动自爆。")).toBeInTheDocument();
+
+    const bottom = screen.getByTestId("god-view-bottom-zone");
+    expect(
+      within(bottom).getByRole("heading", { name: "发言顺序" }),
+    ).toBeInTheDocument();
+    expect(
+      within(bottom).getByRole("heading", { name: "票型矩阵" }),
+    ).toBeInTheDocument();
+    expect(
+      within(bottom).getByRole("heading", { name: "投票统计" }),
+    ).toBeInTheDocument();
+    expect(
+      within(bottom).getByRole("heading", { name: "公开信息" }),
+    ).toBeInTheDocument();
+    expect(
+      within(bottom).queryByRole("heading", { name: "放逐候选排名" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(bottom).queryByRole("heading", { name: "本局标记（回放点）" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders stage side player cards as the only player info entry", async () => {
@@ -912,7 +933,7 @@ describe("LiveGamePage", () => {
     expect(within(strip).getByText("发言席：4 号")).toBeInTheDocument();
     expect(within(strip).getByText("存活 4/4")).toBeInTheDocument();
     expect(screen.getByText("候选 1")).toBeInTheDocument();
-    expect(screen.getByText("等待投票")).toBeInTheDocument();
+    expect(screen.queryByText("等待投票")).not.toBeInTheDocument();
   });
 
   it("shows peaceful night resolution when a guarded attack causes no death", async () => {
