@@ -59,7 +59,7 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
       const body = thinkingTickBody(payload);
       if (body) {
         requestCue.cue.body = body;
-        requestCue.cue.durationMs = longTextDuration(body);
+        requestCue.cue.durationMs = statusTextDuration(body);
       }
       continue;
     }
@@ -441,9 +441,7 @@ const MIN_TEXT_DURATION_MS = 6000;
 const MAX_TEXT_DURATION_MS = 20000;
 
 function longTextDuration(text: string): number {
-  const cjkChars = Array.from(text).filter((char) =>
-    /[\u3400-\u9fff]/u.test(char),
-  ).length;
+  const cjkChars = Array.from(text).filter(isCjkSpeechChar).length;
   const words = text.match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*/g)?.length ?? 0;
   const chineseMs = (cjkChars / NORMAL_CHARS_PER_SECOND) * 1000;
   const wordMs = (words / NORMAL_WORDS_PER_MINUTE) * 60 * 1000;
@@ -454,6 +452,16 @@ function longTextDuration(text: string): number {
   return Math.min(
     MAX_TEXT_DURATION_MS,
     Math.max(MIN_TEXT_DURATION_MS, estimatedMs),
+  );
+}
+
+function statusTextDuration(text: string): number {
+  return Math.min(12000, Math.max(6000, 3500 + text.length * 45));
+}
+
+function isCjkSpeechChar(char: string): boolean {
+  return /[\u3400-\u9fff]|\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u.test(
+    char,
   );
 }
 

@@ -133,6 +133,24 @@ describe("toDirectorCue", () => {
     expect(cue.durationMs).toBe(9500);
   });
 
+  it("uses normal speech pace for kana visible text", () => {
+    const message = "こんにちは".repeat(5);
+    const cue = toDirectorCue(
+      event({
+        id: 10,
+        type: "model_response_received",
+        actor: "佐藤",
+        action: "debate",
+        payload: {
+          visible_text: message,
+        },
+      }),
+    );
+
+    expect(cue.body).toBe(message);
+    expect(cue.durationMs).toBeGreaterThan(6000);
+  });
+
   it("renders protected night attacks as a peaceful night cue", () => {
     const cue = toDirectorCue(
       event({
@@ -319,6 +337,32 @@ describe("toDirectorCue", () => {
       eventId: 2,
       body: "正在组织发言（3 秒）",
     });
+  });
+
+  it("caps long thinking tick status text at 12000ms", () => {
+    const cues = buildDirectorCues([
+      event({
+        id: 2,
+        type: "model_request_started",
+        actor: "张三",
+        action: "debate",
+        payload: { request_id: "req_thinking", model: "deepseek-chat" },
+      }),
+      event({
+        id: 3,
+        type: "model_thinking_tick",
+        actor: "张三",
+        action: "debate",
+        payload: {
+          request_id: "req_thinking",
+          message: "正在整理公开发言和投票理由".repeat(40),
+          elapsed_ms: 12000,
+        },
+      }),
+    ]);
+
+    expect(cues).toHaveLength(1);
+    expect(cues[0].durationMs).toBe(12000);
   });
 
   it("ignores orphan streaming deltas and thinking ticks", () => {
