@@ -811,7 +811,7 @@ def test_get_game_run_returns_404_for_missing_run() -> None:
     assert response.json()["detail"] == "Game run not found"
 
 
-def test_run_game_in_background_publishes_registry_and_engine_events_without_pacing(
+def test_run_game_in_background_publishes_registry_and_engine_events_directly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
