@@ -1,6 +1,5 @@
 import { Badge, Switch } from "../../../components/ui";
 import { withGlassPanel } from "../../../components/ui/glass";
-import type { CSSProperties } from "react";
 
 import type { DirectorCue } from "../liveDirector";
 import { actionLabel, phaseLabel } from "../liveLabels";
@@ -43,6 +42,11 @@ export function LiveDirectorStage({
   const title = cue?.title ?? "等待导播事件";
   const body = cue?.body ?? "对局运行已创建，正在等待下一条实时事件。";
   const isTerminalCue = cue?.importance === "terminal";
+  const stagePlayers = godViewState?.players.slice(0, 12) ?? [];
+  const railSplitIndex = Math.ceil(stagePlayers.length / 2);
+  const leftRailPlayers = stagePlayers.slice(0, railSplitIndex);
+  const rightRailPlayers = stagePlayers.slice(railSplitIndex);
+  const livePlayersByName = new Map(players.map((player) => [player.name, player]));
 
   return (
     <section
@@ -73,6 +77,28 @@ export function LiveDirectorStage({
         <div className="absolute left-1/2 top-[55%] h-[44%] w-[58%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-amber-300/18 bg-[conic-gradient(from_210deg,rgba(251,191,36,0.04),transparent_18%,rgba(20,184,166,0.06)_32%,transparent_48%,rgba(251,191,36,0.05)_72%,transparent)] shadow-[inset_0_0_50px_rgba(251,191,36,0.13)]" />
         <div className="absolute left-1/2 top-[48%] -translate-x-1/2 -translate-y-1/2 select-none text-7xl font-black text-amber-100/10 sm:text-9xl">
           狼
+        </div>
+
+        <div className="pointer-events-none absolute inset-x-3 top-20 bottom-24 z-40 grid grid-cols-[minmax(7rem,12rem)_minmax(14rem,1fr)_minmax(7rem,12rem)] gap-3 sm:inset-x-5 sm:top-20 sm:bottom-24 lg:grid-cols-[minmax(9rem,14rem)_minmax(20rem,1fr)_minmax(9rem,14rem)]">
+          <PlayerRail
+            activePlayerName={activePlayerName}
+            focusedPlayerName={focusedPlayerName}
+            isTerminalCue={isTerminalCue}
+            livePlayersByName={livePlayersByName}
+            onSelectPlayer={onSelectPlayer}
+            players={leftRailPlayers}
+            side="left"
+          />
+          <div aria-hidden="true" />
+          <PlayerRail
+            activePlayerName={activePlayerName}
+            focusedPlayerName={focusedPlayerName}
+            isTerminalCue={isTerminalCue}
+            livePlayersByName={livePlayersByName}
+            onSelectPlayer={onSelectPlayer}
+            players={rightRailPlayers}
+            side="right"
+          />
         </div>
 
         <div className="glass-panel-subtle absolute left-1/2 top-[51%] z-30 w-[min(24rem,48vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-amber-300/25 p-3 text-center shadow-[0_24px_68px_rgba(0,0,0,0.38)] sm:top-[55%] sm:w-[min(30rem,64vw)] sm:p-4">
@@ -172,118 +198,11 @@ export function LiveDirectorStage({
           </div>
         </div>
 
-        <div
-          aria-label="圆桌座位"
-          className="pointer-events-none absolute inset-x-0 top-0 bottom-24 z-20 sm:bottom-20 lg:bottom-16"
-          role="group"
-        >
-          <p className="sr-only">圆桌座位</p>
-          {players.length === 0 ? (
-            <p className="absolute left-1/2 top-[72%] -translate-x-1/2 text-sm text-slate-400">
-              等待玩家加入
-            </p>
-          ) : (
-            players.map((player, index) => {
-              const isCurrentSpeaker =
-                !isTerminalCue &&
-                player.name === activePlayerName &&
-                player.isAlive;
-              const isLastActive =
-                isTerminalCue &&
-                player.name === activePlayerName &&
-                player.isAlive;
-              const isFocused = player.name === focusedPlayerName;
-              const role = roleTone(player.role);
-              const lastAction = player.lastAction
-                ? actionLabel(player.lastAction)
-                : "";
-              const status = playerSeatStatus(
-                player,
-                isTerminalCue,
-                isCurrentSpeaker,
-                isLastActive,
-              );
-              const seatState = !player.isAlive
-                ? "out"
-                : isCurrentSpeaker
-                  ? "speaking"
-                  : isLastActive
-                    ? "last-active"
-                    : isFocused
-                      ? "focused"
-                      : "idle";
-
-              return (
-                <button
-                  aria-label={`${index + 1}号 ${player.name} ${
-                    player.role
-                  } ${status} ${lastAction} ${player.lastDetail}`}
-                  className={`pointer-events-auto absolute left-[var(--seat-x)] top-[var(--seat-y)] w-14 translate-x-[var(--seat-offset-x)] -translate-y-1/2 text-center transition duration-200 hover:translate-x-[var(--seat-offset-x)] hover:-translate-y-1/2 hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 sm:left-[var(--seat-sm-x)] sm:top-[var(--seat-sm-y)] sm:w-24 sm:-translate-x-1/2 sm:hover:-translate-x-1/2 lg:w-28 ${
-                    isFocused ? "is-focused" : ""
-                  } ${!player.isAlive ? "opacity-60 grayscale" : ""}`}
-                  data-seat-state={seatState}
-                  key={player.name}
-                  onClick={() => onSelectPlayer(player.name)}
-                  style={seatStyle(index, players.length)}
-                  type="button"
-                >
-                  <span className="mx-auto mb-1 flex h-5 w-5 items-center justify-center rounded-full border border-amber-300/50 text-[10px] font-semibold text-amber-100 shadow-md sm:h-7 sm:w-7 sm:text-xs">
-                    {index + 1}
-                  </span>
-                  <span
-                    className={`relative mx-auto flex h-10 w-10 items-center justify-center rounded-full border-2 bg-gradient-to-br ${avatarGradient(
-                      player.name,
-                    )} ${appearanceClassName(
-                      player.appearanceId,
-                    )} text-sm font-bold text-slate-100 shadow-lg sm:h-12 sm:w-12 sm:text-base md:h-16 md:w-16 md:text-lg ${role.ring} ${
-                      isCurrentSpeaker
-                        ? "border-teal-100 shadow-[0_0_28px_rgba(45,212,191,0.88),0_0_48px_rgba(250,204,21,0.28)]"
-                        : isLastActive
-                          ? "border-amber-200 shadow-[0_0_22px_rgba(251,191,36,0.45)]"
-                        : ""
-                    } ${
-                      isFocused
-                        ? "ring-2 ring-amber-100 ring-offset-2 ring-offset-slate-950"
-                        : ""
-                    }`}
-                  >
-                    {isCurrentSpeaker ? (
-                      <span
-                        aria-hidden="true"
-                        className="absolute -inset-2 rounded-full border border-teal-200/55 shadow-[0_0_24px_rgba(45,212,191,0.42)] animate-pulse"
-                      />
-                    ) : null}
-                    <span className="relative z-10">{avatarText(player.name)}</span>
-                  </span>
-                  <span className="mt-1 block truncate text-xs font-semibold text-slate-50 drop-shadow sm:text-sm">
-                    {player.name}
-                  </span>
-                  <span
-                    className={`mx-auto mt-1 hidden max-w-full items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 md:inline-flex ${role.badge}`}
-                  >
-                    <span
-                      className={`h-1.5 w-1.5 rounded-full ${
-                        player.isAlive ? role.dot : "bg-slate-400"
-                      }`}
-                    />
-                    <span className="truncate">{player.role}</span>
-                  </span>
-                  <span
-                    className={`mx-auto mt-1 hidden w-fit rounded-md px-2 py-0.5 text-[11px] font-semibold md:block ${
-                      isCurrentSpeaker
-                        ? "bg-teal-400/15 text-teal-100 ring-1 ring-teal-200/40"
-                        : isLastActive
-                          ? "bg-amber-500/15 text-amber-100 ring-1 ring-amber-300/35"
-                        : "text-slate-300"
-                    }`}
-                  >
-                    {status}
-                  </span>
-                </button>
-              );
-            })
-          )}
-        </div>
+        {stagePlayers.length === 0 ? (
+          <p className="absolute left-1/2 top-[72%] z-40 -translate-x-1/2 text-sm text-slate-400">
+            等待玩家加入
+          </p>
+        ) : null}
 
         <div className="glass-panel-subtle absolute inset-x-4 bottom-4 z-40 flex flex-col gap-3 rounded-lg border border-amber-300/20 p-3 text-sm text-slate-200 shadow-[0_16px_45px_rgba(0,0,0,0.24)] sm:inset-x-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
@@ -310,51 +229,6 @@ export function LiveDirectorStage({
       </div>
     </section>
   );
-}
-
-const STATUS_LABELS: Record<LivePlayer["status"], string> = {
-  waiting: "等待中",
-  thinking: "思考中",
-  requesting: "请求模型",
-  streaming: "发言中",
-  responded: "已返回",
-  acted: "已行动",
-  out: "出局",
-};
-
-function playerSeatStatus(
-  player: LivePlayer,
-  isTerminalCue: boolean,
-  isCurrentSpeaker: boolean,
-  isLastActive: boolean,
-): string {
-  if (!player.isAlive) {
-    return "出局";
-  }
-  if (isTerminalCue) {
-    return terminalPlayerStatus(player.status, isLastActive);
-  }
-  if (isCurrentSpeaker) {
-    return "发言中";
-  }
-  return STATUS_LABELS[player.status];
-}
-
-function terminalPlayerStatus(
-  status: LivePlayer["status"],
-  isLastActive: boolean,
-): string {
-  if (isLastActive) {
-    return "最后行动";
-  }
-  if (
-    status === "thinking" ||
-    status === "requesting" ||
-    status === "streaming"
-  ) {
-    return "已行动";
-  }
-  return STATUS_LABELS[status];
 }
 
 const AVATAR_GRADIENTS = [
@@ -409,6 +283,211 @@ function roleTone(role: string) {
   };
 }
 
+function PlayerRail({
+  activePlayerName,
+  focusedPlayerName,
+  isTerminalCue,
+  livePlayersByName,
+  onSelectPlayer,
+  players,
+  side,
+}: {
+  activePlayerName: string | null;
+  focusedPlayerName: string | null;
+  isTerminalCue: boolean;
+  livePlayersByName: Map<string, LivePlayer>;
+  onSelectPlayer: (name: string) => void;
+  players: GodViewPlayer[];
+  side: "left" | "right";
+}) {
+  return (
+    <div
+      className={`flex min-h-0 flex-col justify-center gap-2 ${
+        side === "left" ? "items-start" : "items-end"
+      }`}
+      data-testid={`god-view-player-rail-${side}`}
+    >
+      {players.map((player) => (
+        <StagePlayerCard
+          activePlayerName={activePlayerName}
+          focusedPlayerName={focusedPlayerName}
+          isTerminalCue={isTerminalCue}
+          key={player.name}
+          livePlayer={livePlayersByName.get(player.name) ?? null}
+          onSelectPlayer={onSelectPlayer}
+          player={player}
+          side={side}
+        />
+      ))}
+    </div>
+  );
+}
+
+function StagePlayerCard({
+  activePlayerName,
+  focusedPlayerName,
+  isTerminalCue,
+  livePlayer,
+  onSelectPlayer,
+  player,
+  side,
+}: {
+  activePlayerName: string | null;
+  focusedPlayerName: string | null;
+  isTerminalCue: boolean;
+  livePlayer: LivePlayer | null;
+  onSelectPlayer: (name: string) => void;
+  player: GodViewPlayer;
+  side: "left" | "right";
+}) {
+  const isLastActive =
+    isTerminalCue && player.name === activePlayerName && player.isAlive;
+  const isCurrentSpeaker = !isTerminalCue && player.isSpeaking;
+  const isFocused = player.name === focusedPlayerName;
+  const cardState = !player.isAlive
+    ? "out"
+    : isCurrentSpeaker
+      ? "speaking"
+      : isLastActive
+        ? "last-active"
+        : isFocused
+          ? "focused"
+          : "idle";
+  const status = stageCardStatus(player, livePlayer, isTerminalCue, isLastActive);
+  const role = roleTone(player.role);
+  const liveAction = livePlayer?.lastAction ? actionLabel(livePlayer.lastAction) : "";
+  const liveDetail = livePlayer?.lastDetail ?? "";
+
+  return (
+    <button
+      aria-label={`${player.seatNumber}号 ${player.name} ${player.role} ${status} ${liveAction} ${liveDetail}`}
+      className={`pointer-events-auto grid w-full max-w-[13rem] grid-cols-[2.2rem_minmax(0,1fr)] items-center gap-2 rounded-md border bg-black/45 px-2 py-2 text-left shadow-[0_12px_32px_rgba(0,0,0,0.26)] transition duration-200 hover:-translate-y-0.5 hover:border-amber-200/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 ${
+        side === "right" ? "text-right" : ""
+      } ${stagePlayerTone(player, cardState)} ${
+        isFocused ? "is-focused ring-1 ring-amber-100/70" : ""
+      } ${!player.isAlive ? "opacity-65 grayscale" : ""}`}
+      data-card-state={cardState}
+      data-testid={`god-view-stage-player-card-${player.name}`}
+      onClick={() => onSelectPlayer(player.name)}
+      type="button"
+    >
+      <span className="flex h-8 w-8 items-center justify-center rounded-md border border-amber-300/45 bg-black/55 text-xs font-semibold text-amber-100">
+        {player.seatNumber}
+      </span>
+      <span className="flex min-w-0 items-center gap-2">
+        <span
+          className={`relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 bg-gradient-to-br ${avatarGradient(
+            player.name,
+          )} ${appearanceClassName(
+            player.appearanceId,
+          )} text-xs font-bold text-slate-100 shadow-lg ${role.ring}`}
+        >
+          {isCurrentSpeaker ? (
+            <span
+              aria-hidden="true"
+              className="absolute -inset-1 rounded-full border border-teal-200/55 shadow-[0_0_20px_rgba(45,212,191,0.42)] animate-pulse"
+            />
+          ) : null}
+          {player.avatarImageUrl ? (
+            <img
+              alt={`${player.name} 虚拟头像`}
+              className="relative z-10 h-full w-full object-cover"
+              src={player.avatarImageUrl}
+            />
+          ) : (
+            <span className="relative z-10">{avatarText(player.name)}</span>
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="truncate text-sm font-semibold text-slate-50">
+              {player.name}
+            </span>
+            {player.isSheriff ? (
+              <span className="shrink-0 rounded bg-amber-400/15 px-1 py-0.5 text-[10px] font-semibold text-amber-100 ring-1 ring-amber-300/35">
+                警
+              </span>
+            ) : null}
+          </span>
+          <span className="mt-1 flex min-w-0 flex-wrap gap-1">
+            <span className={`rounded px-1.5 py-0.5 text-[10px] ring-1 ${role.badge}`}>
+              {player.role}
+            </span>
+            <span className="rounded bg-slate-950/70 px-1.5 py-0.5 text-[10px] text-slate-300 ring-1 ring-slate-600/45">
+              {player.identityGroup}
+            </span>
+          </span>
+          <span
+            className={`mt-1 block truncate text-[11px] font-semibold ${
+              cardState === "speaking"
+                ? "text-teal-100"
+                : cardState === "last-active"
+                  ? "text-amber-100"
+                  : cardState === "out"
+                    ? "text-slate-400"
+                    : "text-slate-300"
+            }`}
+          >
+            {status}
+          </span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function stagePlayerTone(player: GodViewPlayer, cardState: string) {
+  if (cardState === "speaking") {
+    return "border-teal-200/55 bg-teal-950/35 shadow-[0_0_28px_rgba(45,212,191,0.18)]";
+  }
+  if (cardState === "last-active") {
+    return "border-amber-200/55 bg-amber-950/30";
+  }
+  if (!player.isAlive) {
+    return "border-slate-600/45 bg-slate-950/70";
+  }
+  if (player.camp === "狼人阵营") {
+    return "border-red-400/35 bg-red-950/24";
+  }
+  if (player.identityGroup === "神职") {
+    return "border-sky-300/30 bg-sky-950/20";
+  }
+  return "border-stone-300/25 bg-stone-950/20";
+}
+
+const STATUS_LABELS: Record<LivePlayer["status"], string> = {
+  waiting: "等待中",
+  thinking: "思考中",
+  requesting: "请求模型",
+  streaming: "发言中",
+  responded: "已返回",
+  acted: "已行动",
+  out: "出局",
+};
+
+function stageCardStatus(
+  player: GodViewPlayer,
+  livePlayer: LivePlayer | null,
+  isTerminalCue: boolean,
+  isLastActive: boolean,
+) {
+  if (!player.isAlive) {
+    return player.statusLabel || "出局";
+  }
+  if (!isTerminalCue) {
+    return player.statusLabel;
+  }
+  if (isLastActive) {
+    return "最后行动";
+  }
+  if (livePlayer) {
+    return livePlayer.status === "streaming"
+      ? "已行动"
+      : STATUS_LABELS[livePlayer.status];
+  }
+  return player.statusLabel === "发言中" ? "已行动" : player.statusLabel;
+}
+
 function speakerTone(player: GodViewPlayer) {
   if (player.camp === "狼人阵营") {
     return "border-red-400 shadow-[0_0_30px_rgba(248,113,113,0.28)]";
@@ -429,36 +508,6 @@ function avatarGradient(name: string) {
 
 function avatarText(name: string) {
   return Array.from(name).slice(0, 2).join("");
-}
-
-type SeatStyle = CSSProperties &
-  Record<
-    | "--seat-x"
-    | "--seat-y"
-    | "--seat-offset-x"
-    | "--seat-sm-x"
-    | "--seat-sm-y",
-    string
-  >;
-
-function seatStyle(index: number, total: number): SeatStyle {
-  const angle = -90 + (360 / Math.max(total, 1)) * index;
-  const radians = (angle * Math.PI) / 180;
-  const xVector = Math.cos(radians);
-  const baseX = 50 + 46 * xVector;
-  const baseY = 50 + 40 * Math.sin(radians);
-  const smX = 50 + 41 * xVector;
-  const smY = 50 + 32 * Math.sin(radians);
-  const seatOffsetX =
-    xVector > 0.92 ? "-85%" : xVector < -0.92 ? "-15%" : "-50%";
-
-  return {
-    "--seat-x": `${baseX}%`,
-    "--seat-y": `${baseY}%`,
-    "--seat-offset-x": seatOffsetX,
-    "--seat-sm-x": `${smX}%`,
-    "--seat-sm-y": `${smY}%`,
-  };
 }
 
 function importanceLabel(importance: DirectorCue["importance"]) {

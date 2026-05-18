@@ -229,7 +229,9 @@ describe("LiveGamePage", () => {
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
     expect(screen.getByText("观赛舞台")).toBeInTheDocument();
-    expect(screen.getByText("圆桌座位")).toBeInTheDocument();
+    expect(screen.getByTestId("god-view-player-rail-left")).toBeInTheDocument();
+    expect(screen.getByTestId("god-view-player-rail-right")).toBeInTheDocument();
+    expect(screen.queryByText("圆桌座位")).not.toBeInTheDocument();
     expect(screen.queryByText("座位盘")).not.toBeInTheDocument();
     expect(screen.getByText("剧情时间线")).toBeInTheDocument();
     expect(screen.getByText("调试事件")).toBeInTheDocument();
@@ -372,44 +374,20 @@ describe("LiveGamePage", () => {
       });
     });
 
-    expect(screen.getByRole("button", { name: /张三/ })).toHaveAccessibleName(
-      /发言中/,
-    );
-    expect(screen.getByRole("button", { name: /张三/ })).toHaveAttribute(
-      "data-seat-state",
-      "speaking",
-    );
-    const roster = screen.getByTestId("god-view-roster-panel");
-    expect(
-      within(roster).getByRole("heading", { name: "身份牌（上帝视角）" }),
-    ).toBeInTheDocument();
-    expect(
-      within(screen.getByTestId("god-view-player-row-张三")).getByText("发言中"),
-    ).toBeInTheDocument();
-    expect(
-      within(screen.getByTestId("god-view-player-row-张三")).getByText("狼人阵营"),
-    ).toBeInTheDocument();
-    expect(
-      within(screen.getByTestId("god-view-player-row-李四")).getByText("白天放逐"),
-    ).toBeInTheDocument();
+    const zhangCard = screen.getByTestId("god-view-stage-player-card-张三");
+    const liCard = screen.getByTestId("god-view-stage-player-card-李四");
+    expect(zhangCard).toHaveAccessibleName(/发言中/);
+    expect(zhangCard).toHaveAttribute("data-card-state", "speaking");
+    expect(screen.queryByTestId("god-view-roster-panel")).not.toBeInTheDocument();
+    expect(within(zhangCard).getByText("发言中")).toBeInTheDocument();
+    expect(within(zhangCard).getAllByText("狼人").length).toBeGreaterThan(0);
+    expect(within(liCard).getByText("白天放逐")).toBeInTheDocument();
     expect(
       screen
-        .getByTestId("god-view-player-row-张三")
+        .getByTestId("god-view-stage-player-card-张三")
         .querySelector(".profile-appearance-moonlit"),
     ).toHaveClass("profile-appearance-moonlit");
-    const activePlayerRoleLabel = within(
-      screen.getByRole("button", { name: /张三/ }),
-    ).getByText("狼人");
-    expect(activePlayerRoleLabel.parentElement).toHaveClass(
-      "hidden",
-      "md:inline-flex",
-    );
-    expect(
-      within(screen.getByRole("button", { name: /张三/ })).getByText("发言中"),
-    ).toHaveClass("hidden", "md:block");
-    expect(screen.getByRole("button", { name: /李四/ })).toHaveAccessibleName(
-      /出局/,
-    );
+    expect(liCard).toHaveAccessibleName(/白天放逐/);
 
     act(() => {
       source.emit("model_response_received", {
@@ -622,37 +600,25 @@ describe("LiveGamePage", () => {
     const liveGrid = container.querySelector('[data-testid="live-stage-layout"]');
     expect(liveGrid).not.toBeNull();
     expect(liveGrid).toHaveClass("live-stage-layout", "live-stage-module");
-    const columns = Array.from(liveGrid!.children);
-    expect(columns).toHaveLength(4);
-    const [rosterColumn, stageColumn, eventsColumn, bottomColumn] = columns;
+    const zones = Array.from(liveGrid!.children);
+    expect(zones).toHaveLength(5);
+    const [topZone, leftZone, stageZone, rightZone, bottomZone] = zones;
 
-    expect(rosterColumn).toHaveClass("live-roster-column");
-    expect(stageColumn).toHaveClass("live-stage-column");
+    expect(topZone).toHaveClass("god-view-top-zone");
+    expect(leftZone).toHaveClass("god-view-left-zone");
+    expect(stageZone).toHaveClass("god-view-stage-zone");
+    expect(rightZone).toHaveClass("god-view-right-zone");
+    expect(within(topZone as HTMLElement).getByTestId("god-view-top-bar")).toBeInTheDocument();
+    expect(within(leftZone as HTMLElement).getByText("局势总览")).toBeInTheDocument();
+    expect(screen.queryByTestId("god-view-roster-panel")).not.toBeInTheDocument();
+    expect(within(stageZone as HTMLElement).getByText("观赛舞台")).toBeInTheDocument();
     expect(
-      within(rosterColumn as HTMLElement).getByText("身份牌（上帝视角）"),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("god-view-roster-panel")).toHaveClass(
-      "god-view-roster-panel",
-    );
-    expect(screen.getByTestId("god-view-roster-panel")).not.toHaveClass(
-      "player-roster-panel",
-    );
-    expect(
-      within(stageColumn as HTMLElement).getByText("观赛舞台"),
-    ).toBeInTheDocument();
-    expect(
-      within(stageColumn as HTMLElement).getByText("圆桌座位"),
-    ).toBeInTheDocument();
-    expect(
-      within(eventsColumn as HTMLElement).getByText("剧情时间线"),
-    ).toBeInTheDocument();
-    expect(
-      within(eventsColumn as HTMLElement).getByText("事件记录"),
-    ).toBeInTheDocument();
-    expect(
-      within(bottomColumn as HTMLElement).getByText("投票统计"),
-    ).toBeInTheDocument();
-    expect(bottomColumn).toHaveClass("live-god-bottom-board");
+      within(stageZone as HTMLElement).queryByText("圆桌座位"),
+    ).not.toBeInTheDocument();
+    expect(within(rightZone as HTMLElement).getByText("剧情时间线")).toBeInTheDocument();
+    expect(within(rightZone as HTMLElement).getByText("事件记录")).toBeInTheDocument();
+    expect(within(bottomZone as HTMLElement).getByText("投票统计")).toBeInTheDocument();
+    expect(bottomZone).toHaveClass("live-god-bottom-board");
     expect(screen.getByTestId("live-status-strip")).toHaveClass(
       "live-command-status",
       "text-slate-300",
@@ -675,11 +641,11 @@ describe("LiveGamePage", () => {
       "min-h-[36rem]",
       "lg:min-h-[40rem]",
     );
-    expect(stageColumn).toHaveClass("min-w-0");
-    expect(eventsColumn).toHaveClass("min-w-0");
+    expect(stageZone).toHaveClass("min-w-0");
+    expect(rightZone).toHaveClass("min-w-0");
 
     expect(
-      within(stageColumn as HTMLElement).queryByTestId("director-controls"),
+      within(stageZone as HTMLElement).queryByTestId("director-controls"),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByTestId("live-rule-summary-shell"),
@@ -700,8 +666,9 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
-    expect(screen.getByTestId("god-view-roster-panel")).toBeInTheDocument();
-    expect(screen.getByText("身份牌（上帝视角）")).toBeInTheDocument();
+    expect(screen.queryByTestId("god-view-roster-panel")).not.toBeInTheDocument();
+    expect(screen.getByTestId("god-view-situation-panel")).toBeInTheDocument();
+    expect(screen.getByText("局势总览")).toBeInTheDocument();
     expect(screen.getByTestId("god-view-intel-panel")).toBeInTheDocument();
     expect(screen.getByText("夜晚行动回顾")).toBeInTheDocument();
     expect(screen.getByText("死亡信息")).toBeInTheDocument();
@@ -799,6 +766,71 @@ describe("LiveGamePage", () => {
     expect(
       within(right).queryByRole("heading", { name: "夜晚行动回顾" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders stage side player cards as the only player info entry", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+    act(() => {
+      emitEvent(source, {
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: Array.from({ length: 12 }, (_, index) => ({
+            name: `P${index + 1}`,
+            role:
+              index < 4
+                ? "狼人"
+                : index < 8
+                  ? "预言家"
+                  : "村民",
+            model: "deepseek-chat",
+          })),
+        },
+      });
+      emitEvent(source, {
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "P7",
+        action: "debate",
+      });
+    });
+
+    const stage = screen.getByTestId("live-director-stage");
+    const leftRail = within(stage).getByTestId("god-view-player-rail-left");
+    const rightRail = within(stage).getByTestId("god-view-player-rail-right");
+    expect(
+      within(leftRail).getAllByTestId(/^god-view-stage-player-card-/),
+    ).toHaveLength(6);
+    expect(
+      within(rightRail).getAllByTestId(/^god-view-stage-player-card-/),
+    ).toHaveLength(6);
+    expect(
+      within(stage).getByTestId("god-view-stage-player-card-P7"),
+    ).toHaveAttribute("data-card-state", "speaking");
+    expect(within(stage).queryByLabelText("圆桌座位")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("god-view-roster-panel")).not.toBeInTheDocument();
+
+    await userEvent.click(
+      within(stage).getByTestId("god-view-stage-player-card-P2"),
+    );
+    expect(
+      within(stage).getByTestId("god-view-stage-player-card-P2"),
+    ).toHaveAttribute("data-card-state", "focused");
   });
 
   it("shows the current speaker as a large god-view stage portrait", async () => {
@@ -960,10 +992,14 @@ describe("LiveGamePage", () => {
       });
     });
 
-    expect(screen.getByRole("button", { name: /张三/ })).toHaveStyle({
-      "--seat-y": "10%",
-      "--seat-sm-y": "18%",
-    });
+    const stage = screen.getByTestId("live-director-stage");
+    const zhangCard = within(stage).getByTestId(
+      "god-view-stage-player-card-张三",
+    );
+    expect(within(stage).queryByLabelText("圆桌座位")).not.toBeInTheDocument();
+    expect(within(stage).getByTestId("god-view-player-rail-left")).toContainElement(
+      zhangCard,
+    );
   });
 
   it("lets users pin a player and re-enable auto follow", async () => {
