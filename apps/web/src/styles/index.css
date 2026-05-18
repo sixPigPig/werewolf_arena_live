@@ -1841,7 +1841,6 @@ body {
   grid-template-columns:
     minmax(9.5rem, 0.95fr)
     minmax(8rem, 0.72fr)
-    minmax(13rem, 1.35fr)
     minmax(8.5rem, auto);
   align-items: end;
   gap: 0.72rem;
