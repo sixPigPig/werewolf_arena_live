@@ -13,11 +13,12 @@ import { GodViewTopBar } from "../features/games/components/GodViewTopBar";
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveDirectorStage } from "../features/games/components/LiveDirectorStage";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
-import { LiveStatusStrip } from "../features/games/components/LiveStatusStrip";
+import { LiveNavStatusBadge } from "../features/games/components/LiveNavStatusBadge";
 import { RuleSetSummary } from "../features/games/components/RuleSetSummary";
 import { useGameRunEvents } from "../features/games/hooks/useGameRunEvents";
 import { useLiveDirector } from "../features/games/hooks/useLiveDirector";
 import { deriveGodViewState } from "../features/games/liveGodView";
+import { deriveLiveNavStatus } from "../features/games/liveNavStatus";
 import { deriveLiveSpectatorState } from "../features/games/liveSpectator";
 import { LivePageShell } from "./components/LivePageShell";
 import { LiveStageModule } from "./components/LiveStageModule";
@@ -87,6 +88,15 @@ export function LiveGamePage() {
     resetKey: runId,
     startAtLatestTerminal: shouldStartAtTerminal,
   });
+  const liveNavStatus = deriveLiveNavStatus({
+    backlogCount: director.backlogCount,
+    connectionState,
+    hasCompletedTerminalEvent: terminalEvent?.type === "game_completed",
+    hasFailedTerminalEvent: terminalEvent?.type === "game_failed",
+    isPaused: director.isPaused,
+    runStatus: run?.status ?? "queued",
+    speed: director.speed,
+  });
   const autoFocusName =
     director.currentCue?.actor ?? spectatorState.activePlayerName;
   const focusedPlayerName = autoFollow
@@ -143,7 +153,7 @@ export function LiveGamePage() {
       data-testid="live-nav-context"
     >
       <h1 className="sr-only">实时观战</h1>
-      <LiveStatusStrip run={run} connectionState={connectionState} variant="nav" />
+      <LiveNavStatusBadge status={liveNavStatus} />
       <span aria-hidden="true" className="h-6 w-px bg-slate-500/45" />
       <RuleSetSummary ruleSet={run.rule_set} variant="nav" />
     </div>

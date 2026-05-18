@@ -245,7 +245,8 @@ describe("LiveGamePage", () => {
     act(() => {
       source.onopen?.();
     });
-    expect(screen.getByText("已连接")).toBeInTheDocument();
+    expect(screen.getByTestId("live-nav-status")).toHaveTextContent("直播中");
+    expect(screen.getByTestId("live-nav-status")).toHaveTextContent("1x");
 
     act(() => {
       source.emit("game_started", {
@@ -534,14 +535,18 @@ describe("LiveGamePage", () => {
     expect(
       within(liveNavContext).getByRole("heading", { name: "实时观战" }),
     ).toBeInTheDocument();
+    const navStatus = within(liveNavContext).getByTestId("live-nav-status");
+    expect(navStatus).toHaveTextContent("连接中");
+    expect(navStatus).toHaveAttribute("data-status-kind", "connecting");
     expect(
-      within(liveNavContext).getByTestId("live-status-strip"),
-    ).toBeInTheDocument();
+      within(liveNavContext).queryByTestId("live-status-strip"),
+    ).not.toBeInTheDocument();
     expect(
       within(liveNavContext).getByTestId("rule-set-summary"),
     ).toBeInTheDocument();
     expect(liveNavContext).not.toHaveTextContent("连接：连接中");
     expect(liveNavContext).not.toHaveTextContent("节奏：");
+    expect(liveNavContext).not.toHaveTextContent("进行中");
     expect(liveNavContext).not.toHaveTextContent("2 狼人 / 1 预言家 / 1 守卫 / 4 村民");
     expect(within(liveNavContext).queryByText("⌄")).not.toBeInTheDocument();
     expect(
@@ -636,10 +641,10 @@ describe("LiveGamePage", () => {
     expect(within(rightZone as HTMLElement).getByText("事件记录")).toBeInTheDocument();
     expect(within(bottomZone as HTMLElement).getByText("投票统计")).toBeInTheDocument();
     expect(bottomZone).toHaveClass("live-god-bottom-board");
-    expect(screen.getByTestId("live-status-strip")).toHaveClass(
-      "text-slate-300",
+    expect(screen.getByTestId("live-nav-status")).toHaveClass(
+      "text-sky-100",
     );
-    expect(screen.getByTestId("live-status-strip")).not.toHaveClass(
+    expect(screen.getByTestId("live-nav-status")).not.toHaveClass(
       "live-command-status",
     );
     expect(screen.getByTestId("rule-set-summary")).toHaveClass(
