@@ -79,7 +79,7 @@ export function LiveDirectorStage({
           狼
         </div>
 
-        <div className="pointer-events-none absolute inset-x-3 top-20 bottom-24 z-40 grid grid-cols-[minmax(7rem,12rem)_minmax(14rem,1fr)_minmax(7rem,12rem)] gap-3 sm:inset-x-5 sm:top-20 sm:bottom-24 lg:grid-cols-[minmax(9rem,14rem)_minmax(20rem,1fr)_minmax(9rem,14rem)]">
+        <div className="god-view-player-rails pointer-events-none absolute inset-x-3 top-20 bottom-24 z-40 grid grid-cols-[minmax(7rem,12rem)_minmax(14rem,1fr)_minmax(7rem,12rem)] gap-3 sm:inset-x-5 sm:top-20 sm:bottom-24 lg:grid-cols-[minmax(9rem,14rem)_minmax(20rem,1fr)_minmax(9rem,14rem)]">
           <PlayerRail
             activePlayerName={activePlayerName}
             focusedPlayerName={focusedPlayerName}
@@ -361,7 +361,7 @@ function StagePlayerCard({
   return (
     <button
       aria-label={`${player.seatNumber}号 ${player.name} ${player.role} ${status} ${liveAction} ${liveDetail}`}
-      className={`pointer-events-auto grid w-full max-w-[13rem] grid-cols-[2.2rem_minmax(0,1fr)] items-center gap-2 rounded-md border bg-black/45 px-2 py-2 text-left shadow-[0_12px_32px_rgba(0,0,0,0.26)] transition duration-200 hover:-translate-y-0.5 hover:border-amber-200/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 ${
+      className={`god-view-player-card pointer-events-auto grid w-full max-w-[13rem] grid-cols-[2.2rem_minmax(0,1fr)] items-center gap-2 rounded-md border bg-black/45 px-2 py-2 text-left shadow-[0_12px_32px_rgba(0,0,0,0.26)] transition duration-200 hover:-translate-y-0.5 hover:border-amber-200/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 ${
         side === "right" ? "text-right" : ""
       } ${stagePlayerTone(player, cardState)} ${
         isFocused ? "is-focused ring-1 ring-amber-100/70" : ""

@@ -754,12 +754,56 @@ body {
   background: rgb(185 147 92 / 55%);
 }
 
+.god-view-broadcast-layout {
+  grid-template-areas:
+    "top top top"
+    "left stage right"
+    "bottom bottom bottom";
+  grid-template-columns:
+    minmax(16rem, 21rem) minmax(34rem, 1fr) minmax(17rem, 23rem);
+  align-items: start;
+}
+
+.god-view-top-zone {
+  grid-area: top;
+}
+
+.god-view-left-zone {
+  grid-area: left;
+}
+
+.god-view-stage-zone {
+  grid-area: stage;
+}
+
+.god-view-right-zone {
+  grid-area: right;
+}
+
+.god-view-bottom-zone {
+  grid-area: bottom;
+}
+
+.god-view-situation-panel,
+.god-view-intel-panel {
+  height: 100%;
+}
+
 @media (orientation: landscape) and (max-height: 820px) {
   .live-stage-layout {
     grid-template-columns: minmax(19rem, 22rem) minmax(0, 1fr);
     align-items: start;
     gap: 0.5rem;
     margin-top: 0.5rem;
+  }
+
+  .god-view-broadcast-layout {
+    grid-template-areas:
+      "top top top"
+      "left stage right"
+      "bottom bottom bottom";
+    grid-template-columns:
+      minmax(15rem, 19rem) minmax(28rem, 1fr) minmax(15rem, 20rem);
   }
 
   .live-roster-column {
@@ -834,7 +878,7 @@ body {
   }
 
   .god-view-bottom-board > div {
-    min-width: 58rem;
+    min-width: 48rem;
   }
 
   .player-roster-main {
@@ -892,6 +936,11 @@ body {
     grid-template-columns: 20rem minmax(0, 1fr) 22rem;
   }
 
+  .god-view-broadcast-layout {
+    grid-template-columns:
+      minmax(15rem, 20rem) minmax(30rem, 1fr) minmax(15rem, 22rem);
+  }
+
   .live-timeline-panel,
   .god-view-intel-panel {
     grid-column: auto;
@@ -942,11 +991,20 @@ body {
     max-height: 12rem;
     overflow: auto;
   }
+
+  .god-view-player-card {
+    padding: 0.38rem 0.5rem;
+  }
 }
 
 @media (orientation: landscape) and (max-height: 520px) {
   .live-stage-layout {
     grid-template-columns: minmax(20rem, 44vw) minmax(0, 1fr);
+  }
+
+  .god-view-broadcast-layout {
+    grid-template-columns:
+      minmax(13rem, 17rem) minmax(24rem, 1fr) minmax(13rem, 18rem);
   }
 
   .live-director-stage-shell {
@@ -974,7 +1032,42 @@ body {
   }
 
   .god-view-bottom-board > div {
-    min-width: 52rem;
+    min-width: 44rem;
+  }
+}
+
+@media (max-width: 1180px) {
+  .god-view-broadcast-layout {
+    grid-template-areas:
+      "top"
+      "stage"
+      "left"
+      "right"
+      "bottom";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .god-view-intel-panel {
+    max-height: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .god-view-player-rails {
+    position: static;
+    inset: auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    margin-top: 1rem;
+    pointer-events: auto;
+  }
+
+  .god-view-player-card {
+    max-width: none;
+    grid-template-columns: 1.8rem minmax(0, 1fr);
+  }
+
+  .god-view-bottom-board > div {
+    min-width: 40rem;
   }
 }
 
