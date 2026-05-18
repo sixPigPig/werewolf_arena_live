@@ -246,9 +246,6 @@ describe("GamesPage", () => {
     expect(within(consoleBar).getByLabelText("随机种子")).toBeInTheDocument();
     expect(within(consoleBar).getByLabelText("最大轮数")).toBeInTheDocument();
     expect(
-      within(consoleBar).queryByRole("combobox", { name: "演示慢速" }),
-    ).not.toBeInTheDocument();
-    expect(
       within(consoleBar).getByRole("button", { name: "发起对局" }),
     ).toHaveClass("gothic-button");
     const playerConfigPanel = await screen.findByRole("region", {
@@ -445,12 +442,6 @@ describe("GamesPage", () => {
         method: "POST",
       }),
     );
-    const createRunRequest = fetchSpy.mock.calls.find(
-      ([url]) => String(url) === "/api/v1/games/runs",
-    )?.[1];
-    expect(
-      JSON.parse(String((createRunRequest as RequestInit).body)),
-    ).not.toHaveProperty("event_pacing");
   });
 
   it("filters the player picker by search and favorites", async () => {

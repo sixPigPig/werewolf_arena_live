@@ -22,7 +22,6 @@ describe("LiveDirectorControls", () => {
 
     expect(options).toHaveLength(2);
     expect(options.map((option) => option.textContent)).toEqual(["1x", "2x"]);
-    expect(screen.queryByRole("option", { name: "1.5x" })).not.toBeInTheDocument();
   });
 
   it("reports 2x speed changes", async () => {

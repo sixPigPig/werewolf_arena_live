@@ -97,7 +97,6 @@ export type RawPlayer = {
   "rule_set_id": "classic_8",
   "seed": 42,
   "max_rounds": 8,
-  "event_pacing": "standard",
   "villager_model": "deepseek-chat",
   "werewolf_model": "deepseek-chat",
   "player_configs": [

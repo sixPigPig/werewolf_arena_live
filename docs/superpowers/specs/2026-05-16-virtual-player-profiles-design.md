@@ -152,7 +152,6 @@ class Player:
   "rule_set_id": "classic_8",
   "seed": 42,
   "max_rounds": 8,
-  "event_pacing": "standard",
   "villager_model": "deepseek-v4-flash",
   "werewolf_model": "deepseek-v4-flash",
   "player_configs": [

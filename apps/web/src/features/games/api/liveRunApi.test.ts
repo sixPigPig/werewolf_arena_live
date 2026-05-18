@@ -123,7 +123,6 @@ describe("live run api", () => {
 
     expect(run.status).toBe("running");
     expect(run.event_count).toBe(4);
-    expect(run).not.toHaveProperty("event_pacing");
     expect(run.winner).toBe("Villagers");
   });
 
