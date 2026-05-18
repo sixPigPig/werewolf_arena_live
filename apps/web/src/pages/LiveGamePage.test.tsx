@@ -239,13 +239,13 @@ describe("LiveGamePage", () => {
       0,
     );
     expect(
-      screen.getByText("1 狼人 / 1 预言家 / 1 医生 / 3 村民"),
-    ).toBeInTheDocument();
+      screen.queryByText("1 狼人 / 1 预言家 / 1 医生 / 3 村民"),
+    ).not.toBeInTheDocument();
     const source = MockEventSource.instances[0];
     act(() => {
       source.onopen?.();
     });
-    expect(screen.getByText("连接：已连接")).toBeInTheDocument();
+    expect(screen.getByText("已连接")).toBeInTheDocument();
 
     act(() => {
       source.emit("game_started", {
@@ -529,7 +529,7 @@ describe("LiveGamePage", () => {
     expect(screen.getByTestId("arena-command-actions")).toBeInTheDocument();
     const liveNavContext =
       within(commandNav).getByTestId("live-nav-context");
-    expect(liveNavContext).toHaveClass("live-command-context");
+    expect(liveNavContext).not.toHaveClass("live-command-context");
     expect(
       within(liveNavContext).getByRole("heading", { name: "实时观战" }),
     ).toBeInTheDocument();
@@ -540,6 +540,16 @@ describe("LiveGamePage", () => {
       within(liveNavContext).getByTestId("rule-set-summary"),
     ).toBeInTheDocument();
     expect(liveNavContext).toHaveTextContent("快速执行");
+    expect(liveNavContext).not.toHaveTextContent("连接：连接中");
+    expect(liveNavContext).not.toHaveTextContent("节奏：快速执行");
+    expect(liveNavContext).not.toHaveTextContent("2 狼人 / 1 预言家 / 1 守卫 / 4 村民");
+    expect(within(liveNavContext).queryByText("⌄")).not.toBeInTheDocument();
+    expect(
+      within(liveNavContext).queryByTestId("live-command-separator"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(liveNavContext).queryByTestId("live-command-rule-separator"),
+    ).not.toBeInTheDocument();
     expect(
       within(screen.getByTestId("arena-command-controls")).getByTestId(
         "director-controls",
@@ -568,9 +578,11 @@ describe("LiveGamePage", () => {
         name: "返回大厅",
       }),
     ).toHaveClass(
-      "live-command-exit",
       "h-10",
       "w-10",
+    );
+    expect(screen.getByRole("link", { name: "返回大厅" })).not.toHaveClass(
+      "live-command-exit",
     );
     expect(screen.getByTestId("live-game-page")).toHaveClass(
       "min-h-screen",
@@ -620,16 +632,22 @@ describe("LiveGamePage", () => {
     expect(within(bottomZone as HTMLElement).getByText("投票统计")).toBeInTheDocument();
     expect(bottomZone).toHaveClass("live-god-bottom-board");
     expect(screen.getByTestId("live-status-strip")).toHaveClass(
-      "live-command-status",
       "text-slate-300",
     );
+    expect(screen.getByTestId("live-status-strip")).not.toHaveClass(
+      "live-command-status",
+    );
     expect(screen.getByTestId("rule-set-summary")).toHaveClass(
-      "live-command-rule-summary",
       "text-slate-100",
     );
+    expect(screen.getByTestId("rule-set-summary")).not.toHaveClass(
+      "live-command-rule-summary",
+    );
     expect(screen.getByTestId("director-controls")).toHaveClass(
-      "live-command-controls",
       "text-slate-100",
+    );
+    expect(screen.getByTestId("director-controls")).not.toHaveClass(
+      "live-command-controls",
     );
     expect(screen.getByTestId("god-view-intel-panel")).toHaveClass(
       "text-slate-100",
@@ -1653,11 +1671,10 @@ describe("LiveGamePage", () => {
     vi.useRealTimers();
   });
 
-  it("shows the backlog count while automatically catching up", () => {
+  it("keeps director nav controls icon-only without hidden status copy", () => {
     render(
       <LiveDirectorControls
         backlogCount={8}
-        isCatchingUp={true}
         isPaused={false}
         onCatchUpToLatest={() => {}}
         onSpeedChange={() => {}}
@@ -1666,8 +1683,15 @@ describe("LiveGamePage", () => {
       />,
     );
 
-    expect(screen.getByText("自动追进度")).toBeInTheDocument();
-    expect(screen.getByText("队列 8 条")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "暂停" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "追到最新" })).toBeInTheDocument();
+    expect(screen.getByLabelText("播放速度")).toBeInTheDocument();
+    expect(
+      screen.queryByText("观赛节奏，队列 8 条，自动追进度"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("播放速度", { selector: "span" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders malformed unknown timeline events as title-only rows", () => {

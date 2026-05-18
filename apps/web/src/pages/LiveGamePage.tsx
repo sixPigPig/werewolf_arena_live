@@ -99,13 +99,11 @@ export function LiveGamePage() {
   const topNavCommands = run ? (
     <LiveDirectorControls
       backlogCount={director.backlogCount}
-      isCatchingUp={director.isCatchingUp}
       isPaused={director.isPaused}
       onCatchUpToLatest={director.catchUpToLatest}
       onSpeedChange={director.setSpeed}
       onTogglePaused={director.togglePaused}
       speed={director.speed}
-      variant="nav"
     />
   ) : null;
   const topNavActions = (
@@ -127,14 +125,13 @@ export function LiveGamePage() {
       ) : null}
       <Button
         asChild
-        className="live-command-exit h-10 w-10 px-0 text-lg"
+        className="h-10 w-10 px-0 text-lg"
         color="gray"
         highContrast
         size="2"
         variant="surface"
       >
         <Link aria-label="返回大厅" to="/games">
-          <span className="sr-only">返回大厅</span>
           <span aria-hidden="true">↪</span>
         </Link>
       </Button>
@@ -142,23 +139,13 @@ export function LiveGamePage() {
   );
   const topNavContext = run ? (
     <div
-      className="live-nav-context live-command-context flex min-w-0 flex-1 flex-nowrap items-center gap-x-3 overflow-hidden"
+      className="live-nav-context flex min-w-0 flex-1 flex-nowrap items-center gap-x-3 overflow-hidden"
       data-testid="live-nav-context"
     >
       <h1 className="sr-only">实时观战</h1>
       <LiveStatusStrip run={run} connectionState={connectionState} variant="nav" />
-      <span
-        aria-hidden="true"
-        className="h-6 w-px bg-slate-500/45"
-        data-testid="live-command-rule-separator"
-      />
+      <span aria-hidden="true" className="h-6 w-px bg-slate-500/45" />
       <RuleSetSummary ruleSet={run.rule_set} variant="nav" />
-      <span
-        aria-hidden="true"
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-500/35 bg-white/5 text-slate-300"
-      >
-        ⌄
-      </span>
     </div>
   ) : null;
   useEffect(() => {

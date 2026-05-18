@@ -3,6 +3,8 @@
 **日期**: 2026-04-26
 **范围**: 优化实时观战页的观看节奏，解决当前对局信息一闪而过的问题。第一期同时提供前端导播队列和后端演示慢速模式。
 
+> **2026-05-18 修订**: 本文中“后端演示慢速模式”、`event_pacing` 三档延迟和创建对局页“演示慢速”控件已被废弃。新的基准设计是后端一律正常速度执行，仅由前端导播控制播放速度；详见 `docs/superpowers/specs/2026-05-18-frontend-only-live-playback-pacing-design.md`。
+
 ## 1. 背景
 
 当前实时观战页直接由 SSE 事件驱动页面焦点。后端在一次玩家行动中会连续发布 `action_requested`、`model_request_started`、`model_response_received`、`action_parsed`、`state_updated` 等事件。当前前端每收到新事件就重算观战状态，导致中间主画面和玩家焦点很快被下一条事件覆盖。

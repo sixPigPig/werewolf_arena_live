@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **2026-05-18 修订**: 本计划中后端 `event_pacing`、`EventPacer`、标准演示/慢速讲解延迟和创建对局页“演示慢速”控件已被新的前端-only 播放速度方案取代。后续实现请以 `docs/superpowers/specs/2026-05-18-frontend-only-live-playback-pacing-design.md` 为准。
+
 **Goal:** 让实时直播页用前端导播队列按观赛节奏播放所有事件，并在创建对局时支持后端演示慢速模式。
 
 **Architecture:** 前端保留 `useGameRunEvents()` 作为真实 SSE 事件源，新增纯函数 `toDirectorCue()` 和 `useLiveDirector()` 生成可播放导播队列；直播页主画面消费当前 cue，右侧原始事件列表仍显示完整事件。后端新增 `event_pacing` 运行参数和可注入 pacer，默认 `off` 不等待，演示模式只在后台对局执行路径中延迟事件推进。

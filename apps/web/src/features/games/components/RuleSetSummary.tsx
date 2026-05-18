@@ -27,16 +27,17 @@ export function RuleSetSummary({
   variant = "panel",
 }: RuleSetSummaryProps) {
   const rule = ruleSet ?? FALLBACK_RULE;
-  const roleSummary =
-    rule.role_summary ??
-    rule.roles.map((role) => `${role.count} ${role.role}`).join(" / ");
   const isNav = variant === "nav";
+  const roleSummary = isNav
+    ? null
+    : rule.role_summary ??
+      rule.roles.map((role) => `${role.count} ${role.role}`).join(" / ");
 
   return (
     <section
       className={
         isNav
-          ? "rule-set-summary live-command-rule-summary flex min-w-0 shrink-0 flex-nowrap items-center gap-x-3 text-slate-100"
+          ? "rule-set-summary flex min-w-0 shrink-0 flex-nowrap items-center gap-x-3 text-slate-100"
           : withGlassPanel("rule-set-summary rounded-lg p-4 text-slate-100")
       }
       data-testid="rule-set-summary"
@@ -60,15 +61,9 @@ export function RuleSetSummary({
         </span>
         <span className="text-xs text-teal-100/70">{rule.player_count} 人</span>
       </div>
-      <p
-        className={
-          isNav
-            ? "sr-only"
-            : "mt-1 text-sm text-slate-300"
-        }
-      >
-        {roleSummary}
-      </p>
+      {roleSummary ? (
+        <p className="mt-1 text-sm text-slate-300">{roleSummary}</p>
+      ) : null}
       {rule.rule_tags && rule.rule_tags.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {rule.rule_tags.map((tag) => (

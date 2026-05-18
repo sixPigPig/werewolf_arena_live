@@ -953,19 +953,6 @@ body {
     padding: 0.45rem 0.75rem 0.75rem;
   }
 
-  .live-page-heading,
-  .live-rule-summary-shell {
-    display: none;
-  }
-
-  .live-status-shell {
-    position: static;
-  }
-
-  .live-status-shell > section {
-    border-radius: 0.5rem;
-  }
-
   .live-status-strip {
     gap: 0.45rem;
     border-bottom: 0;
