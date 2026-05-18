@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from app.werewolf.live import LiveRunRegistry, format_sse
 
 
@@ -37,12 +35,9 @@ def test_registry_creates_run_with_initial_event() -> None:
     assert run.status == "queued"
     assert run.event_count == 1
     assert run.events[0].type == "run_created"
-    assert run.event_pacing == "off"
-    assert run.to_summary()["event_pacing"] == "off"
-    assert run.events[0].payload["event_pacing"] == "off"
 
 
-def test_registry_creates_run_with_event_pacing() -> None:
+def test_registry_summary_and_initial_event_do_not_include_event_pacing() -> None:
     registry = LiveRunRegistry()
 
     run = registry.create_run(
@@ -51,28 +46,14 @@ def test_registry_creates_run_with_event_pacing() -> None:
         werewolf_model="deepseek-chat",
         seed=21,
         max_rounds=8,
-        event_pacing="slow",
+        event_pacing="standard",
         **classic_rule_kwargs(),
     )
 
-    assert run.event_pacing == "slow"
-    assert run.to_summary()["event_pacing"] == "slow"
-    assert run.events[0].payload["event_pacing"] == "slow"
+    summary = run.to_summary()
 
-
-def test_registry_rejects_unsupported_event_pacing() -> None:
-    registry = LiveRunRegistry()
-
-    with pytest.raises(ValueError, match="Unsupported event pacing mode: fast"):
-        registry.create_run(
-            session_id="game_1200abcd",
-            villager_model="deepseek-chat",
-            werewolf_model="deepseek-chat",
-            seed=21,
-            max_rounds=8,
-            event_pacing="fast",  # type: ignore[arg-type]
-            **classic_rule_kwargs(),
-        )
+    assert "event_pacing" not in summary
+    assert "event_pacing" not in run.events[0].payload
 
 
 def test_registry_appends_ordered_events_and_replays_after_id() -> None:

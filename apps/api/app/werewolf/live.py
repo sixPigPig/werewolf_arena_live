@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from app.werewolf.pacing import EventPacingMode, validate_event_pacing
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
 
@@ -89,7 +88,6 @@ class LiveGameRun:
         default_factory=lambda: rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
     )
     player_configs: list[dict[str, Any]] = field(default_factory=list)
-    event_pacing: EventPacingMode = "off"
     status: RunStatus = "queued"
     created_at: str = field(default_factory=utc_now)
     started_at: str | None = None
@@ -115,7 +113,6 @@ class LiveGameRun:
             "rule_set_id": self.rule_set_id,
             "rule_set": _copy_json_payload(self.rule_set),
             "player_configs": _copy_json_payload(self.player_configs),
-            "event_pacing": self.event_pacing,
             "status": self.status,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -142,9 +139,8 @@ class LiveRunRegistry:
         rule_set_id: str = DEFAULT_RULE_SET_ID,
         rule_set: dict[str, Any] | None = None,
         player_configs: list[PlayerConfig] | None = None,
-        event_pacing: EventPacingMode = "off",
+        event_pacing: str | None = None,
     ) -> LiveGameRun:
-        validated_event_pacing = validate_event_pacing(event_pacing)
         rule_set_data = (
             _copy_json_payload(rule_set)
             if rule_set is not None
@@ -162,7 +158,6 @@ class LiveRunRegistry:
                 rule_set_id=rule_set_id,
                 rule_set=rule_set_data,
                 player_configs=player_config_data,
-                event_pacing=validated_event_pacing,
             )
             self._runs[run.run_id] = run
             self._publish_locked(
@@ -177,7 +172,6 @@ class LiveRunRegistry:
                     "rule_set_id": rule_set_id,
                     "rule_set": rule_set_data,
                     "player_configs": player_config_data,
-                    "event_pacing": validated_event_pacing,
                 },
             )
             return run
