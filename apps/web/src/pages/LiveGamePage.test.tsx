@@ -450,6 +450,9 @@ describe("LiveGamePage", () => {
     await userEvent.click(traceButton);
     expect(traceButton).toHaveAttribute("aria-expanded", "true");
     expect(zhangCard).toHaveClass("is-focused");
+    expect(
+      screen.getByTestId("god-view-stage-player-card-张三"),
+    ).toHaveAttribute("data-debug-highlighted", "true");
     const actions = screen.getByTestId("arena-command-actions");
     const replayLink = within(actions).getByRole("link", {
       name: "查看完整复盘",

@@ -37,6 +37,8 @@ export function LiveStageExperience({
   const [manualFocusName, setManualFocusName] = useState<string | null>(null);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const traces = useMemo(() => buildLiveDebugTraces(events), [events]);
+  const selectedTrace =
+    traces.find((trace) => trace.id === selectedTraceId) ?? null;
   const autoFocusName =
     director.currentCue?.actor ?? spectatorState.activePlayerName;
   const focusedPlayerName = autoFollow
@@ -84,6 +86,7 @@ export function LiveStageExperience({
             autoFollow={autoFollow}
             backlogCount={director.backlogCount}
             cue={director.currentCue}
+            debugTrace={selectedTrace}
             focusedPlayerName={focusedPlayerName}
             godViewState={godViewState}
             isCatchingUp={director.isCatchingUp}
