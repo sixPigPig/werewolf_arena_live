@@ -291,6 +291,261 @@ describe("buildLiveDebugTraces", () => {
     expect(traces[0].warnings).not.toContain("解析与状态不一致");
   });
 
+  it("fans out actorless vote state updates to every affected voter trace", () => {
+    const traces = buildLiveDebugTraces([
+      event({
+        id: 1,
+        type: "action_requested",
+        actor: "Sam",
+        action: "vote",
+        phase: "vote",
+        payload: { options: ["Isaac", "Carl"] },
+      }),
+      event({
+        id: 2,
+        type: "model_response_received",
+        actor: "Sam",
+        action: "vote",
+        phase: "vote",
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        actor: "Sam",
+        action: "vote",
+        phase: "vote",
+        payload: { choice: "Isaac" },
+      }),
+      event({
+        id: 4,
+        type: "action_requested",
+        actor: "Bert",
+        action: "vote",
+        phase: "vote",
+        payload: { options: ["Isaac", "Carl"] },
+      }),
+      event({
+        id: 5,
+        type: "model_response_received",
+        actor: "Bert",
+        action: "vote",
+        phase: "vote",
+      }),
+      event({
+        id: 6,
+        type: "action_parsed",
+        actor: "Bert",
+        action: "vote",
+        phase: "vote",
+        payload: { choice: "Carl" },
+      }),
+      event({
+        id: 7,
+        type: "state_updated",
+        actor: null,
+        action: "vote",
+        phase: "vote",
+        payload: { votes: { Sam: "Isaac", Bert: "Carl" } },
+      }),
+    ]);
+
+    expect(traces).toHaveLength(2);
+    expect(traces.map((trace) => trace.eventIds)).toEqual([
+      [1, 2, 3, 7],
+      [4, 5, 6, 7],
+    ]);
+    expect(traces.map((trace) => trace.status)).toEqual(["ok", "ok"]);
+    expect(traces[0].warnings).not.toContain("选择未影响状态");
+    expect(traces[1].warnings).not.toContain("选择未影响状态");
+  });
+
+  it("attaches real playback phase state updates back to debate traces", () => {
+    const traces = buildLiveDebugTraces([
+      event({ id: 1, type: "action_requested", action: "debate" }),
+      event({ id: 2, type: "model_response_received", action: "debate" }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        action: "debate",
+        payload: {
+          choice: "Isaac",
+          visible_result: { say: "我怀疑 Isaac" },
+        },
+      }),
+      event({
+        id: 4,
+        type: "state_updated",
+        actor: null,
+        action: null,
+        payload: {
+          debate: [{ speaker: "Sam", message: "我怀疑 Isaac" }],
+          votes: {},
+        },
+      }),
+    ]);
+
+    expect(traces).toHaveLength(1);
+    expect(traces[0].eventIds).toEqual([1, 2, 3, 4]);
+    expect(traces[0].status).toBe("ok");
+    expect(traces[0].impactSummary).toContain("Sam 新增公开发言");
+  });
+
+  it("marks model request failures as direct trace errors", () => {
+    const traces = buildLiveDebugTraces([
+      event({ id: 1, type: "action_requested" }),
+      event({
+        id: 2,
+        type: "model_request_failed",
+        payload: { message: "模型请求失败，请稍后重试" },
+      }),
+    ]);
+
+    expect(traces).toHaveLength(1);
+    expect(traces[0].status).toBe("error");
+    expect(traces[0].nodes.find((node) => node.kind === "model")).toMatchObject({
+      label: "模型请求失败",
+      status: "error",
+    });
+    expect(traces[0].warnings).toContain("模型请求失败，请稍后重试");
+  });
+
+  it("attaches actorless night aggregate state to matching protect and investigate traces", () => {
+    const traces = buildLiveDebugTraces([
+      event({
+        id: 1,
+        type: "action_requested",
+        actor: "Guard",
+        action: "protect",
+        phase: "night",
+        payload: { options: ["Sam"] },
+      }),
+      event({
+        id: 2,
+        type: "model_response_received",
+        actor: "Guard",
+        action: "protect",
+        phase: "night",
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        actor: "Guard",
+        action: "protect",
+        phase: "night",
+        payload: { choice: "Sam" },
+      }),
+      event({
+        id: 4,
+        type: "action_requested",
+        actor: "Seer",
+        action: "investigate",
+        phase: "night",
+        payload: { options: ["Isaac"] },
+      }),
+      event({
+        id: 5,
+        type: "model_response_received",
+        actor: "Seer",
+        action: "investigate",
+        phase: "night",
+      }),
+      event({
+        id: 6,
+        type: "action_parsed",
+        actor: "Seer",
+        action: "investigate",
+        phase: "night",
+        payload: { choice: "Isaac" },
+      }),
+      event({
+        id: 7,
+        type: "state_updated",
+        actor: null,
+        action: null,
+        phase: "night",
+        payload: {
+          protected: "Sam",
+          investigated: "Isaac",
+          active_players: ["Guard", "Seer", "Sam", "Isaac"],
+        },
+      }),
+    ]);
+
+    expect(traces).toHaveLength(2);
+    expect(traces.map((trace) => trace.eventIds)).toEqual([
+      [1, 2, 3, 7],
+      [4, 5, 6, 7],
+    ]);
+    expect(traces.map((trace) => trace.status)).toEqual(["ok", "ok"]);
+  });
+
+  it("matches actorless sheriff vote fields without crossing into regular vote traces", () => {
+    const traces = buildLiveDebugTraces([
+      event({
+        id: 1,
+        type: "action_requested",
+        actor: "Sam",
+        action: "sheriff_vote",
+        payload: { options: ["Isaac"] },
+      }),
+      event({
+        id: 2,
+        type: "model_response_received",
+        actor: "Sam",
+        action: "sheriff_vote",
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        actor: "Sam",
+        action: "sheriff_vote",
+        payload: { choice: "Isaac" },
+      }),
+      event({
+        id: 4,
+        type: "action_requested",
+        actor: "Sam",
+        action: "vote",
+        payload: { options: ["Bert"] },
+      }),
+      event({
+        id: 5,
+        type: "model_response_received",
+        actor: "Sam",
+        action: "vote",
+      }),
+      event({
+        id: 6,
+        type: "action_parsed",
+        actor: "Sam",
+        action: "vote",
+        payload: { choice: "Bert" },
+      }),
+      event({
+        id: 7,
+        type: "state_updated",
+        actor: null,
+        action: null,
+        payload: {
+          sheriff_votes: { Sam: "Isaac" },
+          votes: { Sam: "Bert" },
+        },
+      }),
+    ]);
+
+    expect(traces).toHaveLength(2);
+    expect(traces[0]).toMatchObject({
+      action: "sheriff_vote",
+      eventIds: [1, 2, 3, 7],
+      status: "ok",
+    });
+    expect(traces[1]).toMatchObject({
+      action: "vote",
+      eventIds: [4, 5, 6, 7],
+      status: "ok",
+    });
+  });
+
   it("does not attach unrelated null actor state updates to a previous actor trace", () => {
     const traces = buildLiveDebugTraces([
       event({

@@ -75,17 +75,61 @@ const STATE_PLAYER_KEYS = [
   "attacked",
   "protected",
   "investigated",
+  "poisoned",
+  "saved_by_witch",
 ];
 
 const STATE_DIFF_LABELS: Record<string, string> = {
   active_player: "当前发言",
   votes: "票型",
+  sheriff_votes: "警长票型",
+  sheriff_runoff_votes: "PK 票型",
   exiled: "放逐",
   eliminated: "出局",
   attacked: "袭击",
   protected: "守护",
   investigated: "查验",
+  poisoned: "毒杀",
+  saved_by_witch: "女巫救人",
 };
+
+const VOTE_STATE_FIELDS: Record<string, string> = {
+  sheriff_runoff_vote: "sheriff_runoff_votes",
+  sheriff_vote: "sheriff_votes",
+  vote: "votes",
+  werewolf_kill_vote: "werewolf_votes",
+};
+
+const TARGET_STATE_FIELDS: Record<string, string> = {
+  investigate: "investigated",
+  protect: "protected",
+  remove: "attacked",
+  werewolf_kill_vote: "attacked",
+  witch_poison: "poisoned",
+  witch_save: "saved_by_witch",
+};
+
+const STATE_KEYS_BY_ACTION: Record<string, string[]> = {
+  debate: ["active_player", "debate_entry", "debate"],
+  hunter_shoot: ["hunter_shot"],
+  investigate: ["investigated"],
+  protect: ["protected"],
+  remove: ["attacked", "eliminated"],
+  sheriff_pk_speech: ["sheriff_pk_speeches"],
+  sheriff_runoff_vote: ["sheriff_runoff_votes"],
+  sheriff_speech: ["sheriff_speeches"],
+  sheriff_vote: ["sheriff_votes"],
+  vote: ["votes", "exiled"],
+  werewolf_kill_vote: ["attacked"],
+  witch_poison: ["poisoned", "eliminated"],
+  witch_save: ["saved_by_witch"],
+};
+
+const SPEECH_STATE_FIELDS: Array<{ key: string; action: string }> = [
+  { key: "debate", action: "debate" },
+  { key: "sheriff_speeches", action: "sheriff_speech" },
+  { key: "sheriff_pk_speeches", action: "sheriff_pk_speech" },
+];
 
 export function buildLiveDebugTraces(
   events: LiveGameEvent[],
@@ -108,9 +152,9 @@ export function buildLiveDebugTraces(
       continue;
     }
 
-    const existingTrace = findActionTrace(traces, event);
-    if (existingTrace) {
-      appendEvent(existingTrace, event);
+    const existingTraces = findActionTraces(traces, event);
+    if (existingTraces.length > 0) {
+      existingTraces.forEach((trace) => appendEvent(trace, event));
     } else {
       traces.push(createActionTrace(event));
     }
@@ -190,13 +234,17 @@ function appendEvent(trace: LiveDebugTrace, event: LiveGameEvent) {
 }
 
 function appendEventDetails(trace: LiveDebugTrace, event: LiveGameEvent) {
+  const statePayload =
+    event.type === "state_updated"
+      ? statePayloadForTrace(event.payload, trace.action)
+      : event.payload;
   const choice = choiceFromPayload(event.payload);
   trace.choice = choice || trace.choice;
   trace.relatedPlayers = uniqueStrings([
     ...trace.relatedPlayers,
     event.actor,
     choice,
-    ...playersFromStatePayload(event.payload),
+    ...playersFromStatePayload(statePayload),
   ]);
 
   if (event.type === "model_request_started") {
@@ -222,6 +270,19 @@ function appendEventDetails(trace: LiveDebugTrace, event: LiveGameEvent) {
       stringField(event.payload, "visible_text") ||
       stringField(event.payload, "message") ||
       trace.rawResponse;
+    return;
+  }
+
+  if (event.type === "model_request_failed") {
+    const message = stringField(event.payload, "message") || "模型请求失败";
+    upsertNode(trace, {
+      kind: "model",
+      eventId: event.id,
+      label: "模型请求失败",
+      status: "error",
+    });
+    trace.rawResponse = message;
+    trace.warnings = uniqueStrings([...trace.warnings, message]);
     return;
   }
 
@@ -252,9 +313,9 @@ function appendEventDetails(trace: LiveDebugTrace, event: LiveGameEvent) {
     });
     trace.impactSummary = uniqueStrings([
       ...trace.impactSummary,
-      ...impactSummary(event.payload),
+      ...impactSummary(statePayload),
     ]);
-    trace.stateDiff = [...trace.stateDiff, ...stateDiff(event.payload)];
+    trace.stateDiff = [...trace.stateDiff, ...stateDiff(statePayload)];
   }
 }
 
@@ -275,17 +336,18 @@ function finalizeTrace(trace: LiveDebugTrace): LiveDebugTrace {
   }
   if (
     trace.choice &&
-    hasStateTargetConflict(trace.choice, trace.actor, trace.payloads)
+    hasStateTargetConflict(trace.choice, trace.actor, trace.action, trace.payloads)
   ) {
     warnings.add("解析与状态不一致");
   }
 
   const warningList = Array.from(warnings);
+  const hasErrorNode = trace.nodes.some((node) => node.status === "error");
   return {
     ...trace,
     nodes: sortNodes(trace.nodes),
     warnings: warningList,
-    status: warningList.includes("解析与状态不一致")
+    status: warningList.includes("解析与状态不一致") || hasErrorNode
       ? "error"
       : warningList.length > 0
         ? "warning"
@@ -293,39 +355,113 @@ function finalizeTrace(trace: LiveDebugTrace): LiveDebugTrace {
   };
 }
 
+function findActionTraces(traces: LiveDebugTrace[], event: LiveGameEvent) {
+  const candidates = traces.filter((trace) => isSameTraceScope(trace, event));
+  if (event.actor) {
+    const latestActorTrace = [...candidates]
+      .reverse()
+      .find(
+        (trace) => trace.actor === event.actor && trace.action === event.action,
+      );
+    return latestActorTrace ? [latestActorTrace] : [];
+  }
+
+  if (event.type === "state_updated") {
+    return candidates.filter((trace) => stateEventAffectsTrace(event, trace));
+  }
+
+  return [];
+}
+
 function findActionTrace(traces: LiveDebugTrace[], event: LiveGameEvent) {
-  return [...traces].reverse().find((trace) => {
-    if (trace.status === "system") {
-      return false;
-    }
+  return findActionTraces(traces, event).at(-1) ?? null;
+}
 
-    const sameRoundPhase = trace.round === event.round && trace.phase === event.phase;
-    if (!sameRoundPhase) {
-      return false;
-    }
-
-    if (event.actor) {
-      return trace.actor === event.actor && trace.action === event.action;
-    }
-
-    if (isActorVoteStateEvent(event, trace.actor)) {
-      return trace.action === event.action;
-    }
-
-    return false;
-  });
+function isSameTraceScope(trace: LiveDebugTrace, event: LiveGameEvent) {
+  return (
+    trace.status !== "system" &&
+    trace.round === event.round &&
+    trace.phase === event.phase
+  );
 }
 
 function isActorVoteStateEvent(
   event: LiveGameEvent,
-  actor: string | null,
+  trace: LiveDebugTrace,
 ) {
-  if (!actor || event.type !== "state_updated") {
+  const actor = trace.actor;
+  const voteField = trace.action ? VOTE_STATE_FIELDS[trace.action] : undefined;
+  if (!actor || !voteField || event.type !== "state_updated") {
     return false;
   }
 
-  const votes = recordField(event.payload, "votes");
-  return Boolean(votes && actor in votes);
+  if (event.action && event.action !== trace.action) {
+    return false;
+  }
+
+  const votes = recordField(event.payload, voteField);
+  if (!votes || !(actor in votes)) {
+    return false;
+  }
+
+  return true;
+}
+
+function stateEventAffectsTrace(
+  event: LiveGameEvent,
+  trace: LiveDebugTrace,
+) {
+  return (
+    isActorVoteStateEvent(event, trace) ||
+    isActionTargetStateEvent(event, trace) ||
+    isActorSpeechStateEvent(event, trace) ||
+    isActivePlayerStateEvent(event, trace)
+  );
+}
+
+function isActionTargetStateEvent(
+  event: LiveGameEvent,
+  trace: LiveDebugTrace,
+) {
+  const stateField = trace.action ? TARGET_STATE_FIELDS[trace.action] : undefined;
+  if (!stateField || !trace.choice || event.type !== "state_updated") {
+    return false;
+  }
+
+  if (event.action && event.action !== trace.action) {
+    return false;
+  }
+
+  return stringField(event.payload, stateField) === trace.choice;
+}
+
+function isActorSpeechStateEvent(
+  event: LiveGameEvent,
+  trace: LiveDebugTrace,
+) {
+  if (!trace.actor || event.type !== "state_updated") {
+    return false;
+  }
+
+  return SPEECH_STATE_FIELDS.some(
+    ({ action, key }) =>
+      trace.action === action &&
+      speakerNamesFromField(event.payload[key]).includes(trace.actor ?? ""),
+  );
+}
+
+function isActivePlayerStateEvent(
+  event: LiveGameEvent,
+  trace: LiveDebugTrace,
+) {
+  if (!trace.actor || event.type !== "state_updated") {
+    return false;
+  }
+
+  return (
+    trace.action === "debate" &&
+    stringField(event.payload, "active_player") === trace.actor
+  );
 }
 
 function markStreamingModelNode(traces: LiveDebugTrace[], event: LiveGameEvent) {
@@ -380,6 +516,7 @@ function eventTypeLabel(type: string) {
     action_requested: "行动请求",
     model_request_started: "模型请求",
     model_response_received: "模型返回",
+    model_request_failed: "模型请求失败",
     action_parsed: "解析完成",
     state_updated: "状态更新",
     game_completed: "对局完成",
@@ -394,9 +531,18 @@ function impactSummary(payload: Record<string, unknown>) {
   if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
     summary.push(`${debateEntry.speaker} 新增公开发言`);
   }
+  for (const speaker of speakerNamesFromPayload(payload)) {
+    summary.push(`${speaker} 新增公开发言`);
+  }
 
   if (recordField(payload, "votes")) {
     summary.push("票型更新");
+  }
+  if (recordField(payload, "sheriff_votes")) {
+    summary.push("警长票型更新");
+  }
+  if (recordField(payload, "sheriff_runoff_votes")) {
+    summary.push("PK 票型更新");
   }
 
   const exiled = stringField(payload, "exiled");
@@ -409,7 +555,7 @@ function impactSummary(payload: Record<string, unknown>) {
     summary.push(`${eliminated} 夜晚出局`);
   }
 
-  return summary;
+  return uniqueStrings(summary);
 }
 
 function stateDiff(payload: Record<string, unknown>): LiveDebugStateDiff[] {
@@ -424,13 +570,15 @@ function stateDiff(payload: Record<string, unknown>): LiveDebugStateDiff[] {
     });
   }
 
-  const votes = recordField(payload, "votes");
-  if (votes) {
-    diffs.push({
-      label: STATE_DIFF_LABELS.votes,
-      before: "未记录",
-      after: JSON.stringify(votes),
-    });
+  for (const key of ["votes", "sheriff_votes", "sheriff_runoff_votes"]) {
+    const votes = recordField(payload, key);
+    if (votes) {
+      diffs.push({
+        label: STATE_DIFF_LABELS[key],
+        before: "未记录",
+        after: JSON.stringify(votes),
+      });
+    }
   }
 
   for (const key of [
@@ -439,6 +587,8 @@ function stateDiff(payload: Record<string, unknown>): LiveDebugStateDiff[] {
     "attacked",
     "protected",
     "investigated",
+    "poisoned",
+    "saved_by_witch",
   ]) {
     const value = stringField(payload, key);
     if (value) {
@@ -468,16 +618,61 @@ function playersFromStatePayload(payload: Record<string, unknown>) {
   if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
     players.push(debateEntry.speaker);
   }
+  players.push(...speakerNamesFromPayload(payload));
 
   return uniqueStrings(players);
+}
+
+function speakerNamesFromPayload(payload: Record<string, unknown>) {
+  return uniqueStrings(
+    SPEECH_STATE_FIELDS.flatMap(({ key }) => speakerNamesFromField(payload[key])),
+  );
+}
+
+function speakerNamesFromField(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) =>
+    isRecord(item) && typeof item.speaker === "string" ? [item.speaker] : [],
+  );
+}
+
+function statePayloadForTrace(
+  payload: Record<string, unknown>,
+  action: string | null,
+) {
+  if (!action) {
+    return payload;
+  }
+
+  const keys = STATE_KEYS_BY_ACTION[action];
+  if (!keys) {
+    return payload;
+  }
+
+  const scopedPayload: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (key in payload) {
+      scopedPayload[key] = payload[key];
+    }
+  }
+  return scopedPayload;
 }
 
 function hasStateTargetConflict(
   choice: string,
   actor: string | null,
+  action: string | null,
   payloads: LiveDebugTrace["payloads"],
 ) {
   if (!actor) {
+    return false;
+  }
+
+  const voteField = action ? VOTE_STATE_FIELDS[action] : undefined;
+  if (!voteField) {
     return false;
   }
 
@@ -486,7 +681,7 @@ function hasStateTargetConflict(
       return false;
     }
 
-    const votes = recordField(item.payload, "votes");
+    const votes = recordField(item.payload, voteField);
     if (!votes) {
       return false;
     }
