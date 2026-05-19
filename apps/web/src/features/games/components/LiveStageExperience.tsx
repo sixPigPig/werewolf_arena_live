@@ -15,22 +15,26 @@ import { GodViewBottomBoard } from "./GodViewBottomBoard";
 import { GodViewIntelPanel } from "./GodViewIntelPanel";
 import { GodViewSituationPanel } from "./GodViewSituationPanel";
 import { GodViewTopBar } from "./GodViewTopBar";
-import { LiveDebugTraceRail } from "./LiveDebugTraceRail";
+import { LiveDebugPanelDialog } from "./LiveDebugPanelDialog";
 import { LiveDirectorStage } from "./LiveDirectorStage";
 
 type LiveStageExperienceProps = {
+  debugPanelOpen?: boolean;
   director: UseLiveDirectorResult;
   events: LiveGameEvent[];
   godViewState: GodViewState;
   mode: "live" | "playback";
+  onDebugPanelOpenChange?: (isOpen: boolean) => void;
   spectatorState: LiveSpectatorState;
 };
 
 export function LiveStageExperience({
+  debugPanelOpen = false,
   director,
   events,
   godViewState,
   mode,
+  onDebugPanelOpenChange,
   spectatorState,
 }: LiveStageExperienceProps) {
   const [autoFollow, setAutoFollow] = useState(true);
@@ -68,18 +72,7 @@ export function LiveStageExperience({
       <LiveStageModule
         bottom={<GodViewBottomBoard state={godViewState} />}
         left={<GodViewSituationPanel state={godViewState} />}
-        right={
-          <GodViewIntelPanel
-            debugRail={
-              <LiveDebugTraceRail
-                onSelectTrace={selectTrace}
-                selectedTraceId={selectedTraceId}
-                traces={traces}
-              />
-            }
-            state={godViewState}
-          />
-        }
+        right={<GodViewIntelPanel state={godViewState} />}
         stage={
           <LiveDirectorStage
             activePlayerName={autoFocusName}
@@ -104,6 +97,13 @@ export function LiveStageExperience({
           />
         }
         top={<GodViewTopBar state={godViewState} />}
+      />
+      <LiveDebugPanelDialog
+        isOpen={debugPanelOpen}
+        onClose={() => onDebugPanelOpenChange?.(false)}
+        onSelectTrace={selectTrace}
+        selectedTraceId={selectedTraceId}
+        traces={traces}
       />
     </LivePageShell>
   );

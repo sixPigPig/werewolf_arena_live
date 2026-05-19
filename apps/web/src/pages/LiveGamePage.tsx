@@ -1,12 +1,13 @@
 import { Callout, Text } from "../components/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { ArenaCommandNav, ArenaNavButton } from "../app/navigation";
 import { getGameRun } from "../features/games/api/getGameRun";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
 import { LiveNavSessionBadge } from "../features/games/components/LiveNavSessionBadge";
+import { LiveNavDebugPanelButton } from "../features/games/components/LiveNavDebugPanelButton";
 import { LiveNavSettingsMenu } from "../features/games/components/LiveNavSettingsMenu";
 import { LiveNavStatusBadge } from "../features/games/components/LiveNavStatusBadge";
 import { LiveStageExperience } from "../features/games/components/LiveStageExperience";
@@ -21,6 +22,8 @@ export function LiveGamePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { events, connectionState } = useGameRunEvents(runId);
+  const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(false);
+  const debugPanelButtonRef = useRef<HTMLButtonElement | null>(null);
   const [terminalStartByRunId, setTerminalStartByRunId] = useState<
     Record<string, boolean>
   >({});
@@ -88,6 +91,12 @@ export function LiveGamePage() {
     runStatus: run?.status ?? "queued",
     speed: director.speed,
   });
+  const handleDebugPanelOpenChange = (isOpen: boolean) => {
+    setIsDebugPanelOpen(isOpen);
+    if (!isOpen) {
+      debugPanelButtonRef.current?.focus();
+    }
+  };
   const topNavCommands = null;
   const topNavActions = run ? (
     <>
@@ -96,6 +105,11 @@ export function LiveGamePage() {
           查看完整复盘
         </ArenaNavButton>
       ) : null}
+      <LiveNavDebugPanelButton
+        isOpen={isDebugPanelOpen}
+        onClick={() => setIsDebugPanelOpen((value) => !value)}
+        ref={debugPanelButtonRef}
+      />
       <LiveNavSettingsMenu
         backlogCount={director.backlogCount}
         canResumeRun={canResumeRun}
@@ -186,10 +200,12 @@ export function LiveGamePage() {
           </Callout.Root>
         ) : null}
         <LiveStageExperience
+          debugPanelOpen={isDebugPanelOpen}
           director={director}
           events={events}
           godViewState={godViewState}
           mode="live"
+          onDebugPanelOpenChange={handleDebugPanelOpenChange}
           spectatorState={spectatorState}
         />
       </main>
