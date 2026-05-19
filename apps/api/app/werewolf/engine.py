@@ -1975,6 +1975,8 @@ class GameEngine:
         )
 
     def _is_secret_werewolf_action(self, phase: str, action: str) -> bool:
+        if action == ACTION_WEREWOLF_SELF_EXPLOSION:
+            return True
         if phase == "night" and action in {
             ACTION_WEREWOLF_DISCUSS,
             ACTION_WEREWOLF_KILL_VOTE,

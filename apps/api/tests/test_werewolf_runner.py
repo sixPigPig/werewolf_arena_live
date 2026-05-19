@@ -2033,7 +2033,14 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     )
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
 
     interrupted = engine._maybe_run_werewolf_self_explosion(
         round_state,
@@ -2049,6 +2056,31 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     assert round_state.werewolf_self_exploded == exploding_wolf
     assert round_log.werewolf_self_explosion is not None
     assert round_log.werewolf_self_explosion.actor == exploding_wolf
+    private_decision_events = [
+        event
+        for event in sink.events
+        if event["action"] == "werewolf_self_explosion"
+        and event["type"]
+        in {
+            "action_requested",
+            "model_request_started",
+            "model_response_received",
+            "action_parsed",
+        }
+    ]
+    assert private_decision_events == []
+
+    engine._publish_self_explosion_update(round_state, active_players)
+
+    public_updates = [
+        event
+        for event in sink.events
+        if event["action"] == "werewolf_self_explosion"
+        and event["type"] == "state_updated"
+    ]
+    assert public_updates
+    assert public_updates[-1]["actor"] == exploding_wolf
+    assert public_updates[-1]["payload"]["werewolf_self_exploded"] == exploding_wolf
 
 
 def test_first_pre_sheriff_self_explosion_ends_day_without_losing_badge() -> None:
