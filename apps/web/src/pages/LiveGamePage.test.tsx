@@ -388,9 +388,6 @@ describe("LiveGamePage", () => {
     expect(screen.getByTestId("live-narrative-center")).toHaveTextContent(
       "我不是狼",
     );
-    expect(
-      screen.getByRole("heading", { name: "张三 正在发言" }),
-    ).toBeInTheDocument();
     expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
 
     act(() => {
@@ -1272,8 +1269,9 @@ describe("LiveGamePage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "调试面板" }));
 
+    expect(screen.getByText("对局异常中断。")).toBeInTheDocument();
     expect((await screen.findAllByText("对局失败")).length).toBeGreaterThanOrEqual(
-      2,
+      1,
     );
     expect(screen.getAllByText("model timeout").length).toBeGreaterThan(0);
   });
@@ -1371,19 +1369,21 @@ describe("LiveGamePage", () => {
     });
 
     expect(
-      screen.getByRole("heading", { name: "第 1 轮开始" }),
+      within(screen.getByTestId("live-narrative-center")).getByText(
+        "第 1 轮开始",
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "白天阶段开始" }),
+      within(screen.getByTestId("live-narrative-center")).queryByText(
+        "天亮了，进入白天发言。",
+      ),
     ).not.toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(2500);
     });
 
-    expect(
-      screen.getByRole("heading", { name: "白天阶段开始" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("天亮了，进入白天发言。")).toBeInTheDocument();
     vi.useRealTimers();
   });
 
@@ -1478,7 +1478,7 @@ describe("LiveGamePage", () => {
     });
 
     expect(
-      await screen.findByRole("heading", { name: "对局完成" }),
+      await screen.findByText("对局结束，狼人阵营获胜。"),
     ).toBeInTheDocument();
     expect(screen.getByText("队列剩余：0")).toBeInTheDocument();
     expect(
@@ -1541,10 +1541,14 @@ describe("LiveGamePage", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("已完成")).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "运行已创建" }),
+      within(screen.getByTestId("live-narrative-center")).getByText(
+        "运行已创建",
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "对局完成" }),
+      within(screen.getByTestId("live-narrative-center")).queryByText(
+        "对局结束，狼人阵营获胜。",
+      ),
     ).not.toBeInTheDocument();
     expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
   });
@@ -1597,10 +1601,14 @@ describe("LiveGamePage", () => {
     await waitFor(() => expect(runAFetches).toHaveLength(2));
     expect(await screen.findByText("已完成")).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "运行已创建" }),
+      within(screen.getByTestId("live-narrative-center")).getByText(
+        "运行已创建",
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "对局完成" }),
+      within(screen.getByTestId("live-narrative-center")).queryByText(
+        "对局结束，狼人阵营获胜。",
+      ),
     ).not.toBeInTheDocument();
     expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
 
@@ -1626,7 +1634,7 @@ describe("LiveGamePage", () => {
     });
     expect(await screen.findByText("已完成")).toBeInTheDocument();
     expect(
-      await screen.findByRole("heading", { name: "对局完成" }),
+      await screen.findByText("对局结束，狼人阵营获胜。"),
     ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "run a" }));
@@ -1655,10 +1663,14 @@ describe("LiveGamePage", () => {
     });
 
     expect(
-      await screen.findByRole("heading", { name: "运行已创建" }),
+      await within(screen.getByTestId("live-narrative-center")).findByText(
+        "运行已创建",
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "对局完成" }),
+      within(screen.getByTestId("live-narrative-center")).queryByText(
+        "对局结束，狼人阵营获胜。",
+      ),
     ).not.toBeInTheDocument();
     expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
     expect(consoleError.mock.calls.flat().join("\n")).not.toContain(
@@ -1700,7 +1712,9 @@ describe("LiveGamePage", () => {
     });
 
     expect(
-      screen.getByRole("heading", { name: "第 1 轮开始" }),
+      within(screen.getByTestId("live-narrative-center")).getByText(
+        "第 1 轮开始",
+      ),
     ).toBeInTheDocument();
     act(() => {
       screen.getByRole("button", { name: "实时设置" }).click();
@@ -1715,16 +1729,16 @@ describe("LiveGamePage", () => {
     });
 
     expect(
-      screen.getByRole("heading", { name: "第 1 轮开始" }),
+      within(screen.getByTestId("live-narrative-center")).getByText(
+        "第 1 轮开始",
+      ),
     ).toBeInTheDocument();
 
     act(() => {
       within(settingsDialog).getByRole("button", { name: "追到最新" }).click();
     });
 
-    expect(
-      screen.getByRole("heading", { name: "对局完成" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("对局结束，好人阵营获胜。")).toBeInTheDocument();
     expect(screen.getByText("胜利阵营：好人阵营")).toBeInTheDocument();
     vi.useRealTimers();
   });

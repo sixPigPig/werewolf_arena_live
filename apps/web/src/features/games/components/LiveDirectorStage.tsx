@@ -123,7 +123,6 @@ export function LiveDirectorStage({
           />
         </div>
 
-        {cue ? <h2 className="sr-only">{cue.title}</h2> : null}
         <LiveNarrativeCenter narrative={narrativeState} />
 
         {stagePlayers.length === 0 ? (
