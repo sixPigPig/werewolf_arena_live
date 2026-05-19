@@ -172,6 +172,9 @@ class _OrderedBatchProvider:
         return ordered_stream_json
 
     def _await_turn(self) -> None:
+        self.release_turn_if_not_started()
+
+    def release_turn_if_not_started(self) -> None:
         with self._condition:
             if self._started:
                 return
@@ -1688,21 +1691,28 @@ class GameEngine:
         request: PlayerActionRequest,
         provider: ModelProvider | None = None,
     ) -> PlayerActionResult:
-        value, lm_log = generate_action_with_events(
-            provider=provider or self.provider,
-            action=request.action,
-            world_state=request.world_state,
-            model=request.player.model,
-            allowed_values=request.options if request.options else None,
-            result_key=request.result_key,
-            event_sink=NullEventSink() if request.is_secret_wolf_action else self.event_sink,
-            event_context={
-                "round_number": request.round_state.number,
-                "phase": request.phase,
-                "actor": request.player.name,
-                "action": request.action,
-            },
-        )
+        action_provider = provider or self.provider
+        try:
+            value, lm_log = generate_action_with_events(
+                provider=action_provider,
+                action=request.action,
+                world_state=request.world_state,
+                model=request.player.model,
+                allowed_values=request.options if request.options else None,
+                result_key=request.result_key,
+                event_sink=NullEventSink() if request.is_secret_wolf_action else self.event_sink,
+                event_context={
+                    "round_number": request.round_state.number,
+                    "phase": request.phase,
+                    "actor": request.player.name,
+                    "action": request.action,
+                },
+            )
+        except Exception:
+            release_turn = getattr(action_provider, "release_turn_if_not_started", None)
+            if callable(release_turn):
+                release_turn()
+            raise
         return PlayerActionResult(request=request, value=value, lm_log=lm_log)
 
     def _finalize_player_action_result(
@@ -1720,14 +1730,7 @@ class GameEngine:
             choice=str(value) if value is not None else None,
             lm_log=lm_log,
         )
-        self._checkpoint_model_success(
-            actor=player.name,
-            action=request.action,
-            phase=request.phase,
-            model=player.model,
-            raw_response=lm_log.raw_response,
-            prompt=lm_log.prompt,
-        )
+        self._checkpoint_player_action_success(result)
         if not request.is_secret_wolf_action:
             self._publish(
                 "model_response_received",
@@ -1797,6 +1800,9 @@ class GameEngine:
                     exceptions[index] = exc
 
         if exceptions:
+            for result in results:
+                if result is not None:
+                    self._checkpoint_player_action_success(result)
             first_failed_index = min(exceptions)
             request = requests[first_failed_index]
             exc = exceptions[first_failed_index]
@@ -1821,6 +1827,17 @@ class GameEngine:
             self._checkpoint_player_action_failure(request, exc)
             raise
         return self._finalize_player_action_result(result)
+
+    def _checkpoint_player_action_success(self, result: PlayerActionResult) -> None:
+        request = result.request
+        self._checkpoint_model_success(
+            actor=request.player.name,
+            action=request.action,
+            phase=request.phase,
+            model=request.player.model,
+            raw_response=result.lm_log.raw_response,
+            prompt=result.lm_log.prompt,
+        )
 
     def _publish_player_action_requested(self, request: PlayerActionRequest) -> None:
         if request.is_secret_wolf_action:

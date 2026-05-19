@@ -308,6 +308,56 @@ class RetryingSheriffRunProvider(ScriptedChineseProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+class RecordingSheriffRunProvider(ScriptedChineseProvider):
+    def __init__(self) -> None:
+        self.actions: list[str] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        name = _extract_actor_name(prompt)
+        if '"run"' in prompt:
+            self.actions.append(name)
+            return json.dumps(
+                {"reasoning": "记录上警批量请求。", "run": "不上警"},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class FailingSheriffRunProvider(ScriptedChineseProvider):
+    def __init__(self, *, fail_actor: str) -> None:
+        self.fail_actor = fail_actor
+        self.actions: list[str] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        name = _extract_actor_name(prompt)
+        if '"run"' in prompt:
+            self.actions.append(name)
+            if name == self.fail_actor:
+                raise RuntimeError("batched model failure")
+            return json.dumps(
+                {"reasoning": "失败批次中的成功响应。", "run": "不上警"},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class RecordingCheckpointManager:
+    def __init__(self) -> None:
+        self.successes: list[dict[str, object]] = []
+        self.failures: list[dict[str, object]] = []
+
+    def start_round(self, **kwargs: object) -> None:
+        del kwargs
+
+    def record_success(self, **kwargs: object) -> None:
+        self.successes.append(dict(kwargs))
+
+    def record_failure(self, **kwargs: object) -> None:
+        self.failures.append(dict(kwargs))
+
+
 class BarrierActionProvider(ScriptedChineseProvider):
     def __init__(
         self,
@@ -455,6 +505,57 @@ def _run_sheriff_complete_retry_batch(
             "sheriff_voters": round_state.sheriff_voters,
         }
     )
+
+
+class FailingModelStartEventSink:
+    def __init__(self, *, fail_actor: str) -> None:
+        self.fail_actor = fail_actor
+
+    def publish(self, event_type: str, **kwargs: object) -> None:
+        if (
+            event_type == "model_request_started"
+            and kwargs.get("action") == "sheriff_run"
+            and kwargs.get("actor") == self.fail_actor
+        ):
+            raise RuntimeError("event sink failed before provider")
+
+
+def _run_sheriff_model_start_failure_batch(
+    queue: multiprocessing.Queue,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_model_start_failure_sheriff_run",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=37,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    provider = RecordingSheriffRunProvider()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=FailingModelStartEventSink(fail_actor=active_players[0]),
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    try:
+        engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+    except Exception as exc:
+        queue.put(
+            {
+                "error": str(exc),
+                "active_players": active_players,
+                "provider_actions": provider.actions,
+            }
+        )
+        return
+
+    queue.put({"error": None})
 
 
 class SelfExplosionProvider(SheriffFlowProvider):
@@ -3167,6 +3268,62 @@ def test_sheriff_run_complete_json_retry_does_not_deadlock_ordered_batch() -> No
     assert sorted(second_attempts) == sorted(active_players)
     assert result["sheriff_candidates"] == []
     assert result["sheriff_voters"] == active_players
+
+
+def test_sheriff_run_model_event_failure_does_not_deadlock_ordered_batch() -> None:
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(target=_run_sheriff_model_start_failure_batch, args=(result_queue,))
+
+    process.start()
+    process.join(timeout=5.0)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=1.0)
+        pytest.fail("sheriff_run model event failure batch did not finish")
+
+    assert process.exitcode == 0
+    try:
+        result = result_queue.get(timeout=1.0)
+    except queue.Empty:
+        pytest.fail("sheriff_run model event failure batch produced no result")
+    assert result["error"] == "event sink failed before provider"
+    assert result["provider_actions"] == result["active_players"][1:]
+
+
+def test_batched_action_failure_checkpoints_successful_responses_before_raising() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_batch_failure_checkpoint_successes",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=38,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    fail_actor = active_players[2]
+    provider = FailingSheriffRunProvider(fail_actor=fail_actor)
+    checkpoint_manager = RecordingCheckpointManager()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        checkpoint_manager=checkpoint_manager,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    with pytest.raises(RuntimeError, match="batched model failure"):
+        engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+
+    successful_actors = [name for name in active_players if name != fail_actor]
+    assert provider.actions == active_players
+    assert [success["actor"] for success in checkpoint_manager.successes] == successful_actors
+    assert {success["action"] for success in checkpoint_manager.successes} == {"sheriff_run"}
+    assert all(success["prompt"] for success in checkpoint_manager.successes)
+    assert [failure["actor"] for failure in checkpoint_manager.failures] == [fail_actor]
+    assert checkpoint_manager.failures[0]["error"] == "batched model failure"
 
 
 def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_debate() -> None:
