@@ -26,7 +26,16 @@ export function GameDetailPage() {
           刷新复盘
         </ArenaNavButton>
       }
-      secondaryAction={<ArenaNavButton to="/games">返回大厅</ArenaNavButton>}
+      secondaryAction={
+        <>
+          {sessionId ? (
+            <ArenaNavButton to={`/games/playback/${sessionId}`}>
+              放到播放台
+            </ArenaNavButton>
+          ) : null}
+          <ArenaNavButton to="/games">返回大厅</ArenaNavButton>
+        </>
+      }
     />
   );
 

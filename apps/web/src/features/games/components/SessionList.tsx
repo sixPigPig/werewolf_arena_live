@@ -135,6 +135,19 @@ export function SessionList({
               </Link>
               <div className="history-session-actions">
                 <FactionBadge winner={session.winner} />
+                <Button
+                  asChild
+                  className="history-resume-button"
+                  color="amber"
+                  variant="surface"
+                >
+                  <Link
+                    aria-label={`播放 ${session.session_id}`}
+                    to={`/games/playback/${session.session_id}`}
+                  >
+                    播放
+                  </Link>
+                </Button>
                 {isResumable ? (
                   <Button
                     className="history-resume-button"
@@ -185,6 +198,14 @@ export function SessionList({
                 </p>
               </div>
             </Link>
+            <Button asChild className="shrink-0" variant="surface">
+              <Link
+                aria-label={`播放 ${session.session_id}`}
+                to={`/games/playback/${session.session_id}`}
+              >
+                播放
+              </Link>
+            </Button>
             {session.resumable && onResumeSession ? (
               <Button
                 className="shrink-0"
