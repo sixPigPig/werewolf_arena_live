@@ -98,6 +98,99 @@ describe("normalizeGameReplay", () => {
     });
   });
 
+  it("normalizes werewolf consensus fields and debug actions", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        rounds: [
+          {
+            ...rawReplay.state.rounds[0],
+            werewolf_discussion: [
+              {
+                round: 1,
+                speaker: "张三",
+                target: "李四",
+                message: "建议袭击李四。",
+              },
+            ],
+            werewolf_vote_rounds: [
+              {
+                round: 1,
+                candidates: ["李四"],
+                votes: { 张三: "李四" },
+                tally: { 李四: 1 },
+                unanimous: true,
+                result: "李四",
+              },
+            ],
+          },
+        ],
+      },
+      logs: [
+        {
+          ...rawReplay.logs[0],
+          werewolf_discussion: [
+            {
+              actor: "张三",
+              action: "werewolf_discuss",
+              options: ["李四"],
+              choice: "李四",
+              lm_log: {
+                prompt: "狼人夜晚私密沟通",
+                raw_response: '{"target":"李四","message":"建议袭击李四。"}',
+                result: { target: "李四", message: "建议袭击李四。" },
+              },
+            },
+          ],
+          werewolf_votes: [
+            [
+              {
+                actor: "张三",
+                action: "werewolf_kill_vote",
+                options: ["李四"],
+                choice: "李四",
+                lm_log: {
+                  prompt: "狼人夜晚狼刀投票",
+                  raw_response: '{"target":"李四"}',
+                  result: { target: "李四" },
+                },
+              },
+            ],
+          ],
+        },
+      ],
+    });
+
+    expect(replay.rounds[0].werewolf_discussion).toEqual([
+      {
+        round: 1,
+        speaker: "张三",
+        target: "李四",
+        message: "建议袭击李四。",
+      },
+    ]);
+    expect(replay.rounds[0].werewolf_vote_rounds[0]).toMatchObject({
+      round: 1,
+      unanimous: true,
+      result: "李四",
+    });
+    expect(replay.debugItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "round-1-night-werewolf-discussion-0",
+          title: "狼人夜聊",
+          action: "werewolf_discuss",
+        }),
+        expect.objectContaining({
+          id: "round-1-night-werewolf-vote-0-0",
+          title: "狼刀投票",
+          action: "werewolf_kill_vote",
+        }),
+      ]),
+    );
+  });
+
   it("omits no-op sheriff badge debug items", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,

@@ -13,6 +13,8 @@ import { isSelfBadgeTransfer } from "../sheriffBadgeDisplay";
 
 const ACTION_TITLES: Record<string, string> = {
   remove: "狼人击杀",
+  werewolf_discuss: "狼人夜聊",
+  werewolf_kill_vote: "狼刀投票",
   protect: "守卫保护",
   investigate: "预言家查验",
   witch_save: "女巫解药",
@@ -119,6 +121,8 @@ function normalizeRound(
     eliminated,
     night_deaths: nightDeaths,
     day_deaths: dayDeaths,
+    werewolf_discussion: round.werewolf_discussion ?? [],
+    werewolf_vote_rounds: round.werewolf_vote_rounds ?? [],
     saved_by_witch: round.saved_by_witch ?? null,
     poisoned: round.poisoned ?? null,
     hunter_shot: round.hunter_shot ?? null,
@@ -214,6 +218,26 @@ function debugItemsFromRound(
     (round.speech_order != null || (stateRound?.speech_order?.length ?? 0) > 0);
 
   pushAction(items, round.number, "night", "night-eliminate", round.eliminate);
+  (round.werewolf_discussion ?? []).forEach((action, index) => {
+    pushAction(
+      items,
+      round.number,
+      "night",
+      `night-werewolf-discussion-${index}`,
+      action,
+    );
+  });
+  (round.werewolf_votes ?? []).forEach((voteRound, roundIndex) => {
+    voteRound.forEach((action, actionIndex) => {
+      pushAction(
+        items,
+        round.number,
+        "night",
+        `night-werewolf-vote-${roundIndex}-${actionIndex}`,
+        action,
+      );
+    });
+  });
   pushAction(items, round.number, "night", "night-protect", round.protect);
   pushAction(
     items,

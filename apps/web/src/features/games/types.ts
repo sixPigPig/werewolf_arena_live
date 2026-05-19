@@ -80,6 +80,8 @@ export type RawRoundLog = {
   eliminate: RawActionLog | null;
   protect: RawActionLog | null;
   investigate: RawActionLog | null;
+  werewolf_discussion?: RawActionLog[];
+  werewolf_votes?: RawActionLog[][];
   witch_save?: RawActionLog | null;
   witch_poison?: RawActionLog | null;
   hunter_shoot?: RawActionLog | null;
@@ -102,6 +104,22 @@ export type DeathEvent = {
   player: string;
   cause: string;
   source?: string | null;
+};
+
+export type WerewolfDiscussionEntry = {
+  round: number;
+  speaker: string;
+  target: string;
+  message: string;
+};
+
+export type WerewolfVoteRound = {
+  round: number;
+  candidates: string[];
+  votes: Record<string, string>;
+  tally: Record<string, number>;
+  unanimous: boolean;
+  result: string | null;
 };
 
 export type RawPlayer = {
@@ -132,6 +150,8 @@ export type RawRoundState = {
   exiled: string | null;
   night_deaths?: DeathEvent[];
   day_deaths?: DeathEvent[];
+  werewolf_discussion?: WerewolfDiscussionEntry[];
+  werewolf_vote_rounds?: WerewolfVoteRound[];
   saved_by_witch?: string | null;
   poisoned?: string | null;
   hunter_shot?: string | null;
@@ -227,6 +247,8 @@ export type GameRound = Omit<
   | "votes"
   | "night_deaths"
   | "day_deaths"
+  | "werewolf_discussion"
+  | "werewolf_vote_rounds"
   | "saved_by_witch"
   | "poisoned"
   | "hunter_shot"
@@ -259,6 +281,8 @@ export type GameRound = Omit<
   eliminated: string | null;
   night_deaths: DeathEvent[];
   day_deaths: DeathEvent[];
+  werewolf_discussion: WerewolfDiscussionEntry[];
+  werewolf_vote_rounds: WerewolfVoteRound[];
   saved_by_witch: string | null;
   poisoned: string | null;
   hunter_shot: string | null;
