@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { Badge, Button, SelectField } from "../../../components/ui";
 import type { LiveDirectorSpeed } from "../hooks/useLiveDirector";
 import type { LiveNavStatus } from "../liveNavStatus";
-import type { GameRun, RuleSetSummary } from "../types";
+import type { GameRun, LiveStageRun, RuleSetSummary } from "../types";
 import { LiveNavStatusBadge } from "./LiveNavStatusBadge";
 
 type LiveNavSettingsMenuProps = {
@@ -16,9 +16,10 @@ type LiveNavSettingsMenuProps = {
   onResumeRun: () => void;
   onSpeedChange: (speed: LiveDirectorSpeed) => void;
   onTogglePaused: () => void;
-  run: GameRun;
+  run: GameRun | LiveStageRun;
   speed: LiveDirectorSpeed;
   status: LiveNavStatus;
+  title?: string;
 };
 
 export function LiveNavSettingsMenu({
@@ -33,6 +34,7 @@ export function LiveNavSettingsMenu({
   run,
   speed,
   status,
+  title = "实时设置",
 }: LiveNavSettingsMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -103,7 +105,7 @@ export function LiveNavSettingsMenu({
       <button
         aria-expanded={isOpen}
         aria-haspopup="dialog"
-        aria-label="实时设置"
+        aria-label={title}
         className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-500/35 bg-white/5 text-base font-semibold text-slate-100 shadow-[inset_0_0_12px_rgba(255,255,255,0.04)] transition hover:border-amber-300/55 hover:bg-amber-300/10 focus:outline-none focus:ring-2 focus:ring-amber-300/70"
         onClick={() => setIsOpen((value) => !value)}
         ref={triggerRef}
@@ -131,10 +133,10 @@ export function LiveNavSettingsMenu({
           >
             <header className="mb-4 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-amber-50" id="live-settings-title">
-                实时设置
+                {title}
               </h2>
               <button
-                aria-label="关闭实时设置"
+                aria-label={`关闭${title}`}
                 className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-500/35 text-slate-200 transition hover:border-amber-300/55 hover:text-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-300/70"
                 onClick={closeMenu}
                 ref={closeButtonRef}
@@ -279,12 +281,13 @@ function InfoRow({
   );
 }
 
-function normalizeRule(run: GameRun): RuleSetSummary {
+function normalizeRule(run: GameRun | LiveStageRun): RuleSetSummary {
   return (
     run.rule_set ?? {
       id: "live",
       name: "实时对局",
-      player_count: run.player_configs?.length ?? 0,
+      player_count:
+        "player_configs" in run ? (run.player_configs?.length ?? 0) : 0,
       roles: [],
       version: "-",
     }
