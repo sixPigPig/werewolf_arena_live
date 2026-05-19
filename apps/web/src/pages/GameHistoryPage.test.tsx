@@ -80,6 +80,9 @@ describe("GameHistoryPage", () => {
     expect(screen.getByTestId("games-sessions-module")).toHaveClass(
       "glass-panel",
     );
+    expect(
+      screen.getByRole("link", { name: "播放 game_00000001" }),
+    ).toHaveAttribute("href", "/games/playback/game_00000001");
   });
 
   it("refreshes the history list", async () => {
@@ -216,6 +219,9 @@ describe("GameHistoryPage", () => {
     expect(
       await screen.findByText("game_1200abcd"),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "播放 game_1200abcd" }),
+    ).toHaveAttribute("href", "/games/playback/game_1200abcd");
     await userEvent.click(screen.getByRole("button", { name: "继续对局" }));
 
     expect(fetchSpy).toHaveBeenCalledWith(

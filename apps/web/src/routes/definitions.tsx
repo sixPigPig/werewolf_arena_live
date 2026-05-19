@@ -3,6 +3,7 @@ import { Navigate, type RouteObject } from "react-router-dom";
 import { ComponentButtonShowcasePage } from "../pages/ComponentButtonShowcasePage";
 import { GameDetailPage } from "../pages/GameDetailPage";
 import { GameHistoryPage } from "../pages/GameHistoryPage";
+import { GamePlaybackPage } from "../pages/GamePlaybackPage";
 import { GamesPage } from "../pages/GamesPage";
 import { LiveGamePage } from "../pages/LiveGamePage";
 import { PlayersPage } from "../pages/PlayersPage";
@@ -31,6 +32,10 @@ export const routes: RouteObject[] = [
   {
     path: "/components/buttons",
     element: <ComponentButtonShowcasePage />,
+  },
+  {
+    path: "/games/playback/:sessionId",
+    element: <GamePlaybackPage />,
   },
   {
     path: "/games/:sessionId",

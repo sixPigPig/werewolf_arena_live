@@ -309,6 +309,10 @@ describe("GameDetailPage", () => {
       "href",
       "/games",
     );
+    expect(screen.getByRole("link", { name: "放到播放台" })).toHaveAttribute(
+      "href",
+      `/games/playback/${sessionId}`,
+    );
     expect(screen.getByRole("button", { name: "刷新复盘" })).toHaveClass(
       "gothic-button",
     );

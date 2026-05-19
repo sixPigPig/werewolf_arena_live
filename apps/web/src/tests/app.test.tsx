@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -91,6 +91,59 @@ describe("App", () => {
       await screen.findByRole("heading", { name: "对局历史" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("game_00000003")).toBeInTheDocument();
+  });
+
+  it("routes a historical playback path to the playback page", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          session_id: "game_1200abcd",
+          status: "complete",
+          rule_set: null,
+          resumable: false,
+          events: [
+            {
+              id: 1,
+              type: "game_started",
+              run_id: "playback_game_1200abcd",
+              session_id: "game_1200abcd",
+              created_at: "2026-05-19T00:00:00Z",
+              round: null,
+              phase: null,
+              actor: null,
+              action: null,
+              payload: { players: [] },
+            },
+            {
+              id: 2,
+              type: "game_completed",
+              run_id: "playback_game_1200abcd",
+              session_id: "game_1200abcd",
+              created_at: "2026-05-19T00:00:01Z",
+              round: null,
+              phase: null,
+              actor: null,
+              action: null,
+              payload: { winner: "狼人阵营" },
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    renderRoute(["/games/playback/game_1200abcd"]);
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/v1/games/game_1200abcd/playback",
+        undefined,
+      ),
+    );
+    expect(screen.getByRole("link", { name: "查看复盘" })).toHaveAttribute(
+      "href",
+      "/games/game_1200abcd",
+    );
   });
 
   it("routes the gothic button showcase path to the component example page", async () => {

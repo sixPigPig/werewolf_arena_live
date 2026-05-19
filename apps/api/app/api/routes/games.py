@@ -30,6 +30,7 @@ from app.werewolf.providers import configured_model_options, default_model_name
 from app.werewolf.config import choose_player_names
 from app.werewolf.checkpoint import ResumeCheckpointError, load_resume_checkpoint
 from app.werewolf.replay import ReplayNotFoundError, ReplayStore, SESSION_ID_RE
+from app.werewolf.replay_playback import build_replay_playback
 from app.werewolf.rules import (
     DEFAULT_RULE_SET_ID,
     get_rule_set,
@@ -385,6 +386,20 @@ def resume_game_run(
     )
     thread.start()
     return registry.get_run(run.run_id).to_summary()
+
+
+@router.get("/{session_id}/playback")
+def get_game_playback(
+    session_id: Annotated[
+        str,
+        Path(pattern=SESSION_ID_RE),
+    ],
+    store: Annotated[ReplayStore, Depends(get_replay_store)],
+) -> dict:
+    try:
+        return build_replay_playback(store.load_session(session_id))
+    except ReplayNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Game session not found") from exc
 
 
 @router.get("/{session_id}")

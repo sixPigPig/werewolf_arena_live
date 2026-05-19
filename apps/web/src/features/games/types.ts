@@ -474,3 +474,30 @@ export type LiveGameEvent = {
   action: string | null;
   payload: Record<string, unknown>;
 };
+
+export type GamePlayback = {
+  session_id: string;
+  status: GameStatus;
+  rule_set?: RuleSetSummary | null;
+  resumable?: boolean;
+  events: LiveGameEvent[];
+};
+
+export type LiveStageRun = Pick<
+  GameRun,
+  | "run_id"
+  | "session_id"
+  | "status"
+  | "rule_set"
+  | "winner"
+  | "error"
+  | "created_at"
+  | "started_at"
+  | "completed_at"
+  | "event_count"
+> & {
+  villager_model?: string;
+  werewolf_model?: string;
+  seed?: number | null;
+  max_rounds?: number;
+};

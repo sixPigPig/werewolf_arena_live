@@ -20,7 +20,7 @@ from app.db.session import get_db
 from app.main import app
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.checkpoint import RESUME_CHECKPOINT_FILE
+from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION, RESUME_CHECKPOINT_FILE
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.player_presets import default_personality_text
 from app.werewolf.replay import ReplayStore
@@ -1126,6 +1126,278 @@ def test_get_game_detail_returns_state_and_logs(tmp_path: Path) -> None:
     assert payload["status"] == "complete"
     assert payload["state"]["players"][0]["name"] == "张三"
     assert payload["logs"][0]["eliminate"]["lm_log"]["prompt"] == "请选择今晚击杀对象。"
+
+
+def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> None:
+    session_id = "game_1200abcd"
+    state = sample_state(session_id, winner="好人阵营")
+    state["rule_set"] = {
+        "id": "starter_6",
+        "name": "新手 6 人快局",
+        "player_count": 6,
+        "roles": [],
+    }
+    state["players"][0]["observations"] = ["private observation secret"]
+    state["players"][0]["gamestate"] = {"hidden": "private gamestate secret"}
+    state["players"][0]["known_roles"] = {"李四": "村民"}
+    state["players"][0]["bidding_rationale"] = "secret player reasoning"
+    state["rounds"][0]["debate"] = [{"speaker": "张三", "message": "我认为李四身份偏低。"}]
+    state["rounds"][0]["votes"] = [{"张三": "李四"}]
+    logs = sample_logs()
+    logs[0]["eliminate"]["lm_log"]["parsed"] = {
+        "choice": "李四",
+        "reasoning": "secret chain",
+    }
+    write_json(tmp_path / session_id / "game_complete.json", state)
+    write_json(tmp_path / session_id / "game_logs.json", logs)
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_id
+    assert payload["status"] == "complete"
+    assert payload["resumable"] is False
+    assert payload["rule_set"]["id"] == "starter_6"
+    event_types = [event["type"] for event in payload["events"]]
+    events = payload["events"]
+    assert event_types[:3] == ["run_created", "run_started", "game_started"]
+    run_created, run_started, game_started = events[:3]
+    assert run_created["payload"]["playback"] is True
+    assert run_created["payload"]["session_id"] == session_id
+    assert run_created["payload"]["status"] == "complete"
+    assert run_created["payload"]["rule_set"]["id"] == "starter_6"
+    assert run_created["payload"]["resumable"] is False
+    assert run_started["payload"] == {"playback": True}
+    assert game_started["payload"]["playback"] is True
+    assert game_started["payload"]["rule_set"]["id"] == "starter_6"
+    assert game_started["payload"]["players"][0] == {
+        "name": "张三",
+        "role": "狼人",
+        "model": "deepseek-chat",
+    }
+    assert "round_started" in event_types
+    assert "action_requested" in event_types
+    assert "action_parsed" in event_types
+    requested_event = next(
+        event
+        for event in events
+        if event["type"] == "action_requested"
+        and event["actor"] == "张三"
+        and event["action"] == "remove"
+    )
+    assert requested_event["payload"].get("options") == ["李四"]
+    assert "visible_text" not in requested_event["payload"]
+    assert any(
+        event["type"] == "action_requested"
+        and event["actor"] == "张三"
+        and event["action"] == "remove"
+        and event["payload"].get("options") == ["李四"]
+        for event in events
+    )
+    assert any(
+        event["type"] == "action_parsed"
+        and event["actor"] == "张三"
+        and event["action"] == "remove"
+        and event["payload"].get("choice") == "李四"
+        for event in events
+    )
+    parsed_event = next(
+        event
+        for event in events
+        if event["type"] == "action_parsed"
+        and event["actor"] == "张三"
+        and event["action"] == "remove"
+    )
+    assert parsed_event["payload"]["result"] == {"choice": "李四"}
+    assert parsed_event["payload"]["visible_result"] == {"choice": "李四"}
+    assert any(
+        event["type"] == "state_updated"
+        and event["phase"] == "day"
+        and event["payload"].get("votes") == {"张三": "李四"}
+        for event in events
+    )
+    assert event_types[-1] == "game_completed"
+    assert payload["events"][-1]["payload"] == {"winner": "好人阵营"}
+    assert [event["id"] for event in payload["events"]] == list(
+        range(1, len(payload["events"]) + 1)
+    )
+    assert all(event["run_id"] == f"playback_{session_id}" for event in payload["events"])
+    serialized_events = json.dumps(payload["events"], ensure_ascii=False)
+    assert "请选择今晚击杀对象。" not in serialized_events
+    assert "raw_response" not in serialized_events
+    assert "prompt" not in serialized_events
+    assert "reasoning" not in serialized_events
+    assert "secret chain" not in serialized_events
+    assert "observations" not in serialized_events
+    assert "gamestate" not in serialized_events
+    assert "known_roles" not in serialized_events
+    assert "bidding_rationale" not in serialized_events
+    assert "private observation secret" not in serialized_events
+    assert "private gamestate secret" not in serialized_events
+    assert "secret player reasoning" not in serialized_events
+    assert "李四" in serialized_events
+
+
+def test_get_game_playback_preserves_public_day_stage_fields(tmp_path: Path) -> None:
+    session_id = "game_1200bcde"
+    state = sample_state(session_id, winner="好人阵营")
+    state["rounds"][0].update(
+        {
+            "sheriff": "张三",
+            "sheriff_candidates": ["张三", "李四"],
+            "sheriff_speech_order": ["张三", "李四"],
+            "sheriff_speech_direction": "警左发言",
+            "sheriff_speeches": [{"speaker": "张三", "message": "我要竞选警长。"}],
+            "sheriff_withdrawn": ["李四"],
+            "sheriff_final_candidates": ["张三"],
+            "sheriff_voters": ["李四"],
+            "sheriff_votes": {"李四": "张三"},
+            "sheriff_pk_candidates": ["张三", "李四"],
+            "sheriff_pk_speeches": [{"speaker": "李四", "message": "我进入 PK。"}],
+            "sheriff_runoff_votes": {"李四": "张三"},
+            "sheriff_elected": "张三",
+            "speech_order": ["李四", "张三"],
+            "speech_order_choice": "警左发言",
+            "vote_weights": {"张三": 1.5, "李四": 1},
+            "sheriff_badge_target": "李四",
+            "sheriff_badge_lost": False,
+            "werewolf_self_exploded": "李四",
+            "day_ended_by_self_explosion": True,
+            "sheriff_pre_election_bomb_count": 1,
+            "sheriff_election_pending": True,
+            "sheriff_badge_lost_reason": "首爆中断警长竞选",
+        }
+    )
+    write_json(tmp_path / session_id / "game_complete.json", state)
+    write_json(tmp_path / session_id / "game_logs.json", sample_logs())
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    day_state = next(
+        event
+        for event in response.json()["events"]
+        if event["type"] == "state_updated" and event["phase"] == "day"
+    )
+    assert day_state["payload"] == {
+        "debate": [],
+        "bids": [{"张三": 3}],
+        "votes": {"张三": "李四"},
+        "summaries": {"张三": "我会隐藏身份。"},
+        "exiled": None,
+        "day_deaths": [],
+        "hunter_shot": None,
+        "idiot_revealed": None,
+        "sheriff": "张三",
+        "sheriff_candidates": ["张三", "李四"],
+        "sheriff_speech_order": ["张三", "李四"],
+        "sheriff_speech_direction": "警左发言",
+        "sheriff_speeches": [{"speaker": "张三", "message": "我要竞选警长。"}],
+        "sheriff_withdrawn": ["李四"],
+        "sheriff_final_candidates": ["张三"],
+        "sheriff_voters": ["李四"],
+        "sheriff_votes": {"李四": "张三"},
+        "sheriff_pk_candidates": ["张三", "李四"],
+        "sheriff_pk_speeches": [{"speaker": "李四", "message": "我进入 PK。"}],
+        "sheriff_runoff_votes": {"李四": "张三"},
+        "sheriff_elected": "张三",
+        "speech_order": ["李四", "张三"],
+        "speech_order_choice": "警左发言",
+        "vote_weights": {"张三": 1.5, "李四": 1},
+        "sheriff_badge_target": "李四",
+        "sheriff_badge_lost": False,
+        "werewolf_self_exploded": "李四",
+        "day_ended_by_self_explosion": True,
+        "sheriff_pre_election_bomb_count": 1,
+        "sheriff_election_pending": True,
+        "sheriff_badge_lost_reason": "首爆中断警长竞选",
+        "active_players": ["张三", "李四"],
+    }
+
+
+def test_get_game_playback_returns_partial_end_without_resuming(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    state = sample_state(session_id, winner="", error="Maximum rounds exceeded")
+    write_json(tmp_path / session_id / "game_partial.json", state)
+    write_json(tmp_path / session_id / "game_logs.json", sample_logs())
+    write_json(
+        tmp_path / session_id / RESUME_CHECKPOINT_FILE,
+        {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "state_at_round_start": state,
+            "logs_before_round": sample_logs(),
+            "run_params": {
+                "villager_model": "deepseek-chat",
+                "werewolf_model": "deepseek-chat",
+                "seed": 7,
+                "max_rounds": 8,
+                "rule_set_id": "classic_8",
+                "player_configs": [],
+            },
+        },
+    )
+    override_logs_root(tmp_path)
+    registry = LiveRunRegistry()
+    created_runs: list[dict[str, object]] = []
+
+    def fail_create_run(**kwargs: object) -> object:
+        created_runs.append(kwargs)
+        raise AssertionError("playback must not create a live run")
+
+    monkeypatch.setattr(registry, "create_run", fail_create_run)
+    override_live_registry(registry)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "partial"
+    assert payload["resumable"] is True
+    assert payload["events"][-1]["type"] == "game_failed"
+    assert payload["events"][-1]["payload"]["playback_partial"] is True
+    assert payload["events"][-1]["payload"]["error"] == "Maximum rounds exceeded"
+    assert created_runs == []
+
+
+def test_get_game_playback_returns_404_for_missing_session(tmp_path: Path) -> None:
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get("/api/v1/games/game_1200abcd/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Game session not found"}
+
+
+def test_get_game_playback_returns_404_for_corrupt_replay_json(tmp_path: Path) -> None:
+    session_id = "game_1200abcd"
+    write_text(tmp_path / session_id / "game_complete.json", "{")
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Game session not found"}
 
 
 def test_get_game_detail_returns_404_for_missing_valid_session(tmp_path: Path) -> None:

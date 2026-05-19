@@ -228,6 +228,7 @@ describe("LiveGamePage", () => {
     );
 
     expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    expect(screen.getByTestId("live-game-page")).toBeInTheDocument();
     expect(screen.getByText("观赛舞台")).toBeInTheDocument();
     expect(screen.getByTestId("god-view-player-rail-left")).toBeInTheDocument();
     expect(screen.getByTestId("god-view-player-rail-right")).toBeInTheDocument();
