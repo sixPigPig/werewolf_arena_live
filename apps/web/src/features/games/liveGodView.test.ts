@@ -357,6 +357,45 @@ describe("deriveGodViewState", () => {
     ]);
   });
 
+  it("does not expose secret wolf consensus actions from public live events", () => {
+    const events = [
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "1号 狼人", role: "werewolf", model: "deepseek-chat" },
+            { name: "2号 狼人", role: "werewolf", model: "deepseek-chat" },
+            { name: "3号 平民", role: "villager", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: null,
+        action: "werewolf_discuss",
+        payload: { message: "狼人正在秘密协商狼刀" },
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: null,
+        action: "werewolf_kill_vote",
+        payload: { message: "狼人正在秘密协商狼刀" },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+
+    expect(state.nightActions).toEqual([]);
+  });
+
   it("uses honest fallback states when no live facts are available", () => {
     const spectator = deriveLiveSpectatorState([]);
 

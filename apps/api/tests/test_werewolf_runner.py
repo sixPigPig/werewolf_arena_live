@@ -3419,6 +3419,74 @@ def test_night_hunter_cannot_shoot_pending_night_death() -> None:
     assert round_state.hunter_shot != poisoned_player
 
 
+class RecordingEventSink:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def publish(
+        self,
+        event_type: str,
+        *,
+        round_number: int | None = None,
+        phase: str | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> object:
+        self.events.append(
+            {
+                "type": event_type,
+                "round": round_number,
+                "phase": phase,
+                "actor": actor,
+                "action": action,
+                "payload": payload or {},
+            }
+        )
+        return None
+
+
+def test_werewolf_consensus_live_events_do_not_publish_wolf_actor() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_wolf_consensus_event_privacy",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=508,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    target = next(player.name for player in state.players if player.role == "村民")
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    event_sink = RecordingEventSink()
+    provider = WerewolfConsensusProvider(
+        vote_rounds=[{wolf: target for wolf in wolves}],
+        discussion_targets={wolf: target for wolf in wolves},
+    )
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=event_sink,
+    )
+
+    engine._run_night_phase(round_state, round_log, active_players)
+
+    secret_events = [
+        event
+        for event in event_sink.events
+        if event["action"] in {"werewolf_discuss", "werewolf_kill_vote"}
+    ]
+    assert secret_events
+    assert {event["actor"] for event in secret_events} == {None}
+    assert all("choice" not in event["payload"] for event in secret_events)
+    assert all("options" not in event["payload"] for event in secret_events)
+    assert all("result_key" not in event["payload"] for event in secret_events)
+
+
 def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:
     complete = json.loads((log_directory / "game_complete.json").read_text())
     logs = json.loads((log_directory / "game_logs.json").read_text())

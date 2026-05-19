@@ -1529,13 +1529,19 @@ class GameEngine:
         world_state = self._world_state(player, options, round_state)
         if extra_world_state:
             world_state.update(extra_world_state)
+        public_actor = self._public_actor_for_action(phase, action, player.name)
         self._publish(
             "action_requested",
             round_number=round_state.number,
             phase=phase,
-            actor=player.name,
+            actor=public_actor,
             action=action,
-            payload={"options": options.copy(), "result_key": result_key},
+            payload=self._public_payload_for_action_requested(
+                phase,
+                action,
+                options,
+                result_key,
+            ),
         )
         try:
             value, lm_log = generate_action_with_events(
@@ -1549,7 +1555,7 @@ class GameEngine:
                 event_context={
                     "round_number": round_state.number,
                     "phase": phase,
-                    "actor": player.name,
+                    "actor": public_actor,
                     "action": action,
                 },
             )
@@ -1581,7 +1587,7 @@ class GameEngine:
             "model_response_received",
             round_number=round_state.number,
             phase=phase,
-            actor=player.name,
+            actor=public_actor,
             action=action,
             payload={
                 "request_id": lm_log.request_id,
@@ -1594,14 +1600,15 @@ class GameEngine:
             "action_parsed",
             round_number=round_state.number,
             phase=phase,
-            actor=player.name,
+            actor=public_actor,
             action=action,
-            payload={
-                "choice": action_log.choice,
-                "result": visible_result,
-                "visible_result": visible_result,
-                "options": options.copy(),
-            },
+            payload=self._public_payload_for_action_parsed(
+                phase,
+                action,
+                action_log,
+                visible_result,
+                options,
+            ),
         )
         if options and value not in options:
             raise ValueError(f"{player.name} returned invalid {action}: {value}")
@@ -1698,6 +1705,48 @@ class GameEngine:
             action=action,
             payload=payload,
         )
+
+    def _public_actor_for_action(self, phase: str, action: str, actor: str) -> str | None:
+        if phase == "night" and action in {
+            ACTION_WEREWOLF_DISCUSS,
+            ACTION_WEREWOLF_KILL_VOTE,
+        }:
+            return None
+        return actor
+
+    def _public_payload_for_action_parsed(
+        self,
+        phase: str,
+        action: str,
+        action_log: ActionLog,
+        visible_result: object,
+        options: list[str],
+    ) -> dict[str, object]:
+        if phase == "night" and action in {
+            ACTION_WEREWOLF_DISCUSS,
+            ACTION_WEREWOLF_KILL_VOTE,
+        }:
+            return {"message": "狼人正在秘密协商狼刀"}
+        return {
+            "choice": action_log.choice,
+            "result": visible_result,
+            "visible_result": visible_result,
+            "options": options.copy(),
+        }
+
+    def _public_payload_for_action_requested(
+        self,
+        phase: str,
+        action: str,
+        options: list[str],
+        result_key: str,
+    ) -> dict[str, object]:
+        if phase == "night" and action in {
+            ACTION_WEREWOLF_DISCUSS,
+            ACTION_WEREWOLF_KILL_VOTE,
+        }:
+            return {"message": "狼人正在秘密协商狼刀"}
+        return {"options": options.copy(), "result_key": result_key}
 
     def _world_state(
         self,

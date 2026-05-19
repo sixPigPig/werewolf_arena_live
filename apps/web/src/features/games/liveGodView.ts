@@ -142,6 +142,7 @@ type MutableGodView = {
   publicFacts: string[];
   replayMarks: GodViewEventLine[];
   skillTriggers: GodViewSkillTrigger[];
+  suppressNightActionFallback: boolean;
 };
 
 export function deriveGodViewState(
@@ -173,6 +174,7 @@ export function deriveGodViewState(
     publicFacts: [],
     replayMarks: [],
     skillTriggers: [],
+    suppressNightActionFallback: false,
   };
 
   for (const event of events) {
@@ -226,7 +228,10 @@ export function deriveGodViewState(
     winnerLabel: view.winnerLabel,
     players,
     progress,
-    nightActions: fallbackNightActions(view.nightActions),
+    nightActions: fallbackNightActions(
+      view.nightActions,
+      view.suppressNightActionFallback,
+    ),
     nightResolution: buildNightResolution(view.latestNightPayload),
     nightActionOrder: buildNightActionOrder(view.nightActions),
     deaths: view.deaths.slice(-3).reverse(),
@@ -293,6 +298,14 @@ function collectActionLine(view: MutableGodView, event: LiveGameEvent) {
   }
 
   const payload = payloadForEvent(event);
+  if (
+    event.phase === "night" &&
+    (event.action === "werewolf_discuss" ||
+      event.action === "werewolf_kill_vote")
+  ) {
+    view.suppressNightActionFallback = true;
+    return;
+  }
   const choice = stringField(payload, "choice") || parsedChoice(payload);
   if (event.action === "vote" && event.actor && choice) {
     view.voteTargets.set(event.actor, choice);
@@ -752,9 +765,15 @@ function stateUpdatedReplayTone(
   return "default";
 }
 
-function fallbackNightActions(actions: GodViewActionLine[]) {
+function fallbackNightActions(
+  actions: GodViewActionLine[],
+  suppressFallback: boolean,
+) {
   if (actions.length > 0) {
     return actions.slice(-5).reverse();
+  }
+  if (suppressFallback) {
+    return [];
   }
   return [
     { label: "狼人目标", value: "等待夜间行动", tone: "muted" },

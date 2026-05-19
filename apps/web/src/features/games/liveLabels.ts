@@ -8,6 +8,8 @@ const ACTION_LABELS: Record<string, string> = {
   sheriff_withdraw: "选择是否退水",
   sheriff_vote: "警长投票",
   sheriff_runoff_vote: "警长 PK 投票",
+  werewolf_discuss: "夜晚沟通",
+  werewolf_kill_vote: "狼刀投票",
   werewolf_self_explosion: "考虑自爆",
   investigate: "查验目标",
   remove: "夜间袭击",
