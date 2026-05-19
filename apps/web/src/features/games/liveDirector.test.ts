@@ -257,7 +257,7 @@ describe("toDirectorCue", () => {
       }),
     );
 
-    expect(malformedCue.title).toBe("state_updated");
+    expect(malformedCue.title).toBe("状态更新");
     expect(malformedCue.body).toContain("not an object");
   });
 

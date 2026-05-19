@@ -1,4 +1,5 @@
 import type { LivePlayer, LiveSpectatorState } from "./liveSpectator";
+import { actionLabel, eventTypeLabel } from "./liveLabels";
 import type { LiveGameEvent } from "./types";
 
 export type GodViewIdentityGroup = "狼人" | "神职" | "平民" | "未知";
@@ -623,7 +624,7 @@ function collectEventLine(view: MutableGodView, event: LiveGameEvent) {
       line ?? {
         id: event.id,
         time: timeLabel(event),
-        text: event.type,
+        text: eventTypeLabel(event.type),
         tone: "default",
       },
     );
@@ -1014,13 +1015,17 @@ function actionDisplay(action: string | null) {
     vote: "投票",
     eliminate: "刀人",
     remove: "刀人",
+    guard: "守护",
     protect: "守护",
     investigate: "查验",
     summarize: "总结",
     sheriff_speech: "警上发言",
+    sheriff_pk_speech: "警长 PK 发言",
     sheriff_vote: "警长投票",
+    sheriff_runoff_vote: "警长 PK 投票",
+    werewolf_self_explosion: "考虑自爆",
   };
-  return action ? map[action] ?? action : "行动";
+  return action ? map[action] ?? actionLabel(action) : "行动";
 }
 
 function phaseEventText(phase: string | null) {

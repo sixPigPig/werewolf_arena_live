@@ -265,6 +265,33 @@ class SelfExplosionProvider(SheriffFlowProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+class StageTriggeredSelfExplosionProvider(SelfExplosionProvider):
+    def __init__(
+        self,
+        *,
+        exploding_wolf: str,
+        trigger_stage: str,
+        candidates: set[str],
+        sheriff_vote_targets: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            self_exploders=[exploding_wolf],
+            candidates=candidates,
+            sheriff_vote_targets=sheriff_vote_targets,
+        )
+        self.trigger_stage = trigger_stage
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"self_explode"' in prompt and self.trigger_stage not in prompt:
+            name = _extract_actor_name(prompt)
+            self.actions.append(("werewolf_self_explosion", name))
+            return json.dumps(
+                {"reasoning": "等待关键发言后再自爆。", "self_explode": "不自爆"},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 class FirstNightSelfExplosionProvider(SelfExplosionProvider):
     def __init__(
         self,
@@ -1846,6 +1873,81 @@ def test_first_night_pending_deaths_are_announced_after_self_explosion() -> None
     assert night_target not in active_players
     assert round_state.votes == []
     assert round_log.summaries == []
+
+
+def test_werewolves_can_self_explode_after_sheriff_candidate_speech() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_self_explosion_after_sheriff_speech",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=57,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    candidates = active_players[:4]
+    first_speaker = active_players[3]
+    exploding_wolf = next(player.name for player in state.players if player.role == "狼人")
+    provider = StageTriggeredSelfExplosionProvider(
+        exploding_wolf=exploding_wolf,
+        trigger_stage=f"{first_speaker} 警上发言后",
+        candidates=set(candidates),
+        sheriff_vote_targets={name: candidates[0] for name in active_players[4:]},
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        rng=random.Random(0),
+    )
+
+    interrupted = engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+
+    assert interrupted is True
+    assert round_state.werewolf_self_exploded == exploding_wolf
+    assert [speech["speaker"] for speech in round_state.sheriff_speeches] == [first_speaker]
+    assert round_state.sheriff_withdrawn == []
+    assert round_state.sheriff_votes == {}
+    assert exploding_wolf not in active_players
+
+
+def test_werewolves_can_self_explode_after_day_debate_speech() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_self_explosion_after_debate_speech",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=76,
+        rule_set=rule_set,
+    )
+    players_by_name = state.player_by_name()
+    active_players = [player.name for player in state.players]
+    sheriff = next(player.name for player in state.players if player.role != "狼人")
+    state.sheriff = sheriff
+    players_by_name[sheriff].is_sheriff = True
+    sheriff_index = active_players.index(sheriff)
+    speech_order = active_players[sheriff_index + 1 :] + active_players[:sheriff_index] + [sheriff]
+    first_speaker = speech_order[0]
+    exploding_wolf = next(player.name for player in state.players if player.role == "狼人")
+    provider = StageTriggeredSelfExplosionProvider(
+        exploding_wolf=exploding_wolf,
+        trigger_stage=f"{first_speaker} 发言后",
+        candidates=set(),
+    )
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.werewolf_self_exploded == exploding_wolf
+    assert [entry.speaker for entry in round_state.debate] == [first_speaker]
+    assert round_state.votes == []
+    assert round_log.summaries == []
+    assert exploding_wolf not in active_players
 
 
 def test_post_sheriff_self_explosion_ends_day_without_consuming_badge() -> None:

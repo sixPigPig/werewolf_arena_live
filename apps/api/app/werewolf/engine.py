@@ -915,6 +915,13 @@ class GameEngine:
                     "speech_order": round_state.speech_order.copy(),
                 },
             )
+            if self._maybe_run_werewolf_self_explosion(
+                round_state,
+                round_log,
+                active_players,
+                f"{speaker} 发言后",
+            ):
+                return True
         return False
 
     def _speech_order(
@@ -1076,6 +1083,13 @@ class GameEngine:
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{name} did not return a valid sheriff speech.")
             round_state.sheriff_speeches.append({"speaker": name, "message": message})
+            if self._maybe_run_werewolf_self_explosion(
+                round_state,
+                round_log,
+                active_players,
+                f"{name} 警上发言后",
+            ):
+                return True
 
         if self._maybe_run_werewolf_self_explosion(
             round_state,
@@ -1170,6 +1184,13 @@ class GameEngine:
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{name} did not return a valid sheriff PK speech.")
             round_state.sheriff_pk_speeches.append({"speaker": name, "message": message})
+            if self._maybe_run_werewolf_self_explosion(
+                round_state,
+                round_log,
+                active_players,
+                f"{name} PK 发言后",
+            ):
+                return True
 
         if self._maybe_run_werewolf_self_explosion(
             round_state,

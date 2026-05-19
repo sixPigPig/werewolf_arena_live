@@ -1,5 +1,5 @@
 import type { LiveGameEvent } from "../types";
-import { liveEventTitle } from "../liveLabels";
+import { eventTypeLabel, liveEventTitle } from "../liveLabels";
 
 const HIDDEN_TIMELINE_EVENT_TYPES = new Set([
   "model_response_delta",
@@ -19,22 +19,7 @@ const STORY_TIMELINE_EVENT_TYPES = new Set([
 ]);
 
 function rawTitleForEvent(event: LiveGameEvent) {
-  if (event.type === "action_requested" && event.actor && event.action) {
-    return `${event.actor} 正在 ${event.action}`;
-  }
-  if (event.type === "model_response_received") {
-    return "模型返回已接收";
-  }
-  if (event.type === "action_parsed") {
-    return "行动解析完成";
-  }
-  if (event.type === "game_completed") {
-    return "对局完成";
-  }
-  if (event.type === "game_failed") {
-    return "对局失败";
-  }
-  return event.type;
+  return liveEventTitle(event);
 }
 
 function payloadForEvent(event: LiveGameEvent) {
@@ -155,5 +140,5 @@ function metaForEvent(event: LiveGameEvent, variant: "raw" | "story") {
   if (variant === "story") {
     return "流程";
   }
-  return event.type;
+  return eventTypeLabel(event.type);
 }

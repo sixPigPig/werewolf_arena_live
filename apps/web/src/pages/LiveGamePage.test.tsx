@@ -1781,6 +1781,57 @@ describe("LiveGamePage", () => {
     expect(container.querySelector("pre")).not.toBeInTheDocument();
   });
 
+  it("localizes raw timeline event and action names", () => {
+    const events = [
+      {
+        id: 1,
+        type: "action_requested",
+        run_id: "run_1234abcd",
+        session_id: "game_1200abcd",
+        created_at: "2026-04-24T12:00:03Z",
+        round: 3,
+        phase: "day",
+        actor: "守夜定狼",
+        action: "werewolf_self_explosion",
+        payload: { options: ["自爆", "不自爆"] },
+      },
+      {
+        id: 2,
+        type: "model_request_started",
+        run_id: "run_1234abcd",
+        session_id: "game_1200abcd",
+        created_at: "2026-04-24T12:00:04Z",
+        round: null,
+        phase: "day",
+        actor: "守夜定狼",
+        action: "debate",
+        payload: { model: "deepseek-chat" },
+      },
+      {
+        id: 3,
+        type: "action_requested",
+        run_id: "run_1234abcd",
+        session_id: "game_1200abcd",
+        created_at: "2026-04-24T12:00:05Z",
+        round: 3,
+        phase: "day",
+        actor: "暗巷观星",
+        action: "debate",
+        payload: {},
+      },
+    ] as LiveGameEvent[];
+
+    render(<LiveEventTimeline events={events} />);
+
+    expect(screen.getByText("守夜定狼 正在考虑自爆")).toBeInTheDocument();
+    expect(screen.getByText("守夜定狼 正在思考")).toBeInTheDocument();
+    expect(screen.getByText("暗巷观星 正在公开发言")).toBeInTheDocument();
+    expect(screen.getByText("模型请求开始")).toBeInTheDocument();
+    expect(screen.queryByText(/werewolf_self_explosion/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/model_request_started/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/debate/)).not.toBeInTheDocument();
+  });
+
   it("renders a localized story timeline when requested", () => {
     const events = [
       {

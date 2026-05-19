@@ -1,5 +1,5 @@
 import type { LiveGameEvent } from "./types";
-import { liveEventTitle } from "./liveLabels";
+import { eventTypeLabel, liveEventTitle } from "./liveLabels";
 
 export type DirectorCueImportance = "normal" | "action" | "key" | "terminal";
 
@@ -206,7 +206,7 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
 
   return {
     ...base,
-    title: event.type,
+    title: eventTypeLabel(event.type),
     body: readablePayload(rawPayload),
     durationMs: 2000,
   };
@@ -224,7 +224,7 @@ function cueBase(event: LiveGameEvent): DirectorCue {
     phase: event.phase,
     actor: event.actor,
     action: event.action,
-    title: event.type,
+    title: eventTypeLabel(event.type),
     body: "",
     importance: "normal",
     durationMs: 2000,
@@ -335,7 +335,7 @@ function stateUpdatedCue(
 
   return {
     ...base,
-    title: event.type,
+    title: eventTypeLabel(event.type),
     body: readablePayload(rawPayload),
     durationMs: 3000,
   };
