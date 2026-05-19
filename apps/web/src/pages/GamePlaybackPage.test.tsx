@@ -112,6 +112,8 @@ describe("GamePlaybackPage", () => {
     expect(screen.queryByText("异常中断")).not.toBeInTheDocument();
     expect(screen.getByTestId("live-game-page")).toBeInTheDocument();
     expect(screen.getByText("观赛舞台")).toBeInTheDocument();
+    expect(screen.getByText("法官旁白")).toBeInTheDocument();
+    expect(screen.getAllByText("对局开始").length).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: "查看复盘" })).toHaveAttribute(
       "href",
       "/games/game_1200abcd",

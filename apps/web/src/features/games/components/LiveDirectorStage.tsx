@@ -5,8 +5,10 @@ import type { DirectorCue } from "../liveDirector";
 import { actionLabel, phaseLabel } from "../liveLabels";
 import type { LiveDebugTrace } from "../liveDebugTrace";
 import type { GodViewPlayer, GodViewState } from "../liveGodView";
+import type { LiveNarrativeState } from "../liveNarrative";
 import type { LivePlayer } from "../liveSpectator";
 import { appearanceClassName } from "../playerProfileOptions";
+import { LiveNarrativeCenter } from "./LiveNarrativeCenter";
 
 type LiveDirectorStageProps = {
   cue: DirectorCue | null;
@@ -15,6 +17,7 @@ type LiveDirectorStageProps = {
   players: LivePlayer[];
   activePlayerName: string | null;
   focusedPlayerName: string | null;
+  narrativeState: LiveNarrativeState;
   debugTrace?: LiveDebugTrace | null;
   godViewState?: GodViewState;
   autoFollow: boolean;
@@ -29,6 +32,7 @@ export function LiveDirectorStage({
   players,
   activePlayerName,
   focusedPlayerName,
+  narrativeState,
   debugTrace,
   godViewState,
   autoFollow,
@@ -38,12 +42,6 @@ export function LiveDirectorStage({
   const tone = stageTone(cue);
   const focusedPlayer =
     players.find((player) => player.name === focusedPlayerName) ?? null;
-  const focusedGodPlayer =
-    godViewState?.players.find((player) => player.name === focusedPlayerName) ??
-    null;
-  const speakerGodPlayer = godViewState?.speakerFlow.current ?? focusedGodPlayer;
-  const title = cue?.title ?? "等待导播事件";
-  const body = cue?.body ?? "对局运行已创建，正在等待下一条实时事件。";
   const isTerminalCue = cue?.importance === "terminal";
   const stagePlayers = godViewState?.players.slice(0, 12) ?? [];
   const railSplitIndex = Math.ceil(stagePlayers.length / 2);
@@ -65,7 +63,7 @@ export function LiveDirectorStage({
         data-testid="live-director-stage-shell"
       >
         <div className="relative z-40 mx-auto flex w-full max-w-5xl flex-col gap-2">
-          <div className="glass-panel-subtle mx-auto flex w-fit items-center gap-3 rounded-full border border-amber-300/35 px-4 py-2 text-sm shadow-[0_0_28px_rgba(245,158,11,0.2)]">
+          <div className="glass-panel-subtle mx-auto flex w-fit flex-wrap items-center justify-center gap-2 rounded-full border border-amber-300/35 px-4 py-2 text-sm shadow-[0_0_28px_rgba(245,158,11,0.2)]">
             <span className="text-slate-400">观赛舞台</span>
             <span className="font-semibold text-amber-200">
               {cue?.round ? `第 ${cue.round} 轮` : "等待回合"}
@@ -74,6 +72,24 @@ export function LiveDirectorStage({
             <span className="font-semibold text-teal-100">
               {cue?.phase ? phaseLabel(cue.phase) : "阶段未开始"}
             </span>
+            {cue ? (
+              <Badge color="amber" variant="surface">
+                #{cue.eventId}
+              </Badge>
+            ) : null}
+            {debugTrace ? (
+              <Badge color="amber" variant="surface">
+                {traceEventRange(debugTrace)}
+              </Badge>
+            ) : null}
+            <Badge color="gray" variant="surface">
+              队列剩余：{backlogCount}
+            </Badge>
+            {isCatchingUp ? (
+              <Badge color="amber" variant="surface">
+                自动追进度中
+              </Badge>
+            ) : null}
           </div>
         </div>
 
@@ -107,107 +123,8 @@ export function LiveDirectorStage({
           />
         </div>
 
-        <div className="glass-panel-subtle absolute left-1/2 top-[51%] z-30 w-[min(24rem,48vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-amber-300/25 p-3 text-center shadow-[0_24px_68px_rgba(0,0,0,0.38)] sm:top-[55%] sm:w-[min(30rem,64vw)] sm:p-4">
-          <div className="mb-3 flex flex-wrap justify-center gap-2 text-xs">
-            {speakerGodPlayer ? (
-              <div
-                className="god-view-speaker-stage mb-2 grid w-full grid-cols-[5rem_minmax(0,1fr)] items-center gap-3 rounded-lg border border-amber-300/30 bg-black/45 p-3 text-left shadow-[0_0_36px_rgba(251,191,36,0.16)] sm:grid-cols-[6rem_minmax(0,1fr)]"
-                data-testid="god-view-speaker-stage"
-              >
-                <div
-                  className={`relative flex aspect-[3/4] items-center justify-center overflow-hidden rounded-md border-2 bg-gradient-to-br ${avatarGradient(
-                    speakerGodPlayer.name,
-                  )} ${appearanceClassName(
-                    speakerGodPlayer.appearanceId,
-                  )} ${speakerTone(speakerGodPlayer)}`}
-                >
-                  {speakerGodPlayer.avatarImageUrl ? (
-                    <img
-                      alt={`${speakerGodPlayer.name} 当前发言形象`}
-                      className="h-full w-full object-cover"
-                      src={speakerGodPlayer.avatarImageUrl}
-                    />
-                  ) : (
-                    <span className="text-3xl font-black text-amber-50">
-                      {avatarText(speakerGodPlayer.name)}
-                    </span>
-                  )}
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold text-amber-200">
-                    {speakerGodPlayer.seatNumber} 号
-                  </p>
-                  <p className="truncate text-xl font-semibold text-amber-50">
-                    {speakerGodPlayer.name}
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                    <span className="rounded border border-amber-300/30 bg-amber-400/10 px-2 py-1 text-amber-100">
-                      {speakerGodPlayer.role}
-                    </span>
-                    <span className="rounded border border-sky-300/25 bg-sky-400/10 px-2 py-1 text-sky-100">
-                      {speakerGodPlayer.camp}
-                    </span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-300 sm:grid-cols-2">
-                    <span>
-                      上一位：{godViewState?.speakerFlow.previous?.name ?? "-"}
-                    </span>
-                    <span>
-                      下一位：{godViewState?.speakerFlow.next?.name ?? "-"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-            {cue ? (
-              <>
-                <Badge color="amber" variant="surface">
-                  #{cue.eventId}
-                </Badge>
-                <Badge color="gray" variant="surface">
-                  {importanceLabel(cue.importance)}
-                </Badge>
-              </>
-            ) : null}
-            {debugTrace ? (
-              <Badge color="amber" variant="surface">
-                {traceEventRange(debugTrace)}
-              </Badge>
-            ) : null}
-            <Badge color="gray" variant="surface">
-              队列剩余：{backlogCount}
-            </Badge>
-            {isCatchingUp ? (
-              <Badge color="amber" variant="surface">
-                自动追进度中
-              </Badge>
-            ) : null}
-          </div>
-          <h2 className="text-xl font-semibold text-amber-50 sm:text-2xl">
-            {title}
-          </h2>
-          {focusedGodPlayer ? (
-            <div className="mt-2 flex flex-wrap justify-center gap-2 text-xs">
-              <span className="rounded-md border border-amber-300/30 bg-amber-400/10 px-2 py-1 text-amber-100">
-                {focusedGodPlayer.seatNumber}号 · {focusedGodPlayer.role}
-              </span>
-              <span className="rounded-md border border-sky-300/25 bg-sky-400/10 px-2 py-1 text-sky-100">
-                {focusedGodPlayer.camp} · {focusedGodPlayer.identityGroup}
-              </span>
-              {focusedGodPlayer.isSheriff ? (
-                <span className="rounded-md border border-amber-300/35 bg-amber-400/15 px-2 py-1 text-amber-100">
-                  警长发言
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-          <div
-            className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-amber-300/15 p-3 text-left text-sm leading-6 text-slate-200 shadow-[inset_0_0_24px_rgba(0,0,0,0.24)] sm:max-h-48 sm:text-base"
-            tabIndex={0}
-          >
-            {body}
-          </div>
-        </div>
+        {cue ? <h2 className="sr-only">{cue.title}</h2> : null}
+        <LiveNarrativeCenter narrative={narrativeState} />
 
         {stagePlayers.length === 0 ? (
           <p className="absolute left-1/2 top-[72%] z-40 -translate-x-1/2 text-sm text-slate-400">
@@ -509,16 +426,6 @@ function stageCardStatus(
   return player.statusLabel === "发言中" ? "已行动" : player.statusLabel;
 }
 
-function speakerTone(player: GodViewPlayer) {
-  if (player.camp === "狼人阵营") {
-    return "border-red-400 shadow-[0_0_30px_rgba(248,113,113,0.28)]";
-  }
-  if (player.identityGroup === "神职") {
-    return "border-sky-200 shadow-[0_0_30px_rgba(125,211,252,0.22)]";
-  }
-  return "border-stone-300 shadow-[0_0_30px_rgba(214,211,209,0.16)]";
-}
-
 function avatarGradient(name: string) {
   const charTotal = Array.from(name).reduce(
     (total, char) => total + char.charCodeAt(0),
@@ -529,19 +436,6 @@ function avatarGradient(name: string) {
 
 function avatarText(name: string) {
   return Array.from(name).slice(0, 2).join("");
-}
-
-function importanceLabel(importance: DirectorCue["importance"]) {
-  if (importance === "terminal") {
-    return "结算";
-  }
-  if (importance === "key") {
-    return "关键";
-  }
-  if (importance === "action") {
-    return "行动";
-  }
-  return "流程";
 }
 
 function traceEventRange(trace: LiveDebugTrace) {

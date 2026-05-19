@@ -9,6 +9,7 @@ import {
   buildLiveDebugTraces,
   type LiveDebugTrace,
 } from "../liveDebugTrace";
+import { deriveLiveNarrativeState } from "../liveNarrative";
 import type { LiveSpectatorState } from "../liveSpectator";
 import type { LiveGameEvent } from "../types";
 import { GodViewBottomBoard } from "./GodViewBottomBoard";
@@ -48,6 +49,16 @@ export function LiveStageExperience({
   const focusedPlayerName = autoFollow
     ? autoFocusName
     : manualFocusName ?? autoFocusName;
+  const narrativeState = useMemo(
+    () =>
+      deriveLiveNarrativeState({
+        cue: director.currentCue,
+        events,
+        godViewState,
+        spectatorState,
+      }),
+    [director.currentCue, events, godViewState, spectatorState],
+  );
   const selectTrace = (trace: LiveDebugTrace | null) => {
     if (!trace) {
       setSelectedTraceId(null);
@@ -83,6 +94,7 @@ export function LiveStageExperience({
             focusedPlayerName={focusedPlayerName}
             godViewState={godViewState}
             isCatchingUp={director.isCatchingUp}
+            narrativeState={narrativeState}
             onAutoFollowChange={(value) => {
               setAutoFollow(value);
               if (value) {

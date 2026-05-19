@@ -296,6 +296,20 @@ describe("LiveGamePage", () => {
         action: "debate",
         payload: { options: [] },
       });
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "实时设置" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "实时设置" })).getByRole(
+        "button",
+        { name: "追到最新" },
+      ),
+    );
+    await userEvent.keyboard("{Escape}");
+    expect(await screen.findByText("请 张三 发言。")).toBeInTheDocument();
+    expect(screen.getByText("张三 正在整理公开发言。")).toBeInTheDocument();
+
+    act(() => {
       source.emit("model_request_started", {
         id: 3,
         type: "model_request_started",
@@ -369,10 +383,14 @@ describe("LiveGamePage", () => {
       ),
     );
     await userEvent.keyboard("{Escape}");
+    expect(screen.getByText("法官旁白")).toBeInTheDocument();
+    expect(screen.getByText("请听 张三 的发言。")).toBeInTheDocument();
+    expect(screen.getByTestId("live-narrative-center")).toHaveTextContent(
+      "我不是狼",
+    );
     expect(
       screen.getByRole("heading", { name: "张三 正在发言" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("张三：我不是狼")).toBeInTheDocument();
     expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
 
     act(() => {
@@ -1016,12 +1034,10 @@ describe("LiveGamePage", () => {
       });
     });
 
-    const stage = await screen.findByTestId("god-view-speaker-stage");
+    const stage = await screen.findByTestId("live-narrative-speaker");
     expect(within(stage).getByText("4 号")).toBeInTheDocument();
     expect(within(stage).getByText("Isaac")).toBeInTheDocument();
     expect(within(stage).getByText("守卫")).toBeInTheDocument();
-    expect(within(stage).getByText("上一位：Bert")).toBeInTheDocument();
-    expect(within(stage).getByText("下一位：Harold")).toBeInTheDocument();
 
     const strip = screen.getByTestId("god-view-stage-strip");
     expect(within(strip).getByText("经典 8 人局")).toBeInTheDocument();
