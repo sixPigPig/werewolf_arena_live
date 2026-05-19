@@ -197,4 +197,72 @@ describe("buildLiveDebugTraces", () => {
     expect(traces[0].status).toBe("ok");
     expect(traces[0].warnings).not.toContain("解析与状态不一致");
   });
+
+  it("attaches null actor vote state updates to the trace actor vote and detects conflict", () => {
+    const traces = buildLiveDebugTraces([
+      event({
+        id: 1,
+        type: "action_requested",
+        action: "vote",
+        payload: { options: ["Isaac", "Bert"] },
+      }),
+      event({
+        id: 2,
+        type: "model_response_received",
+        action: "vote",
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        action: "vote",
+        payload: { choice: "Isaac" },
+      }),
+      event({
+        id: 4,
+        type: "state_updated",
+        actor: null,
+        action: "vote",
+        payload: { votes: { Sam: "Bert" } },
+      }),
+    ]);
+
+    expect(traces).toHaveLength(1);
+    expect(traces[0].eventIds).toEqual([1, 2, 3, 4]);
+    expect(traces[0].status).toBe("error");
+    expect(traces[0].warnings).toContain("解析与状态不一致");
+  });
+
+  it("does not flag null actor vote state updates when the trace actor vote matches", () => {
+    const traces = buildLiveDebugTraces([
+      event({
+        id: 1,
+        type: "action_requested",
+        action: "vote",
+        payload: { options: ["Isaac", "Carl"] },
+      }),
+      event({
+        id: 2,
+        type: "model_response_received",
+        action: "vote",
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        action: "vote",
+        payload: { choice: "Isaac" },
+      }),
+      event({
+        id: 4,
+        type: "state_updated",
+        actor: null,
+        action: "vote",
+        payload: { votes: { Sam: "Isaac", Bert: "Carl" } },
+      }),
+    ]);
+
+    expect(traces).toHaveLength(1);
+    expect(traces[0].eventIds).toEqual([1, 2, 3, 4]);
+    expect(traces[0].status).toBe("ok");
+    expect(traces[0].warnings).not.toContain("解析与状态不一致");
+  });
 });

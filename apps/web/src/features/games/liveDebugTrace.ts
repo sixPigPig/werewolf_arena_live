@@ -304,12 +304,32 @@ function findActionTrace(traces: LiveDebugTrace[], event: LiveGameEvent) {
       return false;
     }
 
-    if (event.actor || event.action) {
+    if (event.actor) {
+      return trace.actor === event.actor && trace.action === event.action;
+    }
+
+    if (isActorVoteStateEvent(event, trace.actor)) {
+      return trace.action === event.action;
+    }
+
+    if (event.action) {
       return trace.actor === event.actor && trace.action === event.action;
     }
 
     return true;
   });
+}
+
+function isActorVoteStateEvent(
+  event: LiveGameEvent,
+  actor: string | null,
+) {
+  if (!actor || event.type !== "state_updated") {
+    return false;
+  }
+
+  const votes = recordField(event.payload, "votes");
+  return Boolean(votes && actor in votes);
 }
 
 function markStreamingModelNode(traces: LiveDebugTrace[], event: LiveGameEvent) {
