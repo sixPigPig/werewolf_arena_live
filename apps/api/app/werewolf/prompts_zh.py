@@ -13,11 +13,6 @@ DEFAULT_GAME_RULES = """你正在进行一局数字版狼人杀。
 """
 
 SCHEMAS: dict[str, dict[str, Any]] = {
-    "bid": {
-        "type": "object",
-        "properties": {"reasoning": {"type": "string"}, "bid": {"type": "string"}},
-        "required": ["reasoning", "bid"],
-    },
     "debate": {
         "type": "object",
         "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
@@ -128,7 +123,6 @@ SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 RESULT_FIELD_BY_ACTION = {
-    "bid": "bid",
     "debate": "say",
     "vote": "vote",
     "sheriff_run": "run",
@@ -153,7 +147,6 @@ RESULT_FIELD_BY_ACTION = {
 
 FIELD_LABELS = {
     "reasoning": "推理",
-    "bid": "发言意愿",
     "say": "发言内容",
     "vote": "投票对象",
     "run": "竞选选择",
@@ -230,17 +223,9 @@ def _render_debate(world_state: dict[str, Any]) -> str:
 def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
     role = world_state["role"]
     options = world_state.get("options", "")
-    if action == "bid":
-        return (
-            "行动：发言竞价。\n"
-            "你需要决定自己有多想成为下一个发言者。0 表示先观察，4 表示必须立刻回应。\n"
-            f"你本轮还剩 {world_state['debate_turns_left']} 次潜在发言机会。\n"
-            f"请以{role}的目标思考，输出字段 reasoning 和 bid。"
-        )
     if action == "debate":
         return (
             "行动：白天公开发言。\n"
-            f"你的发言动机：{world_state.get('bidding_rationale') or '暂无'}。\n"
             "如果你是狼人，要误导局势、转移怀疑、保护队友；如果你是好人，要寻找矛盾、提出怀疑并推动团队协作。\n"
             "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
         )

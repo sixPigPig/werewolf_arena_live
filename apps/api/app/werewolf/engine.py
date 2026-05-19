@@ -1452,39 +1452,6 @@ class GameEngine:
         if sheriff:
             self.state.sheriff_badge_lost = False
 
-    def _get_next_speaker(
-        self,
-        *,
-        active_players: list[str],
-        previous_speaker: str,
-        round_state: RoundState,
-    ) -> tuple[str, list[ActionLog], dict[str, int]]:
-        bid_logs: list[ActionLog] = []
-        bids: dict[str, int] = {}
-        players_by_name = self.state.player_by_name()
-
-        for name in active_players:
-            if name == previous_speaker:
-                continue
-            player = players_by_name[name]
-            bid, action_log = self._player_action(
-                player=player,
-                action="bid",
-                options=["0", "1", "2", "3", "4"],
-                result_key="bid",
-                round_state=round_state,
-                phase="day",
-            )
-            bid_value = int(bid)
-            bids[name] = bid_value
-            player.bidding_rationale = (
-                action_log.lm_log.result.get("reasoning", "") if action_log.lm_log.result else ""
-            )
-            bid_logs.append(action_log)
-
-        speaker = sorted(bids.items(), key=lambda item: (-item[1], item[0]))[0][0]
-        return speaker, bid_logs, bids
-
     def _run_voting(
         self,
         round_state: RoundState,
@@ -1999,7 +1966,6 @@ class GameEngine:
             "observations": player.observations,
             "remaining_players": "、".join(active_players),
             "debate": debate,
-            "bidding_rationale": player.bidding_rationale,
             "personality": player.personality,
             "rule_text": render_rule_text(self.rule_set),
             "werewolf_context": self._werewolf_context(player, active_players),

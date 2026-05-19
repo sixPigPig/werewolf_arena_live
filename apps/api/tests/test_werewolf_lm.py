@@ -127,6 +127,11 @@ def test_build_prompt_supports_werewolf_kill_vote_action() -> None:
     assert "输出字段 reasoning 和 target" in prompt
 
 
+def test_bid_prompt_is_no_longer_supported() -> None:
+    with pytest.raises(ValueError, match="Unsupported action: bid"):
+        build_prompt("bid", _world_state_for_special_action("村民", "Alice、Bob"))
+
+
 def _world_state_for_special_action(role: str, options: str) -> dict[str, object]:
     return {
         "name": "Alice",
@@ -655,11 +660,11 @@ def test_generate_action_retries_until_allowed_value() -> None:
 
 
 def test_generate_action_accepts_numeric_value_for_string_allowed_values() -> None:
-    provider = FakeProvider([{"reasoning": "我想发言", "bid": 2}])
+    provider = FakeProvider([{"reasoning": "我选择 2 号", "vote": 2}])
 
     value, log = generate_action(
         provider=provider,
-        action="bid",
+        action="vote",
         world_state={
             "name": "阿宁",
             "role": "村民",
@@ -672,15 +677,15 @@ def test_generate_action_accepts_numeric_value_for_string_allowed_values() -> No
             "rule_text": "你正在进行一局数字版狼人杀。",
             "werewolf_context": "",
             "debate_turns_left": 2,
-            "options": "0、1、2、3、4",
+            "options": "1、2",
         },
         model="deepseek-chat",
-        allowed_values=["0", "1", "2", "3", "4"],
-        result_key="bid",
+        allowed_values=["1", "2"],
+        result_key="vote",
     )
 
     assert value == "2"
-    assert log.result == {"reasoning": "我想发言", "bid": 2}
+    assert log.result == {"reasoning": "我选择 2 号", "vote": 2}
 
 
 def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> None:

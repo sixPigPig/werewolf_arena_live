@@ -24,8 +24,6 @@ class ScriptedChineseProvider:
         del model, temperature
         options = _extract_options(prompt)
         choice = options[0] if options else "1"
-        if '"bid"' in prompt:
-            return json.dumps({"reasoning": "我需要推动讨论。", "bid": "2"}, ensure_ascii=False)
         if '"say"' in prompt:
             return json.dumps(
                 {"reasoning": "我要给出明确怀疑。", "say": "我认为现在最可疑的人需要解释自己的发言。"},
@@ -909,7 +907,7 @@ class WitchChoiceProvider:
                 {"reasoning": "不发动技能。", "shoot": "不发动技能"},
                 ensure_ascii=False,
             )
-        return json.dumps({"reasoning": "默认选择。", "bid": "0"}, ensure_ascii=False)
+        raise AssertionError(f"Unexpected prompt: {prompt}")
 
 
 class HunterShotProvider(WitchChoiceProvider):
