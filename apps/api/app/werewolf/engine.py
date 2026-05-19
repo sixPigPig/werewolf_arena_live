@@ -471,10 +471,9 @@ class GameEngine:
             vote_logs: list[ActionLog] = []
             discussion_context = self._werewolf_discussion_context(round_state)
             previous_vote_context = self._werewolf_vote_round_context(previous_vote_round)
-            for wolf_name in active_wolves:
-                wolf = players_by_name[wolf_name]
-                target, action_log = self._player_action(
-                    player=wolf,
+            vote_requests = [
+                self._build_player_action_request(
+                    player=players_by_name[wolf_name],
                     action=ACTION_WEREWOLF_KILL_VOTE,
                     options=candidates,
                     result_key="target",
@@ -486,6 +485,13 @@ class GameEngine:
                         "werewolf_kill_vote_round": vote_round,
                     },
                 )
+                for wolf_name in active_wolves
+            ]
+            for wolf_name, (target, action_log) in zip(
+                active_wolves,
+                self._player_actions_batch(vote_requests),
+                strict=True,
+            ):
                 votes[wolf_name] = str(target)
                 vote_logs.append(action_log)
 
@@ -1028,8 +1034,8 @@ class GameEngine:
         active_wolves = [
             name for name in active_players if self._is_werewolf(players_by_name[name])
         ]
-        for name in active_wolves:
-            choice, action_log = self._player_action(
+        requests = [
+            self._build_player_action_request(
                 player=players_by_name[name],
                 action=ACTION_WEREWOLF_SELF_EXPLOSION,
                 options=[WEREWOLF_SELF_EXPLODE, WEREWOLF_NO_SELF_EXPLODE],
@@ -1038,6 +1044,13 @@ class GameEngine:
                 phase="day",
                 extra_world_state={"self_explosion_stage": stage},
             )
+            for name in active_wolves
+        ]
+        for name, (choice, action_log) in zip(
+            active_wolves,
+            self._player_actions_batch(requests),
+            strict=True,
+        ):
             if choice != WEREWOLF_SELF_EXPLODE:
                 continue
 
@@ -1181,8 +1194,8 @@ class GameEngine:
             return True
 
         withdrawn: list[str] = []
-        for name in candidates:
-            withdraw_choice, action_log = self._player_action(
+        withdraw_requests = [
+            self._build_player_action_request(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_WITHDRAW,
                 options=[SHERIFF_WITHDRAW, SHERIFF_STAY],
@@ -1190,6 +1203,13 @@ class GameEngine:
                 round_state=round_state,
                 phase="day",
             )
+            for name in candidates
+        ]
+        for name, (withdraw_choice, action_log) in zip(
+            candidates,
+            self._player_actions_batch(withdraw_requests),
+            strict=True,
+        ):
             round_log.sheriff_withdraw.append(action_log)
             if withdraw_choice == SHERIFF_WITHDRAW:
                 withdrawn.append(name)
@@ -1218,8 +1238,8 @@ class GameEngine:
         ):
             return True
 
-        for name in voters:
-            vote, action_log = self._player_action(
+        vote_requests = [
+            self._build_player_action_request(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_VOTE,
                 options=final_candidates,
@@ -1227,6 +1247,13 @@ class GameEngine:
                 round_state=round_state,
                 phase="day",
             )
+            for name in voters
+        ]
+        for name, (vote, action_log) in zip(
+            voters,
+            self._player_actions_batch(vote_requests),
+            strict=True,
+        ):
             round_log.sheriff_votes.append(action_log)
             if isinstance(vote, str) and vote in final_candidates:
                 round_state.sheriff_votes[name] = vote
@@ -1281,8 +1308,8 @@ class GameEngine:
         ):
             return True
 
-        for name in voters:
-            vote, action_log = self._player_action(
+        runoff_vote_requests = [
+            self._build_player_action_request(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_RUNOFF_VOTE,
                 options=pk_candidates,
@@ -1290,6 +1317,13 @@ class GameEngine:
                 round_state=round_state,
                 phase="day",
             )
+            for name in voters
+        ]
+        for name, (vote, action_log) in zip(
+            voters,
+            self._player_actions_batch(runoff_vote_requests),
+            strict=True,
+        ):
             round_log.sheriff_runoff_votes.append(action_log)
             if isinstance(vote, str) and vote in pk_candidates:
                 round_state.sheriff_runoff_votes[name] = vote
@@ -1459,8 +1493,9 @@ class GameEngine:
         votes: dict[str, str] = {}
         logs: list[ActionLog] = []
         players_by_name = self.state.player_by_name()
-        for voter in self._eligible_voters(active_players):
-            vote, action_log = self._player_action(
+        voters = self._eligible_voters(active_players)
+        vote_requests = [
+            self._build_player_action_request(
                 player=players_by_name[voter],
                 action="vote",
                 options=[name for name in active_players if name != voter],
@@ -1468,6 +1503,13 @@ class GameEngine:
                 round_state=round_state,
                 phase="vote",
             )
+            for voter in voters
+        ]
+        for voter, (vote, action_log) in zip(
+            voters,
+            self._player_actions_batch(vote_requests),
+            strict=True,
+        ):
             if not isinstance(vote, str) or not vote:
                 raise ValueError(f"{voter} did not return a valid vote.")
             votes[voter] = vote
@@ -1591,16 +1633,23 @@ class GameEngine:
             payload={"active_players": active_players.copy()},
         )
         players_by_name = self.state.player_by_name()
-        for name in active_players:
-            player = players_by_name[name]
-            summary, action_log = self._player_action(
-                player=player,
+        summary_requests = [
+            self._build_player_action_request(
+                player=players_by_name[name],
                 action="summarize",
                 options=[],
                 result_key="summary",
                 round_state=round_state,
                 phase="summary",
             )
+            for name in active_players
+        ]
+        for name, (summary, action_log) in zip(
+            active_players,
+            self._player_actions_batch(summary_requests),
+            strict=True,
+        ):
+            player = players_by_name[name]
             if isinstance(summary, str) and summary:
                 round_state.summaries[name] = summary
                 player.add_observation(f"第{round_state.number}轮总结：{summary}")

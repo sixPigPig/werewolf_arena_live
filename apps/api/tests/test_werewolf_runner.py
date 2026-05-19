@@ -310,6 +310,89 @@ class RetryingSheriffRunProvider(ScriptedChineseProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+class BarrierActionProvider(ScriptedChineseProvider):
+    def __init__(
+        self,
+        *,
+        action_key: str,
+        result_key: str,
+        response_value_by_actor: dict[str, str],
+        expected_calls: int,
+    ) -> None:
+        self.action_key = action_key
+        self.result_key = result_key
+        self.response_value_by_actor = response_value_by_actor
+        self.barrier = threading.Barrier(expected_calls)
+        self.actions: list[tuple[str, str]] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        name = _extract_actor_name(prompt)
+        if f'"{self.result_key}"' in prompt and self._matches_action(prompt):
+            self.actions.append((self.action_key, name))
+            self.barrier.wait(timeout=1.0)
+            return json.dumps(
+                {
+                    "reasoning": "并发批量测试。",
+                    self.result_key: self.response_value_by_actor[name],
+                },
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+    def _matches_action(self, prompt: str) -> bool:
+        marker_by_action = {
+            "vote": "行动：投票放逐。",
+            "sheriff_withdraw": "行动：退水选择。",
+            "sheriff_vote": "行动：警长投票。",
+            "sheriff_runoff_vote": "行动：二轮警下投票。",
+            "werewolf_self_explosion": "行动：狼人自爆判断。",
+            "werewolf_kill_vote": "行动：狼人夜晚狼刀投票。",
+            "summarize": "行动：回合总结。",
+        }
+        marker = marker_by_action.get(self.action_key)
+        return marker is None or marker in prompt
+
+
+class BarrierSheriffProvider(BarrierActionProvider):
+    def __init__(
+        self,
+        *,
+        action_key: str,
+        result_key: str,
+        response_value_by_actor: dict[str, str],
+        expected_calls: int,
+        candidates: set[str],
+        first_round_vote_targets: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            action_key=action_key,
+            result_key=result_key,
+            response_value_by_actor=response_value_by_actor,
+            expected_calls=expected_calls,
+        )
+        self.candidates = candidates
+        self.first_round_vote_targets = first_round_vote_targets or {}
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        name = _extract_actor_name(prompt)
+        if '"run"' in prompt:
+            choice = "上警" if name in self.candidates else "不上警"
+            return json.dumps({"reasoning": "测试警长竞选。", "run": choice}, ensure_ascii=False)
+        if (
+            self.action_key == "sheriff_runoff_vote"
+            and '"sheriff_vote"' in prompt
+            and "行动：警长投票。" in prompt
+        ):
+            return json.dumps(
+                {
+                    "reasoning": "测试首轮平票。",
+                    "sheriff_vote": self.first_round_vote_targets[name],
+                },
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 def _run_sheriff_stream_fallback_batch(
     queue: multiprocessing.Queue,
 ) -> None:
@@ -1038,6 +1121,47 @@ def test_round_log_deserializes_werewolf_consensus_logs() -> None:
     serialized = round_log.to_dict()
     assert serialized["werewolf_discussion"] == payload["werewolf_discussion"]
     assert serialized["werewolf_votes"] == payload["werewolf_votes"]
+
+
+def test_werewolf_kill_vote_requests_active_wolves_concurrently() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_parallel_werewolf_kill_vote",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=500,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    active_wolves = [player.name for player in state.players if player.role == "狼人"]
+    non_wolves = [player.name for player in state.players if player.role != "狼人"]
+    target = non_wolves[0]
+    provider = BarrierActionProvider(
+        action_key="werewolf_kill_vote",
+        result_key="target",
+        response_value_by_actor={wolf: target for wolf in active_wolves},
+        expected_calls=len(active_wolves),
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    attacked = engine._run_werewolf_kill_consensus(
+        round_state,
+        round_log,
+        active_players,
+        active_wolves,
+        non_wolves,
+    )
+
+    assert attacked == target
+    assert [
+        actor for action, actor in provider.actions if action == "werewolf_kill_vote"
+    ] == active_wolves
+    assert round_state.werewolf_vote_rounds[0]["votes"] == {
+        wolf: target for wolf in active_wolves
+    }
+    assert [log.actor for log in round_log.werewolf_votes[0]] == active_wolves
 
 
 def _extract_options(prompt: str) -> list[str]:
@@ -1886,6 +2010,47 @@ def test_werewolf_self_explosion_prompt_renders_double_badge_context() -> None:
     assert schema["required"] == ["reasoning", "self_explode"]
 
 
+def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_parallel_self_explosion",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=69,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    active_wolves = [player.name for player in state.players if player.role == "狼人"]
+    exploding_wolf = active_wolves[1]
+    provider = BarrierActionProvider(
+        action_key="werewolf_self_explosion",
+        result_key="self_explode",
+        response_value_by_actor={
+            wolf: "自爆" if wolf != active_wolves[0] else "不自爆"
+            for wolf in active_wolves
+        },
+        expected_calls=len(active_wolves),
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    interrupted = engine._maybe_run_werewolf_self_explosion(
+        round_state,
+        round_log,
+        active_players,
+        "并发自爆测试",
+    )
+
+    assert interrupted is True
+    assert [
+        actor for action, actor in provider.actions if action == "werewolf_self_explosion"
+    ] == active_wolves
+    assert round_state.werewolf_self_exploded == exploding_wolf
+    assert round_log.werewolf_self_explosion is not None
+    assert round_log.werewolf_self_explosion.actor == exploding_wolf
+
+
 def test_first_pre_sheriff_self_explosion_ends_day_without_losing_badge() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -2598,6 +2763,74 @@ def test_revealed_idiot_does_not_vote() -> None:
     assert idiot.name not in votes
 
 
+def test_day_exile_vote_requests_eligible_voters_concurrently() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_parallel_day_vote",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=54,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    eligible_voters = active_players.copy()
+    response_value_by_actor = {
+        voter: next(name for name in active_players if name != voter)
+        for voter in eligible_voters
+    }
+    provider = BarrierActionProvider(
+        action_key="vote",
+        result_key="vote",
+        response_value_by_actor=response_value_by_actor,
+        expected_calls=len(eligible_voters),
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    votes, logs = engine._run_voting(round_state, active_players)
+
+    assert [actor for action, actor in provider.actions if action == "vote"] == eligible_voters
+    assert votes == response_value_by_actor
+    assert [log.actor for log in logs] == eligible_voters
+    assert list(round_state.vote_weights) == eligible_voters
+
+
+def test_round_summaries_request_active_players_concurrently() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_parallel_summaries",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=59,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    provider = BarrierActionProvider(
+        action_key="summarize",
+        result_key="summary",
+        response_value_by_actor={
+            name: f"{name} 的并发总结"
+            for name in active_players
+        },
+        expected_calls=len(active_players),
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_summaries(round_state, round_log, active_players)
+
+    assert [
+        actor for action, actor in provider.actions if action == "summarize"
+    ] == active_players
+    assert list(round_state.summaries) == active_players
+    assert [log.actor for log in round_log.summaries] == active_players
+    for name in active_players:
+        assert state.player_by_name()[name].observations[-1] == (
+            f"第1轮总结：{name} 的并发总结"
+        )
+
+
 def test_small_rule_day_phase_uses_full_seat_order_without_bids() -> None:
     rule_set = get_rule_set("starter_6")
     state = initialize_game_state(
@@ -2726,6 +2959,105 @@ def test_sheriff_run_requests_all_players_concurrently() -> None:
     ] == active_players
     assert round_state.sheriff_candidates == []
     assert round_state.sheriff_voters == active_players
+
+
+def test_sheriff_withdraw_requests_candidates_concurrently() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_parallel_sheriff_withdraw",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=34,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    candidates = active_players[:2]
+    provider = BarrierSheriffProvider(
+        action_key="sheriff_withdraw",
+        result_key="withdraw",
+        response_value_by_actor={name: "不退水" for name in candidates},
+        expected_calls=len(candidates),
+        candidates=set(candidates),
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+
+    assert [
+        actor for action, actor in provider.actions if action == "sheriff_withdraw"
+    ] == candidates
+    assert [log.actor for log in round_log.sheriff_withdraw] == candidates
+
+
+def test_sheriff_vote_requests_off_sheriff_voters_concurrently() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_parallel_sheriff_vote",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=35,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    candidates = active_players[:2]
+    voters = active_players[2:]
+    provider = BarrierSheriffProvider(
+        action_key="sheriff_vote",
+        result_key="sheriff_vote",
+        response_value_by_actor={name: candidates[0] for name in voters},
+        expected_calls=len(voters),
+        candidates=set(candidates),
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+
+    assert [
+        actor for action, actor in provider.actions if action == "sheriff_vote"
+    ] == voters
+    assert round_state.sheriff_votes == {name: candidates[0] for name in voters}
+    assert [log.actor for log in round_log.sheriff_votes] == voters
+
+
+def test_sheriff_runoff_vote_requests_off_sheriff_voters_concurrently() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_parallel_sheriff_runoff_vote",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=36,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    candidates = active_players[:2]
+    voters = active_players[2:]
+    first_round_votes = {
+        name: candidates[index % 2]
+        for index, name in enumerate(voters)
+    }
+    provider = BarrierSheriffProvider(
+        action_key="sheriff_runoff_vote",
+        result_key="sheriff_vote",
+        response_value_by_actor={name: candidates[0] for name in voters},
+        expected_calls=len(voters),
+        candidates=set(candidates),
+        first_round_vote_targets=first_round_votes,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+
+    assert [
+        actor for action, actor in provider.actions if action == "sheriff_runoff_vote"
+    ] == voters
+    assert round_state.sheriff_runoff_votes == {name: candidates[0] for name in voters}
+    assert [log.actor for log in round_log.sheriff_runoff_votes] == voters
 
 
 def test_sheriff_run_stream_failure_falls_back_without_ordered_batch_deadlock() -> None:
