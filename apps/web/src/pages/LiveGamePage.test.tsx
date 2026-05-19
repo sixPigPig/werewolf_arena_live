@@ -128,6 +128,17 @@ function emitEvent(
   });
 }
 
+async function catchUpLiveStage() {
+  await userEvent.click(screen.getByRole("button", { name: "实时设置" }));
+  await userEvent.click(
+    within(screen.getByRole("dialog", { name: "实时设置" })).getByRole(
+      "button",
+      { name: "追到最新" },
+    ),
+  );
+  await userEvent.keyboard("{Escape}");
+}
+
 function LiveGameRouteSwitcher() {
   const navigate = useNavigate();
 
@@ -298,14 +309,7 @@ describe("LiveGamePage", () => {
       });
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "实时设置" }));
-    await userEvent.click(
-      within(screen.getByRole("dialog", { name: "实时设置" })).getByRole(
-        "button",
-        { name: "追到最新" },
-      ),
-    );
-    await userEvent.keyboard("{Escape}");
+    await catchUpLiveStage();
     expect(await screen.findByText("请 张三 发言。")).toBeInTheDocument();
     expect(screen.getByText("张三 正在整理公开发言。")).toBeInTheDocument();
 
@@ -375,14 +379,7 @@ describe("LiveGamePage", () => {
       screen.getByTestId("god-view-stage-player-card-李四"),
     ).toBeInTheDocument();
     expect(await screen.findByText("张三 开始发言")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "实时设置" }));
-    await userEvent.click(
-      within(screen.getByRole("dialog", { name: "实时设置" })).getByRole(
-        "button",
-        { name: "追到最新" },
-      ),
-    );
-    await userEvent.keyboard("{Escape}");
+    await catchUpLiveStage();
     expect(screen.getByText("法官旁白")).toBeInTheDocument();
     expect(screen.getByText("请听 张三 的发言。")).toBeInTheDocument();
     expect(screen.getByTestId("live-narrative-center")).toHaveTextContent(
@@ -408,6 +405,7 @@ describe("LiveGamePage", () => {
       });
     });
 
+    await catchUpLiveStage();
     const zhangCard = screen.getByTestId("god-view-stage-player-card-张三");
     const liCard = screen.getByTestId("god-view-stage-player-card-李四");
     expect(zhangCard).toHaveAccessibleName(/发言中/);
@@ -859,6 +857,7 @@ describe("LiveGamePage", () => {
       });
     });
 
+    await catchUpLiveStage();
     const top = screen.getByTestId("god-view-top-zone");
     expect(within(top).getByText("经典 8 人局")).toBeInTheDocument();
     expect(within(top).getByText("第 1 天")).toBeInTheDocument();
@@ -964,6 +963,7 @@ describe("LiveGamePage", () => {
       });
     });
 
+    await catchUpLiveStage();
     const stage = screen.getByTestId("live-director-stage");
     const leftRail = within(stage).getByTestId("god-view-player-rail-left");
     const rightRail = within(stage).getByTestId("god-view-player-rail-right");
@@ -1035,6 +1035,7 @@ describe("LiveGamePage", () => {
       });
     });
 
+    await catchUpLiveStage();
     const stage = await screen.findByTestId("live-narrative-speaker");
     expect(within(stage).getByText("4 号")).toBeInTheDocument();
     expect(within(stage).getByText("Isaac")).toBeInTheDocument();
@@ -1093,6 +1094,7 @@ describe("LiveGamePage", () => {
       });
     });
 
+    await catchUpLiveStage();
     expect(screen.getAllByText("平安夜").length).toBeGreaterThan(0);
     expect(
       screen.getByText("Isaac 被狼人袭击，但被守卫守护。"),
@@ -1202,6 +1204,7 @@ describe("LiveGamePage", () => {
       });
     });
 
+    await catchUpLiveStage();
     const zhangCard = await screen.findByTestId(
       "god-view-stage-player-card-张三",
     );
@@ -1229,6 +1232,7 @@ describe("LiveGamePage", () => {
       });
     });
 
+    await catchUpLiveStage();
     expect(liCard).toHaveAttribute("data-card-state", "speaking");
     expect(zhangCard).toHaveAttribute("data-card-state", "idle");
   });
@@ -1386,6 +1390,75 @@ describe("LiveGamePage", () => {
 
     expect(screen.getByText("天亮了，进入白天发言。")).toBeInTheDocument();
     vi.useRealTimers();
+  });
+
+  it("syncs side panels to the director stage event window", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(runningRunResponse()),
+    );
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+
+    act(() => {
+      emitEvent(source, {
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "村民", model: "deepseek-chat" },
+          ],
+        },
+      });
+      emitEvent(source, { id: 2, type: "round_started", round: 1 });
+      emitEvent(source, {
+        id: 3,
+        type: "phase_started",
+        round: 1,
+        phase: "day",
+      });
+      emitEvent(source, {
+        id: 4,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        payload: {
+          active_players: ["张三"],
+          exiled: "李四",
+        },
+      });
+    });
+
+    expect(
+      within(screen.getByTestId("live-narrative-center")).getByText(
+        "对局开始",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("god-view-intel-panel")).not.toHaveTextContent(
+      "投票放逐",
+    );
+    expect(
+      screen.getByTestId("god-view-stage-player-card-李四"),
+    ).not.toHaveAttribute("data-card-state", "out");
+
+    await catchUpLiveStage();
+
+    expect(screen.getByText(/李四 被放逐出局/)).toBeInTheDocument();
+    expect(screen.getByTestId("god-view-intel-panel")).toHaveTextContent(
+      "投票放逐",
+    );
+    expect(
+      screen.getByTestId("god-view-stage-player-card-李四"),
+    ).toHaveAttribute("data-card-state", "out");
   });
 
   it("opens completed runs at the terminal event instead of replaying the full backlog", async () => {
@@ -1781,18 +1854,25 @@ describe("LiveGamePage", () => {
       within(storyTimelineElement).getByText("第 1 轮开始"),
     ).toBeInTheDocument();
     expect(
-      within(storyTimelineElement).getByText("白天阶段开始"),
-    ).toBeInTheDocument();
+      within(storyTimelineElement).queryByText("白天阶段开始"),
+    ).not.toBeInTheDocument();
     expect(
       within(storyTimelineElement).queryByText("round_started"),
     ).not.toBeInTheDocument();
     expect(within(storyTimelineElement).getAllByRole("listitem")).toHaveLength(
-      2,
+      1,
     );
 
     act(() => {
       vi.advanceTimersByTime(2500);
     });
+
+    expect(
+      within(storyTimelineElement).getByText("白天阶段开始"),
+    ).toBeInTheDocument();
+    expect(within(storyTimelineElement).getAllByRole("listitem")).toHaveLength(
+      2,
+    );
 
     act(() => {
       screen.getByRole("button", { name: "调试面板" }).click();

@@ -16,6 +16,9 @@ import { useLiveDirector } from "../features/games/hooks/useLiveDirector";
 import { deriveGodViewState } from "../features/games/liveGodView";
 import { deriveLiveNavStatus } from "../features/games/liveNavStatus";
 import { deriveLiveSpectatorState } from "../features/games/liveSpectator";
+import type { LiveGameEvent } from "../features/games/types";
+
+const EMPTY_EVENTS: LiveGameEvent[] = [];
 
 export function LiveGamePage() {
   const { runId } = useParams();
@@ -53,20 +56,6 @@ export function LiveGamePage() {
   );
   const canResumeRun =
     run?.status === "failed" || terminalEvent?.type === "game_failed";
-  const spectatorState = useMemo(
-    () => deriveLiveSpectatorState(events),
-    [events],
-  );
-  const godViewState = useMemo(
-    () =>
-      deriveGodViewState(
-        events,
-        spectatorState,
-        run?.rule_set?.name ?? "实时对局",
-        { sheriffEnabled: run?.rule_set?.sheriff_enabled },
-      ),
-    [events, run?.rule_set?.name, run?.rule_set?.sheriff_enabled, spectatorState],
-  );
   if (run && runId && !(runId in terminalStartByRunId)) {
     setTerminalStartByRunId({
       ...terminalStartByRunId,
@@ -82,6 +71,33 @@ export function LiveGamePage() {
     resetKey: runId,
     startAtLatestTerminal: shouldStartAtTerminal,
   });
+  const currentEventId = director.currentEventId;
+  const stageEvents = useMemo(() => {
+    if (currentEventId === null) {
+      return EMPTY_EVENTS;
+    }
+
+    return events.filter((event) => event.id <= currentEventId);
+  }, [events, currentEventId]);
+  const spectatorState = useMemo(
+    () => deriveLiveSpectatorState(stageEvents),
+    [stageEvents],
+  );
+  const godViewState = useMemo(
+    () =>
+      deriveGodViewState(
+        stageEvents,
+        spectatorState,
+        run?.rule_set?.name ?? "实时对局",
+        { sheriffEnabled: run?.rule_set?.sheriff_enabled },
+      ),
+    [
+      run?.rule_set?.name,
+      run?.rule_set?.sheriff_enabled,
+      spectatorState,
+      stageEvents,
+    ],
+  );
   const liveNavStatus = deriveLiveNavStatus({
     backlogCount: director.backlogCount,
     connectionState,
@@ -202,7 +218,7 @@ export function LiveGamePage() {
         <LiveStageExperience
           debugPanelOpen={isDebugPanelOpen}
           director={director}
-          events={events}
+          events={stageEvents}
           godViewState={godViewState}
           mode="live"
           onDebugPanelOpenChange={handleDebugPanelOpenChange}
