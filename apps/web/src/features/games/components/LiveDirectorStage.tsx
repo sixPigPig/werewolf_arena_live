@@ -3,6 +3,7 @@ import { withGlassPanel } from "../../../components/ui/glass";
 
 import type { DirectorCue } from "../liveDirector";
 import { actionLabel, phaseLabel } from "../liveLabels";
+import type { LiveDebugTrace } from "../liveDebugTrace";
 import type { GodViewPlayer, GodViewState } from "../liveGodView";
 import type { LivePlayer } from "../liveSpectator";
 import { appearanceClassName } from "../playerProfileOptions";
@@ -14,6 +15,7 @@ type LiveDirectorStageProps = {
   players: LivePlayer[];
   activePlayerName: string | null;
   focusedPlayerName: string | null;
+  debugTrace?: LiveDebugTrace | null;
   godViewState?: GodViewState;
   autoFollow: boolean;
   onSelectPlayer: (name: string) => void;
@@ -27,6 +29,7 @@ export function LiveDirectorStage({
   players,
   activePlayerName,
   focusedPlayerName,
+  debugTrace,
   godViewState,
   autoFollow,
   onSelectPlayer,
@@ -47,6 +50,7 @@ export function LiveDirectorStage({
   const leftRailPlayers = stagePlayers.slice(0, railSplitIndex);
   const rightRailPlayers = stagePlayers.slice(railSplitIndex);
   const livePlayersByName = new Map(players.map((player) => [player.name, player]));
+  const debugHighlightedPlayers = new Set(debugTrace?.relatedPlayers ?? []);
 
   return (
     <section
@@ -84,6 +88,7 @@ export function LiveDirectorStage({
             activePlayerName={activePlayerName}
             focusedPlayerName={focusedPlayerName}
             isTerminalCue={isTerminalCue}
+            debugHighlightedPlayers={debugHighlightedPlayers}
             livePlayersByName={livePlayersByName}
             onSelectPlayer={onSelectPlayer}
             players={leftRailPlayers}
@@ -94,6 +99,7 @@ export function LiveDirectorStage({
             activePlayerName={activePlayerName}
             focusedPlayerName={focusedPlayerName}
             isTerminalCue={isTerminalCue}
+            debugHighlightedPlayers={debugHighlightedPlayers}
             livePlayersByName={livePlayersByName}
             onSelectPlayer={onSelectPlayer}
             players={rightRailPlayers}
@@ -162,6 +168,11 @@ export function LiveDirectorStage({
                   {importanceLabel(cue.importance)}
                 </Badge>
               </>
+            ) : null}
+            {debugTrace ? (
+              <Badge color="amber" variant="surface">
+                {traceEventRange(debugTrace)}
+              </Badge>
             ) : null}
             <Badge color="gray" variant="surface">
               队列剩余：{backlogCount}
@@ -287,6 +298,7 @@ function PlayerRail({
   activePlayerName,
   focusedPlayerName,
   isTerminalCue,
+  debugHighlightedPlayers,
   livePlayersByName,
   onSelectPlayer,
   players,
@@ -295,6 +307,7 @@ function PlayerRail({
   activePlayerName: string | null;
   focusedPlayerName: string | null;
   isTerminalCue: boolean;
+  debugHighlightedPlayers: Set<string>;
   livePlayersByName: Map<string, LivePlayer>;
   onSelectPlayer: (name: string) => void;
   players: GodViewPlayer[];
@@ -312,6 +325,7 @@ function PlayerRail({
           activePlayerName={activePlayerName}
           focusedPlayerName={focusedPlayerName}
           isTerminalCue={isTerminalCue}
+          debugHighlighted={debugHighlightedPlayers.has(player.name)}
           key={player.name}
           livePlayer={livePlayersByName.get(player.name) ?? null}
           onSelectPlayer={onSelectPlayer}
@@ -327,6 +341,7 @@ function StagePlayerCard({
   activePlayerName,
   focusedPlayerName,
   isTerminalCue,
+  debugHighlighted,
   livePlayer,
   onSelectPlayer,
   player,
@@ -335,6 +350,7 @@ function StagePlayerCard({
   activePlayerName: string | null;
   focusedPlayerName: string | null;
   isTerminalCue: boolean;
+  debugHighlighted: boolean;
   livePlayer: LivePlayer | null;
   onSelectPlayer: (name: string) => void;
   player: GodViewPlayer;
@@ -365,8 +381,13 @@ function StagePlayerCard({
         side === "right" ? "text-right" : ""
       } ${stagePlayerTone(player, cardState)} ${
         isFocused ? "is-focused ring-1 ring-amber-100/70" : ""
+      } ${
+        debugHighlighted
+          ? "ring-2 ring-amber-300/85 shadow-[0_0_30px_rgba(251,191,36,0.38),0_12px_32px_rgba(0,0,0,0.26)]"
+          : ""
       } ${!player.isAlive ? "opacity-65 grayscale" : ""}`}
       data-card-state={cardState}
+      data-debug-highlighted={debugHighlighted ? "true" : "false"}
       data-testid={`god-view-stage-player-card-${player.name}`}
       onClick={() => onSelectPlayer(player.name)}
       type="button"
@@ -521,6 +542,12 @@ function importanceLabel(importance: DirectorCue["importance"]) {
     return "行动";
   }
   return "流程";
+}
+
+function traceEventRange(trace: LiveDebugTrace) {
+  const first = trace.eventIds[0];
+  const last = trace.eventIds.at(-1);
+  return first === last ? `Trace #${first}` : `Trace #${first}-${last}`;
 }
 
 function stageTone(cue: DirectorCue | null) {
