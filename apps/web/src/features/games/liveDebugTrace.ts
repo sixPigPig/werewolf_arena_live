@@ -108,11 +108,12 @@ export function buildLiveDebugTraces(
       continue;
     }
 
-    const trace = findActionTrace(traces, event) ?? createActionTrace(event);
-    if (!traces.includes(trace)) {
-      traces.push(trace);
+    const existingTrace = findActionTrace(traces, event);
+    if (existingTrace) {
+      appendEvent(existingTrace, event);
+    } else {
+      traces.push(createActionTrace(event));
     }
-    appendEvent(trace, event);
   }
 
   return traces.map(finalizeTrace);
@@ -312,11 +313,7 @@ function findActionTrace(traces: LiveDebugTrace[], event: LiveGameEvent) {
       return trace.action === event.action;
     }
 
-    if (event.action) {
-      return trace.actor === event.actor && trace.action === event.action;
-    }
-
-    return true;
+    return false;
   });
 }
 

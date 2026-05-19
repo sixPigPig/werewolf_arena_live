@@ -265,4 +265,53 @@ describe("buildLiveDebugTraces", () => {
     expect(traces[0].status).toBe("ok");
     expect(traces[0].warnings).not.toContain("解析与状态不一致");
   });
+
+  it("does not attach unrelated null actor state updates to a previous actor trace", () => {
+    const traces = buildLiveDebugTraces([
+      event({
+        id: 1,
+        type: "action_requested",
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        actor: null,
+        action: null,
+        payload: { eliminated: "Bert" },
+      }),
+    ]);
+
+    expect(traces).toHaveLength(2);
+    expect(traces[0]).toMatchObject({
+      id: "trace-1-1",
+      eventIds: [1],
+      actor: "Sam",
+    });
+    expect(traces[1]).toMatchObject({
+      id: "trace-2-2",
+      eventIds: [2],
+      actor: null,
+    });
+  });
+
+  it("does not duplicate payloads state diffs or impact summaries for orphan non-request events", () => {
+    const traces = buildLiveDebugTraces([
+      event({
+        id: 1,
+        type: "state_updated",
+        actor: null,
+        action: null,
+        payload: {
+          active_player: "Sam",
+          debate_entry: { speaker: "Sam", message: "继续发言" },
+        },
+      }),
+    ]);
+
+    expect(traces).toHaveLength(1);
+    expect(traces[0].eventIds).toEqual([1]);
+    expect(traces[0].payloads).toHaveLength(1);
+    expect(traces[0].stateDiff).toHaveLength(1);
+    expect(traces[0].impactSummary).toEqual(["Sam 新增公开发言"]);
+  });
 });
