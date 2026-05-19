@@ -13,6 +13,8 @@ MODEL_GROUP_VILLAGER = "villager"
 MODEL_GROUP_WEREWOLF = "werewolf"
 
 ACTION_REMOVE = "remove"
+ACTION_WEREWOLF_DISCUSS = "werewolf_discuss"
+ACTION_WEREWOLF_KILL_VOTE = "werewolf_kill_vote"
 ACTION_PROTECT = "protect"
 ACTION_INVESTIGATE = "investigate"
 ACTION_WITCH_SAVE = "witch_save"

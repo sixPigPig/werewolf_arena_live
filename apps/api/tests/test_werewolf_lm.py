@@ -87,6 +87,34 @@ def test_build_prompt_supports_hunter_shoot_action() -> None:
     assert "输出字段 reasoning 和 shoot" in prompt
 
 
+def test_build_prompt_supports_werewolf_discuss_action() -> None:
+    prompt, schema = build_prompt(
+        "werewolf_discuss",
+        _world_state_for_special_action("狼人", "Alice、Bob"),
+    )
+
+    assert schema["required"] == ["reasoning", "target", "message"]
+    assert "狼人夜晚私密沟通" in prompt
+    assert "输出字段 reasoning、target 和 message" in prompt
+
+
+def test_build_prompt_supports_werewolf_kill_vote_action() -> None:
+    prompt, schema = build_prompt(
+        "werewolf_kill_vote",
+        {
+            **_world_state_for_special_action("狼人", "Alice、Bob"),
+            "werewolf_discussion": ["Wolf A 建议袭击 Alice。"],
+            "werewolf_previous_vote_round": "第1轮票型：Wolf A -> Alice；Wolf B -> Bob。",
+            "werewolf_kill_vote_round": 2,
+        },
+    )
+
+    assert schema["required"] == ["reasoning", "target"]
+    assert "狼人夜晚狼刀投票" in prompt
+    assert "当前是第 2 轮狼刀投票" in prompt
+    assert "输出字段 reasoning 和 target" in prompt
+
+
 def _world_state_for_special_action(role: str, options: str) -> dict[str, object]:
     return {
         "name": "Alice",

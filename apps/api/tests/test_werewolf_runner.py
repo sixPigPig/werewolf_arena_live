@@ -536,6 +536,79 @@ class HunterShotBadgeProvider(HunterShotProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+def test_round_state_serializes_werewolf_consensus_fields() -> None:
+    round_state = RoundState(number=1, players=["Wolf", "Alice"])
+    round_state.werewolf_discussion.append(
+        {
+            "round": 1,
+            "speaker": "Wolf",
+            "target": "Alice",
+            "message": "建议袭击 Alice。",
+        }
+    )
+    round_state.werewolf_vote_rounds.append(
+        {
+            "round": 1,
+            "candidates": ["Alice"],
+            "votes": {"Wolf": "Alice"},
+            "tally": {"Alice": 1},
+            "unanimous": True,
+            "result": "Alice",
+        }
+    )
+
+    payload = round_state.to_dict()
+
+    assert payload["werewolf_discussion"] == [
+        {
+            "round": 1,
+            "speaker": "Wolf",
+            "target": "Alice",
+            "message": "建议袭击 Alice。",
+        }
+    ]
+    assert payload["werewolf_vote_rounds"] == [
+        {
+            "round": 1,
+            "candidates": ["Alice"],
+            "votes": {"Wolf": "Alice"},
+            "tally": {"Alice": 1},
+            "unanimous": True,
+            "result": "Alice",
+        }
+    ]
+
+
+def test_round_log_serializes_werewolf_consensus_logs() -> None:
+    lm_log = SimpleNamespace(to_dict=lambda: {"prompt": "p", "raw_response": "{}", "result": {}})
+    discussion_log = SimpleNamespace(
+        to_dict=lambda: {
+            "actor": "Wolf",
+            "action": "werewolf_discuss",
+            "options": ["Alice"],
+            "choice": "Alice",
+            "lm_log": lm_log.to_dict(),
+        }
+    )
+    vote_log = SimpleNamespace(
+        to_dict=lambda: {
+            "actor": "Wolf",
+            "action": "werewolf_kill_vote",
+            "options": ["Alice"],
+            "choice": "Alice",
+            "lm_log": lm_log.to_dict(),
+        }
+    )
+    round_log = RoundLog(number=1)
+    round_log.werewolf_discussion.append(discussion_log)
+    round_log.werewolf_votes.append([vote_log])
+
+    payload = round_log.to_dict()
+
+    assert payload["werewolf_discussion"][0]["action"] == "werewolf_discuss"
+    assert payload["werewolf_votes"][0][0]["action"] == "werewolf_kill_vote"
+
+
 def _extract_options(prompt: str) -> list[str]:
     marker = next((candidate for candidate in ("候选人：", "候选选项：") if candidate in prompt), "")
     if not marker:

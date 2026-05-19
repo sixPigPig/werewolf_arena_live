@@ -122,6 +122,8 @@ class RoundState:
     investigated: str | None = None
     exiled: str | None = None
     night_deaths: list[DeathEvent] = field(default_factory=list)
+    werewolf_discussion: list[dict[str, Any]] = field(default_factory=list)
+    werewolf_vote_rounds: list[dict[str, Any]] = field(default_factory=list)
     day_deaths: list[DeathEvent] = field(default_factory=list)
     saved_by_witch: str | None = None
     poisoned: str | None = None
@@ -166,6 +168,8 @@ class RoundState:
             "investigated": self.investigated,
             "exiled": self.exiled,
             "night_deaths": [death.to_dict() for death in self.night_deaths],
+            "werewolf_discussion": self.werewolf_discussion,
+            "werewolf_vote_rounds": self.werewolf_vote_rounds,
             "day_deaths": [death.to_dict() for death in self.day_deaths],
             "saved_by_witch": self.saved_by_witch,
             "poisoned": self.poisoned,
@@ -211,6 +215,8 @@ class RoundLog:
     witch_save: ActionLog | None = None
     witch_poison: ActionLog | None = None
     hunter_shoot: ActionLog | None = None
+    werewolf_discussion: list[ActionLog] = field(default_factory=list)
+    werewolf_votes: list[list[ActionLog]] = field(default_factory=list)
     bid: list[list[ActionLog]] = field(default_factory=list)
     debate: list[ActionLog] = field(default_factory=list)
     votes: list[list[ActionLog]] = field(default_factory=list)
@@ -234,6 +240,10 @@ class RoundLog:
             "witch_save": self.witch_save.to_dict() if self.witch_save else None,
             "witch_poison": self.witch_poison.to_dict() if self.witch_poison else None,
             "hunter_shoot": self.hunter_shoot.to_dict() if self.hunter_shoot else None,
+            "werewolf_discussion": [log.to_dict() for log in self.werewolf_discussion],
+            "werewolf_votes": [
+                [log.to_dict() for log in vote_logs] for vote_logs in self.werewolf_votes
+            ],
             "bid": [[log.to_dict() for log in turn] for turn in self.bid],
             "debate": [log.to_dict() for log in self.debate],
             "votes": [[log.to_dict() for log in vote_logs] for vote_logs in self.votes],

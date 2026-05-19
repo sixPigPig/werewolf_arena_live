@@ -86,6 +86,20 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {"reasoning": {"type": "string"}, "remove": {"type": "string"}},
         "required": ["reasoning", "remove"],
     },
+    "werewolf_discuss": {
+        "type": "object",
+        "properties": {
+            "reasoning": {"type": "string"},
+            "target": {"type": "string"},
+            "message": {"type": "string"},
+        },
+        "required": ["reasoning", "target", "message"],
+    },
+    "werewolf_kill_vote": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "target": {"type": "string"}},
+        "required": ["reasoning", "target"],
+    },
     "protect": {
         "type": "object",
         "properties": {"reasoning": {"type": "string"}, "protect": {"type": "string"}},
@@ -128,6 +142,8 @@ RESULT_FIELD_BY_ACTION = {
     "werewolf_self_explosion": "self_explode",
     "investigate": "investigate",
     "remove": "remove",
+    "werewolf_discuss": "target",
+    "werewolf_kill_vote": "target",
     "protect": "protect",
     "witch_save": "save",
     "witch_poison": "poison",
@@ -148,6 +164,8 @@ FIELD_LABELS = {
     "self_explode": "自爆选择",
     "investigate": "查验对象",
     "remove": "袭击对象",
+    "target": "袭击目标",
+    "message": "队友沟通",
     "protect": "保护对象",
     "save": "解药选择",
     "poison": "毒药选择",
@@ -312,6 +330,35 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             f"候选人：{options}。\n"
             "你必须选择一名最值得查验的玩家。\n"
             "输出字段 reasoning 和 investigate。"
+        )
+    if action == "werewolf_discuss":
+        discussion = world_state.get("werewolf_discussion") or []
+        previous_vote = world_state.get("werewolf_previous_vote_round") or "暂无。"
+        vote_round = int(world_state.get("werewolf_kill_vote_round") or 1)
+        discussion_text = "\n".join(f"- {line}" for line in discussion) if discussion else "暂无。"
+        return (
+            "行动：狼人夜晚私密沟通。\n"
+            f"当前是第 {vote_round} 轮狼刀投票前的沟通。\n"
+            f"候选人：{options}。\n"
+            f"已有狼人沟通：\n{discussion_text}\n"
+            f"上一轮票型：{previous_vote}\n"
+            "你必须从候选人中建议一名袭击目标，并用 message 给队友简短说明理由。"
+            "这是仅狼人队友可见的信息。避免伤害性措辞，用游戏术语表达。"
+            "输出字段 reasoning、target 和 message。"
+        )
+    if action == "werewolf_kill_vote":
+        discussion = world_state.get("werewolf_discussion") or []
+        previous_vote = world_state.get("werewolf_previous_vote_round") or "暂无。"
+        vote_round = int(world_state.get("werewolf_kill_vote_round") or 1)
+        discussion_text = "\n".join(f"- {line}" for line in discussion) if discussion else "暂无。"
+        return (
+            "行动：狼人夜晚狼刀投票。\n"
+            f"当前是第 {vote_round} 轮狼刀投票。\n"
+            f"候选人：{options}。\n"
+            f"狼人沟通记录：\n{discussion_text}\n"
+            f"上一轮票型：{previous_vote}\n"
+            "你必须从候选人中选择一名袭击目标。狼刀只有在所有存活狼人投向同一目标时才成立。"
+            "请尽量与队友形成一致刀口。输出字段 reasoning 和 target。"
         )
     if action == "remove":
         return (

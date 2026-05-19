@@ -119,6 +119,8 @@ def waiting_message_for_action(action: str) -> str:
     if action in {
         "investigate",
         "remove",
+        "werewolf_discuss",
+        "werewolf_kill_vote",
         "protect",
         "witch_save",
         "witch_poison",
