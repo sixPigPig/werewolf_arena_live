@@ -1128,6 +1128,127 @@ def test_get_game_detail_returns_state_and_logs(tmp_path: Path) -> None:
     assert payload["logs"][0]["eliminate"]["lm_log"]["prompt"] == "请选择今晚击杀对象。"
 
 
+def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> None:
+    session_id = "game_1200abcd"
+    state = sample_state(session_id, winner="好人阵营")
+    state["rule_set"] = {
+        "id": "starter_6",
+        "name": "新手 6 人快局",
+        "player_count": 6,
+        "roles": [],
+    }
+    state["rounds"][0]["debate"] = [{"speaker": "张三", "message": "我认为李四身份偏低。"}]
+    state["rounds"][0]["votes"] = [{"张三": "李四"}]
+    write_json(tmp_path / session_id / "game_complete.json", state)
+    write_json(tmp_path / session_id / "game_logs.json", sample_logs())
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_id
+    assert payload["status"] == "complete"
+    assert payload["resumable"] is False
+    assert payload["rule_set"]["id"] == "starter_6"
+    event_types = [event["type"] for event in payload["events"]]
+    events = payload["events"]
+    assert event_types[:3] == ["run_created", "run_started", "game_started"]
+    assert "round_started" in event_types
+    assert "action_requested" in event_types
+    assert "action_parsed" in event_types
+    assert any(
+        event["type"] == "action_requested"
+        and event["actor"] == "张三"
+        and event["action"] == "remove"
+        and event["payload"].get("options") == ["李四"]
+        for event in events
+    )
+    assert any(
+        event["type"] == "action_parsed"
+        and event["actor"] == "张三"
+        and event["action"] == "remove"
+        and event["payload"].get("choice") == "李四"
+        for event in events
+    )
+    assert any(
+        event["type"] == "state_updated"
+        and event["phase"] == "day"
+        and event["payload"].get("votes") == {"张三": "李四"}
+        for event in events
+    )
+    assert event_types[-1] == "game_completed"
+    assert payload["events"][-1]["payload"] == {"winner": "好人阵营"}
+    assert [event["id"] for event in payload["events"]] == list(
+        range(1, len(payload["events"]) + 1)
+    )
+    assert all(event["run_id"] == f"playback_{session_id}" for event in payload["events"])
+
+
+def test_get_game_playback_returns_partial_end_without_resuming(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    state = sample_state(session_id, winner="", error="Maximum rounds exceeded")
+    write_json(tmp_path / session_id / "game_partial.json", state)
+    write_json(tmp_path / session_id / "game_logs.json", sample_logs())
+    write_json(
+        tmp_path / session_id / RESUME_CHECKPOINT_FILE,
+        {
+            "state_at_round_start": state,
+            "logs_before_round": sample_logs(),
+            "run_params": {
+                "villager_model": "deepseek-chat",
+                "werewolf_model": "deepseek-chat",
+                "seed": 7,
+                "max_rounds": 8,
+                "rule_set_id": "classic_8",
+                "player_configs": [],
+            },
+        },
+    )
+    override_logs_root(tmp_path)
+    registry = LiveRunRegistry()
+    created_runs: list[dict[str, object]] = []
+
+    def fail_create_run(**kwargs: object) -> object:
+        created_runs.append(kwargs)
+        raise AssertionError("playback must not create a live run")
+
+    monkeypatch.setattr(registry, "create_run", fail_create_run)
+    override_live_registry(registry)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "partial"
+    assert payload["resumable"] is True
+    assert payload["events"][-1]["type"] == "game_failed"
+    assert payload["events"][-1]["payload"]["playback_partial"] is True
+    assert payload["events"][-1]["payload"]["error"] == "Maximum rounds exceeded"
+    assert created_runs == []
+
+
+def test_get_game_playback_returns_404_for_missing_session(tmp_path: Path) -> None:
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get("/api/v1/games/game_1200abcd/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Game session not found"}
+
+
 def test_get_game_detail_returns_404_for_missing_valid_session(tmp_path: Path) -> None:
     override_logs_root(tmp_path)
 
