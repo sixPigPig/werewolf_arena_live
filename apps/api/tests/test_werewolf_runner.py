@@ -1,5 +1,6 @@
 import json
 import random
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -235,6 +236,24 @@ class SheriffFlowProvider(ScriptedChineseProvider):
             else:
                 choice = options[0] if options else "1"
             return json.dumps({"reasoning": "测试放逐票。", "vote": choice}, ensure_ascii=False)
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class ConcurrentSheriffRunProvider(ScriptedChineseProvider):
+    def __init__(self, expected_calls: int) -> None:
+        self.barrier = threading.Barrier(expected_calls)
+        self.actions: list[tuple[str, str]] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        name = _extract_actor_name(prompt)
+        if '"run"' in prompt:
+            self.actions.append(("sheriff_run", name))
+            self.barrier.wait(timeout=1.0)
+            return json.dumps(
+                {"reasoning": "本轮不上警。", "run": "不上警"},
+                ensure_ascii=False,
+            )
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
@@ -2564,6 +2583,30 @@ def test_sheriff_candidate_speeches_use_random_start_and_direction() -> None:
     assert [
         name for action, name in provider.actions if action == "sheriff_speech"
     ] == expected_speech_order
+
+
+def test_sheriff_run_requests_all_players_concurrently() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_parallel_sheriff_run",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=31,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    provider = ConcurrentSheriffRunProvider(expected_calls=len(active_players))
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+
+    assert [
+        actor for action, actor in provider.actions if action == "sheriff_run"
+    ] == active_players
+    assert round_state.sheriff_candidates == []
+    assert round_state.sheriff_voters == active_players
 
 
 def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_debate() -> None:

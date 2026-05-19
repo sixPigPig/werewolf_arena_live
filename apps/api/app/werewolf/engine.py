@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import copy
 import random
+import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Protocol
 
 from app.werewolf.config import (
@@ -17,7 +20,7 @@ from app.werewolf.config import (
     choose_player_names,
 )
 from app.werewolf.live import NullEventSink
-from app.werewolf.lm import ModelProvider, generate_action_with_events
+from app.werewolf.lm import LmLog, ModelProvider, generate_action_with_events
 from app.werewolf.streaming import action_visible_stream_field
 from app.werewolf.models import (
     ActionLog,
@@ -106,6 +109,72 @@ class GameCheckpointManager(Protocol):
         error: str,
     ) -> None:
         pass
+
+
+@dataclass(frozen=True)
+class PlayerActionRequest:
+    player: Player
+    action: str
+    options: list[str]
+    result_key: str
+    round_state: RoundState
+    phase: str
+    world_state: dict[str, object]
+    is_secret_wolf_action: bool
+
+
+@dataclass(frozen=True)
+class PlayerActionResult:
+    request: PlayerActionRequest
+    value: object | None
+    lm_log: LmLog
+
+
+class _OrderedBatchProvider:
+    def __init__(
+        self,
+        *,
+        provider: ModelProvider,
+        index: int,
+        condition: threading.Condition,
+        next_index: dict[str, int],
+    ) -> None:
+        self._provider = provider
+        self._index = index
+        self._condition = condition
+        self._next_index = next_index
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        self._await_turn()
+        return self._provider.complete_json(
+            model=model,
+            prompt=prompt,
+            temperature=temperature,
+        )
+
+    def __getattr__(self, name: str) -> object:
+        if name != "stream_json":
+            raise AttributeError(name)
+        stream_json = getattr(self._provider, "stream_json", None)
+        if not callable(stream_json):
+            raise AttributeError(name)
+
+        def ordered_stream_json(
+            *,
+            model: str,
+            prompt: str,
+            temperature: float,
+        ) -> object:
+            self._await_turn()
+            return stream_json(model=model, prompt=prompt, temperature=temperature)
+
+        return ordered_stream_json
+
+    def _await_turn(self) -> None:
+        with self._condition:
+            self._condition.wait_for(lambda: self._next_index["value"] == self._index)
+            self._next_index["value"] += 1
+            self._condition.notify_all()
 
 
 NO_WITCH_SAVE = "不使用解药"
@@ -1036,8 +1105,8 @@ class GameEngine:
         players_by_name = self.state.player_by_name()
         candidates: list[str] = []
         voters: list[str] = []
-        for name in active_players:
-            run_choice, action_log = self._player_action(
+        run_requests = [
+            self._build_player_action_request(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_RUN,
                 options=[SHERIFF_RUN, SHERIFF_SKIP],
@@ -1045,6 +1114,13 @@ class GameEngine:
                 round_state=round_state,
                 phase="day",
             )
+            for name in active_players
+        ]
+        for name, (run_choice, action_log) in zip(
+            active_players,
+            self._player_actions_batch(run_requests),
+            strict=True,
+        ):
             round_log.sheriff_run.append(action_log)
             if run_choice == SHERIFF_RUN:
                 candidates.append(name)
@@ -1548,90 +1624,208 @@ class GameEngine:
         phase: str,
         extra_world_state: dict[str, object] | None = None,
     ) -> tuple[object | None, ActionLog]:
-        world_state = self._world_state(player, options, round_state)
-        if extra_world_state:
-            world_state.update(extra_world_state)
-        is_secret_wolf_action = self._is_secret_werewolf_action(phase, action)
-        if not is_secret_wolf_action:
-            self._publish(
-                "action_requested",
-                round_number=round_state.number,
-                phase=phase,
-                actor=player.name,
-                action=action,
-                payload={"options": options.copy(), "result_key": result_key},
-            )
-        try:
-            value, lm_log = generate_action_with_events(
-                provider=self.provider,
-                action=action,
-                world_state=world_state,
-                model=player.model,
-                allowed_values=options if options else None,
-                result_key=result_key,
-                event_sink=NullEventSink() if is_secret_wolf_action else self.event_sink,
-                event_context={
-                    "round_number": round_state.number,
-                    "phase": phase,
-                    "actor": player.name,
-                    "action": action,
-                },
-            )
-        except Exception as exc:
-            error = str(exc)
-            self._checkpoint_model_failure(
-                actor=player.name,
-                action=action,
-                phase=phase,
-                model=player.model,
-                error=error,
-            )
-            raise
-        action_log = ActionLog(
-            actor=player.name,
+        request = self._build_player_action_request(
+            player=player,
             action=action,
             options=options,
+            result_key=result_key,
+            round_state=round_state,
+            phase=phase,
+            extra_world_state=extra_world_state,
+        )
+        return self._player_action_single(request)
+
+    def _build_player_action_request(
+        self,
+        *,
+        player: Player,
+        action: str,
+        options: list[str],
+        result_key: str,
+        round_state: RoundState,
+        phase: str,
+        extra_world_state: dict[str, object] | None = None,
+    ) -> PlayerActionRequest:
+        options_snapshot = options.copy()
+        world_state = self._world_state(player, options_snapshot, round_state)
+        if extra_world_state:
+            world_state.update(extra_world_state)
+        world_state = copy.deepcopy(world_state)
+        is_secret_wolf_action = self._is_secret_werewolf_action(phase, action)
+        return PlayerActionRequest(
+            player=player,
+            action=action,
+            options=options_snapshot,
+            result_key=result_key,
+            round_state=round_state,
+            phase=phase,
+            world_state=world_state,
+            is_secret_wolf_action=is_secret_wolf_action,
+        )
+
+    def _execute_player_action_request(
+        self,
+        request: PlayerActionRequest,
+        provider: ModelProvider | None = None,
+    ) -> PlayerActionResult:
+        value, lm_log = generate_action_with_events(
+            provider=provider or self.provider,
+            action=request.action,
+            world_state=request.world_state,
+            model=request.player.model,
+            allowed_values=request.options if request.options else None,
+            result_key=request.result_key,
+            event_sink=NullEventSink() if request.is_secret_wolf_action else self.event_sink,
+            event_context={
+                "round_number": request.round_state.number,
+                "phase": request.phase,
+                "actor": request.player.name,
+                "action": request.action,
+            },
+        )
+        return PlayerActionResult(request=request, value=value, lm_log=lm_log)
+
+    def _finalize_player_action_result(
+        self,
+        result: PlayerActionResult,
+    ) -> tuple[object | None, ActionLog]:
+        request = result.request
+        player = request.player
+        value = result.value
+        lm_log = result.lm_log
+        action_log = ActionLog(
+            actor=player.name,
+            action=request.action,
+            options=request.options,
             choice=str(value) if value is not None else None,
             lm_log=lm_log,
         )
         self._checkpoint_model_success(
             actor=player.name,
-            action=action,
-            phase=phase,
+            action=request.action,
+            phase=request.phase,
             model=player.model,
             raw_response=lm_log.raw_response,
             prompt=lm_log.prompt,
         )
-        if not is_secret_wolf_action:
+        if not request.is_secret_wolf_action:
             self._publish(
                 "model_response_received",
-                round_number=round_state.number,
-                phase=phase,
+                round_number=request.round_state.number,
+                phase=request.phase,
                 actor=player.name,
-                action=action,
+                action=request.action,
                 payload={
                     "request_id": lm_log.request_id,
                     "model": player.model,
                     "message": "模型返回已接收，正在解析行动",
                 },
             )
-            visible_result = _visible_action_result(action, lm_log.result)
+            visible_result = _visible_action_result(request.action, lm_log.result)
             self._publish(
                 "action_parsed",
-                round_number=round_state.number,
-                phase=phase,
+                round_number=request.round_state.number,
+                phase=request.phase,
                 actor=player.name,
-                action=action,
+                action=request.action,
                 payload={
                     "choice": action_log.choice,
                     "result": visible_result,
                     "visible_result": visible_result,
-                    "options": options.copy(),
+                    "options": request.options.copy(),
                 },
             )
-        if options and value not in options:
-            raise ValueError(f"{player.name} returned invalid {action}: {value}")
+        if request.options and value not in request.options:
+            raise ValueError(f"{player.name} returned invalid {request.action}: {value}")
         return value, action_log
+
+    def _player_actions_batch(
+        self,
+        requests: list[PlayerActionRequest],
+    ) -> list[tuple[object | None, ActionLog]]:
+        if not requests:
+            return []
+        if len(requests) == 1:
+            return [self._player_action_single(requests[0])]
+
+        for request in requests:
+            self._publish_player_action_requested(request)
+
+        results: list[PlayerActionResult | None] = [None] * len(requests)
+        exceptions: dict[int, Exception] = {}
+        condition = threading.Condition()
+        next_index = {"value": 0}
+        with ThreadPoolExecutor(max_workers=len(requests)) as executor:
+            futures = {
+                executor.submit(
+                    self._execute_player_action_request,
+                    request,
+                    _OrderedBatchProvider(
+                        provider=self.provider,
+                        index=index,
+                        condition=condition,
+                        next_index=next_index,
+                    ),
+                ): index
+                for index, request in enumerate(requests)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    results[index] = future.result()
+                except Exception as exc:
+                    exceptions[index] = exc
+
+        if exceptions:
+            first_failed_index = min(exceptions)
+            request = requests[first_failed_index]
+            exc = exceptions[first_failed_index]
+            self._checkpoint_player_action_failure(request, exc)
+            raise exc
+
+        finalized: list[tuple[object | None, ActionLog]] = []
+        for result in results:
+            if result is None:
+                raise RuntimeError("Player action batch completed without a result.")
+            finalized.append(self._finalize_player_action_result(result))
+        return finalized
+
+    def _player_action_single(
+        self,
+        request: PlayerActionRequest,
+    ) -> tuple[object | None, ActionLog]:
+        self._publish_player_action_requested(request)
+        try:
+            result = self._execute_player_action_request(request)
+        except Exception as exc:
+            self._checkpoint_player_action_failure(request, exc)
+            raise
+        return self._finalize_player_action_result(result)
+
+    def _publish_player_action_requested(self, request: PlayerActionRequest) -> None:
+        if request.is_secret_wolf_action:
+            return
+        self._publish(
+            "action_requested",
+            round_number=request.round_state.number,
+            phase=request.phase,
+            actor=request.player.name,
+            action=request.action,
+            payload={"options": request.options.copy(), "result_key": request.result_key},
+        )
+
+    def _checkpoint_player_action_failure(
+        self,
+        request: PlayerActionRequest,
+        exc: Exception,
+    ) -> None:
+        self._checkpoint_model_failure(
+            actor=request.player.name,
+            action=request.action,
+            phase=request.phase,
+            model=request.player.model,
+            error=str(exc),
+        )
 
     def _checkpoint_round_start(
         self,
