@@ -273,7 +273,10 @@ function finalizeTrace(trace: LiveDebugTrace): LiveDebugTrace {
   if (trace.choice && !trace.nodes.some((node) => node.kind === "state")) {
     warnings.add("选择未影响状态");
   }
-  if (trace.choice && hasStateTargetConflict(trace.choice, trace.payloads)) {
+  if (
+    trace.choice &&
+    hasStateTargetConflict(trace.choice, trace.actor, trace.payloads)
+  ) {
     warnings.add("解析与状态不一致");
   }
 
@@ -455,8 +458,13 @@ function playersFromStatePayload(payload: Record<string, unknown>) {
 
 function hasStateTargetConflict(
   choice: string,
+  actor: string | null,
   payloads: LiveDebugTrace["payloads"],
 ) {
+  if (!actor) {
+    return false;
+  }
+
   return payloads.some((item) => {
     if (item.type !== "state_updated" || !isRecord(item.payload)) {
       return false;
@@ -467,7 +475,11 @@ function hasStateTargetConflict(
       return false;
     }
 
-    return Object.values(votes).some((target) => String(target) !== choice);
+    if (!(actor in votes)) {
+      return false;
+    }
+
+    return String(votes[actor]) !== choice;
   });
 }
 

@@ -88,13 +88,19 @@ describe("buildLiveDebugTraces", () => {
         type: "model_response_delta",
         payload: { request_id: "req_1", visible_text: "我" },
       }),
-      event({ id: 3, type: "model_response_received" }),
-      event({ id: 4, type: "action_parsed", payload: { choice: "skip" } }),
+      event({
+        id: 3,
+        type: "model_thinking_tick",
+        payload: { request_id: "req_1", message: "思考中" },
+      }),
+      event({ id: 4, type: "model_response_received" }),
+      event({ id: 5, type: "action_parsed", payload: { choice: "skip" } }),
     ]);
 
     expect(traces).toHaveLength(1);
-    expect(traces[0].eventIds).toEqual([1, 3, 4]);
+    expect(traces[0].eventIds).toEqual([1, 4, 5]);
     expect(traces[0].nodes.some((node) => node.eventId === 2)).toBe(false);
+    expect(traces[0].nodes.some((node) => node.eventId === 3)).toBe(false);
     expect(traces[0].nodes.find((node) => node.kind === "model")?.label).toBe(
       "模型返回",
     );
@@ -159,5 +165,36 @@ describe("buildLiveDebugTraces", () => {
 
     expect(traces[0].status).toBe("error");
     expect(traces[0].warnings).toContain("解析与状态不一致");
+  });
+
+  it("compares vote conflicts only against the trace actor vote", () => {
+    const traces = buildLiveDebugTraces([
+      event({
+        id: 1,
+        type: "action_requested",
+        action: "vote",
+        payload: { options: ["Isaac", "Carl"] },
+      }),
+      event({
+        id: 2,
+        type: "model_response_received",
+        action: "vote",
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        action: "vote",
+        payload: { choice: "Isaac" },
+      }),
+      event({
+        id: 4,
+        type: "state_updated",
+        action: "vote",
+        payload: { votes: { Sam: "Isaac", Bert: "Carl" } },
+      }),
+    ]);
+
+    expect(traces[0].status).toBe("ok");
+    expect(traces[0].warnings).not.toContain("解析与状态不一致");
   });
 });
