@@ -241,6 +241,25 @@ describe("VirtualPlayerLibrary", () => {
     expect(screen.getByText("冷锋拆阵")).toBeInTheDocument();
   });
 
+  it("renders the full appearance image in the player card portrait area", () => {
+    renderLibrary({
+      profiles: [
+        profile({
+          id: "profile-full-portrait",
+          display_name: "整图阿夜",
+          avatar_image_url: "/api/v1/player-profiles/avatar/full.png",
+          avatar_image_mime: "image/png",
+        }),
+      ],
+    });
+
+    const image = screen.getByRole("img", { name: "整图阿夜 人物形象" });
+    const portrait = image.closest(".virtual-player-card-portrait");
+
+    expect(portrait).toBeInTheDocument();
+    expect(portrait).toHaveAttribute("data-display", "full-image");
+  });
+
   it("shows backend default personality text in the prompt preview when personality text is blank", async () => {
     const user = userEvent.setup();
     const props = renderLibrary();

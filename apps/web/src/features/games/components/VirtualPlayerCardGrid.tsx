@@ -239,11 +239,14 @@ export function VirtualPlayerCardGrid({
                 <li className="virtual-player-card" key={profile.id}>
                   <span
                     className={[
-                      "virtual-player-card-avatar",
+                      "virtual-player-card-portrait",
                       profile.avatar_image_url
-                        ? "virtual-player-card-avatar-image"
+                        ? "virtual-player-card-portrait-image"
                         : appearanceClassName(profile.appearance_id),
                     ].join(" ")}
+                    data-display={
+                      profile.avatar_image_url ? "full-image" : "fallback"
+                    }
                   >
                     {profile.avatar_image_url ? (
                       <img
