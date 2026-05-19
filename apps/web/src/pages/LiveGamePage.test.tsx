@@ -1269,11 +1269,15 @@ describe("LiveGamePage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "调试面板" }));
 
-    expect(screen.getByText("对局异常中断。")).toBeInTheDocument();
+    const narrativeCenter = screen.getByTestId("live-narrative-center");
+    expect(within(narrativeCenter).getByText("对局异常中断。")).toBeInTheDocument();
+    expect(
+      within(narrativeCenter).getByText("失败原因已记录，公开舞台已停止播放。"),
+    ).toBeInTheDocument();
     expect((await screen.findAllByText("对局失败")).length).toBeGreaterThanOrEqual(
       1,
     );
-    expect(screen.getAllByText("model timeout").length).toBeGreaterThan(0);
+    expect(narrativeCenter).not.toHaveTextContent("model timeout");
   });
 
   it("resumes a failed live run from its saved checkpoint", async () => {

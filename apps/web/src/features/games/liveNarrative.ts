@@ -196,7 +196,7 @@ function cueForEvent({
       tone: "danger",
       judgeLine: "对局异常中断。",
       performerLine: "本局无法继续播放。",
-      detailLine: stringField(payload, "error") || cue.body,
+      detailLine: "失败原因已记录，公开舞台已停止播放。",
       actorName: null,
       action: cue.action,
       speechText: "",

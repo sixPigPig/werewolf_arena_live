@@ -491,7 +491,7 @@ describe("deriveLiveNarrativeState", () => {
       kind: "terminal",
       tone: "danger",
       judgeLine: "对局异常中断。",
-      detailLine: "模型服务不可用",
+      detailLine: "失败原因已记录，公开舞台已停止播放。",
     });
   });
 
@@ -562,6 +562,30 @@ describe("deriveLiveNarrativeState", () => {
 
     expect(state.cue.actorName).toBeNull();
     expect(state.speaker).toBeNull();
+  });
+
+  it("narrates terminal failures without exposing private error internals", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "game_failed",
+        payload: {
+          error: "provider returned raw_response with private prompt",
+          raw_response: "private raw response",
+        },
+      }),
+    ]);
+
+    expect(state.cue).toMatchObject({
+      kind: "terminal",
+      tone: "danger",
+      judgeLine: "对局异常中断。",
+      performerLine: "本局无法继续播放。",
+      detailLine: "失败原因已记录，公开舞台已停止播放。",
+    });
+    expect(state.cue.detailLine).not.toContain("provider returned");
+    expect(state.cue.detailLine).not.toContain("private prompt");
+    expect(state.cue.detailLine).not.toContain("private raw response");
   });
 
   it("does not fall back to the current speaker for unknown cue actors", () => {
