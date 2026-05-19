@@ -406,6 +406,17 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
 
 
 def _render_json_example(action: str) -> str:
+    if action == "werewolf_discuss":
+        field_mapping = (
+            f"reasoning={FIELD_LABELS['reasoning']}，"
+            f"target={FIELD_LABELS['target']}，"
+            f"message={FIELD_LABELS['message']}"
+        )
+        return (
+            f"JSON 示例（字段含义：{field_mapping}）："
+            '{"reasoning":"用中文说明你的推理","target":"你的选择或发言",'
+            '"message":"给狼人队友的简短说明"}'
+        )
     key = RESULT_FIELD_BY_ACTION[action]
     field_mapping = f"reasoning={FIELD_LABELS['reasoning']}，{key}={FIELD_LABELS[key]}"
     return (

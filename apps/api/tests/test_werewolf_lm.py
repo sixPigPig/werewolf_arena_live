@@ -98,6 +98,18 @@ def test_build_prompt_supports_werewolf_discuss_action() -> None:
     assert "输出字段 reasoning、target 和 message" in prompt
 
 
+def test_build_prompt_werewolf_discuss_example_includes_message() -> None:
+    prompt, _schema = build_prompt(
+        "werewolf_discuss",
+        _world_state_for_special_action("狼人", "Alice、Bob"),
+    )
+
+    example = prompt.split("JSON 示例", 1)[1]
+
+    assert '"target"' in example
+    assert '"message"' in example
+
+
 def test_build_prompt_supports_werewolf_kill_vote_action() -> None:
     prompt, schema = build_prompt(
         "werewolf_kill_vote",
