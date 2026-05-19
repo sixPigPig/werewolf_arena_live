@@ -252,7 +252,11 @@ def _publish_action_events(
 
 
 def _is_secret_werewolf_action(action_log: dict[str, Any]) -> bool:
-    return action_log.get("action") in {"werewolf_discuss", "werewolf_kill_vote"}
+    return action_log.get("action") in {
+        "werewolf_discuss",
+        "werewolf_kill_vote",
+        "werewolf_self_explosion",
+    }
 
 
 def _night_state_payload(round_state: dict[str, Any], active_players: list[Any]) -> dict[str, Any]:

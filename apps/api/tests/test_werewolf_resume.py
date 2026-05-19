@@ -116,6 +116,8 @@ def test_resume_game_replays_cached_model_responses_before_live_requests(
     checkpoint_path = error.value.log_directory / RESUME_CHECKPOINT_FILE
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert len(checkpoint["cached_model_responses"]) == 1
+    assert "prompt" in checkpoint["cached_model_responses"][0]
+    assert checkpoint["cached_model_responses"][0]["prompt"]
 
     resume_provider = ScriptedProvider()
     result = resume_game(

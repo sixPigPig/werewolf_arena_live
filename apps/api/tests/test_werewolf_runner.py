@@ -2062,6 +2062,9 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
         in {
             "action_requested",
             "model_request_started",
+            "model_response_delta",
+            "model_thinking_delta",
+            "model_thinking_tick",
             "model_response_received",
             "action_parsed",
         }
@@ -2978,7 +2981,14 @@ def test_sheriff_run_requests_all_players_concurrently() -> None:
     )
     active_players = [player.name for player in state.players]
     provider = ConcurrentSheriffRunProvider(expected_calls=len(active_players))
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
 
@@ -2986,6 +2996,11 @@ def test_sheriff_run_requests_all_players_concurrently() -> None:
 
     assert [
         actor for action, actor in provider.actions if action == "sheriff_run"
+    ] == active_players
+    assert [
+        event["actor"]
+        for event in sink.events
+        if event["type"] == "action_requested" and event["action"] == "sheriff_run"
     ] == active_players
     assert round_state.sheriff_candidates == []
     assert round_state.sheriff_voters == active_players
@@ -4166,10 +4181,19 @@ def test_werewolf_consensus_live_events_do_not_publish_wolf_actor() -> None:
     engine._run_night_phase(round_state, round_log, active_players)
 
     secret_actions = {"werewolf_discuss", "werewolf_kill_vote"}
+    secret_decision_event_types = {
+        "action_requested",
+        "model_request_started",
+        "model_response_delta",
+        "model_thinking_delta",
+        "model_thinking_tick",
+        "model_response_received",
+        "action_parsed",
+    }
     secret_events = [
         event
         for event in event_sink.events
-        if event["action"] in secret_actions
+        if event["action"] in secret_actions and event["type"] in secret_decision_event_types
     ]
     assert secret_events == []
     assert [log.actor for log in round_log.werewolf_discussion] == wolves

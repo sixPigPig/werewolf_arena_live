@@ -1291,6 +1291,62 @@ def test_get_game_playback_suppresses_secret_wolf_consensus_actions(tmp_path: Pa
     )
 
 
+def test_get_game_playback_suppresses_secret_wolf_self_explosion_check(
+    tmp_path: Path,
+) -> None:
+    session_id = "game_1200abcd"
+    state = sample_state(session_id, winner="好人阵营")
+    state["rounds"][0]["werewolf_self_exploded"] = "张三"
+    state["rounds"][0]["day_ended_by_self_explosion"] = True
+    logs = sample_logs()
+    logs[0]["werewolf_self_explosion"] = {
+        "actor": "张三",
+        "action": "werewolf_self_explosion",
+        "options": ["自爆", "不自爆"],
+        "choice": "自爆",
+        "lm_log": {
+            "prompt": "行动：狼人自爆判断。",
+            "raw_response": '{"reasoning":"秘密判断","self_explode":"自爆"}',
+            "parsed": {"reasoning": "秘密判断", "self_explode": "自爆"},
+        },
+    }
+    write_json(tmp_path / session_id / "game_complete.json", state)
+    write_json(tmp_path / session_id / "game_logs.json", logs)
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    private_event_types = {
+        "action_requested",
+        "model_request_started",
+        "model_response_delta",
+        "model_thinking_delta",
+        "model_thinking_tick",
+        "model_response_received",
+        "action_parsed",
+    }
+    assert [
+        event
+        for event in events
+        if event["action"] == "werewolf_self_explosion"
+        and event["type"] in private_event_types
+    ] == []
+    day_state = next(
+        event
+        for event in events
+        if event["type"] == "state_updated" and event["phase"] == "day"
+    )
+    assert day_state["payload"]["werewolf_self_exploded"] == "张三"
+    serialized_events = json.dumps(events, ensure_ascii=False)
+    assert "行动：狼人自爆判断。" not in serialized_events
+    assert "秘密判断" not in serialized_events
+
+
 def test_get_game_playback_preserves_public_day_stage_fields(tmp_path: Path) -> None:
     session_id = "game_1200bcde"
     state = sample_state(session_id, winner="好人阵营")
