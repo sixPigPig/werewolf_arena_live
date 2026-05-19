@@ -9,12 +9,12 @@ import type {
 
 type GodViewIntelPanelProps = {
   state: GodViewState;
-  debugTimeline?: ReactNode;
+  debugRail?: ReactNode;
 };
 
 export function GodViewIntelPanel({
+  debugRail,
   state,
-  debugTimeline,
 }: GodViewIntelPanelProps) {
   return (
     <aside
@@ -113,12 +113,12 @@ export function GodViewIntelPanel({
         </div>
       </IntelSection>
 
-      {debugTimeline ? (
+      {debugRail ? (
         <details className="border-t border-amber-500/15">
           <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-300">
             调试事件
           </summary>
-          {debugTimeline}
+          {debugRail}
         </details>
       ) : null}
     </aside>

@@ -343,10 +343,11 @@ describe("LiveGamePage", () => {
       });
     });
 
-    expect(
-      await screen.findByRole("button", { name: /张三/ }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /张三/ })).toHaveAccessibleName(
+    const liveZhangCard = await screen.findByTestId(
+      "god-view-stage-player-card-张三",
+    );
+    expect(liveZhangCard).toBeInTheDocument();
+    expect(liveZhangCard).toHaveAccessibleName(
       /公开发言/,
     );
     expect(screen.getByRole("button", { name: /李四/ })).toBeInTheDocument();
@@ -430,8 +431,13 @@ describe("LiveGamePage", () => {
     });
 
     expect(screen.queryByText('{"say":"我不是狼"}')).not.toBeInTheDocument();
-    expect(screen.getByText("模型返回已接收，正在解析行动")).toBeInTheDocument();
     expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
+    expect(screen.getByText("调试事件")).toBeInTheDocument();
+    expect(await screen.findByText("Action Trace")).toBeInTheDocument();
+    expect(screen.getByText(/按行动聚合/)).toBeInTheDocument();
+    expect(screen.getByText("张三 · 公开发言")).toBeInTheDocument();
+    expect(screen.getByText(/#2-/)).toBeInTheDocument();
+    expect(screen.queryByText("等待实时事件...")).not.toBeInTheDocument();
     const actions = screen.getByTestId("arena-command-actions");
     const replayLink = within(actions).getByRole("link", {
       name: "查看完整复盘",
