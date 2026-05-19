@@ -122,6 +122,103 @@ describe("GamePlaybackPage", () => {
     );
   });
 
+  it("renders action trace rail from visible playback events", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          playbackResponse({
+            events: [
+              {
+                id: 1,
+                type: "game_started",
+                run_id: "run_original",
+                session_id: "game_1200abcd",
+                created_at: "2026-05-19T00:00:00Z",
+                round: null,
+                phase: null,
+                actor: null,
+                action: null,
+                payload: {
+                  players: [
+                    { name: "Sam", role: "狼人", model: "deepseek-chat" },
+                    { name: "Isaac", role: "村民", model: "deepseek-chat" },
+                  ],
+                },
+              },
+              {
+                id: 2,
+                type: "action_requested",
+                run_id: "run_original",
+                session_id: "game_1200abcd",
+                created_at: "2026-05-19T00:00:01Z",
+                round: 1,
+                phase: "day",
+                actor: "Sam",
+                action: "debate",
+                payload: { options: ["Isaac"] },
+              },
+              {
+                id: 3,
+                type: "model_response_received",
+                run_id: "run_original",
+                session_id: "game_1200abcd",
+                created_at: "2026-05-19T00:00:02Z",
+                round: 1,
+                phase: "day",
+                actor: "Sam",
+                action: "debate",
+                payload: { raw_response: "{\"say\":\"我怀疑 Isaac\"}" },
+              },
+              {
+                id: 4,
+                type: "action_parsed",
+                run_id: "run_original",
+                session_id: "game_1200abcd",
+                created_at: "2026-05-19T00:00:03Z",
+                round: 1,
+                phase: "day",
+                actor: "Sam",
+                action: "debate",
+                payload: {
+                  choice: "Isaac",
+                  visible_result: { say: "我怀疑 Isaac" },
+                },
+              },
+              {
+                id: 5,
+                type: "state_updated",
+                run_id: "run_original",
+                session_id: "game_1200abcd",
+                created_at: "2026-05-19T00:00:04Z",
+                round: 1,
+                phase: "day",
+                actor: "Sam",
+                action: "debate",
+                payload: {
+                  active_player: "Sam",
+                  debate_entry: { speaker: "Sam", message: "我怀疑 Isaac" },
+                },
+              },
+            ],
+          }),
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    renderPlaybackRoute();
+
+    await user.click(await screen.findByRole("button", { name: "回放设置" }));
+    const dialog = screen.getByRole("dialog", { name: "回放设置" });
+    await user.click(within(dialog).getByRole("button", { name: "追到最新" }));
+    await user.click(await screen.findByText("调试事件"));
+
+    expect(await screen.findByText("Action Trace")).toBeInTheDocument();
+    expect(screen.getByText("Sam · 公开发言")).toBeInTheDocument();
+    expect(screen.getByText("Sam 新增公开发言")).toBeInTheDocument();
+  });
+
   it("shows interrupted status for partial playback", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
