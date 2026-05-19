@@ -600,19 +600,67 @@ describe("deriveLiveNarrativeState", () => {
     expect(state.speaker).toBeNull();
   });
 
-  it("falls back to the director cue for unknown events", () => {
+  it("uses generic fallback text for unknown events without payload internals", () => {
     const state = narrativeFor([
       event({
         id: 5,
         type: "custom_diagnostic",
-        payload: { note: "debug value" },
+        payload: {
+          note: "debug value",
+          prompt: "private prompt",
+          raw_response: "private raw response",
+        },
       }),
     ]);
 
     expect(state.cue).toMatchObject({
       kind: "fallback",
       judgeLine: "custom_diagnostic",
+      detailLine: "收到未分类事件，等待后续公开结算。",
     });
-    expect(state.cue.detailLine).toContain("debug value");
+    expect(state.cue.detailLine).not.toContain("debug value");
+    expect(state.cue.detailLine).not.toContain("private prompt");
+    expect(state.cue.detailLine).not.toContain("private raw response");
+  });
+
+  it("narrates model request failures without exposing private payload fields", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Sam", role: "村民", model: "deepseek-chat" },
+            { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "model_request_failed",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: {
+          message: "模型请求超时，等待重试。",
+          prompt: "private prompt",
+          raw_response: "private raw response",
+          error: "provider stack trace",
+        },
+      }),
+    ]);
+
+    expect(state.cue).toMatchObject({
+      kind: "player-action",
+      tone: "danger",
+      actorName: "Sam",
+      judgeLine: "模型请求暂时失败。",
+      performerLine: "Sam 的行动暂时中断。",
+      detailLine: "模型请求超时，等待重试。",
+    });
+    expect(state.cue.detailLine).not.toContain("private prompt");
+    expect(state.cue.detailLine).not.toContain("private raw response");
+    expect(state.cue.detailLine).not.toContain("provider stack trace");
   });
 });

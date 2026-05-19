@@ -162,6 +162,10 @@ function cueForEvent({
     return modelWaitingCue(cue, payload, actorName, nextSpeakerName);
   }
 
+  if (event.type === "model_request_failed") {
+    return modelRequestFailedCue(cue, payload, actorName);
+  }
+
   if (event.type === "action_parsed") {
     return parsedActionCue(cue, payload, actorName, nextSpeakerName);
   }
@@ -353,6 +357,27 @@ function modelWaitingCue(
   });
 }
 
+function modelRequestFailedCue(
+  cue: DirectorCue,
+  payload: Record<string, unknown>,
+  actorName: string | null,
+): NarrativeCue {
+  const actor = actorName ?? "当前玩家";
+  const publicMessage = stringField(payload, "message");
+
+  return makeCue({
+    eventId: cue.eventId,
+    kind: "player-action",
+    tone: "danger",
+    judgeLine: "模型请求暂时失败。",
+    performerLine: `${actor} 的行动暂时中断。`,
+    detailLine: publicMessage || "等待系统重试或进入后续公开结算。",
+    actorName,
+    action: cue.action,
+    speechText: "",
+  });
+}
+
 function parsedActionCue(
   cue: DirectorCue,
   payload: Record<string, unknown>,
@@ -502,7 +527,7 @@ function fallbackCue(cue: DirectorCue, actorName: string | null): NarrativeCue {
     tone: toneFromDirectorCue(cue),
     judgeLine: cue.title,
     performerLine: actorName ? `${actorName} 的事件更新。` : "对局事件更新。",
-    detailLine: cue.body,
+    detailLine: "收到未分类事件，等待后续公开结算。",
     actorName,
     action: cue.action,
     speechText: "",
