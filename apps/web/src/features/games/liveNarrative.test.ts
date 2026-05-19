@@ -495,6 +495,111 @@ describe("deriveLiveNarrativeState", () => {
     });
   });
 
+  it("aligns the top-level speaker with affected-player cues", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Sam", role: "村民", model: "deepseek-chat" },
+            { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: { options: [] },
+      }),
+      event({
+        id: 3,
+        type: "state_updated",
+        round: 1,
+        phase: "vote",
+        payload: {
+          exiled: "Isaac",
+          active_players: ["Sam"],
+        },
+      }),
+    ]);
+
+    expect(state.cue.actorName).toBe("Isaac");
+    expect(state.speaker?.name).toBe("Isaac");
+  });
+
+  it("does not keep a stale speaker for terminal cues", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Sam", role: "村民", model: "deepseek-chat" },
+            { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: { options: [] },
+      }),
+      event({
+        id: 3,
+        type: "game_completed",
+        payload: { winner: "好人阵营" },
+      }),
+    ]);
+
+    expect(state.cue.actorName).toBeNull();
+    expect(state.speaker).toBeNull();
+  });
+
+  it("does not fall back to the current speaker for unknown cue actors", () => {
+    const events = [
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Sam", role: "村民", model: "deepseek-chat" },
+            { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: { options: [] },
+      }),
+    ];
+    const unknownActorCue = toDirectorCue(
+      event({
+        id: 99,
+        type: "custom_diagnostic",
+        actor: "Ghost",
+        payload: { note: "diagnostic" },
+      }),
+    );
+    const state = narrativeFor(events, unknownActorCue);
+
+    expect(state.cue.actorName).toBe("Ghost");
+    expect(state.speaker).toBeNull();
+  });
+
   it("falls back to the director cue for unknown events", () => {
     const state = narrativeFor([
       event({

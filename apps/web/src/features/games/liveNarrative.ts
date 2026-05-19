@@ -76,7 +76,6 @@ export function deriveLiveNarrativeState({
     spectatorState.activePlayerName ??
     null;
   const nextSpeakerName = godViewState.speakerFlow.next?.name ?? null;
-  const speaker = speakerFor(actorName, godViewState);
   const narrativeCue = cueForEvent({
     cue,
     event,
@@ -85,6 +84,7 @@ export function deriveLiveNarrativeState({
     nextSpeakerName,
     godViewState,
   });
+  const speaker = speakerFor(narrativeCue.actorName, godViewState);
 
   return {
     cue: narrativeCue,
@@ -520,9 +520,7 @@ function speakerFor(
   if (!actorName) {
     return null;
   }
-  const player =
-    godViewState.players.find((item) => item.name === actorName) ??
-    godViewState.speakerFlow.current;
+  const player = godViewState.players.find((item) => item.name === actorName);
   if (!player) {
     return null;
   }
