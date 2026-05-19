@@ -29,6 +29,31 @@ DAY_ACTION_KEYS = (
     "werewolf_self_explosion",
     "summaries",
 )
+DAY_STAGE_STATE_KEYS = (
+    "sheriff",
+    "sheriff_candidates",
+    "sheriff_speech_order",
+    "sheriff_speech_direction",
+    "sheriff_speeches",
+    "sheriff_withdrawn",
+    "sheriff_final_candidates",
+    "sheriff_voters",
+    "sheriff_votes",
+    "sheriff_pk_candidates",
+    "sheriff_pk_speeches",
+    "sheriff_runoff_votes",
+    "sheriff_elected",
+    "speech_order",
+    "speech_order_choice",
+    "vote_weights",
+    "sheriff_badge_target",
+    "sheriff_badge_lost",
+    "werewolf_self_exploded",
+    "day_ended_by_self_explosion",
+    "sheriff_pre_election_bomb_count",
+    "sheriff_election_pending",
+    "sheriff_badge_lost_reason",
+)
 PUBLIC_PLAYER_KEYS = (
     "name",
     "role",
@@ -195,7 +220,6 @@ def _publish_action_events(
         action=action,
         payload={
             "options": options,
-            "visible_text": visible_text,
         },
     )
     publish(
@@ -239,7 +263,7 @@ def _night_state_payload(round_state: dict[str, Any], active_players: list[Any])
 
 
 def _day_state_payload(round_state: dict[str, Any], active_players: list[Any]) -> dict[str, Any]:
-    return {
+    payload = {
         "debate": _list_or_empty(round_state.get("debate")),
         "bids": _list_or_empty(round_state.get("bids")),
         "votes": _latest_mapping(round_state.get("votes")),
@@ -250,6 +274,14 @@ def _day_state_payload(round_state: dict[str, Any], active_players: list[Any]) -
         "idiot_revealed": round_state.get("idiot_revealed"),
         "active_players": active_players,
     }
+    payload.update(
+        {
+            key: round_state.get(key)
+            for key in DAY_STAGE_STATE_KEYS
+            if key in round_state
+        }
+    )
+    return payload
 
 
 def _logs_by_round(logs: Any) -> dict[int, dict[str, Any]]:
