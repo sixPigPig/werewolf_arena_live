@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import random
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -36,13 +37,26 @@ class ReplayThenLiveProvider:
         self._cached_model_responses = copy.deepcopy(cached_model_responses)
         self._delegate = delegate
         self._index = 0
+        self._lock = threading.Lock()
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        if self._index < len(self._cached_model_responses):
-            response = self._cached_model_responses[self._index]
-            self._index += 1
-            return str(response["raw_response"])
+        with self._lock:
+            prompt_match_index = self._find_prompt_match(model=model, prompt=prompt)
+            if prompt_match_index is not None:
+                response = self._cached_model_responses.pop(prompt_match_index)
+                return str(response["raw_response"])
+
+            if self._index < len(self._cached_model_responses):
+                response = self._cached_model_responses[self._index]
+                self._index += 1
+                return str(response["raw_response"])
         return self._delegate.complete_json(model=model, prompt=prompt, temperature=temperature)
+
+    def _find_prompt_match(self, *, model: str, prompt: str) -> int | None:
+        for index, response in enumerate(self._cached_model_responses):
+            if response.get("model") == model and response.get("prompt") == prompt:
+                return index
+        return None
 
 
 class ResumeCheckpointManager:
@@ -90,18 +104,20 @@ class ResumeCheckpointManager:
         phase: str,
         model: str,
         raw_response: str,
+        prompt: str | None = None,
     ) -> None:
         if self._checkpoint is None:
             return
-        self._checkpoint["cached_model_responses"].append(
-            {
-                "actor": actor,
-                "action": action,
-                "phase": phase,
-                "model": model,
-                "raw_response": raw_response,
-            }
-        )
+        cached_response = {
+            "actor": actor,
+            "action": action,
+            "phase": phase,
+            "model": model,
+            "raw_response": raw_response,
+        }
+        if prompt is not None:
+            cached_response["prompt"] = prompt
+        self._checkpoint["cached_model_responses"].append(cached_response)
         self._checkpoint["failed_request"] = None
         self._checkpoint["last_error"] = None
         self._save()

@@ -92,6 +92,7 @@ class GameCheckpointManager(Protocol):
         phase: str,
         model: str,
         raw_response: str,
+        prompt: str | None = None,
     ) -> None:
         pass
 
@@ -1599,6 +1600,7 @@ class GameEngine:
             phase=phase,
             model=player.model,
             raw_response=lm_log.raw_response,
+            prompt=lm_log.prompt,
         )
         if not is_secret_wolf_action:
             self._publish(
@@ -1656,6 +1658,7 @@ class GameEngine:
         phase: str,
         model: str,
         raw_response: str,
+        prompt: str | None = None,
     ) -> None:
         if self.checkpoint_manager is None:
             return
@@ -1665,6 +1668,7 @@ class GameEngine:
             phase=phase,
             model=model,
             raw_response=raw_response,
+            prompt=prompt,
         )
 
     def _checkpoint_model_failure(

@@ -162,6 +162,38 @@ def test_replay_then_live_provider_uses_cached_response_first() -> None:
     assert live_provider.calls == 1
 
 
+def test_replay_provider_matches_cached_responses_by_prompt_when_available() -> None:
+    delegate = ScriptedProvider()
+    provider = ReplayThenLiveProvider(
+        cached_model_responses=[
+            {
+                "actor": "Alice",
+                "action": "vote",
+                "phase": "vote",
+                "model": "model-a",
+                "prompt": "prompt-a",
+                "raw_response": '{"reasoning":"A","vote":"Bob"}',
+            },
+            {
+                "actor": "Bob",
+                "action": "vote",
+                "phase": "vote",
+                "model": "model-b",
+                "prompt": "prompt-b",
+                "raw_response": '{"reasoning":"B","vote":"Alice"}',
+            },
+        ],
+        delegate=delegate,
+    )
+
+    second = provider.complete_json(model="model-b", prompt="prompt-b", temperature=0.4)
+    first = provider.complete_json(model="model-a", prompt="prompt-a", temperature=0.4)
+
+    assert json.loads(second)["vote"] == "Alice"
+    assert json.loads(first)["vote"] == "Bob"
+    assert delegate.calls == 0
+
+
 def test_replay_store_lists_checkpoint_only_session_as_resumable(tmp_path: Path) -> None:
     provider = FailingAfterProvider(fail_after_successes=0)
 
