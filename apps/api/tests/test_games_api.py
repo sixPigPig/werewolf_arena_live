@@ -20,7 +20,7 @@ from app.db.session import get_db
 from app.main import app
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.checkpoint import RESUME_CHECKPOINT_FILE
+from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION, RESUME_CHECKPOINT_FILE
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.player_presets import default_personality_text
 from app.werewolf.replay import ReplayStore
@@ -1139,8 +1139,13 @@ def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> N
     }
     state["rounds"][0]["debate"] = [{"speaker": "张三", "message": "我认为李四身份偏低。"}]
     state["rounds"][0]["votes"] = [{"张三": "李四"}]
+    logs = sample_logs()
+    logs[0]["eliminate"]["lm_log"]["parsed"] = {
+        "choice": "李四",
+        "reasoning": "secret chain",
+    }
     write_json(tmp_path / session_id / "game_complete.json", state)
-    write_json(tmp_path / session_id / "game_logs.json", sample_logs())
+    write_json(tmp_path / session_id / "game_logs.json", logs)
     override_logs_root(tmp_path)
 
     try:
@@ -1157,6 +1162,15 @@ def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> N
     event_types = [event["type"] for event in payload["events"]]
     events = payload["events"]
     assert event_types[:3] == ["run_created", "run_started", "game_started"]
+    run_created, run_started, game_started = events[:3]
+    assert run_created["payload"]["playback"] is True
+    assert run_created["payload"]["session_id"] == session_id
+    assert run_created["payload"]["status"] == "complete"
+    assert run_created["payload"]["rule_set"]["id"] == "starter_6"
+    assert run_created["payload"]["resumable"] is False
+    assert run_started["payload"] == {"playback": True}
+    assert game_started["payload"]["playback"] is True
+    assert game_started["payload"]["rule_set"]["id"] == "starter_6"
     assert "round_started" in event_types
     assert "action_requested" in event_types
     assert "action_parsed" in event_types
@@ -1174,6 +1188,15 @@ def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> N
         and event["payload"].get("choice") == "李四"
         for event in events
     )
+    parsed_event = next(
+        event
+        for event in events
+        if event["type"] == "action_parsed"
+        and event["actor"] == "张三"
+        and event["action"] == "remove"
+    )
+    assert parsed_event["payload"]["result"] == {"choice": "李四"}
+    assert parsed_event["payload"]["visible_result"] == {"choice": "李四"}
     assert any(
         event["type"] == "state_updated"
         and event["phase"] == "day"
@@ -1186,6 +1209,13 @@ def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> N
         range(1, len(payload["events"]) + 1)
     )
     assert all(event["run_id"] == f"playback_{session_id}" for event in payload["events"])
+    serialized_events = json.dumps(payload["events"], ensure_ascii=False)
+    assert "请选择今晚击杀对象。" not in serialized_events
+    assert "raw_response" not in serialized_events
+    assert "prompt" not in serialized_events
+    assert "reasoning" not in serialized_events
+    assert "secret chain" not in serialized_events
+    assert "李四" in serialized_events
 
 
 def test_get_game_playback_returns_partial_end_without_resuming(
@@ -1199,6 +1229,7 @@ def test_get_game_playback_returns_partial_end_without_resuming(
     write_json(
         tmp_path / session_id / RESUME_CHECKPOINT_FILE,
         {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
             "state_at_round_start": state,
             "logs_before_round": sample_logs(),
             "run_params": {
