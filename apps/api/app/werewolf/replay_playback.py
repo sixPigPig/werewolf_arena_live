@@ -203,6 +203,8 @@ def _publish_action_events(
     round_number: int,
     phase: str,
 ) -> None:
+    if _is_secret_werewolf_action(action_log):
+        return
     actor = _optional_str(action_log.get("actor"))
     action = _optional_str(action_log.get("action"))
     options = _list_or_empty(action_log.get("options"))
@@ -247,6 +249,10 @@ def _publish_action_events(
             "visible_text": visible_text,
         },
     )
+
+
+def _is_secret_werewolf_action(action_log: dict[str, Any]) -> bool:
+    return action_log.get("action") in {"werewolf_discuss", "werewolf_kill_vote"}
 
 
 def _night_state_payload(round_state: dict[str, Any], active_players: list[Any]) -> dict[str, Any]:

@@ -1243,6 +1243,54 @@ def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> N
     assert "李四" in serialized_events
 
 
+def test_get_game_playback_suppresses_secret_wolf_consensus_actions(tmp_path: Path) -> None:
+    session_id = "game_1200abcd"
+    state = sample_state(session_id, winner="好人阵营")
+    logs = sample_logs()
+    logs[0]["eliminate"] = {
+        "actor": "张三",
+        "action": "werewolf_kill_vote",
+        "options": ["李四"],
+        "choice": "李四",
+        "lm_log": {
+            "prompt": "请选择今晚狼刀对象。",
+            "raw_response": '{"target":"李四"}',
+            "parsed": {"target": "李四"},
+        },
+    }
+    logs[0]["protect"] = {
+        "actor": "王五",
+        "action": "protect",
+        "options": ["张三", "李四"],
+        "choice": "张三",
+        "lm_log": {
+            "prompt": "请选择守护对象。",
+            "raw_response": '{"protect":"张三"}',
+            "parsed": {"protect": "张三"},
+        },
+    }
+    write_json(tmp_path / session_id / "game_complete.json", state)
+    write_json(tmp_path / session_id / "game_logs.json", logs)
+    override_logs_root(tmp_path)
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    secret_actions = {"werewolf_discuss", "werewolf_kill_vote"}
+    assert [event for event in events if event["action"] in secret_actions] == []
+    assert any(
+        event["type"] == "action_parsed"
+        and event["actor"] == "王五"
+        and event["action"] == "protect"
+        and event["payload"].get("choice") == "张三"
+        for event in events
+    )
+
+
 def test_get_game_playback_preserves_public_day_stage_fields(tmp_path: Path) -> None:
     session_id = "game_1200bcde"
     state = sample_state(session_id, winner="好人阵营")
