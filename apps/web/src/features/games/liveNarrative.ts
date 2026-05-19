@@ -166,6 +166,10 @@ function cueForEvent({
     return modelRequestFailedCue(cue, payload, actorName);
   }
 
+  if (event.type === "model_response_received") {
+    return modelResponseReceivedCue(cue, payload, actorName, nextSpeakerName);
+  }
+
   if (event.type === "action_parsed") {
     return parsedActionCue(cue, payload, actorName, nextSpeakerName);
   }
@@ -372,6 +376,42 @@ function modelRequestFailedCue(
     judgeLine: "模型请求暂时失败。",
     performerLine: `${actor} 的行动暂时中断。`,
     detailLine: publicMessage || "等待系统重试或进入后续公开结算。",
+    actorName,
+    action: cue.action,
+    speechText: "",
+  });
+}
+
+function modelResponseReceivedCue(
+  cue: DirectorCue,
+  payload: Record<string, unknown>,
+  actorName: string | null,
+  nextSpeakerName: string | null,
+): NarrativeCue {
+  const actor = actorName ?? "当前玩家";
+  const visibleText = stringField(payload, "visible_text");
+
+  if (visibleText && isPublicSpeechAction(cue.action)) {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "player-speaking",
+      tone: "day",
+      judgeLine: `请听 ${actor} 的发言。`,
+      performerLine: `${actor} 完成发言。`,
+      detailLine: nextLine(nextSpeakerName),
+      actorName,
+      action: cue.action,
+      speechText: visibleText,
+    });
+  }
+
+  return makeCue({
+    eventId: cue.eventId,
+    kind: "player-action",
+    tone: cue.phase === "night" ? "night" : "neutral",
+    judgeLine: "模型返回已接收。",
+    performerLine: `${actor} 的行动正在解析。`,
+    detailLine: "行动结果等待公开结算。",
     actorName,
     action: cue.action,
     speechText: "",

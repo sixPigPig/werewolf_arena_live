@@ -195,6 +195,73 @@ describe("deriveLiveNarrativeState", () => {
     });
   });
 
+  it("uses non-streaming visible model responses as public player speech", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Sam", role: "村民", model: "deepseek-chat" },
+            { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "model_response_received",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: {
+          visible_text: "我先听后置位发言。",
+          raw_response: "{\"say\":\"private raw\"}",
+        },
+      }),
+    ]);
+
+    expect(state.cue).toMatchObject({
+      kind: "player-speaking",
+      tone: "day",
+      actorName: "Sam",
+      judgeLine: "请听 Sam 的发言。",
+      performerLine: "Sam 完成发言。",
+      detailLine: "下一位：Isaac",
+      speechText: "我先听后置位发言。",
+    });
+    expect(state.cue.speechText).not.toContain("private raw");
+  });
+
+  it("renders non-public model responses as safe parsing status", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "model_response_received",
+        round: 1,
+        phase: "night",
+        actor: "Sam",
+        action: "eliminate",
+        payload: {
+          message: "provider returned private body",
+          raw_response: "private raw response",
+        },
+      }),
+    ]);
+
+    expect(state.cue).toMatchObject({
+      kind: "player-action",
+      tone: "night",
+      actorName: "Sam",
+      judgeLine: "模型返回已接收。",
+      performerLine: "Sam 的行动正在解析。",
+      detailLine: "行动结果等待公开结算。",
+      speechText: "",
+    });
+    expect(state.cue.detailLine).not.toContain("provider returned");
+    expect(state.cue.detailLine).not.toContain("private raw response");
+  });
+
   it("uses coalesced streaming cue text as live player speech", () => {
     const events = [
       event({
