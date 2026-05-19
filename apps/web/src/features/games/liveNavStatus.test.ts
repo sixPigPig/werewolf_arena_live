@@ -108,6 +108,40 @@ describe("deriveLiveNavStatus", () => {
     });
   });
 
+  it("treats closed completed playback as ended instead of interrupted", () => {
+    expect(
+      deriveLiveNavStatus({
+        backlogCount: 0,
+        connectionState: "closed",
+        hasCompletedTerminalEvent: true,
+        isPaused: false,
+        runStatus: "completed",
+        speed: 1,
+      }),
+    ).toMatchObject({
+      kind: "ended",
+      label: "已结束",
+      tone: "done",
+    });
+  });
+
+  it("treats failed playback as interrupted", () => {
+    expect(
+      deriveLiveNavStatus({
+        backlogCount: 0,
+        connectionState: "closed",
+        hasFailedTerminalEvent: true,
+        isPaused: false,
+        runStatus: "failed",
+        speed: 1,
+      }),
+    ).toMatchObject({
+      kind: "interrupted",
+      label: "异常中断",
+      tone: "danger",
+    });
+  });
+
   it("prioritizes failures and active closed streams as interrupted", () => {
     expect(
       deriveLiveNavStatus({

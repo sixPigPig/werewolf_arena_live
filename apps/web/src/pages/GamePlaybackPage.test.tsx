@@ -122,6 +122,41 @@ describe("GamePlaybackPage", () => {
     );
   });
 
+  it("shows interrupted status for partial playback", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          playbackResponse({
+            status: "partial",
+            resumable: false,
+            events: [
+              {
+                id: 1,
+                type: "game_failed",
+                run_id: "playback_game_1200abcd",
+                session_id: "game_1200abcd",
+                created_at: "2026-05-19T00:00:00Z",
+                round: null,
+                phase: null,
+                actor: null,
+                action: null,
+                payload: {
+                  error: "Maximum rounds exceeded",
+                  playback_partial: true,
+                },
+              },
+            ],
+          }),
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    renderPlaybackRoute();
+
+    expect(await screen.findByText("异常中断")).toBeInTheDocument();
+  });
+
   it("resumes resumable partial playback through the existing resume endpoint", async () => {
     const user = userEvent.setup();
     const fetch = vi.spyOn(globalThis, "fetch");
