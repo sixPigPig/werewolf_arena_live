@@ -130,6 +130,17 @@ describe("normalizeGameReplay", () => {
       logs: [
         {
           ...rawReplay.logs[0],
+          eliminate: {
+            actor: "张三",
+            action: "werewolf_kill_vote",
+            options: ["李四"],
+            choice: "李四",
+            lm_log: {
+              prompt: "狼人夜晚狼刀投票",
+              raw_response: '{"target":"李四"}',
+              result: { target: "李四" },
+            },
+          },
           werewolf_discussion: [
             {
               actor: "张三",
@@ -189,6 +200,12 @@ describe("normalizeGameReplay", () => {
         }),
       ]),
     );
+    expect(
+      replay.debugItems.filter((item) => item.action === "werewolf_kill_vote"),
+    ).toHaveLength(1);
+    expect(
+      replay.debugItems.some((item) => item.id === "round-1-night-eliminate"),
+    ).toBe(false);
   });
 
   it("omits no-op sheriff badge debug items", () => {

@@ -42,6 +42,8 @@ const baseRound: GameRound = {
   sheriff_badge_lost_reason: null,
   night_deaths: [{ player: "Bob", cause: "witch_poison", source: "Witch" }],
   day_deaths: [],
+  werewolf_discussion: [],
+  werewolf_vote_rounds: [],
   debate: [],
   bids: [],
   bidGroups: [],

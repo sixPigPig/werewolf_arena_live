@@ -217,7 +217,9 @@ function debugItemsFromRound(
     selfExplosion !== null &&
     (round.speech_order != null || (stateRound?.speech_order?.length ?? 0) > 0);
 
-  pushAction(items, round.number, "night", "night-eliminate", round.eliminate);
+  if ((round.werewolf_votes ?? []).length === 0) {
+    pushAction(items, round.number, "night", "night-eliminate", round.eliminate);
+  }
   (round.werewolf_discussion ?? []).forEach((action, index) => {
     pushAction(
       items,

@@ -19,6 +19,8 @@ const baseRound: GameRound = {
   idiot_revealed: "Bob",
   night_deaths: [],
   day_deaths: [{ player: "Alice", cause: "hunter_shot", source: "Hunter" }],
+  werewolf_discussion: [],
+  werewolf_vote_rounds: [],
   debate: [],
   bids: [],
   bidGroups: [],

@@ -18,6 +18,8 @@ const baseRound: GameRound = {
   idiot_revealed: null,
   night_deaths: [],
   day_deaths: [],
+  werewolf_discussion: [],
+  werewolf_vote_rounds: [],
   debate: [],
   bids: [],
   bidGroups: [],
