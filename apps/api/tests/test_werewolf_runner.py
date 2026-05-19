@@ -3020,6 +3020,164 @@ def test_werewolf_consensus_revotes_until_unanimous() -> None:
     assert len(round_log.werewolf_votes) == 2
 
 
+def test_werewolf_consensus_can_converge_on_third_vote() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_wolf_consensus_third_vote",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=503,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    targets = [player.name for player in state.players if player.role != "狼人"][:3]
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    provider = WerewolfConsensusProvider(
+        vote_rounds=[
+            {wolves[0]: targets[0], wolves[1]: targets[1], wolves[2]: targets[0], wolves[3]: targets[1]},
+            {wolves[0]: targets[0], wolves[1]: targets[1], wolves[2]: targets[1], wolves[3]: targets[0]},
+            {wolf: targets[1] for wolf in wolves},
+        ],
+        discussion_targets={wolf: targets[0] for wolf in wolves},
+    )
+    state.sheriff = next(player.name for player in state.players if player.name != targets[1])
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+
+    assert pending_deaths is None
+    assert round_state.attacked == targets[1]
+    assert len(round_state.werewolf_vote_rounds) == 3
+    assert round_state.werewolf_vote_rounds[2]["unanimous"] is True
+
+
+def test_werewolf_consensus_errors_when_vote_round_limit_is_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_wolf_consensus_limit",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=504,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    non_wolves = [player.name for player in state.players if player.role != "狼人"]
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    provider = WerewolfConsensusProvider(
+        vote_rounds=[
+            {wolves[0]: non_wolves[0], wolves[1]: non_wolves[1]},
+            {wolves[0]: non_wolves[0], wolves[1]: non_wolves[1]},
+        ],
+        discussion_targets={wolf: non_wolves[0] for wolf in wolves},
+    )
+    monkeypatch.setattr("app.werewolf.engine.MAX_WEREWOLF_KILL_VOTE_ROUNDS", 2)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    with pytest.raises(RuntimeError, match="狼人夜晚投票未能达成一致"):
+        engine._run_night_phase(round_state, round_log, active_players)
+
+
+def test_guard_protects_consensus_werewolf_attack() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_guard_consensus_attack",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=505,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    target = next(player.name for player in state.players if player.role == "村民")
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    provider = WerewolfConsensusProvider(
+        vote_rounds=[{wolf: target for wolf in wolves}],
+        discussion_targets={wolf: target for wolf in wolves},
+        protect_choice=target,
+    )
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+
+    assert pending_deaths is None
+    assert round_state.attacked == target
+    assert round_state.protected == target
+    assert round_state.night_deaths == []
+    assert target in active_players
+
+
+def test_witch_can_save_consensus_werewolf_attack() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_witch_save_consensus_attack",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=506,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    witch = next(player for player in state.players if player.role == "女巫")
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    provider = WerewolfConsensusProvider(
+        vote_rounds=[{wolf: witch.name for wolf in wolves}],
+        discussion_targets={wolf: witch.name for wolf in wolves},
+        save_choice=witch.name,
+    )
+    state.sheriff = next(player.name for player in state.players if player.name != witch.name)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+
+    assert pending_deaths is None
+    assert round_state.attacked == witch.name
+    assert round_state.saved_by_witch == witch.name
+    assert round_state.night_deaths == []
+
+
+def test_hunter_shoots_after_consensus_werewolf_attack_death() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_hunter_consensus_attack",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=507,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    hunter = next(player for player in state.players if player.role == "猎人")
+    shot_target = wolves[0]
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    provider = WerewolfConsensusProvider(
+        vote_rounds=[{wolf: hunter.name for wolf in wolves}],
+        discussion_targets={wolf: hunter.name for wolf in wolves},
+        shoot_choice=shot_target,
+    )
+    state.sheriff = next(
+        player.name for player in state.players if player.name not in {hunter.name, shot_target}
+    )
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+
+    assert pending_deaths is None
+    assert round_state.hunter_shot == shot_target
+    assert [death.cause for death in round_state.night_deaths] == [
+        "werewolf_attack",
+        "hunter_shot",
+    ]
+
+
 def test_first_night_hunter_shot_is_announced_before_badge_and_debate() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
