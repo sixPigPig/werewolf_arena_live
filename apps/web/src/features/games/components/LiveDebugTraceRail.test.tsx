@@ -106,6 +106,8 @@ describe("LiveDebugTraceRail", () => {
       "state",
       "stage",
     ]);
+    expect(nodes[0]).toHaveAttribute("aria-label", "request: 行动请求 (ok)");
+    expect(nodes[4]).toHaveAttribute("aria-label", "stage: 舞台同步 (ok)");
   });
 
   it("clicking a trace expands details and calls onSelectTrace(trace)", async () => {
@@ -128,11 +130,38 @@ describe("LiveDebugTraceRail", () => {
     expect(screen.getByText("请林恩投票。")).toBeInTheDocument();
   });
 
+  it("expands the controlled selected trace and reports selecting a different trace", async () => {
+    const user = userEvent.setup();
+    const onSelectTrace = vi.fn();
+
+    render(
+      <LiveDebugTraceRail
+        onSelectTrace={onSelectTrace}
+        selectedTraceId="trace-warning"
+        traces={traces}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /秦澈 · 查验/ }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("请预言家查验。")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /周明 · 投票/ }));
+
+    expect(onSelectTrace).toHaveBeenCalledWith(traces[2]);
+  });
+
   it("filters OK traces when only issues is enabled", async () => {
     const user = userEvent.setup();
     render(<LiveDebugTraceRail traces={traces} />);
 
-    await user.click(screen.getByRole("button", { name: "只看异常" }));
+    const issueFilter = screen.getByRole("button", { name: "只看异常" });
+    expect(issueFilter).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(issueFilter);
+
+    expect(issueFilter).toHaveAttribute("aria-pressed", "true");
 
     expect(
       screen.queryByTestId("live-debug-trace-card-trace-ok"),

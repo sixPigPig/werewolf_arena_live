@@ -151,10 +151,10 @@ function TraceCard({
         <NodeStrip nodes={trace.nodes} />
 
         <div className="mt-2 space-y-1">
-          {summary.slice(0, 3).map((item) => (
+          {summary.slice(0, 3).map((item, index) => (
             <p
               className="break-words text-xs leading-5 text-slate-300"
-              key={item}
+              key={`${item}-${index}`}
             >
               {item}
             </p>
@@ -174,6 +174,9 @@ function NodeStrip({ nodes }: { nodes: LiveDebugTraceNode[] }) {
         const node = nodes.find((item) => item.kind === kind);
         return (
           <span
+            aria-label={`${kind}: ${node?.label ?? "未记录"} (${
+              node?.status ?? "muted"
+            })`}
             className={`min-w-0 rounded border px-1.5 py-1 text-center text-[10px] font-semibold uppercase tracking-normal ${nodeTone(
               node?.status ?? "muted",
             )}`}
@@ -195,8 +198,8 @@ function TraceDetails({ trace }: { trace: LiveDebugTrace }) {
       {trace.warnings.length > 0 ? (
         <DetailBlock title="异常提示" tone="warning">
           <ul className="space-y-1">
-            {trace.warnings.map((warning) => (
-              <li className="break-words" key={warning}>
+            {trace.warnings.map((warning, index) => (
+              <li className="break-words" key={`${warning}-${index}`}>
                 {warning}
               </li>
             ))}
