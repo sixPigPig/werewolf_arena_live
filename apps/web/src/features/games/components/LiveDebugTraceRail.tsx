@@ -12,8 +12,10 @@ import type {
 
 type LiveDebugTraceRailProps = {
   traces: LiveDebugTrace[];
+  listClassName?: string;
   selectedTraceId?: string | null;
   onSelectTrace?: (trace: LiveDebugTrace | null) => void;
+  surface?: "embedded" | "panel";
 };
 
 const TRACE_NODE_KINDS: LiveDebugTraceNodeKind[] = [
@@ -32,8 +34,10 @@ const STATUS_LABELS: Record<LiveDebugTraceStatus, string> = {
 };
 
 export function LiveDebugTraceRail({
+  listClassName,
   onSelectTrace,
   selectedTraceId,
+  surface = "panel",
   traces,
 }: LiveDebugTraceRailProps) {
   const [showIssuesOnly, setShowIssuesOnly] = useState(false);
@@ -54,9 +58,13 @@ export function LiveDebugTraceRail({
 
   return (
     <aside
-      className={withGlassPanel(
-        "live-debug-trace-rail min-w-0 overflow-hidden rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.3)]",
-      )}
+      className={
+        surface === "embedded"
+          ? "live-debug-trace-rail flex h-full min-w-0 flex-col overflow-hidden text-slate-100"
+          : withGlassPanel(
+              "live-debug-trace-rail min-w-0 overflow-hidden rounded-lg text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,0.3)]",
+            )
+      }
       data-testid="live-debug-trace-rail"
     >
       <header className="flex items-start justify-between gap-3 border-b border-amber-500/15 px-4 py-3">
@@ -85,7 +93,12 @@ export function LiveDebugTraceRail({
           等待可追踪行动...
         </div>
       ) : (
-        <ol className="max-h-[min(56rem,calc(100vh-12rem))] space-y-2 overflow-auto p-3">
+        <ol
+          className={
+            listClassName ??
+            "max-h-[min(56rem,calc(100vh-12rem))] space-y-2 overflow-auto p-3"
+          }
+        >
           {visibleTraces.map((trace) => (
             <TraceCard
               expanded={activeTraceId === trace.id}

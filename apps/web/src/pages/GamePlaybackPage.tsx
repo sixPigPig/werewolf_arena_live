@@ -1,11 +1,12 @@
 import { Callout, Text } from "../components/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { ArenaCommandNav, ArenaNavButton } from "../app/navigation";
 import { getGamePlayback } from "../features/games/api/getGamePlayback";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
+import { LiveNavDebugPanelButton } from "../features/games/components/LiveNavDebugPanelButton";
 import { LiveNavSessionBadge } from "../features/games/components/LiveNavSessionBadge";
 import { LiveNavSettingsMenu } from "../features/games/components/LiveNavSettingsMenu";
 import { LiveNavStatusBadge } from "../features/games/components/LiveNavStatusBadge";
@@ -27,6 +28,8 @@ export function GamePlaybackPage() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(false);
+  const debugPanelButtonRef = useRef<HTMLButtonElement | null>(null);
   const { data, isError, isPending } = useQuery({
     queryKey: ["game-playback", sessionId],
     queryFn: () => getGamePlayback(sessionId!),
@@ -95,10 +98,21 @@ export function GamePlaybackPage() {
       navigate(`/games/live/${newRun.run_id}`);
     },
   });
+  const handleDebugPanelOpenChange = (isOpen: boolean) => {
+    setIsDebugPanelOpen(isOpen);
+    if (!isOpen) {
+      debugPanelButtonRef.current?.focus();
+    }
+  };
 
   const topNavActions = run ? (
     <>
       <ArenaNavButton to={`/games/${run.session_id}`}>查看复盘</ArenaNavButton>
+      <LiveNavDebugPanelButton
+        isOpen={isDebugPanelOpen}
+        onClick={() => setIsDebugPanelOpen((value) => !value)}
+        ref={debugPanelButtonRef}
+      />
       <LiveNavSettingsMenu
         backlogCount={director.backlogCount}
         canResumeRun={canResumePlayback}
@@ -170,10 +184,12 @@ export function GamePlaybackPage() {
           </Callout.Root>
         ) : null}
         <LiveStageExperience
+          debugPanelOpen={isDebugPanelOpen}
           director={director}
           events={visibleEvents}
           godViewState={godViewState}
           mode="playback"
+          onDebugPanelOpenChange={handleDebugPanelOpenChange}
           spectatorState={spectatorState}
         />
       </main>

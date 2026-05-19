@@ -214,11 +214,14 @@ describe("GamePlaybackPage", () => {
     await user.click(await screen.findByRole("button", { name: "回放设置" }));
     const dialog = screen.getByRole("dialog", { name: "回放设置" });
     await user.click(within(dialog).getByRole("button", { name: "追到最新" }));
-    await user.click(await screen.findByText("调试事件"));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByText("调试事件")).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "调试面板" }));
 
-    expect(await screen.findByText("Action Trace")).toBeInTheDocument();
-    expect(screen.getByText("Sam · 公开发言")).toBeInTheDocument();
-    expect(screen.getByText("Sam 新增公开发言")).toBeInTheDocument();
+    const debugDialog = screen.getByRole("dialog", { name: "调试面板" });
+    expect(await within(debugDialog).findByText("Action Trace")).toBeInTheDocument();
+    expect(within(debugDialog).getByText("Sam · 公开发言")).toBeInTheDocument();
+    expect(within(debugDialog).getByText("Sam 新增公开发言")).toBeInTheDocument();
   });
 
   it("shows interrupted status for partial playback", async () => {

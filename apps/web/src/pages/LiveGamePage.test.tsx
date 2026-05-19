@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { Route, Routes, useNavigate } from "react-router-dom";
@@ -235,7 +242,7 @@ describe("LiveGamePage", () => {
     expect(screen.queryByText("圆桌座位")).not.toBeInTheDocument();
     expect(screen.queryByText("座位盘")).not.toBeInTheDocument();
     expect(screen.getByText("剧情时间线")).toBeInTheDocument();
-    expect(screen.getByText("调试事件")).toBeInTheDocument();
+    expect(screen.queryByText("调试事件")).not.toBeInTheDocument();
     expect((await screen.findAllByText("新手 6 人快局")).length).toBeGreaterThan(
       0,
     );
@@ -434,13 +441,57 @@ describe("LiveGamePage", () => {
 
     expect(screen.queryByText('{"say":"我不是狼"}')).not.toBeInTheDocument();
     expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
-    expect(screen.getByText("调试事件")).toBeInTheDocument();
-    await userEvent.click(screen.getByText("调试事件"));
-    const debugPanel = screen.getByText("调试事件").closest("details");
-    expect(debugPanel).toHaveAttribute("open");
-    expect(within(debugPanel!).getByText("Action Trace")).toBeInTheDocument();
-    expect(within(debugPanel!).getByText(/按行动聚合/)).toBeInTheDocument();
-    const traceButton = within(debugPanel!).getByRole("button", {
+    expect(screen.queryByText("调试事件")).not.toBeInTheDocument();
+    const actions = screen.getByTestId("arena-command-actions");
+    const replayLink = within(actions).getByRole("link", {
+      name: "查看完整复盘",
+    });
+    expect(replayLink).toHaveAttribute(
+      "href",
+      "/games/game_1200abcd",
+    );
+    expect(replayLink).toHaveClass("gothic-button");
+    const debugButton = within(actions).getByRole("button", {
+      name: "调试面板",
+    });
+    const settingsButton = within(actions).getByRole("button", {
+      name: "实时设置",
+    });
+    expect(
+      debugButton.compareDocumentPosition(settingsButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    await userEvent.click(debugButton);
+
+    const debugDialog = screen.getByRole("dialog", { name: "调试面板" });
+    expect(debugDialog).toHaveAttribute("aria-modal", "false");
+    expect(within(debugDialog).getByText("Action Trace")).toBeInTheDocument();
+    expect(within(debugDialog).getByText(/按行动聚合/)).toBeInTheDocument();
+    expect(screen.getByTestId("god-view-stage-player-card-张三")).toBeVisible();
+
+    const initialLeft = debugDialog.style.left;
+    const initialTop = debugDialog.style.top;
+    fireEvent.mouseDown(screen.getByTestId("live-debug-panel-drag-handle"), {
+      clientX: 120,
+      clientY: 100,
+    });
+    fireEvent.mouseMove(document, { clientX: 80, clientY: 135 });
+    fireEvent.mouseUp(document);
+    expect(debugDialog.style.left).not.toBe(initialLeft);
+    expect(debugDialog.style.top).not.toBe(initialTop);
+
+    const initialWidth = debugDialog.style.width;
+    const initialHeight = debugDialog.style.height;
+    fireEvent.mouseDown(screen.getByTestId("live-debug-panel-resize-handle"), {
+      clientX: 760,
+      clientY: 620,
+    });
+    fireEvent.mouseMove(document, { clientX: 820, clientY: 680 });
+    fireEvent.mouseUp(document);
+    expect(debugDialog.style.width).not.toBe(initialWidth);
+    expect(debugDialog.style.height).not.toBe(initialHeight);
+
+    const traceButton = within(debugDialog).getByRole("button", {
       name: /张三 · 公开发言/,
     });
     expect(traceButton).toHaveTextContent(/#2-/);
@@ -453,18 +504,6 @@ describe("LiveGamePage", () => {
     expect(
       screen.getByTestId("god-view-stage-player-card-张三"),
     ).toHaveAttribute("data-debug-highlighted", "true");
-    const actions = screen.getByTestId("arena-command-actions");
-    const replayLink = within(actions).getByRole("link", {
-      name: "查看完整复盘",
-    });
-    expect(replayLink).toHaveAttribute(
-      "href",
-      "/games/game_1200abcd",
-    );
-    expect(replayLink).toHaveClass("gothic-button");
-    const settingsButton = within(actions).getByRole("button", {
-      name: "实时设置",
-    });
     expect(
       replayLink.compareDocumentPosition(settingsButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -1215,6 +1254,8 @@ describe("LiveGamePage", () => {
       });
     });
 
+    await userEvent.click(screen.getByRole("button", { name: "调试面板" }));
+
     expect((await screen.findAllByText("对局失败")).length).toBeGreaterThanOrEqual(
       2,
     );
@@ -1672,7 +1713,7 @@ describe("LiveGamePage", () => {
     vi.useRealTimers();
   });
 
-  it("shows story events by default and action traces in the debug drawer", async () => {
+  it("shows story events by default and action traces in the debug panel", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(runningRunResponse()),
@@ -1723,16 +1764,16 @@ describe("LiveGamePage", () => {
     });
 
     act(() => {
-      screen.getByText("调试事件").click();
+      screen.getByRole("button", { name: "调试面板" }).click();
     });
-    const debugPanel = screen.getByText("调试事件").closest("details");
-    expect(debugPanel).not.toBeNull();
-    expect(within(debugPanel!).getByText("Action Trace")).toBeInTheDocument();
-    expect(within(debugPanel!).getByText("第 1 轮开始")).toBeInTheDocument();
-    expect(within(debugPanel!).getByText("白天阶段开始")).toBeInTheDocument();
-    expect(within(debugPanel!).getAllByText("系统").length).toBeGreaterThan(0);
-    expect(within(debugPanel!).queryByText("round_started")).not.toBeInTheDocument();
-    expect(within(debugPanel!).queryByText("phase_started")).not.toBeInTheDocument();
+    expect(screen.queryByText("调试事件")).not.toBeInTheDocument();
+    const debugPanel = screen.getByRole("dialog", { name: "调试面板" });
+    expect(within(debugPanel).getByText("Action Trace")).toBeInTheDocument();
+    expect(within(debugPanel).getByText("第 1 轮开始")).toBeInTheDocument();
+    expect(within(debugPanel).getByText("白天阶段开始")).toBeInTheDocument();
+    expect(within(debugPanel).getAllByText("系统").length).toBeGreaterThan(0);
+    expect(within(debugPanel).queryByText("round_started")).not.toBeInTheDocument();
+    expect(within(debugPanel).queryByText("phase_started")).not.toBeInTheDocument();
     vi.useRealTimers();
   });
 
