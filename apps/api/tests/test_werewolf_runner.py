@@ -97,6 +97,73 @@ class StreamingSpeechProvider(ScriptedChineseProvider):
         return [self.complete_json(model="deepseek-chat", prompt=prompt, temperature=0.4)]
 
 
+class WerewolfConsensusProvider(ScriptedChineseProvider):
+    def __init__(
+        self,
+        *,
+        vote_rounds: list[dict[str, str]],
+        discussion_targets: dict[str, str] | None = None,
+        protect_choice: str | None = None,
+        save_choice: str = "不使用解药",
+        poison_choice: str = "不使用毒药",
+        shoot_choice: str = "不发动技能",
+    ) -> None:
+        self.vote_rounds = vote_rounds
+        self.discussion_targets = discussion_targets or {}
+        self.protect_choice = protect_choice
+        self.save_choice = save_choice
+        self.poison_choice = poison_choice
+        self.shoot_choice = shoot_choice
+        self.vote_calls = 0
+        self.actions: list[tuple[str, str, str]] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        name = _extract_actor_name(prompt)
+        options = _extract_options(prompt)
+        if '"message"' in prompt and '"target"' in prompt:
+            target = self.discussion_targets.get(name, options[0])
+            self.actions.append(("werewolf_discuss", name, target))
+            return json.dumps(
+                {
+                    "reasoning": "夜晚私密沟通。",
+                    "target": target,
+                    "message": f"建议今晚袭击{target}。",
+                },
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            wolves_in_round = max(1, len(self.vote_rounds[0]))
+            round_index = min(self.vote_calls // wolves_in_round, len(self.vote_rounds) - 1)
+            target = self.vote_rounds[round_index][name]
+            self.vote_calls += 1
+            self.actions.append(("werewolf_kill_vote", name, target))
+            return json.dumps(
+                {"reasoning": "形成统一刀口。", "target": target},
+                ensure_ascii=False,
+            )
+        if '"protect"' in prompt and self.protect_choice:
+            return json.dumps(
+                {"reasoning": "测试守卫守护狼刀目标。", "protect": self.protect_choice},
+                ensure_ascii=False,
+            )
+        if '"save"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试女巫解药选择。", "save": self.save_choice},
+                ensure_ascii=False,
+            )
+        if '"poison"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试女巫毒药选择。", "poison": self.poison_choice},
+                ensure_ascii=False,
+            )
+        if '"shoot"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试猎人开枪选择。", "shoot": self.shoot_choice},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 class SheriffFlowProvider(ScriptedChineseProvider):
     def __init__(
         self,
@@ -2663,6 +2730,95 @@ def test_first_night_dead_elected_sheriff_transfers_badge_after_death_announceme
         if observation == f"第1轮：{dead_sheriff}出局，将警徽移交给{new_sheriff}。"
     )
     assert election_index < night_death_index < badge_index
+
+
+def test_werewolf_consensus_first_vote_sets_attacked() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_wolf_consensus_first_vote",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=501,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    target = next(player.name for player in state.players if player.role == "预言家")
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    provider = WerewolfConsensusProvider(
+        vote_rounds=[{wolf: target for wolf in wolves}],
+        discussion_targets={wolf: target for wolf in wolves},
+    )
+    state.sheriff = next(player.name for player in state.players if player.name != target)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+
+    assert pending_deaths is None
+    assert round_state.attacked == target
+    assert round_state.werewolf_vote_rounds == [
+        {
+            "round": 1,
+            "candidates": [
+                player.name for player in state.players if player.role != "狼人"
+            ],
+            "votes": {wolf: target for wolf in wolves},
+            "tally": {target: len(wolves)},
+            "unanimous": True,
+            "result": target,
+        }
+    ]
+    assert len(round_state.werewolf_discussion) == len(wolves)
+    assert len(round_log.werewolf_discussion) == len(wolves)
+    assert len(round_log.werewolf_votes) == 1
+    assert [log.actor for log in round_log.werewolf_votes[0]] == wolves
+    assert round_log.eliminate is round_log.werewolf_votes[0][0]
+
+
+def test_werewolf_consensus_revotes_until_unanimous() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_wolf_consensus_revoting",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=502,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    non_wolves = [player.name for player in state.players if player.role != "狼人"]
+    first_target = non_wolves[0]
+    second_target = non_wolves[1]
+    final_target = first_target
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    provider = WerewolfConsensusProvider(
+        vote_rounds=[
+            {
+                wolves[0]: first_target,
+                wolves[1]: second_target,
+                wolves[2]: first_target,
+                wolves[3]: second_target,
+            },
+            {wolf: final_target for wolf in wolves},
+        ],
+        discussion_targets={wolf: first_target for wolf in wolves},
+    )
+    state.sheriff = next(player.name for player in state.players if player.name != final_target)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+
+    assert pending_deaths is None
+    assert round_state.attacked == final_target
+    assert [entry["round"] for entry in round_state.werewolf_vote_rounds] == [1, 2]
+    assert round_state.werewolf_vote_rounds[0]["unanimous"] is False
+    assert round_state.werewolf_vote_rounds[0]["result"] is None
+    assert round_state.werewolf_vote_rounds[1]["unanimous"] is True
+    assert round_state.werewolf_vote_rounds[1]["result"] == final_target
+    assert round_state.werewolf_vote_rounds[1]["candidates"] == [first_target, second_target]
+    assert len(round_log.werewolf_votes) == 2
 
 
 def test_first_night_hunter_shot_is_announced_before_badge_and_debate() -> None:

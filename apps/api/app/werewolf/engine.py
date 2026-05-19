@@ -42,6 +42,8 @@ from app.werewolf.rules import (
     ACTION_SHERIFF_SPEECH,
     ACTION_SHERIFF_VOTE,
     ACTION_SHERIFF_WITHDRAW,
+    ACTION_WEREWOLF_DISCUSS,
+    ACTION_WEREWOLF_KILL_VOTE,
     ACTION_WEREWOLF_SELF_EXPLOSION,
     ACTION_INVESTIGATE,
     ACTION_HUNTER_SHOOT,
@@ -61,6 +63,9 @@ from app.werewolf.rules import (
     role_category,
     rule_set_snapshot,
 )
+
+
+MAX_WEREWOLF_KILL_VOTE_ROUNDS = 8
 
 
 class MaxRoundsExceeded(RuntimeError):
@@ -285,17 +290,14 @@ class GameEngine:
             name for name in active_players if not self._is_werewolf(players_by_name[name])
         ]
 
-        if ACTION_REMOVE in self.rule_set.night_actions and active_wolves and non_wolves:
-            wolf = players_by_name[active_wolves[0]]
-            attacked, round_log.eliminate = self._player_action(
-                player=wolf,
-                action=ACTION_REMOVE,
-                options=non_wolves,
-                result_key=ACTION_REMOVE,
-                round_state=round_state,
-                phase="night",
+        if ACTION_REMOVE in self.rule_set.night_actions:
+            round_state.attacked = self._run_werewolf_kill_consensus(
+                round_state,
+                round_log,
+                active_players,
+                active_wolves,
+                non_wolves,
             )
-            round_state.attacked = str(attacked) if attacked is not None else None
 
         if ACTION_PROTECT in self.rule_set.night_actions and self._is_role_active(DOCTOR, active_players):
             doctor = players_by_name[self._active_player_for_role(DOCTOR, active_players)]
@@ -364,6 +366,148 @@ class GameEngine:
         )
 
         return None
+
+    def _run_werewolf_kill_consensus(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+        active_wolves: list[str],
+        non_wolves: list[str],
+    ) -> str | None:
+        if not active_wolves or not non_wolves:
+            return None
+
+        players_by_name = self.state.player_by_name()
+        candidates = non_wolves.copy()
+        previous_vote_round: dict[str, object] | None = None
+
+        for vote_round in range(1, MAX_WEREWOLF_KILL_VOTE_ROUNDS + 1):
+            if len(active_wolves) > 1:
+                self._run_werewolf_discussion_round(
+                    round_state=round_state,
+                    round_log=round_log,
+                    active_wolves=active_wolves,
+                    candidates=candidates,
+                    vote_round=vote_round,
+                    previous_vote_round=previous_vote_round,
+                )
+
+            votes: dict[str, str] = {}
+            vote_logs: list[ActionLog] = []
+            discussion_context = self._werewolf_discussion_context(round_state)
+            previous_vote_context = self._werewolf_vote_round_context(previous_vote_round)
+            for wolf_name in active_wolves:
+                wolf = players_by_name[wolf_name]
+                target, action_log = self._player_action(
+                    player=wolf,
+                    action=ACTION_WEREWOLF_KILL_VOTE,
+                    options=candidates,
+                    result_key="target",
+                    round_state=round_state,
+                    phase="night",
+                    extra_world_state={
+                        "werewolf_discussion": discussion_context,
+                        "werewolf_previous_vote_round": previous_vote_context,
+                        "werewolf_kill_vote_round": vote_round,
+                    },
+                )
+                votes[wolf_name] = str(target)
+                vote_logs.append(action_log)
+
+            round_log.werewolf_votes.append(vote_logs)
+            vote_record = self._record_werewolf_vote_round(vote_round, candidates, votes)
+            round_state.werewolf_vote_rounds.append(vote_record)
+            previous_vote_round = vote_record
+            if vote_record["unanimous"]:
+                round_log.eliminate = vote_logs[0] if vote_logs else None
+                return str(vote_record["result"])
+
+            candidates = list(dict.fromkeys(votes.values()))
+
+        raise RuntimeError("狼人夜晚投票未能达成一致")
+
+    def _run_werewolf_discussion_round(
+        self,
+        *,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_wolves: list[str],
+        candidates: list[str],
+        vote_round: int,
+        previous_vote_round: dict[str, object] | None,
+    ) -> None:
+        players_by_name = self.state.player_by_name()
+        previous_vote_context = self._werewolf_vote_round_context(previous_vote_round)
+        for wolf_name in active_wolves:
+            discussion_context = self._werewolf_discussion_context(round_state)
+            wolf = players_by_name[wolf_name]
+            target, action_log = self._player_action(
+                player=wolf,
+                action=ACTION_WEREWOLF_DISCUSS,
+                options=candidates,
+                result_key="target",
+                round_state=round_state,
+                phase="night",
+                extra_world_state={
+                    "werewolf_discussion": discussion_context,
+                    "werewolf_previous_vote_round": previous_vote_context,
+                    "werewolf_kill_vote_round": vote_round,
+                },
+            )
+            message = ""
+            if action_log.lm_log.result:
+                message = str(action_log.lm_log.result.get("message") or "")
+            round_state.werewolf_discussion.append(
+                {
+                    "round": vote_round,
+                    "speaker": wolf.name,
+                    "target": str(target),
+                    "message": message,
+                }
+            )
+            round_log.werewolf_discussion.append(action_log)
+
+    def _record_werewolf_vote_round(
+        self,
+        vote_round: int,
+        candidates: list[str],
+        votes: dict[str, str],
+    ) -> dict[str, object]:
+        tally: dict[str, int] = {}
+        for target in votes.values():
+            tally[target] = tally.get(target, 0) + 1
+        voted_targets = list(dict.fromkeys(votes.values()))
+        unanimous = len(voted_targets) == 1
+        return {
+            "round": vote_round,
+            "candidates": candidates.copy(),
+            "votes": votes.copy(),
+            "tally": tally,
+            "unanimous": unanimous,
+            "result": voted_targets[0] if unanimous else None,
+        }
+
+    def _werewolf_discussion_context(self, round_state: RoundState) -> list[str]:
+        return [
+            (
+                f"第{entry.get('round')}轮沟通，{entry.get('speaker')}建议"
+                f"{entry.get('target')}：{entry.get('message')}"
+            )
+            for entry in round_state.werewolf_discussion
+        ]
+
+    def _werewolf_vote_round_context(
+        self,
+        vote_round: dict[str, object] | None,
+    ) -> str:
+        if not vote_round:
+            return "暂无。"
+        votes = vote_round.get("votes")
+        if not isinstance(votes, dict):
+            return "暂无。"
+        vote_text = "；".join(f"{wolf} -> {target}" for wolf, target in votes.items())
+        return f"第{vote_round.get('round')}轮票型：{vote_text}。"
 
     def _run_witch_phase(
         self,
