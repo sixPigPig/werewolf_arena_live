@@ -142,7 +142,10 @@ type MutableGodView = {
   publicFacts: string[];
   replayMarks: GodViewEventLine[];
   skillTriggers: GodViewSkillTrigger[];
-  suppressNightActionFallback: boolean;
+  suppressedNightActionFallbackScope: {
+    round: number | null;
+    phase: string | null;
+  } | null;
 };
 
 export function deriveGodViewState(
@@ -174,7 +177,7 @@ export function deriveGodViewState(
     publicFacts: [],
     replayMarks: [],
     skillTriggers: [],
-    suppressNightActionFallback: false,
+    suppressedNightActionFallbackScope: null,
   };
 
   for (const event of events) {
@@ -230,7 +233,7 @@ export function deriveGodViewState(
     progress,
     nightActions: fallbackNightActions(
       view.nightActions,
-      view.suppressNightActionFallback,
+      shouldSuppressNightActionFallback(view),
     ),
     nightResolution: buildNightResolution(view.latestNightPayload),
     nightActionOrder: buildNightActionOrder(view.nightActions),
@@ -303,7 +306,10 @@ function collectActionLine(view: MutableGodView, event: LiveGameEvent) {
     (event.action === "werewolf_discuss" ||
       event.action === "werewolf_kill_vote")
   ) {
-    view.suppressNightActionFallback = true;
+    view.suppressedNightActionFallbackScope = {
+      round: event.round,
+      phase: event.phase,
+    };
     return;
   }
   const choice = stringField(payload, "choice") || parsedChoice(payload);
@@ -763,6 +769,15 @@ function stateUpdatedReplayTone(
     return "warning";
   }
   return "default";
+}
+
+function shouldSuppressNightActionFallback(view: MutableGodView) {
+  const scope = view.suppressedNightActionFallbackScope;
+  return (
+    scope !== null &&
+    scope.round === view.currentRound &&
+    scope.phase === view.currentPhase
+  );
 }
 
 function fallbackNightActions(

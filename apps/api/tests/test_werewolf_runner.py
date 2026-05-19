@@ -3475,16 +3475,16 @@ def test_werewolf_consensus_live_events_do_not_publish_wolf_actor() -> None:
 
     engine._run_night_phase(round_state, round_log, active_players)
 
+    secret_actions = {"werewolf_discuss", "werewolf_kill_vote"}
     secret_events = [
         event
         for event in event_sink.events
-        if event["action"] in {"werewolf_discuss", "werewolf_kill_vote"}
+        if event["action"] in secret_actions
     ]
-    assert secret_events
-    assert {event["actor"] for event in secret_events} == {None}
-    assert all("choice" not in event["payload"] for event in secret_events)
-    assert all("options" not in event["payload"] for event in secret_events)
-    assert all("result_key" not in event["payload"] for event in secret_events)
+    assert secret_events == []
+    assert [log.actor for log in round_log.werewolf_discussion] == wolves
+    assert len(round_log.werewolf_votes) == 1
+    assert [log.actor for log in round_log.werewolf_votes[0]] == wolves
 
 
 def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:

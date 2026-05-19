@@ -396,6 +396,50 @@ describe("deriveGodViewState", () => {
     expect(state.nightActions).toEqual([]);
   });
 
+  it("does not let historical secret wolf events suppress later night fallback", () => {
+    const events = [
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "1号 狼人", role: "werewolf", model: "deepseek-chat" },
+            { name: "2号 女巫", role: "witch", model: "deepseek-chat" },
+            { name: "3号 平民", role: "villager", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: null,
+        action: "werewolf_kill_vote",
+        payload: { message: "狼人正在秘密协商狼刀" },
+      }),
+      event({
+        id: 3,
+        type: "phase_started",
+        round: 2,
+        phase: "night",
+        payload: {
+          active_players: ["1号 狼人", "2号 女巫", "3号 平民"],
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+
+    expect(state.nightActions).toEqual([
+      { label: "狼人目标", value: "等待夜间行动", tone: "muted" },
+      { label: "预言家查验", value: "暂无记录", tone: "muted" },
+      { label: "女巫药剂", value: "暂无记录", tone: "muted" },
+      { label: "守卫守护", value: "暂无记录", tone: "muted" },
+    ]);
+  });
+
   it("uses honest fallback states when no live facts are available", () => {
     const spectator = deriveLiveSpectatorState([]);
 

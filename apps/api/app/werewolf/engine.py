@@ -1529,20 +1529,16 @@ class GameEngine:
         world_state = self._world_state(player, options, round_state)
         if extra_world_state:
             world_state.update(extra_world_state)
-        public_actor = self._public_actor_for_action(phase, action, player.name)
-        self._publish(
-            "action_requested",
-            round_number=round_state.number,
-            phase=phase,
-            actor=public_actor,
-            action=action,
-            payload=self._public_payload_for_action_requested(
-                phase,
-                action,
-                options,
-                result_key,
-            ),
-        )
+        is_secret_wolf_action = self._is_secret_werewolf_action(phase, action)
+        if not is_secret_wolf_action:
+            self._publish(
+                "action_requested",
+                round_number=round_state.number,
+                phase=phase,
+                actor=player.name,
+                action=action,
+                payload={"options": options.copy(), "result_key": result_key},
+            )
         try:
             value, lm_log = generate_action_with_events(
                 provider=self.provider,
@@ -1551,11 +1547,11 @@ class GameEngine:
                 model=player.model,
                 allowed_values=options if options else None,
                 result_key=result_key,
-                event_sink=self.event_sink,
+                event_sink=NullEventSink() if is_secret_wolf_action else self.event_sink,
                 event_context={
                     "round_number": round_state.number,
                     "phase": phase,
-                    "actor": public_actor,
+                    "actor": player.name,
                     "action": action,
                 },
             )
@@ -1583,33 +1579,33 @@ class GameEngine:
             model=player.model,
             raw_response=lm_log.raw_response,
         )
-        self._publish(
-            "model_response_received",
-            round_number=round_state.number,
-            phase=phase,
-            actor=public_actor,
-            action=action,
-            payload={
-                "request_id": lm_log.request_id,
-                "model": player.model,
-                "message": "模型返回已接收，正在解析行动",
-            },
-        )
-        visible_result = _visible_action_result(action, lm_log.result)
-        self._publish(
-            "action_parsed",
-            round_number=round_state.number,
-            phase=phase,
-            actor=public_actor,
-            action=action,
-            payload=self._public_payload_for_action_parsed(
-                phase,
-                action,
-                action_log,
-                visible_result,
-                options,
-            ),
-        )
+        if not is_secret_wolf_action:
+            self._publish(
+                "model_response_received",
+                round_number=round_state.number,
+                phase=phase,
+                actor=player.name,
+                action=action,
+                payload={
+                    "request_id": lm_log.request_id,
+                    "model": player.model,
+                    "message": "模型返回已接收，正在解析行动",
+                },
+            )
+            visible_result = _visible_action_result(action, lm_log.result)
+            self._publish(
+                "action_parsed",
+                round_number=round_state.number,
+                phase=phase,
+                actor=player.name,
+                action=action,
+                payload={
+                    "choice": action_log.choice,
+                    "result": visible_result,
+                    "visible_result": visible_result,
+                    "options": options.copy(),
+                },
+            )
         if options and value not in options:
             raise ValueError(f"{player.name} returned invalid {action}: {value}")
         return value, action_log
@@ -1706,47 +1702,13 @@ class GameEngine:
             payload=payload,
         )
 
-    def _public_actor_for_action(self, phase: str, action: str, actor: str) -> str | None:
+    def _is_secret_werewolf_action(self, phase: str, action: str) -> bool:
         if phase == "night" and action in {
             ACTION_WEREWOLF_DISCUSS,
             ACTION_WEREWOLF_KILL_VOTE,
         }:
-            return None
-        return actor
-
-    def _public_payload_for_action_parsed(
-        self,
-        phase: str,
-        action: str,
-        action_log: ActionLog,
-        visible_result: object,
-        options: list[str],
-    ) -> dict[str, object]:
-        if phase == "night" and action in {
-            ACTION_WEREWOLF_DISCUSS,
-            ACTION_WEREWOLF_KILL_VOTE,
-        }:
-            return {"message": "狼人正在秘密协商狼刀"}
-        return {
-            "choice": action_log.choice,
-            "result": visible_result,
-            "visible_result": visible_result,
-            "options": options.copy(),
-        }
-
-    def _public_payload_for_action_requested(
-        self,
-        phase: str,
-        action: str,
-        options: list[str],
-        result_key: str,
-    ) -> dict[str, object]:
-        if phase == "night" and action in {
-            ACTION_WEREWOLF_DISCUSS,
-            ACTION_WEREWOLF_KILL_VOTE,
-        }:
-            return {"message": "狼人正在秘密协商狼刀"}
-        return {"options": options.copy(), "result_key": result_key}
+            return True
+        return False
 
     def _world_state(
         self,
