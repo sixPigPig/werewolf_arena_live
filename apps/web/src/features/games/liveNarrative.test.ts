@@ -433,6 +433,29 @@ describe("deriveLiveNarrativeState", () => {
     expect(peacefulCue.performerLine).not.toContain("守卫");
     expect(peacefulCue.detailLine).toBe("存活玩家：Sam、Isaac");
 
+    const legacyProtectedCue = narrativeFor([
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        payload: {
+          protected: "李四",
+          eliminated: "李四",
+          active_players: ["张三", "李四"],
+        },
+      }),
+    ]).cue;
+
+    expect(legacyProtectedCue).toMatchObject({
+      kind: "judge",
+      tone: "safe",
+      judgeLine: "天亮了，昨夜平安无事。",
+      performerLine: "昨夜没有玩家出局。",
+    });
+    expect(legacyProtectedCue.judgeLine).not.toContain("李四 出局");
+    expect(legacyProtectedCue.detailLine).toBe("存活玩家：张三、李四");
+
     expect(
       narrativeFor([
         event({

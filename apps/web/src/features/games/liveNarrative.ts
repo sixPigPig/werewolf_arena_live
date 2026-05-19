@@ -427,6 +427,20 @@ function stateUpdatedCue(
     });
   }
 
+  if (isPeacefulNightPayload(payload)) {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: "safe",
+      judgeLine: "天亮了，昨夜平安无事。",
+      performerLine: "昨夜没有玩家出局。",
+      detailLine: activePlayersLine(payload),
+      actorName,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
   const deathNames = deathNamesFromPayload(payload);
   if (deathNames.length > 0) {
     return makeCue({
@@ -437,20 +451,6 @@ function stateUpdatedCue(
       performerLine: "夜间结算公布。",
       detailLine: activePlayersLine(payload),
       actorName: deathNames[0],
-      action: cue.action,
-      speechText: "",
-    });
-  }
-
-  if (isPeacefulNightPayload(payload)) {
-    return makeCue({
-      eventId: cue.eventId,
-      kind: "judge",
-      tone: "safe",
-      judgeLine: "天亮了，昨夜平安无事。",
-      performerLine: "昨夜没有玩家出局。",
-      detailLine: activePlayersLine(payload),
-      actorName,
       action: cue.action,
       speechText: "",
     });
@@ -589,6 +589,7 @@ function isPeacefulNightPayload(payload: Record<string, unknown>): boolean {
   const eliminated = payload.eliminated;
   return Boolean(
     (attacked && protectedPlayer === attacked) ||
+      (typeof eliminated === "string" && protectedPlayer === eliminated) ||
       (protectedPlayer && eliminated === null),
   );
 }
