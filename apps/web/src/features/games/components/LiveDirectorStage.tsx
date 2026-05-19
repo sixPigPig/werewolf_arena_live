@@ -1,4 +1,4 @@
-import { Badge, Switch } from "../../../components/ui";
+import { Badge } from "../../../components/ui";
 import { withGlassPanel } from "../../../components/ui/glass";
 
 import type { DirectorCue } from "../liveDirector";
@@ -16,13 +16,9 @@ type LiveDirectorStageProps = {
   isCatchingUp: boolean;
   players: LivePlayer[];
   activePlayerName: string | null;
-  focusedPlayerName: string | null;
   narrativeState: LiveNarrativeState;
   debugTrace?: LiveDebugTrace | null;
   godViewState?: GodViewState;
-  autoFollow: boolean;
-  onSelectPlayer: (name: string) => void;
-  onAutoFollowChange: (value: boolean) => void;
 };
 
 export function LiveDirectorStage({
@@ -31,17 +27,11 @@ export function LiveDirectorStage({
   isCatchingUp,
   players,
   activePlayerName,
-  focusedPlayerName,
   narrativeState,
   debugTrace,
   godViewState,
-  autoFollow,
-  onSelectPlayer,
-  onAutoFollowChange,
 }: LiveDirectorStageProps) {
   const tone = stageTone(cue);
-  const focusedPlayer =
-    players.find((player) => player.name === focusedPlayerName) ?? null;
   const isTerminalCue = cue?.importance === "terminal";
   const stagePlayers = godViewState?.players.slice(0, 12) ?? [];
   const railSplitIndex = Math.ceil(stagePlayers.length / 2);
@@ -102,22 +92,18 @@ export function LiveDirectorStage({
         <div className="god-view-player-rails pointer-events-none absolute inset-x-3 top-20 bottom-24 z-40 grid grid-cols-[minmax(7rem,12rem)_minmax(14rem,1fr)_minmax(7rem,12rem)] gap-3 sm:inset-x-5 sm:top-20 sm:bottom-24 lg:grid-cols-[minmax(9rem,14rem)_minmax(20rem,1fr)_minmax(9rem,14rem)]">
           <PlayerRail
             activePlayerName={activePlayerName}
-            focusedPlayerName={focusedPlayerName}
             isTerminalCue={isTerminalCue}
             debugHighlightedPlayers={debugHighlightedPlayers}
             livePlayersByName={livePlayersByName}
-            onSelectPlayer={onSelectPlayer}
             players={leftRailPlayers}
             side="left"
           />
           <div aria-hidden="true" />
           <PlayerRail
             activePlayerName={activePlayerName}
-            focusedPlayerName={focusedPlayerName}
             isTerminalCue={isTerminalCue}
             debugHighlightedPlayers={debugHighlightedPlayers}
             livePlayersByName={livePlayersByName}
-            onSelectPlayer={onSelectPlayer}
             players={rightRailPlayers}
             side="right"
           />
@@ -130,29 +116,6 @@ export function LiveDirectorStage({
             等待玩家加入
           </p>
         ) : null}
-
-        <div className="glass-panel-subtle absolute inset-x-4 bottom-4 z-40 flex flex-col gap-3 rounded-lg border border-amber-300/20 p-3 text-sm text-slate-200 shadow-[0_16px_45px_rgba(0,0,0,0.24)] sm:inset-x-6 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-amber-200">当前关注</p>
-            <p className="mt-1 truncate">
-              {focusedPlayer
-                ? `${focusedPlayer.name} · ${focusedPlayer.role} · ${
-                    focusedPlayer.lastAction
-                      ? actionLabel(focusedPlayer.lastAction)
-                      : "等待行动"
-                  }`
-                : "等待玩家行动"}
-            </p>
-          </div>
-          <label className="flex shrink-0 items-center gap-2 text-xs text-slate-300">
-            <Switch
-              checked={autoFollow}
-              color="amber"
-              onCheckedChange={onAutoFollowChange}
-            />
-            自动跟随
-          </label>
-        </div>
       </div>
     </section>
   );
@@ -212,20 +175,16 @@ function roleTone(role: string) {
 
 function PlayerRail({
   activePlayerName,
-  focusedPlayerName,
   isTerminalCue,
   debugHighlightedPlayers,
   livePlayersByName,
-  onSelectPlayer,
   players,
   side,
 }: {
   activePlayerName: string | null;
-  focusedPlayerName: string | null;
   isTerminalCue: boolean;
   debugHighlightedPlayers: Set<string>;
   livePlayersByName: Map<string, LivePlayer>;
-  onSelectPlayer: (name: string) => void;
   players: GodViewPlayer[];
   side: "left" | "right";
 }) {
@@ -239,12 +198,10 @@ function PlayerRail({
       {players.map((player) => (
         <StagePlayerCard
           activePlayerName={activePlayerName}
-          focusedPlayerName={focusedPlayerName}
           isTerminalCue={isTerminalCue}
           debugHighlighted={debugHighlightedPlayers.has(player.name)}
           key={player.name}
           livePlayer={livePlayersByName.get(player.name) ?? null}
-          onSelectPlayer={onSelectPlayer}
           player={player}
           side={side}
         />
@@ -255,49 +212,40 @@ function PlayerRail({
 
 function StagePlayerCard({
   activePlayerName,
-  focusedPlayerName,
   isTerminalCue,
   debugHighlighted,
   livePlayer,
-  onSelectPlayer,
   player,
   side,
 }: {
   activePlayerName: string | null;
-  focusedPlayerName: string | null;
   isTerminalCue: boolean;
   debugHighlighted: boolean;
   livePlayer: LivePlayer | null;
-  onSelectPlayer: (name: string) => void;
   player: GodViewPlayer;
   side: "left" | "right";
 }) {
   const isLastActive =
     isTerminalCue && player.name === activePlayerName && player.isAlive;
   const isCurrentSpeaker = !isTerminalCue && player.isSpeaking;
-  const isFocused = player.name === focusedPlayerName;
   const cardState = !player.isAlive
     ? "out"
     : isCurrentSpeaker
       ? "speaking"
       : isLastActive
         ? "last-active"
-        : isFocused
-          ? "focused"
-          : "idle";
+        : "idle";
   const status = stageCardStatus(player, livePlayer, isTerminalCue, isLastActive);
   const role = roleTone(player.role);
   const liveAction = livePlayer?.lastAction ? actionLabel(livePlayer.lastAction) : "";
   const liveDetail = livePlayer?.lastDetail ?? "";
 
   return (
-    <button
+    <article
       aria-label={`${player.seatNumber}号 ${player.name} ${player.role} ${status} ${liveAction} ${liveDetail}`}
-      className={`god-view-player-card pointer-events-auto grid w-full max-w-[13rem] grid-cols-[2.2rem_minmax(0,1fr)] items-center gap-2 rounded-md border bg-black/45 px-2 py-2 text-left shadow-[0_12px_32px_rgba(0,0,0,0.26)] transition duration-200 hover:-translate-y-0.5 hover:border-amber-200/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 ${
+      className={`god-view-player-card pointer-events-auto grid w-full max-w-[13rem] grid-cols-[2.2rem_minmax(0,1fr)] items-center gap-2 rounded-md border bg-black/45 px-2 py-2 text-left shadow-[0_12px_32px_rgba(0,0,0,0.26)] transition duration-200 ${
         side === "right" ? "text-right" : ""
       } ${stagePlayerTone(player, cardState)} ${
-        isFocused ? "is-focused ring-1 ring-amber-100/70" : ""
-      } ${
         debugHighlighted
           ? "ring-2 ring-amber-300/85 shadow-[0_0_30px_rgba(251,191,36,0.38),0_12px_32px_rgba(0,0,0,0.26)]"
           : ""
@@ -305,8 +253,6 @@ function StagePlayerCard({
       data-card-state={cardState}
       data-debug-highlighted={debugHighlighted ? "true" : "false"}
       data-testid={`god-view-stage-player-card-${player.name}`}
-      onClick={() => onSelectPlayer(player.name)}
-      type="button"
     >
       <span className="flex h-8 w-8 items-center justify-center rounded-md border border-amber-300/45 bg-black/55 text-xs font-semibold text-amber-100">
         {player.seatNumber}
@@ -369,7 +315,7 @@ function StagePlayerCard({
           </span>
         </span>
       </span>
-    </button>
+    </article>
   );
 }
 

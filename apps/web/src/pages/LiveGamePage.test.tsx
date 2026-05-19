@@ -511,11 +511,15 @@ describe("LiveGamePage", () => {
     });
     expect(traceButton).toHaveTextContent(/#2-/);
     expect(screen.queryByText("等待实时事件...")).not.toBeInTheDocument();
-    await userEvent.click(liCard);
-    expect(liCard).toHaveClass("is-focused");
+    expect(screen.queryByText("当前关注")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("switch", { name: "自动跟随" }),
+    ).not.toBeInTheDocument();
+
     await userEvent.click(traceButton);
     expect(traceButton).toHaveAttribute("aria-expanded", "true");
-    expect(zhangCard).toHaveClass("is-focused");
+    expect(zhangCard).toHaveAttribute("data-debug-highlighted", "true");
+    expect(liCard).toHaveAttribute("data-debug-highlighted", "false");
     expect(
       screen.getByTestId("god-view-stage-player-card-张三"),
     ).toHaveAttribute("data-debug-highlighted", "true");
@@ -975,12 +979,12 @@ describe("LiveGamePage", () => {
     expect(within(stage).queryByLabelText("圆桌座位")).not.toBeInTheDocument();
     expect(screen.queryByTestId("god-view-roster-panel")).not.toBeInTheDocument();
 
-    await userEvent.click(
-      within(stage).getByTestId("god-view-stage-player-card-P2"),
-    );
     expect(
       within(stage).getByTestId("god-view-stage-player-card-P2"),
-    ).toHaveAttribute("data-card-state", "focused");
+    ).toHaveAttribute("data-card-state", "idle");
+    expect(
+      within(stage).queryByRole("button", { name: /P2/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the current speaker as a large god-view stage portrait", async () => {
@@ -1151,7 +1155,7 @@ describe("LiveGamePage", () => {
     );
   });
 
-  it("lets users pin a player and re-enable auto follow", async () => {
+  it("removes current focus controls while keeping actor-driven speaking state", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(runningRunResponse()),
@@ -1203,14 +1207,12 @@ describe("LiveGamePage", () => {
     );
     const liCard = screen.getByTestId("god-view-stage-player-card-李四");
 
-    expect(zhangCard).toHaveClass(
-      "is-focused",
-    );
-
-    await userEvent.click(liCard);
-    expect(liCard).toHaveClass(
-      "is-focused",
-    );
+    expect(screen.queryByText("当前关注")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("switch", { name: "自动跟随" }),
+    ).not.toBeInTheDocument();
+    expect(zhangCard).toHaveAttribute("data-card-state", "speaking");
+    expect(liCard).toHaveAttribute("data-card-state", "idle");
 
     act(() => {
       source.emit("action_requested", {
@@ -1221,19 +1223,14 @@ describe("LiveGamePage", () => {
         created_at: "2026-04-24T12:00:04Z",
         round: 1,
         phase: "day",
-        actor: "张三",
+        actor: "李四",
         action: "vote",
-        payload: { options: ["李四"] },
+        payload: { options: ["张三"] },
       });
     });
-    expect(liCard).toHaveClass(
-      "is-focused",
-    );
 
-    await userEvent.click(screen.getByRole("switch", { name: "自动跟随" }));
-    expect(zhangCard).toHaveClass(
-      "is-focused",
-    );
+    expect(liCard).toHaveAttribute("data-card-state", "speaking");
+    expect(zhangCard).toHaveAttribute("data-card-state", "idle");
   });
 
   it("renders failed event errors", async () => {

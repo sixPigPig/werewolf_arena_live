@@ -38,17 +38,12 @@ export function LiveStageExperience({
   onDebugPanelOpenChange,
   spectatorState,
 }: LiveStageExperienceProps) {
-  const [autoFollow, setAutoFollow] = useState(true);
-  const [manualFocusName, setManualFocusName] = useState<string | null>(null);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const traces = useMemo(() => buildLiveDebugTraces(events), [events]);
   const selectedTrace =
     traces.find((trace) => trace.id === selectedTraceId) ?? null;
-  const autoFocusName =
+  const activePlayerName =
     director.currentCue?.actor ?? spectatorState.activePlayerName;
-  const focusedPlayerName = autoFollow
-    ? autoFocusName
-    : manualFocusName ?? autoFocusName;
   const narrativeState = useMemo(
     () =>
       deriveLiveNarrativeState({
@@ -60,17 +55,7 @@ export function LiveStageExperience({
     [director.currentCue, events, godViewState, spectatorState],
   );
   const selectTrace = (trace: LiveDebugTrace | null) => {
-    if (!trace) {
-      setSelectedTraceId(null);
-      return;
-    }
-
-    setSelectedTraceId(trace.id);
-    const focusName = trace.actor ?? trace.relatedPlayers[0] ?? null;
-    if (focusName) {
-      setAutoFollow(false);
-      setManualFocusName(focusName);
-    }
+    setSelectedTraceId(trace?.id ?? null);
   };
 
   return (
@@ -86,25 +71,13 @@ export function LiveStageExperience({
         right={<GodViewIntelPanel state={godViewState} />}
         stage={
           <LiveDirectorStage
-            activePlayerName={autoFocusName}
-            autoFollow={autoFollow}
+            activePlayerName={activePlayerName}
             backlogCount={director.backlogCount}
             cue={director.currentCue}
             debugTrace={selectedTrace}
-            focusedPlayerName={focusedPlayerName}
             godViewState={godViewState}
             isCatchingUp={director.isCatchingUp}
             narrativeState={narrativeState}
-            onAutoFollowChange={(value) => {
-              setAutoFollow(value);
-              if (value) {
-                setManualFocusName(null);
-              }
-            }}
-            onSelectPlayer={(name) => {
-              setAutoFollow(false);
-              setManualFocusName(name);
-            }}
             players={spectatorState.players}
           />
         }
