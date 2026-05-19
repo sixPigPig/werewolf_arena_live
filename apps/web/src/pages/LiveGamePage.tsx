@@ -6,30 +6,21 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ArenaCommandNav, ArenaNavButton } from "../app/navigation";
 import { getGameRun } from "../features/games/api/getGameRun";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
-import { GodViewBottomBoard } from "../features/games/components/GodViewBottomBoard";
-import { GodViewIntelPanel } from "../features/games/components/GodViewIntelPanel";
-import { GodViewSituationPanel } from "../features/games/components/GodViewSituationPanel";
-import { GodViewTopBar } from "../features/games/components/GodViewTopBar";
-import { LiveDirectorStage } from "../features/games/components/LiveDirectorStage";
-import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
 import { LiveNavSessionBadge } from "../features/games/components/LiveNavSessionBadge";
 import { LiveNavSettingsMenu } from "../features/games/components/LiveNavSettingsMenu";
 import { LiveNavStatusBadge } from "../features/games/components/LiveNavStatusBadge";
+import { LiveStageExperience } from "../features/games/components/LiveStageExperience";
 import { useGameRunEvents } from "../features/games/hooks/useGameRunEvents";
 import { useLiveDirector } from "../features/games/hooks/useLiveDirector";
 import { deriveGodViewState } from "../features/games/liveGodView";
 import { deriveLiveNavStatus } from "../features/games/liveNavStatus";
 import { deriveLiveSpectatorState } from "../features/games/liveSpectator";
-import { LivePageShell } from "./components/LivePageShell";
-import { LiveStageModule } from "./components/LiveStageModule";
 
 export function LiveGamePage() {
   const { runId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { events, connectionState } = useGameRunEvents(runId);
-  const [autoFollow, setAutoFollow] = useState(true);
-  const [manualFocusName, setManualFocusName] = useState<string | null>(null);
   const [terminalStartByRunId, setTerminalStartByRunId] = useState<
     Record<string, boolean>
   >({});
@@ -97,15 +88,6 @@ export function LiveGamePage() {
     runStatus: run?.status ?? "queued",
     speed: director.speed,
   });
-  const autoFocusName =
-    director.currentCue?.actor ?? spectatorState.activePlayerName;
-  const focusedPlayerName = autoFollow
-    ? autoFocusName
-    : manualFocusName ?? autoFocusName;
-  const handleSelectPlayer = (name: string) => {
-    setAutoFollow(false);
-    setManualFocusName(name);
-  };
   const topNavCommands = null;
   const topNavActions = run ? (
     <>
@@ -198,50 +180,18 @@ export function LiveGamePage() {
         className="live-game-page min-h-screen px-4 py-6 text-slate-100"
         data-testid="live-game-page"
       >
-        <LivePageShell>
-          {resumeMutation.isError ? (
-            <Callout.Root className="mb-3" color="red" size="1" variant="soft">
-              <Callout.Text>无法继续对局</Callout.Text>
-            </Callout.Root>
-          ) : null}
-          <LiveStageModule
-            bottom={<GodViewBottomBoard state={godViewState} />}
-            left={<GodViewSituationPanel state={godViewState} />}
-            right={
-              <GodViewIntelPanel
-                debugTimeline={
-                  <LiveEventTimeline
-                    currentEventId={director.currentEventId}
-                    events={events}
-                  />
-                }
-                state={godViewState}
-              />
-            }
-            stage={
-              <LiveDirectorStage
-                activePlayerName={autoFocusName}
-                autoFollow={autoFollow}
-                backlogCount={director.backlogCount}
-                cue={director.currentCue}
-                focusedPlayerName={focusedPlayerName}
-                godViewState={godViewState}
-                isCatchingUp={director.isCatchingUp}
-                onAutoFollowChange={(value) => {
-                  setAutoFollow(value);
-                  if (value) {
-                    setManualFocusName(null);
-                  }
-                }}
-                onSelectPlayer={handleSelectPlayer}
-                players={spectatorState.players}
-              />
-            }
-            top={
-              <GodViewTopBar state={godViewState} />
-            }
-          />
-        </LivePageShell>
+        {resumeMutation.isError ? (
+          <Callout.Root className="mb-3" color="red" size="1" variant="soft">
+            <Callout.Text>无法继续对局</Callout.Text>
+          </Callout.Root>
+        ) : null}
+        <LiveStageExperience
+          director={director}
+          events={events}
+          godViewState={godViewState}
+          mode="live"
+          spectatorState={spectatorState}
+        />
       </main>
     </>
   );
