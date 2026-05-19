@@ -82,11 +82,14 @@ STRATEGY_PRESETS = {
 
 Use a work-focused application layout, not a landing page.
 
-- Top navigation: brand, "返回大厅", "新建虚拟玩家".
-- Left rail: search input, filters, sorting, profile list/card grid.
-- Center editor: segmented tabs for Basic, Identity, Strategy, Examples.
-- Right preview: portrait, name, tags, model, personality summary, strategy radar-like values using compact stat bars, composed prompt preview.
-- Empty state: one primary action to create a profile, plus four system avatar examples visible in the first viewport.
+- Default browse state follows the reference image: one framed dark-gothic workspace with a narrow left filter rail and a 3-column profile card grid on the right.
+- Top navigation: brand plus page actions. Keep "新建虚拟玩家" as the primary action and "返回大厅" as the secondary action in the global nav only; do not duplicate the create button inside the library workspace.
+- Left rail: title "虚拟玩家库", search input, model filter, personality filter, sorting, favorite-only action, and empty/error hints. Keep this rail about 160-200 px on desktop.
+- Right content: profile cards in a stable grid. Desktop defaults to 3 columns; mobile collapses the filter rail and renders one card per row.
+- Profile card anatomy: round portrait, truncated display name, short badge for personality or strategy, model label, 2-3 compact metadata/tag lines, and bottom actions "编辑", "复制", "删除".
+- Card dimensions must stay stable across hover, selected, loading, and long-content states. Long names, model ids, tags, and action labels truncate or wrap within their own rows without overlapping.
+- Creating from the global nav or editing from a card opens an oversized modal dialog. Do not make the default page a permanent "list + editor + preview" three-column layout.
+- Empty state: keep the same left/filter plus right/grid frame and point users to the global-nav create action; do not add a second in-workspace create button.
 
 ### `/games` Page
 
@@ -718,6 +721,15 @@ Use `VirtualPlayerLibrary` as the orchestrator and move focused rendering into:
 - `VirtualPlayerEditor`: form sections and save/cancel.
 - `VirtualPlayerPreview`: image, metadata, stat bars, and prompt preview.
 
+Default layout requirements:
+
+- Render `VirtualPlayerLibrary` as the reference-style browser first: left filter rail plus right card grid.
+- Keep `VirtualPlayerCardGrid` responsible for card density and stable card sizing; it should not contain the full profile editor.
+- Put search, model/personality filters, sorting, and favorite-only controls in the left rail on desktop.
+- Use a 3-column grid on desktop. Use responsive CSS so medium widths can fall back to 2 columns and mobile to 1 column.
+- Render the editor in an oversized modal opened by the global-nav "新建虚拟玩家" action or a card "编辑" action; closing it returns to the same filtered grid state.
+- Match the existing gothic visual language: dark panel, fine gold borders, compact typography, ornate but restrained card corners, and no decorative gradient blobs.
+
 The editor must use compact field labels and controls:
 
 - Text input for nickname and one-line description.
@@ -750,6 +762,8 @@ Expected: selected tests pass.
 
 Add tests proving:
 
+- `/players` default browse state includes the left filter rail and a profile card grid.
+- Desktop profile cards expose portrait, display name, model, compact metadata, and "编辑", "复制", "删除" actions.
 - Searching by display name filters cards.
 - Searching by tag filters cards.
 - Model and personality filters narrow the card grid.
@@ -864,7 +878,11 @@ cd apps/web && npm run dev -- --host 127.0.0.1
 
 Use Browser to verify:
 
-- `/players` opens and the first viewport shows the workbench, not a marketing page.
+- `/players` opens and the first viewport shows the reference-style player library, not a marketing page.
+- Desktop `/players` shows a left filter rail and 3-column card grid with "新建虚拟玩家" and "返回大厅" only in the global nav.
+- Clicking global-nav "新建虚拟玩家" opens an oversized modal, and the library workspace itself has no duplicate create button.
+- Clicking a card "编辑" opens the same oversized modal in edit mode.
+- Profile cards keep stable dimensions; long names, model ids, tags, and bottom actions do not overlap or resize the grid.
 - New profile starts with random name and random system avatar.
 - Dragging or choosing an image updates the portrait preview.
 - Rich fields save and re-open with the same values.
@@ -876,6 +894,8 @@ Use Browser to verify:
 ## Acceptance Criteria
 
 - `/players` is the only place for creating and editing reusable virtual players.
+- `/players` default browse layout matches the reference: left filter rail, right card grid, global-nav create/back actions, and stable gothic profile cards.
+- `/players` uses one oversized modal for both new and edit player flows.
 - `/games` still supports choosing saved profiles into seats.
 - Existing profiles created before this iteration load with safe defaults for all new fields.
 - Rich profile fields are persisted in DB and file fallback mode.

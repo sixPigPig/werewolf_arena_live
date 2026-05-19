@@ -152,6 +152,14 @@ function renderRoute(path: string) {
   );
 }
 
+async function clickNavCreate() {
+  await userEvent.click(
+    within(screen.getByTestId("arena-global-nav")).getByRole("button", {
+      name: "新建虚拟玩家",
+    }),
+  );
+}
+
 describe("PlayersPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -226,13 +234,16 @@ describe("PlayersPage", () => {
     });
 
     renderPage();
+    const playerLibrary = await screen.findByTestId("virtual-player-library");
+    expect(
+      within(playerLibrary).queryByRole("button", { name: "新建虚拟玩家" }),
+    ).not.toBeInTheDocument();
 
-    await userEvent.click(
-      within(screen.getByTestId("arena-global-nav")).getByRole("button", {
-        name: "新建虚拟玩家",
-      }),
-    );
+    await clickNavCreate();
 
+    expect(
+      screen.getByRole("dialog", { name: "新建虚拟玩家" }),
+    ).toBeInTheDocument();
     const nameInput = screen.getByLabelText("虚拟玩家昵称");
     expect(nameInput).toHaveFocus();
     expect(
@@ -354,9 +365,7 @@ describe("PlayersPage", () => {
       await within(playerLibrary).findByText("Alpha 阿夜"),
     ).toBeInTheDocument();
 
-    await userEvent.click(
-      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
-    );
+    await clickNavCreate();
     await userEvent.click(screen.getByRole("button", { name: /高压进攻/ }));
 
     expect(screen.getByLabelText("一句话简介")).toHaveValue(
@@ -400,10 +409,8 @@ describe("PlayersPage", () => {
     });
     renderPage();
 
-    const playerLibrary = await screen.findByTestId("virtual-player-library");
-    await userEvent.click(
-      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
-    );
+    await screen.findByTestId("virtual-player-library");
+    await clickNavCreate();
 
     const nameInput = screen.getByLabelText("虚拟玩家昵称") as HTMLInputElement;
     expect(
@@ -483,10 +490,8 @@ describe("PlayersPage", () => {
     });
     renderPage();
 
-    const playerLibrary = await screen.findByTestId("virtual-player-library");
-    await userEvent.click(
-      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
-    );
+    await screen.findByTestId("virtual-player-library");
+    await clickNavCreate();
     await userEvent.click(
       screen.getByRole("button", { name: /^AI 生成请求/ }),
     );
@@ -506,10 +511,8 @@ describe("PlayersPage", () => {
     mockPlayersPageFetch(filteredProfilesResponse());
     renderPage();
 
-    const playerLibrary = await screen.findByTestId("virtual-player-library");
-    await userEvent.click(
-      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
-    );
+    await screen.findByTestId("virtual-player-library");
+    await clickNavCreate();
     await userEvent.click(screen.getByRole("button", { name: /高压进攻/ }));
     await userEvent.click(screen.getByRole("button", { name: "保存为模板" }));
     const dialog = screen.getByRole("dialog", { name: "保存为模板" });
@@ -540,9 +543,7 @@ describe("PlayersPage", () => {
       await within(playerLibrary).findByText("Alpha 阿夜"),
     ).toBeInTheDocument();
 
-    await userEvent.click(
-      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
-    );
+    await clickNavCreate();
     await userEvent.clear(screen.getByLabelText("虚拟玩家昵称"));
     await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), " alpha 阿夜 ");
 
@@ -595,9 +596,7 @@ describe("PlayersPage", () => {
       await within(playerLibrary).findByText("Alpha 阿夜"),
     ).toBeInTheDocument();
 
-    await userEvent.click(
-      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
-    );
+    await clickNavCreate();
     await userEvent.click(screen.getByRole("button", { name: /高压进攻/ }));
     await userEvent.clear(screen.getByLabelText("虚拟玩家昵称"));
     await userEvent.type(screen.getByLabelText("虚拟玩家昵称"), "连创玩家");
@@ -717,9 +716,7 @@ describe("PlayersPage", () => {
       within(playerLibrary).getByRole("img", { name: "冷静的阿夜 人物形象" }),
     ).toHaveAttribute("src", "/api/v1/player-profiles/avatar/profile-1.png");
 
-    await userEvent.click(
-      within(playerLibrary).getByRole("button", { name: "新建虚拟玩家" }),
-    );
+    await clickNavCreate();
     const generatedNameInput = screen.getByLabelText("虚拟玩家昵称") as HTMLInputElement;
     expect(generatedNameInput.value.trim().length).toBeGreaterThan(0);
     await userEvent.clear(generatedNameInput);

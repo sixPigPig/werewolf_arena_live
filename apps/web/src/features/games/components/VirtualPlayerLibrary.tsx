@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 
-import { Button, Container } from "../../../components/ui";
+import { Container } from "../../../components/ui";
 import {
   AI_PLAYER_CREATION_PRESET,
   AI_PLAYER_CREATION_PRESET_ID,
@@ -773,60 +773,65 @@ export function VirtualPlayerLibrary({
         >
           虚拟玩家库
         </h2>
-        <Button
-          className="virtual-player-library-action"
-          intent="primary"
-          onClick={startCreate}
-          size="1"
-          skin="gothic"
-          type="button"
-        >
-          新建虚拟玩家
-        </Button>
       </div>
 
       {isEditorOpen ? (
-        <VirtualPlayerEditor
-          ref={editorRef}
-          canSave={canSave}
-          catchphraseInput={catchphraseInput}
-          creationPresets={creationPresets}
-          creationReadiness={creationReadiness}
-          draft={draft}
-          exampleMessageInput={exampleMessageInput}
-          isGeneratingAiDraft={isGeneratingAiDraft}
-          isGeneratingAiName={isGeneratingAiName}
-          isEditing={Boolean(editingProfileId)}
-          isAvatarDragging={isAvatarDragging}
-          isSaving={isSaving}
-          isTemplateDialogOpen={isTemplateDialogOpen}
-          isUploadingAvatar={isUploadingAvatar}
-          modelOptions={activeModelOptions}
-          selectedCreationPresetId={selectedCreationPresetId}
-          tagInput={tagInput}
-          onApplySystemAvatar={applySystemAvatar}
-          onAvatarDragLeave={handleAvatarDragLeave}
-          onAvatarDragOver={handleAvatarDragOver}
-          onAvatarDrop={handleAvatarDrop}
-          onAvatarFileChange={(event) => void uploadAvatar(event)}
-          onCancel={cancelEditor}
-          onCancelSaveTemplate={cancelSaveTemplateDialog}
-          onCatchphraseInputChange={handleCatchphraseInputChange}
-          onConfirmSaveTemplate={saveCurrentDraftAsTemplate}
-          onCreationPresetChange={applyCreationPreset}
-          onDraftChange={updateDraft}
-          onExampleMessageInputChange={handleExampleMessageInputChange}
-          onGenerateAiName={requestAiNameForDraft}
-          onOpenSaveTemplate={openSaveTemplateDialog}
-          onSave={() => void saveDraft()}
-          onSaveAndContinue={() =>
-            void saveDraft({ continueCreating: true })
-          }
-          onTagInputChange={handleTagInputChange}
-          onTemplateNameInputChange={setTemplateNameInput}
-          templateNameInput={templateNameInput}
-          templateSaveError={templateSaveError}
-        />
+        <div className="virtual-player-editor-dialog-backdrop">
+          <div
+            aria-labelledby="virtual-player-editor-dialog-title"
+            aria-modal="true"
+            className="virtual-player-editor-dialog"
+            role="dialog"
+          >
+            <h3
+              className="virtual-player-editor-dialog-title"
+              id="virtual-player-editor-dialog-title"
+            >
+              {editingProfileId ? "编辑虚拟玩家" : "新建虚拟玩家"}
+            </h3>
+            <VirtualPlayerEditor
+              ref={editorRef}
+              canSave={canSave}
+              catchphraseInput={catchphraseInput}
+              creationPresets={creationPresets}
+              creationReadiness={creationReadiness}
+              draft={draft}
+              exampleMessageInput={exampleMessageInput}
+              isGeneratingAiDraft={isGeneratingAiDraft}
+              isGeneratingAiName={isGeneratingAiName}
+              isEditing={Boolean(editingProfileId)}
+              isAvatarDragging={isAvatarDragging}
+              isSaving={isSaving}
+              isTemplateDialogOpen={isTemplateDialogOpen}
+              isUploadingAvatar={isUploadingAvatar}
+              modelOptions={activeModelOptions}
+              selectedCreationPresetId={selectedCreationPresetId}
+              tagInput={tagInput}
+              onApplySystemAvatar={applySystemAvatar}
+              onAvatarDragLeave={handleAvatarDragLeave}
+              onAvatarDragOver={handleAvatarDragOver}
+              onAvatarDrop={handleAvatarDrop}
+              onAvatarFileChange={(event) => void uploadAvatar(event)}
+              onCancel={cancelEditor}
+              onCancelSaveTemplate={cancelSaveTemplateDialog}
+              onCatchphraseInputChange={handleCatchphraseInputChange}
+              onConfirmSaveTemplate={saveCurrentDraftAsTemplate}
+              onCreationPresetChange={applyCreationPreset}
+              onDraftChange={updateDraft}
+              onExampleMessageInputChange={handleExampleMessageInputChange}
+              onGenerateAiName={requestAiNameForDraft}
+              onOpenSaveTemplate={openSaveTemplateDialog}
+              onSave={() => void saveDraft()}
+              onSaveAndContinue={() =>
+                void saveDraft({ continueCreating: true })
+              }
+              onTagInputChange={handleTagInputChange}
+              onTemplateNameInputChange={setTemplateNameInput}
+              templateNameInput={templateNameInput}
+              templateSaveError={templateSaveError}
+            />
+          </div>
+        </div>
       ) : null}
 
       <VirtualPlayerCardGrid

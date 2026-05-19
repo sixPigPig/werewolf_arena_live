@@ -14,6 +14,8 @@ const modelOptions: ModelOption[] = [
   { id: "deepseek-chat", label: "DeepSeek · deepseek-chat" },
 ];
 
+type VirtualPlayerLibraryProps = Parameters<typeof VirtualPlayerLibrary>[0];
+
 function profile(
   overrides: Partial<VirtualPlayerProfile>,
 ): VirtualPlayerProfile {
@@ -48,9 +50,10 @@ function profile(
 }
 
 function renderLibrary(
-  overrides: Partial<Parameters<typeof VirtualPlayerLibrary>[0]> = {},
+  overrides: Partial<VirtualPlayerLibraryProps> = {},
 ) {
-  const props = {
+  const onCreateActionReady = overrides.onCreateActionReady ?? vi.fn();
+  const props: VirtualPlayerLibraryProps = {
     profiles: [],
     modelOptions,
     isLoading: false,
@@ -64,12 +67,23 @@ function renderLibrary(
     onCreateProfile: vi.fn<() => Promise<unknown>>().mockResolvedValue({}),
     onUpdateProfile: vi.fn<() => Promise<unknown>>().mockResolvedValue({}),
     onDeleteProfile: vi.fn<() => Promise<unknown>>().mockResolvedValue({}),
+    onCreateActionReady,
     ...overrides,
   };
 
   render(<VirtualPlayerLibrary {...props} />);
 
   return props;
+}
+
+async function openCreateEditor(props: VirtualPlayerLibraryProps) {
+  const onCreateActionReady = props.onCreateActionReady as ReturnType<typeof vi.fn>;
+  const openCreate = onCreateActionReady.mock.calls.at(-1)?.[0] as
+    | (() => void)
+    | undefined;
+
+  expect(openCreate).toBeTypeOf("function");
+  await act(async () => openCreate?.());
 }
 
 describe("VirtualPlayerLibrary", () => {
@@ -107,9 +121,9 @@ describe("VirtualPlayerLibrary", () => {
     const onCreateProfile = vi
       .fn<(request: PlayerProfileRequest) => Promise<unknown>>()
       .mockResolvedValue({});
-    renderLibrary({ onCreateProfile });
+    const props = renderLibrary({ onCreateProfile });
 
-    await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await openCreateEditor(props);
     expect(
       screen
         .getByTestId("virtual-player-avatar-dropzone")
@@ -133,9 +147,9 @@ describe("VirtualPlayerLibrary", () => {
     const onGenerateAiDraft = vi.fn().mockResolvedValue({
       display_name: "月蚀归票",
     });
-    renderLibrary({ onGenerateAiDraft });
+    const props = renderLibrary({ onGenerateAiDraft });
 
-    await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await openCreateEditor(props);
 
     expect(screen.getByLabelText("虚拟玩家昵称")).toHaveValue("夜幕听风");
     expect(onGenerateAiDraft).not.toHaveBeenCalled();
@@ -146,12 +160,12 @@ describe("VirtualPlayerLibrary", () => {
     const onGenerateAiDraft = vi.fn().mockResolvedValue({
       display_name: "月蚀归票",
     });
-    renderLibrary({
+    const props = renderLibrary({
       onGenerateAiDraft,
       profiles: [profile({ display_name: "夜幕听风" })],
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await openCreateEditor(props);
     expect(onGenerateAiDraft).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole("button", { name: "AI 生成昵称" }));
@@ -168,9 +182,9 @@ describe("VirtualPlayerLibrary", () => {
   it("saves rich virtual player settings from the dedicated editor", async () => {
     const user = userEvent.setup();
     const onCreateProfile = vi.fn().mockResolvedValue({});
-    renderLibrary({ onCreateProfile });
+    const props = renderLibrary({ onCreateProfile });
 
-    await user.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await openCreateEditor(props);
     await user.clear(screen.getByLabelText("一句话简介"));
     await user.type(screen.getByLabelText("一句话简介"), "逻辑控场玩家");
     await user.clear(screen.getByLabelText("背景故事"));
@@ -200,11 +214,38 @@ describe("VirtualPlayerLibrary", () => {
     );
   });
 
+  it("renders the reference browse layout with a filter rail and card matrix", () => {
+    renderLibrary({
+      profiles: [
+        profile({
+          id: "profile-layout",
+          display_name: "冷锋拆阵",
+          tags: ["控场"],
+        }),
+      ],
+    });
+
+    const library = screen.getByTestId("virtual-player-library");
+    const browseLayout = library.querySelector(".virtual-player-library-browser");
+    const filterRail = screen.getByRole("complementary", {
+      name: "虚拟玩家筛选",
+    });
+    const cardList = screen.getByRole("list", { name: "虚拟玩家列表" });
+
+    expect(browseLayout).toContainElement(filterRail);
+    expect(browseLayout).toContainElement(cardList);
+    expect(filterRail).toHaveClass("virtual-player-library-filter-rail");
+    expect(cardList.parentElement).toHaveClass(
+      "virtual-player-library-card-matrix",
+    );
+    expect(screen.getByText("冷锋拆阵")).toBeInTheDocument();
+  });
+
   it("shows backend default personality text in the prompt preview when personality text is blank", async () => {
     const user = userEvent.setup();
-    renderLibrary();
+    const props = renderLibrary();
 
-    await user.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await openCreateEditor(props);
     await user.selectOptions(screen.getByLabelText("性格"), "cautious");
 
     expect(
@@ -215,9 +256,9 @@ describe("VirtualPlayerLibrary", () => {
   it("normalizes empty and out-of-range tendency values before saving", async () => {
     const user = userEvent.setup();
     const onCreateProfile = vi.fn().mockResolvedValue({});
-    renderLibrary({ onCreateProfile });
+    const props = renderLibrary({ onCreateProfile });
 
-    await user.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await openCreateEditor(props);
     await user.clear(screen.getByLabelText("冒险倾向"));
     await user.clear(screen.getByLabelText("领导倾向"));
     await user.type(screen.getByLabelText("领导倾向"), "9");
@@ -330,6 +371,25 @@ describe("VirtualPlayerLibrary", () => {
     );
   });
 
+  it("opens profile edits in a dialog", async () => {
+    const user = userEvent.setup();
+    renderLibrary({
+      profiles: [
+        profile({
+          id: "profile-dialog-edit",
+          display_name: "弹窗阿夜",
+        }),
+      ],
+    });
+
+    await user.click(screen.getByRole("button", { name: "编辑 弹窗阿夜" }));
+
+    expect(
+      screen.getByRole("dialog", { name: "编辑虚拟玩家" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("虚拟玩家昵称")).toHaveValue("弹窗阿夜");
+  });
+
   it("filters virtual player cards with compact search", async () => {
     const user = userEvent.setup();
     renderLibrary({
@@ -420,9 +480,9 @@ describe("VirtualPlayerLibrary", () => {
     const onCreateProfile = vi
       .fn<(request: PlayerProfileRequest) => Promise<unknown>>()
       .mockResolvedValue({});
-    renderLibrary({ onCreateProfile });
+    const props = renderLibrary({ onCreateProfile });
 
-    await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await openCreateEditor(props);
     await userEvent.click(
       screen.getByRole("button", {
         name: `选择内设形象 ${SYSTEM_PLAYER_AVATARS[2].label}`,
@@ -448,9 +508,9 @@ describe("VirtualPlayerLibrary", () => {
     const onCreateProfile = vi
       .fn<(request: PlayerProfileRequest) => Promise<unknown>>()
       .mockResolvedValue({});
-    renderLibrary({ onCreateProfile, onUploadAvatar });
+    const props = renderLibrary({ onCreateProfile, onUploadAvatar });
 
-    await userEvent.click(screen.getByRole("button", { name: "新建虚拟玩家" }));
+    await openCreateEditor(props);
     const droppedFile = new File(
       [new Uint8Array([137, 80, 78, 71])],
       "dropped.png",
