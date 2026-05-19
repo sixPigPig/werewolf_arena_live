@@ -172,6 +172,22 @@ describe("LiveDebugTraceRail", () => {
     expect(onSelectTrace).toHaveBeenCalledWith(null);
   });
 
+  it("does not fall back to internal expansion when controlled selectedTraceId is null", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<LiveDebugTraceRail traces={traces} />);
+
+    const traceButton = screen.getByRole("button", { name: /林恩 · 投票/ });
+    await user.click(traceButton);
+    expect(traceButton).toHaveAttribute("aria-expanded", "true");
+
+    rerender(<LiveDebugTraceRail selectedTraceId={null} traces={traces} />);
+
+    expect(screen.getByRole("button", { name: /林恩 · 投票/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
   it("filters OK traces when only issues is enabled", async () => {
     const user = userEvent.setup();
     render(<LiveDebugTraceRail traces={traces} />);

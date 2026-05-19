@@ -49,7 +49,8 @@ export function LiveDebugTraceRail({
     [showIssuesOnly, traces],
   );
 
-  const activeTraceId = selectedTraceId ?? expandedTraceId;
+  const isControlled = selectedTraceId !== undefined;
+  const activeTraceId = isControlled ? selectedTraceId : expandedTraceId;
 
   return (
     <aside
@@ -91,7 +92,9 @@ export function LiveDebugTraceRail({
               key={trace.id}
               onSelect={() => {
                 const nextTrace = activeTraceId === trace.id ? null : trace;
-                setExpandedTraceId(nextTrace?.id ?? null);
+                if (!isControlled) {
+                  setExpandedTraceId(nextTrace?.id ?? null);
+                }
                 onSelectTrace?.(nextTrace);
               }}
               trace={trace}

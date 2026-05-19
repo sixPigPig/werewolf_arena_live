@@ -350,7 +350,9 @@ describe("LiveGamePage", () => {
     expect(liveZhangCard).toHaveAccessibleName(
       /公开发言/,
     );
-    expect(screen.getByRole("button", { name: /李四/ })).toBeInTheDocument();
+    expect(
+      screen.getByTestId("god-view-stage-player-card-李四"),
+    ).toBeInTheDocument();
     expect(await screen.findByText("张三 开始发言")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "实时设置" }));
     await userEvent.click(
@@ -1141,12 +1143,17 @@ describe("LiveGamePage", () => {
       });
     });
 
-    expect(await screen.findByRole("button", { name: /张三/ })).toHaveClass(
+    const zhangCard = await screen.findByTestId(
+      "god-view-stage-player-card-张三",
+    );
+    const liCard = screen.getByTestId("god-view-stage-player-card-李四");
+
+    expect(zhangCard).toHaveClass(
       "is-focused",
     );
 
-    await userEvent.click(screen.getByRole("button", { name: /李四/ }));
-    expect(screen.getByRole("button", { name: /李四/ })).toHaveClass(
+    await userEvent.click(liCard);
+    expect(liCard).toHaveClass(
       "is-focused",
     );
 
@@ -1164,12 +1171,12 @@ describe("LiveGamePage", () => {
         payload: { options: ["李四"] },
       });
     });
-    expect(screen.getByRole("button", { name: /李四/ })).toHaveClass(
+    expect(liCard).toHaveClass(
       "is-focused",
     );
 
     await userEvent.click(screen.getByRole("switch", { name: "自动跟随" }));
-    expect(screen.getByRole("button", { name: /张三/ })).toHaveClass(
+    expect(zhangCard).toHaveClass(
       "is-focused",
     );
   });
@@ -1414,10 +1421,14 @@ describe("LiveGamePage", () => {
       await screen.findByRole("heading", { name: "对局完成" }),
     ).toBeInTheDocument();
     expect(screen.getByText("队列剩余：0")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /李四/ })).toHaveAccessibleName(
+    expect(
+      screen.getByTestId("god-view-stage-player-card-李四"),
+    ).toHaveAccessibleName(
       /最后行动/,
     );
-    expect(screen.getByRole("button", { name: /张三/ })).not.toHaveAccessibleName(
+    expect(
+      screen.getByTestId("god-view-stage-player-card-张三"),
+    ).not.toHaveAccessibleName(
       /发言中/,
     );
   });
@@ -1658,7 +1669,7 @@ describe("LiveGamePage", () => {
     vi.useRealTimers();
   });
 
-  it("shows story events by default and keeps raw events in the debug drawer", async () => {
+  it("shows story events by default and action traces in the debug drawer", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(runningRunResponse()),
@@ -1713,8 +1724,12 @@ describe("LiveGamePage", () => {
     });
     const debugPanel = screen.getByText("调试事件").closest("details");
     expect(debugPanel).not.toBeNull();
-    expect(within(debugPanel!).getByText("round_started")).toBeInTheDocument();
-    expect(within(debugPanel!).getByText("phase_started")).toBeInTheDocument();
+    expect(within(debugPanel!).getByText("Action Trace")).toBeInTheDocument();
+    expect(within(debugPanel!).getByText("第 1 轮开始")).toBeInTheDocument();
+    expect(within(debugPanel!).getByText("白天阶段开始")).toBeInTheDocument();
+    expect(within(debugPanel!).getAllByText("系统").length).toBeGreaterThan(0);
+    expect(within(debugPanel!).queryByText("round_started")).not.toBeInTheDocument();
+    expect(within(debugPanel!).queryByText("phase_started")).not.toBeInTheDocument();
     vi.useRealTimers();
   });
 
