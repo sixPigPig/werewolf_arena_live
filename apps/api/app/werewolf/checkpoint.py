@@ -36,7 +36,6 @@ class ReplayThenLiveProvider:
     ) -> None:
         self._cached_model_responses = copy.deepcopy(cached_model_responses)
         self._delegate = delegate
-        self._index = 0
         self._lock = threading.Lock()
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
@@ -46,15 +45,21 @@ class ReplayThenLiveProvider:
                 response = self._cached_model_responses.pop(prompt_match_index)
                 return str(response["raw_response"])
 
-            if self._index < len(self._cached_model_responses):
-                response = self._cached_model_responses[self._index]
-                self._index += 1
+            legacy_match_index = self._find_legacy_match()
+            if legacy_match_index is not None:
+                response = self._cached_model_responses.pop(legacy_match_index)
                 return str(response["raw_response"])
         return self._delegate.complete_json(model=model, prompt=prompt, temperature=temperature)
 
     def _find_prompt_match(self, *, model: str, prompt: str) -> int | None:
         for index, response in enumerate(self._cached_model_responses):
             if response.get("model") == model and response.get("prompt") == prompt:
+                return index
+        return None
+
+    def _find_legacy_match(self) -> int | None:
+        for index, response in enumerate(self._cached_model_responses):
+            if "prompt" not in response:
                 return index
         return None
 

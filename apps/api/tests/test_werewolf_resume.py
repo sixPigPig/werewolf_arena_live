@@ -194,6 +194,98 @@ def test_replay_provider_matches_cached_responses_by_prompt_when_available() -> 
     assert delegate.calls == 0
 
 
+def test_replay_provider_does_not_consume_prompt_cache_on_prompt_miss() -> None:
+    delegate = ScriptedProvider()
+    provider = ReplayThenLiveProvider(
+        cached_model_responses=[
+            {
+                "actor": "Alice",
+                "action": "vote",
+                "phase": "vote",
+                "model": "model-a",
+                "prompt": "p1",
+                "raw_response": '{"reasoning":"one","vote":"Bob"}',
+            },
+            {
+                "actor": "Bob",
+                "action": "vote",
+                "phase": "vote",
+                "model": "model-a",
+                "prompt": "p2",
+                "raw_response": '{"reasoning":"two","vote":"Alice"}',
+            },
+        ],
+        delegate=delegate,
+    )
+
+    miss = provider.complete_json(
+        model="model-a",
+        prompt='行动："vote"。候选人：Live。',
+        temperature=0.4,
+    )
+    cached = provider.complete_json(model="model-a", prompt="p1", temperature=0.4)
+
+    assert json.loads(miss)["vote"] == "Live"
+    assert json.loads(cached)["vote"] == "Bob"
+    assert delegate.calls == 1
+
+
+def test_replay_provider_keeps_prompt_and_legacy_cache_consumption_separate() -> None:
+    delegate = ScriptedProvider()
+    provider = ReplayThenLiveProvider(
+        cached_model_responses=[
+            {
+                "actor": "Legacy One",
+                "action": "vote",
+                "phase": "vote",
+                "model": "model-a",
+                "raw_response": '{"reasoning":"legacy-one","vote":"L1"}',
+            },
+            {
+                "actor": "Prompt One",
+                "action": "vote",
+                "phase": "vote",
+                "model": "model-a",
+                "prompt": "p1",
+                "raw_response": '{"reasoning":"prompt-one","vote":"P1"}',
+            },
+            {
+                "actor": "Legacy Two",
+                "action": "vote",
+                "phase": "vote",
+                "model": "model-a",
+                "raw_response": '{"reasoning":"legacy-two","vote":"L2"}',
+            },
+            {
+                "actor": "Prompt Two",
+                "action": "vote",
+                "phase": "vote",
+                "model": "model-a",
+                "prompt": "p2",
+                "raw_response": '{"reasoning":"prompt-two","vote":"P2"}',
+            },
+        ],
+        delegate=delegate,
+    )
+
+    first_legacy = provider.complete_json(model="model-a", prompt="legacy-1", temperature=0.4)
+    second_prompt = provider.complete_json(model="model-a", prompt="p2", temperature=0.4)
+    second_legacy = provider.complete_json(model="model-a", prompt="legacy-2", temperature=0.4)
+    first_prompt = provider.complete_json(model="model-a", prompt="p1", temperature=0.4)
+    miss = provider.complete_json(
+        model="model-a",
+        prompt='行动："vote"。候选人：Live。',
+        temperature=0.4,
+    )
+
+    assert json.loads(first_legacy)["vote"] == "L1"
+    assert json.loads(second_prompt)["vote"] == "P2"
+    assert json.loads(second_legacy)["vote"] == "L2"
+    assert json.loads(first_prompt)["vote"] == "P1"
+    assert json.loads(miss)["vote"] == "Live"
+    assert delegate.calls == 1
+
+
 def test_replay_store_lists_checkpoint_only_session_as_resumable(tmp_path: Path) -> None:
     provider = FailingAfterProvider(fail_after_successes=0)
 
