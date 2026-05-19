@@ -152,6 +152,26 @@ describe("LiveDebugTraceRail", () => {
     expect(onSelectTrace).toHaveBeenCalledWith(traces[2]);
   });
 
+  it("reports null when clicking the controlled selected trace again", async () => {
+    const user = userEvent.setup();
+    const onSelectTrace = vi.fn();
+
+    render(
+      <LiveDebugTraceRail
+        onSelectTrace={onSelectTrace}
+        selectedTraceId="trace-warning"
+        traces={traces}
+      />,
+    );
+
+    const selectedTrace = screen.getByRole("button", { name: /秦澈 · 查验/ });
+    expect(selectedTrace).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(selectedTrace);
+
+    expect(onSelectTrace).toHaveBeenCalledWith(null);
+  });
+
   it("filters OK traces when only issues is enabled", async () => {
     const user = userEvent.setup();
     render(<LiveDebugTraceRail traces={traces} />);

@@ -56,7 +56,7 @@ describe("buildLiveDebugTraces", () => {
 
     expect(traces).toHaveLength(1);
     expect(traces[0]).toMatchObject({
-      id: "trace-10-14",
+      id: "trace-10",
       eventIds: [10, 11, 12, 13, 14],
       actor: "Sam",
       action: "debate",
@@ -78,6 +78,31 @@ describe("buildLiveDebugTraces", () => {
       before: "未记录",
       after: "Sam",
     });
+  });
+
+  it("keeps action trace ids stable as later events are appended", () => {
+    const initial = buildLiveDebugTraces([
+      event({ id: 10, type: "action_requested" }),
+    ]);
+    const withModel = buildLiveDebugTraces([
+      event({ id: 10, type: "action_requested" }),
+      event({ id: 11, type: "model_response_received" }),
+    ]);
+    const withState = buildLiveDebugTraces([
+      event({ id: 10, type: "action_requested" }),
+      event({ id: 11, type: "model_response_received" }),
+      event({ id: 12, type: "action_parsed", payload: { choice: "Isaac" } }),
+      event({
+        id: 13,
+        type: "state_updated",
+        payload: { active_player: "Sam" },
+      }),
+    ]);
+
+    expect(initial[0].id).toBe("trace-10");
+    expect(withModel[0].id).toBe("trace-10");
+    expect(withState[0].id).toBe("trace-10");
+    expect(withState[0].eventIds).toEqual([10, 11, 12, 13]);
   });
 
   it("keeps streaming deltas out of the trace list but records model streaming status", () => {
@@ -283,12 +308,12 @@ describe("buildLiveDebugTraces", () => {
 
     expect(traces).toHaveLength(2);
     expect(traces[0]).toMatchObject({
-      id: "trace-1-1",
+      id: "trace-1",
       eventIds: [1],
       actor: "Sam",
     });
     expect(traces[1]).toMatchObject({
-      id: "trace-2-2",
+      id: "trace-2",
       eventIds: [2],
       actor: null,
     });

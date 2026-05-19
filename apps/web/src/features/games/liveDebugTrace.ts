@@ -121,7 +121,7 @@ export function buildLiveDebugTraces(
 
 function createActionTrace(event: LiveGameEvent): LiveDebugTrace {
   const trace: LiveDebugTrace = {
-    id: `trace-${event.id}-${event.id}`,
+    id: `trace-${event.id}`,
     eventIds: [event.id],
     round: event.round,
     phase: event.phase,
@@ -185,7 +185,6 @@ function createSystemTrace(event: LiveGameEvent): LiveDebugTrace {
 
 function appendEvent(trace: LiveDebugTrace, event: LiveGameEvent) {
   trace.eventIds = uniqueNumbers([...trace.eventIds, event.id]);
-  trace.id = `trace-${trace.eventIds[0]}-${trace.eventIds.at(-1)}`;
   trace.payloads.push({ eventId: event.id, type: event.type, payload: event.payload });
   appendEventDetails(trace, event);
 }

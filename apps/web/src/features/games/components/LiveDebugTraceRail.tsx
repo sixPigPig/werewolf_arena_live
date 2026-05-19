@@ -13,7 +13,7 @@ import type {
 type LiveDebugTraceRailProps = {
   traces: LiveDebugTrace[];
   selectedTraceId?: string | null;
-  onSelectTrace?: (trace: LiveDebugTrace) => void;
+  onSelectTrace?: (trace: LiveDebugTrace | null) => void;
 };
 
 const TRACE_NODE_KINDS: LiveDebugTraceNodeKind[] = [
@@ -90,10 +90,9 @@ export function LiveDebugTraceRail({
               expanded={activeTraceId === trace.id}
               key={trace.id}
               onSelect={() => {
-                setExpandedTraceId((current) =>
-                  current === trace.id ? null : trace.id,
-                );
-                onSelectTrace?.(trace);
+                const nextTrace = activeTraceId === trace.id ? null : trace;
+                setExpandedTraceId(nextTrace?.id ?? null);
+                onSelectTrace?.(nextTrace);
               }}
               trace={trace}
             />

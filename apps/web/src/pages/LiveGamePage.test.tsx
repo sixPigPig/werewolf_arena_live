@@ -433,11 +433,21 @@ describe("LiveGamePage", () => {
     expect(screen.queryByText('{"say":"我不是狼"}')).not.toBeInTheDocument();
     expect(screen.queryByText("model_response_delta")).not.toBeInTheDocument();
     expect(screen.getByText("调试事件")).toBeInTheDocument();
-    expect(await screen.findByText("Action Trace")).toBeInTheDocument();
-    expect(screen.getByText(/按行动聚合/)).toBeInTheDocument();
-    expect(screen.getByText("张三 · 公开发言")).toBeInTheDocument();
-    expect(screen.getByText(/#2-/)).toBeInTheDocument();
+    await userEvent.click(screen.getByText("调试事件"));
+    const debugPanel = screen.getByText("调试事件").closest("details");
+    expect(debugPanel).toHaveAttribute("open");
+    expect(within(debugPanel!).getByText("Action Trace")).toBeInTheDocument();
+    expect(within(debugPanel!).getByText(/按行动聚合/)).toBeInTheDocument();
+    const traceButton = within(debugPanel!).getByRole("button", {
+      name: /张三 · 公开发言/,
+    });
+    expect(traceButton).toHaveTextContent(/#2-/);
     expect(screen.queryByText("等待实时事件...")).not.toBeInTheDocument();
+    await userEvent.click(liCard);
+    expect(liCard).toHaveClass("is-focused");
+    await userEvent.click(traceButton);
+    expect(traceButton).toHaveAttribute("aria-expanded", "true");
+    expect(zhangCard).toHaveClass("is-focused");
     const actions = screen.getByTestId("arena-command-actions");
     const replayLink = within(actions).getByRole("link", {
       name: "查看完整复盘",

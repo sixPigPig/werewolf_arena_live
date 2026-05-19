@@ -42,7 +42,12 @@ export function LiveStageExperience({
   const focusedPlayerName = autoFollow
     ? autoFocusName
     : manualFocusName ?? autoFocusName;
-  const selectTrace = (trace: LiveDebugTrace) => {
+  const selectTrace = (trace: LiveDebugTrace | null) => {
+    if (!trace) {
+      setSelectedTraceId(null);
+      return;
+    }
+
     setSelectedTraceId(trace.id);
     const focusName = trace.actor ?? trace.relatedPlayers[0] ?? null;
     if (focusName) {
