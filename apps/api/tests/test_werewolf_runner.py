@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.werewolf.config import HUNTER, SEER, WEREWOLF
-from app.werewolf.checkpoint import player_from_dict
+from app.werewolf.checkpoint import player_from_dict, round_log_from_dict, round_state_from_dict
 from app.werewolf.engine import GameEngine, MaxRoundsExceeded, initialize_game_state
 from app.werewolf.live import NullEventSink
 from app.werewolf.models import DeathEvent, RoundLog, RoundState
@@ -35,6 +35,13 @@ class ScriptedChineseProvider:
                 {"reasoning": "我想确认他的真实身份。", "investigate": choice},
                 ensure_ascii=False,
             )
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "狼人私密沟通。", "target": choice, "message": f"建议袭击{choice}。"},
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps({"reasoning": "狼人统一刀口。", "target": choice}, ensure_ascii=False)
         if '"remove"' in prompt:
             return json.dumps({"reasoning": "他对狼人阵营威胁最大。", "remove": choice}, ensure_ascii=False)
         if '"protect"' in prompt:
@@ -270,6 +277,20 @@ class FirstNightSelfExplosionProvider(SelfExplosionProvider):
         self.remove_target = remove_target
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {
+                    "reasoning": "制造首夜 pending 死亡。",
+                    "target": self.remove_target,
+                    "message": f"建议袭击{self.remove_target}。",
+                },
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "制造首夜 pending 死亡。", "target": self.remove_target},
+                ensure_ascii=False,
+            )
         if '"remove"' in prompt:
             return json.dumps(
                 {"reasoning": "制造首夜 pending 死亡。", "remove": self.remove_target},
@@ -298,6 +319,20 @@ class FirstNightSheriffDeathProvider(SheriffFlowProvider):
         self.remove_target = remove_target
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {
+                    "reasoning": "首夜刀中未来警长。",
+                    "target": self.remove_target,
+                    "message": f"建议袭击{self.remove_target}。",
+                },
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "首夜刀中未来警长。", "target": self.remove_target},
+                ensure_ascii=False,
+            )
         if '"remove"' in prompt:
             return json.dumps(
                 {"reasoning": "首夜刀中未来警长。", "remove": self.remove_target},
@@ -360,6 +395,20 @@ class FirstNightHunterShotBadgeProvider(SheriffFlowProvider):
         self.shoot_choice = shoot_choice
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {
+                    "reasoning": "首夜刀中猎人。",
+                    "target": self.remove_target,
+                    "message": f"建议袭击{self.remove_target}。",
+                },
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "首夜刀中猎人。", "target": self.remove_target},
+                ensure_ascii=False,
+            )
         if '"remove"' in prompt:
             return json.dumps(
                 {"reasoning": "首夜刀中猎人。", "remove": self.remove_target},
@@ -405,6 +454,20 @@ class ProtectedNightProvider:
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         del model, temperature
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {
+                    "reasoning": "测试狼人袭击被守护目标。",
+                    "target": self.target,
+                    "message": f"建议袭击{self.target}。",
+                },
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试狼人袭击被守护目标。", "target": self.target},
+                ensure_ascii=False,
+            )
         if '"remove"' in prompt:
             return json.dumps(
                 {"reasoning": "测试狼人袭击被守护目标。", "remove": self.target},
@@ -431,6 +494,20 @@ class TargetedInvestigationProvider(ScriptedChineseProvider):
         self.remove_target = remove_target
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {
+                    "reasoning": "测试狼人夜晚袭击。",
+                    "target": self.remove_target,
+                    "message": f"建议袭击{self.remove_target}。",
+                },
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试狼人夜晚袭击。", "target": self.remove_target},
+                ensure_ascii=False,
+            )
         if '"remove"' in prompt:
             return json.dumps(
                 {"reasoning": "测试狼人夜晚袭击。", "remove": self.remove_target},
@@ -449,6 +526,20 @@ class NoWinnerRoundProvider(ScriptedChineseProvider):
         self.protected_target = protected_target
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {
+                    "reasoning": "测试狼人袭击被守护目标。",
+                    "target": self.protected_target,
+                    "message": f"建议袭击{self.protected_target}。",
+                },
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试狼人袭击被守护目标。", "target": self.protected_target},
+                ensure_ascii=False,
+            )
         if '"remove"' in prompt:
             return json.dumps(
                 {"reasoning": "测试狼人袭击被守护目标。", "remove": self.protected_target},
@@ -484,6 +575,20 @@ class FirstNightPeacefulSheriffProvider(SheriffFlowProvider):
         self.protected_target = protected_target
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {
+                    "reasoning": "测试首夜袭击会被救下的目标。",
+                    "target": self.protected_target,
+                    "message": f"建议袭击{self.protected_target}。",
+                },
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "测试首夜袭击会被救下的目标。", "target": self.protected_target},
+                ensure_ascii=False,
+            )
         if '"remove"' in prompt:
             return json.dumps(
                 {"reasoning": "测试首夜袭击会被救下的目标。", "remove": self.protected_target},
@@ -511,6 +616,20 @@ class WitchChoiceProvider:
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         del model, temperature
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {
+                    "reasoning": "选择夜晚袭击目标。",
+                    "target": self.remove_target,
+                    "message": f"建议袭击{self.remove_target}。",
+                },
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "选择夜晚袭击目标。", "target": self.remove_target},
+                ensure_ascii=False,
+            )
         if '"remove"' in prompt:
             self.actions.append("remove")
             return json.dumps(
@@ -646,6 +765,39 @@ def test_round_state_serializes_werewolf_consensus_fields() -> None:
     ]
 
 
+def test_round_state_deserializes_werewolf_consensus_fields() -> None:
+    payload = {
+        "number": 1,
+        "players": ["Wolf", "Alice"],
+        "werewolf_discussion": [
+            {
+                "round": 1,
+                "speaker": "Wolf",
+                "target": "Alice",
+                "message": "建议袭击 Alice。",
+            }
+        ],
+        "werewolf_vote_rounds": [
+            {
+                "round": 1,
+                "candidates": ["Alice"],
+                "votes": {"Wolf": "Alice"},
+                "tally": {"Alice": 1},
+                "unanimous": True,
+                "result": "Alice",
+            }
+        ],
+    }
+
+    round_state = round_state_from_dict(payload)
+
+    assert round_state.werewolf_discussion == payload["werewolf_discussion"]
+    assert round_state.werewolf_vote_rounds == payload["werewolf_vote_rounds"]
+    serialized = round_state.to_dict()
+    assert serialized["werewolf_discussion"] == payload["werewolf_discussion"]
+    assert serialized["werewolf_vote_rounds"] == payload["werewolf_vote_rounds"]
+
+
 def test_round_log_serializes_werewolf_consensus_logs() -> None:
     lm_log = SimpleNamespace(to_dict=lambda: {"prompt": "p", "raw_response": "{}", "result": {}})
     discussion_log = SimpleNamespace(
@@ -674,6 +826,53 @@ def test_round_log_serializes_werewolf_consensus_logs() -> None:
 
     assert payload["werewolf_discussion"][0]["action"] == "werewolf_discuss"
     assert payload["werewolf_votes"][0][0]["action"] == "werewolf_kill_vote"
+
+
+def test_round_log_deserializes_werewolf_consensus_logs() -> None:
+    payload = {
+        "number": 1,
+        "werewolf_discussion": [
+            {
+                "actor": "Wolf",
+                "action": "werewolf_discuss",
+                "options": ["Alice", "Bob"],
+                "choice": "Alice",
+                "lm_log": {
+                    "prompt": "discussion prompt",
+                    "raw_response": "{}",
+                    "result": {"target": "Alice", "message": "建议袭击 Alice。"},
+                },
+            }
+        ],
+        "werewolf_votes": [
+            [
+                {
+                    "actor": "Wolf",
+                    "action": "werewolf_kill_vote",
+                    "options": ["Alice"],
+                    "choice": "Alice",
+                    "lm_log": {
+                        "prompt": "vote prompt",
+                        "raw_response": "{}",
+                        "result": {"target": "Alice"},
+                    },
+                }
+            ]
+        ],
+    }
+
+    round_log = round_log_from_dict(payload)
+
+    assert round_log.werewolf_discussion[0].action == "werewolf_discuss"
+    assert round_log.werewolf_discussion[0].lm_log.result == {
+        "target": "Alice",
+        "message": "建议袭击 Alice。",
+    }
+    assert round_log.werewolf_votes[0][0].action == "werewolf_kill_vote"
+    assert round_log.werewolf_votes[0][0].lm_log.result == {"target": "Alice"}
+    serialized = round_log.to_dict()
+    assert serialized["werewolf_discussion"] == payload["werewolf_discussion"]
+    assert serialized["werewolf_votes"] == payload["werewolf_votes"]
 
 
 def _extract_options(prompt: str) -> list[str]:

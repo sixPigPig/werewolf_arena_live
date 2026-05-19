@@ -269,6 +269,8 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
         speech_order=[str(item) for item in data.get("speech_order", [])],
         speech_order_choice=data.get("speech_order_choice"),
         vote_weights=copy.deepcopy(data.get("vote_weights", {})),
+        werewolf_discussion=copy.deepcopy(data.get("werewolf_discussion", [])),
+        werewolf_vote_rounds=copy.deepcopy(data.get("werewolf_vote_rounds", [])),
         sheriff_badge_target=data.get("sheriff_badge_target"),
         sheriff_badge_lost=bool(data.get("sheriff_badge_lost", False)),
         werewolf_self_exploded=data.get("werewolf_self_exploded"),
@@ -302,6 +304,8 @@ def round_log_from_dict(data: dict[str, Any]) -> RoundLog:
         speech_order=optional_action_log_from_dict(data.get("speech_order")),
         sheriff_badge=optional_action_log_from_dict(data.get("sheriff_badge")),
         werewolf_self_explosion=optional_action_log_from_dict(data.get("werewolf_self_explosion")),
+        werewolf_discussion=action_logs_from_dict(data.get("werewolf_discussion", [])),
+        werewolf_votes=action_log_groups_from_dict(data.get("werewolf_votes", [])),
     )
 
 
