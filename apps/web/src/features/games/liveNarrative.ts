@@ -381,7 +381,7 @@ function parsedActionCue(
     tone: parsedActionTone(cue),
     judgeLine: isVoteAction(cue.action) ? "投票选择已记录。" : "玩家行动已解析。",
     performerLine: actorName ? `${actorName} 已完成行动。` : "行动已完成。",
-    detailLine: cue.body,
+    detailLine: parsedActionDetailLine(cue),
     actorName,
     action: cue.action,
     speechText: "",
@@ -448,7 +448,7 @@ function stateUpdatedCue(
       kind: "judge",
       tone: "safe",
       judgeLine: "天亮了，昨夜平安无事。",
-      performerLine: godViewState.nightResolution.detail,
+      performerLine: "昨夜没有玩家出局。",
       detailLine: activePlayersLine(payload),
       actorName,
       action: cue.action,
@@ -560,10 +560,6 @@ function visibleSpeechText(payload: Record<string, unknown>): string {
   if (isRecord(visibleResult)) {
     return stringField(visibleResult, "say") || stringField(visibleResult, "summary");
   }
-  const result = payload.result;
-  if (isRecord(result)) {
-    return stringField(result, "say") || stringField(result, "summary");
-  }
   return "";
 }
 
@@ -629,6 +625,13 @@ function activePlayersLine(payload: Record<string, unknown>): string {
 
 function nextLine(nextSpeakerName: string | null): string {
   return nextSpeakerName ? `下一位：${nextSpeakerName}` : "等待后续发言。";
+}
+
+function parsedActionDetailLine(cue: DirectorCue): string {
+  if (isVoteAction(cue.action)) {
+    return cue.body;
+  }
+  return "行动结果等待公开结算。";
 }
 
 function parsedActionTone(cue: DirectorCue): NarrativeCueTone {

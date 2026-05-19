@@ -281,7 +281,7 @@ describe("deriveLiveNarrativeState", () => {
           actor: "Leah",
           action: "summarize",
           payload: {
-            result: { summary: "Isaac 的票型需要重点复盘。" },
+            visible_result: { summary: "Isaac 的票型需要重点复盘。" },
           },
         }),
       ]).cue,
@@ -290,6 +290,29 @@ describe("deriveLiveNarrativeState", () => {
       judgeLine: "请听 Leah 的发言。",
       speechText: "Isaac 的票型需要重点复盘。",
     });
+  });
+
+  it("does not expose parsed result speech without visible_result", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "action_parsed",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: {
+          result: { say: "这段只在内部解析结果里，不应该公开。" },
+        },
+      }),
+    ]);
+
+    expect(state.cue).toMatchObject({
+      kind: "player-action",
+      judgeLine: "玩家行动已解析。",
+      speechText: "",
+    });
+    expect(state.cue.detailLine).not.toContain("这段只在内部解析结果里");
   });
 
   it("announces vote, exile, night death, and terminal results", () => {
@@ -388,7 +411,27 @@ describe("deriveLiveNarrativeState", () => {
       kind: "judge",
       tone: "safe",
       judgeLine: "天亮了，昨夜平安无事。",
+      performerLine: "昨夜没有玩家出局。",
     });
+
+    const peacefulCue = narrativeFor([
+      event({
+        id: 1,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        payload: {
+          attacked: "Sam",
+          protected: "Sam",
+          eliminated: null,
+          active_players: ["Sam", "Isaac"],
+        },
+      }),
+    ]).cue;
+
+    expect(peacefulCue.performerLine).not.toContain("Sam");
+    expect(peacefulCue.performerLine).not.toContain("守卫");
+    expect(peacefulCue.detailLine).toBe("存活玩家：Sam、Isaac");
 
     expect(
       narrativeFor([
