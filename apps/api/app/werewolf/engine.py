@@ -1718,6 +1718,8 @@ class GameEngine:
     def _finalize_player_action_result(
         self,
         result: PlayerActionResult,
+        *,
+        checkpoint: bool = True,
     ) -> tuple[object | None, ActionLog]:
         request = result.request
         player = request.player
@@ -1730,7 +1732,11 @@ class GameEngine:
             choice=str(value) if value is not None else None,
             lm_log=lm_log,
         )
-        self._checkpoint_player_action_success(result)
+        if checkpoint:
+            self._checkpoint_player_action_success(result)
+        invalid_error = self._invalid_player_action_error(result)
+        if invalid_error is not None:
+            raise invalid_error
         if not request.is_secret_wolf_action:
             self._publish(
                 "model_response_received",
@@ -1758,8 +1764,6 @@ class GameEngine:
                     "options": request.options.copy(),
                 },
             )
-        if request.options and value not in request.options:
-            raise ValueError(f"{player.name} returned invalid {request.action}: {value}")
         return value, action_log
 
     def _player_actions_batch(
@@ -1800,20 +1804,38 @@ class GameEngine:
                     exceptions[index] = exc
 
         if exceptions:
-            for result in results:
-                if result is not None:
-                    self._checkpoint_player_action_success(result)
+            self._checkpoint_player_action_results(results)
             first_failed_index = min(exceptions)
             request = requests[first_failed_index]
             exc = exceptions[first_failed_index]
             self._checkpoint_player_action_failure(request, exc)
             raise exc
 
+        invalid_errors = {
+            index: error
+            for index, result in enumerate(results)
+            if result is not None
+            for error in [self._invalid_player_action_error(result)]
+            if error is not None
+        }
+        if invalid_errors:
+            self._checkpoint_player_action_results(results)
+            first_failed_index = min(invalid_errors)
+            request = requests[first_failed_index]
+            exc = invalid_errors[first_failed_index]
+            self._checkpoint_player_action_failure(request, exc)
+            raise exc
+
+        self._checkpoint_player_action_results(results)
         finalized: list[tuple[object | None, ActionLog]] = []
         for result in results:
             if result is None:
                 raise RuntimeError("Player action batch completed without a result.")
-            finalized.append(self._finalize_player_action_result(result))
+            try:
+                finalized.append(self._finalize_player_action_result(result, checkpoint=False))
+            except Exception as exc:
+                self._checkpoint_player_action_failure(result.request, exc)
+                raise
         return finalized
 
     def _player_action_single(
@@ -1826,7 +1848,11 @@ class GameEngine:
         except Exception as exc:
             self._checkpoint_player_action_failure(request, exc)
             raise
-        return self._finalize_player_action_result(result)
+        try:
+            return self._finalize_player_action_result(result)
+        except Exception as exc:
+            self._checkpoint_player_action_failure(request, exc)
+            raise
 
     def _checkpoint_player_action_success(self, result: PlayerActionResult) -> None:
         request = result.request
@@ -1838,6 +1864,14 @@ class GameEngine:
             raw_response=result.lm_log.raw_response,
             prompt=result.lm_log.prompt,
         )
+
+    def _checkpoint_player_action_results(
+        self,
+        results: list[PlayerActionResult | None],
+    ) -> None:
+        for result in results:
+            if result is not None:
+                self._checkpoint_player_action_success(result)
 
     def _publish_player_action_requested(self, request: PlayerActionRequest) -> None:
         if request.is_secret_wolf_action:
@@ -1863,6 +1897,14 @@ class GameEngine:
             model=request.player.model,
             error=str(exc),
         )
+
+    def _invalid_player_action_error(self, result: PlayerActionResult) -> ValueError | None:
+        request = result.request
+        if request.options and result.value not in request.options:
+            return ValueError(
+                f"{request.player.name} returned invalid {request.action}: {result.value}"
+            )
+        return None
 
     def _checkpoint_round_start(
         self,

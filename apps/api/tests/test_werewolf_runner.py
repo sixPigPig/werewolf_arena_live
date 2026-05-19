@@ -343,6 +343,31 @@ class FailingSheriffRunProvider(ScriptedChineseProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+class InvalidSheriffRunProvider(ScriptedChineseProvider):
+    def __init__(self, *, invalid_actor: str) -> None:
+        self.invalid_actor = invalid_actor
+        self.actions: list[str] = []
+        self.first_actions: list[str] = []
+        self.attempts_by_actor: dict[str, int] = {}
+        self.lock = threading.Lock()
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        name = _extract_actor_name(prompt)
+        if '"run"' in prompt:
+            with self.lock:
+                self.actions.append(name)
+                self.attempts_by_actor[name] = self.attempts_by_actor.get(name, 0) + 1
+                if self.attempts_by_actor[name] == 1:
+                    self.first_actions.append(name)
+            run_choice = "无效上警选择" if name == self.invalid_actor else "不上警"
+            return json.dumps(
+                {"reasoning": "测试无效批量响应。", "run": run_choice},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 class RecordingCheckpointManager:
     def __init__(self) -> None:
         self.successes: list[dict[str, object]] = []
@@ -3324,6 +3349,52 @@ def test_batched_action_failure_checkpoints_successful_responses_before_raising(
     assert all(success["prompt"] for success in checkpoint_manager.successes)
     assert [failure["actor"] for failure in checkpoint_manager.failures] == [fail_actor]
     assert checkpoint_manager.failures[0]["error"] == "batched model failure"
+
+
+def test_batched_invalid_action_checkpoints_all_responses_and_failure() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_batch_invalid_checkpoint_successes",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=39,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    invalid_actor = active_players[2]
+    provider = InvalidSheriffRunProvider(invalid_actor=invalid_actor)
+    checkpoint_manager = RecordingCheckpointManager()
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        checkpoint_manager=checkpoint_manager,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    with pytest.raises(ValueError, match=f"{invalid_actor} returned invalid sheriff_run"):
+        engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+
+    assert provider.first_actions == active_players
+    assert provider.attempts_by_actor == {
+        actor: 3 if actor == invalid_actor else 1
+        for actor in active_players
+    }
+    assert [success["actor"] for success in checkpoint_manager.successes] == active_players
+    assert {success["action"] for success in checkpoint_manager.successes} == {"sheriff_run"}
+    assert all(success["prompt"] for success in checkpoint_manager.successes)
+    assert [failure["actor"] for failure in checkpoint_manager.failures] == [invalid_actor]
+    assert "returned invalid sheriff_run" in str(checkpoint_manager.failures[0]["error"])
+    assert [
+        event
+        for event in sink.events
+        if event["action"] == "sheriff_run"
+        and event["type"] in {"model_response_received", "action_parsed"}
+    ] == []
 
 
 def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_debate() -> None:
