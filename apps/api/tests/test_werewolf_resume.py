@@ -26,6 +26,13 @@ class ScriptedProvider:
         self.calls += 1
         options = _extract_options(prompt)
         choice = options[0] if options else "1"
+        if '"message"' in prompt and '"target"' in prompt:
+            return json.dumps(
+                {"reasoning": "狼人私密沟通。", "target": choice, "message": f"建议袭击{choice}。"},
+                ensure_ascii=False,
+            )
+        if '"target"' in prompt:
+            return json.dumps({"reasoning": "狼人统一刀口。", "target": choice}, ensure_ascii=False)
         if '"remove"' in prompt:
             return json.dumps({"reasoning": "优先击杀。", "remove": choice}, ensure_ascii=False)
         if '"protect"' in prompt:
@@ -130,10 +137,10 @@ def test_replay_then_live_provider_uses_cached_response_first() -> None:
         cached_model_responses=[
             {
                 "actor": "张三",
-                "action": "remove",
+                "action": "werewolf_kill_vote",
                 "phase": "night",
                 "model": "deepseek-chat",
-                "raw_response": '{"reasoning":"cached","remove":"李四"}',
+                "raw_response": '{"reasoning":"cached","target":"李四"}',
             }
         ],
         delegate=live_provider,
@@ -141,7 +148,7 @@ def test_replay_then_live_provider_uses_cached_response_first() -> None:
 
     assert (
         provider.complete_json(model="deepseek-chat", prompt="first", temperature=0.4)
-        == '{"reasoning":"cached","remove":"李四"}'
+        == '{"reasoning":"cached","target":"李四"}'
     )
     assert live_provider.calls == 0
 
