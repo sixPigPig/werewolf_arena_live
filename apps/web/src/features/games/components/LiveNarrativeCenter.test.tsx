@@ -87,8 +87,54 @@ describe("LiveNarrativeCenter", () => {
     expect(screen.getByText("#20")).toBeInTheDocument();
     expect(screen.getByText("投票结果公布。")).toBeInTheDocument();
     expect(screen.getByText("票型已经更新。")).toBeInTheDocument();
+    expect(screen.getByLabelText("旁白内容")).toHaveTextContent("票型已经更新。");
     expect(screen.getByText("当前最高票：Isaac，2 票。")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Sam" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to performer text when speech text is only whitespace", () => {
+    render(
+      <LiveNarrativeCenter
+        narrative={narrative({
+          cue: {
+            action: "debate",
+            actorName: "Sam",
+            detailLine: "",
+            eventId: 21,
+            judgeLine: "请听 Sam 的发言。",
+            kind: "player-speaking",
+            performerLine: "Sam 正在发言。",
+            speechText: "   \n\t",
+            tone: "day",
+          },
+          detailLine: "",
+          performerLine: "Sam 正在发言。",
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("旁白内容")).toHaveTextContent("Sam 正在发言。");
+  });
+
+  it("renders uploaded speaker avatar images", () => {
+    render(
+      <LiveNarrativeCenter
+        narrative={narrative({
+          speaker: {
+            appearanceId: "moonlit",
+            avatarImageUrl: "https://example.test/sam.png",
+            camp: "好人阵营",
+            name: "Sam",
+            role: "村民",
+            seatNumber: 8,
+          },
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("img", { name: /Sam 当前发言形象/ }),
+    ).toHaveAttribute("src", "https://example.test/sam.png");
   });
 
   it("omits event id and detail badges when values are empty", () => {
@@ -118,5 +164,13 @@ describe("LiveNarrativeCenter", () => {
     expect(screen.queryByText(/^#/)).not.toBeInTheDocument();
     expect(screen.getByText("等待导播事件")).toBeInTheDocument();
     expect(screen.getByText("等待玩家行动。")).toBeInTheDocument();
+  });
+
+  it("uses a viewport-safe width constraint for integration on mobile", () => {
+    render(<LiveNarrativeCenter narrative={narrative()} />);
+
+    expect(screen.getByTestId("live-narrative-center")).toHaveClass(
+      "w-[min(31rem,calc(100vw-2rem))]",
+    );
   });
 });

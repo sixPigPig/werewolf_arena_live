@@ -21,11 +21,11 @@ const TONE_CLASS_BY_TONE: Record<NarrativeCueTone, string> = {
 
 export function LiveNarrativeCenter({ narrative }: LiveNarrativeCenterProps) {
   const { cue, speaker } = narrative;
-  const displayText = cue.speechText || cue.performerLine;
+  const displayText = cue.speechText.trim() ? cue.speechText : cue.performerLine;
 
   return (
     <div
-      className={`glass-panel-subtle absolute left-1/2 top-[51%] z-30 w-[min(25rem,50vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border p-3 text-center sm:top-[55%] sm:w-[min(31rem,64vw)] sm:p-4 ${TONE_CLASS_BY_TONE[cue.tone]}`}
+      className={`glass-panel-subtle absolute left-1/2 top-[51%] z-30 w-[min(31rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg border p-3 text-center sm:top-[55%] sm:p-4 ${TONE_CLASS_BY_TONE[cue.tone]}`}
       data-narrative-tone={cue.tone}
       data-testid="live-narrative-center"
     >
@@ -87,6 +87,7 @@ export function LiveNarrativeCenter({ narrative }: LiveNarrativeCenterProps) {
       ) : null}
 
       <div
+        aria-label="旁白内容"
         className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-amber-300/15 p-3 text-left text-sm leading-6 text-slate-200 shadow-[inset_0_0_24px_rgba(0,0,0,0.24)] sm:max-h-48 sm:text-base"
         tabIndex={0}
       >
