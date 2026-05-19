@@ -29,6 +29,18 @@ DAY_ACTION_KEYS = (
     "werewolf_self_explosion",
     "summaries",
 )
+PUBLIC_PLAYER_KEYS = (
+    "name",
+    "role",
+    "model",
+    "personality_id",
+    "personality",
+    "appearance_id",
+    "avatar_prompt",
+    "avatar_image_url",
+    "profile_id",
+    "tags",
+)
 
 
 def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
@@ -81,7 +93,7 @@ def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
         payload={
             "playback": True,
             "rule_set": rule_set,
-            "players": _list_or_empty(state.get("players")),
+            "players": _public_players(state.get("players")),
             "active_players": _active_players(state),
         },
     )
@@ -299,6 +311,26 @@ def _active_players(state: dict[str, Any]) -> list[Any]:
         for player in players
         if isinstance(player, dict) and player.get("name")
     ]
+
+
+def _public_players(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        _public_player(player)
+        for player in value
+        if isinstance(player, dict)
+    ]
+
+
+def _public_player(player: dict[str, Any]) -> dict[str, Any]:
+    return _copy_json_payload(
+        {
+            key: player[key]
+            for key in PUBLIC_PLAYER_KEYS
+            if key in player
+        }
+    )
 
 
 def _latest_mapping(value: Any) -> dict[str, Any]:

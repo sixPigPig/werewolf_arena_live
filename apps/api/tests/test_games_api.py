@@ -1137,6 +1137,10 @@ def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> N
         "player_count": 6,
         "roles": [],
     }
+    state["players"][0]["observations"] = ["private observation secret"]
+    state["players"][0]["gamestate"] = {"hidden": "private gamestate secret"}
+    state["players"][0]["known_roles"] = {"李四": "村民"}
+    state["players"][0]["bidding_rationale"] = "secret player reasoning"
     state["rounds"][0]["debate"] = [{"speaker": "张三", "message": "我认为李四身份偏低。"}]
     state["rounds"][0]["votes"] = [{"张三": "李四"}]
     logs = sample_logs()
@@ -1171,6 +1175,11 @@ def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> N
     assert run_started["payload"] == {"playback": True}
     assert game_started["payload"]["playback"] is True
     assert game_started["payload"]["rule_set"]["id"] == "starter_6"
+    assert game_started["payload"]["players"][0] == {
+        "name": "张三",
+        "role": "狼人",
+        "model": "deepseek-chat",
+    }
     assert "round_started" in event_types
     assert "action_requested" in event_types
     assert "action_parsed" in event_types
@@ -1215,6 +1224,13 @@ def test_get_game_playback_returns_complete_playback_events(tmp_path: Path) -> N
     assert "prompt" not in serialized_events
     assert "reasoning" not in serialized_events
     assert "secret chain" not in serialized_events
+    assert "observations" not in serialized_events
+    assert "gamestate" not in serialized_events
+    assert "known_roles" not in serialized_events
+    assert "bidding_rationale" not in serialized_events
+    assert "private observation secret" not in serialized_events
+    assert "private gamestate secret" not in serialized_events
+    assert "secret player reasoning" not in serialized_events
     assert "李四" in serialized_events
 
 
