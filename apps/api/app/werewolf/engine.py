@@ -143,6 +143,7 @@ class _OrderedBatchProvider:
         self._index = index
         self._condition = condition
         self._next_index = next_index
+        self._started = False
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         self._await_turn()
@@ -172,7 +173,10 @@ class _OrderedBatchProvider:
 
     def _await_turn(self) -> None:
         with self._condition:
+            if self._started:
+                return
             self._condition.wait_for(lambda: self._next_index["value"] == self._index)
+            self._started = True
             self._next_index["value"] += 1
             self._condition.notify_all()
 

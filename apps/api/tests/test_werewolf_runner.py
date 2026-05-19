@@ -1,4 +1,6 @@
 import json
+import multiprocessing
+import queue
 import random
 import threading
 from types import SimpleNamespace
@@ -255,6 +257,123 @@ class ConcurrentSheriffRunProvider(ScriptedChineseProvider):
                 ensure_ascii=False,
             )
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class StreamingSheriffRunFallbackProvider(ScriptedChineseProvider):
+    def __init__(self, expected_calls: int) -> None:
+        self.barrier = threading.Barrier(expected_calls)
+        self.actions: list[tuple[str, str]] = []
+
+    def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+        del model, temperature
+        name = _extract_actor_name(prompt)
+        if '"run"' in prompt:
+            self.actions.append(("stream_sheriff_run", name))
+            raise RuntimeError("stream failed before first chunk")
+        return [self.complete_json(model=model, prompt=prompt, temperature=temperature)]
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        name = _extract_actor_name(prompt)
+        if '"run"' in prompt:
+            self.actions.append(("complete_sheriff_run", name))
+            self.barrier.wait(timeout=2.0)
+            return json.dumps(
+                {"reasoning": "stream 失败后回退到非流式。", "run": "不上警"},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class RetryingSheriffRunProvider(ScriptedChineseProvider):
+    def __init__(self, expected_calls: int) -> None:
+        self.barrier = threading.Barrier(expected_calls)
+        self.attempts_by_actor: dict[str, int] = {}
+        self.lock = threading.Lock()
+        self.actions: list[tuple[str, str, int]] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        name = _extract_actor_name(prompt)
+        if '"run"' in prompt:
+            with self.lock:
+                attempt = self.attempts_by_actor.get(name, 0) + 1
+                self.attempts_by_actor[name] = attempt
+                self.actions.append(("complete_sheriff_run", name, attempt))
+            if attempt == 1:
+                return "invalid json"
+            self.barrier.wait(timeout=2.0)
+            return json.dumps(
+                {"reasoning": "重试后返回有效选择。", "run": "不上警"},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+def _run_sheriff_stream_fallback_batch(
+    queue: multiprocessing.Queue,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_stream_fallback_sheriff_run",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=32,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    provider = StreamingSheriffRunFallbackProvider(expected_calls=len(active_players))
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    try:
+        engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+    except Exception as exc:
+        queue.put({"error": repr(exc)})
+        return
+
+    queue.put(
+        {
+            "actions": provider.actions,
+            "active_players": active_players,
+            "sheriff_candidates": round_state.sheriff_candidates,
+            "sheriff_voters": round_state.sheriff_voters,
+        }
+    )
+
+
+def _run_sheriff_complete_retry_batch(
+    queue: multiprocessing.Queue,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_complete_retry_sheriff_run",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=33,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    provider = RetryingSheriffRunProvider(expected_calls=len(active_players))
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    try:
+        engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+    except Exception as exc:
+        queue.put({"error": repr(exc)})
+        return
+
+    queue.put(
+        {
+            "actions": provider.actions,
+            "active_players": active_players,
+            "sheriff_candidates": round_state.sheriff_candidates,
+            "sheriff_voters": round_state.sheriff_voters,
+        }
+    )
 
 
 class SelfExplosionProvider(SheriffFlowProvider):
@@ -2607,6 +2726,70 @@ def test_sheriff_run_requests_all_players_concurrently() -> None:
     ] == active_players
     assert round_state.sheriff_candidates == []
     assert round_state.sheriff_voters == active_players
+
+
+def test_sheriff_run_stream_failure_falls_back_without_ordered_batch_deadlock() -> None:
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(target=_run_sheriff_stream_fallback_batch, args=(result_queue,))
+
+    process.start()
+    process.join(timeout=5.0)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=1.0)
+        pytest.fail("sheriff_run stream fallback batch did not finish")
+
+    assert process.exitcode == 0
+    try:
+        result = result_queue.get(timeout=1.0)
+    except queue.Empty:
+        pytest.fail("sheriff_run stream fallback batch produced no result")
+    assert "error" not in result
+    active_players = result["active_players"]
+    assert [
+        actor for action, actor in result["actions"] if action == "stream_sheriff_run"
+    ] == active_players
+    assert sorted(
+        actor for action, actor in result["actions"] if action == "complete_sheriff_run"
+    ) == sorted(active_players)
+    assert result["sheriff_candidates"] == []
+    assert result["sheriff_voters"] == active_players
+
+
+def test_sheriff_run_complete_json_retry_does_not_deadlock_ordered_batch() -> None:
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(target=_run_sheriff_complete_retry_batch, args=(result_queue,))
+
+    process.start()
+    process.join(timeout=5.0)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=1.0)
+        pytest.fail("sheriff_run complete_json retry batch did not finish")
+
+    assert process.exitcode == 0
+    try:
+        result = result_queue.get(timeout=1.0)
+    except queue.Empty:
+        pytest.fail("sheriff_run complete_json retry batch produced no result")
+    assert "error" not in result
+    active_players = result["active_players"]
+    first_attempts = [
+        actor
+        for action, actor, attempt in result["actions"]
+        if action == "complete_sheriff_run" and attempt == 1
+    ]
+    second_attempts = [
+        actor
+        for action, actor, attempt in result["actions"]
+        if action == "complete_sheriff_run" and attempt == 2
+    ]
+    assert first_attempts == active_players
+    assert sorted(second_attempts) == sorted(active_players)
+    assert result["sheriff_candidates"] == []
+    assert result["sheriff_voters"] == active_players
 
 
 def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_debate() -> None:
