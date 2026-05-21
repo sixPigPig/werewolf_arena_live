@@ -21,7 +21,7 @@ export function GodViewSituationPanel({ state }: GodViewSituationPanelProps) {
             label="当前阶段"
             value={`${state.dayNightLabel} · ${state.phaseLabel}`}
           />
-          <InfoRow label="当前发言" value={state.currentSeatLabel} />
+          <InfoRow label="当前焦点" value={state.currentSeatLabel} />
           <InfoRow label="存活人数" value={state.aliveLabel} />
           <InfoRow label="胜负条件" value={state.winMode} />
           <div

@@ -408,10 +408,11 @@ describe("LiveGamePage", () => {
     await catchUpLiveStage();
     const zhangCard = screen.getByTestId("god-view-stage-player-card-张三");
     const liCard = screen.getByTestId("god-view-stage-player-card-李四");
-    expect(zhangCard).toHaveAccessibleName(/发言中/);
-    expect(zhangCard).toHaveAttribute("data-card-state", "speaking");
+    expect(zhangCard).toHaveAccessibleName(/存活/);
+    expect(zhangCard).not.toHaveAccessibleName(/发言中/);
+    expect(zhangCard).toHaveAttribute("data-card-state", "idle");
     expect(screen.queryByTestId("god-view-roster-panel")).not.toBeInTheDocument();
-    expect(within(zhangCard).getByText("发言中")).toBeInTheDocument();
+    expect(within(zhangCard).getByText("存活")).toBeInTheDocument();
     expect(within(zhangCard).getAllByText("狼人").length).toBeGreaterThan(0);
     expect(within(liCard).getByText("白天放逐")).toBeInTheDocument();
     expect(
@@ -862,8 +863,8 @@ describe("LiveGamePage", () => {
     expect(within(top).getByText("经典 8 人局")).toBeInTheDocument();
     expect(within(top).getByText("第 1 天")).toBeInTheDocument();
     expect(within(top).getByText("白天发言")).toBeInTheDocument();
-    expect(within(top).getByText("发言席：4 号")).toBeInTheDocument();
-    expect(within(top).getByText("00:45")).toBeInTheDocument();
+    expect(within(top).getByText("结算：Bert")).toBeInTheDocument();
+    expect(within(top).getByText("结算中")).toBeInTheDocument();
     expect(within(top).getByText("存活 4/4")).toBeInTheDocument();
     expect(within(top).getByText("屠边")).toBeInTheDocument();
     expect(
@@ -975,7 +976,7 @@ describe("LiveGamePage", () => {
     ).toHaveLength(6);
     expect(
       within(stage).getByTestId("god-view-stage-player-card-P7"),
-    ).toHaveAttribute("data-card-state", "speaking");
+    ).toHaveAttribute("data-card-state", "preparing-speech");
     expect(within(stage).queryByLabelText("圆桌座位")).not.toBeInTheDocument();
     expect(screen.queryByTestId("god-view-roster-panel")).not.toBeInTheDocument();
 
@@ -1157,7 +1158,7 @@ describe("LiveGamePage", () => {
     );
   });
 
-  it("removes current focus controls while keeping actor-driven speaking state", async () => {
+  it("removes current focus controls while keeping actor-driven semantic state", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(runningRunResponse()),
@@ -1214,7 +1215,7 @@ describe("LiveGamePage", () => {
     expect(
       screen.queryByRole("switch", { name: "自动跟随" }),
     ).not.toBeInTheDocument();
-    expect(zhangCard).toHaveAttribute("data-card-state", "speaking");
+    expect(zhangCard).toHaveAttribute("data-card-state", "preparing-speech");
     expect(liCard).toHaveAttribute("data-card-state", "idle");
 
     act(() => {
@@ -1233,7 +1234,8 @@ describe("LiveGamePage", () => {
     });
 
     await catchUpLiveStage();
-    expect(liCard).toHaveAttribute("data-card-state", "speaking");
+    expect(liCard).toHaveAttribute("data-card-state", "voting");
+    expect(within(liCard).getByText("投票中")).toBeInTheDocument();
     expect(zhangCard).toHaveAttribute("data-card-state", "idle");
   });
 

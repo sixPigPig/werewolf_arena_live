@@ -20,7 +20,7 @@ export function GodViewTopBar({ state }: GodViewTopBarProps) {
         <TopStat label="房间名" value={state.boardName} />
         <TopStat label="天夜" value={state.dayNightLabel} />
         <TopStat label="阶段" value={state.phaseLabel} />
-        <TopStat label="发言席" value={state.currentSeatLabel} />
+        <TopStat label="当前席位" value={state.currentSeatLabel} />
         <TopStat label="倒计时" value={state.countdownLabel} />
         <TopStat label="存活" value={state.aliveLabel} />
         <TopStat label="胜负条件" value={state.winMode} />

@@ -227,14 +227,13 @@ function StagePlayerCard({
 }) {
   const isLastActive =
     isTerminalCue && player.name === activePlayerName && player.isAlive;
-  const isCurrentSpeaker = !isTerminalCue && player.isSpeaking;
+  const isCurrentSpeaker =
+    !isTerminalCue && player.stageStatus.kind === "speaking";
   const cardState = !player.isAlive
     ? "out"
-    : isCurrentSpeaker
-      ? "speaking"
-      : isLastActive
-        ? "last-active"
-        : "idle";
+    : isLastActive
+      ? "last-active"
+      : player.stageStatus.kind;
   const status = stageCardStatus(player, livePlayer, isTerminalCue, isLastActive);
   const role = roleTone(player.role);
   const liveAction = livePlayer?.lastAction ? actionLabel(livePlayer.lastAction) : "";
@@ -301,15 +300,9 @@ function StagePlayerCard({
             </span>
           </span>
           <span
-            className={`mt-1 block truncate text-[11px] font-semibold ${
-              cardState === "speaking"
-                ? "text-teal-100"
-                : cardState === "last-active"
-                  ? "text-amber-100"
-                  : cardState === "out"
-                    ? "text-slate-400"
-                    : "text-slate-300"
-            }`}
+            className={`mt-1 block truncate text-[11px] font-semibold ${stageStatusTextTone(
+              cardState,
+            )}`}
           >
             {status}
           </span>
@@ -322,6 +315,24 @@ function StagePlayerCard({
 function stagePlayerTone(player: GodViewPlayer, cardState: string) {
   if (cardState === "speaking") {
     return "border-teal-200/55 bg-teal-950/35 shadow-[0_0_28px_rgba(45,212,191,0.18)]";
+  }
+  if (cardState === "preparing-speech") {
+    return "border-cyan-200/50 bg-cyan-950/25 shadow-[0_0_22px_rgba(34,211,238,0.14)]";
+  }
+  if (cardState === "voting") {
+    return "border-amber-200/60 bg-amber-950/30 shadow-[0_0_24px_rgba(251,191,36,0.16)]";
+  }
+  if (cardState === "summarizing") {
+    return "border-sky-200/55 bg-sky-950/28";
+  }
+  if (cardState === "acting") {
+    return "border-indigo-200/50 bg-indigo-950/25";
+  }
+  if (cardState === "affected") {
+    return "border-rose-200/60 bg-rose-950/30 shadow-[0_0_26px_rgba(251,113,133,0.17)]";
+  }
+  if (cardState === "resolved") {
+    return "border-emerald-200/45 bg-emerald-950/22";
   }
   if (cardState === "last-active") {
     return "border-amber-200/55 bg-amber-950/30";
@@ -336,6 +347,31 @@ function stagePlayerTone(player: GodViewPlayer, cardState: string) {
     return "border-sky-300/30 bg-sky-950/20";
   }
   return "border-stone-300/25 bg-stone-950/20";
+}
+
+function stageStatusTextTone(cardState: string) {
+  if (cardState === "speaking") {
+    return "text-teal-100";
+  }
+  if (cardState === "preparing-speech") {
+    return "text-cyan-100";
+  }
+  if (cardState === "voting" || cardState === "last-active") {
+    return "text-amber-100";
+  }
+  if (cardState === "summarizing" || cardState === "acting") {
+    return "text-sky-100";
+  }
+  if (cardState === "affected") {
+    return "text-rose-100";
+  }
+  if (cardState === "resolved") {
+    return "text-emerald-100";
+  }
+  if (cardState === "out") {
+    return "text-slate-400";
+  }
+  return "text-slate-300";
 }
 
 const STATUS_LABELS: Record<LivePlayer["status"], string> = {

@@ -49,7 +49,7 @@ describe("deriveGodViewState", () => {
     expect(state.dayNightLabel).toBe("第 3 天");
     expect(state.phaseLabel).toBe("白天发言");
     expect(state.currentSeatLabel).toBe("发言席：1 号");
-    expect(state.countdownLabel).toBe("00:45");
+    expect(state.countdownLabel).toBe("准备中");
     expect(state.aliveLabel).toBe("存活 3/3");
     expect(state.progress).toMatchObject({
       wolvesAlive: 1,
@@ -62,12 +62,176 @@ describe("deriveGodViewState", () => {
       seatNumber: 1,
       camp: "狼人阵营",
       identityGroup: "狼人",
-      isSpeaking: true,
-      statusLabel: "发言中",
+      isSpeaking: false,
+      statusLabel: "准备发言",
+      stageStatus: { kind: "preparing-speech", label: "准备发言" },
     });
     expect(state.players[1]).toMatchObject({
       camp: "好人阵营",
       identityGroup: "神职",
+    });
+  });
+
+  it("shows vote actors as voting instead of speaking", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "villager", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "李四",
+        action: "vote",
+        payload: { options: ["张三"] },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "投票测试");
+    const voter = state.players.find((player) => player.name === "李四");
+    const other = state.players.find((player) => player.name === "张三");
+
+    expect(state.currentSeatLabel).toBe("投票席：2 号");
+    expect(state.countdownLabel).toBe("投票中");
+    expect(state.speakerFlow.current).toBeNull();
+    expect(voter).toMatchObject({
+      isSpeaking: false,
+      statusLabel: "投票中",
+      stageStatus: { kind: "voting", label: "投票中" },
+    });
+    expect(other).toMatchObject({
+      isSpeaking: false,
+      statusLabel: "存活",
+      stageStatus: { kind: "idle", label: "存活" },
+    });
+  });
+
+  it("keeps visible public speech in the speaking state", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "villager", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "model_response_delta",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+        payload: { visible_text: "我是一张好人牌" },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "发言测试");
+    const speaker = state.players.find((player) => player.name === "张三");
+
+    expect(state.currentSeatLabel).toBe("发言席：1 号");
+    expect(state.countdownLabel).toBe("00:45");
+    expect(speaker).toMatchObject({
+      isSpeaking: true,
+      statusLabel: "发言中",
+      stageStatus: { kind: "speaking", label: "发言中" },
+    });
+  });
+
+  it("clears stale speaker state when a public exile is resolved", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "villager", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "张三",
+        action: "debate",
+      }),
+      event({
+        id: 3,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        payload: {
+          active_players: ["张三"],
+          exiled: "李四",
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "结算测试");
+    const speaker = state.players.find((player) => player.name === "张三");
+    const exiled = state.players.find((player) => player.name === "李四");
+
+    expect(state.currentSeatLabel).toBe("结算：李四");
+    expect(state.countdownLabel).toBe("结算中");
+    expect(state.speakerFlow.current).toBeNull();
+    expect(speaker).toMatchObject({
+      isSpeaking: false,
+      statusLabel: "存活",
+      stageStatus: { kind: "idle", label: "存活" },
+    });
+    expect(exiled).toMatchObject({
+      isSpeaking: false,
+      isAlive: false,
+      statusLabel: "白天放逐",
+      stageStatus: { kind: "out", label: "白天放逐" },
+    });
+  });
+
+  it("shows summary actors as summarizing instead of speaking", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "villager", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "summary",
+        actor: "张三",
+        action: "summarize",
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "总结测试");
+    const summarizer = state.players.find((player) => player.name === "张三");
+
+    expect(state.currentSeatLabel).toBe("总结席：1 号");
+    expect(state.countdownLabel).toBe("总结中");
+    expect(summarizer).toMatchObject({
+      isSpeaking: false,
+      statusLabel: "总结中",
+      stageStatus: { kind: "summarizing", label: "总结中" },
     });
   });
 
@@ -448,7 +612,7 @@ describe("deriveGodViewState", () => {
     expect(state.boardName).toBe("实时对局");
     expect(state.dayNightLabel).toBe("等待开局");
     expect(state.phaseLabel).toBe("阶段未开始");
-    expect(state.currentSeatLabel).toBe("发言席：等待");
+    expect(state.currentSeatLabel).toBe("等待");
     expect(state.countdownLabel).toBe("待命");
     expect(state.aliveLabel).toBe("存活 0/0");
     expect(state.winMode).toBe("屠边");

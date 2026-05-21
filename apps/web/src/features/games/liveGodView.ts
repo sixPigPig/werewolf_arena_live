@@ -4,6 +4,22 @@ import type { LiveGameEvent } from "./types";
 
 export type GodViewIdentityGroup = "狼人" | "神职" | "平民" | "未知";
 
+export type GodViewPlayerStageStatusKind =
+  | "idle"
+  | "preparing-speech"
+  | "speaking"
+  | "summarizing"
+  | "voting"
+  | "acting"
+  | "resolved"
+  | "affected"
+  | "out";
+
+export type GodViewPlayerStageStatus = {
+  kind: GodViewPlayerStageStatusKind;
+  label: string;
+};
+
 export type GodViewPlayer = {
   seatNumber: number;
   name: string;
@@ -12,6 +28,7 @@ export type GodViewPlayer = {
   identityGroup: GodViewIdentityGroup;
   isAlive: boolean;
   statusLabel: string;
+  stageStatus: GodViewPlayerStageStatus;
   isSheriff: boolean;
   isSpeaking: boolean;
   voteTarget: string | null;
@@ -129,7 +146,7 @@ export type GodViewOptions = {
 type MutableGodView = {
   currentRound: number | null;
   currentPhase: string | null;
-  activePlayerName: string | null;
+  stageFocus: GodViewStageFocus;
   voteTargets: Map<string, string>;
   voteWeights: Map<string, number>;
   nightActions: GodViewActionLine[];
@@ -149,6 +166,25 @@ type MutableGodView = {
   } | null;
 };
 
+type GodViewStageFocusKind =
+  | "waiting"
+  | "speech"
+  | "vote"
+  | "summary"
+  | "action"
+  | "resolution"
+  | "terminal";
+
+type GodViewStageFocus = {
+  kind: GodViewStageFocusKind;
+  actorName: string | null;
+  speakerName: string | null;
+  actorStatus: GodViewPlayerStageStatus | null;
+  affectedStatuses: Map<string, GodViewPlayerStageStatus>;
+  resolutionName: string | null;
+  countdownLabel: string;
+};
+
 export function deriveGodViewState(
   events: LiveGameEvent[],
   spectator: LiveSpectatorState,
@@ -158,7 +194,7 @@ export function deriveGodViewState(
   const view: MutableGodView = {
     currentRound: spectator.currentRound,
     currentPhase: spectator.currentPhase,
-    activePlayerName: spectator.activePlayerName,
+    stageFocus: waitingStageFocus(),
     voteTargets: new Map(),
     voteWeights: new Map(),
     nightActions: [],
@@ -193,6 +229,7 @@ export function deriveGodViewState(
     collectStateUpdate(view, event);
     collectTerminal(view, event);
     collectEventLine(view, event);
+    view.stageFocus = stageFocusForEvent(event);
   }
 
   const players = spectator.players.map((player, index) =>
@@ -225,8 +262,8 @@ export function deriveGodViewState(
     boardName,
     dayNightLabel: roundLabel(view.currentRound, view.currentPhase),
     phaseLabel: phaseDisplay(view.currentPhase),
-    currentSeatLabel: currentSeatLabel(players, view.activePlayerName),
-    countdownLabel: countdownLabel(view.currentPhase, view.activePlayerName),
+    currentSeatLabel: currentSeatLabel(players, view.stageFocus),
+    countdownLabel: view.stageFocus.countdownLabel,
     aliveLabel: `存活 ${totalAlive}/${players.length}`,
     winMode: "屠边",
     winnerLabel: view.winnerLabel,
@@ -252,7 +289,7 @@ export function deriveGodViewState(
     sheriff: view.sheriff,
     sheriffRuleState: buildSheriffRuleState(options.sheriffEnabled),
     speechOrder,
-    speakerFlow: buildSpeakerFlow(players, speechOrder, view.activePlayerName),
+    speakerFlow: buildSpeakerFlow(players, speechOrder, view.stageFocus.speakerName),
     eventLines: view.eventLines.slice(-7).reverse(),
     publicFacts: dedupe(view.publicFacts).slice(-6).reverse(),
     replayMarks: view.replayMarks.slice(-5).reverse(),
@@ -642,7 +679,8 @@ function toGodViewPlayer(
       target === player.name ? total + (view.voteWeights.get(voter) ?? 1) : total,
     0,
   );
-  const isSpeaking = player.name === view.activePlayerName && player.isAlive;
+  const stageStatus = stageStatusForPlayer(player, view.stageFocus);
+  const isSpeaking = stageStatus.kind === "speaking" && player.isAlive;
 
   return {
     seatNumber: index + 1,
@@ -651,7 +689,8 @@ function toGodViewPlayer(
     camp: roleCamp(role),
     identityGroup: identityGroup(role),
     isAlive: player.isAlive,
-    statusLabel: statusLabel(player, isSpeaking),
+    statusLabel: statusLabel(player, stageStatus),
+    stageStatus,
     isSheriff: view.sheriff.current === player.name,
     isSpeaking,
     voteTarget: view.voteTargets.get(player.name) ?? null,
@@ -979,23 +1018,326 @@ function roundLabel(round: number | null, phase: string | null) {
 
 function currentSeatLabel(
   players: GodViewPlayer[],
-  activePlayerName: string | null,
+  focus: GodViewStageFocus,
 ) {
-  const player = players.find((item) => item.name === activePlayerName);
-  return player ? `发言席：${player.seatNumber} 号` : "发言席：等待";
+  if (focus.kind === "terminal") {
+    return "对局结束";
+  }
+  if (focus.kind === "waiting") {
+    return "等待";
+  }
+  if (focus.kind === "resolution") {
+    return focus.resolutionName ? `结算：${focus.resolutionName}` : "结算中";
+  }
+
+  const player = players.find((item) => item.name === focus.actorName);
+  const seat = player ? `${player.seatNumber} 号` : "等待";
+  const map: Record<
+    Exclude<GodViewStageFocusKind, "waiting" | "resolution" | "terminal">,
+    string
+  > = {
+    action: "行动席",
+    speech: "发言席",
+    summary: "总结席",
+    vote: "投票席",
+  };
+  return `${map[focus.kind]}：${seat}`;
 }
 
-function countdownLabel(phase: string | null, activePlayerName: string | null) {
-  if (!activePlayerName) {
-    return "待命";
+function waitingStageFocus(): GodViewStageFocus {
+  return {
+    kind: "waiting",
+    actorName: null,
+    speakerName: null,
+    actorStatus: null,
+    affectedStatuses: new Map(),
+    resolutionName: null,
+    countdownLabel: "待命",
+  };
+}
+
+function stageFocusForEvent(event: LiveGameEvent): GodViewStageFocus {
+  if (event.type === "game_completed" || event.type === "game_failed") {
+    return {
+      ...waitingStageFocus(),
+      kind: "terminal",
+      countdownLabel: "已结束",
+    };
   }
+
+  if (event.type === "state_updated") {
+    return stageFocusForStateUpdate(event);
+  }
+
+  if (event.actor) {
+    return stageFocusForActorEvent(event);
+  }
+
+  if (event.type === "phase_started") {
+    return stageFocusForPhase(event.phase);
+  }
+
+  return waitingStageFocus();
+}
+
+function stageFocusForStateUpdate(event: LiveGameEvent): GodViewStageFocus {
+  const payload = payloadForEvent(event);
+  const affectedStatuses = affectedStatusesForPayload(payload);
+  if (affectedStatuses.size > 0) {
+    return {
+      ...waitingStageFocus(),
+      kind: "resolution",
+      affectedStatuses,
+      resolutionName: affectedStatuses.keys().next().value ?? null,
+      countdownLabel: "结算中",
+    };
+  }
+
+  const debateEntry = payload.debate_entry;
+  if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
+    return actorStageFocus({
+      kind: "speech",
+      actorName: debateEntry.speaker,
+      speakerName: debateEntry.speaker,
+      actorStatus: { kind: "resolved", label: "已发言" },
+      countdownLabel: "已记录",
+    });
+  }
+
+  if (recordField(payload, "votes")) {
+    return {
+      ...waitingStageFocus(),
+      kind: "resolution",
+      resolutionName: "投票结果",
+      countdownLabel: "结算中",
+    };
+  }
+
+  if (event.actor) {
+    return stageFocusForActorEvent(event);
+  }
+
+  return stageFocusForPhase(event.phase);
+}
+
+function stageFocusForPhase(phase: string | null): GodViewStageFocus {
   if (phase === "night") {
-    return "夜间行动中";
+    return {
+      ...waitingStageFocus(),
+      kind: "action",
+      countdownLabel: "夜间行动中",
+    };
   }
   if (phase === "vote") {
-    return "投票中";
+    return {
+      ...waitingStageFocus(),
+      kind: "vote",
+      countdownLabel: "投票中",
+    };
   }
-  return "00:45";
+  if (phase === "summary") {
+    return {
+      ...waitingStageFocus(),
+      kind: "summary",
+      countdownLabel: "总结中",
+    };
+  }
+  return waitingStageFocus();
+}
+
+function stageFocusForActorEvent(event: LiveGameEvent): GodViewStageFocus {
+  const actorName = event.actor;
+  if (!actorName) {
+    return stageFocusForPhase(event.phase);
+  }
+
+  if (isPublicSpeechAction(event.action)) {
+    if (event.type === "model_response_delta") {
+      return actorStageFocus({
+        kind: "speech",
+        actorName,
+        speakerName: actorName,
+        actorStatus: { kind: "speaking", label: "发言中" },
+        countdownLabel: "00:45",
+      });
+    }
+    if (isResolvedActorEvent(event.type)) {
+      return actorStageFocus({
+        kind: "speech",
+        actorName,
+        speakerName: actorName,
+        actorStatus: { kind: "resolved", label: "已发言" },
+        countdownLabel: "已记录",
+      });
+    }
+    return actorStageFocus({
+      kind: "speech",
+      actorName,
+      speakerName: actorName,
+      actorStatus: { kind: "preparing-speech", label: "准备发言" },
+      countdownLabel: "准备中",
+    });
+  }
+
+  if (isVoteAction(event.action)) {
+    return actorStageFocus({
+      kind: "vote",
+      actorName,
+      speakerName: null,
+      actorStatus: isResolvedActorEvent(event.type)
+        ? { kind: "resolved", label: "已投票" }
+        : { kind: "voting", label: "投票中" },
+      countdownLabel: isResolvedActorEvent(event.type) ? "已投票" : "投票中",
+    });
+  }
+
+  if (isSummaryAction(event.action)) {
+    return actorStageFocus({
+      kind: "summary",
+      actorName,
+      speakerName: null,
+      actorStatus: isResolvedActorEvent(event.type)
+        ? { kind: "resolved", label: "已总结" }
+        : { kind: "summarizing", label: "总结中" },
+      countdownLabel: isResolvedActorEvent(event.type) ? "已总结" : "总结中",
+    });
+  }
+
+  return actorStageFocus({
+    kind: "action",
+    actorName,
+    speakerName: null,
+    actorStatus: isResolvedActorEvent(event.type)
+      ? { kind: "resolved", label: "已行动" }
+      : {
+          kind: "acting",
+          label: event.phase === "night" ? "夜间行动中" : "行动中",
+        },
+    countdownLabel: event.phase === "night" ? "夜间行动中" : "行动中",
+  });
+}
+
+function actorStageFocus({
+  actorName,
+  actorStatus,
+  countdownLabel,
+  kind,
+  speakerName,
+}: {
+  actorName: string;
+  actorStatus: GodViewPlayerStageStatus;
+  countdownLabel: string;
+  kind: Exclude<
+    GodViewStageFocusKind,
+    "waiting" | "resolution" | "terminal"
+  >;
+  speakerName: string | null;
+}): GodViewStageFocus {
+  return {
+    kind,
+    actorName,
+    speakerName,
+    actorStatus,
+    affectedStatuses: new Map(),
+    resolutionName: null,
+    countdownLabel,
+  };
+}
+
+function stageStatusForPlayer(
+  player: LivePlayer,
+  focus: GodViewStageFocus,
+): GodViewPlayerStageStatus {
+  if (!player.isAlive) {
+    return { kind: "out", label: player.lastDetail || "出局" };
+  }
+
+  const affected = focus.affectedStatuses.get(player.name);
+  if (affected) {
+    return affected;
+  }
+
+  if (focus.actorName === player.name && focus.actorStatus) {
+    return focus.actorStatus;
+  }
+
+  return { kind: "idle", label: "存活" };
+}
+
+function affectedStatusesForPayload(
+  payload: Record<string, unknown>,
+): Map<string, GodViewPlayerStageStatus> {
+  const statuses = new Map<string, GodViewPlayerStageStatus>();
+  for (const field of ["night_deaths", "day_deaths"]) {
+    const deaths = payload[field];
+    if (!Array.isArray(deaths)) {
+      continue;
+    }
+    for (const death of deaths) {
+      if (!isRecord(death) || typeof death.player !== "string") {
+        continue;
+      }
+      statuses.set(death.player, {
+        kind: "out",
+        label: field === "night_deaths" ? "夜晚出局" : "白天出局",
+      });
+    }
+  }
+
+  const exiled = stringField(payload, "exiled");
+  if (exiled) {
+    statuses.set(exiled, { kind: "out", label: "白天放逐" });
+  }
+
+  const eliminated = stringField(payload, "eliminated");
+  if (eliminated) {
+    statuses.set(eliminated, { kind: "out", label: "夜晚出局" });
+  }
+
+  const selfExploded = stringField(payload, "werewolf_self_exploded");
+  if (selfExploded) {
+    statuses.set(selfExploded, { kind: "affected", label: "自爆公开" });
+  }
+
+  const hunterShot = stringField(payload, "hunter_shot");
+  if (hunterShot) {
+    statuses.set(hunterShot, { kind: "affected", label: "被带走" });
+  }
+
+  const protectedPlayer = stringField(payload, "protected");
+  if (protectedPlayer && statuses.size === 0) {
+    statuses.set(protectedPlayer, { kind: "affected", label: "被守护" });
+  }
+
+  return statuses;
+}
+
+function isPublicSpeechAction(action: string | null) {
+  return (
+    action === "debate" ||
+    action === "sheriff_speech" ||
+    action === "sheriff_pk_speech"
+  );
+}
+
+function isVoteAction(action: string | null) {
+  return (
+    action === "vote" ||
+    action === "sheriff_vote" ||
+    action === "sheriff_runoff_vote"
+  );
+}
+
+function isSummaryAction(action: string | null) {
+  return action === "summarize";
+}
+
+function isResolvedActorEvent(type: string) {
+  return (
+    type === "model_response_received" ||
+    type === "action_parsed" ||
+    type === "state_updated"
+  );
 }
 
 export function phaseDisplay(phase: string | null) {
@@ -1039,24 +1381,14 @@ function phaseEventText(phase: string | null) {
   return phase ? map[phase] ?? `进入${phase}` : "阶段开始";
 }
 
-function statusLabel(player: LivePlayer, isSpeaking: boolean) {
+function statusLabel(
+  player: LivePlayer,
+  stageStatus: GodViewPlayerStageStatus,
+) {
   if (!player.isAlive) {
-    return player.lastDetail || "死亡";
+    return stageStatus.label || player.lastDetail || "死亡";
   }
-  if (isSpeaking) {
-    return "发言中";
-  }
-
-  const map: Record<LivePlayer["status"], string> = {
-    waiting: "存活",
-    thinking: "思考中",
-    requesting: "请求中",
-    streaming: "发言中",
-    responded: "已返回",
-    acted: "已行动",
-    out: "出局",
-  };
-  return map[player.status];
+  return stageStatus.label;
 }
 
 function normalizeRole(role: string) {
