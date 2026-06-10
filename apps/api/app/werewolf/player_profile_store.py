@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,94 +54,6 @@ class PlayerProfileFileStore:
                 return profile
         return None
 
-    def create_profile(
-        self,
-        *,
-        display_name: str,
-        model: str,
-        personality_id: str,
-        personality_text: str,
-        appearance_id: str,
-        avatar_prompt: str,
-        tags: list[str],
-        avatar_image_url: str = "",
-        avatar_image_path: str = "",
-        avatar_image_mime: str = "",
-        short_description: str = "",
-        background_story: str = "",
-        speaking_style: str = "",
-        catchphrases: list[str] | None = None,
-        strategy_profile: str = "balanced",
-        risk_tolerance: int = 3,
-        bluffing_tendency: int = 3,
-        trust_tendency: int = 3,
-        leadership_tendency: int = 3,
-        talkativeness: int = 3,
-        example_messages: list[str] | None = None,
-        favorite: bool = False,
-    ) -> StoredPlayerProfile:
-        now = datetime.now(UTC)
-        profile = StoredPlayerProfile(
-            id=str(uuid.uuid4()),
-            owner_user_id=None,
-            display_name=display_name,
-            model=model,
-            personality_id=personality_id,
-            personality_text=personality_text,
-            appearance_id=appearance_id,
-            avatar_prompt=avatar_prompt,
-            avatar_image_url=avatar_image_url,
-            avatar_image_path=avatar_image_path,
-            avatar_image_mime=avatar_image_mime,
-            short_description=short_description,
-            background_story=background_story,
-            speaking_style=speaking_style,
-            catchphrases=catchphrases or [],
-            strategy_profile=strategy_profile,
-            risk_tolerance=risk_tolerance,
-            bluffing_tendency=bluffing_tendency,
-            trust_tendency=trust_tendency,
-            leadership_tendency=leadership_tendency,
-            talkativeness=talkativeness,
-            example_messages=example_messages or [],
-            favorite=favorite,
-            tags=tags,
-            created_at=now,
-            updated_at=now,
-        )
-        profiles = self._read_profiles()
-        profiles.append(profile)
-        self._write_profiles(profiles)
-        return profile
-
-    def update_profile(
-        self,
-        profile_id: str,
-        updates: dict[str, Any],
-    ) -> StoredPlayerProfile | None:
-        profiles = self._read_profiles()
-        updated_profile: StoredPlayerProfile | None = None
-        for profile in profiles:
-            if profile.id != profile_id:
-                continue
-            for field_name, value in updates.items():
-                setattr(profile, field_name, value)
-            profile.updated_at = datetime.now(UTC)
-            updated_profile = profile
-            break
-        if updated_profile is None:
-            return None
-        self._write_profiles(profiles)
-        return updated_profile
-
-    def delete_profile(self, profile_id: str) -> bool:
-        profiles = self._read_profiles()
-        remaining = [profile for profile in profiles if profile.id != profile_id]
-        if len(remaining) == len(profiles):
-            return False
-        self._write_profiles(remaining)
-        return True
-
     def _read_profiles(self) -> list[StoredPlayerProfile]:
         if not self.path.exists():
             return []
@@ -155,20 +66,6 @@ class PlayerProfileFileStore:
             for profile in [_profile_from_payload(item)]
             if profile is not None
         ]
-
-    def _write_profiles(self, profiles: list[StoredPlayerProfile]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": 3,
-            "profiles": [_profile_to_payload(profile) for profile in profiles],
-        }
-        temp_path = self.path.with_suffix(f"{self.path.suffix}.tmp")
-        temp_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temp_path.replace(self.path)
-
 
 def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None:
     profile_id = _optional_string(payload.get("id"))
@@ -215,37 +112,6 @@ def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None
         created_at=created_at,
         updated_at=_parse_datetime(payload.get("updated_at"), fallback=created_at),
     )
-
-
-def _profile_to_payload(profile: StoredPlayerProfile) -> dict[str, Any]:
-    return {
-        "id": profile.id,
-        "owner_user_id": profile.owner_user_id,
-        "display_name": profile.display_name,
-        "model": profile.model,
-        "personality_id": profile.personality_id,
-        "personality_text": profile.personality_text,
-        "appearance_id": profile.appearance_id,
-        "avatar_prompt": profile.avatar_prompt,
-        "avatar_image_url": profile.avatar_image_url,
-        "avatar_image_path": profile.avatar_image_path,
-        "avatar_image_mime": profile.avatar_image_mime,
-        "short_description": profile.short_description,
-        "background_story": profile.background_story,
-        "speaking_style": profile.speaking_style,
-        "catchphrases": profile.catchphrases,
-        "strategy_profile": profile.strategy_profile,
-        "risk_tolerance": profile.risk_tolerance,
-        "bluffing_tendency": profile.bluffing_tendency,
-        "trust_tendency": profile.trust_tendency,
-        "leadership_tendency": profile.leadership_tendency,
-        "talkativeness": profile.talkativeness,
-        "example_messages": profile.example_messages,
-        "favorite": profile.favorite,
-        "tags": profile.tags,
-        "created_at": profile.created_at.isoformat(),
-        "updated_at": profile.updated_at.isoformat(),
-    }
 
 
 def _optional_string(value: object) -> str | None:
@@ -305,7 +171,3 @@ def _strings_from_payload(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
-
-
-def player_profile_store_for_logs_dir(logs_dir: str | Path) -> PlayerProfileFileStore:
-    return PlayerProfileFileStore(Path(logs_dir) / "player_profiles.json")

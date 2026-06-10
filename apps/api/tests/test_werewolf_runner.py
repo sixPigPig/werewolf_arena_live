@@ -245,7 +245,6 @@ class ConcurrentSheriffRunProvider(ScriptedChineseProvider):
         self.actions: list[tuple[str, str]] = []
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, temperature
         name = _extract_actor_name(prompt)
         if '"run"' in prompt:
             self.actions.append(("sheriff_run", name))
@@ -263,7 +262,6 @@ class StreamingSheriffRunFallbackProvider(ScriptedChineseProvider):
         self.actions: list[tuple[str, str]] = []
 
     def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
-        del model, temperature
         name = _extract_actor_name(prompt)
         if '"run"' in prompt:
             self.actions.append(("stream_sheriff_run", name))
@@ -271,7 +269,6 @@ class StreamingSheriffRunFallbackProvider(ScriptedChineseProvider):
         return [self.complete_json(model=model, prompt=prompt, temperature=temperature)]
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, temperature
         name = _extract_actor_name(prompt)
         if '"run"' in prompt:
             self.actions.append(("complete_sheriff_run", name))
@@ -291,7 +288,6 @@ class RetryingSheriffRunProvider(ScriptedChineseProvider):
         self.actions: list[tuple[str, str, int]] = []
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, temperature
         name = _extract_actor_name(prompt)
         if '"run"' in prompt:
             with self.lock:
@@ -313,7 +309,6 @@ class RecordingSheriffRunProvider(ScriptedChineseProvider):
         self.actions: list[str] = []
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, temperature
         name = _extract_actor_name(prompt)
         if '"run"' in prompt:
             self.actions.append(name)
@@ -330,7 +325,6 @@ class FailingSheriffRunProvider(ScriptedChineseProvider):
         self.actions: list[str] = []
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, temperature
         name = _extract_actor_name(prompt)
         if '"run"' in prompt:
             self.actions.append(name)
@@ -352,7 +346,6 @@ class InvalidSheriffRunProvider(ScriptedChineseProvider):
         self.lock = threading.Lock()
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, temperature
         name = _extract_actor_name(prompt)
         if '"run"' in prompt:
             with self.lock:

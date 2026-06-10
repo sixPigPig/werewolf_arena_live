@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes import player_profiles as player_profiles_routes
-from app.api.routes.player_profiles import get_player_avatar_asset_store, get_player_profile_store
+from app.api.routes.player_profiles import get_player_avatar_asset_store
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -508,40 +508,40 @@ def test_create_profile_validation_errors(payload: dict, expected_detail: str | 
         assert response.json()["detail"] == expected_detail
 
 
-def test_profiles_fall_back_to_local_file_when_database_is_unavailable(
-    tmp_path,
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("get", "/api/v1/player-profiles", None),
+        ("get", "/api/v1/player-profiles/profile-1", None),
+        (
+            "post",
+            "/api/v1/player-profiles",
+            {"display_name": "数据库玩家", "model": "deepseek-v4-flash"},
+        ),
+        (
+            "patch",
+            "/api/v1/player-profiles/profile-1",
+            {"display_name": "更新玩家"},
+        ),
+        ("delete", "/api/v1/player-profiles/profile-1", None),
+    ],
+)
+def test_profile_api_returns_503_when_database_is_unavailable(
+    method: str,
+    path: str,
+    payload: dict[str, object] | None,
 ) -> None:
     app.dependency_overrides[get_db] = override_broken_db
-    app.dependency_overrides[get_player_profile_store] = lambda: PlayerProfileFileStore(
-        tmp_path / "player_profiles.json"
-    )
     try:
-        create_response = client.post(
-            "/api/v1/player-profiles",
-            json={
-                "display_name": "  本地玩家  ",
-                "model": "deepseek-v4-flash",
-                "personality_id": "cautious",
-                "appearance_id": "moonlit",
-                "tags": [" 本地 ", "本地"],
-            },
-        )
-        list_response = client.get("/api/v1/player-profiles")
+        response = client.request(method, path, json=payload)
     finally:
         app.dependency_overrides.clear()
 
-    assert create_response.status_code == 201
-    created = create_response.json()
-    assert created["display_name"] == "本地玩家"
-    assert created["personality_text"] == default_personality_text("cautious")
-    assert created["appearance_id"] == "moonlit"
-    assert created["tags"] == ["本地"]
-
-    assert list_response.status_code == 200
-    assert list_response.json()["profiles"][0]["id"] == created["id"]
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Player profile database unavailable"}
 
 
-def test_player_profile_file_store_reads_old_payload_with_rich_defaults_and_writes_v3(
+def test_player_profile_file_store_reads_old_payload_with_rich_defaults(
     tmp_path,
 ) -> None:
     path = tmp_path / "player_profiles.json"
@@ -578,45 +578,6 @@ def test_player_profile_file_store_reads_old_payload_with_rich_defaults_and_writ
     assert legacy.talkativeness == 3
     assert legacy.example_messages == []
     assert legacy.favorite is False
-
-    store.create_profile(
-        display_name="新玩家",
-        model="deepseek-v4-flash",
-        personality_id="balanced",
-        personality_text="",
-        appearance_id="default",
-        avatar_prompt="",
-        tags=[],
-    )
-    payload_after_create = json.loads(path.read_text(encoding="utf-8"))
-    legacy_payload = next(
-        profile
-        for profile in payload_after_create["profiles"]
-        if profile["id"] == "legacy-profile"
-    )
-
-    assert payload_after_create["version"] == 3
-    assert legacy_payload["short_description"] == ""
-    assert legacy_payload["catchphrases"] == []
-    assert legacy_payload["strategy_profile"] == "balanced"
-    assert legacy_payload["risk_tolerance"] == 3
-    assert legacy_payload["favorite"] is False
-
-    updated = store.update_profile(
-        "legacy-profile",
-        {
-            "short_description": "旧档补齐简介",
-            "catchphrases": ["补齐口头禅"],
-            "favorite": True,
-        },
-    )
-    payload_after_update = json.loads(path.read_text(encoding="utf-8"))
-
-    assert updated is not None
-    assert updated.short_description == "旧档补齐简介"
-    assert updated.catchphrases == ["补齐口头禅"]
-    assert updated.favorite is True
-    assert payload_after_update["version"] == 3
 
 
 def test_create_profile_persists_rich_character_settings() -> None:

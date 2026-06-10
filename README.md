@@ -24,12 +24,23 @@ pnpm install
 
 `uv` 只用于首次同步 Python 依赖。如果本机没有 `uv`，请先安装 `uv`，或者使用已经存在的 `apps/api/.venv` 运行后端；`make api` 会直接调用项目内的 `.venv/bin/python`。
 
-如需数据库，启动 PostgreSQL 并执行迁移：
+PostgreSQL 是虚拟玩家档案的唯一运行时数据源。使用玩家库或发起对局前，启动数据库并执行迁移：
 
 ```bash
 docker compose up -d db
 cd apps/api && uv run alembic upgrade head
 ```
+
+数据库不可用时，玩家档案 CRUD 和依赖玩家库的开局请求会返回 `503`，不会回退到本地 JSON 文件。
+
+如果旧版本曾在 `apps/api/logs/player_profiles.json` 写入玩家档案，可在数据库迁移完成后执行一次幂等导入：
+
+```bash
+cd apps/api
+.venv/bin/python -m app.cli import-player-profiles --source logs/player_profiles.json
+```
+
+命令按档案 ID 导入，数据库中已存在的 ID 会跳过且不会覆盖。确认导入统计后可自行归档旧 JSON 文件；运行时不再读取或写入该文件。
 
 ## 本地运行
 
@@ -88,6 +99,8 @@ http://127.0.0.1:5173
 3. 页面会进入 `/games/live/<run_id>`。
 4. 实时观战页会展示玩家列表、当前聚焦玩家、原始事件侧栏。
 5. 对局结束后点击“查看完整复盘”进入 `/games/<session_id>`。
+
+实时 run 和 SSE 事件保存在 API 进程内存中，当前部署应使用单个 API worker。同一进程内重复恢复同一对局会复用已有活动 run，不会重复启动模型任务；跨进程排他需要后续引入共享任务存储。
 
 运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。当前内置
 DeepSeek 和 MiniMax；如果 `WEREWOLF_DEFAULT_MODEL` 为空，后端会从已配置 API key 的

@@ -4,7 +4,7 @@ import random
 import threading
 from typing import Annotated, Iterator
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -20,10 +20,6 @@ from app.werewolf.player_configs import (
     player_config_from_profile,
     player_configs_from_serialized,
     validate_unique_effective_player_names,
-)
-from app.werewolf.player_profile_store import (
-    PlayerProfileFileStore,
-    player_profile_store_for_logs_dir,
 )
 from app.werewolf.player_presets import is_valid_appearance, is_valid_personality
 from app.werewolf.providers import configured_model_options, default_model_name
@@ -43,7 +39,7 @@ from app.werewolf.runner import GameRunError, new_session_id, resume_game, run_g
 router = APIRouter()
 live_registry = LiveRunRegistry()
 RecoverableDatabaseError = (OperationalError, ProgrammingError)
-RecoverableProfileListError = (AttributeError, OperationalError, ProgrammingError)
+PLAYER_PROFILE_DATABASE_UNAVAILABLE = "Player profile database unavailable"
 
 
 class CreatePlayerConfigRequest(BaseModel):
@@ -77,15 +73,10 @@ def get_live_registry() -> LiveRunRegistry:
     return live_registry
 
 
-def get_player_profile_store() -> PlayerProfileFileStore:
-    return player_profile_store_for_logs_dir(settings.werewolf_logs_dir)
-
-
 def normalize_player_config_requests(
     requests: list[CreatePlayerConfigRequest],
     player_count: int,
     db: Session,
-    profile_store: PlayerProfileFileStore,
 ) -> list[PlayerConfig]:
     if len(requests) > player_count:
         raise HTTPException(status_code=422, detail="Too many player configs")
@@ -110,8 +101,8 @@ def normalize_player_config_requests(
         if profile_id is not None:
             try:
                 profile = db.get(VirtualPlayerProfile, profile_id)
-            except RecoverableDatabaseError:
-                profile = profile_store.get_profile(profile_id)
+            except RecoverableDatabaseError as exc:
+                raise _profile_database_unavailable() from exc
             if profile is None:
                 raise HTTPException(status_code=422, detail=f"Unknown player profile: {profile_id}")
 
@@ -150,13 +141,11 @@ def complete_player_configs_from_library(
     player_count: int,
     seed: int | None,
     db: Session,
-    profile_store: PlayerProfileFileStore,
 ) -> list[PlayerConfig]:
     configs = normalize_player_config_requests(
         requests,
         player_count,
         db,
-        profile_store,
     )
     configs_by_seat = {config.seat: config for config in configs}
     missing_profile_seats = [
@@ -174,7 +163,7 @@ def complete_player_configs_from_library(
     }
     available_profiles = [
         profile
-        for profile in list_available_player_profiles(db, profile_store)
+        for profile in list_available_player_profiles(db)
         if clean_optional_string(getattr(profile, "id", None)) not in used_profile_ids
     ]
     available_count = len(used_profile_ids) + len(available_profiles)
@@ -210,7 +199,6 @@ def complete_player_configs_from_library(
 
 def list_available_player_profiles(
     db: Session,
-    profile_store: PlayerProfileFileStore,
 ) -> list[object]:
     try:
         return list(
@@ -218,8 +206,8 @@ def list_available_player_profiles(
             .order_by(VirtualPlayerProfile.updated_at.desc(), VirtualPlayerProfile.id.desc())
             .all()
         )
-    except RecoverableProfileListError:
-        return list(profile_store.list_profiles())
+    except RecoverableDatabaseError as exc:
+        raise _profile_database_unavailable() from exc
 
 
 @router.get("")
@@ -242,7 +230,6 @@ def create_game_run(
     request: CreateGameRunRequest,
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
     db: Annotated[Session, Depends(get_db)],
-    profile_store: Annotated[PlayerProfileFileStore, Depends(get_player_profile_store)],
 ) -> dict:
     try:
         rule_set = get_rule_set(request.rule_set_id)
@@ -257,7 +244,6 @@ def create_game_run(
         player_count=rule_set.player_count,
         seed=request.seed,
         db=db,
-        profile_store=profile_store,
     )
     try:
         validate_unique_effective_player_names(
@@ -294,6 +280,10 @@ def create_game_run(
     )
     thread.start()
     return registry.get_run(run.run_id).to_summary()
+
+
+def _profile_database_unavailable() -> HTTPException:
+    return HTTPException(status_code=503, detail=PLAYER_PROFILE_DATABASE_UNAVAILABLE)
 
 
 @router.get("/runs/{run_id}")
@@ -336,7 +326,13 @@ def resume_game_run(
     ],
     store: Annotated[ReplayStore, Depends(get_replay_store)],
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
+    response: Response,
 ) -> dict:
+    active_run = registry.try_get_active_run_for_session(session_id)
+    if active_run is not None:
+        response.status_code = 200
+        return active_run.to_summary()
+
     checkpoint_directory = store.logs_root / session_id
     try:
         checkpoint = load_resume_checkpoint(checkpoint_directory)
@@ -364,7 +360,7 @@ def resume_game_run(
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
-    run = registry.create_run(
+    run, created = registry.get_or_create_active_run(
         session_id=session_id,
         villager_model=str(run_params.get("villager_model") or default_model_name()),
         werewolf_model=str(run_params.get("werewolf_model") or default_model_name()),
@@ -374,6 +370,9 @@ def resume_game_run(
         rule_set=rule_set_snapshot(rule_set),
         player_configs=checkpoint_player_configs,
     )
+    if not created:
+        response.status_code = 200
+        return run.to_summary()
     thread = threading.Thread(
         target=_resume_game_in_background,
         kwargs={

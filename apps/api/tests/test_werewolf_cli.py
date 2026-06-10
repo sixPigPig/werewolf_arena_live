@@ -1,6 +1,15 @@
+import json
 from pathlib import Path
 
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+import app.cli as cli
 from app.cli import main
+from app.db.base import Base
+from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.runner import GameRunError, RunGameResult
 
 
@@ -138,3 +147,135 @@ def test_serve_command_starts_uvicorn(monkeypatch) -> None:
         "port": 9000,
         "reload": True,
     }
+
+
+def test_import_player_profiles_command_is_idempotent(tmp_path, capsys, monkeypatch) -> None:
+    source = tmp_path / "player_profiles.json"
+    source.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "profiles": [
+                    {
+                        "id": "legacy-profile",
+                        "display_name": "旧档玩家",
+                        "model": "deepseek-v4-flash",
+                        "personality_id": "cautious",
+                        "personality_text": "先听后判。",
+                        "appearance_id": "moonlit",
+                        "tags": ["本地"],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr(cli, "SessionLocal", testing_session, raising=False)
+
+    first_exit_code = main(["import-player-profiles", "--source", str(source)])
+    first_output = capsys.readouterr().out
+    second_exit_code = main(["import-player-profiles", "--source", str(source)])
+    second_output = capsys.readouterr().out
+
+    with testing_session() as session:
+        imported = session.get(VirtualPlayerProfile, "legacy-profile")
+
+    assert first_exit_code == 0
+    assert "读取=1 导入=1 跳过=0" in first_output
+    assert second_exit_code == 0
+    assert "读取=1 导入=0 跳过=1" in second_output
+    assert imported is not None
+    assert imported.display_name == "旧档玩家"
+    assert imported.personality_text == "先听后判。"
+    assert imported.tags == ["本地"]
+
+
+def test_import_player_profiles_command_rejects_missing_malformed_or_empty_files(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr(cli, "SessionLocal", testing_session, raising=False)
+    missing = tmp_path / "missing.json"
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("{not-json", encoding="utf-8")
+    empty = tmp_path / "empty.json"
+    empty.write_text('{"version":3,"profiles":[]}', encoding="utf-8")
+
+    missing_exit_code = main(["import-player-profiles", "--source", str(missing)])
+    missing_error = capsys.readouterr().err
+    malformed_exit_code = main(["import-player-profiles", "--source", str(malformed)])
+    malformed_error = capsys.readouterr().err
+    empty_exit_code = main(["import-player-profiles", "--source", str(empty)])
+    empty_error = capsys.readouterr().err
+
+    assert missing_exit_code == 1
+    assert "无法读取玩家档案文件" in missing_error
+    assert malformed_exit_code == 1
+    assert "无法读取玩家档案文件" in malformed_error
+    assert empty_exit_code == 1
+    assert "没有可导入的玩家档案" in empty_error
+
+
+def test_import_player_profiles_command_rolls_back_database_failure(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "player_profiles.json"
+    source.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "profiles": [
+                    {
+                        "id": "legacy-profile",
+                        "display_name": "旧档玩家",
+                        "model": "deepseek-v4-flash",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class FailingSession:
+        def __init__(self) -> None:
+            self.rolled_back = False
+
+        def get(self, *_args: object) -> None:
+            return None
+
+        def add(self, _value: object) -> None:
+            pass
+
+        def commit(self) -> None:
+            raise OperationalError("commit", {}, Exception("database unavailable"))
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+        def close(self) -> None:
+            pass
+
+    session = FailingSession()
+    monkeypatch.setattr(cli, "SessionLocal", lambda: session, raising=False)
+
+    exit_code = main(["import-player-profiles", "--source", str(source)])
+    error = capsys.readouterr().err
+
+    assert exit_code == 1
+    assert "导入玩家档案失败" in error
+    assert session.rolled_back is True

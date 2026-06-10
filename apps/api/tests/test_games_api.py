@@ -41,6 +41,9 @@ class BrokenSession:
     def get(self, *_args: object) -> None:
         raise OperationalError("select", {}, Exception("database unavailable"))
 
+    def query(self, *_args: object) -> None:
+        raise OperationalError("select", {}, Exception("database unavailable"))
+
     def close(self) -> None:
         pass
 
@@ -496,49 +499,10 @@ def test_create_game_run_resolves_profile_configs(
     assert snapshot in [config.to_dict() for config in background_configs]
 
 
-def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
+def test_create_game_run_returns_503_when_profile_database_is_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    write_json(
-        tmp_path / "player_profiles.json",
-        {
-            "version": 2,
-            "profiles": [
-                {
-                    "id": "profile-file",
-                    "owner_user_id": None,
-                    "display_name": "文件玩家",
-                    "model": "file-model",
-                    "personality_id": "cautious",
-                    "personality_text": "先听后判。",
-                    "appearance_id": "moonlit",
-                    "avatar_prompt": "silver moon portrait",
-                    "avatar_image_url": "/api/v1/player-profiles/avatar/profile-file.png",
-                    "tags": ["本地"],
-                    "created_at": "2026-05-16T00:00:00+00:00",
-                    "updated_at": "2026-05-16T00:00:00+00:00",
-                },
-                *[
-                    {
-                        "id": f"profile-file-{index}",
-                        "owner_user_id": None,
-                        "display_name": f"文件补位{index}",
-                        "model": "file-model",
-                        "personality_id": "balanced",
-                        "personality_text": "补位玩家。",
-                        "appearance_id": "default",
-                        "avatar_prompt": "",
-                        "avatar_image_url": "",
-                        "tags": [],
-                        "created_at": "2026-05-16T00:00:00+00:00",
-                        "updated_at": "2026-05-16T00:00:00+00:00",
-                    }
-                    for index in range(1, 8)
-                ],
-            ],
-        },
-    )
     registry = LiveRunRegistry()
     override_logs_root(tmp_path)
     override_live_registry(registry)
@@ -548,7 +512,6 @@ def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
     def fake_background_run(**kwargs: object) -> None:
         captured.append(kwargs)
 
-    monkeypatch.setattr("app.api.routes.games.settings.werewolf_logs_dir", str(tmp_path))
     monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
     monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
 
@@ -564,34 +527,9 @@ def test_create_game_run_resolves_file_profile_when_database_is_unavailable(
     finally:
         clear_overrides()
 
-    assert response.status_code == 201
-    configs = response.json()["player_configs"]
-    snapshot = next(config for config in configs if config["seat"] == 2)
-    expected_personality = "\n".join(
-        [
-            "先听后判。",
-            "狼人杀策略: 稳健观察，按证据推进，不轻易极端站边。",
-            "冒险倾向: 3/5",
-            "伪装倾向: 3/5",
-            "信任倾向: 3/5",
-            "领导倾向: 3/5",
-            "发言活跃: 3/5",
-        ]
-    )
-    assert snapshot == {
-        "seat": 2,
-        "profile_id": "profile-file",
-        "name": "文件玩家",
-        "model": "file-model",
-        "personality_id": "cautious",
-        "personality": expected_personality,
-        "appearance_id": "moonlit",
-        "avatar_prompt": "silver moon portrait",
-        "avatar_image_url": "/api/v1/player-profiles/avatar/profile-file.png",
-        "tags": ["本地"],
-    }
-    assert len(captured[0]["player_configs"]) == 8
-    assert snapshot in [config.to_dict() for config in captured[0]["player_configs"]]
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Player profile database unavailable"}
+    assert captured == []
 
 
 def test_game_run_player_config_composes_rich_profile_prompt(
@@ -838,6 +776,57 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     ]
     assert captured[0]["session_id"] == session_id
     assert captured[0]["logs_dir"] == tmp_path
+
+
+def test_resume_game_run_reuses_active_run_without_starting_another_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    write_json(
+        tmp_path / session_id / RESUME_CHECKPOINT_FILE,
+        {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "session_id": session_id,
+            "run_params": {
+                "villager_model": "deepseek-chat",
+                "werewolf_model": "deepseek-chat",
+                "seed": 21,
+                "max_rounds": 8,
+                "rule_set_id": "starter_6",
+                "player_configs": [],
+            },
+            "round_number": 1,
+            "active_players": ["张三", "李四"],
+            "rng_state": None,
+            "state_at_round_start": sample_state(session_id, winner="", error=""),
+            "logs_before_round": [],
+            "cached_model_responses": [],
+            "failed_request": None,
+            "last_error": None,
+        },
+    )
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_resume_background(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._resume_game_in_background", fake_resume_background)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        first_response = client.post(f"/api/v1/games/{session_id}/resume")
+        second_response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 200
+    assert second_response.json()["run_id"] == first_response.json()["run_id"]
+    assert len(captured) == 1
 
 
 def test_resume_game_run_returns_404_without_checkpoint(

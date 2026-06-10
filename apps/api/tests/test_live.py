@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 from app.werewolf.live import LiveRunRegistry, format_sse
 
@@ -144,6 +145,43 @@ def test_registry_marks_completed_and_failed() -> None:
     assert registry.get_run(failed.run_id).error == "Maximum rounds exceeded"
     assert registry.get_run(failed.run_id).completed_at is not None
     assert registry.get_run(failed.run_id).events[-1].type == "game_failed"
+
+
+def test_registry_get_or_create_active_run_is_atomic_per_session() -> None:
+    registry = LiveRunRegistry()
+
+    def get_or_create() -> tuple[str, bool]:
+        run, created = registry.get_or_create_active_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+            **classic_rule_kwargs(),
+        )
+        return run.run_id, created
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _index: get_or_create(), range(8)))
+
+    run_ids = {run_id for run_id, _created in results}
+    assert len(run_ids) == 1
+    assert sum(created for _run_id, created in results) == 1
+
+    first_run_id = results[0][0]
+    registry.mark_failed(first_run_id, error="temporary failure")
+
+    replacement, created = registry.get_or_create_active_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+        **classic_rule_kwargs(),
+    )
+
+    assert created is True
+    assert replacement.run_id != first_run_id
 
 
 def test_format_sse_preserves_unicode_and_payload_history_is_stable() -> None:

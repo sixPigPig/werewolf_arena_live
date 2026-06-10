@@ -175,6 +175,40 @@ class LiveRunRegistry:
             )
             return run
 
+    def try_get_active_run_for_session(self, session_id: str) -> LiveGameRun | None:
+        with self._lock:
+            return self._active_run_for_session_locked(session_id)
+
+    def get_or_create_active_run(
+        self,
+        *,
+        session_id: str,
+        villager_model: str,
+        werewolf_model: str,
+        seed: int | None,
+        max_rounds: int,
+        rule_set_id: str = DEFAULT_RULE_SET_ID,
+        rule_set: dict[str, Any] | None = None,
+        player_configs: list[PlayerConfig] | None = None,
+    ) -> tuple[LiveGameRun, bool]:
+        with self._lock:
+            active_run = self._active_run_for_session_locked(session_id)
+            if active_run is not None:
+                return active_run, False
+            return (
+                self.create_run(
+                    session_id=session_id,
+                    villager_model=villager_model,
+                    werewolf_model=werewolf_model,
+                    seed=seed,
+                    max_rounds=max_rounds,
+                    rule_set_id=rule_set_id,
+                    rule_set=rule_set,
+                    player_configs=player_configs,
+                ),
+                True,
+            )
+
     def get_run(self, run_id: str) -> LiveGameRun:
         with self._lock:
             return self._runs[run_id]
@@ -182,6 +216,16 @@ class LiveRunRegistry:
     def try_get_run(self, run_id: str) -> LiveGameRun | None:
         with self._lock:
             return self._runs.get(run_id)
+
+    def _active_run_for_session_locked(self, session_id: str) -> LiveGameRun | None:
+        return next(
+            (
+                run
+                for run in reversed(tuple(self._runs.values()))
+                if run.session_id == session_id and run.status in {"queued", "running"}
+            ),
+            None,
+        )
 
     def mark_running(self, run_id: str) -> LiveEvent:
         with self._lock:

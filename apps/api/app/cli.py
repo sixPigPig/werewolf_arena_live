@@ -7,6 +7,8 @@ from typing import Sequence
 
 import uvicorn
 
+from app.db.session import SessionLocal
+from app.player_profile_import import PlayerProfileImportError, import_player_profiles
 from app.werewolf.providers import default_model_name
 from app.werewolf.runner import GameRunError, run_game
 
@@ -36,6 +38,13 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--reload", action="store_true")
     serve_parser.set_defaults(func=_serve_command)
 
+    import_profiles_parser = subparsers.add_parser(
+        "import-player-profiles",
+        help="Import legacy JSON player profiles into PostgreSQL.",
+    )
+    import_profiles_parser.add_argument("--source", type=Path, required=True)
+    import_profiles_parser.set_defaults(func=_import_player_profiles_command)
+
     return parser
 
 
@@ -62,6 +71,24 @@ def _run_game_command(args: argparse.Namespace) -> int:
 
 def _serve_command(args: argparse.Namespace) -> int:
     uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload)
+    return 0
+
+
+def _import_player_profiles_command(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        result = import_player_profiles(args.source, db)
+    except PlayerProfileImportError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+    print(
+        f"读取={result.read_count} "
+        f"导入={result.imported_count} "
+        f"跳过={result.skipped_count}"
+    )
     return 0
 
 
