@@ -1,9 +1,4 @@
-import {
-  Button,
-  Callout,
-  Container,
-  TextField,
-} from "../../../components/ui";
+import { Button, Callout, Container } from "../../../components/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -11,10 +6,12 @@ import { Link, useNavigate } from "react-router-dom";
 import { createGameRun } from "../api/createGameRun";
 import { listRuleSets } from "../api/listRuleSets";
 import {
+  clearAllSeats,
   hasPlayerConfig,
   randomFillEmptySeats,
   removeInvalidProfileRefs,
 } from "../lineupUtils";
+import { LobbyActionBar } from "./LobbyActionBar";
 import { LobbyLineupWorkbench } from "./LobbyLineupWorkbench";
 import { LobbyRuleSelector } from "./LobbyRuleSelector";
 import { RuleDetailsDrawer } from "./RuleDetailsDrawer";
@@ -136,49 +133,9 @@ export function CreateGameRunForm({
         });
       }}
     >
-      <section className="lobby-console-bar" data-testid="lobby-console-bar">
-        <div className="lobby-console-title-block">
-          <h1 className="lobby-console-title">狼人杀对局大厅</h1>
-        </div>
-        <div className="lobby-console-controls" data-testid="lobby-console-controls">
-          <label className="lobby-console-field lobby-console-field-seed">
-            <span className="lobby-console-field-label">随机种子</span>
-            <TextField.Root
-              className="lobby-console-input"
-              inputMode="numeric"
-              placeholder="可留空"
-              value={seed}
-              onChange={(event) => setSeed(event.target.value)}
-            />
-          </label>
-          <label className="lobby-console-field lobby-console-field-rounds">
-            <span className="lobby-console-field-label">最大轮数</span>
-            <TextField.Root
-              className="lobby-console-input"
-              min={1}
-              max={20}
-              required
-              type="number"
-              value={maxRounds}
-              onChange={(event) => {
-                setMaxRounds(event.target.value);
-                setValidationError(null);
-              }}
-            />
-          </label>
-          <Button
-            className="lobby-console-launch"
-            disabled={isSubmitDisabled}
-            intent="warning"
-            loading={mutation.isPending}
-            size="1"
-            skin="gothic"
-            type="submit"
-          >
-            发起对局
-          </Button>
-        </div>
-      </section>
+      <header className="lobby-workbench-heading">
+        <h1 className="lobby-console-title">狼人杀对局大厅</h1>
+      </header>
 
       <Container
         aria-labelledby="lobby-rules-title"
@@ -223,6 +180,42 @@ export function CreateGameRunForm({
           ) : null}
         </div>
       </Container>
+
+      <LobbyActionBar
+        disabled={isSubmitDisabled}
+        loading={mutation.isPending}
+        maxRounds={maxRounds}
+        onClearAll={() => setPlayerConfigs(clearAllSeats())}
+        onFillFavorites={() => {
+          if (selectedRuleSet) {
+            setPlayerConfigs(
+              randomFillEmptySeats(
+                visiblePlayerConfigs,
+                profiles,
+                selectedRuleSet.player_count,
+                { favoritesOnly: true },
+              ),
+            );
+          }
+        }}
+        onMaxRoundsChange={(value) => {
+          setMaxRounds(value);
+          setValidationError(null);
+        }}
+        onRandomFill={() => {
+          if (selectedRuleSet) {
+            setPlayerConfigs(
+              randomFillEmptySeats(
+                visiblePlayerConfigs,
+                profiles,
+                selectedRuleSet.player_count,
+              ),
+            );
+          }
+        }}
+        onSeedChange={setSeed}
+        seed={seed}
+      />
 
       {validationError ? (
         <Callout.Root className="lobby-form-callout" color="red" size="1" variant="soft">

@@ -313,14 +313,17 @@ describe("GamesPage", () => {
     );
     expect(createModule).not.toHaveClass("glass-panel");
 
-    const consoleBar = within(createModule).getByTestId("lobby-console-bar");
     expect(
-      within(consoleBar).getByRole("heading", { name: "狼人杀对局大厅" }),
+      within(createModule).queryByTestId("lobby-console-bar"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(createModule).getByRole("heading", { name: "狼人杀对局大厅" }),
     ).toBeInTheDocument();
-    expect(within(consoleBar).getByLabelText("随机种子")).toBeInTheDocument();
-    expect(within(consoleBar).getByLabelText("最大轮数")).toBeInTheDocument();
+    const actionBar = within(createModule).getByTestId("lobby-action-bar");
+    expect(within(actionBar).getByLabelText("随机种子")).toBeInTheDocument();
+    expect(within(actionBar).getByLabelText("最大轮数")).toBeInTheDocument();
     expect(
-      within(consoleBar).getByRole("button", { name: "发起对局" }),
+      within(actionBar).getByRole("button", { name: "发起对局" }),
     ).toHaveClass("gothic-button");
     const workbench = await screen.findByRole("region", { name: "组建阵容" });
     expect(workbench).toHaveAttribute("data-testid", "lobby-lineup-workbench");
@@ -1091,6 +1094,59 @@ describe("GamesPage", () => {
     expect(body.rule_set_id).toBe("classic_8");
     expect(body.player_configs).toHaveLength(8);
     expect(await screen.findByText("实时观战 run_1234abcd")).toBeInTheDocument();
+  });
+
+  it("clears every selected seat and model override from the bottom action bar", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/games/rule-sets")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(ruleSetsResponse()), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/player-profiles")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    const { container } = renderWithClient(<GamesPage />, "/games");
+
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "为 1 号座位选择 冷静的阿夜",
+      }),
+    );
+    await userEvent.type(
+      screen.getByLabelText("1 号座位模型覆盖"),
+      "qwen3.6-plus",
+    );
+    expect(screen.getByText("已选 1 / 8")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "清空阵容" }));
+    const dialog = screen.getByRole("alertdialog", { name: "确认清空阵容" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "确认清空" }));
+
+    expect(screen.getByText("已选 0 / 8")).toBeInTheDocument();
+    const seatDetailPanel = container.querySelector(".seat-detail-panel");
+    expect(seatDetailPanel).not.toBeNull();
+    expect(
+      within(seatDetailPanel as HTMLElement).getByText("空席"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("1 号座位模型覆盖")).toHaveValue("");
   });
 
   it("blocks launch when max rounds is empty", async () => {
