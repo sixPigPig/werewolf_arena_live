@@ -211,6 +211,7 @@ export function CreateGameRunForm({
               <LobbyLineupWorkbench
                 configs={visiblePlayerConfigs}
                 isProfileListLoaded={isProfileListLoaded}
+                isRuleDetailsOpen={isRuleDrawerOpen}
                 onChange={setPlayerConfigs}
                 onOpenRuleDetails={() => setIsRuleDrawerOpen(true)}
                 playerCount={selectedRuleSet.player_count}

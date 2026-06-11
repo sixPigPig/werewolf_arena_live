@@ -322,7 +322,8 @@ describe("GamesPage", () => {
     expect(
       within(consoleBar).getByRole("button", { name: "发起对局" }),
     ).toHaveClass("gothic-button");
-    const workbench = await screen.findByTestId("lobby-lineup-workbench");
+    const workbench = await screen.findByRole("region", { name: "组建阵容" });
+    expect(workbench).toHaveAttribute("data-testid", "lobby-lineup-workbench");
     expect(
       within(workbench).getByTestId("lobby-lineup-column"),
     ).toBeInTheDocument();
@@ -371,9 +372,12 @@ describe("GamesPage", () => {
     expect(screen.getByTestId("lobby-rules-panel")).toContainElement(
       officialRuleCards,
     );
+    const ruleDetailsButton = screen.getByRole("button", { name: "规则详情" });
     expect(screen.getByTestId("games-create-module")).toContainElement(
-      screen.getByRole("button", { name: "规则详情" }),
+      ruleDetailsButton,
     );
+    expect(ruleDetailsButton).toHaveAttribute("aria-haspopup", "dialog");
+    expect(ruleDetailsButton).toHaveAttribute("aria-expanded", "false");
     expect(
       screen.queryByRole("dialog", { name: "经典 8 人局规则" }),
     ).not.toBeInTheDocument();
@@ -526,7 +530,12 @@ describe("GamesPage", () => {
       screen.getByRole("button", { name: "1号冷静的阿夜" }),
     ).toBeInTheDocument();
     expect(screen.getByText("已选 2 / 8")).toBeInTheDocument();
-    expect(screen.getByText("已在 1 号位")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "2号影刃" }));
+    const occupiedProfileButton = screen.getByRole("button", {
+      name: "为 2 号座位选择 冷静的阿夜",
+    });
+    expect(occupiedProfileButton).toBeDisabled();
+    expect(within(occupiedProfileButton).getByText("已在 1 号位")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
 
@@ -707,11 +716,15 @@ describe("GamesPage", () => {
     renderWithClient(<GamesPage />, "/games");
 
     await screen.findByRole("radiogroup", { name: "官方规则" });
+    const ruleDetailsButton = screen.getByRole("button", { name: "规则详情" });
+    expect(ruleDetailsButton).toHaveAttribute("aria-haspopup", "dialog");
+    expect(ruleDetailsButton).toHaveAttribute("aria-expanded", "false");
     expect(
       screen.queryByRole("dialog", { name: "经典 8 人局规则" }),
     ).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "规则详情" }));
+    await userEvent.click(ruleDetailsButton);
+    expect(ruleDetailsButton).toHaveAttribute("aria-expanded", "true");
 
     const initialDetails = within(
       screen.getByRole("dialog", { name: "经典 8 人局规则" }),
@@ -723,9 +736,10 @@ describe("GamesPage", () => {
     await userEvent.click(
       initialDetails.getByRole("button", { name: "关闭规则详情" }),
     );
+    expect(ruleDetailsButton).toHaveAttribute("aria-expanded", "false");
 
     await userEvent.click(screen.getByLabelText("标准 12 人警长局"));
-    await userEvent.click(screen.getByRole("button", { name: "规则详情" }));
+    await userEvent.click(ruleDetailsButton);
 
     const updatedDetails = within(
       screen.getByRole("dialog", { name: "标准 12 人警长局规则" }),

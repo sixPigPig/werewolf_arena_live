@@ -24,6 +24,7 @@ import { SeatGrid } from "./SeatGrid";
 type LobbyLineupWorkbenchProps = {
   configs: PlayerConfig[];
   isProfileListLoaded: boolean;
+  isRuleDetailsOpen: boolean;
   onChange: (configs: PlayerConfig[]) => void;
   onOpenRuleDetails: () => void;
   playerCount: number;
@@ -35,6 +36,7 @@ type LobbyLineupWorkbenchProps = {
 export function LobbyLineupWorkbench({
   configs,
   isProfileListLoaded,
+  isRuleDetailsOpen,
   onChange,
   onOpenRuleDetails,
   playerCount,
@@ -103,6 +105,7 @@ export function LobbyLineupWorkbench({
 
   return (
     <section
+      aria-labelledby="lobby-lineup-title"
       className="lobby-lineup-workbench"
       data-testid="lobby-lineup-workbench"
     >
@@ -112,12 +115,14 @@ export function LobbyLineupWorkbench({
       >
         <header className="lobby-column-header">
           <div>
-            <h2>组建阵容</h2>
+            <h2 id="lobby-lineup-title">组建阵容</h2>
             <span>
               {rule.name} · {playerCount} 个座位
             </span>
           </div>
           <button
+            aria-expanded={isRuleDetailsOpen}
+            aria-haspopup="dialog"
             className="gothic-button gothic-button-sm"
             data-intent="default"
             onClick={onOpenRuleDetails}
