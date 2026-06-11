@@ -2041,7 +2041,9 @@ body {
 .lobby-console-form {
   display: grid;
   width: min(100%, 118rem);
-  min-height: calc(100vh - 8rem);
+  height: calc(100dvh - var(--arena-nav-height, 56px) - 2rem);
+  max-height: calc(100dvh - var(--arena-nav-height, 56px) - 2rem);
+  min-height: 0;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 0.72rem;
   margin: 0 auto;
@@ -2069,7 +2071,9 @@ body {
 
 .lobby-workbench-frame {
   display: grid;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   grid-template-columns: minmax(17rem, 0.72fr) minmax(0, 2fr);
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 0.72rem;
@@ -2080,6 +2084,7 @@ body {
   min-width: 0;
   min-height: 0;
   grid-template-columns: minmax(24rem, 1.05fr) minmax(21rem, 0.95fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 0.72rem;
 }
 
@@ -2124,6 +2129,7 @@ body {
 
 .lobby-rule-column,
 .lobby-player-column {
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -2132,6 +2138,7 @@ body {
 }
 
 .lobby-lineup-column {
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -2711,12 +2718,14 @@ body {
 }
 
 .profile-picker {
+  min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .lobby-player-column .profile-picker {
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
 }
 
 .lobby-player-column .player-config-role-cards {
@@ -3063,6 +3072,7 @@ body {
 
   .lobby-lineup-workbench {
     grid-template-columns: 1fr;
+    grid-template-rows: repeat(2, minmax(0, 1fr));
   }
 
   .lobby-action-bar {
@@ -3115,6 +3125,8 @@ body {
 
 @media (max-width: 720px) {
   .lobby-console-form {
+    height: auto;
+    max-height: none;
     min-height: auto;
     gap: 0.75rem;
   }
@@ -3123,6 +3135,7 @@ body {
   .lobby-lineup-workbench {
     grid-template-columns: 1fr;
     grid-template-rows: auto;
+    overflow: visible;
   }
 
   .lobby-workbench-column,
@@ -3132,6 +3145,11 @@ body {
 
   .lobby-lineup-column,
   .lobby-player-column {
+    overflow: visible;
+  }
+
+  .lobby-player-column .profile-picker,
+  .lobby-player-column .player-config-role-cards {
     overflow: visible;
   }
 
@@ -3155,13 +3173,8 @@ body {
   }
 
   .lobby-action-parameters,
-  .lobby-action-buttons,
   .lobby-rule-drawer dl > div {
     grid-template-columns: 1fr;
-  }
-
-  .lobby-action-buttons {
-    justify-content: stretch;
   }
 
   .lobby-action-buttons .gothic-button,

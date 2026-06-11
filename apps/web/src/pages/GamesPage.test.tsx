@@ -328,6 +328,9 @@ describe("GamesPage", () => {
     ).toHaveClass("gothic-button");
     const workbench = await screen.findByRole("region", { name: "组建阵容" });
     expect(workbench).toHaveAttribute("data-testid", "lobby-lineup-workbench");
+    expect(await screen.findByTestId("lobby-lineup-workbench")).toHaveClass(
+      "lobby-lineup-workbench",
+    );
     const lineupColumn = within(workbench).getByTestId("lobby-lineup-column");
     expect(lineupColumn).toHaveClass(
       "lobby-workbench-column",
