@@ -26,6 +26,23 @@ const rules: RuleSetSummary[] = [
 ];
 
 describe("LobbyRuleSelector", () => {
+  it("shows loading status without rendering an empty rule group", () => {
+    render(
+      <LobbyRuleSelector
+        error={false}
+        loading
+        onValueChange={vi.fn()}
+        rules={[]}
+        value=""
+      />,
+    );
+
+    expect(screen.getByText("正在读取官方规则...")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("radiogroup", { name: "官方规则" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders the rule column and reports a newly selected rule", async () => {
     const onValueChange = vi.fn();
 
