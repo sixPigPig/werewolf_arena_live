@@ -2718,6 +2718,8 @@ body {
 }
 
 .profile-picker {
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
 }
@@ -2728,8 +2730,15 @@ body {
   overflow: hidden;
 }
 
+.lobby-player-column .profile-picker-filters {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .lobby-player-column .player-config-role-cards {
+  width: 100%;
+  min-width: 0;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   padding-right: 0.18rem;
 }
@@ -3071,8 +3080,10 @@ body {
   }
 
   .lobby-lineup-workbench {
+    overflow-y: auto;
     grid-template-columns: 1fr;
-    grid-template-rows: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto auto;
+    overscroll-behavior: contain;
   }
 
   .lobby-action-bar {
@@ -3082,6 +3093,25 @@ body {
 
   .player-config-seat-module {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .lobby-lineup-column,
+  .lobby-player-column {
+    min-height: 18rem;
+  }
+
+  .lobby-player-column {
+    overflow-y: auto;
+  }
+
+  .lobby-player-column .profile-picker {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .lobby-player-column .player-config-role-cards {
+    max-height: 22rem;
+    min-height: 12rem;
   }
 
   .profile-picker-filters {
@@ -3195,6 +3225,10 @@ body {
   }
 
   .profile-picker-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .lobby-player-column .profile-picker-filters {
     grid-template-columns: 1fr;
   }
 
