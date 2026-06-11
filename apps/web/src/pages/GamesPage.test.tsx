@@ -412,9 +412,7 @@ describe("GamesPage", () => {
     expect(screen.getByTestId("games-create-module")).toContainElement(
       workbenchFrame,
     );
-    expect(screen.getByTestId("games-create-module")).toContainElement(
-      screen.getByTestId("lobby-action-bar"),
-    );
+    expect(workbenchFrame).toContainElement(screen.getByTestId("lobby-action-bar"));
   });
 
   it("removes configured seats outside a smaller rule and reports the removed seats", async () => {

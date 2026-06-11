@@ -219,43 +219,43 @@ export function CreateGameRunForm({
             />
           </>
         ) : null}
-      </div>
 
-      <LobbyActionBar
-        disabled={isSubmitDisabled}
-        loading={mutation.isPending}
-        maxRounds={maxRounds}
-        onClearAll={() => setPlayerConfigs(clearAllSeats())}
-        onFillFavorites={() => {
-          if (selectedRuleSet) {
-            setPlayerConfigs(
-              randomFillEmptySeats(
-                visiblePlayerConfigs,
-                profiles,
-                selectedRuleSet.player_count,
-                { favoritesOnly: true },
-              ),
-            );
-          }
-        }}
-        onMaxRoundsChange={(value) => {
-          setMaxRounds(value);
-          setValidationError(null);
-        }}
-        onRandomFill={() => {
-          if (selectedRuleSet) {
-            setPlayerConfigs(
-              randomFillEmptySeats(
-                visiblePlayerConfigs,
-                profiles,
-                selectedRuleSet.player_count,
-              ),
-            );
-          }
-        }}
-        onSeedChange={setSeed}
-        seed={seed}
-      />
+        <LobbyActionBar
+          disabled={isSubmitDisabled}
+          loading={mutation.isPending}
+          maxRounds={maxRounds}
+          onClearAll={() => setPlayerConfigs(clearAllSeats())}
+          onFillFavorites={() => {
+            if (selectedRuleSet) {
+              setPlayerConfigs(
+                randomFillEmptySeats(
+                  visiblePlayerConfigs,
+                  profiles,
+                  selectedRuleSet.player_count,
+                  { favoritesOnly: true },
+                ),
+              );
+            }
+          }}
+          onMaxRoundsChange={(value) => {
+            setMaxRounds(value);
+            setValidationError(null);
+          }}
+          onRandomFill={() => {
+            if (selectedRuleSet) {
+              setPlayerConfigs(
+                randomFillEmptySeats(
+                  visiblePlayerConfigs,
+                  profiles,
+                  selectedRuleSet.player_count,
+                ),
+              );
+            }
+          }}
+          onSeedChange={setSeed}
+          seed={seed}
+        />
+      </div>
 
       {validationError ? (
         <Callout.Root className="lobby-form-callout" color="red" size="1" variant="soft">
