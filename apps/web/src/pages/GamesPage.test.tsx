@@ -350,29 +350,18 @@ describe("GamesPage", () => {
       screen.getByRole("button", { name: "为 1 号座位选择 冷静的阿夜" }),
     ).toBeInTheDocument();
 
-    const rulesPanel = within(createModule).getByTestId("lobby-rules-panel");
-    expect(rulesPanel).toHaveClass(
-      "lobby-rules-panel",
-      "gothic-night-container",
-      "gothic-night-container-md",
-    );
+    const workbenchFrame = within(createModule).getByTestId("lobby-workbench-frame");
+    expect(workbenchFrame).toHaveClass("lobby-workbench-frame");
     expect(
-      rulesPanel.querySelector(".gothic-night-container-frame"),
-    ).toHaveAttribute("aria-hidden", "true");
-    expect(
-      rulesPanel.querySelectorAll(".gothic-night-container-frame-piece"),
-    ).toHaveLength(8);
-    expect(
-      within(rulesPanel).getByRole("heading", { name: "官方规则" }),
+      within(workbenchFrame).getByRole("heading", { name: "规则选择" }),
     ).toBeInTheDocument();
-    expect(within(rulesPanel).getByText("官方规则")).toBeInTheDocument();
     expect(screen.queryByTestId("games-sessions-module")).not.toBeInTheDocument();
     expect(screen.queryByText("game_00000001")).not.toBeInTheDocument();
     const officialRuleCards = await screen.findByRole("radiogroup", {
       name: "官方规则",
     });
     expect(officialRuleCards).toHaveClass("lobby-rule-grid");
-    expect(screen.getByTestId("lobby-rules-panel")).toContainElement(
+    expect(screen.getByTestId("lobby-workbench-frame")).toContainElement(
       officialRuleCards,
     );
     const ruleDetailsButton = screen.getByRole("button", { name: "规则详情" });
@@ -408,6 +397,50 @@ describe("GamesPage", () => {
         String(input).endsWith("/api/v1/games"),
       ),
     ).toBe(false);
+  });
+
+  it("renders the rule, lineup, and player columns inside one lobby workbench", async () => {
+    mockLobbyRequests(fullPlayerProfilesResponse(12));
+
+    renderWithClient(<GamesPage />, "/games");
+
+    const workbenchFrame = await screen.findByTestId("lobby-workbench-frame");
+    const lineupColumn = await screen.findByTestId("lobby-lineup-column");
+    expect(workbenchFrame).toContainElement(screen.getByTestId("lobby-rule-column"));
+    expect(workbenchFrame).toContainElement(lineupColumn);
+    expect(workbenchFrame).toContainElement(screen.getByTestId("lobby-player-column"));
+    expect(screen.getByTestId("games-create-module")).toContainElement(
+      workbenchFrame,
+    );
+    expect(screen.getByTestId("games-create-module")).toContainElement(
+      screen.getByTestId("lobby-action-bar"),
+    );
+  });
+
+  it("removes configured seats outside a smaller rule and reports the removed seats", async () => {
+    mockLobbyRequests(fullPlayerProfilesResponse(12));
+
+    renderWithClient(<GamesPage />, "/games");
+
+    await userEvent.click(await screen.findByLabelText("标准 12 人警长局"));
+    await userEvent.click(screen.getByRole("button", { name: "9号空席" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "为 9 号座位选择 随机玩家9" }),
+    );
+
+    expect(screen.getByRole("button", { name: "9号随机玩家9" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText("经典 8 人局"));
+
+    expect(
+      screen.queryByRole("button", { name: "9号随机玩家9" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "9号空席" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "已移除 9 号位的 1 名玩家",
+    );
   });
 
   it("renders seat assignment profile cards in the game lobby", async () => {

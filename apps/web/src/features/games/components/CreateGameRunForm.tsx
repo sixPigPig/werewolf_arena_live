@@ -1,6 +1,6 @@
-import { Button, Callout, Container } from "../../../components/ui";
+import { Button, Callout } from "../../../components/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { createGameRun } from "../api/createGameRun";
@@ -10,6 +10,7 @@ import {
   hasPlayerConfig,
   randomFillEmptySeats,
   removeInvalidProfileRefs,
+  resizeLineupForPlayerCount,
 } from "../lineupUtils";
 import { LobbyActionBar } from "./LobbyActionBar";
 import { LobbyLineupWorkbench } from "./LobbyLineupWorkbench";
@@ -35,6 +36,9 @@ export function CreateGameRunForm({
   const [seed, setSeed] = useState("");
   const [maxRounds, setMaxRounds] = useState("8");
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>([]);
+  const [lineupResizeNotice, setLineupResizeNotice] = useState<string | null>(
+    null,
+  );
   const [validationError, setValidationError] = useState<string | null>(null);
   const [playerLibraryShortage, setPlayerLibraryShortage] = useState<{
     availableCount: number;
@@ -44,10 +48,6 @@ export function CreateGameRunForm({
 
   const closeRuleDetails = useCallback(() => {
     setIsRuleDrawerOpen(false);
-  }, []);
-  const handleRuleSetChange = useCallback((ruleSetId: string) => {
-    setIsRuleDrawerOpen(false);
-    setSelectedRuleSetId(ruleSetId);
   }, []);
 
   const ruleSetsQuery = useQuery({
@@ -60,7 +60,10 @@ export function CreateGameRunForm({
     onSuccess: (run) => navigate(`/games/live/${run.run_id}`),
   });
 
-  const ruleSets = ruleSetsQuery.data?.rule_sets ?? [];
+  const ruleSets = useMemo(
+    () => ruleSetsQuery.data?.rule_sets ?? [],
+    [ruleSetsQuery.data?.rule_sets],
+  );
   const selectedRuleSet =
     ruleSets.find((rule) => rule.id === selectedRuleSetId) ??
     ruleSets[0] ??
@@ -70,11 +73,53 @@ export function CreateGameRunForm({
     ruleSetsQuery.isPending ||
     ruleSetsQuery.isError ||
     !isProfileListLoaded;
-  const validProfileIds = new Set(profiles.map((profile) => profile.id));
+  const validProfileIds = useMemo(
+    () => new Set(profiles.map((profile) => profile.id)),
+    [profiles],
+  );
   const visiblePlayerConfigs = removeInvalidProfileRefs(
     playerConfigs,
     validProfileIds,
   );
+  const handleRuleSetChange = useCallback((ruleSetId: string) => {
+    setIsRuleDrawerOpen(false);
+    setSelectedRuleSetId(ruleSetId);
+
+    const nextRule = ruleSets.find((rule) => rule.id === ruleSetId);
+    if (!nextRule) {
+      setLineupResizeNotice(null);
+      return;
+    }
+
+    setPlayerConfigs((previousConfigs) => {
+      const currentVisibleConfigs = removeInvalidProfileRefs(
+        previousConfigs,
+        validProfileIds,
+      );
+      const resizedLineup = resizeLineupForPlayerCount(
+        currentVisibleConfigs,
+        nextRule.player_count,
+      );
+      const visibleSeats = new Set(
+        currentVisibleConfigs.map((config) => config.seat),
+      );
+      const hiddenConfigs = previousConfigs.filter(
+        (config) => !visibleSeats.has(config.seat),
+      );
+
+      setLineupResizeNotice(
+        resizedLineup.removedSeats.length > 0
+          ? `已移除 ${formatSeatRange(resizedLineup.removedSeats)}的 ${
+              resizedLineup.removedSeats.length
+            } 名玩家`
+          : null,
+      );
+
+      return [...hiddenConfigs, ...resizedLineup.configs].sort(
+        (left, right) => left.seat - right.seat,
+      );
+    });
+  }, [ruleSets, validProfileIds]);
 
   return (
     <form
@@ -135,51 +180,46 @@ export function CreateGameRunForm({
     >
       <header className="lobby-workbench-heading">
         <h1 className="lobby-console-title">狼人杀对局大厅</h1>
+        {lineupResizeNotice ? (
+          <p className="lobby-lineup-resize-notice" role="status">
+            {lineupResizeNotice}
+          </p>
+        ) : null}
       </header>
 
-      <Container
-        aria-labelledby="lobby-rules-title"
-        as="section"
-        className="lobby-rules-panel"
-        contentClassName="lobby-rules-panel-content"
-        data-testid="lobby-rules-panel"
-        size="2"
+      <div
+        className="lobby-workbench-frame"
+        data-testid="lobby-workbench-frame"
       >
-        <h2 className="lobby-rules-legend" id="lobby-rules-title">
-          <span aria-hidden="true" className="lobby-rules-legend-mark" />
-          官方规则
-        </h2>
-        <div className="lobby-rules-content">
-          <LobbyRuleSelector
-            error={ruleSetsQuery.isError}
-            loading={ruleSetsQuery.isPending}
-            onValueChange={handleRuleSetChange}
-            rules={ruleSets}
-            value={selectedRuleSetId}
-          />
-          {selectedRuleSet ? (
-            <>
-              <RuleDetailsDrawer
-                onClose={closeRuleDetails}
-                open={isRuleDrawerOpen}
-                returnFocusRef={ruleDetailsTriggerRef}
-                rule={selectedRuleSet}
-              />
-              <LobbyLineupWorkbench
-                configs={visiblePlayerConfigs}
-                isProfileListLoaded={isProfileListLoaded}
-                isRuleDetailsOpen={isRuleDrawerOpen}
-                onChange={setPlayerConfigs}
-                onOpenRuleDetails={() => setIsRuleDrawerOpen(true)}
-                playerCount={selectedRuleSet.player_count}
-                profiles={profiles}
-                rule={selectedRuleSet}
-                ruleDetailsTriggerRef={ruleDetailsTriggerRef}
-              />
-            </>
-          ) : null}
-        </div>
-      </Container>
+        <LobbyRuleSelector
+          error={ruleSetsQuery.isError}
+          loading={ruleSetsQuery.isPending}
+          onValueChange={handleRuleSetChange}
+          rules={ruleSets}
+          value={selectedRuleSetId}
+        />
+        {selectedRuleSet ? (
+          <>
+            <RuleDetailsDrawer
+              onClose={closeRuleDetails}
+              open={isRuleDrawerOpen}
+              returnFocusRef={ruleDetailsTriggerRef}
+              rule={selectedRuleSet}
+            />
+            <LobbyLineupWorkbench
+              configs={visiblePlayerConfigs}
+              isProfileListLoaded={isProfileListLoaded}
+              isRuleDetailsOpen={isRuleDrawerOpen}
+              onChange={setPlayerConfigs}
+              onOpenRuleDetails={() => setIsRuleDrawerOpen(true)}
+              playerCount={selectedRuleSet.player_count}
+              profiles={profiles}
+              rule={selectedRuleSet}
+              ruleDetailsTriggerRef={ruleDetailsTriggerRef}
+            />
+          </>
+        ) : null}
+      </div>
 
       <LobbyActionBar
         disabled={isSubmitDisabled}
@@ -276,6 +316,16 @@ function PlayerLibraryShortageDialog({
       </section>
     </div>
   );
+}
+
+function formatSeatRange(seats: number[]) {
+  if (seats.length === 1) return `${seats[0]} 号位`;
+  const consecutive = seats.every(
+    (seat, index) => index === 0 || seat === seats[index - 1] + 1,
+  );
+  return consecutive
+    ? `${seats[0]}-${seats[seats.length - 1]} 号位`
+    : `${seats.join("、")} 号位`;
 }
 
 function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
