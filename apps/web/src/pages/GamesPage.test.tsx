@@ -320,6 +320,7 @@ describe("GamesPage", () => {
       within(createModule).getByRole("heading", { name: "狼人杀对局大厅" }),
     ).toBeInTheDocument();
     const actionBar = within(createModule).getByTestId("lobby-action-bar");
+    expect(actionBar).toHaveClass("lobby-action-bar");
     expect(within(actionBar).getByLabelText("随机种子")).toBeInTheDocument();
     expect(within(actionBar).getByLabelText("最大轮数")).toBeInTheDocument();
     expect(
@@ -327,12 +328,18 @@ describe("GamesPage", () => {
     ).toHaveClass("gothic-button");
     const workbench = await screen.findByRole("region", { name: "组建阵容" });
     expect(workbench).toHaveAttribute("data-testid", "lobby-lineup-workbench");
-    expect(
-      within(workbench).getByTestId("lobby-lineup-column"),
-    ).toBeInTheDocument();
-    expect(
-      within(workbench).getByTestId("lobby-player-column"),
-    ).toBeInTheDocument();
+    const lineupColumn = within(workbench).getByTestId("lobby-lineup-column");
+    expect(lineupColumn).toHaveClass(
+      "lobby-workbench-column",
+      "lobby-lineup-column",
+    );
+    const playerColumn = within(workbench).getByTestId("lobby-player-column");
+    expect(playerColumn).toHaveClass(
+      "lobby-workbench-column",
+      "lobby-player-column",
+    );
+    expect(lineupColumn).toBeInTheDocument();
+    expect(playerColumn).toBeInTheDocument();
     expect(
       within(workbench).getByRole("heading", { name: "组建阵容" }),
     ).toBeInTheDocument();
@@ -352,6 +359,8 @@ describe("GamesPage", () => {
 
     const workbenchFrame = within(createModule).getByTestId("lobby-workbench-frame");
     expect(workbenchFrame).toHaveClass("lobby-workbench-frame");
+    const ruleColumn = within(workbenchFrame).getByTestId("lobby-rule-column");
+    expect(ruleColumn).toHaveClass("lobby-workbench-column", "lobby-rule-column");
     expect(
       within(workbenchFrame).getByRole("heading", { name: "规则选择" }),
     ).toBeInTheDocument();
