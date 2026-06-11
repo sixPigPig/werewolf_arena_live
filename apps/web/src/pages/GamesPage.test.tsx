@@ -1123,7 +1123,7 @@ describe("GamesPage", () => {
       );
     });
 
-    const { container } = renderWithClient(<GamesPage />, "/games");
+    renderWithClient(<GamesPage />, "/games");
 
     await userEvent.click(
       await screen.findByRole("button", {
@@ -1141,11 +1141,11 @@ describe("GamesPage", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "确认清空" }));
 
     expect(screen.getByText("已选 0 / 8")).toBeInTheDocument();
-    const seatDetailPanel = container.querySelector(".seat-detail-panel");
-    expect(seatDetailPanel).not.toBeNull();
+    expect(screen.getByRole("button", { name: "1号空席" })).toBeInTheDocument();
     expect(
-      within(seatDetailPanel as HTMLElement).getByText("空席"),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "1号冷静的阿夜" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("开局时由系统随机补齐")).toBeInTheDocument();
     expect(screen.getByLabelText("1 号座位模型覆盖")).toHaveValue("");
   });
 

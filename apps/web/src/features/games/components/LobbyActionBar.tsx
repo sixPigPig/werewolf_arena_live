@@ -2,6 +2,15 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button, TextField } from "../../../components/ui";
 
+const clearDialogFocusableSelector = [
+  'a[href]:not([tabindex="-1"])',
+  'button:not(:disabled):not([tabindex="-1"])',
+  'input:not(:disabled):not([tabindex="-1"])',
+  'select:not(:disabled):not([tabindex="-1"])',
+  'textarea:not(:disabled):not([tabindex="-1"])',
+  '[tabindex]:not([tabindex="-1"]):not([disabled])',
+].join(",");
+
 export type LobbyActionBarProps = {
   disabled: boolean;
   loading: boolean;
@@ -43,6 +52,45 @@ export function LobbyActionBar({
       if (event.key === "Escape") {
         event.preventDefault();
         setConfirmingClear(false);
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const dialog = dialogRef.current;
+      if (!dialog) {
+        return;
+      }
+
+      const focusableElements = Array.from(
+        dialog.querySelectorAll<HTMLElement>(clearDialogFocusableSelector),
+      );
+      const firstFocusable = focusableElements[0];
+      const lastFocusable = focusableElements.at(-1);
+
+      if (!firstFocusable || !lastFocusable) {
+        return;
+      }
+
+      if (event.shiftKey) {
+        if (
+          document.activeElement === firstFocusable ||
+          !dialog.contains(document.activeElement)
+        ) {
+          event.preventDefault();
+          lastFocusable.focus();
+        }
+        return;
+      }
+
+      if (
+        document.activeElement === lastFocusable ||
+        !dialog.contains(document.activeElement)
+      ) {
+        event.preventDefault();
+        firstFocusable.focus();
       }
     };
 
@@ -110,6 +158,7 @@ export function LobbyActionBar({
       {confirmingClear ? (
         <div className="lobby-clear-dialog-backdrop">
           <section
+            aria-describedby="lobby-clear-dialog-description"
             aria-labelledby="lobby-clear-dialog-title"
             aria-modal="true"
             className="lobby-clear-dialog"
@@ -117,7 +166,9 @@ export function LobbyActionBar({
             role="alertdialog"
           >
             <h2 id="lobby-clear-dialog-title">确认清空阵容</h2>
-            <p>全部席位玩家与临时模型覆盖都会被移除。</p>
+            <p id="lobby-clear-dialog-description">
+              全部席位玩家与临时模型覆盖都会被移除。
+            </p>
             <div className="lobby-clear-dialog-actions">
               <Button
                 data-clear-dialog-cancel=""
