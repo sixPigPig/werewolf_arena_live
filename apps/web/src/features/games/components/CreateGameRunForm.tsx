@@ -5,7 +5,7 @@ import {
   TextField,
 } from "../../../components/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { createGameRun } from "../api/createGameRun";
@@ -15,19 +15,11 @@ import {
   randomFillEmptySeats,
   removeInvalidProfileRefs,
 } from "../lineupUtils";
-import {
-  formatReplayHint,
-  formatRoleSummary,
-  formatSheriffRule,
-  formatSpeechPolicy,
-  formatWinCondition,
-  getRuleEmblem,
-} from "../rulePresentation";
 import { LobbyRuleSelector } from "./LobbyRuleSelector";
 import { PlayerConfigPanel } from "./PlayerConfigPanel";
+import { RuleDetailsDrawer } from "./RuleDetailsDrawer";
 import type {
   PlayerConfig,
-  RuleSetSummary,
   VirtualPlayerProfile,
 } from "../types";
 
@@ -42,6 +34,7 @@ export function CreateGameRunForm({
 }: CreateGameRunFormProps) {
   const navigate = useNavigate();
   const [selectedRuleSetId, setSelectedRuleSetId] = useState("classic_8");
+  const [isRuleDrawerOpen, setIsRuleDrawerOpen] = useState(false);
   const [seed, setSeed] = useState("");
   const [maxRounds, setMaxRounds] = useState("8");
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>([]);
@@ -50,6 +43,15 @@ export function CreateGameRunForm({
     availableCount: number;
     requiredCount: number;
   } | null>(null);
+  const ruleDetailsTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const closeRuleDetails = useCallback(() => {
+    setIsRuleDrawerOpen(false);
+  }, []);
+  const handleRuleSetChange = useCallback((ruleSetId: string) => {
+    setIsRuleDrawerOpen(false);
+    setSelectedRuleSetId(ruleSetId);
+  }, []);
 
   const ruleSetsQuery = useQuery({
     queryKey: ["rule-sets"],
@@ -194,13 +196,31 @@ export function CreateGameRunForm({
           <LobbyRuleSelector
             error={ruleSetsQuery.isError}
             loading={ruleSetsQuery.isPending}
-            onValueChange={setSelectedRuleSetId}
+            onValueChange={handleRuleSetChange}
             rules={ruleSets}
             value={selectedRuleSetId}
           />
           {selectedRuleSet ? (
             <>
-              <SelectedRuleDetails rule={selectedRuleSet} />
+              <button
+                aria-expanded={isRuleDrawerOpen}
+                aria-haspopup="dialog"
+                className="gothic-button gothic-button-sm"
+                data-intent="default"
+                onClick={() => setIsRuleDrawerOpen(true)}
+                ref={ruleDetailsTriggerRef}
+                type="button"
+              >
+                <span className="gothic-button-content">
+                  <span className="gothic-button-label">规则详情</span>
+                </span>
+              </button>
+              <RuleDetailsDrawer
+                onClose={closeRuleDetails}
+                open={isRuleDrawerOpen}
+                returnFocusRef={ruleDetailsTriggerRef}
+                rule={selectedRuleSet}
+              />
               <PlayerConfigPanel
                 configs={visiblePlayerConfigs}
                 isProfileListLoaded={isProfileListLoaded}
@@ -296,54 +316,4 @@ function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
     })
     .filter((config) => hasPlayerConfig(config))
     .sort((left, right) => left.seat - right.seat);
-}
-
-function SelectedRuleDetails({ rule }: { rule: RuleSetSummary }) {
-  const roleSummary = formatRoleSummary(rule);
-  const rows = [
-    { label: "阵营配置", value: roleSummary },
-    { label: "发言顺序", value: formatSpeechPolicy(rule) },
-    { label: "警长规则", value: formatSheriffRule(rule) },
-    { label: "胜利条件", value: formatWinCondition(rule) },
-    { label: "复盘提示", value: formatReplayHint(rule) },
-  ];
-
-  return (
-    <section
-      className="lobby-rule-details"
-      data-testid="selected-rule-details"
-    >
-      <div
-        aria-hidden="true"
-        className="lobby-rule-details-glyph"
-      >
-        狼
-      </div>
-      <div className="lobby-rule-details-header">
-        <span
-          aria-hidden="true"
-          className="lobby-rule-details-emblem"
-        >
-          {getRuleEmblem(rule)}
-        </span>
-        <div className="lobby-rule-details-title-block">
-          <h3 className="lobby-rule-details-title">{rule.name}规则</h3>
-          {rule.description ? (
-            <p className="lobby-rule-details-description">{rule.description}</p>
-          ) : null}
-        </div>
-      </div>
-      <dl className="lobby-rule-details-list">
-        {rows.map((row) => (
-          <div
-            className="lobby-rule-details-row"
-            key={row.label}
-          >
-            <dt className="lobby-rule-details-label">{row.label}</dt>
-            <dd className="lobby-rule-details-value">{row.value}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
-  );
 }

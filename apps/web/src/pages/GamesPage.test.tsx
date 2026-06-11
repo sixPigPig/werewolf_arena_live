@@ -112,6 +112,36 @@ function fullPlayerProfilesResponse(count = 8) {
   };
 }
 
+function mockLobbyRequests(
+  profilesResponse = fullPlayerProfilesResponse(8),
+) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/games/rule-sets")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(ruleSetsResponse()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (url.endsWith("/api/v1/player-profiles")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(profilesResponse), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(
+      new Response(JSON.stringify({ sessions: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
+}
+
 function multiPlayerProfilesResponse() {
   return {
     profiles: [
@@ -313,11 +343,11 @@ describe("GamesPage", () => {
       officialRuleCards,
     );
     expect(screen.getByTestId("games-create-module")).toContainElement(
-      screen.getByTestId("selected-rule-details"),
+      screen.getByRole("button", { name: "规则详情" }),
     );
-    expect(screen.getByTestId("selected-rule-details")).toHaveClass(
-      "lobby-rule-details",
-    );
+    expect(
+      screen.queryByRole("dialog", { name: "经典 8 人局规则" }),
+    ).not.toBeInTheDocument();
     expect(
       within(officialRuleCards).getByLabelText("经典 8 人局"),
     ).toBeInTheDocument();
@@ -628,58 +658,35 @@ describe("GamesPage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows the selected rule details below the official rule cards", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-      const url = String(input);
-      if (url.endsWith("/api/v1/games/rule-sets")) {
-        return Promise.resolve(
-          new Response(JSON.stringify(ruleSetsResponse()), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      if (url.endsWith("/api/v1/player-profiles")) {
-        return Promise.resolve(
-          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      return Promise.resolve(
-        new Response(JSON.stringify({ sessions: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
-    });
+  it("shows the selected rule details in a drawer", async () => {
+    mockLobbyRequests(fullPlayerProfilesResponse(12));
 
     renderWithClient(<GamesPage />, "/games");
 
-    const initialDetails = within(
-      await screen.findByTestId("selected-rule-details"),
-    );
+    await screen.findByRole("radiogroup", { name: "官方规则" });
     expect(
-      initialDetails.getByRole("heading", { name: "经典 8 人局规则" }),
-    ).toBeInTheDocument();
-    expect(initialDetails.getByText("阵营配置")).toBeInTheDocument();
+      screen.queryByRole("dialog", { name: "经典 8 人局规则" }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "规则详情" }));
+
+    const initialDetails = within(
+      screen.getByRole("dialog", { name: "经典 8 人局规则" }),
+    );
     expect(
       initialDetails.getByText("2 狼人 / 4 村民 / 1 预言家 / 1 守卫"),
     ).toBeInTheDocument();
-    expect(initialDetails.getByText("无警长")).toBeInTheDocument();
+
+    await userEvent.click(
+      initialDetails.getByRole("button", { name: "关闭规则详情" }),
+    );
 
     await userEvent.click(screen.getByLabelText("标准 12 人警长局"));
+    await userEvent.click(screen.getByRole("button", { name: "规则详情" }));
 
-    const updatedDetails = within(screen.getByTestId("selected-rule-details"));
-    expect(
-      updatedDetails.getByRole("heading", { name: "标准 12 人警长局规则" }),
-    ).toBeInTheDocument();
-    expect(
-      updatedDetails.getByText(
-        "4 狼人 / 4 村民 / 1 预言家 / 1 女巫 / 1 猎人 / 1 白痴",
-      ),
-    ).toBeInTheDocument();
+    const updatedDetails = within(
+      screen.getByRole("dialog", { name: "标准 12 人警长局规则" }),
+    );
     expect(updatedDetails.getByText("有警长，警徽 1.5 票")).toBeInTheDocument();
   });
 
