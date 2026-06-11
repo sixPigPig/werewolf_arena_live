@@ -166,7 +166,10 @@ export function ProfilePicker({
           ))}
         </SelectField>
       </div>
-      <div className="player-config-role-cards">
+      <div
+        className="player-config-role-cards"
+        data-testid="lobby-player-card-grid"
+      >
         {filteredProfiles.map((profile) => {
           const occupiedSeat = occupiedSeatByProfileId.get(profile.id);
           const isCurrentSeat = occupiedSeat === selectedSeat;

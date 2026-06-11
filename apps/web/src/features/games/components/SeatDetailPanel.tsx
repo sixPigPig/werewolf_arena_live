@@ -7,22 +7,16 @@ type SeatDetailPanelProps = {
   selectedConfig?: PlayerConfig;
   selectedProfile?: VirtualPlayerProfile;
   selectedSeat: number;
-  onClearAllSeats: () => void;
   onClearSeat: () => void;
-  onFillFavorites: () => void;
   onModelChange: (model: string) => void;
-  onRandomFill: () => void;
 };
 
 export function SeatDetailPanel({
   selectedConfig,
   selectedProfile,
   selectedSeat,
-  onClearAllSeats,
   onClearSeat,
-  onFillFavorites,
   onModelChange,
-  onRandomFill,
 }: SeatDetailPanelProps) {
   return (
     <div className="seat-detail-panel">
@@ -34,9 +28,6 @@ export function SeatDetailPanel({
         <div className="seat-detail-actions">
           <Button onClick={onClearSeat} size="1" skin="gothic" type="button">
             清空当前座位
-          </Button>
-          <Button onClick={onClearAllSeats} size="1" skin="gothic" type="button">
-            清空全部座位
           </Button>
         </div>
       </div>
@@ -70,14 +61,6 @@ export function SeatDetailPanel({
             onChange={(event) => onModelChange(event.target.value)}
           />
         </label>
-        <div className="player-config-role-actions">
-          <Button onClick={onRandomFill} size="1" skin="gothic" type="button">
-            随机填充空席
-          </Button>
-          <Button onClick={onFillFavorites} size="1" skin="gothic" type="button">
-            只用收藏填充
-          </Button>
-        </div>
       </div>
     </div>
   );

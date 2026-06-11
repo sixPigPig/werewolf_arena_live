@@ -19,7 +19,7 @@ export function SeatGrid({
   const seats = Array.from({ length: playerCount }, (_, index) => index + 1);
 
   return (
-    <div className="player-config-seat-module">
+    <div className="player-config-seat-module" data-testid="lobby-seat-grid">
       {seats.map((seat) => {
         const config = configs.find((item) => item.seat === seat);
         const profile = profiles.find((item) => item.id === config?.profile_id);

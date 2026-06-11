@@ -15,8 +15,8 @@ import {
   randomFillEmptySeats,
   removeInvalidProfileRefs,
 } from "../lineupUtils";
+import { LobbyLineupWorkbench } from "./LobbyLineupWorkbench";
 import { LobbyRuleSelector } from "./LobbyRuleSelector";
-import { PlayerConfigPanel } from "./PlayerConfigPanel";
 import { RuleDetailsDrawer } from "./RuleDetailsDrawer";
 import type {
   PlayerConfig,
@@ -202,31 +202,21 @@ export function CreateGameRunForm({
           />
           {selectedRuleSet ? (
             <>
-              <button
-                aria-expanded={isRuleDrawerOpen}
-                aria-haspopup="dialog"
-                className="gothic-button gothic-button-sm"
-                data-intent="default"
-                onClick={() => setIsRuleDrawerOpen(true)}
-                ref={ruleDetailsTriggerRef}
-                type="button"
-              >
-                <span className="gothic-button-content">
-                  <span className="gothic-button-label">规则详情</span>
-                </span>
-              </button>
               <RuleDetailsDrawer
                 onClose={closeRuleDetails}
                 open={isRuleDrawerOpen}
                 returnFocusRef={ruleDetailsTriggerRef}
                 rule={selectedRuleSet}
               />
-              <PlayerConfigPanel
+              <LobbyLineupWorkbench
                 configs={visiblePlayerConfigs}
                 isProfileListLoaded={isProfileListLoaded}
                 onChange={setPlayerConfigs}
+                onOpenRuleDetails={() => setIsRuleDrawerOpen(true)}
                 playerCount={selectedRuleSet.player_count}
                 profiles={profiles}
+                rule={selectedRuleSet}
+                ruleDetailsTriggerRef={ruleDetailsTriggerRef}
               />
             </>
           ) : null}

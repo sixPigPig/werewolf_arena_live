@@ -168,6 +168,22 @@ function multiPlayerProfilesResponse() {
   };
 }
 
+function lineupWorkbenchProfilesResponse() {
+  const response = fullPlayerProfilesResponse(8);
+  response.profiles[1] = {
+    ...response.profiles[1],
+    display_name: "影刃",
+    model: "Qwen",
+    personality_id: "aggressive",
+    personality_text: "主动施压。",
+    favorite: false,
+    short_description: "高压进攻玩家",
+    strategy_profile: "pressure_attacker",
+    tags: ["进攻"],
+  };
+  return response;
+}
+
 function findGameRunRequest(fetchSpy: {
   mock: { calls: Array<[unknown, RequestInit?]> };
 }) {
@@ -306,11 +322,24 @@ describe("GamesPage", () => {
     expect(
       within(consoleBar).getByRole("button", { name: "发起对局" }),
     ).toHaveClass("gothic-button");
-    const playerConfigPanel = await screen.findByRole("region", {
-      name: "席位模块",
-    });
+    const workbench = await screen.findByTestId("lobby-lineup-workbench");
     expect(
-      within(playerConfigPanel).getByRole("button", { name: "1号空席" }),
+      within(workbench).getByTestId("lobby-lineup-column"),
+    ).toBeInTheDocument();
+    expect(
+      within(workbench).getByTestId("lobby-player-column"),
+    ).toBeInTheDocument();
+    expect(
+      within(workbench).getByRole("heading", { name: "组建阵容" }),
+    ).toBeInTheDocument();
+    expect(
+      within(workbench).getByRole("heading", { name: "玩家卡牌库" }),
+    ).toBeInTheDocument();
+    expect(
+      within(workbench).getByRole("button", { name: "1号空席" }),
+    ).toBeInTheDocument();
+    expect(
+      within(workbench).getByText("当前席位 · 1 号"),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "选择虚拟玩家" })).toBeInTheDocument();
     expect(
@@ -403,11 +432,11 @@ describe("GamesPage", () => {
 
     renderWithClient(<GamesPage />, "/games");
 
-    const playerConfigPanel = await screen.findByRole("region", {
-      name: "席位模块",
-    });
+    const playerColumn = within(
+      await screen.findByTestId("lobby-lineup-workbench"),
+    ).getByTestId("lobby-player-column");
     expect(
-      within(playerConfigPanel).getByRole("button", {
+      within(playerColumn).getByRole("button", {
         name: "为 1 号座位选择 冷静的阿夜",
       }),
     ).toBeInTheDocument();
@@ -426,7 +455,7 @@ describe("GamesPage", () => {
       }
       if (url.endsWith("/api/v1/player-profiles")) {
         return Promise.resolve(
-          new Response(JSON.stringify(fullPlayerProfilesResponse(8)), {
+          new Response(JSON.stringify(lineupWorkbenchProfilesResponse()), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -476,6 +505,19 @@ describe("GamesPage", () => {
     expect(await screen.findByText("已选 0 / 8")).toBeInTheDocument();
     expect(screen.getByText("空席将由系统随机补齐")).toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole("button", { name: "2号空席" }));
+    expect(screen.getByText("当前席位 · 2 号")).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "为 2 号座位选择 影刃" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "2号影刃" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("已选 1 / 8")).toBeInTheDocument();
+    expect(screen.getByText("已在 2 号位")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "1号空席" }));
     await userEvent.click(
       screen.getByRole("button", { name: "为 1 号座位选择 冷静的阿夜" }),
     );
@@ -483,7 +525,7 @@ describe("GamesPage", () => {
     expect(
       screen.getByRole("button", { name: "1号冷静的阿夜" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("已选 1 / 8")).toBeInTheDocument();
+    expect(screen.getByText("已选 2 / 8")).toBeInTheDocument();
     expect(screen.getByText("已在 1 号位")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "发起对局" }));
@@ -492,6 +534,7 @@ describe("GamesPage", () => {
     expect(body.rule_set_id).toBe("classic_8");
     expect(body.player_configs).toHaveLength(8);
     expect(body.player_configs[0]).toEqual({ seat: 1, profile_id: "profile-1" });
+    expect(body.player_configs[1]).toEqual({ seat: 2, profile_id: "profile-2" });
     expect(
       new Set(body.player_configs.map((config: { profile_id: string }) => config.profile_id)).size,
     ).toBe(8);
@@ -617,7 +660,7 @@ describe("GamesPage", () => {
       screen.getByText("正在读取虚拟玩家资料，席位选择加载完成后可用。"),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("region", { name: "席位模块" }),
+      await screen.findByTestId("lobby-lineup-workbench"),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "去玩家库创建" }),
