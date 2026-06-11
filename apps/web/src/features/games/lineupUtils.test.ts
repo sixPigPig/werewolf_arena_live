@@ -115,10 +115,11 @@ describe("lineupUtils", () => {
 
   it("removes configured seats outside a smaller player count", () => {
     const configs: PlayerConfig[] = [
-      { seat: 1, profile_id: "profile-1" },
-      { seat: 8, model: "Kimi" },
-      { seat: 9, profile_id: "profile-2" },
       { seat: 12, appearance_id: "moonlit" },
+      { seat: 8, model: "Kimi" },
+      { seat: 10 },
+      { seat: 9, profile_id: "profile-2" },
+      { seat: 1, profile_id: "profile-1" },
     ];
 
     expect(resizeLineupForPlayerCount(configs, 8)).toEqual({
@@ -132,12 +133,15 @@ describe("lineupUtils", () => {
 
   it("preserves configured seats when growing the player count", () => {
     const configs: PlayerConfig[] = [
-      { seat: 1, profile_id: "profile-1" },
       { seat: 6, model: "Kimi" },
+      { seat: 1, profile_id: "profile-1" },
     ];
 
     expect(resizeLineupForPlayerCount(configs, 12)).toEqual({
-      configs,
+      configs: [
+        { seat: 1, profile_id: "profile-1" },
+        { seat: 6, model: "Kimi" },
+      ],
       removedSeats: [],
     });
   });
