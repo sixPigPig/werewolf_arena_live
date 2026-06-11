@@ -1,11 +1,7 @@
 import {
-  Badge,
   Button,
   Callout,
   Container,
-  Flex,
-  RadioCards,
-  Text,
   TextField,
 } from "../../../components/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -19,6 +15,15 @@ import {
   randomFillEmptySeats,
   removeInvalidProfileRefs,
 } from "../lineupUtils";
+import {
+  formatReplayHint,
+  formatRoleSummary,
+  formatSheriffRule,
+  formatSpeechPolicy,
+  formatWinCondition,
+  getRuleEmblem,
+} from "../rulePresentation";
+import { LobbyRuleSelector } from "./LobbyRuleSelector";
 import { PlayerConfigPanel } from "./PlayerConfigPanel";
 import type {
   PlayerConfig,
@@ -71,62 +76,6 @@ export function CreateGameRunForm({
     playerConfigs,
     validProfileIds,
   );
-
-  const renderRuleCard = (rule: RuleSetSummary) => {
-    const roleSummary = formatRoleSummary(rule);
-    const isSelected = selectedRuleSetId === rule.id;
-
-    return (
-      <RadioCards.Item
-        aria-label={rule.name}
-        className={[
-          "lobby-rule-card",
-          isSelected ? "lobby-rule-card-selected" : "",
-        ].join(" ")}
-        key={rule.id}
-        value={rule.id}
-      >
-        <span aria-hidden="true" className="lobby-rule-card-glint" />
-        <div className="lobby-rule-card-body">
-          <span
-            aria-hidden="true"
-            className={[
-              "lobby-rule-emblem",
-              isSelected ? "lobby-rule-emblem-selected" : "",
-            ].join(" ")}
-          >
-            {getRuleEmblem(rule)}
-          </span>
-          <div className="lobby-rule-copy">
-            <Text as="span" className="lobby-rule-name" size="3" weight="bold">
-              {rule.name}
-            </Text>
-            <Text as="span" className="lobby-rule-meta" size="2">
-              {rule.player_count} 人 · {rule.complexity ?? "标准"} ·{" "}
-              {rule.estimated_duration ?? "中"}
-            </Text>
-            <Text as="span" className="lobby-rule-roles" size="2">
-              {roleSummary}
-            </Text>
-            {rule.rule_tags && rule.rule_tags.length > 0 ? (
-              <Flex className="lobby-rule-tags" gap="1" wrap="wrap">
-                {rule.rule_tags.map((tag) => (
-                  <Badge
-                    className="lobby-rule-tag"
-                    color="gray"
-                    key={tag}
-                    variant="surface"
-                  >
-                    {tag}
-                  </Badge>
-                ))}
-              </Flex>
-            ) : null}
-          </div>
-        </div>
-      </RadioCards.Item>
-    );
-  };
 
   return (
     <form
@@ -241,38 +190,27 @@ export function CreateGameRunForm({
           <span aria-hidden="true" className="lobby-rules-legend-mark" />
           官方规则
         </h2>
-        {ruleSetsQuery.isPending ? (
-          <p className="lobby-rules-status">正在读取官方规则...</p>
-        ) : null}
-        {ruleSetsQuery.isError ? (
-          <p className="lobby-rules-error">无法读取官方规则</p>
-        ) : null}
-        {ruleSets.length > 0 ? (
-          <div className="lobby-rules-content">
-            <RadioCards.Root
-              aria-label="官方规则"
-              className="lobby-rule-grid"
-              highContrast
-              onValueChange={setSelectedRuleSetId}
-              value={selectedRuleSetId}
-              variant="surface"
-            >
-              {ruleSets.map(renderRuleCard)}
-            </RadioCards.Root>
-            {selectedRuleSet ? (
-              <>
-                <SelectedRuleDetails rule={selectedRuleSet} />
-                <PlayerConfigPanel
-                  configs={visiblePlayerConfigs}
-                  isProfileListLoaded={isProfileListLoaded}
-                  onChange={setPlayerConfigs}
-                  playerCount={selectedRuleSet.player_count}
-                  profiles={profiles}
-                />
-              </>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="lobby-rules-content">
+          <LobbyRuleSelector
+            error={ruleSetsQuery.isError}
+            loading={ruleSetsQuery.isPending}
+            onValueChange={setSelectedRuleSetId}
+            rules={ruleSets}
+            value={selectedRuleSetId}
+          />
+          {selectedRuleSet ? (
+            <>
+              <SelectedRuleDetails rule={selectedRuleSet} />
+              <PlayerConfigPanel
+                configs={visiblePlayerConfigs}
+                isProfileListLoaded={isProfileListLoaded}
+                onChange={setPlayerConfigs}
+                playerCount={selectedRuleSet.player_count}
+                profiles={profiles}
+              />
+            </>
+          ) : null}
+        </div>
       </Container>
 
       {validationError ? (
@@ -408,72 +346,4 @@ function SelectedRuleDetails({ rule }: { rule: RuleSetSummary }) {
       </dl>
     </section>
   );
-}
-
-function formatRoleSummary(rule: RuleSetSummary) {
-  if (rule.role_summary) {
-    return rule.role_summary;
-  }
-
-  return rule.roles.map((role) => `${role.count} ${role.role}`).join(" / ");
-}
-
-function getRuleEmblem(rule: RuleSetSummary) {
-  if (rule.sheriff_enabled) {
-    return "警";
-  }
-
-  if (rule.name.includes("新手")) {
-    return "新";
-  }
-
-  if (rule.name.includes("社交")) {
-    return "社";
-  }
-
-  return "典";
-}
-
-function formatSpeechPolicy(rule: RuleSetSummary) {
-  if (rule.speech_policy === "sheriff_directed") {
-    return "警长决定警左或警右，所有玩家完成完整发言";
-  }
-
-  return "顺序发言";
-}
-
-function formatSheriffRule(rule: RuleSetSummary) {
-  if (!rule.sheriff_enabled) {
-    return "无警长";
-  }
-
-  const voteWeight = rule.sheriff_vote_weight ?? 1.5;
-  return `有警长，警徽 ${voteWeight} 票`;
-}
-
-function formatWinCondition(rule: RuleSetSummary) {
-  if (
-    rule.win_condition === "slaughter_side" ||
-    rule.rule_tags?.includes("屠边")
-  ) {
-    return "狼人淘汰所有神民或村民；好人放逐所有狼人";
-  }
-
-  return "狼人数量大于等于其他存活玩家；好人放逐所有狼人";
-}
-
-function formatReplayHint(rule: RuleSetSummary) {
-  const nightActions = rule.night_actions ?? [];
-  const hasNightRoles = nightActions.length > 1;
-  const hasSheriff = Boolean(rule.sheriff_enabled);
-
-  if (hasSheriff) {
-    return "显示上警、警徽流、投票轨迹与关键发言";
-  }
-
-  if (hasNightRoles) {
-    return "显示夜间行动、投票轨迹与关键发言";
-  }
-
-  return "突出发言博弈、投票轨迹与关键轮次";
 }
