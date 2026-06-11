@@ -8,6 +8,7 @@ import {
   findDuplicateProfileSelections,
   randomFillEmptySeats,
   removeInvalidProfileRefs,
+  resizeLineupForPlayerCount,
   summarizeLineup,
 } from "./lineupUtils";
 
@@ -110,6 +111,35 @@ describe("lineupUtils", () => {
       { seat: 1, profile_id: "profile-1" },
       { seat: 2, model: "Qwen" },
     ]);
+  });
+
+  it("removes configured seats outside a smaller player count", () => {
+    const configs: PlayerConfig[] = [
+      { seat: 1, profile_id: "profile-1" },
+      { seat: 8, model: "Kimi" },
+      { seat: 9, profile_id: "profile-2" },
+      { seat: 12, appearance_id: "moonlit" },
+    ];
+
+    expect(resizeLineupForPlayerCount(configs, 8)).toEqual({
+      configs: [
+        { seat: 1, profile_id: "profile-1" },
+        { seat: 8, model: "Kimi" },
+      ],
+      removedSeats: [9, 12],
+    });
+  });
+
+  it("preserves configured seats when growing the player count", () => {
+    const configs: PlayerConfig[] = [
+      { seat: 1, profile_id: "profile-1" },
+      { seat: 6, model: "Kimi" },
+    ];
+
+    expect(resizeLineupForPlayerCount(configs, 12)).toEqual({
+      configs,
+      removedSeats: [],
+    });
   });
 
   it("finds duplicate profile selections", () => {

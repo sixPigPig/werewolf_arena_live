@@ -19,6 +19,11 @@ export type LineupSummary = {
   personalityCounts: LineupCount[];
 };
 
+export type ResizedLineup = {
+  configs: PlayerConfig[];
+  removedSeats: number[];
+};
+
 type RandomFillOptions = {
   favoritesOnly?: boolean;
   random?: () => number;
@@ -178,6 +183,22 @@ export function removeInvalidProfileRefs(
       return hasPlayerConfig(nextConfig) ? nextConfig : null;
     })
     .filter((config): config is PlayerConfig => config !== null);
+}
+
+export function resizeLineupForPlayerCount(
+  configs: PlayerConfig[],
+  playerCount: number,
+): ResizedLineup {
+  const isValidSeat = (config: PlayerConfig) =>
+    config.seat >= 1 && config.seat <= playerCount;
+
+  return {
+    configs: sortConfigs(configs.filter(isValidSeat)),
+    removedSeats: configs
+      .filter((config) => !isValidSeat(config) && hasPlayerConfig(config))
+      .map((config) => config.seat)
+      .sort((left, right) => left - right),
+  };
 }
 
 export function hasPlayerConfig(config: PlayerConfig) {
