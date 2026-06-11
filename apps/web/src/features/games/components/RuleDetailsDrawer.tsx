@@ -17,7 +17,7 @@ type RuleDetailsDrawerProps = {
 };
 
 const focusableSelector =
-  'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])';
 
 export function RuleDetailsDrawer({
   onClose,
@@ -33,6 +33,7 @@ export function RuleDetailsDrawer({
       return;
     }
 
+    const returnFocusElement = returnFocusRef.current;
     closeButtonRef.current?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -81,7 +82,7 @@ export function RuleDetailsDrawer({
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      returnFocusRef.current?.focus();
+      returnFocusElement?.focus();
     };
   }, [onClose, open, returnFocusRef]);
 

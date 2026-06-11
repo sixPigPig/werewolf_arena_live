@@ -90,13 +90,20 @@ describe("RuleDetailsDrawer", () => {
 
     await user.click(screen.getByRole("button", { name: "规则详情" }));
 
+    const dialog = screen.getByRole("dialog", { name: "经典 8 人局规则" });
     const closeButton = screen.getByRole("button", {
       name: "关闭规则详情",
     });
-    fireEvent.keyDown(document, { key: "Tab" });
-    expect(closeButton).toHaveFocus();
+    const disabledButton = document.createElement("button");
+    disabledButton.disabled = true;
+    dialog.prepend(disabledButton);
+    const finalLink = document.createElement("a");
+    finalLink.href = "#rules-end";
+    finalLink.textContent = "规则末尾";
+    dialog.append(finalLink);
 
-    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    finalLink.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
     expect(closeButton).toHaveFocus();
   });
 });
