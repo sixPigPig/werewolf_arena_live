@@ -10,6 +10,7 @@ from app.werewolf.checkpoint import (
     ReplayThenLiveProvider,
     game_state_from_dict,
     round_log_from_dict,
+    round_state_from_dict,
 )
 from app.werewolf.lm import LmLog
 from app.werewolf.models import ActionLog, GameState, Player, RoundLog, RoundState
@@ -350,6 +351,13 @@ def test_resume_checkpoint_preserves_self_explosion_state() -> None:
     assert restored_round.sheriff_badge_lost_reason == "首爆中断警长竞选"
     assert restored_log.werewolf_self_explosion is not None
     assert restored_log.werewolf_self_explosion.choice == "自爆"
+
+
+def test_round_state_from_dict_defaults_new_summary_fields() -> None:
+    round_state = round_state_from_dict({"number": 1, "players": ["1号玩家"]})
+
+    assert round_state.public_summary == ""
+    assert round_state.private_summaries == {}
 
 
 def _extract_options(prompt: str) -> list[str]:

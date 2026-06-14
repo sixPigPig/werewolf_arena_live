@@ -278,6 +278,8 @@ def _day_state_payload(round_state: dict[str, Any], active_players: list[Any]) -
         "bids": _list_or_empty(round_state.get("bids")),
         "votes": _latest_mapping(round_state.get("votes")),
         "summaries": _dict_or_empty(round_state.get("summaries")),
+        "private_summaries": _dict_or_empty(round_state.get("private_summaries")),
+        "public_summary": str(round_state.get("public_summary") or ""),
         "exiled": round_state.get("exiled"),
         "day_deaths": _list_or_empty(round_state.get("day_deaths")),
         "hunter_shot": round_state.get("hunter_shot"),

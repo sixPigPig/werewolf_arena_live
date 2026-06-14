@@ -274,6 +274,8 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
         bids=copy.deepcopy(data.get("bids", [])),
         votes=copy.deepcopy(data.get("votes", [])),
         summaries=copy.deepcopy(data.get("summaries", {})),
+        private_summaries=copy.deepcopy(data.get("private_summaries", {})),
+        public_summary=str(data.get("public_summary") or ""),
         sheriff=data.get("sheriff"),
         sheriff_candidates=[str(item) for item in data.get("sheriff_candidates", [])],
         sheriff_speech_order=[str(item) for item in data.get("sheriff_speech_order", [])],

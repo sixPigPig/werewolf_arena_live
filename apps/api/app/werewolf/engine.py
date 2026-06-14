@@ -1621,16 +1621,34 @@ class GameEngine:
         ):
             player = players_by_name[name]
             if isinstance(summary, str) and summary:
-                round_state.summaries[name] = summary
+                round_state.private_summaries[name] = summary
                 player.add_observation(f"第{round_state.number}轮总结：{summary}")
             round_log.summaries.append(action_log)
-            self._publish_state_updated(
-                round_state=round_state,
-                phase="summary",
-                actor=name,
-                action="summarize",
-                payload={"summaries": round_state.summaries.copy()},
-            )
+
+        round_state.public_summary = self._public_round_brief(round_state)
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="summary",
+            action="summarize",
+            payload={"public_summary": round_state.public_summary},
+        )
+
+    def _public_round_brief(self, round_state: RoundState) -> str:
+        parts = [f"第{round_state.number}轮"]
+        if round_state.night_deaths:
+            deaths = "、".join(death.player for death in round_state.night_deaths)
+            parts.append(f"夜晚{deaths}出局")
+        if round_state.werewolf_self_exploded:
+            parts.append(f"{round_state.werewolf_self_exploded}自爆，白天结束")
+        if round_state.exiled:
+            parts.append(f"{round_state.exiled}被放逐")
+        if round_state.hunter_shot:
+            parts.append(f"猎人带走{round_state.hunter_shot}")
+        if round_state.idiot_revealed:
+            parts.append(f"{round_state.idiot_revealed}翻牌免死")
+        if len(parts) == 1:
+            parts.append("没有公开出局")
+        return "；".join(parts) + "。"
 
     def _eligible_voters(self, active_players: list[str]) -> list[str]:
         players_by_name = self.state.player_by_name()

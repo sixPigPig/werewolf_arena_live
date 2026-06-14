@@ -1193,6 +1193,60 @@ def test_round_log_serializes_werewolf_consensus_logs() -> None:
     assert payload["werewolf_votes"][0][0]["action"] == "werewolf_kill_vote"
 
 
+def test_model_summaries_are_private_and_public_brief_is_safe() -> None:
+    round_state = RoundState(number=4, players=["10号玩家", "12号玩家"])
+    round_state.private_summaries["10号玩家"] = "本轮我作为10号狼人，准备夜晚刀9号。"
+    round_state.public_summary = "第4轮：1号玩家被放逐，票型记录已更新。"
+
+    payload = round_state.to_dict()
+
+    assert payload["public_summary"] == "第4轮：1号玩家被放逐，票型记录已更新。"
+    assert payload["summaries"] == {}
+    assert payload["private_summaries"]["10号玩家"] == "本轮我作为10号狼人，准备夜晚刀9号。"
+
+
+def test_summary_phase_does_not_publish_private_summaries() -> None:
+    class CapturingSink:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        def publish(self, event_type: str, **kwargs: object) -> None:
+            self.events.append({"type": event_type, **kwargs})
+
+    sink = CapturingSink()
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="summary_test",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=20260614,
+        rule_set=rule_set,
+    )
+    provider = ScriptedChineseProvider()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=1,
+        rule_set=rule_set,
+        event_sink=sink,
+        rng=random.Random(1),
+    )
+    round_state = RoundState(number=1, players=[player.name for player in state.players])
+    round_log = RoundLog(number=1)
+    active_players = [player.name for player in state.players]
+
+    engine._run_summaries(round_state, round_log, active_players)
+
+    summary_events = [
+        event
+        for event in sink.events
+        if event["type"] == "state_updated" and event.get("phase") == "summary"
+    ]
+    assert summary_events
+    assert all("private_summaries" not in (event.get("payload") or {}) for event in summary_events)
+    assert all("summaries" not in (event.get("payload") or {}) for event in summary_events)
+
+
 def test_round_log_deserializes_werewolf_consensus_logs() -> None:
     payload = {
         "number": 1,
@@ -2975,7 +3029,9 @@ def test_round_summaries_request_active_players_concurrently() -> None:
     assert [
         actor for action, actor in provider.actions if action == "summarize"
     ] == active_players
-    assert list(round_state.summaries) == active_players
+    assert list(round_state.private_summaries) == active_players
+    assert round_state.summaries == {}
+    assert round_state.public_summary == "第1轮；没有公开出局。"
     assert [log.actor for log in round_log.summaries] == active_players
     for name in active_players:
         assert state.player_by_name()[name].observations[-1] == (

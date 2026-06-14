@@ -133,6 +133,8 @@ class RoundState:
     bids: list[dict[str, int]] = field(default_factory=list)
     votes: list[dict[str, str]] = field(default_factory=list)
     summaries: dict[str, str] = field(default_factory=dict)
+    private_summaries: dict[str, str] = field(default_factory=dict)
+    public_summary: str = ""
     sheriff: str | None = None
     sheriff_candidates: list[str] = field(default_factory=list)
     sheriff_speech_order: list[str] = field(default_factory=list)
@@ -179,6 +181,8 @@ class RoundState:
             "bids": self.bids,
             "votes": self.votes,
             "summaries": self.summaries,
+            "private_summaries": self.private_summaries,
+            "public_summary": self.public_summary,
             "sheriff": self.sheriff,
             "sheriff_candidates": self.sheriff_candidates,
             "sheriff_speech_order": self.sheriff_speech_order,
