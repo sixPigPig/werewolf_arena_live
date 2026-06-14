@@ -23,6 +23,10 @@ class ActionLog:
     options: list[str]
     choice: str | None
     lm_log: LmLog
+    invalid_value: object | None = None
+    fallback_choice: object | None = None
+    fallback_reason: str | None = None
+    attempt_count: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +35,10 @@ class ActionLog:
             "options": self.options,
             "choice": self.choice,
             "lm_log": self.lm_log.to_dict(),
+            "invalid_value": self.invalid_value,
+            "fallback_choice": self.fallback_choice,
+            "fallback_reason": self.fallback_reason,
+            "attempt_count": self.attempt_count,
         }
 
 

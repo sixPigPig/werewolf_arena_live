@@ -8,6 +8,7 @@ import pytest
 from app.werewolf.checkpoint import (
     RESUME_CHECKPOINT_FILE,
     ReplayThenLiveProvider,
+    action_log_from_dict,
     game_state_from_dict,
     round_log_from_dict,
     round_state_from_dict,
@@ -358,6 +359,61 @@ def test_round_state_from_dict_defaults_new_summary_fields() -> None:
 
     assert round_state.public_summary == ""
     assert round_state.private_summaries == {}
+
+
+def test_action_log_serializes_invalid_and_fallback_metadata() -> None:
+    action_log = ActionLog(
+        actor="1号玩家",
+        action="witch_poison",
+        options=["6号玩家", "12号玩家", "不使用毒药"],
+        choice="不使用毒药",
+        lm_log=LmLog(
+            prompt="prompt",
+            raw_response='{"poison":"10号玩家"}',
+            result={"poison": "10号玩家"},
+            invalid_attempts=[
+                {
+                    "value": "10号玩家",
+                    "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
+                    "result_key": "poison",
+                }
+            ],
+        ),
+        invalid_value="10号玩家",
+        fallback_choice="不使用毒药",
+        fallback_reason="optional_action_invalid",
+        attempt_count=3,
+    )
+
+    payload = action_log.to_dict()
+
+    assert payload["invalid_value"] == "10号玩家"
+    assert payload["fallback_choice"] == "不使用毒药"
+    assert payload["fallback_reason"] == "optional_action_invalid"
+    assert payload["attempt_count"] == 3
+    assert payload["lm_log"]["invalid_attempts"][0]["value"] == "10号玩家"
+
+
+def test_action_log_from_dict_defaults_invalid_and_fallback_metadata() -> None:
+    action_log = action_log_from_dict(
+        {
+            "actor": "1号玩家",
+            "action": "witch_poison",
+            "options": ["不使用毒药"],
+            "choice": "不使用毒药",
+            "lm_log": {
+                "prompt": "prompt",
+                "raw_response": "{}",
+                "result": {"poison": "不使用毒药"},
+            },
+        }
+    )
+
+    assert action_log.invalid_value is None
+    assert action_log.fallback_choice is None
+    assert action_log.fallback_reason is None
+    assert action_log.attempt_count == 1
+    assert action_log.lm_log.invalid_attempts == []
 
 
 def _extract_options(prompt: str) -> list[str]:

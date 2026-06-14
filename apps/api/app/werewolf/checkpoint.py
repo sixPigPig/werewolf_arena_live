@@ -362,7 +362,13 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
             prompt=str(lm_log_data.get("prompt") or ""),
             raw_response=str(lm_log_data.get("raw_response") or ""),
             result=lm_log_data.get("result", lm_log_data.get("parsed")),
+            request_id=lm_log_data.get("request_id"),
+            invalid_attempts=copy.deepcopy(lm_log_data.get("invalid_attempts", [])),
         ),
+        invalid_value=data.get("invalid_value"),
+        fallback_choice=data.get("fallback_choice"),
+        fallback_reason=data.get("fallback_reason"),
+        attempt_count=int(data.get("attempt_count") or 1),
     )
 
 
