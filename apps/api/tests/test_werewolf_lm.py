@@ -429,6 +429,43 @@ def test_generate_action_with_events_suppresses_private_action_deltas() -> None:
     assert [event["type"] for event in sink.events].count("model_response_delta") == 0
 
 
+def test_generate_action_with_events_does_not_schedule_retry_on_final_invalid_attempt() -> None:
+    sink = CapturingLmEventSink()
+    provider = FakeProvider([{"reasoning": "想毒10", "poison": "10号玩家"}])
+
+    value, log = generate_action_with_events(
+        provider=provider,
+        action="witch_poison",
+        world_state={
+            **_world_state_for_special_action("女巫", ""),
+            "options": ["6号玩家", "12号玩家", "不使用毒药"],
+        },
+        model="deepseek-chat",
+        allowed_values=["6号玩家", "12号玩家", "不使用毒药"],
+        result_key="poison",
+        retries=1,
+        event_sink=sink,
+        event_context={
+            "round_number": 1,
+            "phase": "night",
+            "actor": "Alice",
+            "action": "witch_poison",
+        },
+        request_id_factory=lambda: "req_final_invalid",
+        enable_progress_ticks=False,
+    )
+
+    assert value is None
+    assert log.invalid_attempts == [
+        {
+            "value": "10号玩家",
+            "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
+            "result_key": "poison",
+        }
+    ]
+    assert [event["type"] for event in sink.events] == ["model_request_started"]
+
+
 def test_generate_action_with_events_publishes_sanitized_started_before_model_output() -> None:
     sink = CapturingLmEventSink()
     world_state = _world_state_for_special_action("村民", "")

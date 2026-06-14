@@ -234,20 +234,21 @@ def generate_action_with_events(
                 result_key=result_key,
             )
         )
-        _publish_model_event(
-            event_sink,
-            "model_retry_scheduled",
-            context=context,
-            payload={
-                "request_id": request_id,
-                "model": model,
-                "attempt": attempt + 2,
-                "invalid_value": normalized_value,
-                "allowed_values": allowed_values.copy(),
-                "result_key": result_key,
-                "message": "模型选择不在候选项中，正在带反馈重试。",
-            },
-        )
+        if attempt + 1 < retries:
+            _publish_model_event(
+                event_sink,
+                "model_retry_scheduled",
+                context=context,
+                payload={
+                    "request_id": request_id,
+                    "model": model,
+                    "attempt": attempt + 2,
+                    "invalid_value": normalized_value,
+                    "allowed_values": allowed_values.copy(),
+                    "result_key": result_key,
+                    "message": "模型选择不在候选项中，正在带反馈重试。",
+                },
+            )
 
     return None, LmLog(
         prompt=current_prompt,
