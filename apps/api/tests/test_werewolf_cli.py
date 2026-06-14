@@ -149,6 +149,32 @@ def test_serve_command_starts_uvicorn(monkeypatch) -> None:
     }
 
 
+def test_evaluate_replay_command_prints_issue_codes(tmp_path, capsys) -> None:
+    replay = {
+        "session_id": "game_eval",
+        "winner": "",
+        "players": [],
+        "rounds": [
+            {
+                "number": 1,
+                "summaries": {"10号玩家": "我作为10号狼人。"},
+                "private_summaries": {},
+                "debate": [],
+                "sheriff_speeches": [],
+            }
+        ],
+    }
+    path = tmp_path / "game_complete.json"
+    path.write_text(json.dumps(replay, ensure_ascii=False), encoding="utf-8")
+
+    exit_code = main(["evaluate-replay", "--source", str(path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "session_id=game_eval" in output
+    assert "private_summary_leak" in output
+
+
 def test_import_player_profiles_command_is_idempotent(tmp_path, capsys, monkeypatch) -> None:
     source = tmp_path / "player_profiles.json"
     source.write_text(

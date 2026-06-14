@@ -9,6 +9,7 @@ import uvicorn
 
 from app.db.session import SessionLocal
 from app.player_profile_import import PlayerProfileImportError, import_player_profiles
+from app.werewolf.evaluator import evaluate_replay
 from app.werewolf.providers import default_model_name
 from app.werewolf.runner import GameRunError, run_game
 
@@ -44,6 +45,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     import_profiles_parser.add_argument("--source", type=Path, required=True)
     import_profiles_parser.set_defaults(func=_import_player_profiles_command)
+
+    evaluate_parser = subparsers.add_parser(
+        "evaluate-replay",
+        help="Evaluate a game_complete.json replay for realism issues.",
+    )
+    evaluate_parser.add_argument("--source", type=Path, required=True)
+    evaluate_parser.set_defaults(func=_evaluate_replay_command)
 
     return parser
 
@@ -89,6 +97,19 @@ def _import_player_profiles_command(args: argparse.Namespace) -> int:
         f"导入={result.imported_count} "
         f"跳过={result.skipped_count}"
     )
+    return 0
+
+
+def _evaluate_replay_command(args: argparse.Namespace) -> int:
+    report = evaluate_replay(args.source)
+    print(f"session_id={report.session_id}")
+    if not report.issues:
+        print("issues=0")
+        return 0
+
+    print(f"issues={len(report.issues)}")
+    for issue in report.issues:
+        print(f"{issue.code} round={issue.round_number} detail={issue.detail}")
     return 0
 
 
