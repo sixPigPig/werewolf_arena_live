@@ -78,7 +78,10 @@ export function DayPhase({
           轮次总结
         </h4>
         <div className="mt-2">
-          <SummaryStrip summaries={round.summaries} />
+          <SummaryStrip
+            publicSummary={round.public_summary}
+            summaries={round.summaries}
+          />
         </div>
       </section>
 

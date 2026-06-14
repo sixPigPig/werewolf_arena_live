@@ -545,6 +545,30 @@ describe("deriveLiveNarrativeState", () => {
     });
   });
 
+  it("explains sheriff election continuation after first pre-election self explosion", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        actor: "4号玩家",
+        action: "werewolf_self_explosion",
+        payload: {
+          werewolf_self_exploded: "4号玩家",
+          sheriff_election_pending: true,
+          sheriff_badge_lost: false,
+          sheriff_badge_lost_reason: "首爆中断警长竞选",
+          active_players: ["1号玩家", "2号玩家"],
+        },
+      }),
+    ]);
+
+    expect(state.cue.judgeLine).toContain("4号玩家");
+    expect(state.cue.detailLine).toContain("中断警长竞选");
+    expect(state.cue.detailLine).toContain("次日继续竞选");
+  });
+
   it("turns failed games into terminal narration", () => {
     expect(
       narrativeFor([

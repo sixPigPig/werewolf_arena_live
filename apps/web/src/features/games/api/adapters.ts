@@ -119,6 +119,17 @@ function normalizeRound(
     ...round,
     attacked,
     eliminated,
+    summaries: stringRecord(round.summaries),
+    private_summaries: stringRecord(round.private_summaries),
+    public_summary:
+      typeof round.public_summary === "string" ? round.public_summary : "",
+    public_facts: Array.isArray(round.public_facts)
+      ? round.public_facts.filter(isRecord).map((fact) => ({
+          round_number: Number(fact.round_number ?? 0),
+          category: String(fact.category ?? "event"),
+          text: String(fact.text ?? ""),
+        }))
+      : [],
     night_deaths: nightDeaths,
     day_deaths: dayDeaths,
     werewolf_discussion: round.werewolf_discussion ?? [],
@@ -414,4 +425,18 @@ function pushAction(
     rawResponse: action.lm_log.raw_response ?? "",
     parsed: action.lm_log.result,
   });
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, String(item)]),
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

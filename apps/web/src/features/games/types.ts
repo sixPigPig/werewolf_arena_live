@@ -106,6 +106,12 @@ export type DeathEvent = {
   source?: string | null;
 };
 
+export type PublicFact = {
+  round_number: number;
+  category: string;
+  text: string;
+};
+
 export type WerewolfDiscussionEntry = {
   round: number;
   speaker: string;
@@ -183,6 +189,9 @@ export type RawRoundState = {
   bids: Array<Record<string, number>>;
   votes: Array<Record<string, string>>;
   summaries: Record<string, string>;
+  private_summaries?: Record<string, string>;
+  public_summary?: string;
+  public_facts?: PublicFact[];
   success: boolean;
 };
 

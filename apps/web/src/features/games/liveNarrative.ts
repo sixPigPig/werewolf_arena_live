@@ -542,6 +542,21 @@ function stateUpdatedCue(
     });
   }
 
+  const selfExploded = stringField(payload, "werewolf_self_exploded");
+  if (selfExploded && payload.sheriff_election_pending === true) {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "player-action",
+      tone: "danger",
+      judgeLine: `${selfExploded} 发动狼人自爆。`,
+      performerLine: "技能效果已经公开。",
+      detailLine: selfExplosionInterruptionLine(payload),
+      actorName: selfExploded,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
   const skillLine = skillJudgeLine(payload);
   if (skillLine) {
     return makeCue({
@@ -678,6 +693,14 @@ function skillJudgeLine(payload: Record<string, unknown>): string {
     return "警徽被撕毁。";
   }
   return "";
+}
+
+function selfExplosionInterruptionLine(payload: Record<string, unknown>): string {
+  const reason =
+    stringField(payload, "sheriff_badge_lost_reason") || "首爆中断警长竞选";
+  const activePlayers = activePlayersLine(payload);
+  const line = `${reason}；警徽未流失，次日继续竞选。`;
+  return activePlayers ? `${line}\n${activePlayers}` : line;
 }
 
 function activePlayersLine(payload: Record<string, unknown>): string {

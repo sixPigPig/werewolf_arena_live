@@ -307,8 +307,20 @@ function stateUpdatedCue(
     };
   }
 
+  const publicSummary = stringField(payload, "public_summary");
+  if (publicSummary) {
+    return {
+      ...base,
+      title: "回合公开总结",
+      body: publicSummary,
+      importance: "key",
+      durationMs: 6000,
+      compressible: false,
+    };
+  }
+
   const summaries = payload.summaries;
-  if (isRecord(summaries)) {
+  if (isRecord(summaries) && !isRecord(payload.private_summaries)) {
     return {
       ...base,
       title: "回合总结更新",

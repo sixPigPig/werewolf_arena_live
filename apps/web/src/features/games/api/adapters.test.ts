@@ -437,6 +437,47 @@ describe("normalizeGameReplay", () => {
     expect(round.sheriff_elected).toBeNull();
   });
 
+  it("normalizes public summary without exposing private summaries as round summaries", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      state: {
+        ...rawReplay.state,
+        rounds: [
+          {
+            ...rawReplay.state.rounds[0],
+            summaries: {},
+            private_summaries: {
+              "10号玩家": "我作为10号狼人，准备夜晚刀9号。",
+            },
+            public_summary: "第1轮：无人被放逐。",
+            public_facts: [
+              {
+                round_number: 1,
+                category: "claim",
+                text: "7号玩家声明6号玩家为好人。",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(replay.rounds[0].public_summary).toBe("第1轮：无人被放逐。");
+    expect(replay.rounds[0].private_summaries?.["10号玩家"]).toBe(
+      "我作为10号狼人，准备夜晚刀9号。",
+    );
+    expect(Object.values(replay.rounds[0].summaries).join("")).not.toContain(
+      "10号狼人",
+    );
+    expect(replay.rounds[0].public_facts).toEqual([
+      {
+        round_number: 1,
+        category: "claim",
+        text: "7号玩家声明6号玩家为好人。",
+      },
+    ]);
+  });
+
   it("preserves legacy normal vote majority display thresholds", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,

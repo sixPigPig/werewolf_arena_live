@@ -2,9 +2,19 @@ import { Card } from "../../../components/ui";
 
 type SummaryStripProps = {
   summaries: Record<string, string>;
+  publicSummary?: string | null;
 };
 
-export function SummaryStrip({ summaries }: SummaryStripProps) {
+export function SummaryStrip({ summaries, publicSummary }: SummaryStripProps) {
+  const publicText = publicSummary?.trim();
+  if (publicText) {
+    return (
+      <Card asChild size="1" variant="surface">
+        <p className="break-words text-sm text-slate-700">{publicText}</p>
+      </Card>
+    );
+  }
+
   const entries = Object.entries(summaries);
 
   if (entries.length === 0) {

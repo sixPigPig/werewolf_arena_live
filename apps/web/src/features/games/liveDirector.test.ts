@@ -112,6 +112,29 @@ describe("toDirectorCue", () => {
     });
   });
 
+  it("uses public_summary and ignores private summary payloads", () => {
+    const cue = toDirectorCue(
+      event({
+        type: "state_updated",
+        phase: "summary",
+        action: "summarize",
+        payload: {
+          public_summary: "第4轮：1号玩家被放逐。",
+          private_summaries: {
+            "10号玩家": "我作为10号狼人，准备夜晚刀9号。",
+          },
+          summaries: {
+            "10号玩家": "我作为10号狼人，准备夜晚刀9号。",
+          },
+        },
+      }),
+    );
+
+    expect(cue?.body).toContain("第4轮：1号玩家被放逐。");
+    expect(cue?.body).not.toContain("10号狼人");
+    expect(cue?.body).not.toContain("刀9号");
+  });
+
   it("uses normal speech pace for visible long text at 1x", () => {
     const message =
       "我现在给出完整的发言，先说明昨晚信息，再解释投票理由，最后给出今天建议。";

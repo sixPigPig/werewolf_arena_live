@@ -258,6 +258,29 @@ describe("DayPhase", () => {
     expect(screen.getByText("Alice（1.5票）")).toBeInTheDocument();
   });
 
+  it("renders public round summary without private summaries", () => {
+    render(
+      <DayPhase
+        round={{
+          ...baseRound,
+          hunter_shot: null,
+          idiot_revealed: null,
+          public_summary: "第1轮：无人被放逐。",
+          summaries: {
+            "10号玩家": "我作为10号狼人，准备夜晚刀9号。",
+          },
+        }}
+        items={[]}
+        selectedItem={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("第1轮：无人被放逐。")).toBeInTheDocument();
+    expect(screen.queryByText(/10号狼人/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/刀9号/)).not.toBeInTheDocument();
+  });
+
   it("shows sheriff badge handling with the day exile result", () => {
     render(
       <DayPhase
