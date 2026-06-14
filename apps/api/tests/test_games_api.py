@@ -1386,6 +1386,8 @@ def test_get_game_playback_preserves_public_day_stage_fields(tmp_path: Path) -> 
         "bids": [{"张三": 3}],
         "votes": {"张三": "李四"},
         "summaries": {"张三": "我会隐藏身份。"},
+        "private_summaries": {},
+        "public_summary": "",
         "exiled": None,
         "day_deaths": [],
         "hunter_shot": None,
