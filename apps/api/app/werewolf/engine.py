@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.werewolf.action_quality import action_quality_warnings
 from app.werewolf.config import (
     DEFAULT_DEBATE_TURNS,
     DOCTOR,
@@ -1004,6 +1005,13 @@ class GameEngine:
             )
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{speaker} did not return a valid debate message.")
+            self._publish_action_quality_warnings(
+                round_state=round_state,
+                phase="day",
+                actor=speaker,
+                action=ACTION_DEBATE,
+                text=message,
+            )
 
             entry = DebateEntry(speaker=speaker, message=message)
             round_state.debate.append(entry)
@@ -1207,6 +1215,13 @@ class GameEngine:
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{name} did not return a valid sheriff speech.")
             round_state.sheriff_speeches.append({"speaker": name, "message": message})
+            self._publish_action_quality_warnings(
+                round_state=round_state,
+                phase="day",
+                actor=name,
+                action=ACTION_SHERIFF_SPEECH,
+                text=message,
+            )
             self._add_public_fact(
                 round_state.number,
                 "claim",
@@ -2053,6 +2068,31 @@ class GameEngine:
             actor=actor,
             action=action,
             payload=payload,
+        )
+
+    def _publish_action_quality_warnings(
+        self,
+        *,
+        round_state: RoundState,
+        phase: str,
+        actor: str,
+        action: str,
+        text: str,
+    ) -> None:
+        warnings = action_quality_warnings(
+            action=action,
+            text=text,
+            endgame=len(round_state.players) <= 4,
+        )
+        if not warnings:
+            return
+        self._publish(
+            "action_quality_warning",
+            round_number=round_state.number,
+            phase=phase,
+            actor=actor,
+            action=action,
+            payload={"warnings": warnings, "text": text},
         )
 
     def _is_secret_werewolf_action(self, phase: str, action: str) -> bool:

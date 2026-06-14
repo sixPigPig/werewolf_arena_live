@@ -1307,6 +1307,46 @@ def test_world_state_marks_four_player_endgame_pressure() -> None:
     assert any("错误放逐" in line for line in world_state["endgame_context"])
 
 
+def test_action_quality_warning_event_is_published_for_stage_mismatch() -> None:
+    class CapturingSink:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        def publish(self, event_type: str, **kwargs: object) -> None:
+            self.events.append({"type": event_type, **kwargs})
+
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="quality_test",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=20260614,
+        rule_set=rule_set,
+    )
+    sink = CapturingSink()
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=1,
+        rule_set=rule_set,
+        event_sink=sink,
+        rng=random.Random(1),
+    )
+    round_state = RoundState(number=2, players=[player.name for player in state.players])
+
+    engine._publish_action_quality_warnings(
+        round_state=round_state,
+        phase="day",
+        actor="3号玩家",
+        action="sheriff_speech",
+        text="我退水，警徽投给8号。",
+    )
+
+    warning_events = [event for event in sink.events if event["type"] == "action_quality_warning"]
+    assert warning_events
+    assert warning_events[0]["payload"]["warnings"] == ["sheriff_speech_mentions_withdraw"]
+
+
 def test_round_log_deserializes_werewolf_consensus_logs() -> None:
     payload = {
         "number": 1,
