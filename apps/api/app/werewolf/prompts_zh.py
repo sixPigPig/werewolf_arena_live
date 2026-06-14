@@ -174,6 +174,7 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
     sections = [
         _render_base(world_state),
         _render_observations(world_state),
+        _render_public_facts(world_state),
         _render_sheriff_election(world_state),
         _render_debate(world_state),
         _render_instruction(action, world_state),
@@ -204,6 +205,13 @@ def _render_observations(world_state: dict[str, Any]) -> str:
     if not observations:
         return "你的私人观察：暂无。"
     return "你的私人观察：\n" + "\n".join(f"- {observation}" for observation in observations)
+
+
+def _render_public_facts(world_state: dict[str, Any]) -> str:
+    facts = world_state.get("public_facts") or []
+    if not facts:
+        return "公开事实记录：暂无。"
+    return "公开事实记录：\n" + "\n".join(f"- {fact}" for fact in facts)
 
 
 def _render_sheriff_election(world_state: dict[str, Any]) -> str:

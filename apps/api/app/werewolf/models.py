@@ -278,6 +278,7 @@ class GameState:
     sheriff_badge_lost: bool = False
     sheriff_pre_election_bomb_count: int = 0
     sheriff_election_pending: bool = False
+    public_facts: list[dict[str, Any]] = field(default_factory=list)
 
     def player_by_name(self) -> dict[str, Player]:
         return {player.name: player for player in self.players}
@@ -294,4 +295,5 @@ class GameState:
             "sheriff_badge_lost": self.sheriff_badge_lost,
             "sheriff_pre_election_bomb_count": self.sheriff_pre_election_bomb_count,
             "sheriff_election_pending": self.sheriff_election_pending,
+            "public_facts": self.public_facts,
         }

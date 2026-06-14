@@ -1247,6 +1247,37 @@ def test_summary_phase_does_not_publish_private_summaries() -> None:
     assert all("summaries" not in (event.get("payload") or {}) for event in summary_events)
 
 
+def test_world_state_includes_public_facts_for_late_day_actions() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="facts_test",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=20260614,
+        rule_set=rule_set,
+    )
+    state.public_facts.append(
+        {
+            "round_number": 2,
+            "category": "claim",
+            "text": "7号玩家警上声明6号玩家为好人。",
+        }
+    )
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=1,
+        rule_set=rule_set,
+        rng=random.Random(1),
+    )
+    players = state.player_by_name()
+    round_state = RoundState(number=4, players=[player.name for player in state.players])
+
+    world_state = engine._world_state(players["1号玩家"], [], round_state)
+
+    assert "7号玩家警上声明6号玩家为好人。" in world_state["public_facts"]
+
+
 def test_round_log_deserializes_werewolf_consensus_logs() -> None:
     payload = {
         "number": 1,

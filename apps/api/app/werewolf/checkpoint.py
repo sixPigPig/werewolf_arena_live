@@ -206,6 +206,7 @@ def game_state_from_dict(data: dict[str, Any]) -> GameState:
         sheriff_badge_lost=bool(data.get("sheriff_badge_lost", False)),
         sheriff_pre_election_bomb_count=int(data.get("sheriff_pre_election_bomb_count", 0)),
         sheriff_election_pending=bool(data.get("sheriff_election_pending", False)),
+        public_facts=copy.deepcopy(data.get("public_facts", [])),
     )
 
 

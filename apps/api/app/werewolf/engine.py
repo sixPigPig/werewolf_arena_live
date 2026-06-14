@@ -36,6 +36,11 @@ from app.werewolf.player_configs import (
     PlayerConfig,
     validate_unique_effective_player_names,
 )
+from app.werewolf.public_facts import (
+    PublicFact,
+    compressed_public_facts,
+    public_fact_from_dict,
+)
 from app.werewolf.rules import (
     ACTION_DEBATE,
     ACTION_SHERIFF_BADGE,
@@ -425,6 +430,11 @@ class GameEngine:
         if round_state.night_deaths:
             eliminated_names = "、".join(death.player for death in round_state.night_deaths)
             self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
+            self._add_public_fact(
+                round_state.number,
+                "death",
+                f"第{round_state.number}轮：夜晚，{eliminated_names}出局。",
+            )
         else:
             self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
         self._publish_state_updated(
@@ -849,6 +859,13 @@ class GameEngine:
         votes, vote_logs = self._run_voting(round_state, active_players)
         round_state.votes.append(votes)
         round_log.votes.append(vote_logs)
+        if votes:
+            self._add_public_fact(
+                round_state.number,
+                "vote",
+                f"第{round_state.number}轮票型："
+                + "；".join(f"{voter}->{target}" for voter, target in votes.items()),
+            )
         self._publish_state_updated(
             round_state=round_state,
             phase="vote",
@@ -901,6 +918,11 @@ class GameEngine:
         if round_state.night_deaths:
             eliminated_names = "、".join(death.player for death in round_state.night_deaths)
             self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
+            self._add_public_fact(
+                round_state.number,
+                "death",
+                f"第{round_state.number}轮：夜晚，{eliminated_names}出局。",
+            )
         else:
             self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
 
@@ -1082,6 +1104,11 @@ class GameEngine:
         round_state.day_deaths.append(DeathEvent(wolf, "werewolf_self_explosion", wolf))
         self._remove_player(active_players, wolf)
         self._announce(active_players, f"第{round_state.number}轮：{wolf}自爆为狼人，白天立即结束。")
+        self._add_public_fact(
+            round_state.number,
+            "reveal",
+            f"第{round_state.number}轮：{wolf}自爆为狼人，白天立即结束。",
+        )
 
         if self.state.sheriff == wolf:
             self._maybe_transfer_sheriff_badge(
@@ -1180,6 +1207,11 @@ class GameEngine:
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{name} did not return a valid sheriff speech.")
             round_state.sheriff_speeches.append({"speaker": name, "message": message})
+            self._add_public_fact(
+                round_state.number,
+                "claim",
+                f"第{round_state.number}轮警上发言：{name}：{message}",
+            )
             if self._maybe_run_werewolf_self_explosion(
                 round_state,
                 round_log,
@@ -1389,6 +1421,11 @@ class GameEngine:
         round_state.sheriff_election_pending = False
         self._announce(
             active_players,
+            f"第{round_state.number}轮：警长竞选，{sheriff}当选警长，投票计为{self.rule_set.sheriff_vote_weight:g}票。",
+        )
+        self._add_public_fact(
+            round_state.number,
+            "sheriff",
             f"第{round_state.number}轮：警长竞选，{sheriff}当选警长，投票计为{self.rule_set.sheriff_vote_weight:g}票。",
         )
 
@@ -2041,6 +2078,7 @@ class GameEngine:
             "role": player.role,
             "round": round_state.number,
             "observations": player.observations,
+            "public_facts": self._public_fact_lines(),
             "remaining_players": "、".join(active_players),
             "debate": debate,
             "personality": player.personality,
@@ -2052,6 +2090,19 @@ class GameEngine:
             "debate_turns_left": max(0, self.debate_turns - len(round_state.debate)),
             "options": "、".join(options),
         }
+
+    def _add_public_fact(self, round_number: int, category: str, text: str) -> None:
+        self.state.public_facts.append(
+            PublicFact(
+                round_number=round_number,
+                category=category,
+                text=text,
+            ).to_dict()
+        )
+
+    def _public_fact_lines(self) -> list[str]:
+        facts = [public_fact_from_dict(item) for item in self.state.public_facts]
+        return compressed_public_facts(facts)
 
     def _sheriff_election_context(self, round_state: RoundState) -> list[str]:
         lines: list[str] = []

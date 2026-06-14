@@ -127,6 +127,19 @@ def test_build_prompt_supports_werewolf_kill_vote_action() -> None:
     assert "输出字段 reasoning 和 target" in prompt
 
 
+def test_prompt_renders_public_facts() -> None:
+    prompt, _schema = build_prompt(
+        "debate",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "public_facts": ["7号玩家警上声明6号玩家为好人。"],
+        },
+    )
+
+    assert "公开事实记录" in prompt
+    assert "7号玩家警上声明6号玩家为好人。" in prompt
+
+
 def test_bid_prompt_is_no_longer_supported() -> None:
     with pytest.raises(ValueError, match="Unsupported action: bid"):
         build_prompt("bid", _world_state_for_special_action("村民", "Alice、Bob"))
