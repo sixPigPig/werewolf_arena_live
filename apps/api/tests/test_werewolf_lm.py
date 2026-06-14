@@ -140,6 +140,42 @@ def test_prompt_renders_public_facts() -> None:
     assert "7号玩家警上声明6号玩家为好人。" in prompt
 
 
+def test_prompt_renders_endgame_context() -> None:
+    prompt, _schema = build_prompt(
+        "debate",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "endgame_context": [
+                "当前存活 4 人，公开已出 3 名狼人，最多可能还剩 1 狼。",
+                "本轮错误放逐可能导致狼人夜晚获胜。",
+            ],
+        },
+    )
+
+    assert "残局压力" in prompt
+    assert "本轮错误放逐可能导致狼人夜晚获胜。" in prompt
+
+
+def test_hunter_prompt_requires_candidate_comparison() -> None:
+    prompt, _schema = build_prompt(
+        "hunter_shoot",
+        _world_state_for_special_action("猎人", "10号玩家、12号玩家、不发动技能"),
+    )
+
+    assert "候选嫌疑对比" in prompt
+    assert "随机" in prompt
+
+
+def test_witch_poison_prompt_requires_reason_to_hold_poison() -> None:
+    prompt, _schema = build_prompt(
+        "witch_poison",
+        _world_state_for_special_action("女巫", "10号玩家、不使用毒药"),
+    )
+
+    assert "如果不使用毒药" in prompt
+    assert "保留毒药仍有收益" in prompt
+
+
 def test_bid_prompt_is_no_longer_supported() -> None:
     with pytest.raises(ValueError, match="Unsupported action: bid"):
         build_prompt("bid", _world_state_for_special_action("村民", "Alice、Bob"))

@@ -2079,6 +2079,7 @@ class GameEngine:
             "round": round_state.number,
             "observations": player.observations,
             "public_facts": self._public_fact_lines(),
+            "endgame_context": self._endgame_context(active_players),
             "remaining_players": "、".join(active_players),
             "debate": debate,
             "personality": player.personality,
@@ -2103,6 +2104,27 @@ class GameEngine:
     def _public_fact_lines(self) -> list[str]:
         facts = [public_fact_from_dict(item) for item in self.state.public_facts]
         return compressed_public_facts(facts)
+
+    def _endgame_context(self, active_players: list[str]) -> list[str]:
+        total_wolves = sum(
+            role_spec.count
+            for role_spec in self.rule_set.roles
+            if role_spec.team == TEAM_WEREWOLVES
+        )
+        revealed_wolves = [
+            player.name
+            for player in self.state.players
+            if self._is_werewolf(player)
+            and player.revealed_role
+            and player.name not in active_players
+        ]
+        max_remaining_wolves = max(0, total_wolves - len(revealed_wolves))
+        lines = [
+            f"当前存活 {len(active_players)} 人，公开已出 {len(revealed_wolves)} 名狼人，最多可能还剩 {max_remaining_wolves} 狼。",
+        ]
+        if len(active_players) <= 4 and max_remaining_wolves > 0:
+            lines.append("本轮错误放逐可能导致狼人夜晚获胜。")
+        return lines
 
     def _sheriff_election_context(self, round_state: RoundState) -> list[str]:
         lines: list[str] = []

@@ -1278,6 +1278,35 @@ def test_world_state_includes_public_facts_for_late_day_actions() -> None:
     assert "7号玩家警上声明6号玩家为好人。" in world_state["public_facts"]
 
 
+def test_world_state_marks_four_player_endgame_pressure() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="endgame_test",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=20260614,
+        rule_set=rule_set,
+    )
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=1,
+        rule_set=rule_set,
+        rng=random.Random(1),
+    )
+    players = state.player_by_name()
+    active_players = ["6号玩家", "9号玩家", "10号玩家", "12号玩家"]
+    round_state = RoundState(number=5, players=active_players)
+    for player in state.players:
+        if player.gamestate:
+            player.gamestate.current_players = active_players
+
+    world_state = engine._world_state(players["6号玩家"], [], round_state)
+
+    assert any("当前存活 4 人" in line for line in world_state["endgame_context"])
+    assert any("错误放逐" in line for line in world_state["endgame_context"])
+
+
 def test_round_log_deserializes_werewolf_consensus_logs() -> None:
     payload = {
         "number": 1,

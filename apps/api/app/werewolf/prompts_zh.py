@@ -175,6 +175,7 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
         _render_base(world_state),
         _render_observations(world_state),
         _render_public_facts(world_state),
+        _render_endgame_context(world_state),
         _render_sheriff_election(world_state),
         _render_debate(world_state),
         _render_instruction(action, world_state),
@@ -214,6 +215,13 @@ def _render_public_facts(world_state: dict[str, Any]) -> str:
     return "公开事实记录：\n" + "\n".join(f"- {fact}" for fact in facts)
 
 
+def _render_endgame_context(world_state: dict[str, Any]) -> str:
+    lines = world_state.get("endgame_context") or []
+    if not lines:
+        return ""
+    return "残局压力：\n" + "\n".join(f"- {line}" for line in lines)
+
+
 def _render_sheriff_election(world_state: dict[str, Any]) -> str:
     election = world_state.get("sheriff_election") or []
     if not election:
@@ -235,6 +243,7 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
         return (
             "行动：白天公开发言。\n"
             "如果你是狼人，要误导局势、转移怀疑、保护队友；如果你是好人，要寻找矛盾、提出怀疑并推动团队协作。\n"
+            "发言必须引用至少一条公开事实、票型或前置位发言，不要只复述别人结论。\n"
             "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
         )
     if action == "vote":
@@ -380,14 +389,17 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "行动：女巫夜晚毒药。\n"
             f"候选人：{options}。\n"
             "你可以选择一名玩家使用毒药，或选择不使用毒药。"
-            "被毒死的猎人不能开枪。输出字段 reasoning 和 poison。"
+            "如果不使用毒药，必须说明保留毒药仍有收益，不能只说信息不足。"
+            "结合公开事实、票型和警徽流判断。被毒死的猎人不能开枪。"
+            "输出字段 reasoning 和 poison。"
         )
     if action == "hunter_shoot":
         return (
             "行动：猎人死亡开枪。\n"
             f"候选人：{options}。\n"
             "你可以选择一名存活玩家带走，或选择不发动技能。"
-            "结合发言、投票和阵营目标做判断。输出字段 reasoning 和 shoot。"
+            "必须给出候选嫌疑对比；不能只因为信息不足就随机开枪。"
+            "结合公开事实、发言、投票和阵营目标做判断。输出字段 reasoning 和 shoot。"
         )
     if action == "summarize":
         return (
