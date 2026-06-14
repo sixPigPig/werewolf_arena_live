@@ -708,6 +708,86 @@ def test_generate_action_retries_until_allowed_value() -> None:
     assert provider.calls == 2
 
 
+def test_generate_action_retries_with_invalid_allowed_value_feedback() -> None:
+    class CapturingProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+            self.responses = [
+                '{"reasoning":"想毒10","poison":"10号玩家"}',
+                '{"reasoning":"改毒12","poison":"12号玩家"}',
+            ]
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            del model, temperature
+            self.prompts.append(prompt)
+            return self.responses[len(self.prompts) - 1]
+
+    provider = CapturingProvider()
+
+    value, lm_log = generate_action(
+        provider=provider,
+        action="witch_poison",
+        world_state={
+            **_world_state_for_special_action("女巫", ""),
+            "options": ["6号玩家", "12号玩家", "不使用毒药"],
+        },
+        model="deepseek-v4-flash",
+        allowed_values=["6号玩家", "12号玩家", "不使用毒药"],
+        result_key="poison",
+        retries=2,
+    )
+
+    assert value == "12号玩家"
+    assert len(provider.prompts) == 2
+    assert "上次输出的 poison 为“10号玩家”" in provider.prompts[1]
+    assert "6号玩家、12号玩家、不使用毒药" in provider.prompts[1]
+    assert lm_log.invalid_attempts == [
+        {
+            "value": "10号玩家",
+            "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
+            "result_key": "poison",
+        }
+    ]
+
+
+def test_generate_action_returns_invalid_attempts_after_exhausting_retries() -> None:
+    provider = FakeProvider(
+        [
+            {"reasoning": "想毒10", "poison": "10号玩家"},
+            {"reasoning": "仍毒10", "poison": "10号玩家"},
+        ]
+    )
+
+    value, lm_log = generate_action(
+        provider=provider,
+        action="witch_poison",
+        world_state={
+            **_world_state_for_special_action("女巫", ""),
+            "options": ["6号玩家", "12号玩家", "不使用毒药"],
+        },
+        model="deepseek-v4-flash",
+        allowed_values=["6号玩家", "12号玩家", "不使用毒药"],
+        result_key="poison",
+        retries=2,
+    )
+
+    assert value is None
+    assert lm_log.result == {"reasoning": "仍毒10", "poison": "10号玩家"}
+    assert lm_log.invalid_attempts == [
+        {
+            "value": "10号玩家",
+            "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
+            "result_key": "poison",
+        },
+        {
+            "value": "10号玩家",
+            "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
+            "result_key": "poison",
+        },
+    ]
+    assert "retry" in lm_log.raw_response
+
+
 def test_generate_action_accepts_numeric_value_for_string_allowed_values() -> None:
     provider = FakeProvider([{"reasoning": "我选择 2 号", "vote": 2}])
 

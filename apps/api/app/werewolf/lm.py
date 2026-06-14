@@ -4,7 +4,7 @@ import json
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from app.werewolf.prompts_zh import build_prompt
@@ -33,6 +33,7 @@ class LmLog:
     raw_response: str
     result: dict[str, Any] | None
     request_id: str | None = None
+    invalid_attempts: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         value = {
@@ -42,6 +43,8 @@ class LmLog:
         }
         if self.request_id is not None:
             value["request_id"] = self.request_id
+        if self.invalid_attempts:
+            value["invalid_attempts"] = self.invalid_attempts
         return value
 
 
@@ -69,14 +72,18 @@ def generate_action(
     result_key: str | None = None,
     retries: int = DEFAULT_RETRIES,
 ) -> tuple[Any | None, LmLog]:
-    prompt, _schema = build_prompt(action, world_state)
+    base_prompt, _schema = build_prompt(action, world_state)
     raw_responses: list[str] = []
+    invalid_attempts: list[dict[str, Any]] = []
     last_result: dict[str, Any] | None = None
+    current_prompt = base_prompt
 
     for attempt in range(retries):
+        if invalid_attempts:
+            current_prompt = _prompt_with_invalid_feedback(base_prompt, invalid_attempts[-1])
         raw_response = provider.complete_json(
             model=model,
-            prompt=prompt,
+            prompt=current_prompt,
             temperature=min(1.0, 0.4 + attempt * 0.2),
         )
         raw_responses.append(raw_response)
@@ -89,12 +96,25 @@ def generate_action(
         value = result.get(result_key) if result_key else result
         normalized_value = _normalize_allowed_value(value, allowed_values)
         if allowed_values is None or normalized_value in allowed_values:
-            return normalized_value, LmLog(prompt=prompt, raw_response=raw_response, result=result)
+            return normalized_value, LmLog(
+                prompt=current_prompt,
+                raw_response=raw_response,
+                result=result,
+                invalid_attempts=invalid_attempts.copy(),
+            )
+        invalid_attempts.append(
+            _invalid_attempt(
+                value=normalized_value,
+                allowed_values=allowed_values,
+                result_key=result_key,
+            )
+        )
 
     return None, LmLog(
-        prompt=prompt,
+        prompt=current_prompt,
         raw_response="\n--- retry ---\n".join(raw_responses),
         result=last_result,
+        invalid_attempts=invalid_attempts.copy(),
     )
 
 
@@ -112,10 +132,12 @@ def generate_action_with_events(
     request_id_factory: Callable[[], str] | None = None,
     enable_progress_ticks: bool = True,
 ) -> tuple[Any | None, LmLog]:
-    prompt, _schema = build_prompt(action, world_state)
+    base_prompt, _schema = build_prompt(action, world_state)
     raw_responses: list[str] = []
+    invalid_attempts: list[dict[str, Any]] = []
     last_result: dict[str, Any] | None = None
     last_request_id: str | None = None
+    current_prompt = base_prompt
     context = ModelEventContext(
         round_number=event_context.get("round_number"),
         phase=event_context.get("phase"),
@@ -124,6 +146,8 @@ def generate_action_with_events(
     )
 
     for attempt in range(retries):
+        if invalid_attempts:
+            current_prompt = _prompt_with_invalid_feedback(base_prompt, invalid_attempts[-1])
         request_id = (
             request_id_factory()
             if request_id_factory is not None
@@ -160,7 +184,7 @@ def generate_action_with_events(
             raw_response = _complete_json_with_optional_stream(
                 provider=provider,
                 model=model,
-                prompt=prompt,
+                prompt=current_prompt,
                 temperature=temperature,
                 action=action,
                 event_sink=event_sink,
@@ -197,17 +221,40 @@ def generate_action_with_events(
         normalized_value = _normalize_allowed_value(value, allowed_values)
         if allowed_values is None or normalized_value in allowed_values:
             return normalized_value, LmLog(
-                prompt=prompt,
+                prompt=current_prompt,
                 raw_response=raw_response,
                 result=result,
                 request_id=request_id,
+                invalid_attempts=invalid_attempts.copy(),
             )
+        invalid_attempts.append(
+            _invalid_attempt(
+                value=normalized_value,
+                allowed_values=allowed_values,
+                result_key=result_key,
+            )
+        )
+        _publish_model_event(
+            event_sink,
+            "model_retry_scheduled",
+            context=context,
+            payload={
+                "request_id": request_id,
+                "model": model,
+                "attempt": attempt + 2,
+                "invalid_value": normalized_value,
+                "allowed_values": allowed_values.copy(),
+                "result_key": result_key,
+                "message": "模型选择不在候选项中，正在带反馈重试。",
+            },
+        )
 
     return None, LmLog(
-        prompt=prompt,
+        prompt=current_prompt,
         raw_response="\n--- retry ---\n".join(raw_responses),
         result=last_result,
         request_id=last_request_id,
+        invalid_attempts=invalid_attempts.copy(),
     )
 
 
@@ -325,6 +372,36 @@ def _normalize_allowed_value(value: Any, allowed_values: list[Any] | None) -> An
     if all(isinstance(item, str) for item in allowed_values) and value is not None:
         return str(value)
     return value
+
+
+def _invalid_attempt(
+    *,
+    value: Any,
+    allowed_values: list[Any],
+    result_key: str | None,
+) -> dict[str, Any]:
+    return {
+        "value": value,
+        "allowed_values": allowed_values.copy(),
+        "result_key": result_key or "result",
+    }
+
+
+def _prompt_with_invalid_feedback(
+    base_prompt: str,
+    invalid_attempt: dict[str, Any],
+) -> str:
+    allowed_values = "、".join(str(item) for item in invalid_attempt["allowed_values"])
+    result_key = str(invalid_attempt["result_key"])
+    value = str(invalid_attempt["value"])
+    return (
+        f"{base_prompt}\n\n"
+        "上次输出无效，请修正。\n"
+        f"上次输出的 {result_key} 为“{value}”，但该值不在合法候选中。\n"
+        f"本次必须从以下候选中选择 {result_key}：{allowed_values}。\n"
+        "如果你原本最怀疑的人不在候选中，请在剩余候选中重新排序，或选择合法的放弃/不使用选项。\n"
+        "只输出合法 JSON。"
+    )
 
 
 def parse_json_object(raw_response: str) -> dict[str, Any]:
