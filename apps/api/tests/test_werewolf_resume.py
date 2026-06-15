@@ -416,6 +416,40 @@ def test_action_log_from_dict_defaults_invalid_and_fallback_metadata() -> None:
     assert action_log.lm_log.invalid_attempts == []
 
 
+def test_action_log_from_dict_restores_invalid_attempts_with_deep_copy() -> None:
+    source = {
+        "actor": "1号玩家",
+        "action": "witch_poison",
+        "options": ["6号玩家", "12号玩家", "不使用毒药"],
+        "choice": "不使用毒药",
+        "lm_log": {
+            "prompt": "prompt",
+            "raw_response": '{"poison":"10号玩家"}',
+            "result": {"poison": "10号玩家"},
+            "invalid_attempts": [
+                {
+                    "value": "10号玩家",
+                    "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
+                    "result_key": "poison",
+                }
+            ],
+        },
+    }
+
+    action_log = action_log_from_dict(source)
+
+    source["lm_log"]["invalid_attempts"][0]["value"] = "mutated"
+    source["lm_log"]["invalid_attempts"][0]["allowed_values"].append("mutated")
+
+    assert action_log.lm_log.invalid_attempts == [
+        {
+            "value": "10号玩家",
+            "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
+            "result_key": "poison",
+        }
+    ]
+
+
 def _extract_options(prompt: str) -> list[str]:
     marker = next((candidate for candidate in ("候选人：", "候选选项：") if candidate in prompt), "")
     if not marker:
