@@ -25,6 +25,7 @@ from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.player_profile_prompts import compose_player_profile_prompt
 from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.rules import (
+    ACTION_DEBATE,
     ACTION_WEREWOLF_SELF_EXPLOSION,
     ACTION_WITCH_POISON,
     MODEL_GROUP_WEREWOLF,
@@ -1423,6 +1424,49 @@ def test_action_quality_warning_event_is_published_for_stage_mismatch() -> None:
     warning_events = [event for event in sink.events if event["type"] == "action_quality_warning"]
     assert warning_events
     assert warning_events[0]["payload"]["warnings"] == ["sheriff_speech_mentions_withdraw"]
+
+
+def test_debate_action_quality_warning_uses_prior_round_context() -> None:
+    sink = CapturingEventSink()
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="debate_quality_warning",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=2026061505,
+        rule_set=rule_set,
+    )
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=1,
+        rule_set=rule_set,
+        event_sink=sink,
+        rng=random.Random(1),
+    )
+    player = state.players[1]
+    player.personality = "常用表达: 我先盘票型；这里不急着站死"
+    round_state = RoundState(number=1, players=[player.name for player in state.players])
+    round_state.debate.append(
+        DebateEntry(
+            speaker=state.players[0].name,
+            message="我先盘票型。第一轮全票挂警徽定狼。",
+        )
+    )
+
+    engine._publish_action_quality_warnings(
+        round_state=round_state,
+        phase="day",
+        actor=player.name,
+        action=ACTION_DEBATE,
+        text="我先盘票型。第一轮全票挂警徽定狼，这里不急着站死。",
+        prior_texts=[entry.message for entry in round_state.debate],
+        personality=player.personality,
+    )
+
+    warning_event = next(event for event in sink.events if event["type"] == "action_quality_warning")
+    assert "catchphrase_overuse" in warning_event["payload"]["warnings"]
+    assert "repeated_debate_phrase" in warning_event["payload"]["warnings"]
 
 
 def test_round_log_deserializes_werewolf_consensus_logs() -> None:

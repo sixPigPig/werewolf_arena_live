@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.werewolf.debate_realism import dialogue_quality_warnings
+
 
 def action_quality_warnings(
     *,
@@ -7,6 +9,8 @@ def action_quality_warnings(
     text: str,
     actor: str | None = None,
     endgame: bool = False,
+    prior_texts: list[str] | tuple[str, ...] = (),
+    personality: str = "",
 ) -> list[str]:
     warnings: list[str] = []
     normalized = text.replace(" ", "")
@@ -50,5 +54,14 @@ def action_quality_warnings(
             "后置位" in normalized or "他们" in normalized or "范围" in normalized
         ):
             warnings.append("self_reference_as_group")
+
+    if action == "debate":
+        for warning in dialogue_quality_warnings(
+            text=text,
+            prior_texts=prior_texts,
+            personality=personality,
+        ):
+            if warning not in warnings:
+                warnings.append(warning)
 
     return warnings

@@ -1021,6 +1021,8 @@ class GameEngine:
                 actor=speaker,
                 action=ACTION_DEBATE,
                 text=message,
+                prior_texts=[entry.message for entry in round_state.debate],
+                personality=player.personality,
             )
 
             entry = DebateEntry(speaker=speaker, message=message)
@@ -2132,12 +2134,16 @@ class GameEngine:
         actor: str,
         action: str,
         text: str,
+        prior_texts: list[str] | tuple[str, ...] = (),
+        personality: str = "",
     ) -> None:
         warnings = action_quality_warnings(
             action=action,
             text=text,
             actor=actor,
             endgame=len(round_state.players) <= 4,
+            prior_texts=prior_texts,
+            personality=personality,
         )
         if not warnings:
             return

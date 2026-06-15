@@ -39,3 +39,19 @@ def test_action_quality_flags_role_term_contradiction_and_self_reference() -> No
         text="我10号是村民，后置位10、11、12都需要解释身份。",
         actor="10号玩家",
     )
+
+
+def test_action_quality_flags_debate_repetition_with_context() -> None:
+    warnings = action_quality_warnings(
+        action="debate",
+        text="我先盘票型。第一轮全票挂警徽定狼，这里不急着站死。",
+        prior_texts=[
+            "我先盘票型。第一轮全票挂警徽定狼，说明大家都觉得他发言差。",
+            "第一轮全票挂警徽定狼，先听后置位。",
+        ],
+        personality="常用表达: 我先盘票型；这里不急着站死",
+    )
+
+    assert "catchphrase_overuse" in warnings
+    assert "repeated_debate_phrase" in warnings
+    assert "low_novelty_debate" in warnings
