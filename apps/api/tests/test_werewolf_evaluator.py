@@ -114,3 +114,46 @@ def test_evaluator_flags_term_contradiction_and_self_reference(tmp_path) -> None
 
     assert "role_term_contradiction" in report.issue_codes
     assert "self_reference_as_group" in report.issue_codes
+
+
+def test_evaluator_flags_homogeneous_lineup_and_repeated_debate(tmp_path) -> None:
+    personality = (
+        "重视票型、发言顺序和行为一致性。\n"
+        "常用表达: 我先盘票型；这里不急着站死"
+    )
+    replay = {
+        "session_id": "game_repetition_eval",
+        "winner": "狼人阵营",
+        "players": [
+            {
+                "name": f"玩家{index}",
+                "role": "村民",
+                "model": "deepseek-v4-flash",
+                "personality_id": "analytical",
+                "personality": personality,
+                "tags": ["控场", "复盘"],
+            }
+            for index in range(1, 5)
+        ],
+        "rounds": [
+            {
+                "number": 2,
+                "summaries": {},
+                "sheriff_speeches": [],
+                "debate": [
+                    {"speaker": "玩家1", "message": "我先盘票型。第一轮全票挂警徽定狼，这里不急着站死。"},
+                    {"speaker": "玩家2", "message": "我先盘票型。第一轮全票挂警徽定狼，这里不急着站死，先听后置位。"},
+                    {"speaker": "玩家3", "message": "我先盘票型。第一轮全票挂警徽定狼，先听后置位补充。"},
+                ],
+            }
+        ],
+    }
+    path = tmp_path / "game_complete.json"
+    path.write_text(json.dumps(replay, ensure_ascii=False), encoding="utf-8")
+
+    report = evaluate_replay(path)
+
+    assert "homogeneous_personality_lineup" in report.issue_codes
+    assert "shared_catchphrase_lineup" in report.issue_codes
+    assert "repeated_debate_phrase" in report.issue_codes
+    assert "low_novelty_debate" in report.issue_codes

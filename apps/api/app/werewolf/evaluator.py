@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.werewolf.debate_realism import (
+    dialogue_quality_warnings,
+    lineup_quality_warnings_from_players,
+)
+
 PRIVATE_LEAK_PATTERNS = (
     "我作为",
     "我是狼人",
@@ -43,6 +48,17 @@ def evaluate_replay(path: Path) -> ReplayEvaluationReport:
     public_good_claims: dict[str, str] = {}
     seen_issue_keys: set[tuple[str, int, str]] = set()
     recent_self_explosions: list[int] = []
+
+    players = data.get("players")
+    if isinstance(players, list):
+        for warning in lineup_quality_warnings_from_players(players):
+            issues.append(
+                ReplayEvaluationIssue(
+                    code=warning["code"],
+                    round_number=0,
+                    detail=warning["detail"],
+                )
+            )
 
     error_message = _error_message_from_data(data)
     if any(marker in error_message for marker in INVALID_ACTION_MARKERS):
@@ -106,7 +122,25 @@ def evaluate_replay(path: Path) -> ReplayEvaluationReport:
                 public_good_claims.setdefault(player, speech)
 
         debate_text = "\n".join(_speech_entries(round_state.get("debate")))
+        prior_debate_texts: list[str] = []
         for speaker, text in _speech_entry_details(round_state.get("debate")):
+            for warning in dialogue_quality_warnings(
+                text=text,
+                prior_texts=prior_debate_texts,
+                personality=_player_personality(data, speaker),
+            ):
+                _append_issue(
+                    issues,
+                    seen_issue_keys,
+                    ReplayEvaluationIssue(
+                        code=warning,
+                        round_number=round_number,
+                        detail=f"{speaker}: {text}",
+                    ),
+                    key_detail=f"{speaker}:{warning}:{text[:80]}",
+                )
+            prior_debate_texts.append(text)
+
             if _has_role_term_contradiction(text):
                 _append_issue(
                     issues,
@@ -205,6 +239,18 @@ def _error_message_from_data(data: dict[str, Any]) -> str:
     state = data.get("state")
     if isinstance(state, dict) and isinstance(state.get("error_message"), str):
         return str(state["error_message"])
+    return ""
+
+
+def _player_personality(data: dict[str, Any], speaker: str) -> str:
+    players = data.get("players")
+    if not isinstance(players, list):
+        return ""
+    for player in players:
+        if not isinstance(player, dict):
+            continue
+        if str(player.get("name") or "") == speaker:
+            return str(player.get("personality") or "")
     return ""
 
 
