@@ -9,7 +9,42 @@ from app.werewolf.player_configs import PlayerConfig, player_config_from_dict
 PUNCTUATION_RE = re.compile(r"[\s，。！？、；：,.!?;:\"'《》（）()【】\[\]{}<>-]+")
 CATCHPHRASE_LINE_RE = re.compile(r"^常用表达:\s*(.+)$", re.MULTILINE)
 CATCHPHRASE_SPLIT_RE = re.compile(r"[；;、,，\n]+")
+PLAYER_REFERENCE_RE = re.compile(
+    r"^(?:玩家)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})号(?:位)?(?:玩家)?$"
+)
 LOW_NOVELTY_THRESHOLD = 0.45
+COMMON_GAME_ANCHORS = {
+    "预言家查验",
+    "预言家发言",
+    "女巫用药",
+    "猎人开枪",
+    "守卫守护",
+    "狼人阵营",
+    "好人阵营",
+    "村民身份",
+    "平民身份",
+    "角色身份",
+    "身份信息",
+    "身份声明",
+    "查验结果",
+    "投票位置",
+    "投票行为",
+    "投票记录",
+    "投票理由",
+    "投票解释",
+    "发言顺序",
+    "发言位置",
+    "发言内容",
+    "站边理由",
+    "票型信息",
+    "票型位置",
+    "倒牌信息",
+    "夜间信息",
+    "上票位置",
+    "警上发言",
+    "警下发言",
+    "出局玩家",
+}
 
 
 def normalize_dialogue_text(text: str) -> str:
@@ -79,8 +114,17 @@ def dialogue_quality_warnings(
         normalized_phrase = normalize_dialogue_text(phrase)
         if normalized_phrase:
             normalized_catchphrases.append(normalized_phrase)
-    if any(phrase in normalized for phrase in normalized_catchphrases):
-        warnings.append("catchphrase_overuse")
+    normalized_prior = [
+        normalize_dialogue_text(str(item)) for item in prior_texts if str(item).strip()
+    ]
+    for phrase in normalized_catchphrases:
+        current_count = normalized.count(phrase)
+        if current_count == 0:
+            continue
+        prior_count = sum(prior_text.count(phrase) for prior_text in normalized_prior)
+        if prior_count > 0 or current_count + prior_count > 1:
+            warnings.append("catchphrase_overuse")
+            break
 
     prior = [str(item) for item in prior_texts if str(item).strip()]
     if prior:
@@ -192,4 +236,13 @@ def _ngrams(text: str, size: int) -> set[str]:
 
 
 def _is_weak_phrase(phrase: str) -> bool:
-    return len(set(phrase)) <= 1 or phrase.isdigit()
+    return (
+        len(set(phrase)) <= 1
+        or phrase.isdigit()
+        or PLAYER_REFERENCE_RE.fullmatch(phrase) is not None
+        or _is_common_game_anchor(phrase)
+    )
+
+
+def _is_common_game_anchor(phrase: str) -> bool:
+    return any(phrase in anchor or anchor in phrase for anchor in COMMON_GAME_ANCHORS)

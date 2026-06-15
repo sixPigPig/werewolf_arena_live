@@ -52,6 +52,56 @@ def test_dialogue_quality_warnings_detects_repetition_and_catchphrase_overuse() 
     assert "low_novelty_debate" in warnings
 
 
+def test_dialogue_quality_allows_first_catchphrase_use() -> None:
+    warnings = dialogue_quality_warnings(
+        text="我先盘票型。今晚5号玩家倒牌，先看票型。",
+        prior_texts=[],
+        personality=ANALYTICAL_PERSONALITY,
+    )
+
+    assert "catchphrase_overuse" not in warnings
+
+
+def test_dialogue_quality_flags_repeated_catchphrase_use() -> None:
+    warnings = dialogue_quality_warnings(
+        text="我先盘票型。第二轮继续看投票。",
+        prior_texts=["我先盘票型。第一轮先听发言。"],
+        personality=ANALYTICAL_PERSONALITY,
+    )
+
+    assert "catchphrase_overuse" in warnings
+
+
+def test_repeated_phrase_ignores_player_reference_only() -> None:
+    warnings = dialogue_quality_warnings(
+        text="我怀疑5号玩家，因为他的投票位置靠后。",
+        prior_texts=["5号玩家需要解释自己的投票。"],
+        personality="",
+    )
+
+    assert "repeated_debate_phrase" not in warnings
+
+
+def test_repeated_phrase_ignores_shared_role_vote_vocabulary() -> None:
+    warnings = dialogue_quality_warnings(
+        text="我认为预言家查验要先放一放，今天投票位置更能说明问题。",
+        prior_texts=["预言家查验先听完，投票位置需要每个人解释清楚。"],
+        personality="",
+    )
+
+    assert "repeated_debate_phrase" not in warnings
+
+
+def test_repeated_phrase_still_flags_actual_phrase_reuse() -> None:
+    warnings = dialogue_quality_warnings(
+        text="第一轮全票挂警徽定狼，我现在还是这个判断。",
+        prior_texts=["第一轮全票挂警徽定狼，所以先把他放进狼坑。"],
+        personality="",
+    )
+
+    assert "repeated_debate_phrase" in warnings
+
+
 def test_debate_guidance_for_turn_assigns_distinct_speaker_jobs() -> None:
     first = debate_guidance_for_turn(
         speaker="票台换票",
