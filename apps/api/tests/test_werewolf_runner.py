@@ -1352,6 +1352,39 @@ def test_world_state_includes_debate_guidance_for_current_speaker() -> None:
     assert any("避免复用" in line for line in world_state["debate_guidance"])
 
 
+def test_world_state_debate_guidance_uses_round_speech_order() -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="debate_guidance_speech_order",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=2026061504,
+        rule_set=rule_set,
+    )
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=1,
+        rule_set=rule_set,
+        rng=random.Random(1),
+    )
+    active_players = [player.name for player in state.players]
+    player = state.players[1]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.speech_order = [
+        active_players[0],
+        active_players[2],
+        active_players[3],
+        active_players[4],
+        active_players[1],
+        active_players[5],
+    ]
+
+    world_state = engine._world_state(player, [], round_state)
+
+    assert any("第 5/6 位" in line for line in world_state["debate_guidance"])
+
+
 def test_action_quality_warning_event_is_published_for_stage_mismatch() -> None:
     class CapturingSink:
         def __init__(self) -> None:

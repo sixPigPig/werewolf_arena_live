@@ -2194,9 +2194,10 @@ class GameEngine:
         active_players: list[str],
         round_state: RoundState,
     ) -> list[str]:
+        speech_order = round_state.speech_order or active_players
         return debate_guidance_for_turn(
             speaker=player.name,
-            active_players=active_players,
+            active_players=speech_order,
             prior_messages=[
                 f"{entry.speaker}：{entry.message}"
                 for entry in round_state.debate

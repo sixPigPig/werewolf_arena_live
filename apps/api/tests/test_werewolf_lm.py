@@ -177,6 +177,18 @@ def test_debate_prompt_renders_turn_guidance_and_quality_feedback() -> None:
     assert "上次发言重复了我先盘票型" in prompt
 
 
+def test_vote_prompt_omits_debate_guidance() -> None:
+    prompt, _schema = build_prompt(
+        "vote",
+        {
+            **_world_state_for_special_action("村民", "Bob、Carol"),
+            "debate_guidance": ["你是本轮第 2/3 位发言。"],
+        },
+    )
+
+    assert "本轮发言任务" not in prompt
+
+
 def test_werewolf_self_explosion_prompt_mentions_chain_cost() -> None:
     prompt, _schema = build_prompt(
         "werewolf_self_explosion",
