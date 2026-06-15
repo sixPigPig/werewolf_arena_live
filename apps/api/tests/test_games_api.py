@@ -348,7 +348,11 @@ def test_create_game_run_returns_lineup_quality_warnings_for_homogeneous_profile
 
     assert response.status_code == 201
     warnings = response.json()["lineup_quality_warnings"]
-    assert warnings[0]["code"] == "homogeneous_personality_lineup"
+    assert warnings
+    assert all(set(warning) == {"code", "detail"} for warning in warnings)
+    assert "homogeneous_personality_lineup" in {
+        warning["code"] for warning in warnings
+    }
 
 
 def test_create_game_run_rejects_when_player_library_is_too_small(
