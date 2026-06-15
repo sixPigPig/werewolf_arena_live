@@ -206,6 +206,13 @@ SHERIFF_BADGE_LOST_DOUBLE_BOMB = "双爆吞警徽"
 SHERIFF_BADGE_PENDING_FIRST_BOMB = "首爆中断警长竞选"
 SHERIFF_SPEECH_CLOCKWISE = "顺时针"
 SHERIFF_SPEECH_COUNTERCLOCKWISE = "逆时针"
+OPTIONAL_ACTION_FALLBACKS = {
+    ACTION_WITCH_SAVE: NO_WITCH_SAVE,
+    ACTION_WITCH_POISON: NO_WITCH_POISON,
+    ACTION_HUNTER_SHOOT: NO_HUNTER_SHOT,
+    ACTION_WEREWOLF_SELF_EXPLOSION: WEREWOLF_NO_SELF_EXPLODE,
+    ACTION_SHERIFF_WITHDRAW: SHERIFF_STAY,
+}
 
 
 def initialize_game_state(
@@ -1806,7 +1813,21 @@ class GameEngine:
             self._checkpoint_player_action_success(result)
         invalid_error = self._invalid_player_action_error(result)
         if invalid_error is not None:
-            raise invalid_error
+            fallback_choice = self._optional_fallback_choice(request)
+            if fallback_choice is None:
+                raise invalid_error
+            invalid_value = self._invalid_value_from_result(result)
+            value = fallback_choice
+            action_log.choice = str(fallback_choice)
+            action_log.invalid_value = invalid_value
+            action_log.fallback_choice = fallback_choice
+            action_log.fallback_reason = "optional_action_invalid"
+            action_log.attempt_count = max(1, len(lm_log.invalid_attempts))
+            self._publish_optional_fallback_warning(
+                request=request,
+                invalid_value=invalid_value,
+                fallback_choice=fallback_choice,
+            )
         if not request.is_secret_wolf_action:
             self._publish(
                 "model_response_received",
@@ -1878,21 +1899,6 @@ class GameEngine:
             first_failed_index = min(exceptions)
             request = requests[first_failed_index]
             exc = exceptions[first_failed_index]
-            self._checkpoint_player_action_failure(request, exc)
-            raise exc
-
-        invalid_errors = {
-            index: error
-            for index, result in enumerate(results)
-            if result is not None
-            for error in [self._invalid_player_action_error(result)]
-            if error is not None
-        }
-        if invalid_errors:
-            self._checkpoint_player_action_results(results)
-            first_failed_index = min(invalid_errors)
-            request = requests[first_failed_index]
-            exc = invalid_errors[first_failed_index]
             self._checkpoint_player_action_failure(request, exc)
             raise exc
 
@@ -1975,6 +1981,40 @@ class GameEngine:
                 f"{request.player.name} returned invalid {request.action}: {result.value}"
             )
         return None
+
+    def _optional_fallback_choice(self, request: PlayerActionRequest) -> object | None:
+        fallback = OPTIONAL_ACTION_FALLBACKS.get(request.action)
+        if fallback is not None and fallback in request.options:
+            return fallback
+        return None
+
+    def _invalid_value_from_result(self, result: PlayerActionResult) -> object | None:
+        if result.value is not None:
+            return result.value
+        if result.lm_log.invalid_attempts:
+            return result.lm_log.invalid_attempts[-1].get("value")
+        return None
+
+    def _publish_optional_fallback_warning(
+        self,
+        *,
+        request: PlayerActionRequest,
+        invalid_value: object | None,
+        fallback_choice: object,
+    ) -> None:
+        self._publish(
+            "action_quality_warning",
+            round_number=request.round_state.number,
+            phase=request.phase,
+            actor=request.player.name,
+            action=request.action,
+            payload={
+                "warnings": ["off_option_fallback"],
+                "invalid_value": invalid_value,
+                "fallback_choice": fallback_choice,
+                "allowed_values": request.options.copy(),
+            },
+        )
 
     def _checkpoint_round_start(
         self,

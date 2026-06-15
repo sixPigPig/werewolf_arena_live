@@ -7,10 +7,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.werewolf.config import HUNTER, SEER, WEREWOLF
+from app.werewolf.config import HUNTER, SEER, WEREWOLF, WITCH
 from app.werewolf.checkpoint import player_from_dict, round_log_from_dict, round_state_from_dict
-from app.werewolf.engine import GameEngine, MaxRoundsExceeded, initialize_game_state
+from app.werewolf.engine import (
+    GameEngine,
+    MaxRoundsExceeded,
+    NO_HUNTER_SHOT,
+    NO_WITCH_POISON,
+    initialize_game_state,
+)
 from app.werewolf.live import NullEventSink
+from app.werewolf.lm import FakeProvider
 from app.werewolf.models import DeathEvent, RoundLog, RoundState
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.player_profile_prompts import compose_player_profile_prompt
@@ -1390,8 +1397,18 @@ def test_round_log_deserializes_werewolf_consensus_logs() -> None:
     assert round_log.werewolf_votes[0][0].action == "werewolf_kill_vote"
     assert round_log.werewolf_votes[0][0].lm_log.result == {"target": "Alice"}
     serialized = round_log.to_dict()
-    assert serialized["werewolf_discussion"] == payload["werewolf_discussion"]
-    assert serialized["werewolf_votes"] == payload["werewolf_votes"]
+    default_action_metadata = {
+        "invalid_value": None,
+        "fallback_choice": None,
+        "fallback_reason": None,
+        "attempt_count": 1,
+    }
+    assert serialized["werewolf_discussion"] == [
+        {**payload["werewolf_discussion"][0], **default_action_metadata}
+    ]
+    assert serialized["werewolf_votes"] == [
+        [{**payload["werewolf_votes"][0][0], **default_action_metadata}]
+    ]
 
 
 def test_werewolf_kill_vote_requests_active_wolves_concurrently() -> None:
@@ -3538,12 +3555,18 @@ def test_batched_invalid_action_checkpoints_all_responses_and_failure() -> None:
     assert all(success["prompt"] for success in checkpoint_manager.successes)
     assert [failure["actor"] for failure in checkpoint_manager.failures] == [invalid_actor]
     assert "returned invalid sheriff_run" in str(checkpoint_manager.failures[0]["error"])
-    assert [
+    decision_events = [
         event
         for event in sink.events
         if event["action"] == "sheriff_run"
         and event["type"] in {"model_response_received", "action_parsed"}
-    ] == []
+    ]
+    assert [(event["actor"], event["type"]) for event in decision_events] == [
+        (active_players[0], "model_response_received"),
+        (active_players[0], "action_parsed"),
+        (active_players[1], "model_response_received"),
+        (active_players[1], "action_parsed"),
+    ]
 
 
 def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_debate() -> None:
@@ -4602,3 +4625,95 @@ def _role_counts(players: list[dict[str, object]]) -> dict[str, int]:
         role = str(player["role"])
         counts[role] = counts.get(role, 0) + 1
     return counts
+
+
+def test_witch_poison_invalid_choice_falls_back_to_no_poison() -> None:
+    class CapturingSink:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        def publish(self, event_type: str, **kwargs: object) -> None:
+            self.events.append({"type": event_type, **kwargs})
+
+    sink = CapturingSink()
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="witch_poison_fallback",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=2026061501,
+        rule_set=rule_set,
+    )
+    witch = next(player for player in state.players if player.role == WITCH)
+    witch.witch_poison_available = True
+    provider = FakeProvider(
+        [
+            {"reasoning": "想毒被刀目标", "poison": "10号玩家"},
+            {"reasoning": "仍想毒被刀目标", "poison": "10号玩家"},
+            {"reasoning": "继续毒被刀目标", "poison": "10号玩家"},
+        ]
+    )
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        rng=random.Random(1),
+    )
+    active_players = [witch.name, "6号玩家", "10号玩家", "12号玩家"]
+    round_state = RoundState(number=5, players=active_players.copy(), attacked="10号玩家")
+    round_log = RoundLog(number=5)
+
+    engine._run_witch_phase(round_state, round_log, active_players)
+
+    assert round_state.poisoned is None
+    assert round_log.witch_poison is not None
+    assert round_log.witch_poison.choice == NO_WITCH_POISON
+    assert round_log.witch_poison.invalid_value == "10号玩家"
+    assert round_log.witch_poison.fallback_choice == NO_WITCH_POISON
+    assert any(event["type"] == "action_quality_warning" for event in sink.events)
+
+
+def test_hunter_invalid_shot_falls_back_to_no_shot() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="hunter_fallback",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=2026061502,
+        rule_set=rule_set,
+    )
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    hunter.hunter_can_shoot = True
+    provider = FakeProvider(
+        [
+            {"reasoning": "想带不存在玩家", "shoot": "99号玩家"},
+            {"reasoning": "仍带不存在玩家", "shoot": "99号玩家"},
+            {"reasoning": "继续带不存在玩家", "shoot": "99号玩家"},
+        ]
+    )
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        rng=random.Random(1),
+    )
+    active_players = [hunter.name, "6号玩家", "12号玩家"]
+    round_state = RoundState(number=5, players=active_players.copy())
+    round_log = RoundLog(number=5)
+
+    engine._maybe_run_hunter_shot(
+        dead_player=hunter.name,
+        death_cause="vote_exile",
+        round_state=round_state,
+        round_log=round_log,
+        active_players=active_players,
+        phase="day",
+    )
+
+    assert round_state.hunter_shot is None
+    assert round_log.hunter_shoot is not None
+    assert round_log.hunter_shoot.choice == NO_HUNTER_SHOT
+    assert round_log.hunter_shoot.fallback_choice == NO_HUNTER_SHOT
