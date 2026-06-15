@@ -27,3 +27,15 @@ def test_endgame_warning_for_tomorrow_without_pressure() -> None:
     )
 
     assert "endgame_tomorrow_without_pressure" in warnings
+
+
+def test_action_quality_flags_role_term_contradiction_and_self_reference() -> None:
+    assert "role_term_contradiction" in action_quality_warnings(
+        action="debate",
+        text="3号预言家查杀5号好人，所以5号可信。",
+    )
+    assert "self_reference_as_group" in action_quality_warnings(
+        action="debate",
+        text="我10号是村民，后置位10、11、12都需要解释身份。",
+        actor="10号玩家",
+    )

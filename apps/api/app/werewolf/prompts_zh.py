@@ -324,6 +324,8 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             f"{badge_context}\n"
             "选择自爆会公开你是狼人、你立刻出局，并让当天直接结束进入夜晚。\n"
             f"候选选项：{options}。\n"
+            "已有狼人自爆时，继续自爆必须能带来明确收益，例如吞警徽、阻止关键查验、保护最后隐狼或直接创造胜势。"
+            "收益不明确时选择不自爆，保留白天发言空间。"
             "请以狼人阵营收益判断，输出字段 reasoning 和 self_explode。"
         )
     if action == "investigate":
@@ -385,11 +387,20 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "输出字段 reasoning 和 save。"
         )
     if action == "witch_poison":
+        attacked = str(world_state.get("attacked") or "")
+        attacked_note = (
+            f"今晚被狼人袭击的目标是{attacked}；{attacked}不在毒药候选中，不能同时作为毒药目标。"
+            if attacked
+            else ""
+        )
         return (
             "行动：女巫夜晚毒药。\n"
             f"候选人：{options}。\n"
-            "你可以选择一名玩家使用毒药，或选择不使用毒药。"
+            f"{attacked_note}"
+            "你可以选择一名候选玩家使用毒药，或选择不使用毒药。"
+            "如果你最怀疑的人不在候选中，请在剩余候选中重新排序，或选择不使用毒药。"
             "如果不使用毒药，必须说明保留毒药仍有收益，不能只说信息不足。"
+            "poison 必须完全等于候选人中的一个值。"
             "结合公开事实、票型和警徽流判断。被毒死的猎人不能开枪。"
             "输出字段 reasoning 和 poison。"
         )

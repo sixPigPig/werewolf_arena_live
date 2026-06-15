@@ -76,6 +76,21 @@ def test_build_prompt_supports_witch_poison_action() -> None:
     assert "输出字段 reasoning 和 poison" in prompt
 
 
+def test_witch_poison_prompt_explains_attacked_target_exclusion() -> None:
+    prompt, _schema = build_prompt(
+        "witch_poison",
+        {
+            **_world_state_for_special_action("女巫", ""),
+            "options": ["6号玩家", "11号玩家", "12号玩家", "不使用毒药"],
+            "attacked": "10号玩家",
+        },
+    )
+
+    assert "今晚被狼人袭击的目标是10号玩家" in prompt
+    assert "10号玩家不在毒药候选中" in prompt
+    assert "poison 必须完全等于候选人中的一个值" in prompt
+
+
 def test_build_prompt_supports_hunter_shoot_action() -> None:
     prompt, schema = build_prompt(
         "hunter_shoot",
@@ -138,6 +153,22 @@ def test_prompt_renders_public_facts() -> None:
 
     assert "公开事实记录" in prompt
     assert "7号玩家警上声明6号玩家为好人。" in prompt
+
+
+def test_werewolf_self_explosion_prompt_mentions_chain_cost() -> None:
+    prompt, _schema = build_prompt(
+        "werewolf_self_explosion",
+        {
+            **_world_state_for_special_action("狼人", ""),
+            "public_facts": [
+                "第1轮：2号玩家自爆为狼人，白天立即结束。",
+                "第2轮：7号玩家自爆为狼人，白天立即结束。",
+            ],
+        },
+    )
+
+    assert "已有狼人自爆" in prompt
+    assert "收益不明确时选择不自爆" in prompt
 
 
 def test_prompt_renders_endgame_context() -> None:

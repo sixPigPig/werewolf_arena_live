@@ -2135,6 +2135,7 @@ class GameEngine:
         warnings = action_quality_warnings(
             action=action,
             text=text,
+            actor=actor,
             endgame=len(round_state.players) <= 4,
         )
         if not warnings:
