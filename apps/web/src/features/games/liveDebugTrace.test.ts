@@ -192,6 +192,33 @@ describe("buildLiveDebugTraces", () => {
     expect(traces[0].warnings).toContain("解析与状态不一致");
   });
 
+  it("attaches action quality fallback warnings to action traces", () => {
+    const traces = buildLiveDebugTraces([
+      event({
+        id: 1,
+        type: "action_requested",
+        actor: "1号玩家",
+        action: "witch_poison",
+        payload: { options: ["不使用毒药"] },
+      }),
+      event({
+        id: 2,
+        type: "action_quality_warning",
+        actor: "1号玩家",
+        action: "witch_poison",
+        payload: {
+          warnings: ["off_option_fallback"],
+          invalid_value: "10号玩家",
+          fallback_choice: "不使用毒药",
+        },
+      }),
+    ]);
+
+    expect(traces[0].status).toBe("warning");
+    expect(traces[0].warnings).toContain("off_option_fallback");
+    expect(traces[0].impactSummary.join(" ")).toContain("不使用毒药");
+  });
+
   it("compares vote conflicts only against the trace actor vote", () => {
     const traces = buildLiveDebugTraces([
       event({

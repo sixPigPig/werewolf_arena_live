@@ -68,6 +68,10 @@ export type RawActionLog = {
   options: string[];
   choice: string | null;
   lm_log: RawLmLog;
+  invalid_value?: unknown;
+  fallback_choice?: unknown;
+  fallback_reason?: string | null;
+  attempt_count?: number;
 };
 
 export type SpeechEntry = {
@@ -246,6 +250,10 @@ export type DebugItem = {
   prompt: string;
   rawResponse: string;
   parsed: unknown;
+  invalidValue?: unknown;
+  fallbackChoice?: unknown;
+  fallbackReason?: string | null;
+  attemptCount?: number;
 };
 
 export type GameRound = Omit<

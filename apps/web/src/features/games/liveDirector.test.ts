@@ -63,6 +63,42 @@ describe("toDirectorCue", () => {
     expect(cue.durationMs).toBe(2500);
   });
 
+  it("renders retry and fallback warnings as safe status cues", () => {
+    expect(
+      toDirectorCue(
+        event({
+          type: "model_retry_scheduled",
+          actor: "1号玩家",
+          action: "witch_poison",
+          payload: {
+            attempt: 2,
+            invalid_value: "10号玩家",
+            message: "模型选择不在候选项中，正在带反馈重试。",
+          },
+        }),
+      ),
+    ).toMatchObject({
+      title: "1号玩家 正在重试行动",
+      body: "模型选择不在候选项中，正在带反馈重试。第 2 次尝试。",
+      importance: "action",
+    });
+
+    expect(
+      toDirectorCue(
+        event({
+          type: "action_quality_warning",
+          actor: "1号玩家",
+          action: "witch_poison",
+          payload: {
+            warnings: ["off_option_fallback"],
+            invalid_value: "10号玩家",
+            fallback_choice: "不使用毒药",
+          },
+        }),
+      ).body,
+    ).toContain("已使用安全兜底：不使用毒药");
+  });
+
   it("renders state updates for debate, votes, exile and completed games", () => {
     expect(
       toDirectorCue(

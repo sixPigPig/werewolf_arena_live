@@ -98,6 +98,40 @@ describe("normalizeGameReplay", () => {
     });
   });
 
+  it("normalizes invalid action fallback metadata into debug items", () => {
+    const replay = normalizeGameReplay({
+      ...rawReplay,
+      logs: [
+        {
+          ...rawReplay.logs[0],
+          witch_poison: {
+            actor: "1号玩家",
+            action: "witch_poison",
+            options: ["6号玩家", "12号玩家", "不使用毒药"],
+            choice: "不使用毒药",
+            invalid_value: "10号玩家",
+            fallback_choice: "不使用毒药",
+            fallback_reason: "optional_action_invalid",
+            attempt_count: 3,
+            lm_log: {
+              prompt: "请选择毒药目标。",
+              raw_response: '{"poison":"10号玩家"}',
+              result: { poison: "10号玩家" },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(replay.debugItems[1]).toMatchObject({
+      action: "witch_poison",
+      invalidValue: "10号玩家",
+      fallbackChoice: "不使用毒药",
+      fallbackReason: "optional_action_invalid",
+      attemptCount: 3,
+    });
+  });
+
   it("normalizes werewolf consensus fields and debug actions", () => {
     const replay = normalizeGameReplay({
       ...rawReplay,

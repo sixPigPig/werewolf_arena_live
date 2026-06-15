@@ -138,6 +138,32 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
     };
   }
 
+  if (event.type === "model_retry_scheduled") {
+    const attempt = Number(payload.attempt ?? 0);
+    return {
+      ...base,
+      title: `${event.actor ?? "玩家"} 正在重试行动`,
+      body: `${stringField(payload, "message") || "模型输出不在候选项中，正在重试。"}${attempt ? `第 ${attempt} 次尝试。` : ""}`,
+      importance: "action",
+      durationMs: 3000,
+      compressible: true,
+    };
+  }
+
+  if (event.type === "action_quality_warning") {
+    const fallbackChoice = stringField(payload, "fallback_choice");
+    return {
+      ...base,
+      title: "行动质量提示",
+      body: fallbackChoice
+        ? `已使用安全兜底：${fallbackChoice}`
+        : readablePayload(rawPayload),
+      importance: "action",
+      durationMs: 3500,
+      compressible: true,
+    };
+  }
+
   if (event.type === "model_request_started") {
     return {
       ...base,

@@ -286,6 +286,26 @@ function appendEventDetails(trace: LiveDebugTrace, event: LiveGameEvent) {
     return;
   }
 
+  if (event.type === "action_quality_warning") {
+    upsertNode(trace, {
+      kind: "stage",
+      eventId: event.id,
+      label: "质量提示",
+      status: "warning",
+    });
+    const warnings = arrayStrings(event.payload, "warnings");
+    trace.warnings = uniqueStrings([...trace.warnings, ...warnings]);
+    const fallbackChoice = stringField(event.payload, "fallback_choice");
+    if (fallbackChoice) {
+      trace.impactSummary = uniqueStrings([
+        ...trace.impactSummary,
+        `安全兜底：${fallbackChoice}`,
+      ]);
+      trace.choice = fallbackChoice;
+    }
+    return;
+  }
+
   if (event.type === "action_parsed") {
     upsertNode(trace, {
       kind: "parsed",
@@ -697,6 +717,11 @@ function hasStateTargetConflict(
 function stringField(payload: Record<string, unknown>, key: string) {
   const value = payload[key];
   return typeof value === "string" ? value : "";
+}
+
+function arrayStrings(payload: Record<string, unknown>, key: string): string[] {
+  const value = payload[key];
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 function recordField(

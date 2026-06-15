@@ -424,6 +424,10 @@ function pushAction(
     prompt: action.lm_log.prompt ?? "",
     rawResponse: action.lm_log.raw_response ?? "",
     parsed: action.lm_log.result,
+    invalidValue: action.invalid_value,
+    fallbackChoice: action.fallback_choice,
+    fallbackReason: action.fallback_reason ?? null,
+    attemptCount: action.attempt_count ?? 1,
   });
 }
 
