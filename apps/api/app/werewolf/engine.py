@@ -20,6 +20,7 @@ from app.werewolf.config import (
     WINNER_WEREWOLVES,
     choose_player_names,
 )
+from app.werewolf.debate_realism import debate_guidance_for_turn
 from app.werewolf.live import NullEventSink
 from app.werewolf.lm import LmLog, ModelProvider, generate_action_with_events
 from app.werewolf.streaming import action_visible_stream_field
@@ -2176,6 +2177,7 @@ class GameEngine:
             "endgame_context": self._endgame_context(active_players),
             "remaining_players": "、".join(active_players),
             "debate": debate,
+            "debate_guidance": self._debate_guidance(player, active_players, round_state),
             "personality": player.personality,
             "rule_text": render_rule_text(self.rule_set),
             "werewolf_context": self._werewolf_context(player, active_players),
@@ -2185,6 +2187,22 @@ class GameEngine:
             "debate_turns_left": max(0, self.debate_turns - len(round_state.debate)),
             "options": "、".join(options),
         }
+
+    def _debate_guidance(
+        self,
+        player: Player,
+        active_players: list[str],
+        round_state: RoundState,
+    ) -> list[str]:
+        return debate_guidance_for_turn(
+            speaker=player.name,
+            active_players=active_players,
+            prior_messages=[
+                f"{entry.speaker}：{entry.message}"
+                for entry in round_state.debate
+            ],
+            personality=player.personality,
+        )
 
     def _add_public_fact(self, round_number: int, category: str, text: str) -> None:
         self.state.public_facts.append(

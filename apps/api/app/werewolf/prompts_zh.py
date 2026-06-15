@@ -178,6 +178,8 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
         _render_endgame_context(world_state),
         _render_sheriff_election(world_state),
         _render_debate(world_state),
+        _render_debate_guidance(world_state),
+        _render_quality_feedback(world_state),
         _render_instruction(action, world_state),
         "请只输出合法 JSON，不要输出 Markdown，不要添加解释性前后缀。",
         _render_json_example(action),
@@ -234,6 +236,20 @@ def _render_debate(world_state: dict[str, Any]) -> str:
     if not debate:
         return "本轮发言记录：讨论尚未开始。"
     return "本轮发言记录：\n" + "\n".join(f"- {line}" for line in debate)
+
+
+def _render_debate_guidance(world_state: dict[str, Any]) -> str:
+    guidance = world_state.get("debate_guidance") or []
+    if not guidance:
+        return ""
+    return "本轮发言任务：\n" + "\n".join(f"- {line}" for line in guidance)
+
+
+def _render_quality_feedback(world_state: dict[str, Any]) -> str:
+    feedback = str(world_state.get("quality_feedback") or "").strip()
+    if not feedback:
+        return ""
+    return f"质量反馈：\n- {feedback}"
 
 
 def _render_instruction(action: str, world_state: dict[str, Any]) -> str:

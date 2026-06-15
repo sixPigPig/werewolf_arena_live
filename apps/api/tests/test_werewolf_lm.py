@@ -155,6 +155,28 @@ def test_prompt_renders_public_facts() -> None:
     assert "7号玩家警上声明6号玩家为好人。" in prompt
 
 
+def test_debate_prompt_renders_turn_guidance_and_quality_feedback() -> None:
+    prompt, _schema = build_prompt(
+        "debate",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "debate": ["票台换票：我先盘票型。第一轮全票挂警徽定狼。"],
+            "debate_guidance": [
+                "你是本轮第 2/3 位发言。",
+                "你是中置位：选择一个前置位观点进行赞同或反驳，并给出新的理由。",
+                "避免复用这些已出现或个人口癖表达：我先盘票型。",
+            ],
+            "quality_feedback": "上次发言重复了我先盘票型，请换表达并新增反问。",
+        },
+    )
+
+    assert "本轮发言任务" in prompt
+    assert "你是本轮第 2/3 位发言。" in prompt
+    assert "避免复用这些已出现或个人口癖表达：我先盘票型。" in prompt
+    assert "质量反馈" in prompt
+    assert "上次发言重复了我先盘票型" in prompt
+
+
 def test_werewolf_self_explosion_prompt_mentions_chain_cost() -> None:
     prompt, _schema = build_prompt(
         "werewolf_self_explosion",

@@ -20,7 +20,7 @@ from app.werewolf.engine import (
 )
 from app.werewolf.live import NullEventSink
 from app.werewolf.lm import FakeProvider
-from app.werewolf.models import DeathEvent, RoundLog, RoundState
+from app.werewolf.models import DeathEvent, DebateEntry, RoundLog, RoundState
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.player_profile_prompts import compose_player_profile_prompt
 from app.werewolf.prompts_zh import build_prompt
@@ -1319,6 +1319,37 @@ def test_world_state_marks_four_player_endgame_pressure() -> None:
 
     assert any("当前存活 4 人" in line for line in world_state["endgame_context"])
     assert any("错误放逐" in line for line in world_state["endgame_context"])
+
+
+def test_world_state_includes_debate_guidance_for_current_speaker() -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="debate_guidance_world_state",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=2026061504,
+        rule_set=rule_set,
+    )
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=1,
+        rule_set=rule_set,
+        rng=random.Random(1),
+    )
+    active_players = [player.name for player in state.players]
+    player = state.players[1]
+    player.personality = "常用表达: 我先盘票型；这里不急着站死"
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.debate.append(
+        DebateEntry(speaker=active_players[0], message="我先盘票型。第一轮先听发言。")
+    )
+
+    world_state = engine._world_state(player, [], round_state)
+
+    assert "debate_guidance" in world_state
+    assert any("第 2/6 位" in line for line in world_state["debate_guidance"])
+    assert any("避免复用" in line for line in world_state["debate_guidance"])
 
 
 def test_action_quality_warning_event_is_published_for_stage_mismatch() -> None:
