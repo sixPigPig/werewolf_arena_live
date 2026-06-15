@@ -1823,11 +1823,12 @@ class GameEngine:
             action_log.fallback_choice = fallback_choice
             action_log.fallback_reason = "optional_action_invalid"
             action_log.attempt_count = max(1, len(lm_log.invalid_attempts))
-            self._publish_optional_fallback_warning(
-                request=request,
-                invalid_value=invalid_value,
-                fallback_choice=fallback_choice,
-            )
+            if not request.is_secret_wolf_action:
+                self._publish_optional_fallback_warning(
+                    request=request,
+                    invalid_value=invalid_value,
+                    fallback_choice=fallback_choice,
+                )
         if not request.is_secret_wolf_action:
             self._publish(
                 "model_response_received",
@@ -1842,18 +1843,28 @@ class GameEngine:
                 },
             )
             visible_result = _visible_action_result(request.action, lm_log.result)
+            parsed_payload = {
+                "choice": action_log.choice,
+                "result": visible_result,
+                "visible_result": visible_result,
+                "options": request.options.copy(),
+            }
+            if action_log.fallback_choice is not None:
+                parsed_payload.update(
+                    {
+                        "invalid_value": action_log.invalid_value,
+                        "fallback_choice": action_log.fallback_choice,
+                        "fallback_reason": action_log.fallback_reason,
+                        "attempt_count": action_log.attempt_count,
+                    }
+                )
             self._publish(
                 "action_parsed",
                 round_number=request.round_state.number,
                 phase=request.phase,
                 actor=player.name,
                 action=request.action,
-                payload={
-                    "choice": action_log.choice,
-                    "result": visible_result,
-                    "visible_result": visible_result,
-                    "options": request.options.copy(),
-                },
+                payload=parsed_payload,
             )
         return value, action_log
 

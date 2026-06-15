@@ -14,6 +14,8 @@ from app.werewolf.engine import (
     MaxRoundsExceeded,
     NO_HUNTER_SHOT,
     NO_WITCH_POISON,
+    WEREWOLF_NO_SELF_EXPLODE,
+    WEREWOLF_SELF_EXPLODE,
     initialize_game_state,
 )
 from app.werewolf.live import NullEventSink
@@ -22,7 +24,12 @@ from app.werewolf.models import DeathEvent, RoundLog, RoundState
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.player_profile_prompts import compose_player_profile_prompt
 from app.werewolf.prompts_zh import build_prompt
-from app.werewolf.rules import MODEL_GROUP_WEREWOLF, get_rule_set
+from app.werewolf.rules import (
+    ACTION_WEREWOLF_SELF_EXPLOSION,
+    ACTION_WITCH_POISON,
+    MODEL_GROUP_WEREWOLF,
+    get_rule_set,
+)
 from app.werewolf.runner import GameRunError, run_game
 
 
@@ -4672,7 +4679,30 @@ def test_witch_poison_invalid_choice_falls_back_to_no_poison() -> None:
     assert round_log.witch_poison.choice == NO_WITCH_POISON
     assert round_log.witch_poison.invalid_value == "10号玩家"
     assert round_log.witch_poison.fallback_choice == NO_WITCH_POISON
-    assert any(event["type"] == "action_quality_warning" for event in sink.events)
+    warning_event = next(
+        event
+        for event in sink.events
+        if event["type"] == "action_quality_warning"
+        and event["action"] == ACTION_WITCH_POISON
+    )
+    assert warning_event["payload"]["warnings"] == ["off_option_fallback"]
+    assert warning_event["payload"]["invalid_value"] == "10号玩家"
+    assert warning_event["payload"]["fallback_choice"] == NO_WITCH_POISON
+    assert warning_event["payload"]["allowed_values"] == [
+        "6号玩家",
+        "12号玩家",
+        NO_WITCH_POISON,
+    ]
+    parsed_event = next(
+        event
+        for event in sink.events
+        if event["type"] == "action_parsed" and event["action"] == ACTION_WITCH_POISON
+    )
+    assert parsed_event["payload"]["choice"] == NO_WITCH_POISON
+    assert parsed_event["payload"]["invalid_value"] == "10号玩家"
+    assert parsed_event["payload"]["fallback_choice"] == NO_WITCH_POISON
+    assert parsed_event["payload"]["fallback_reason"] == "optional_action_invalid"
+    assert parsed_event["payload"]["attempt_count"] == 3
 
 
 def test_hunter_invalid_shot_falls_back_to_no_shot() -> None:
@@ -4717,3 +4747,58 @@ def test_hunter_invalid_shot_falls_back_to_no_shot() -> None:
     assert round_log.hunter_shoot is not None
     assert round_log.hunter_shoot.choice == NO_HUNTER_SHOT
     assert round_log.hunter_shoot.fallback_choice == NO_HUNTER_SHOT
+
+
+def test_secret_self_explosion_invalid_choice_falls_back_without_public_leak() -> None:
+    sink = CapturingEventSink()
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="self_explosion_fallback_privacy",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=2026061503,
+        rule_set=rule_set,
+    )
+    players_by_name = state.player_by_name()
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    provider = FakeProvider(
+        [
+            {"reasoning": "想选奇怪答案", "self_explode": "也许自爆"},
+            {"reasoning": "继续选奇怪答案", "self_explode": "也许自爆"},
+            {"reasoning": "仍然选奇怪答案", "self_explode": "也许自爆"},
+        ]
+    )
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        rng=random.Random(1),
+    )
+    round_state = RoundState(number=5, players=[player.name for player in state.players])
+
+    choice, action_log = engine._player_action(
+        player=players_by_name[wolf.name],
+        action=ACTION_WEREWOLF_SELF_EXPLOSION,
+        options=[WEREWOLF_SELF_EXPLODE, WEREWOLF_NO_SELF_EXPLODE],
+        result_key="self_explode",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert choice == WEREWOLF_NO_SELF_EXPLODE
+    assert action_log.choice == WEREWOLF_NO_SELF_EXPLODE
+    assert action_log.invalid_value == "也许自爆"
+    assert action_log.fallback_choice == WEREWOLF_NO_SELF_EXPLODE
+    assert action_log.fallback_reason == "optional_action_invalid"
+    leaking_events = [
+        event
+        for event in sink.events
+        if event["type"] in {"action_quality_warning", "action_parsed"}
+        and (
+            event.get("actor") == wolf.name
+            or event.get("action") == ACTION_WEREWOLF_SELF_EXPLOSION
+        )
+    ]
+    assert leaking_events == []
