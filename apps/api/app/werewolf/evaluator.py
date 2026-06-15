@@ -16,6 +16,7 @@ PRIVATE_LEAK_PATTERNS = (
 SUSPICION_MARKERS = ("怀疑", "可疑", "像狼", "狼人", "出", "票", "抗推")
 PRESSURE_MARKERS = ("直接输", "不能出错", "轮次", "生死", "最后")
 TOMORROW_MARKERS = ("明天再", "下一轮")
+INVALID_ACTION_MARKERS = ("returned invalid", "invalid witch_poison", "invalid hunter_shoot")
 
 
 @dataclass(frozen=True)
@@ -41,9 +42,51 @@ def evaluate_replay(path: Path) -> ReplayEvaluationReport:
     issues: list[ReplayEvaluationIssue] = []
     public_good_claims: dict[str, str] = {}
     seen_issue_keys: set[tuple[str, int, str]] = set()
+    recent_self_explosions: list[int] = []
+
+    error_message = _error_message_from_data(data)
+    if any(marker in error_message for marker in INVALID_ACTION_MARKERS):
+        issues.append(
+            ReplayEvaluationIssue(
+                code="invalid_action_abort",
+                round_number=0,
+                detail=error_message,
+            )
+        )
+    logs_path = path.with_name("game_logs.json")
+    if error_message and logs_path.exists():
+        try:
+            logs_data = json.loads(logs_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logs_data = None
+        if logs_data == []:
+            issues.append(
+                ReplayEvaluationIssue(
+                    code="empty_partial_logs",
+                    round_number=0,
+                    detail="Partial replay has an error but game_logs.json is empty.",
+                )
+            )
 
     for round_state in rounds:
         round_number = int(round_state.get("number") or 0)
+
+        if round_state.get("werewolf_self_exploded"):
+            recent_self_explosions.append(round_number)
+            recent_self_explosions = [
+                item for item in recent_self_explosions if round_number - item <= 2
+            ]
+            if len(recent_self_explosions) >= 3:
+                _append_issue(
+                    issues,
+                    seen_issue_keys,
+                    ReplayEvaluationIssue(
+                        code="chain_self_explosion_overuse",
+                        round_number=round_number,
+                        detail="Three werewolf self-explosions occurred within three rounds.",
+                    ),
+                    key_detail="chain",
+                )
 
         for speaker, summary in _summary_entries(round_state.get("summaries")):
             if _contains_private_leak(summary):
@@ -63,6 +106,30 @@ def evaluate_replay(path: Path) -> ReplayEvaluationReport:
                 public_good_claims.setdefault(player, speech)
 
         debate_text = "\n".join(_speech_entries(round_state.get("debate")))
+        for speaker, text in _speech_entry_details(round_state.get("debate")):
+            if _has_role_term_contradiction(text):
+                _append_issue(
+                    issues,
+                    seen_issue_keys,
+                    ReplayEvaluationIssue(
+                        code="role_term_contradiction",
+                        round_number=round_number,
+                        detail="Speech combines incompatible role terms such as 查杀 and 好人.",
+                    ),
+                    key_detail=f"{speaker}:{text[:80]}",
+                )
+            if speaker and _has_self_reference_as_group(speaker, text):
+                _append_issue(
+                    issues,
+                    seen_issue_keys,
+                    ReplayEvaluationIssue(
+                        code="self_reference_as_group",
+                        round_number=round_number,
+                        detail="Speaker grouped their own seat with other seats as if they were separate.",
+                    ),
+                    key_detail=f"{speaker}:{text[:80]}",
+                )
+
         for player, claim in public_good_claims.items():
             if (
                 _casts_suspicion_on_player(debate_text, player)
@@ -131,6 +198,16 @@ def _rounds_from_data(data: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _error_message_from_data(data: dict[str, Any]) -> str:
+    error_message = data.get("error_message")
+    if isinstance(error_message, str):
+        return error_message
+    state = data.get("state")
+    if isinstance(state, dict) and isinstance(state.get("error_message"), str):
+        return str(state["error_message"])
+    return ""
+
+
 def _summary_entries(value: Any) -> list[tuple[str, str]]:
     if isinstance(value, dict):
         return [(str(actor), str(summary)) for actor, summary in value.items()]
@@ -180,6 +257,46 @@ def _speech_entries(value: Any) -> list[str]:
         elif isinstance(item, str):
             messages.append(item)
     return messages
+
+
+def _speech_entry_details(value: Any) -> list[tuple[str, str]]:
+    if not isinstance(value, list):
+        return []
+    messages: list[tuple[str, str]] = []
+    for item in value:
+        if isinstance(item, dict):
+            message = item.get("message")
+            if isinstance(message, str):
+                speaker = str(item.get("speaker") or item.get("actor") or "")
+                messages.append((speaker, message))
+                continue
+            choice = item.get("choice")
+            if isinstance(choice, str):
+                speaker = str(item.get("actor") or item.get("speaker") or "")
+                messages.append((speaker, choice))
+        elif isinstance(item, str):
+            messages.append(("", item))
+    return messages
+
+
+def _has_role_term_contradiction(text: str) -> bool:
+    return ("查杀" in text and "好人" in text) or ("金水" in text and "狼人" in text)
+
+
+def _has_self_reference_as_group(speaker: str, text: str) -> bool:
+    normalized = text.replace(" ", "")
+    number = speaker.replace("玩家", "")
+    aliases = [number]
+    bare_number = number.replace("号", "")
+    if bare_number != number:
+        aliases.append(bare_number)
+    return (
+        "后置位" in normalized or "他们" in normalized or "范围" in normalized
+    ) and any(
+        pattern in normalized
+        for alias in aliases
+        for pattern in (f"{alias}、", f"、{alias}", f"{alias}和")
+    )
 
 
 def _claimed_good_players(text: str) -> list[str]:
