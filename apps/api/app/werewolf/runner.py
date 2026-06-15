@@ -81,6 +81,7 @@ def run_game(
     )
     engine_rng = random.Random(f"{seed}:engine") if seed is not None else random.Random()
 
+    engine = None
     try:
         engine = GameEngine(
             state=state,
@@ -93,6 +94,8 @@ def run_game(
         )
         logs = engine.run()
     except Exception as exc:
+        if engine is not None:
+            logs = engine.logs
         state.error_message = str(exc)
         save_game(state, logs, log_directory)
         raise GameRunError(str(exc), log_directory) from exc
@@ -144,6 +147,7 @@ def resume_game(
     rng = rng_from_json_state(checkpoint.get("rng_state"))
     logs_after_resume = []
 
+    engine = None
     try:
         engine = GameEngine(
             state=state,
@@ -157,6 +161,8 @@ def resume_game(
         )
         logs_after_resume = engine.run()
     except Exception as exc:
+        if engine is not None:
+            logs_after_resume = engine.logs
         state.error_message = str(exc)
         save_game(state, logs_before_round + logs_after_resume, log_directory)
         raise GameRunError(str(exc), log_directory) from exc

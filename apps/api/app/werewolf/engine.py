@@ -311,9 +311,11 @@ class GameEngine:
         self.rng = rng or random.Random()
         self.starting_active_players = starting_active_players
         self.checkpoint_manager = checkpoint_manager
+        self.logs: list[RoundLog] = []
 
     def run(self) -> list[RoundLog]:
         logs: list[RoundLog] = []
+        self.logs = logs
         active_players = (
             self.starting_active_players.copy()
             if self.starting_active_players is not None

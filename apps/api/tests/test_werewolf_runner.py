@@ -4802,3 +4802,31 @@ def test_secret_self_explosion_invalid_choice_falls_back_without_public_leak() -
         )
     ]
     assert leaking_events == []
+
+
+def test_run_game_saves_in_progress_logs_when_required_action_fails(tmp_path) -> None:
+    provider = FakeProvider(
+        [
+            {"reasoning": "非法刀口", "target": "不存在玩家"},
+            {"reasoning": "仍非法", "target": "不存在玩家"},
+            {"reasoning": "继续非法", "target": "不存在玩家"},
+        ]
+    )
+
+    with pytest.raises(GameRunError):
+        run_game(
+            villager_model="deepseek-v4-flash",
+            werewolf_model="deepseek-v4-flash",
+            seed=2026061503,
+            logs_dir=tmp_path,
+            max_rounds=1,
+            provider=provider,
+            session_id="required_action_failure",
+            rule_set_id="starter_6",
+        )
+
+    log_path = tmp_path / "required_action_failure" / "game_logs.json"
+    logs = json.loads(log_path.read_text(encoding="utf-8"))
+
+    assert logs
+    assert logs[0]["number"] == 1
