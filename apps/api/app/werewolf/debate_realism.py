@@ -12,6 +12,9 @@ CATCHPHRASE_SPLIT_RE = re.compile(r"[；;、,，\n]+")
 PLAYER_REFERENCE_RE = re.compile(
     r"^(?:玩家)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})号(?:位)?(?:玩家)?$"
 )
+PLAYER_REFERENCE_IN_TEXT_RE = re.compile(
+    r"(?:玩家)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})号(?:位)?(?:玩家)?"
+)
 LOW_NOVELTY_THRESHOLD = 0.45
 COMMON_GAME_ANCHORS = {
     "预言家查验",
@@ -76,16 +79,16 @@ def repeated_phrase_candidates(
     counts: Counter[str] = Counter()
     first_seen: dict[str, int] = {}
     for text in texts:
-        normalized = normalize_dialogue_text(text)
         seen_for_text: set[str] = set()
-        max_chars = min(8, len(normalized))
-        for size in range(min_chars, max_chars + 1):
-            for index in range(0, len(normalized) - size + 1):
-                phrase = normalized[index : index + size]
-                if _is_weak_phrase(phrase):
-                    continue
-                seen_for_text.add(phrase)
-                first_seen.setdefault(phrase, len(first_seen))
+        for normalized in _phrase_candidate_fragments(text):
+            max_chars = min(8, len(normalized))
+            for size in range(min_chars, max_chars + 1):
+                for index in range(0, len(normalized) - size + 1):
+                    phrase = normalized[index : index + size]
+                    if _is_weak_phrase(phrase):
+                        continue
+                    seen_for_text.add(phrase)
+                    first_seen.setdefault(phrase, len(first_seen))
         counts.update(seen_for_text)
 
     phrases: list[str] = []
@@ -233,6 +236,12 @@ def _ngrams(text: str, size: int) -> set[str]:
     if len(text) < size:
         return set()
     return {text[index : index + size] for index in range(0, len(text) - size + 1)}
+
+
+def _phrase_candidate_fragments(text: str) -> list[str]:
+    normalized = normalize_dialogue_text(text)
+    without_player_refs = PLAYER_REFERENCE_IN_TEXT_RE.sub(" ", normalized)
+    return [fragment for fragment in without_player_refs.split() if fragment]
 
 
 def _is_weak_phrase(phrase: str) -> bool:

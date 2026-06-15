@@ -82,6 +82,16 @@ def test_repeated_phrase_ignores_player_reference_only() -> None:
     assert "repeated_debate_phrase" not in warnings
 
 
+def test_repeated_phrase_ignores_predicate_plus_player_reference() -> None:
+    warnings = dialogue_quality_warnings(
+        text="我怀疑5号玩家。",
+        prior_texts=["我也怀疑5号玩家。"],
+        personality="",
+    )
+
+    assert "repeated_debate_phrase" not in warnings
+
+
 def test_repeated_phrase_ignores_shared_role_vote_vocabulary() -> None:
     warnings = dialogue_quality_warnings(
         text="我认为预言家查验要先放一放，今天投票位置更能说明问题。",
