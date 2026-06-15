@@ -3,6 +3,7 @@ from app.werewolf.debate_realism import (
     debate_guidance_for_turn,
     dialogue_quality_warnings,
     lineup_quality_warnings,
+    lineup_quality_warnings_from_players,
     repeated_phrase_candidates,
 )
 from app.werewolf.player_configs import PlayerConfig
@@ -75,6 +76,18 @@ def test_debate_guidance_for_turn_assigns_distinct_speaker_jobs() -> None:
     assert any("避免复用" in line for line in final)
 
 
+def test_debate_guidance_for_turn_uses_known_speaker_position() -> None:
+    guidance = debate_guidance_for_turn(
+        speaker="烛火潜行",
+        active_players=["票台换票", "狼啸听风", "烛火潜行"],
+        prior_messages=[],
+        personality=ANALYTICAL_PERSONALITY,
+    )
+
+    assert any("第 3/3 位" in line for line in guidance)
+    assert any("明确票口" in line for line in guidance)
+
+
 def test_lineup_quality_warnings_detects_homogeneous_profiles() -> None:
     configs = [
         PlayerConfig(
@@ -105,5 +118,100 @@ def test_lineup_quality_warnings_detects_homogeneous_profiles() -> None:
         {
             "code": "shared_tag_lineup",
             "detail": "4 players share tag 控场.",
+        },
+    ]
+
+
+def test_lineup_quality_warnings_from_players_handles_normal_player_dict_tags() -> None:
+    players = [
+        {
+            "seat": seat,
+            "profile_id": f"profile-{seat}",
+            "name": f"玩家{seat}",
+            "model": "model",
+            "personality_id": "analytical",
+            "personality": ANALYTICAL_PERSONALITY,
+            "appearance_id": "default",
+            "avatar_prompt": "",
+            "tags": ["控场", "复盘"],
+        }
+        for seat in range(1, 5)
+    ]
+
+    warnings = lineup_quality_warnings_from_players(players)
+
+    assert warnings == [
+        {
+            "code": "homogeneous_personality_lineup",
+            "detail": "4 players share personality_id analytical.",
+        },
+        {
+            "code": "shared_catchphrase_lineup",
+            "detail": "4 players share catchphrase 我先盘票型.",
+        },
+        {
+            "code": "shared_tag_lineup",
+            "detail": "4 players share tag 控场.",
+        },
+    ]
+
+
+def test_lineup_quality_warnings_from_players_ignores_malformed_or_missing_tags() -> None:
+    players = [
+        {
+            "seat": 1,
+            "profile_id": "profile-1",
+            "name": "玩家1",
+            "model": "model",
+            "personality_id": "analytical",
+            "personality": ANALYTICAL_PERSONALITY,
+            "appearance_id": "default",
+            "avatar_prompt": "",
+            "tags": "控场",
+        },
+        {
+            "seat": 2,
+            "profile_id": "profile-2",
+            "name": "玩家2",
+            "model": "model",
+            "personality_id": "analytical",
+            "personality": ANALYTICAL_PERSONALITY,
+            "appearance_id": "default",
+            "avatar_prompt": "",
+            "tags": 7,
+        },
+        {
+            "seat": 3,
+            "profile_id": "profile-3",
+            "name": "玩家3",
+            "model": "model",
+            "personality_id": "analytical",
+            "personality": ANALYTICAL_PERSONALITY,
+            "appearance_id": "default",
+            "avatar_prompt": "",
+            "tags": None,
+        },
+        {
+            "seat": 4,
+            "profile_id": "profile-4",
+            "name": "玩家4",
+            "model": "model",
+            "personality_id": "analytical",
+            "personality": ANALYTICAL_PERSONALITY,
+            "appearance_id": "default",
+            "avatar_prompt": "",
+        },
+    ]
+
+    warnings = lineup_quality_warnings_from_players(players)
+
+    assert warnings == [
+        {
+            "code": "homogeneous_personality_lineup",
+            "detail": "4 players share personality_id analytical.",
+        },
+        {
+            "code": "shared_catchphrase_lineup",
+            "detail": "4 players share catchphrase 我先盘票型.",
         },
     ]

@@ -4,7 +4,7 @@ import re
 from collections import Counter
 from typing import Any
 
-from app.werewolf.player_configs import PlayerConfig
+from app.werewolf.player_configs import PlayerConfig, player_config_from_dict
 
 PUNCTUATION_RE = re.compile(r"[\s，。！？、；：,.!?;:\"'《》（）()【】\[\]{}<>-]+")
 CATCHPHRASE_LINE_RE = re.compile(r"^常用表达:\s*(.+)$", re.MULTILINE)
@@ -74,11 +74,11 @@ def dialogue_quality_warnings(
 ) -> list[str]:
     warnings: list[str] = []
     normalized = normalize_dialogue_text(text)
-    normalized_catchphrases = [
-        normalize_dialogue_text(phrase)
-        for phrase in catchphrases_from_personality(personality)
-        if normalize_dialogue_text(phrase)
-    ]
+    normalized_catchphrases: list[str] = []
+    for phrase in catchphrases_from_personality(personality):
+        normalized_phrase = normalize_dialogue_text(phrase)
+        if normalized_phrase:
+            normalized_catchphrases.append(normalized_phrase)
     if any(phrase in normalized for phrase in normalized_catchphrases):
         warnings.append("catchphrase_overuse")
 
@@ -102,7 +102,10 @@ def debate_guidance_for_turn(
     personality: str,
 ) -> list[str]:
     total = max(1, len(active_players))
-    position = min(total, len(prior_messages) + 1)
+    if speaker in active_players:
+        position = active_players.index(speaker) + 1
+    else:
+        position = min(total, len(prior_messages) + 1)
     lines = [f"你是本轮第 {position}/{total} 位发言。"]
     if position == 1:
         lines.append("开一个新信息点：优先提出夜死、票型、身份声明或发言顺序中的一个可验证疑点。")
@@ -159,21 +162,14 @@ def lineup_quality_warnings(configs: list[PlayerConfig]) -> list[dict[str, str]]
 
 
 def lineup_quality_warnings_from_players(players: list[dict[str, Any]]) -> list[dict[str, str]]:
-    configs = [
-        PlayerConfig(
-            seat=index,
-            profile_id=str(player.get("profile_id") or ""),
-            name=str(player.get("name") or ""),
-            model=str(player.get("model") or ""),
-            personality_id=str(player.get("personality_id") or ""),
-            personality=str(player.get("personality") or ""),
-            appearance_id=str(player.get("appearance_id") or ""),
-            avatar_prompt=str(player.get("avatar_prompt") or ""),
-            tags=tuple(str(tag) for tag in player.get("tags") or []),
-        )
-        for index, player in enumerate(players, start=1)
-        if isinstance(player, dict)
-    ]
+    configs: list[PlayerConfig] = []
+    for index, player in enumerate(players, start=1):
+        if not isinstance(player, dict):
+            continue
+        data = dict(player)
+        if data.get("seat") is None:
+            data["seat"] = index
+        configs.append(player_config_from_dict(data))
     return lineup_quality_warnings(configs)
 
 
