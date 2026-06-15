@@ -323,6 +323,34 @@ def test_create_game_run_randomly_fills_profiles_when_no_lineup_selected(
     assert [config.to_dict() for config in captured[0]["player_configs"]] == configs
 
 
+def test_create_game_run_returns_lineup_quality_warnings_for_homogeneous_profiles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(6)
+    registry = LiveRunRegistry()
+    override_logs_root(tmp_path)
+    override_live_registry(registry)
+
+    def fake_background_run(**kwargs: object) -> None:
+        del kwargs
+
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"rule_set_id": "starter_6", "seed": 21, "max_rounds": 1},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    warnings = response.json()["lineup_quality_warnings"]
+    assert warnings[0]["code"] == "homogeneous_personality_lineup"
+
+
 def test_create_game_run_rejects_when_player_library_is_too_small(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

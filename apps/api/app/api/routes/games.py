@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.werewolf.debate_realism import lineup_quality_warnings
 from app.werewolf.live import EventSink, LiveEvent, LiveRunRegistry, format_sse
 from app.werewolf.player_configs import (
     PlayerConfig,
@@ -252,6 +253,7 @@ def create_game_run(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    lineup_warnings = lineup_quality_warnings(player_configs)
     session_id = new_session_id()
     run = registry.create_run(
         session_id=session_id,
@@ -262,6 +264,7 @@ def create_game_run(
         rule_set_id=rule_set.id,
         rule_set=rule_snapshot,
         player_configs=player_configs,
+        lineup_quality_warnings=lineup_warnings,
     )
     thread = threading.Thread(
         target=_run_game_in_background,

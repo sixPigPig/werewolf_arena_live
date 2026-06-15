@@ -476,6 +476,11 @@ export type PlayerConfig = {
   tags?: string[];
 };
 
+export type LineupQualityWarning = {
+  code: string;
+  detail: string;
+};
+
 export type GameRun = {
   run_id: string;
   session_id: string;
@@ -492,6 +497,7 @@ export type GameRun = {
   error: string | null;
   event_count: number;
   player_configs?: PlayerConfig[];
+  lineup_quality_warnings?: LineupQualityWarning[];
 };
 
 export type CreateGameRunRequest = {

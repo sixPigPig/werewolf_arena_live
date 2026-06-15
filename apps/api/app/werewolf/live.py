@@ -88,6 +88,7 @@ class LiveGameRun:
         default_factory=lambda: rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
     )
     player_configs: list[dict[str, Any]] = field(default_factory=list)
+    lineup_quality_warnings: list[dict[str, str]] = field(default_factory=list)
     status: RunStatus = "queued"
     created_at: str = field(default_factory=utc_now)
     started_at: str | None = None
@@ -113,6 +114,7 @@ class LiveGameRun:
             "rule_set_id": self.rule_set_id,
             "rule_set": _copy_json_payload(self.rule_set),
             "player_configs": _copy_json_payload(self.player_configs),
+            "lineup_quality_warnings": _copy_json_payload(self.lineup_quality_warnings),
             "status": self.status,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -139,6 +141,7 @@ class LiveRunRegistry:
         rule_set_id: str = DEFAULT_RULE_SET_ID,
         rule_set: dict[str, Any] | None = None,
         player_configs: list[PlayerConfig] | None = None,
+        lineup_quality_warnings: list[dict[str, str]] | None = None,
     ) -> LiveGameRun:
         rule_set_data = (
             _copy_json_payload(rule_set)
@@ -146,6 +149,7 @@ class LiveRunRegistry:
             else rule_set_snapshot(get_rule_set(rule_set_id))
         )
         player_config_data = [config.to_dict() for config in player_configs or []]
+        lineup_warning_data = _copy_json_payload(lineup_quality_warnings or [])
         with self._lock:
             run = LiveGameRun(
                 run_id=f"run_{uuid.uuid4().hex[:12]}",
@@ -157,6 +161,7 @@ class LiveRunRegistry:
                 rule_set_id=rule_set_id,
                 rule_set=rule_set_data,
                 player_configs=player_config_data,
+                lineup_quality_warnings=lineup_warning_data,
             )
             self._runs[run.run_id] = run
             self._publish_locked(
@@ -171,6 +176,7 @@ class LiveRunRegistry:
                     "rule_set_id": rule_set_id,
                     "rule_set": rule_set_data,
                     "player_configs": player_config_data,
+                    "lineup_quality_warnings": lineup_warning_data,
                 },
             )
             return run
