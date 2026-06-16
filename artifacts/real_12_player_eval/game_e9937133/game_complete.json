@@ -1,0 +1,1395 @@
+{
+  "session_id": "game_e9937133",
+  "players": [
+    {
+      "name": "1号玩家",
+      "role": "村民",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。",
+        "第2轮：2号玩家自爆为狼人，白天立即结束。",
+        "第3轮：7号玩家出局，将警徽移交给3号玩家。",
+        "第3轮：夜晚，7号玩家出局。",
+        "第3轮：8号玩家自爆为狼人，白天立即结束。",
+        "第4轮：3号玩家出局，警徽被撕毁。",
+        "第4轮：夜晚，3号玩家出局。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": null,
+        "wolf_teammates": []
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": false,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "2号玩家",
+      "role": "狼人",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": "4号玩家",
+        "wolf_teammates": [
+          "4号玩家",
+          "8号玩家",
+          "10号玩家"
+        ]
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": true,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "3号玩家",
+      "role": "女巫",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。",
+        "第2轮：2号玩家自爆为狼人，白天立即结束。",
+        "第3轮：7号玩家出局，将警徽移交给3号玩家。",
+        "第3轮：夜晚，7号玩家出局。",
+        "第3轮：8号玩家自爆为狼人，白天立即结束。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": null,
+        "wolf_teammates": []
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": false,
+      "witch_antidote_available": false,
+      "witch_poison_available": true,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "4号玩家",
+      "role": "狼人",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": "2号玩家",
+        "wolf_teammates": [
+          "2号玩家",
+          "8号玩家",
+          "10号玩家"
+        ]
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": true,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "5号玩家",
+      "role": "白痴",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": null,
+        "wolf_teammates": []
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": false,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "6号玩家",
+      "role": "村民",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。",
+        "第2轮：2号玩家自爆为狼人，白天立即结束。",
+        "第3轮：7号玩家出局，将警徽移交给3号玩家。",
+        "第3轮：夜晚，7号玩家出局。",
+        "第3轮：8号玩家自爆为狼人，白天立即结束。",
+        "第4轮：3号玩家出局，警徽被撕毁。",
+        "第4轮：夜晚，3号玩家出局。",
+        "第4轮：白天投票，1号玩家被放逐。",
+        "第4轮总结：我是6号村民，本轮1号被放逐，若为狼则胜利；否则继续寻找最后一狼。我怀疑9号虽然看起来理性，但狼可能故意带节奏，明天再看。”",
+        "第5轮：夜晚，11号玩家出局。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": null,
+        "wolf_teammates": []
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": false,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "7号玩家",
+      "role": "预言家",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：我查验了3号玩家，阵营是好人阵营。",
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：我查验了6号玩家，阵营是好人阵营。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。",
+        "第2轮：2号玩家自爆为狼人，白天立即结束。",
+        "第3轮：我查验了1号玩家，阵营是好人阵营。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": null,
+        "wolf_teammates": []
+      },
+      "known_roles": {
+        "3号玩家": "好人阵营",
+        "6号玩家": "好人阵营",
+        "1号玩家": "好人阵营"
+      },
+      "can_vote": true,
+      "revealed_role": false,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "8号玩家",
+      "role": "狼人",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。",
+        "第2轮：2号玩家自爆为狼人，白天立即结束。",
+        "第3轮：7号玩家出局，将警徽移交给3号玩家。",
+        "第3轮：夜晚，7号玩家出局。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": "2号玩家",
+        "wolf_teammates": [
+          "2号玩家",
+          "4号玩家",
+          "10号玩家"
+        ]
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": true,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "9号玩家",
+      "role": "猎人",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。",
+        "第2轮：2号玩家自爆为狼人，白天立即结束。",
+        "第3轮：7号玩家出局，将警徽移交给3号玩家。",
+        "第3轮：夜晚，7号玩家出局。",
+        "第3轮：8号玩家自爆为狼人，白天立即结束。",
+        "第4轮：3号玩家出局，警徽被撕毁。",
+        "第4轮：夜晚，3号玩家出局。",
+        "第4轮：白天投票，1号玩家被放逐。",
+        "第4轮总结：1号被放逐表明他是好人，剩余一狼在6、10、11、12中。6号最可疑，因为1号首踩6号，6号反踩并成功抗推。明天计划出6号，若我被刀则开枪带走6号。",
+        "第5轮：夜晚，11号玩家出局。",
+        "第5轮：白天投票，6号玩家被放逐。",
+        "第5轮总结：6号被放逐，大概率是狼。游戏可能已结束，若未结束则下一轮注意10和12的动向，作为猎人我保留开枪能力，若被刀则带走可疑玩家。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": null,
+        "wolf_teammates": []
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": false,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "10号玩家",
+      "role": "狼人",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。",
+        "第2轮：2号玩家自爆为狼人，白天立即结束。",
+        "第3轮：7号玩家出局，将警徽移交给3号玩家。",
+        "第3轮：夜晚，7号玩家出局。",
+        "第3轮：8号玩家自爆为狼人，白天立即结束。",
+        "第4轮：3号玩家出局，警徽被撕毁。",
+        "第4轮：夜晚，3号玩家出局。",
+        "第4轮：白天投票，1号玩家被放逐。",
+        "第4轮总结：本轮我作为10号狼人，发言附和9号，指出1号可疑，成功抗推1号。下一步策略是继续假装平民，引导大家怀疑6号，争取白天放逐6号，同时避免暴露自己。",
+        "第5轮：夜晚，11号玩家出局。",
+        "第5轮：白天投票，6号玩家被放逐。",
+        "第5轮总结：我选择夜晚刀9号，白天继续伪装村民，说服12号相信9号是狼，从而放逐9号，最后刀12号获胜。",
+        "第6轮：夜晚，9号玩家、12号玩家出局。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [
+          {
+            "speaker": "1号玩家",
+            "message": "大家好，我是1号村民。现在只剩一狼了，就在6、9、10、11、12里面。我怀疑6号，他之前发言比较划水，今天我们先出6号，不要分票，大家同意吗？"
+          },
+          {
+            "speaker": "6号玩家",
+            "message": "我是6号村民，1号你凭什么直接出我？你才可疑，从头到尾在带节奏。剩一狼就在你1、9、10、11、12里面，我觉得1号最像狼，今天出1号吧。"
+          },
+          {
+            "speaker": "9号玩家",
+            "message": "我是9号，目前剩一狼就在我们当中。1号和6号互踩，肯定有一个是狼。我觉得1号更可疑，上来就要出6号，有点急。今天先出1号，大家别分票。如果1号是好人，明天再处理6号。我平民一个，先表明立场。"
+          },
+          {
+            "speaker": "10号玩家",
+            "message": "我是10号，我觉得1号很可疑。1号上来就咬定6号是狼，但没有任何依据，更像是想抗推一个好人。6号反驳后，1号没有进一步解释，反而继续踩。9号说得对，今天先出1号，如果1号是好人，明天再处理6号。我平民，同意出1号。"
+          },
+          {
+            "speaker": "11号玩家",
+            "message": "我是11号村民，听了大家的发言，1号上来就咬6号，确实可疑，而且9号和10号也怀疑1号，我觉得今天可以先出1号。如果1号是好人，明天再处理6号，这样比较稳妥。"
+          },
+          {
+            "speaker": "12号玩家",
+            "message": "我是12号村民，听了大家的发言，我觉得1号确实可疑，上来就要出6号，没有逻辑，反而像是想抗推好人。9号分析得对，今天先出1号，明天再处理6号。我同意出1号。"
+          },
+          {
+            "speaker": "6号玩家",
+            "message": "我是6号村民，场上还剩4人，已知3狼已出，最后一狼就在9、10、12中。昨晚11号出局，大概率是狼刀。从出局顺序看，狼人连续刀警长，说明他们想控场。我怀疑9号，因为9号一直很理性，但狼人往往靠理性隐藏。今天我们先放逐9号，听一下10和12的意见。"
+          },
+          {
+            "speaker": "9号玩家",
+            "message": "6号，你这发言太刻意了。你说最后一狼在9、10、12里，但你自己呢？你一点嫌疑没有？1号被你抗推，当时你就很积极。现在场上只剩4人，你直接聊爆了。我建议今天出6，10和12可以想想，6号是不是一直在带节奏。我是好人，不是狼。"
+          },
+          {
+            "speaker": "10号玩家",
+            "message": "我是10号村民。6号昨天抗推1号就很可疑，今天又直接说狼在9、10、12里，把自己摘得干干净净，明显在带节奏。9号分析很对，6号才是那个最像狼的人。我建议今天出6号，大家别被误导。"
+          },
+          {
+            "speaker": "12号玩家",
+            "message": "我是12号村民。6号昨天就急着抗推1号，今天又直接说狼在9、10、12里，完全忽略自己。这行为太像狼了。9号和10号的逻辑很清楚，6号才是那个带节奏的人。今天必须出6号，先把他放逐，如果他是好人，明天再看情况。我投票出6。"
+          }
+        ],
+        "other_wolf": "2号玩家",
+        "wolf_teammates": [
+          "2号玩家",
+          "4号玩家",
+          "8号玩家"
+        ]
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": false,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "11号玩家",
+      "role": "村民",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。",
+        "第2轮：2号玩家自爆为狼人，白天立即结束。",
+        "第3轮：7号玩家出局，将警徽移交给3号玩家。",
+        "第3轮：夜晚，7号玩家出局。",
+        "第3轮：8号玩家自爆为狼人，白天立即结束。",
+        "第4轮：3号玩家出局，警徽被撕毁。",
+        "第4轮：夜晚，3号玩家出局。",
+        "第4轮：白天投票，1号玩家被放逐。",
+        "第4轮总结：1号是好人，那么6号就是狼。今天建议出6号，不能再分票了。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": null,
+        "wolf_teammates": []
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": false,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    },
+    {
+      "name": "12号玩家",
+      "role": "村民",
+      "model": "deepseek-v4-flash",
+      "personality_id": "balanced",
+      "personality": "",
+      "appearance_id": "default",
+      "avatar_prompt": "",
+      "avatar_image_url": "",
+      "profile_id": null,
+      "tags": [],
+      "observations": [
+        "第1轮：4号玩家自爆为狼人，白天立即结束。",
+        "第1轮：夜晚，5号玩家出局。",
+        "第2轮：夜晚无人出局。",
+        "第2轮：警长竞选，7号玩家当选警长，投票计为1.5票。",
+        "第2轮：2号玩家自爆为狼人，白天立即结束。",
+        "第3轮：7号玩家出局，将警徽移交给3号玩家。",
+        "第3轮：夜晚，7号玩家出局。",
+        "第3轮：8号玩家自爆为狼人，白天立即结束。",
+        "第4轮：3号玩家出局，警徽被撕毁。",
+        "第4轮：夜晚，3号玩家出局。",
+        "第4轮：白天投票，1号玩家被放逐。",
+        "第4轮总结：本回合放逐1号，我同意出1号。如果1号为狼人则游戏结束；否则明天需在6、9、10、11中找出最后一狼，我暂怀疑6号，但会进一步分析发言。",
+        "第5轮：夜晚，11号玩家出局。",
+        "第5轮：白天投票，6号玩家被放逐。",
+        "第5轮总结：本轮我们成功放逐了6号，他大概率是狼人。如果游戏结束，则好人获胜；如果未结束，则需在9号和10号中进一步分析，但我暂时相信9号和10号是好人。"
+      ],
+      "bidding_rationale": "",
+      "gamestate": {
+        "round_number": 6,
+        "current_players": [
+          "10号玩家"
+        ],
+        "debate": [],
+        "other_wolf": null,
+        "wolf_teammates": []
+      },
+      "known_roles": {},
+      "can_vote": true,
+      "revealed_role": false,
+      "witch_antidote_available": false,
+      "witch_poison_available": false,
+      "hunter_can_shoot": false,
+      "is_sheriff": false
+    }
+  ],
+  "rule_set": {
+    "id": "classic_12_seer_witch_hunter_idiot",
+    "version": "2026.04",
+    "name": "12 人预女猎白局",
+    "description": "4 狼、预言家、女巫、猎人、白痴与 4 民的标准屠边局。",
+    "player_count": 12,
+    "roles": [
+      {
+        "role": "狼人",
+        "count": 4,
+        "team": "werewolves",
+        "model_group": "werewolf",
+        "category": "werewolf"
+      },
+      {
+        "role": "预言家",
+        "count": 1,
+        "team": "villagers",
+        "model_group": "villager",
+        "category": "god"
+      },
+      {
+        "role": "女巫",
+        "count": 1,
+        "team": "villagers",
+        "model_group": "villager",
+        "category": "god"
+      },
+      {
+        "role": "猎人",
+        "count": 1,
+        "team": "villagers",
+        "model_group": "villager",
+        "category": "god"
+      },
+      {
+        "role": "白痴",
+        "count": 1,
+        "team": "villagers",
+        "model_group": "villager",
+        "category": "god"
+      },
+      {
+        "role": "村民",
+        "count": 4,
+        "team": "villagers",
+        "model_group": "villager",
+        "category": "civilian"
+      }
+    ],
+    "night_actions": [
+      "remove",
+      "investigate",
+      "witch_save",
+      "witch_poison"
+    ],
+    "day_actions": [
+      "sheriff_run",
+      "sheriff_speech",
+      "sheriff_withdraw",
+      "sheriff_vote",
+      "sheriff_pk_speech",
+      "sheriff_runoff_vote",
+      "werewolf_self_explosion",
+      "speech_order",
+      "debate",
+      "vote",
+      "hunter_shoot",
+      "summarize"
+    ],
+    "win_condition": "slaughter_side",
+    "reveal_policy": "hidden",
+    "complexity": "进阶",
+    "estimated_duration": "长",
+    "sheriff_enabled": true,
+    "sheriff_vote_weight": 1.5,
+    "werewolf_self_explosion_enabled": true,
+    "sheriff_badge_bomb_policy": "double",
+    "speech_policy": "sheriff_directed",
+    "speech_rounds": 1,
+    "rule_tags": [
+      "有警长",
+      "警徽 1.5 票",
+      "屠边",
+      "预女猎白"
+    ]
+  },
+  "rounds": [
+    {
+      "number": 1,
+      "players": [
+        "1号玩家",
+        "2号玩家",
+        "3号玩家",
+        "4号玩家",
+        "5号玩家",
+        "6号玩家",
+        "7号玩家",
+        "8号玩家",
+        "9号玩家",
+        "10号玩家",
+        "11号玩家",
+        "12号玩家"
+      ],
+      "attacked": "5号玩家",
+      "eliminated": "5号玩家",
+      "protected": null,
+      "investigated": "3号玩家",
+      "exiled": null,
+      "night_deaths": [
+        {
+          "player": "5号玩家",
+          "cause": "werewolf_attack",
+          "source": "狼人"
+        }
+      ],
+      "werewolf_discussion": [
+        {
+          "round": 1,
+          "speaker": "2号玩家",
+          "target": "5号玩家",
+          "message": "先刀5号，位置居中，看反应。"
+        },
+        {
+          "round": 1,
+          "speaker": "4号玩家",
+          "target": "5号玩家",
+          "message": "同意刀5号，先看反应。"
+        },
+        {
+          "round": 1,
+          "speaker": "8号玩家",
+          "target": "5号玩家",
+          "message": "同意刀5号，统一行动。"
+        },
+        {
+          "round": 1,
+          "speaker": "10号玩家",
+          "target": "5号玩家",
+          "message": "同意刀5，统一行动，注意白天发言配合。"
+        }
+      ],
+      "werewolf_vote_rounds": [
+        {
+          "round": 1,
+          "candidates": [
+            "1号玩家",
+            "3号玩家",
+            "5号玩家",
+            "6号玩家",
+            "7号玩家",
+            "9号玩家",
+            "11号玩家",
+            "12号玩家"
+          ],
+          "votes": {
+            "2号玩家": "5号玩家",
+            "4号玩家": "5号玩家",
+            "8号玩家": "5号玩家",
+            "10号玩家": "5号玩家"
+          },
+          "tally": {
+            "5号玩家": 4
+          },
+          "unanimous": true,
+          "result": "5号玩家"
+        }
+      ],
+      "day_deaths": [
+        {
+          "player": "4号玩家",
+          "cause": "werewolf_self_explosion",
+          "source": "4号玩家"
+        }
+      ],
+      "saved_by_witch": null,
+      "poisoned": null,
+      "hunter_shot": null,
+      "idiot_revealed": null,
+      "debate": [],
+      "bids": [],
+      "votes": [],
+      "summaries": {},
+      "sheriff": null,
+      "sheriff_candidates": [
+        "2号玩家",
+        "3号玩家",
+        "4号玩家",
+        "5号玩家",
+        "7号玩家",
+        "8号玩家",
+        "9号玩家",
+        "10号玩家"
+      ],
+      "sheriff_speech_order": [
+        "7号玩家",
+        "5号玩家",
+        "4号玩家",
+        "3号玩家",
+        "2号玩家",
+        "10号玩家",
+        "9号玩家",
+        "8号玩家"
+      ],
+      "sheriff_speech_direction": "逆时针",
+      "sheriff_speeches": [
+        {
+          "speaker": "7号玩家",
+          "message": "7号预言家，昨晚验了3号是好人。上警拿警徽，警徽流先4后8。希望好人能相信我带队。3号暂时认好，后面看站边。暂时没有其他信息，过了。"
+        }
+      ],
+      "sheriff_withdrawn": [],
+      "sheriff_final_candidates": [],
+      "sheriff_voters": [
+        "1号玩家",
+        "6号玩家",
+        "11号玩家",
+        "12号玩家"
+      ],
+      "sheriff_votes": {},
+      "sheriff_pk_candidates": [],
+      "sheriff_pk_speeches": [],
+      "sheriff_runoff_votes": {},
+      "sheriff_elected": null,
+      "speech_order": [],
+      "speech_order_choice": null,
+      "vote_weights": {},
+      "sheriff_badge_target": null,
+      "sheriff_badge_lost": false,
+      "werewolf_self_exploded": "4号玩家",
+      "day_ended_by_self_explosion": true,
+      "sheriff_pre_election_bomb_count": 1,
+      "sheriff_election_pending": true,
+      "sheriff_badge_lost_reason": "首爆中断警长竞选",
+      "success": true
+    },
+    {
+      "number": 2,
+      "players": [
+        "1号玩家",
+        "2号玩家",
+        "3号玩家",
+        "6号玩家",
+        "7号玩家",
+        "8号玩家",
+        "9号玩家",
+        "10号玩家",
+        "11号玩家",
+        "12号玩家"
+      ],
+      "attacked": "3号玩家",
+      "eliminated": null,
+      "protected": null,
+      "investigated": "6号玩家",
+      "exiled": null,
+      "night_deaths": [],
+      "werewolf_discussion": [
+        {
+          "round": 1,
+          "speaker": "2号玩家",
+          "target": "3号玩家",
+          "message": "建议刀3号，位置中性，可能好人"
+        },
+        {
+          "round": 1,
+          "speaker": "8号玩家",
+          "target": "3号玩家",
+          "message": "同意刀3号，位置中性且无特殊身份暴露，稳妥起见。"
+        },
+        {
+          "round": 1,
+          "speaker": "10号玩家",
+          "target": "3号玩家",
+          "message": "同意刀3号，稳妥推进。"
+        }
+      ],
+      "werewolf_vote_rounds": [
+        {
+          "round": 1,
+          "candidates": [
+            "1号玩家",
+            "3号玩家",
+            "6号玩家",
+            "7号玩家",
+            "9号玩家",
+            "11号玩家",
+            "12号玩家"
+          ],
+          "votes": {
+            "2号玩家": "3号玩家",
+            "8号玩家": "3号玩家",
+            "10号玩家": "3号玩家"
+          },
+          "tally": {
+            "3号玩家": 3
+          },
+          "unanimous": true,
+          "result": "3号玩家"
+        }
+      ],
+      "day_deaths": [
+        {
+          "player": "2号玩家",
+          "cause": "werewolf_self_explosion",
+          "source": "2号玩家"
+        }
+      ],
+      "saved_by_witch": "3号玩家",
+      "poisoned": null,
+      "hunter_shot": null,
+      "idiot_revealed": null,
+      "debate": [],
+      "bids": [],
+      "votes": [],
+      "summaries": {},
+      "sheriff": "7号玩家",
+      "sheriff_candidates": [
+        "2号玩家",
+        "3号玩家",
+        "7号玩家",
+        "8号玩家",
+        "9号玩家"
+      ],
+      "sheriff_speech_order": [
+        "8号玩家",
+        "9号玩家",
+        "2号玩家",
+        "3号玩家",
+        "7号玩家"
+      ],
+      "sheriff_speech_direction": "顺时针",
+      "sheriff_speeches": [
+        {
+          "speaker": "8号玩家",
+          "message": "我是8号预言家，昨晚查验2号，2号是我的金水。警徽流先验6号，再验7号。4号自爆狼出局，狼队损失一狼，我希望女巫藏好，猎人不要暴露，警下玩家跟我投票。谢谢。"
+        },
+        {
+          "speaker": "9号玩家",
+          "message": "我是9号，上警竞选警长。8号跳预言家给2号金水，我觉得8号发言还行，但4号自爆后狼队可能悍跳，我会先认8号真预言家，警徽流暂跟8号。如果后面有对跳，我会仔细分辨。希望大家把警徽投给我，我来带队归票。"
+        },
+        {
+          "speaker": "2号玩家",
+          "message": "我是2号，8号预言家给我金水，我认8号真预言家。4号自爆后狼队大概率悍跳，9号虽然认8号真，但想抢警徽，行为可疑。警徽流支持8号先验6再验7，希望警下玩家把警徽投给8号，让真预言家带队。"
+        },
+        {
+          "speaker": "3号玩家",
+          "message": "我是3号，上警竞选警长。8号预言家给2号金水，发言不错，4号自爆后狼队大概率不悍跳，我认8号真预言家。我退水，警徽投给8号，让他带队归票。"
+        },
+        {
+          "speaker": "7号玩家",
+          "message": "我是7号预言家，昨晚查验6号，6号是好人。第一轮我查验了3号，3号也是好人。4号是自爆狼，狼队损失一狼。8号给我2号金水，但警徽流先6后7，明显想抗推我。我才是真预言家，警徽流先验1号，再验10号。请警下玩家把警徽投给我，我来带队归票。"
+        }
+      ],
+      "sheriff_withdrawn": [
+        "2号玩家",
+        "3号玩家",
+        "8号玩家",
+        "9号玩家"
+      ],
+      "sheriff_final_candidates": [
+        "7号玩家"
+      ],
+      "sheriff_voters": [
+        "1号玩家",
+        "6号玩家",
+        "10号玩家",
+        "11号玩家",
+        "12号玩家"
+      ],
+      "sheriff_votes": {},
+      "sheriff_pk_candidates": [],
+      "sheriff_pk_speeches": [],
+      "sheriff_runoff_votes": {},
+      "sheriff_elected": "7号玩家",
+      "speech_order": [
+        "6号玩家",
+        "3号玩家",
+        "2号玩家",
+        "1号玩家",
+        "12号玩家",
+        "11号玩家",
+        "10号玩家",
+        "9号玩家",
+        "8号玩家",
+        "7号玩家"
+      ],
+      "speech_order_choice": "警右发言",
+      "vote_weights": {},
+      "sheriff_badge_target": null,
+      "sheriff_badge_lost": false,
+      "werewolf_self_exploded": "2号玩家",
+      "day_ended_by_self_explosion": true,
+      "sheriff_pre_election_bomb_count": 0,
+      "sheriff_election_pending": false,
+      "sheriff_badge_lost_reason": null,
+      "success": true
+    },
+    {
+      "number": 3,
+      "players": [
+        "1号玩家",
+        "3号玩家",
+        "6号玩家",
+        "7号玩家",
+        "8号玩家",
+        "9号玩家",
+        "10号玩家",
+        "11号玩家",
+        "12号玩家"
+      ],
+      "attacked": "7号玩家",
+      "eliminated": "7号玩家",
+      "protected": null,
+      "investigated": "1号玩家",
+      "exiled": null,
+      "night_deaths": [
+        {
+          "player": "7号玩家",
+          "cause": "werewolf_attack",
+          "source": "狼人"
+        }
+      ],
+      "werewolf_discussion": [
+        {
+          "round": 1,
+          "speaker": "8号玩家",
+          "target": "7号玩家",
+          "message": "今晚刀警长7号，减少好人优势。"
+        },
+        {
+          "round": 1,
+          "speaker": "10号玩家",
+          "target": "7号玩家",
+          "message": "今晚刀7号，女巫解药已用，这一轮必死。"
+        }
+      ],
+      "werewolf_vote_rounds": [
+        {
+          "round": 1,
+          "candidates": [
+            "1号玩家",
+            "3号玩家",
+            "6号玩家",
+            "7号玩家",
+            "9号玩家",
+            "11号玩家",
+            "12号玩家"
+          ],
+          "votes": {
+            "8号玩家": "7号玩家",
+            "10号玩家": "7号玩家"
+          },
+          "tally": {
+            "7号玩家": 2
+          },
+          "unanimous": true,
+          "result": "7号玩家"
+        }
+      ],
+      "day_deaths": [
+        {
+          "player": "8号玩家",
+          "cause": "werewolf_self_explosion",
+          "source": "8号玩家"
+        }
+      ],
+      "saved_by_witch": null,
+      "poisoned": null,
+      "hunter_shot": null,
+      "idiot_revealed": null,
+      "debate": [],
+      "bids": [],
+      "votes": [],
+      "summaries": {},
+      "sheriff": "3号玩家",
+      "sheriff_candidates": [],
+      "sheriff_speech_order": [],
+      "sheriff_speech_direction": null,
+      "sheriff_speeches": [],
+      "sheriff_withdrawn": [],
+      "sheriff_final_candidates": [],
+      "sheriff_voters": [],
+      "sheriff_votes": {},
+      "sheriff_pk_candidates": [],
+      "sheriff_pk_speeches": [],
+      "sheriff_runoff_votes": {},
+      "sheriff_elected": null,
+      "speech_order": [
+        "6号玩家",
+        "8号玩家",
+        "9号玩家",
+        "10号玩家",
+        "11号玩家",
+        "12号玩家",
+        "1号玩家",
+        "3号玩家"
+      ],
+      "speech_order_choice": "警左发言",
+      "vote_weights": {},
+      "sheriff_badge_target": "3号玩家",
+      "sheriff_badge_lost": false,
+      "werewolf_self_exploded": "8号玩家",
+      "day_ended_by_self_explosion": true,
+      "sheriff_pre_election_bomb_count": 0,
+      "sheriff_election_pending": false,
+      "sheriff_badge_lost_reason": null,
+      "success": true
+    },
+    {
+      "number": 4,
+      "players": [
+        "1号玩家",
+        "3号玩家",
+        "6号玩家",
+        "9号玩家",
+        "10号玩家",
+        "11号玩家",
+        "12号玩家"
+      ],
+      "attacked": "3号玩家",
+      "eliminated": "3号玩家",
+      "protected": null,
+      "investigated": null,
+      "exiled": "1号玩家",
+      "night_deaths": [
+        {
+          "player": "3号玩家",
+          "cause": "werewolf_attack",
+          "source": "狼人"
+        }
+      ],
+      "werewolf_discussion": [],
+      "werewolf_vote_rounds": [
+        {
+          "round": 1,
+          "candidates": [
+            "1号玩家",
+            "3号玩家",
+            "6号玩家",
+            "9号玩家",
+            "11号玩家",
+            "12号玩家"
+          ],
+          "votes": {
+            "10号玩家": "3号玩家"
+          },
+          "tally": {
+            "3号玩家": 1
+          },
+          "unanimous": true,
+          "result": "3号玩家"
+        }
+      ],
+      "day_deaths": [
+        {
+          "player": "1号玩家",
+          "cause": "vote_exile",
+          "source": "投票"
+        }
+      ],
+      "saved_by_witch": null,
+      "poisoned": null,
+      "hunter_shot": null,
+      "idiot_revealed": null,
+      "debate": [
+        {
+          "speaker": "1号玩家",
+          "message": "大家好，我是1号村民。现在只剩一狼了，就在6、9、10、11、12里面。我怀疑6号，他之前发言比较划水，今天我们先出6号，不要分票，大家同意吗？"
+        },
+        {
+          "speaker": "6号玩家",
+          "message": "我是6号村民，1号你凭什么直接出我？你才可疑，从头到尾在带节奏。剩一狼就在你1、9、10、11、12里面，我觉得1号最像狼，今天出1号吧。"
+        },
+        {
+          "speaker": "9号玩家",
+          "message": "我是9号，目前剩一狼就在我们当中。1号和6号互踩，肯定有一个是狼。我觉得1号更可疑，上来就要出6号，有点急。今天先出1号，大家别分票。如果1号是好人，明天再处理6号。我平民一个，先表明立场。"
+        },
+        {
+          "speaker": "10号玩家",
+          "message": "我是10号，我觉得1号很可疑。1号上来就咬定6号是狼，但没有任何依据，更像是想抗推一个好人。6号反驳后，1号没有进一步解释，反而继续踩。9号说得对，今天先出1号，如果1号是好人，明天再处理6号。我平民，同意出1号。"
+        },
+        {
+          "speaker": "11号玩家",
+          "message": "我是11号村民，听了大家的发言，1号上来就咬6号，确实可疑，而且9号和10号也怀疑1号，我觉得今天可以先出1号。如果1号是好人，明天再处理6号，这样比较稳妥。"
+        },
+        {
+          "speaker": "12号玩家",
+          "message": "我是12号村民，听了大家的发言，我觉得1号确实可疑，上来就要出6号，没有逻辑，反而像是想抗推好人。9号分析得对，今天先出1号，明天再处理6号。我同意出1号。"
+        }
+      ],
+      "bids": [],
+      "votes": [
+        {
+          "1号玩家": "6号玩家",
+          "6号玩家": "1号玩家",
+          "9号玩家": "1号玩家",
+          "10号玩家": "1号玩家",
+          "11号玩家": "1号玩家",
+          "12号玩家": "1号玩家"
+        }
+      ],
+      "summaries": {
+        "6号玩家": "我是6号村民，本轮1号被放逐，若为狼则胜利；否则继续寻找最后一狼。我怀疑9号虽然看起来理性，但狼可能故意带节奏，明天再看。”",
+        "9号玩家": "1号被放逐表明他是好人，剩余一狼在6、10、11、12中。6号最可疑，因为1号首踩6号，6号反踩并成功抗推。明天计划出6号，若我被刀则开枪带走6号。",
+        "10号玩家": "本轮我作为10号狼人，发言附和9号，指出1号可疑，成功抗推1号。下一步策略是继续假装平民，引导大家怀疑6号，争取白天放逐6号，同时避免暴露自己。",
+        "11号玩家": "1号是好人，那么6号就是狼。今天建议出6号，不能再分票了。",
+        "12号玩家": "本回合放逐1号，我同意出1号。如果1号为狼人则游戏结束；否则明天需在6、9、10、11中找出最后一狼，我暂怀疑6号，但会进一步分析发言。"
+      },
+      "sheriff": null,
+      "sheriff_candidates": [],
+      "sheriff_speech_order": [],
+      "sheriff_speech_direction": null,
+      "sheriff_speeches": [],
+      "sheriff_withdrawn": [],
+      "sheriff_final_candidates": [],
+      "sheriff_voters": [],
+      "sheriff_votes": {},
+      "sheriff_pk_candidates": [],
+      "sheriff_pk_speeches": [],
+      "sheriff_runoff_votes": {},
+      "sheriff_elected": null,
+      "speech_order": [
+        "1号玩家",
+        "6号玩家",
+        "9号玩家",
+        "10号玩家",
+        "11号玩家",
+        "12号玩家"
+      ],
+      "speech_order_choice": null,
+      "vote_weights": {
+        "1号玩家": 1.0,
+        "6号玩家": 1.0,
+        "9号玩家": 1.0,
+        "10号玩家": 1.0,
+        "11号玩家": 1.0,
+        "12号玩家": 1.0
+      },
+      "sheriff_badge_target": null,
+      "sheriff_badge_lost": true,
+      "werewolf_self_exploded": null,
+      "day_ended_by_self_explosion": false,
+      "sheriff_pre_election_bomb_count": 0,
+      "sheriff_election_pending": false,
+      "sheriff_badge_lost_reason": null,
+      "success": true
+    },
+    {
+      "number": 5,
+      "players": [
+        "6号玩家",
+        "9号玩家",
+        "10号玩家",
+        "11号玩家",
+        "12号玩家"
+      ],
+      "attacked": "11号玩家",
+      "eliminated": "11号玩家",
+      "protected": null,
+      "investigated": null,
+      "exiled": "6号玩家",
+      "night_deaths": [
+        {
+          "player": "11号玩家",
+          "cause": "werewolf_attack",
+          "source": "狼人"
+        }
+      ],
+      "werewolf_discussion": [],
+      "werewolf_vote_rounds": [
+        {
+          "round": 1,
+          "candidates": [
+            "6号玩家",
+            "9号玩家",
+            "11号玩家",
+            "12号玩家"
+          ],
+          "votes": {
+            "10号玩家": "11号玩家"
+          },
+          "tally": {
+            "11号玩家": 1
+          },
+          "unanimous": true,
+          "result": "11号玩家"
+        }
+      ],
+      "day_deaths": [
+        {
+          "player": "6号玩家",
+          "cause": "vote_exile",
+          "source": "投票"
+        }
+      ],
+      "saved_by_witch": null,
+      "poisoned": null,
+      "hunter_shot": null,
+      "idiot_revealed": null,
+      "debate": [
+        {
+          "speaker": "6号玩家",
+          "message": "我是6号村民，场上还剩4人，已知3狼已出，最后一狼就在9、10、12中。昨晚11号出局，大概率是狼刀。从出局顺序看，狼人连续刀警长，说明他们想控场。我怀疑9号，因为9号一直很理性，但狼人往往靠理性隐藏。今天我们先放逐9号，听一下10和12的意见。"
+        },
+        {
+          "speaker": "9号玩家",
+          "message": "6号，你这发言太刻意了。你说最后一狼在9、10、12里，但你自己呢？你一点嫌疑没有？1号被你抗推，当时你就很积极。现在场上只剩4人，你直接聊爆了。我建议今天出6，10和12可以想想，6号是不是一直在带节奏。我是好人，不是狼。"
+        },
+        {
+          "speaker": "10号玩家",
+          "message": "我是10号村民。6号昨天抗推1号就很可疑，今天又直接说狼在9、10、12里，把自己摘得干干净净，明显在带节奏。9号分析很对，6号才是那个最像狼的人。我建议今天出6号，大家别被误导。"
+        },
+        {
+          "speaker": "12号玩家",
+          "message": "我是12号村民。6号昨天就急着抗推1号，今天又直接说狼在9、10、12里，完全忽略自己。这行为太像狼了。9号和10号的逻辑很清楚，6号才是那个带节奏的人。今天必须出6号，先把他放逐，如果他是好人，明天再看情况。我投票出6。"
+        }
+      ],
+      "bids": [],
+      "votes": [
+        {
+          "6号玩家": "9号玩家",
+          "9号玩家": "6号玩家",
+          "10号玩家": "6号玩家",
+          "12号玩家": "6号玩家"
+        }
+      ],
+      "summaries": {
+        "9号玩家": "6号被放逐，大概率是狼。游戏可能已结束，若未结束则下一轮注意10和12的动向，作为猎人我保留开枪能力，若被刀则带走可疑玩家。",
+        "10号玩家": "我选择夜晚刀9号，白天继续伪装村民，说服12号相信9号是狼，从而放逐9号，最后刀12号获胜。",
+        "12号玩家": "本轮我们成功放逐了6号，他大概率是狼人。如果游戏结束，则好人获胜；如果未结束，则需在9号和10号中进一步分析，但我暂时相信9号和10号是好人。"
+      },
+      "sheriff": null,
+      "sheriff_candidates": [],
+      "sheriff_speech_order": [],
+      "sheriff_speech_direction": null,
+      "sheriff_speeches": [],
+      "sheriff_withdrawn": [],
+      "sheriff_final_candidates": [],
+      "sheriff_voters": [],
+      "sheriff_votes": {},
+      "sheriff_pk_candidates": [],
+      "sheriff_pk_speeches": [],
+      "sheriff_runoff_votes": {},
+      "sheriff_elected": null,
+      "speech_order": [
+        "6号玩家",
+        "9号玩家",
+        "10号玩家",
+        "12号玩家"
+      ],
+      "speech_order_choice": null,
+      "vote_weights": {
+        "6号玩家": 1.0,
+        "9号玩家": 1.0,
+        "10号玩家": 1.0,
+        "12号玩家": 1.0
+      },
+      "sheriff_badge_target": null,
+      "sheriff_badge_lost": false,
+      "werewolf_self_exploded": null,
+      "day_ended_by_self_explosion": false,
+      "sheriff_pre_election_bomb_count": 0,
+      "sheriff_election_pending": false,
+      "sheriff_badge_lost_reason": null,
+      "success": true
+    },
+    {
+      "number": 6,
+      "players": [
+        "9号玩家",
+        "10号玩家",
+        "12号玩家"
+      ],
+      "attacked": "9号玩家",
+      "eliminated": "9号玩家",
+      "protected": null,
+      "investigated": null,
+      "exiled": null,
+      "night_deaths": [
+        {
+          "player": "9号玩家",
+          "cause": "werewolf_attack",
+          "source": "狼人"
+        },
+        {
+          "player": "12号玩家",
+          "cause": "hunter_shot",
+          "source": "9号玩家"
+        }
+      ],
+      "werewolf_discussion": [],
+      "werewolf_vote_rounds": [
+        {
+          "round": 1,
+          "candidates": [
+            "9号玩家",
+            "12号玩家"
+          ],
+          "votes": {
+            "10号玩家": "9号玩家"
+          },
+          "tally": {
+            "9号玩家": 1
+          },
+          "unanimous": true,
+          "result": "9号玩家"
+        }
+      ],
+      "day_deaths": [],
+      "saved_by_witch": null,
+      "poisoned": null,
+      "hunter_shot": "12号玩家",
+      "idiot_revealed": null,
+      "debate": [],
+      "bids": [],
+      "votes": [],
+      "summaries": {},
+      "sheriff": null,
+      "sheriff_candidates": [],
+      "sheriff_speech_order": [],
+      "sheriff_speech_direction": null,
+      "sheriff_speeches": [],
+      "sheriff_withdrawn": [],
+      "sheriff_final_candidates": [],
+      "sheriff_voters": [],
+      "sheriff_votes": {},
+      "sheriff_pk_candidates": [],
+      "sheriff_pk_speeches": [],
+      "sheriff_runoff_votes": {},
+      "sheriff_elected": null,
+      "speech_order": [],
+      "speech_order_choice": null,
+      "vote_weights": {},
+      "sheriff_badge_target": null,
+      "sheriff_badge_lost": false,
+      "werewolf_self_exploded": null,
+      "day_ended_by_self_explosion": false,
+      "sheriff_pre_election_bomb_count": 0,
+      "sheriff_election_pending": false,
+      "sheriff_badge_lost_reason": null,
+      "success": true
+    }
+  ],
+  "winner": "狼人阵营",
+  "error_message": "",
+  "sheriff": null,
+  "sheriff_badge_lost": true,
+  "sheriff_pre_election_bomb_count": 1,
+  "sheriff_election_pending": false
+}

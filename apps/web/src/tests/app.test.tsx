@@ -59,9 +59,11 @@ describe("App", () => {
       "inset-0",
       "bg-cover",
     );
-    expect(screen.getByTestId("site-background").getAttribute("style")).toContain(
-      "werewolf-site-background",
-    );
+    const backgroundStyle = screen.getByTestId("site-background").getAttribute("style");
+    expect(backgroundStyle).toContain("werewolf-clean-background");
+    expect(backgroundStyle).not.toContain("linear-gradient");
+    expect(backgroundStyle).toContain("background-size: cover");
+    expect(backgroundStyle).toContain("background-position: center top");
   });
 
   it("routes the game history path to the history page", async () => {

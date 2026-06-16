@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import siteBackground from "../assets/werewolf-site-background.png";
+import siteBackground from "../assets/werewolf-clean-background.webp";
 
 type AppThemeProps = {
   children: ReactNode;
@@ -14,8 +14,9 @@ export function AppTheme({ children }: AppThemeProps) {
         className="pointer-events-none fixed inset-0 z-0 bg-cover bg-center bg-no-repeat"
         data-testid="site-background"
         style={{
-          backgroundImage: `linear-gradient(180deg, rgba(2, 6, 13, 0.26) 0%, rgba(2, 6, 13, 0.58) 48%, rgba(2, 6, 13, 0.82) 100%), url(${siteBackground})`,
+          backgroundImage: `url(${siteBackground})`,
           backgroundPosition: "center top",
+          backgroundSize: "cover",
         }}
       />
       <div className="site-content-layer relative z-10 min-h-screen pt-[var(--arena-nav-height,var(--app-top-nav-height,56px))]">
