@@ -1092,6 +1092,45 @@ body {
   min-height: calc(100svh - var(--arena-nav-height, var(--app-top-nav-height, 56px)));
 }
 
+.games-workspace-module {
+  gap: 0.35rem;
+  min-height: 100svh;
+  margin-top: calc(var(--arena-nav-height, var(--app-top-nav-height, 56px)) * -1);
+}
+
+.games-lobby-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0;
+}
+
+.games-lobby-brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.games-lobby-brand-banner {
+  width: auto;
+  max-width: min(44rem, 52vw);
+  height: clamp(5.5rem, 7.25vw, 6.75rem);
+  flex: 0 0 auto;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.games-lobby-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.72rem;
+}
+
 .virtual-player-library {
   width: min(92rem, 100%);
   min-width: 0;
@@ -2068,24 +2107,20 @@ body {
 .lobby-console-form {
   display: grid;
   width: min(100%, 118rem);
-  height: calc(100dvh - var(--arena-nav-height, 56px) - 2rem);
-  max-height: calc(100dvh - var(--arena-nav-height, 56px) - 2rem);
+  height: calc(100dvh - clamp(5rem, 7vw, 6.6rem) - 2rem);
+  max-height: calc(100dvh - clamp(5rem, 7vw, 6.6rem) - 2rem);
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 0.72rem;
   margin: 0 auto;
 }
 
-.lobby-workbench-heading {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: end;
-  justify-content: space-between;
-  gap: 0.55rem 1rem;
-}
-
 .lobby-lineup-resize-notice {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  z-index: 4;
+  transform: translateX(-50%);
   margin: 0;
   border: 1px solid rgb(232 201 130 / 26%);
   border-radius: 0.2rem;
@@ -2097,6 +2132,7 @@ body {
 }
 
 .lobby-workbench-frame {
+  position: relative;
   display: grid;
   min-width: 0;
   min-height: 0;
@@ -2253,7 +2289,6 @@ body {
   min-width: 8.5rem;
 }
 
-.lobby-console-title-block,
 .lobby-rules-panel-content,
 .lobby-rules-content,
 .lobby-rule-card-body,
@@ -2261,18 +2296,6 @@ body {
 .lobby-rule-drawer dl {
   position: relative;
   z-index: 1;
-}
-
-.lobby-console-title {
-  margin: 0;
-  color: #f0dfc8;
-  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
-  font-size: 1.35rem;
-  font-weight: 800;
-  line-height: 1.1;
-  text-shadow:
-    0 1px 0 rgb(0 0 0 / 72%),
-    0 0 18px rgb(238 190 111 / 18%);
 }
 
 .lobby-console-field {

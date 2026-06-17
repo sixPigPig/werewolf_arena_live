@@ -178,19 +178,15 @@ export function CreateGameRunForm({
         });
       }}
     >
-      <header className="lobby-workbench-heading">
-        <h1 className="lobby-console-title">狼人杀对局大厅</h1>
+      <div
+        className="lobby-workbench-frame"
+        data-testid="lobby-workbench-frame"
+      >
         {lineupResizeNotice ? (
           <p className="lobby-lineup-resize-notice" role="status">
             {lineupResizeNotice}
           </p>
         ) : null}
-      </header>
-
-      <div
-        className="lobby-workbench-frame"
-        data-testid="lobby-workbench-frame"
-      >
         <LobbyRuleSelector
           error={ruleSetsQuery.isError}
           loading={ruleSetsQuery.isPending}

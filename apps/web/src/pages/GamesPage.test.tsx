@@ -248,38 +248,26 @@ describe("GamesPage", () => {
     const { container } = renderWithClient(<GamesPage />, "/games");
 
     expect(
-      screen.getByRole("heading", { name: "狼人杀对局大厅" }),
-    ).toBeInTheDocument();
-    const nav = screen.getByTestId("arena-global-nav");
-    expect(nav).toHaveAttribute("data-variant", "global");
-    expect(nav).toHaveAttribute("data-surface", "transparent");
-    expect(nav).toHaveClass(
-      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
-      "min-h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
-      "bg-transparent",
-      "border-transparent",
+      screen.queryByRole("heading", { name: "狼人杀对局大厅" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("arena-global-nav")).not.toBeInTheDocument();
+    const lobbyHeader = screen.getByTestId("games-lobby-header");
+    expect(lobbyHeader).toBeInTheDocument();
+    expect(
+      screen.getByTestId("games-lobby-brand-banner").getAttribute("src"),
+    ).toContain("langrensha-arena-banner");
+    expect(screen.queryByTestId("games-lobby-logo")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("games-lobby-wordmark")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建对局" })).toHaveClass(
+      "gothic-button",
     );
-    expect(screen.getByTestId("arena-brand-logo")).toHaveClass(
-      "h-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
-      "w-[var(--arena-nav-height,var(--app-top-nav-height,56px))]",
-    );
-    expect(screen.getByTestId("arena-brand-logo").getAttribute("src")).toContain(
-      "langrensha-c-logo",
-    );
-    expect(screen.getByTestId("arena-brand-wordmark").getAttribute("src")).toContain(
-      "langrensha-title-wordmark",
-    );
-    expect(screen.getByRole("link", { name: "狼人杀竞技场" })).toHaveAttribute(
-      "href",
-      "/games",
-    );
-    expect(screen.getByRole("link", { name: "对局历史" })).toHaveAttribute(
-      "href",
-      "/games/history",
-    );
-    expect(screen.getByRole("link", { name: "玩家库" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "玩家图鉴" })).toHaveAttribute(
       "href",
       "/players",
+    );
+    expect(screen.getByRole("link", { name: "对局记录" })).toHaveAttribute(
+      "href",
+      "/games/history",
     );
     expect(
       screen.queryByRole("heading", { name: "虚拟玩家工作台" }),
@@ -287,17 +275,17 @@ describe("GamesPage", () => {
     expect(
       screen.queryByRole("button", { name: "刷新列表" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新建对局" })).toHaveClass(
-      "gothic-button",
-    );
-    expect(screen.getByRole("link", { name: "对局历史" })).toHaveClass(
+    expect(screen.getByRole("link", { name: "对局记录" })).toHaveClass(
       "gothic-button",
     );
     expect(screen.queryByRole("link", { name: "返回大厅" })).not.toBeInTheDocument();
     expect(container.querySelector("main")).toHaveClass(
       "max-w-none",
+      "pt-1",
+      "pb-4",
       "w-full",
     );
+    expect(container.querySelector("main")).not.toHaveClass("py-5");
     expect(container.querySelector("main")?.className).not.toContain("bg-");
     expect(container.querySelector("main")).not.toHaveClass("max-w-4xl");
     expect(screen.getByTestId("games-workspace-module")).toHaveClass(
@@ -317,8 +305,8 @@ describe("GamesPage", () => {
       within(createModule).queryByTestId("lobby-console-bar"),
     ).not.toBeInTheDocument();
     expect(
-      within(createModule).getByRole("heading", { name: "狼人杀对局大厅" }),
-    ).toBeInTheDocument();
+      within(createModule).queryByRole("heading", { name: "狼人杀对局大厅" }),
+    ).not.toBeInTheDocument();
     const actionBar = within(createModule).getByTestId("lobby-action-bar");
     expect(actionBar).toHaveClass("lobby-action-bar");
     expect(within(actionBar).getByLabelText("随机种子")).toBeInTheDocument();

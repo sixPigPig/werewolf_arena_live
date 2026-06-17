@@ -47,9 +47,10 @@ describe("App", () => {
 
     renderRoute(["/"]);
 
+    expect(await screen.findByTestId("games-create-module")).toBeInTheDocument();
     expect(
-      await screen.findByRole("heading", { name: "狼人杀对局大厅" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("heading", { name: "狼人杀对局大厅" }),
+    ).not.toBeInTheDocument();
     expect(document.querySelector(".app-theme")).toBeInTheDocument();
     expect(document.querySelector(".app-theme")?.className).not.toContain(
       "bg-",

@@ -1,6 +1,5 @@
 import { useRef } from "react";
 
-import { ArenaGlobalNav, ArenaNavButton } from "../app/navigation";
 import { GamesWorkspace } from "./components/GamesWorkspace";
 
 export function GamesPage() {
@@ -18,21 +17,9 @@ export function GamesPage() {
   };
 
   return (
-    <>
-      <ArenaGlobalNav
-        primaryAction={
-          <ArenaNavButton intent="primary" onClick={focusCreateForm}>
-            新建对局
-          </ArenaNavButton>
-        }
-        secondaryAction={
-          <>
-            <ArenaNavButton to="/players">玩家库</ArenaNavButton>
-            <ArenaNavButton to="/games/history">对局历史</ArenaNavButton>
-          </>
-        }
-      />
-      <GamesWorkspace createFormRef={createFormRef} />
-    </>
+    <GamesWorkspace
+      createFormRef={createFormRef}
+      onCreateGameClick={focusCreateForm}
+    />
   );
 }
