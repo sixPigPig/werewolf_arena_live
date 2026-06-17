@@ -4,6 +4,8 @@ import { listPlayerProfiles } from "../../features/games/api/listPlayerProfiles"
 import { useQuery } from "@tanstack/react-query";
 import type { RefObject } from "react";
 import brandBannerSrc from "../../assets/langrensha-arena-banner.png";
+import ravenCandleLeftSrc from "../../assets/lobby-decor/raven-candle-left.png";
+import ravenCandleRightSrc from "../../assets/lobby-decor/raven-candle-right.png";
 
 type GamesWorkspaceProps = {
   createFormRef: RefObject<HTMLDivElement | null>;
@@ -26,6 +28,20 @@ export function GamesWorkspace({
       className="games-workspace-module lobby-page-shell mx-auto w-full max-w-none px-4 pb-4 pt-1 sm:px-6 lg:px-8"
       data-testid="games-workspace-module"
     >
+      <div aria-hidden="true" className="games-lobby-corner-decor">
+        <img
+          alt=""
+          className="games-lobby-corner-decor-image games-lobby-corner-decor-left"
+          data-testid="games-lobby-corner-decor-left"
+          src={ravenCandleLeftSrc}
+        />
+        <img
+          alt=""
+          className="games-lobby-corner-decor-image games-lobby-corner-decor-right"
+          data-testid="games-lobby-corner-decor-right"
+          src={ravenCandleRightSrc}
+        />
+      </div>
       <header className="games-lobby-header" data-testid="games-lobby-header">
         <div
           aria-label="狼人杀竞技场"

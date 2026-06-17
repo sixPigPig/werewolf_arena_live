@@ -292,6 +292,17 @@ describe("GamesPage", () => {
       "games-workspace-module",
     );
     expect(
+      screen.getByTestId("games-lobby-corner-decor-left").getAttribute("src"),
+    ).toContain("raven-candle-left");
+    expect(
+      screen.getByTestId("games-lobby-corner-decor-right").getAttribute("src"),
+    ).toContain("raven-candle-right");
+    expect(
+      screen
+        .getByTestId("games-lobby-corner-decor-left")
+        .closest(".games-lobby-corner-decor"),
+    ).toHaveAttribute("aria-hidden", "true");
+    expect(
       screen.queryByTestId("virtual-player-library"),
     ).not.toBeInTheDocument();
     const createModule = screen.getByTestId("games-create-module");

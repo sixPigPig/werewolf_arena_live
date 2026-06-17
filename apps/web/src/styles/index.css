@@ -1093,12 +1093,43 @@ body {
 }
 
 .games-workspace-module {
+  position: relative;
   gap: 0.35rem;
+  isolation: isolate;
   min-height: 100svh;
   margin-top: calc(var(--arena-nav-height, var(--app-top-nav-height, 56px)) * -1);
 }
 
+.games-lobby-corner-decor {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  overflow: clip;
+  pointer-events: none;
+}
+
+.games-lobby-corner-decor-image {
+  position: absolute;
+  bottom: max(env(safe-area-inset-bottom, 0px), 0rem);
+  width: clamp(10rem, 17vw, 21rem);
+  max-height: min(48svh, 32rem);
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 1.2rem 1.8rem rgb(0 0 0 / 62%));
+}
+
+.games-lobby-corner-decor-left {
+  left: clamp(-5.5rem, -5vw, -1.2rem);
+}
+
+.games-lobby-corner-decor-right {
+  right: clamp(-5.5rem, -5vw, -1.2rem);
+}
+
 .games-lobby-header {
+  position: relative;
+  z-index: 50;
   display: flex;
   min-width: 0;
   align-items: center;
@@ -2258,6 +2289,7 @@ body {
 
 .lobby-action-bar {
   display: flex;
+  z-index: 50;
   grid-column: 1 / -1;
   align-items: end;
   justify-content: space-between;
@@ -3173,6 +3205,18 @@ body {
 }
 
 @media (max-width: 1180px) {
+  .games-lobby-corner-decor-image {
+    width: clamp(8rem, 15vw, 13rem);
+  }
+
+  .games-lobby-corner-decor-left {
+    left: clamp(-4rem, -6vw, -1.4rem);
+  }
+
+  .games-lobby-corner-decor-right {
+    right: clamp(-4rem, -6vw, -1.4rem);
+  }
+
   .lobby-workbench-frame {
     grid-template-columns: minmax(24rem, 0.88fr) minmax(0, 1.12fr);
   }
@@ -3257,6 +3301,19 @@ body {
 }
 
 @media (max-width: 720px) {
+  .games-lobby-corner-decor-image {
+    width: clamp(5.75rem, 25vw, 8rem);
+    opacity: 0.86;
+  }
+
+  .games-lobby-corner-decor-left {
+    left: -2.7rem;
+  }
+
+  .games-lobby-corner-decor-right {
+    right: -2.7rem;
+  }
+
   .lobby-console-form {
     height: auto;
     max-height: none;
