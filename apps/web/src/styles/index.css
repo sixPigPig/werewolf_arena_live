@@ -2175,6 +2175,7 @@ body {
   content: "";
   border: 1px solid rgb(185 147 92 / 18%);
   border-radius: 0.22rem;
+  display: none;
   pointer-events: none;
 }
 
@@ -2190,6 +2191,13 @@ body {
   padding: 0.88rem 1rem 1rem;
 }
 
+.lobby-workbench-column > .gothic-border-frame-content {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
 .lobby-rule-column,
 .lobby-player-column {
   min-height: 0;
@@ -2197,6 +2205,10 @@ body {
 }
 
 .lobby-rule-column {
+  gap: 0.72rem;
+}
+
+.lobby-rule-column > .gothic-border-frame-content {
   gap: 0.72rem;
 }
 
@@ -2247,6 +2259,15 @@ body {
   justify-content: space-between;
   gap: 0.72rem;
   padding: 0.72rem 0.86rem;
+}
+
+.lobby-action-bar > .gothic-border-frame-content {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.72rem;
 }
 
 .lobby-action-parameters {
@@ -3159,6 +3180,11 @@ body {
     flex-direction: column;
   }
 
+  .lobby-action-bar > .gothic-border-frame-content {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .player-config-seat-module {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -3249,6 +3275,10 @@ body {
   .lobby-player-column .profile-picker,
   .lobby-player-column .player-config-role-cards {
     overflow: visible;
+  }
+
+  .lobby-player-column .player-config-role-cards {
+    max-height: none;
   }
 
   .lobby-rule-list {
@@ -3997,6 +4027,124 @@ body {
   .gothic-panel-ornament-bottom {
     width: min(17rem, calc(100% - 7rem));
   }
+}
+
+.gothic-border-frame {
+  --gothic-border-frame-corner-inline: 74px;
+  --gothic-border-frame-corner-block: 74px;
+  --gothic-border-frame-edge-thickness: 34px;
+  position: relative;
+  isolation: isolate;
+}
+
+.gothic-border-frame-compact {
+  --gothic-border-frame-corner-inline: 62px;
+  --gothic-border-frame-corner-block: 52px;
+  --gothic-border-frame-edge-thickness: 26px;
+}
+
+.gothic-border-frame-decoration,
+.gothic-border-frame-piece {
+  position: absolute;
+  pointer-events: none;
+}
+
+.gothic-border-frame-decoration {
+  inset: 0;
+  z-index: 2;
+}
+
+.gothic-border-frame-piece {
+  display: block;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  filter:
+    drop-shadow(0 1px 0 rgb(255 255 255 / 8%))
+    drop-shadow(0 0 7px rgb(0 0 0 / 62%));
+}
+
+.gothic-border-frame-corner-tl,
+.gothic-border-frame-corner-tr,
+.gothic-border-frame-corner-br,
+.gothic-border-frame-corner-bl {
+  width: var(--gothic-border-frame-corner-inline);
+  height: var(--gothic-border-frame-corner-block);
+}
+
+.gothic-border-frame-corner-tl {
+  top: 0;
+  left: 0;
+  background-image: url("../assets/lobby-border-frame/frame-corner-tl.png");
+  background-position: top left;
+}
+
+.gothic-border-frame-corner-tr {
+  top: 0;
+  right: 0;
+  background-image: url("../assets/lobby-border-frame/frame-corner-tr.png");
+  background-position: top right;
+}
+
+.gothic-border-frame-corner-br {
+  right: 0;
+  bottom: 0;
+  background-image: url("../assets/lobby-border-frame/frame-corner-br.png");
+  background-position: bottom right;
+}
+
+.gothic-border-frame-corner-bl {
+  bottom: 0;
+  left: 0;
+  background-image: url("../assets/lobby-border-frame/frame-corner-bl.png");
+  background-position: bottom left;
+}
+
+.gothic-border-frame-edge-top,
+.gothic-border-frame-edge-bottom {
+  right: calc(var(--gothic-border-frame-corner-inline) * 0.82);
+  left: calc(var(--gothic-border-frame-corner-inline) * 0.82);
+  height: var(--gothic-border-frame-edge-thickness);
+  background-repeat: repeat-x;
+  background-size: auto 100%;
+}
+
+.gothic-border-frame-edge-top {
+  top: 0;
+  background-image: url("../assets/lobby-border-frame/frame-edge-top.png");
+}
+
+.gothic-border-frame-edge-bottom {
+  bottom: 0;
+  background-image: url("../assets/lobby-border-frame/frame-edge-bottom.png");
+}
+
+.gothic-border-frame-edge-right,
+.gothic-border-frame-edge-left {
+  top: calc(var(--gothic-border-frame-corner-block) * 0.82);
+  bottom: calc(var(--gothic-border-frame-corner-block) * 0.82);
+  width: var(--gothic-border-frame-edge-thickness);
+  background-repeat: repeat-y;
+  background-size: 100% auto;
+}
+
+.gothic-border-frame-edge-right {
+  right: 0;
+  background-image: url("../assets/lobby-border-frame/frame-edge-right.png");
+}
+
+.gothic-border-frame-edge-left {
+  left: 0;
+  background-image: url("../assets/lobby-border-frame/frame-edge-left.png");
+}
+
+.gothic-border-frame-content {
+  position: relative;
+  z-index: 3;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 .gothic-button {

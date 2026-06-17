@@ -308,7 +308,14 @@ describe("GamesPage", () => {
       within(createModule).queryByRole("heading", { name: "狼人杀对局大厅" }),
     ).not.toBeInTheDocument();
     const actionBar = within(createModule).getByTestId("lobby-action-bar");
-    expect(actionBar).toHaveClass("lobby-action-bar");
+    expect(actionBar).toHaveClass(
+      "lobby-action-bar",
+      "gothic-border-frame",
+      "gothic-border-frame-compact",
+    );
+    expect(
+      actionBar.querySelector(".gothic-border-frame-content"),
+    ).toBeInTheDocument();
     expect(within(actionBar).getByLabelText("随机种子")).toBeInTheDocument();
     expect(within(actionBar).getByLabelText("最大轮数")).toBeInTheDocument();
     expect(
@@ -321,14 +328,22 @@ describe("GamesPage", () => {
     );
     const lineupColumn = within(workbench).getByTestId("lobby-lineup-column");
     expect(lineupColumn).toHaveClass(
+      "gothic-border-frame",
       "lobby-workbench-column",
       "lobby-lineup-column",
     );
+    expect(
+      lineupColumn.querySelector(".gothic-border-frame-content"),
+    ).toBeInTheDocument();
     const playerColumn = within(workbench).getByTestId("lobby-player-column");
     expect(playerColumn).toHaveClass(
+      "gothic-border-frame",
       "lobby-workbench-column",
       "lobby-player-column",
     );
+    expect(
+      playerColumn.querySelector(".gothic-border-frame-content"),
+    ).toBeInTheDocument();
     expect(lineupColumn).toBeInTheDocument();
     expect(playerColumn).toBeInTheDocument();
     expect(
@@ -351,7 +366,14 @@ describe("GamesPage", () => {
     const workbenchFrame = within(createModule).getByTestId("lobby-workbench-frame");
     expect(workbenchFrame).toHaveClass("lobby-workbench-frame");
     const ruleColumn = within(workbenchFrame).getByTestId("lobby-rule-column");
-    expect(ruleColumn).toHaveClass("lobby-workbench-column", "lobby-rule-column");
+    expect(ruleColumn).toHaveClass(
+      "gothic-border-frame",
+      "lobby-workbench-column",
+      "lobby-rule-column",
+    );
+    expect(
+      ruleColumn.querySelector(".gothic-border-frame-content"),
+    ).toBeInTheDocument();
     expect(
       within(workbenchFrame).getByRole("heading", { name: "规则选择" }),
     ).toBeInTheDocument();

@@ -6,7 +6,7 @@ import social8CardSelected from "../../../assets/rule-cards/social-8-selected.pn
 import social8Card from "../../../assets/rule-cards/social-8.png";
 import starter6CardSelected from "../../../assets/rule-cards/starter-6-selected.png";
 import starter6Card from "../../../assets/rule-cards/starter-6.png";
-import { RadioCards } from "../../../components/ui";
+import { GothicBorderFrame, RadioCards } from "../../../components/ui";
 
 import { formatRoleSummary } from "../rulePresentation";
 import type { RuleSetSummary } from "../types";
@@ -55,8 +55,9 @@ export function LobbyRuleSelector({
   value,
 }: LobbyRuleSelectorProps) {
   return (
-    <section
+    <GothicBorderFrame
       aria-labelledby="lobby-rule-selector-title"
+      as="section"
       className="lobby-workbench-column lobby-rule-column"
       data-testid="lobby-rule-column"
     >
@@ -123,6 +124,6 @@ export function LobbyRuleSelector({
           })}
         </RadioCards.Root>
       ) : null}
-    </section>
+    </GothicBorderFrame>
   );
 }

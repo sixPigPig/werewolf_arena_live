@@ -22,6 +22,10 @@ export {
   type ButtonSkin,
 } from "./Button";
 export { Container, type ContainerProps } from "./Container";
+export {
+  GothicBorderFrame,
+  type GothicBorderFrameProps,
+} from "./GothicBorderFrame";
 export { GothicPanel, type GothicPanelProps } from "./GothicPanel";
 
 type Tone =

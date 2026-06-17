@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { Button, TextField } from "../../../components/ui";
+import { Button, GothicBorderFrame, TextField } from "../../../components/ui";
 
 const clearDialogFocusableSelector = [
   'a[href]:not([tabindex="-1"])',
@@ -102,7 +102,12 @@ export function LobbyActionBar({
   }, [confirmingClear]);
 
   return (
-    <footer className="lobby-action-bar" data-testid="lobby-action-bar">
+    <GothicBorderFrame
+      as="footer"
+      className="lobby-action-bar"
+      data-testid="lobby-action-bar"
+      density="compact"
+    >
       <div className="lobby-action-parameters">
         <label>
           <span>随机种子</span>
@@ -193,6 +198,6 @@ export function LobbyActionBar({
           </section>
         </div>
       ) : null}
-    </footer>
+    </GothicBorderFrame>
   );
 }

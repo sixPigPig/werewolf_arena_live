@@ -5,6 +5,7 @@ import {
   type RefObject,
 } from "react";
 
+import { GothicBorderFrame } from "../../../components/ui";
 import {
   applyProfileToSeat,
   clearSeat,
@@ -109,7 +110,7 @@ export function LobbyLineupWorkbench({
       className="lobby-lineup-workbench"
       data-testid="lobby-lineup-workbench"
     >
-      <div
+      <GothicBorderFrame
         className="lobby-workbench-column lobby-lineup-column"
         data-testid="lobby-lineup-column"
       >
@@ -147,8 +148,8 @@ export function LobbyLineupWorkbench({
           profiles={profiles}
           selectedSeat={activeSeat}
         />
-      </div>
-      <div
+      </GothicBorderFrame>
+      <GothicBorderFrame
         className="lobby-workbench-column lobby-player-column"
         data-testid="lobby-player-column"
         ref={playerColumnRef}
@@ -175,7 +176,7 @@ export function LobbyLineupWorkbench({
           selectedProfile={selectedProfile}
           selectedSeat={activeSeat}
         />
-      </div>
+      </GothicBorderFrame>
     </section>
   );
 }
