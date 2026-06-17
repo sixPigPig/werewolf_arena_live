@@ -60,7 +60,7 @@ describe("App", () => {
       "bg-cover",
     );
     const backgroundStyle = screen.getByTestId("site-background").getAttribute("style");
-    expect(backgroundStyle).toContain("werewolf-clean-background");
+    expect(backgroundStyle).toContain("werewolf-castle-background");
     expect(backgroundStyle).not.toContain("linear-gradient");
     expect(backgroundStyle).toContain("background-size: cover");
     expect(backgroundStyle).toContain("background-position: center top");

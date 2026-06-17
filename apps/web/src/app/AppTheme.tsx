@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import siteBackground from "../assets/werewolf-clean-background.webp";
+import siteBackground from "../assets/werewolf-castle-background.png";
 
 type AppThemeProps = {
   children: ReactNode;
