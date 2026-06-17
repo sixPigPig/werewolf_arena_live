@@ -2188,7 +2188,7 @@ body {
 .lobby-workbench-column {
   display: flex;
   flex-direction: column;
-  padding: 0.88rem 1rem 1rem;
+  padding: 0;
 }
 
 .lobby-workbench-column > .gothic-border-frame-content {
@@ -2258,7 +2258,12 @@ body {
   align-items: end;
   justify-content: space-between;
   gap: 0.72rem;
-  padding: 0.72rem 0.86rem;
+  padding: 0;
+}
+
+.lobby-action-bar.gothic-border-frame-compact {
+  --gothic-border-frame-safe-block: 0.64rem;
+  --gothic-border-frame-safe-inline: clamp(1.35rem, 3.2vw, 3.6rem);
 }
 
 .lobby-action-bar > .gothic-border-frame-content {
@@ -4033,6 +4038,8 @@ body {
   --gothic-border-frame-corner-inline: 74px;
   --gothic-border-frame-corner-block: 74px;
   --gothic-border-frame-edge-thickness: 34px;
+  --gothic-border-frame-safe-block: 1.35rem;
+  --gothic-border-frame-safe-inline: 1.45rem;
   position: relative;
   isolation: isolate;
 }
@@ -4041,6 +4048,8 @@ body {
   --gothic-border-frame-corner-inline: 62px;
   --gothic-border-frame-corner-block: 52px;
   --gothic-border-frame-edge-thickness: 26px;
+  --gothic-border-frame-safe-block: 0.75rem;
+  --gothic-border-frame-safe-inline: 1rem;
 }
 
 .gothic-border-frame-decoration,
@@ -4145,6 +4154,9 @@ body {
   width: 100%;
   min-width: 0;
   min-height: 0;
+  padding:
+    var(--gothic-border-frame-safe-block)
+    var(--gothic-border-frame-safe-inline);
 }
 
 .gothic-button {

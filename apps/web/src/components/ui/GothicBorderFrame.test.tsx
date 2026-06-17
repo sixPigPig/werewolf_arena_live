@@ -49,6 +49,15 @@ describe("GothicBorderFrame", () => {
   it("uses sliced lobby border assets without stretching the source image", () => {
     const css = readFileSync("src/styles/index.css", "utf8");
 
+    expect(css).toContain("--gothic-border-frame-safe-block");
+    expect(css).toContain("--gothic-border-frame-safe-inline");
+    expect(css).toContain("padding:");
+    expect(css).toContain("var(--gothic-border-frame-safe-block)");
+    expect(css).toContain("var(--gothic-border-frame-safe-inline)");
+    expect(css).toContain(".lobby-action-bar.gothic-border-frame-compact");
+    expect(css).toContain(
+      "--gothic-border-frame-safe-inline: clamp(1.35rem, 3.2vw, 3.6rem);",
+    );
     expect(css).toContain(
       'url("../assets/lobby-border-frame/frame-corner-tl.png")',
     );
