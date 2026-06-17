@@ -54,6 +54,15 @@ describe("GothicBorderFrame", () => {
     expect(css).toContain("padding:");
     expect(css).toContain("var(--gothic-border-frame-safe-block)");
     expect(css).toContain("var(--gothic-border-frame-safe-inline)");
+    expect(css).toContain("--gothic-border-frame-edge-seam-overlap");
+    expect(css).toContain("--gothic-border-frame-edge-seam-offset");
+    expect(css).toContain(
+      "calc(var(--gothic-border-frame-corner-inline) - var(--gothic-border-frame-edge-seam-overlap))",
+    );
+    expect(css).toContain("top: var(--gothic-border-frame-edge-seam-offset)");
+    expect(css).toContain("left: var(--gothic-border-frame-edge-seam-offset)");
+    expect(css).toContain("z-index: 1;");
+    expect(css).toContain("z-index: 2;");
     expect(css).toContain(".lobby-action-bar.gothic-border-frame-compact");
     expect(css).toContain(
       "--gothic-border-frame-safe-inline: clamp(1.35rem, 3.2vw, 3.6rem);",

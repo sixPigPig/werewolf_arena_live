@@ -4038,6 +4038,9 @@ body {
   --gothic-border-frame-corner-inline: 74px;
   --gothic-border-frame-corner-block: 74px;
   --gothic-border-frame-edge-thickness: 34px;
+  --gothic-border-frame-edge-seam-overlap: calc(var(--gothic-border-frame-corner-inline) * 0.3);
+  --gothic-border-frame-edge-seam-overlap-block: calc(var(--gothic-border-frame-corner-block) * 0.3);
+  --gothic-border-frame-edge-seam-offset: calc(var(--gothic-border-frame-edge-thickness) * 0.18);
   --gothic-border-frame-safe-block: 1.35rem;
   --gothic-border-frame-safe-inline: 1.45rem;
   position: relative;
@@ -4077,6 +4080,7 @@ body {
 .gothic-border-frame-corner-tr,
 .gothic-border-frame-corner-br,
 .gothic-border-frame-corner-bl {
+  z-index: 2;
   width: var(--gothic-border-frame-corner-inline);
   height: var(--gothic-border-frame-corner-block);
 }
@@ -4111,39 +4115,41 @@ body {
 
 .gothic-border-frame-edge-top,
 .gothic-border-frame-edge-bottom {
-  right: calc(var(--gothic-border-frame-corner-inline) * 0.82);
-  left: calc(var(--gothic-border-frame-corner-inline) * 0.82);
+  z-index: 1;
+  right: calc(var(--gothic-border-frame-corner-inline) - var(--gothic-border-frame-edge-seam-overlap));
+  left: calc(var(--gothic-border-frame-corner-inline) - var(--gothic-border-frame-edge-seam-overlap));
   height: var(--gothic-border-frame-edge-thickness);
   background-repeat: repeat-x;
   background-size: auto 100%;
 }
 
 .gothic-border-frame-edge-top {
-  top: 0;
+  top: var(--gothic-border-frame-edge-seam-offset);
   background-image: url("../assets/lobby-border-frame/frame-edge-top.png");
 }
 
 .gothic-border-frame-edge-bottom {
-  bottom: 0;
+  bottom: var(--gothic-border-frame-edge-seam-offset);
   background-image: url("../assets/lobby-border-frame/frame-edge-bottom.png");
 }
 
 .gothic-border-frame-edge-right,
 .gothic-border-frame-edge-left {
-  top: calc(var(--gothic-border-frame-corner-block) * 0.82);
-  bottom: calc(var(--gothic-border-frame-corner-block) * 0.82);
+  z-index: 1;
+  top: calc(var(--gothic-border-frame-corner-block) - var(--gothic-border-frame-edge-seam-overlap-block));
+  bottom: calc(var(--gothic-border-frame-corner-block) - var(--gothic-border-frame-edge-seam-overlap-block));
   width: var(--gothic-border-frame-edge-thickness);
   background-repeat: repeat-y;
   background-size: 100% auto;
 }
 
 .gothic-border-frame-edge-right {
-  right: 0;
+  right: var(--gothic-border-frame-edge-seam-offset);
   background-image: url("../assets/lobby-border-frame/frame-edge-right.png");
 }
 
 .gothic-border-frame-edge-left {
-  left: 0;
+  left: var(--gothic-border-frame-edge-seam-offset);
   background-image: url("../assets/lobby-border-frame/frame-edge-left.png");
 }
 
