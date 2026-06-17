@@ -2136,7 +2136,7 @@ body {
   display: grid;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   grid-template-columns: minmax(28rem, 0.85fr) minmax(0, 1.65fr);
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 0.72rem;
@@ -2156,7 +2156,7 @@ body {
   position: relative;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   border: 0;
   border-radius: 0.35rem;
   background:
@@ -2201,7 +2201,7 @@ body {
 .lobby-rule-column,
 .lobby-player-column {
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .lobby-rule-column {
@@ -2214,6 +2214,10 @@ body {
 
 .lobby-lineup-column {
   min-height: 0;
+  overflow: visible;
+}
+
+.lobby-lineup-column > .gothic-border-frame-content {
   overflow-y: auto;
 }
 
@@ -4038,6 +4042,7 @@ body {
   --gothic-border-frame-corner-inline: 74px;
   --gothic-border-frame-corner-block: 74px;
   --gothic-border-frame-edge-thickness: 34px;
+  --gothic-border-frame-art-outset: 0.82rem;
   --gothic-border-frame-edge-seam-overlap: calc(var(--gothic-border-frame-corner-inline) * 0.3);
   --gothic-border-frame-edge-seam-overlap-block: calc(var(--gothic-border-frame-corner-block) * 0.3);
   --gothic-border-frame-edge-seam-offset: calc(var(--gothic-border-frame-edge-thickness) * 0.18);
@@ -4062,7 +4067,7 @@ body {
 }
 
 .gothic-border-frame-decoration {
-  inset: 0;
+  inset: calc(var(--gothic-border-frame-art-outset) * -1);
   z-index: 2;
 }
 

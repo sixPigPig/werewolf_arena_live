@@ -48,13 +48,21 @@ describe("GothicBorderFrame", () => {
 
   it("uses sliced lobby border assets without stretching the source image", () => {
     const css = readFileSync("src/styles/index.css", "utf8");
+    const workbenchFrameRule =
+      css.match(/\.lobby-workbench-frame \{[\s\S]*?\n\}/)?.[0] ?? "";
     const lobbyFrameShellRule =
       css.match(/\.lobby-workbench-column,\n\.lobby-action-bar \{[\s\S]*?\n\}/)?.[0] ??
       "";
 
+    expect(workbenchFrameRule).toContain("overflow: visible;");
+    expect(lobbyFrameShellRule).toContain("overflow: visible;");
     expect(lobbyFrameShellRule).toContain("border: 0;");
     expect(lobbyFrameShellRule).not.toContain(
       "border: 1px solid rgb(185 147 92 / 44%);",
+    );
+    expect(css).toContain("--gothic-border-frame-art-outset");
+    expect(css).toContain(
+      "inset: calc(var(--gothic-border-frame-art-outset) * -1);",
     );
     expect(css).toContain("--gothic-border-frame-safe-block");
     expect(css).toContain("--gothic-border-frame-safe-inline");
