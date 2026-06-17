@@ -2157,7 +2157,7 @@ body {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid rgb(185 147 92 / 44%);
+  border: 0;
   border-radius: 0.35rem;
   background:
     linear-gradient(180deg, rgb(6 11 15 / 88%), rgb(1 5 10 / 78%)),
