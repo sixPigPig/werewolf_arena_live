@@ -57,6 +57,14 @@ describe("LobbyRuleSelector", () => {
     );
 
     expect(screen.getByTestId("lobby-rule-column")).toBeInTheDocument();
+    expect(screen.getByLabelText("经典 8 人局").querySelector("img")).toHaveAttribute(
+      "src",
+      expect.stringContaining("classic-8-selected.png"),
+    );
+    expect(screen.getByLabelText("新手 6 人快局").querySelector("img")).toHaveAttribute(
+      "src",
+      expect.stringContaining("starter-6.png"),
+    );
 
     await userEvent.click(screen.getByLabelText("新手 6 人快局"));
 

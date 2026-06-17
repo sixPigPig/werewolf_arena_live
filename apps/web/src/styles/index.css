@@ -2074,7 +2074,7 @@ body {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  grid-template-columns: minmax(17rem, 0.72fr) minmax(0, 2fr);
+  grid-template-columns: minmax(28rem, 0.85fr) minmax(0, 1.65fr);
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 0.72rem;
 }
@@ -2452,6 +2452,9 @@ body {
 
 .lobby-rule-grid {
   display: grid;
+  align-content: start;
+  align-items: start;
+  grid-auto-rows: max-content;
   grid-template-columns: 1fr;
   gap: 0.62rem;
 }
@@ -2465,116 +2468,81 @@ body {
 
 .lobby-rule-card {
   position: relative;
-  min-height: 8.15rem;
-  overflow: hidden;
-  border-color: rgb(134 146 158 / 42%) !important;
-  border-radius: 0.25rem !important;
-  background:
-    linear-gradient(180deg, rgb(8 15 20 / 84%), rgb(2 7 12 / 88%)),
-    radial-gradient(circle at 18% 35%, rgb(130 153 166 / 12%), transparent 34%);
-  padding: 0.82rem !important;
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 7%),
-    inset 0 -1px 0 rgb(0 0 0 / 54%);
+  align-self: start;
+  min-height: 0;
+  overflow: visible;
+  border-color: transparent !important;
+  border-radius: 0.24rem !important;
+  background: transparent;
+  padding: 0 !important;
+  line-height: 0;
+  box-shadow: none;
+  transition:
+    filter 150ms ease,
+    transform 150ms ease;
 }
 
 .lobby-rule-card::before,
 .lobby-rule-card::after {
-  position: absolute;
-  width: 0.62rem;
-  height: 0.62rem;
-  content: "";
-  border-color: rgb(185 147 92 / 42%);
-  pointer-events: none;
-}
-
-.lobby-rule-card::before {
-  top: 0.2rem;
-  left: 0.2rem;
-  border-top: 1px solid;
-  border-left: 1px solid;
-}
-
-.lobby-rule-card::after {
-  right: 0.2rem;
-  bottom: 0.2rem;
-  border-right: 1px solid;
-  border-bottom: 1px solid;
+  display: none;
 }
 
 .lobby-rule-card:hover {
-  border-color: rgb(232 201 130 / 62%) !important;
-  filter: brightness(1.08);
+  border-color: transparent !important;
+  filter: brightness(1.05);
+  transform: translateY(-1px);
 }
 
 .lobby-rule-card-selected {
-  border-color: rgb(232 201 130 / 82%) !important;
-  background:
-    linear-gradient(180deg, rgb(31 28 18 / 86%), rgb(5 8 12 / 90%)),
-    radial-gradient(circle at 18% 35%, rgb(238 190 111 / 18%), transparent 36%);
+  border-color: transparent !important;
+  background: transparent;
+  box-shadow: none;
+}
+
+.lobby-rule-card:focus-visible {
   box-shadow:
-    0 0 0 1px rgb(232 201 130 / 24%),
-    0 0 22px rgb(238 190 111 / 16%),
-    inset 0 1px 0 rgb(255 230 184 / 13%),
-    inset 0 -1px 0 rgb(0 0 0 / 54%);
+    0 0 0 2px rgb(232 201 130 / 78%),
+    0 0 20px rgb(238 190 111 / 22%);
 }
 
 .lobby-rule-card-glint {
-  position: absolute;
-  top: 0;
-  right: 0.8rem;
-  left: 0.8rem;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgb(232 201 130 / 46%), transparent);
-  opacity: 0;
-}
-
-.lobby-rule-card-selected .lobby-rule-card-glint,
-.lobby-rule-card:hover .lobby-rule-card-glint {
-  opacity: 1;
+  display: none;
 }
 
 .lobby-rule-card-body {
-  display: flex;
-  height: 100%;
+  display: block;
+  width: 100%;
+  height: auto;
   min-width: 0;
-  align-items: center;
-  gap: 0.82rem;
 }
 
-.lobby-rule-emblem {
-  display: grid;
-  width: 3.4rem;
-  height: 3.4rem;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid rgb(180 192 203 / 42%);
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at 50% 35%, rgb(238 190 111 / 18%), transparent 48%),
-    radial-gradient(circle, rgb(28 35 42 / 86%), rgb(5 8 12 / 92%));
-  color: #d8e0e7;
-  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
-  font-size: 1.35rem;
-  font-weight: 800;
-  box-shadow:
-    inset 0 0 0 0.25rem rgb(0 0 0 / 28%),
-    0 8px 16px rgb(0 0 0 / 30%);
+.lobby-rule-card-image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.18rem;
+  user-select: none;
+  pointer-events: none;
 }
 
-.lobby-rule-emblem-selected {
-  border-color: rgb(232 201 130 / 72%);
-  color: #f0dfc8;
-  box-shadow:
-    inset 0 0 0 0.25rem rgb(0 0 0 / 26%),
-    0 0 18px rgb(238 190 111 / 20%);
-}
-
-.lobby-rule-copy {
+.lobby-rule-card-fallback {
   display: flex;
+  min-height: 8.15rem;
   min-width: 0;
   flex-direction: column;
-  gap: 0.24rem;
+  justify-content: center;
+  gap: 0.28rem;
+  border: 1px solid rgb(134 146 158 / 42%);
+  border-radius: 0.25rem;
+  background:
+    linear-gradient(180deg, rgb(8 15 20 / 84%), rgb(2 7 12 / 88%)),
+    radial-gradient(circle at 18% 35%, rgb(130 153 166 / 12%), transparent 34%);
+  padding: 0.82rem;
+  line-height: 1.3;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 7%),
+    inset 0 -1px 0 rgb(0 0 0 / 54%);
 }
 
 .lobby-rule-name {
@@ -3126,7 +3094,7 @@ body {
 
 @media (max-width: 1180px) {
   .lobby-workbench-frame {
-    grid-template-columns: minmax(15rem, 0.78fr) minmax(0, 1.22fr);
+    grid-template-columns: minmax(24rem, 0.88fr) minmax(0, 1.12fr);
   }
 
   .lobby-lineup-workbench {
@@ -3235,7 +3203,7 @@ body {
 
   .lobby-rule-list {
     display: grid;
-    grid-auto-columns: minmax(15rem, 78vw);
+    grid-auto-columns: minmax(21rem, 88vw);
     grid-auto-flow: column;
     grid-template-columns: none;
     overflow-x: auto;
@@ -3244,7 +3212,7 @@ body {
   }
 
   .lobby-rule-card {
-    min-width: 15rem;
+    min-width: 21rem;
   }
 
   .player-config-seat-module,
