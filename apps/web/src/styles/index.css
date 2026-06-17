@@ -22,6 +22,33 @@ body {
   min-height: 100vh;
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(214 207 191 / 68%) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 0.34rem;
+  height: 0.34rem;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(214 207 191 / 68%);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(235 228 210 / 82%);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 #root {
   min-height: 100vh;
 }
@@ -738,20 +765,20 @@ body {
 }
 
 .god-view-bottom-board {
-  scrollbar-color: rgb(185 147 92 / 55%) rgb(2 6 23 / 45%);
+  scrollbar-color: rgb(214 207 191 / 68%) transparent;
 }
 
 .god-view-bottom-board::-webkit-scrollbar {
-  height: 0.55rem;
+  height: 0.34rem;
 }
 
 .god-view-bottom-board::-webkit-scrollbar-track {
-  background: rgb(2 6 23 / 45%);
+  background: transparent;
 }
 
 .god-view-bottom-board::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: rgb(185 147 92 / 55%);
+  background: rgb(214 207 191 / 68%);
 }
 
 .god-view-broadcast-layout {
