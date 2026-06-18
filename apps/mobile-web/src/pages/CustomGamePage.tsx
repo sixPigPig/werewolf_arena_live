@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import {
   createGameRun,
@@ -13,6 +13,7 @@ import { MobileButton } from "../components/MobileButton";
 import { StatusBanner } from "../components/StatusBanner";
 
 const stepTitles = ["规则预设", "玩家选择", "模型和轮数", "确认开局"];
+const pendingRuleSetQueryStep = -1;
 const minGameRounds = 1;
 const maxGameRounds = 20;
 
@@ -34,8 +35,13 @@ function mutationErrorMessage(error: unknown) {
 
 export function CustomGamePage() {
   const navigate = useNavigate();
-  const [step, setStep] = useState(0);
-  const [selectedRuleSetId, setSelectedRuleSetId] = useState("");
+  const [searchParams] = useSearchParams();
+  const ruleSetIdFromQuery = searchParams.get("ruleSetId") ?? "";
+  const [step, setStep] = useState(
+    ruleSetIdFromQuery ? pendingRuleSetQueryStep : 0,
+  );
+  const [selectedRuleSetId, setSelectedRuleSetId] =
+    useState(ruleSetIdFromQuery);
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>([]);
   const [maxRounds, setMaxRounds] = useState(8);
 
@@ -56,6 +62,15 @@ export function CustomGamePage() {
     () => ruleSetsQuery.data?.rule_sets ?? [],
     [ruleSetsQuery.data?.rule_sets],
   );
+  const queryRule = useMemo(
+    () =>
+      ruleSetIdFromQuery
+        ? ruleSets.find((ruleSet) => ruleSet.id === ruleSetIdFromQuery)
+        : undefined,
+    [ruleSetIdFromQuery, ruleSets],
+  );
+  const currentStep =
+    step === pendingRuleSetQueryStep ? (queryRule ? 1 : 0) : step;
   const models = useMemo(
     () => modelOptionsQuery.data?.models ?? [],
     [modelOptionsQuery.data?.models],
@@ -106,8 +121,8 @@ export function CustomGamePage() {
   };
 
   const nextDisabled =
-    (step === 0 && !activeRule) ||
-    (step === 1 && effectiveSelectedProfileIds.length === 0);
+    (currentStep === 0 && !activeRule) ||
+    (currentStep === 1 && effectiveSelectedProfileIds.length === 0);
 
   const confirmDisabled =
     !activeRule ||
@@ -136,16 +151,16 @@ export function CustomGamePage() {
     <section className="mobile-page-section">
       <header className="mobile-card">
         <p className="mobile-kicker">自定义开局</p>
-        <h2>{stepTitles[step]}</h2>
+        <h2>{stepTitles[currentStep]}</h2>
         <p>
-          第 {step + 1} 步 / 共 {stepTitles.length} 步
+          第 {currentStep + 1} 步 / 共 {stepTitles.length} 步
         </p>
       </header>
 
       <section className="mobile-card" aria-labelledby="custom-step-title">
-        <h2 id="custom-step-title">{stepTitles[step]}</h2>
+        <h2 id="custom-step-title">{stepTitles[currentStep]}</h2>
 
-        {step === 0 ? (
+        {currentStep === 0 ? (
           <>
             {ruleSetsQuery.isLoading ? <p>正在读取规则预设...</p> : null}
             {ruleSetsQuery.isError ? (
@@ -178,7 +193,7 @@ export function CustomGamePage() {
           </>
         ) : null}
 
-        {step === 1 ? (
+        {currentStep === 1 ? (
           <>
             {playerProfilesQuery.isLoading ? <p>正在读取玩家档案...</p> : null}
             {playerProfilesQuery.isError ? (
@@ -212,7 +227,7 @@ export function CustomGamePage() {
           </>
         ) : null}
 
-        {step === 2 ? (
+        {currentStep === 2 ? (
           <>
             {modelOptionsQuery.isError ? (
               <StatusBanner title="模型读取失败" tone="error">
@@ -250,7 +265,7 @@ export function CustomGamePage() {
           </>
         ) : null}
 
-        {step === 3 ? (
+        {currentStep === 3 ? (
           <>
             <div className="mobile-list-row">
               <strong>规则</strong>
@@ -287,22 +302,22 @@ export function CustomGamePage() {
       </section>
 
       <FixedActionBar>
-        {step > 0 ? (
+        {currentStep > 0 ? (
           <MobileButton
             disabled={createRunMutation.isPending}
             onClick={() => {
-              setStep((current) => Math.max(0, current - 1));
+              setStep(Math.max(0, currentStep - 1));
             }}
           >
             上一步
           </MobileButton>
         ) : null}
 
-        {step < stepTitles.length - 1 ? (
+        {currentStep < stepTitles.length - 1 ? (
           <MobileButton
             disabled={nextDisabled}
             onClick={() => {
-              setStep((current) => Math.min(stepTitles.length - 1, current + 1));
+              setStep(Math.min(stepTitles.length - 1, currentStep + 1));
             }}
             tone="primary"
           >

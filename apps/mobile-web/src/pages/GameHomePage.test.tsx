@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createGameRun, listGames } from "../api/gamesApi";
+import { createGameRun, listGames, listRuleSets } from "../api/gamesApi";
 import type { GameRun, GameSessionSummary } from "../api/types";
 import { GameHomePage } from "./GameHomePage";
 
@@ -24,6 +24,7 @@ vi.mock("react-router-dom", async () => {
 vi.mock("../api/gamesApi", () => ({
   createGameRun: vi.fn(),
   listGames: vi.fn(),
+  listRuleSets: vi.fn(),
 }));
 
 const gameRunFixture = {
@@ -88,25 +89,75 @@ describe("GameHomePage", () => {
   beforeEach(() => {
     vi.mocked(createGameRun).mockReset();
     vi.mocked(listGames).mockReset();
+    vi.mocked(listRuleSets).mockReset();
     navigateMock.mockReset();
     vi.mocked(listGames).mockResolvedValue({ sessions: [] });
+    vi.mocked(listRuleSets).mockResolvedValue({
+      rule_sets: [
+        {
+          id: "classic_8",
+          version: "1",
+          name: "经典 8 人",
+          player_count: 8,
+          role_summary: "狼人 2 · 好人 6",
+        },
+        {
+          id: "classic_12_seer_witch_hunter_idiot",
+          version: "1",
+          name: "经典 12 人",
+          player_count: 12,
+          role_summary: "预女猎白",
+        },
+      ],
+    });
   });
 
-  it("starts a one-click game and navigates to the live run", async () => {
-    vi.mocked(createGameRun).mockResolvedValue(gameRunFixture);
+  it("starts a quick game only after confirming the selected rule", async () => {
+    vi.mocked(createGameRun).mockResolvedValue({
+      ...gameRunFixture,
+      rule_set_id: "classic_8",
+      rule_set: {
+        id: "classic_8",
+        version: "1",
+        name: "经典 8 人",
+        player_count: 8,
+        roles: [],
+      },
+    });
 
     renderGameHomePage();
 
-    await userEvent.click(screen.getByRole("button", { name: "一键开局" }));
+    await screen.findByRole("radio", { name: /经典 8 人/ });
+
+    expect(
+      screen.queryByRole("button", { name: "快速开局" }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("radio", { name: /经典 8 人/ }));
+    await userEvent.click(screen.getByRole("button", { name: "确认规则" }));
+    await userEvent.click(screen.getByRole("button", { name: "快速开局" }));
 
     expect(createGameRun).toHaveBeenCalledWith({
       max_rounds: 8,
       player_configs: [],
-      rule_set_id: "classic_12_seer_witch_hunter_idiot",
+      rule_set_id: "classic_8",
     });
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith("/live/run_mobile_1");
     });
+  });
+
+  it("links custom start to the confirmed rule", async () => {
+    renderGameHomePage();
+
+    await screen.findByRole("radio", { name: /经典 8 人/ });
+    await userEvent.click(screen.getByRole("radio", { name: /经典 8 人/ }));
+    await userEvent.click(screen.getByRole("button", { name: "确认规则" }));
+
+    expect(screen.getByRole("link", { name: "自定义开局" })).toHaveAttribute(
+      "href",
+      "/custom-game?ruleSetId=classic_8",
+    );
   });
 
   it("renders the recent game status", async () => {

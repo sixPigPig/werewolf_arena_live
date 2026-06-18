@@ -62,7 +62,7 @@ const gameRunFixture = {
   event_count: 1,
 } satisfies GameRun;
 
-function renderCustomGamePage() {
+function renderCustomGamePage(route = "/custom-game") {
   const queryClient = new QueryClient({
     defaultOptions: {
       mutations: { retry: false },
@@ -72,7 +72,7 @@ function renderCustomGamePage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[route]}>
         <CustomGamePage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -139,6 +139,36 @@ describe("CustomGamePage", () => {
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith("/live/custom_run");
     });
+  });
+
+  it("starts at player selection when a valid ruleSetId is provided", async () => {
+    renderCustomGamePage("/custom-game?ruleSetId=classic_12");
+
+    expect(
+      await screen.findAllByRole("heading", { name: "玩家选择" }),
+    ).toHaveLength(2);
+    expect(screen.getByText("第 2 步 / 共 4 步")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /夜鸦/ }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await userEvent.click(screen.getByRole("button", { name: "确认开局" }));
+
+    expect(createGameRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        player_configs: [{ seat: 1, profile_id: "p1" }],
+        rule_set_id: "classic_12",
+      }),
+    );
+  });
+
+  it("starts at rule selection without a ruleSetId parameter", async () => {
+    renderCustomGamePage();
+
+    expect(
+      await screen.findAllByRole("heading", { name: "规则预设" }),
+    ).toHaveLength(2);
+    expect(screen.getByText("第 1 步 / 共 4 步")).toBeInTheDocument();
   });
 
   it("caps custom max rounds before creating the game", async () => {
