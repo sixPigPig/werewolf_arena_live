@@ -46,13 +46,16 @@ describe("GothicBorderFrame", () => {
     );
   });
 
-  it("uses sliced lobby border assets without stretching the source image", () => {
+  it("uses image corners with continuous CSS rails instead of sliced edge images", () => {
     const css = readFileSync("src/styles/index.css", "utf8");
     const workbenchFrameRule =
       css.match(/\.lobby-workbench-frame \{[\s\S]*?\n\}/)?.[0] ?? "";
     const lobbyFrameShellRule =
       css.match(/\.lobby-workbench-column,\n\.lobby-action-bar \{[\s\S]*?\n\}/)?.[0] ??
       "";
+    const frameCssStart = css.indexOf(".gothic-border-frame {");
+    const frameCssEnd = css.indexOf(".gothic-button {", frameCssStart);
+    const frameCss = css.slice(frameCssStart, frameCssEnd);
 
     expect(workbenchFrameRule).toContain("overflow: visible;");
     expect(lobbyFrameShellRule).toContain("overflow: visible;");
@@ -60,40 +63,45 @@ describe("GothicBorderFrame", () => {
     expect(lobbyFrameShellRule).not.toContain(
       "border: 1px solid rgb(185 147 92 / 44%);",
     );
-    expect(css).toContain("--gothic-border-frame-art-outset");
-    expect(css).toContain(
+    expect(frameCss).toContain("--gothic-border-frame-art-outset");
+    expect(frameCss).toContain(
       "inset: calc(var(--gothic-border-frame-art-outset) * -1);",
     );
-    expect(css).toContain("--gothic-border-frame-safe-block");
-    expect(css).toContain("--gothic-border-frame-safe-inline");
-    expect(css).toContain("padding:");
-    expect(css).toContain("var(--gothic-border-frame-safe-block)");
-    expect(css).toContain("var(--gothic-border-frame-safe-inline)");
-    expect(css).toContain("--gothic-border-frame-edge-seam-overlap");
-    expect(css).toContain("--gothic-border-frame-edge-seam-offset");
-    expect(css).toContain(
+    expect(frameCss).toContain("--gothic-border-frame-safe-block");
+    expect(frameCss).toContain("--gothic-border-frame-safe-inline");
+    expect(frameCss).toContain("padding:");
+    expect(frameCss).toContain("var(--gothic-border-frame-safe-block)");
+    expect(frameCss).toContain("var(--gothic-border-frame-safe-inline)");
+    expect(frameCss).toContain("--gothic-border-frame-edge-seam-overlap");
+    expect(frameCss).toContain("--gothic-border-frame-edge-seam-offset");
+    expect(frameCss).toContain("--gothic-border-frame-rail-highlight");
+    expect(frameCss).toContain("--gothic-border-frame-rail-gold");
+    expect(frameCss).toContain("--gothic-border-frame-rail-shadow");
+    expect(frameCss).toContain(
       "calc(var(--gothic-border-frame-corner-inline) - var(--gothic-border-frame-edge-seam-overlap))",
     );
-    expect(css).toContain("top: var(--gothic-border-frame-edge-seam-offset)");
-    expect(css).toContain("left: var(--gothic-border-frame-edge-seam-offset)");
-    expect(css).toContain("z-index: 1;");
-    expect(css).toContain("z-index: 2;");
+    expect(frameCss).toContain("top: var(--gothic-border-frame-edge-seam-offset)");
+    expect(frameCss).toContain("left: var(--gothic-border-frame-edge-seam-offset)");
+    expect(frameCss).toContain("z-index: 1;");
+    expect(frameCss).toContain("z-index: 2;");
     expect(css).toContain(".lobby-action-bar.gothic-border-frame-compact");
     expect(css).toContain(
       "--gothic-border-frame-safe-inline: clamp(1.35rem, 3.2vw, 3.6rem);",
     );
-    expect(css).toContain(
+    expect(frameCss).toContain(
       'url("../assets/lobby-border-frame/frame-corner-tl.png")',
     );
-    expect(css).toContain(
+    expect(frameCss).toContain("linear-gradient(90deg");
+    expect(frameCss).toContain("linear-gradient(180deg");
+    expect(frameCss).not.toContain(
       'url("../assets/lobby-border-frame/frame-edge-top.png")',
     );
-    expect(css).toContain(
+    expect(frameCss).not.toContain(
       'url("../assets/lobby-border-frame/frame-edge-left.png")',
     );
-    expect(css).toContain("background-repeat: repeat-x");
-    expect(css).toContain("background-repeat: repeat-y");
-    expect(css).not.toContain(
+    expect(frameCss).not.toContain("background-repeat: repeat-x");
+    expect(frameCss).not.toContain("background-repeat: repeat-y");
+    expect(frameCss).not.toContain(
       'source-transparent.png") 0 0 / 100% 100%',
     );
   });

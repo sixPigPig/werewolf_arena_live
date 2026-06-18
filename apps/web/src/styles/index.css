@@ -4103,6 +4103,11 @@ body {
   --gothic-border-frame-edge-seam-overlap: calc(var(--gothic-border-frame-corner-inline) * 0.3);
   --gothic-border-frame-edge-seam-overlap-block: calc(var(--gothic-border-frame-corner-block) * 0.3);
   --gothic-border-frame-edge-seam-offset: calc(var(--gothic-border-frame-edge-thickness) * 0.18);
+  --gothic-border-frame-rail-highlight: rgb(202 205 199 / 76%);
+  --gothic-border-frame-rail-hairline: rgb(255 255 255 / 28%);
+  --gothic-border-frame-rail-gold: rgb(154 132 88 / 24%);
+  --gothic-border-frame-rail-shadow: rgb(7 9 11 / 96%);
+  --gothic-border-frame-rail-blue: rgb(49 77 128 / 14%);
   --gothic-border-frame-safe-block: 1.35rem;
   --gothic-border-frame-safe-inline: 1.45rem;
   position: relative;
@@ -4181,18 +4186,26 @@ body {
   right: calc(var(--gothic-border-frame-corner-inline) - var(--gothic-border-frame-edge-seam-overlap));
   left: calc(var(--gothic-border-frame-corner-inline) - var(--gothic-border-frame-edge-seam-overlap));
   height: var(--gothic-border-frame-edge-thickness);
-  background-repeat: repeat-x;
-  background-size: auto 100%;
+  background-repeat: no-repeat;
+  filter:
+    drop-shadow(0 1px 0 rgb(255 255 255 / 8%))
+    drop-shadow(0 0 6px rgb(0 0 0 / 58%));
 }
 
 .gothic-border-frame-edge-top {
   top: var(--gothic-border-frame-edge-seam-offset);
-  background-image: url("../assets/lobby-border-frame/frame-edge-top.png");
+  background:
+    linear-gradient(90deg, var(--gothic-border-frame-rail-hairline), var(--gothic-border-frame-rail-highlight) 18%, var(--gothic-border-frame-rail-highlight) 82%, var(--gothic-border-frame-rail-hairline)) 0 0.46rem / 100% 1px no-repeat,
+    linear-gradient(90deg, var(--gothic-border-frame-rail-shadow), rgb(24 26 27 / 96%) 18%, rgb(24 26 27 / 96%) 82%, var(--gothic-border-frame-rail-shadow)) 0 0.54rem / 100% 4px no-repeat,
+    linear-gradient(90deg, rgb(255 255 255 / 16%), rgb(103 106 105 / 42%) 22%, rgb(103 106 105 / 42%) 78%, rgb(255 255 255 / 16%)) 0 0.8rem / 100% 1px no-repeat;
 }
 
 .gothic-border-frame-edge-bottom {
   bottom: var(--gothic-border-frame-edge-seam-offset);
-  background-image: url("../assets/lobby-border-frame/frame-edge-bottom.png");
+  background:
+    linear-gradient(90deg, rgb(255 255 255 / 16%), rgb(103 106 105 / 42%) 22%, rgb(103 106 105 / 42%) 78%, rgb(255 255 255 / 16%)) 0 calc(100% - 0.8rem) / 100% 1px no-repeat,
+    linear-gradient(90deg, var(--gothic-border-frame-rail-shadow), rgb(24 26 27 / 96%) 18%, rgb(24 26 27 / 96%) 82%, var(--gothic-border-frame-rail-shadow)) 0 calc(100% - 0.54rem) / 100% 4px no-repeat,
+    linear-gradient(90deg, var(--gothic-border-frame-rail-hairline), var(--gothic-border-frame-rail-highlight) 18%, var(--gothic-border-frame-rail-highlight) 82%, var(--gothic-border-frame-rail-hairline)) 0 calc(100% - 0.46rem) / 100% 1px no-repeat;
 }
 
 .gothic-border-frame-edge-right,
@@ -4201,18 +4214,26 @@ body {
   top: calc(var(--gothic-border-frame-corner-block) - var(--gothic-border-frame-edge-seam-overlap-block));
   bottom: calc(var(--gothic-border-frame-corner-block) - var(--gothic-border-frame-edge-seam-overlap-block));
   width: var(--gothic-border-frame-edge-thickness);
-  background-repeat: repeat-y;
-  background-size: 100% auto;
+  background-repeat: no-repeat;
+  filter:
+    drop-shadow(1px 0 0 rgb(255 255 255 / 7%))
+    drop-shadow(0 0 6px rgb(0 0 0 / 58%));
 }
 
 .gothic-border-frame-edge-right {
   right: var(--gothic-border-frame-edge-seam-offset);
-  background-image: url("../assets/lobby-border-frame/frame-edge-right.png");
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 16%), rgb(103 106 105 / 42%) 22%, rgb(103 106 105 / 42%) 78%, rgb(255 255 255 / 16%)) calc(100% - 0.8rem) 0 / 1px 100% no-repeat,
+    linear-gradient(180deg, var(--gothic-border-frame-rail-shadow), rgb(24 26 27 / 96%) 18%, rgb(24 26 27 / 96%) 82%, var(--gothic-border-frame-rail-shadow)) calc(100% - 0.54rem) 0 / 4px 100% no-repeat,
+    linear-gradient(180deg, var(--gothic-border-frame-rail-hairline), var(--gothic-border-frame-rail-highlight) 18%, var(--gothic-border-frame-rail-highlight) 82%, var(--gothic-border-frame-rail-hairline)) calc(100% - 0.46rem) 0 / 1px 100% no-repeat;
 }
 
 .gothic-border-frame-edge-left {
   left: var(--gothic-border-frame-edge-seam-offset);
-  background-image: url("../assets/lobby-border-frame/frame-edge-left.png");
+  background:
+    linear-gradient(180deg, var(--gothic-border-frame-rail-hairline), var(--gothic-border-frame-rail-highlight) 18%, var(--gothic-border-frame-rail-highlight) 82%, var(--gothic-border-frame-rail-hairline)) 0.46rem 0 / 1px 100% no-repeat,
+    linear-gradient(180deg, var(--gothic-border-frame-rail-shadow), rgb(24 26 27 / 96%) 18%, rgb(24 26 27 / 96%) 82%, var(--gothic-border-frame-rail-shadow)) 0.54rem 0 / 4px 100% no-repeat,
+    linear-gradient(180deg, rgb(255 255 255 / 16%), rgb(103 106 105 / 42%) 22%, rgb(103 106 105 / 42%) 78%, rgb(255 255 255 / 16%)) 0.8rem 0 / 1px 100% no-repeat;
 }
 
 .gothic-border-frame-content {
