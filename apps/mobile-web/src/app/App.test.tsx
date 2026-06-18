@@ -8,6 +8,28 @@ import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { routes } from "../routes/definitions";
 import { updateRootFontSize } from "../styles/rem";
 
+const requiredRoutes = [
+  "/",
+  "/games",
+  "/games/:gameId",
+  "/games/:gameId/live",
+  "/games/:gameId/replay",
+  "/players",
+  "/players/:playerId",
+  "/history",
+];
+
+const routeSmokeCases = [
+  { path: "/", heading: "移动大厅" },
+  { path: "/games", heading: "移动大厅" },
+  { path: "/games/wolf-1", heading: "对局详情" },
+  { path: "/games/wolf-1/live", heading: "实时观战" },
+  { path: "/games/wolf-1/replay", heading: "移动复盘" },
+  { path: "/players", heading: "玩家图鉴" },
+  { path: "/players/seer-1", heading: "玩家详情" },
+  { path: "/history", heading: "对局历史" },
+];
+
 describe("mobile app scaffold", () => {
   it("redirects the mobile root route to games", async () => {
     const router = createMemoryRouter(routes, { initialEntries: ["/"] });
@@ -15,6 +37,21 @@ describe("mobile app scaffold", () => {
     render(<RouterProvider router={router} />);
 
     expect(await screen.findByRole("heading", { name: "移动大厅" })).toBeInTheDocument();
+  });
+
+  it("declares the required mobile routes without extras", () => {
+    expect(routes.map((route) => route.path)).toEqual(requiredRoutes);
+  });
+
+  it("renders every required mobile route", async () => {
+    for (const routeCase of routeSmokeCases) {
+      const router = createMemoryRouter(routes, { initialEntries: [routeCase.path] });
+      const { unmount } = render(<RouterProvider router={router} />);
+
+      expect(await screen.findByRole("heading", { name: routeCase.heading })).toBeInTheDocument();
+
+      unmount();
+    }
   });
 
   it("uses px2rem with the approved 375px baseline", () => {

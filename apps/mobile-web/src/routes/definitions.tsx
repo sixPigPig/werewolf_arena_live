@@ -5,14 +5,16 @@ import { GamesPage } from "../pages/GamesPage";
 import { HistoryPage } from "../pages/HistoryPage";
 import { LivePage } from "../pages/LivePage";
 import { PlaybackPage } from "../pages/PlaybackPage";
+import { PlayerDetailPage } from "../pages/PlayerDetailPage";
 import { PlayersPage } from "../pages/PlayersPage";
 
 export const routes: RouteObject[] = [
   { path: "/", element: <Navigate to="/games" replace /> },
   { path: "/games", element: <GamesPage /> },
+  { path: "/games/:gameId", element: <GameDetailPage /> },
+  { path: "/games/:gameId/live", element: <LivePage /> },
+  { path: "/games/:gameId/replay", element: <PlaybackPage /> },
   { path: "/players", element: <PlayersPage /> },
-  { path: "/games/history", element: <HistoryPage /> },
-  { path: "/games/live/:runId", element: <LivePage /> },
-  { path: "/games/playback/:sessionId", element: <PlaybackPage /> },
-  { path: "/games/:sessionId", element: <GameDetailPage /> },
+  { path: "/players/:playerId", element: <PlayerDetailPage /> },
+  { path: "/history", element: <HistoryPage /> },
 ];
