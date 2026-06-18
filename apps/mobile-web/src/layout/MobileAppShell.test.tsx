@@ -1,8 +1,23 @@
+/// <reference types="node" />
+
 import { render, screen, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
 import { routes } from "../routes/definitions";
+
+const mobileStyles = readFileSync(
+  "src/styles/index.css",
+  "utf8",
+);
+
+function cssBlock(selector: string) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = mobileStyles.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`));
+
+  return match?.[1] ?? "";
+}
 
 function renderAt(path: string) {
   const router = createMemoryRouter(routes, { initialEntries: [path] });
@@ -28,5 +43,19 @@ describe("MobileAppShell", () => {
 
     expect(within(nav).getByRole("link", { name: "玩家" })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getByRole("link", { name: "对局" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("keeps fixed bottom chrome inside the phone viewport", () => {
+    expect(cssBlock(":root")).toContain("--mobile-tab-bar-offset");
+    expect(cssBlock(".mobile-tab-bar")).toContain("box-sizing: border-box");
+    expect(cssBlock(".mobile-tab-bar")).toContain("max-width: 100vw");
+    expect(cssBlock(".mobile-fixed-action-bar")).toContain(
+      "bottom: var(--mobile-tab-bar-offset)",
+    );
+  });
+
+  it("keeps status and legacy shell styles aligned with supported UI", () => {
+    expect(cssBlock(".mobile-status-banner-success")).toContain("border-color");
+    expect(mobileStyles).not.toContain(".mobile-page-surface");
   });
 });
