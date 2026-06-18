@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+:root {
+  color: #f4e8d2;
+  background: #070a0f;
+  font-family: Inter, "Segoe UI", sans-serif;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100svh;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: linear-gradient(180deg, #101722 0%, #05070b 100%);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.mobile-page {
+  min-height: 100svh;
+  box-sizing: border-box;
+  padding: 24px 16px;
+}
