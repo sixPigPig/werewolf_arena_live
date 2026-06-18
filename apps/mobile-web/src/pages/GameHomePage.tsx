@@ -97,7 +97,6 @@ export function GameHomePage() {
   return (
     <section className="mobile-page-section">
       <div className="mobile-hero-panel">
-        <span className="mobile-sr-only">手机版 Web 正在搭建中</span>
         <p className="mobile-kicker">大厅</p>
         <h2>今晚开一局</h2>
         <p>

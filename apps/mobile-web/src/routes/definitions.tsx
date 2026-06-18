@@ -1,7 +1,5 @@
-import { QueryClientProvider } from "@tanstack/react-query";
 import type { RouteObject } from "react-router-dom";
 
-import { queryClient } from "../lib/query-client";
 import { MobileAppShell } from "../layout/MobileAppShell";
 import { GameHomePage } from "../pages/GameHomePage";
 
@@ -15,20 +13,12 @@ function starterPage(title: string) {
   );
 }
 
-function gameHomePage() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <GameHomePage />
-    </QueryClientProvider>
-  );
-}
-
 export const routes: RouteObject[] = [
   {
     path: "/",
     element: <MobileAppShell />,
     children: [
-      { index: true, element: gameHomePage() },
+      { index: true, element: <GameHomePage /> },
       { path: "players", element: starterPage("玩家") },
       { path: "history", element: starterPage("历史") },
       { path: "settings", element: starterPage("设置") },

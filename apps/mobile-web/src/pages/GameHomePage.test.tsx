@@ -119,4 +119,10 @@ describe("GameHomePage", () => {
     expect(screen.getByText("最近对局")).toBeInTheDocument();
     expect(await screen.findByText("session_recent")).toBeInTheDocument();
   });
+
+  it("does not render the old scaffold copy", () => {
+    renderGameHomePage();
+
+    expect(screen.queryByText("手机版 Web 正在搭建中")).not.toBeInTheDocument();
+  });
 });

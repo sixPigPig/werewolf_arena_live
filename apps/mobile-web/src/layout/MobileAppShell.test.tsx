@@ -1,5 +1,6 @@
 /// <reference types="node" />
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
@@ -9,6 +10,10 @@ import { routes } from "../routes/definitions";
 
 const mobileStyles = readFileSync(
   "src/styles/index.css",
+  "utf8",
+);
+const routeDefinitions = readFileSync(
+  "src/routes/definitions.tsx",
   "utf8",
 );
 
@@ -21,7 +26,18 @@ function cssBlock(selector: string) {
 
 function renderAt(path: string) {
   const router = createMemoryRouter(routes, { initialEntries: [path] });
-  return render(<RouterProvider router={router} />);
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      mutations: { retry: false },
+      queries: { retry: false },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
 }
 
 describe("MobileAppShell", () => {
@@ -57,5 +73,10 @@ describe("MobileAppShell", () => {
   it("keeps status and legacy shell styles aligned with supported UI", () => {
     expect(cssBlock(".mobile-status-banner-success")).toContain("border-color");
     expect(mobileStyles).not.toContain(".mobile-page-surface");
+  });
+
+  it("keeps route definitions provider-free", () => {
+    expect(routeDefinitions).not.toContain("QueryClientProvider");
+    expect(routeDefinitions).not.toContain("queryClient");
   });
 });
