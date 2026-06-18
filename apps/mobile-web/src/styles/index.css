@@ -316,3 +316,71 @@ textarea {
   color: #aeb9c3;
   opacity: 1;
 }
+
+/* Task 6: live stage */
+.mobile-live-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-live-header > div {
+  min-width: 0;
+}
+
+.mobile-live-header h2 {
+  margin: 0;
+  color: #ead8bf;
+  font-family: Georgia, "Noto Serif SC", serif;
+  font-size: 1.2rem;
+  line-height: 1.2;
+}
+
+.mobile-live-status {
+  flex: 0 0 auto;
+  border: 1px solid rgb(185 147 92 / 38%);
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: #f3dfbf;
+  font-size: 0.78rem;
+}
+
+.mobile-stage-card {
+  min-height: 160px;
+  border: 1px solid rgb(185 147 92 / 56%);
+  border-radius: 8px;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, rgb(31 39 44 / 88%), rgb(8 12 17 / 94%)),
+    radial-gradient(circle at 50% 0%, rgb(201 157 95 / 16%), transparent 12rem);
+}
+
+.mobile-stage-card strong {
+  display: block;
+  margin-top: 8px;
+  color: #f4e6d0;
+  font-size: 1.1rem;
+  overflow-wrap: anywhere;
+}
+
+.mobile-stage-card p {
+  overflow-wrap: anywhere;
+}
+
+.mobile-seat-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mobile-seat-strip span {
+  display: flex;
+  aspect-ratio: 1;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(119 137 150 / 38%);
+  border-radius: 8px;
+  background: #101820;
+}
