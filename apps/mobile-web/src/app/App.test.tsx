@@ -3,7 +3,7 @@
 import { render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { RouterProvider, createMemoryRouter } from "react-router-dom";
+import { RouterProvider, createMemoryRouter, type RouteObject } from "react-router-dom";
 
 import { routes } from "../routes/definitions";
 import { updateRootFontSize } from "../styles/rem";
@@ -30,6 +30,32 @@ const routeSmokeCases = [
   { path: "/history", heading: "对局历史" },
 ];
 
+function joinRoutePath(parentPath: string, childPath?: string) {
+  if (!childPath) {
+    return parentPath || "/";
+  }
+
+  if (childPath.startsWith("/")) {
+    return childPath;
+  }
+
+  const basePath = parentPath === "/" ? "" : parentPath;
+
+  return `${basePath}/${childPath}`;
+}
+
+function collectPublicRoutePaths(routeObjects: RouteObject[], parentPath = ""): string[] {
+  return routeObjects.flatMap((route) => {
+    const routePath = route.index ? parentPath || "/" : joinRoutePath(parentPath, route.path);
+
+    if (route.children?.length) {
+      return collectPublicRoutePaths(route.children, routePath);
+    }
+
+    return [routePath];
+  });
+}
+
 describe("mobile app scaffold", () => {
   it("redirects the mobile root route to games", async () => {
     const router = createMemoryRouter(routes, { initialEntries: ["/"] });
@@ -40,7 +66,7 @@ describe("mobile app scaffold", () => {
   });
 
   it("declares the required mobile routes without extras", () => {
-    expect(routes.map((route) => route.path)).toEqual(requiredRoutes);
+    expect(collectPublicRoutePaths(routes)).toEqual(requiredRoutes);
   });
 
   it("renders every required mobile route", async () => {
