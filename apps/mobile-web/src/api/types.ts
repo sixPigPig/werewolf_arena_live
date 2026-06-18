@@ -71,18 +71,49 @@ export type CreateGameRunRequest = {
 
 export type GameRunStatus = "queued" | "running" | "completed" | "failed";
 
+export type PlayerConfig = {
+  seat: number;
+  profile_id?: string | null;
+  name?: string | null;
+  model?: string | null;
+  personality_id?: string;
+  personality?: string;
+  appearance_id?: string;
+  avatar_prompt?: string;
+  avatar_image_url?: string;
+  tags?: string[];
+};
+
+export type LineupQualityWarning = {
+  code: string;
+  detail: string;
+};
+
 export type GameRun = {
   run_id: string;
   session_id: string;
+  villager_model: string;
+  werewolf_model: string;
+  seed: number | null;
+  max_rounds: number;
+  rule_set_id: string;
+  rule_set: RuleSetSummary;
+  player_configs: PlayerConfig[];
+  lineup_quality_warnings: LineupQualityWarning[];
   status: GameRunStatus;
-  winner?: string | null;
-  error?: string | null;
-  rule_set?: RuleSetSummary;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  winner: string | null;
+  error: string | null;
+  event_count: number;
 };
+
+export type GameSessionStatus = "complete" | "partial";
 
 export type GameSessionSummary = {
   session_id: string;
-  status: "complete" | "partial";
+  status: GameSessionStatus;
   winner: string | null;
   round_count: number;
   created_at: string | null;
@@ -97,16 +128,20 @@ export type GameSessionsResponse = {
 export type LiveGameEvent = {
   id: number;
   type: string;
-  payload?: Record<string, unknown>;
-  timestamp?: string;
+  run_id: string;
+  session_id: string;
+  created_at: string;
+  round: number | null;
+  phase: string | null;
+  actor: string | null;
+  action: string | null;
+  payload: Record<string, unknown>;
 };
 
 export type GamePlaybackResponse = {
   session_id: string;
-  timeline?: Array<{
-    id?: string;
-    title?: string;
-    text?: string;
-    round?: number;
-  }>;
+  status: GameSessionStatus;
+  rule_set?: RuleSetSummary | null;
+  resumable: boolean;
+  events: LiveGameEvent[];
 };
