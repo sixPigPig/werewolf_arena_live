@@ -13,6 +13,16 @@ import { MobileButton } from "../components/MobileButton";
 import { StatusBanner } from "../components/StatusBanner";
 
 const stepTitles = ["规则预设", "玩家选择", "模型和轮数", "确认开局"];
+const minGameRounds = 1;
+const maxGameRounds = 20;
+
+function normalizeMaxRounds(value: number) {
+  if (!Number.isFinite(value)) {
+    return minGameRounds;
+  }
+
+  return Math.min(maxGameRounds, Math.max(minGameRounds, value));
+}
 
 function mutationErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {
@@ -207,12 +217,11 @@ export function CustomGamePage() {
               <span>最大轮数</span>
               <input
                 id="custom-game-max-rounds"
-                min={1}
+                max={maxGameRounds}
+                min={minGameRounds}
                 onChange={(event) => {
                   const nextValue = Number.parseInt(event.target.value, 10);
-                  setMaxRounds(
-                    Number.isFinite(nextValue) ? Math.max(1, nextValue) : 1,
-                  );
+                  setMaxRounds(normalizeMaxRounds(nextValue));
                 }}
                 type="number"
                 value={maxRounds}

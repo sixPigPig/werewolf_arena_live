@@ -141,4 +141,27 @@ describe("CustomGamePage", () => {
       expect(navigateMock).toHaveBeenCalledWith("/live/custom_run");
     });
   });
+
+  it("caps custom max rounds before creating the game", async () => {
+    const user = userEvent.setup();
+    renderCustomGamePage();
+
+    await screen.findByText("经典 12 人");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("checkbox", { name: /夜鸦/ }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    const maxRoundsInput = screen.getByRole("spinbutton", {
+      name: "最大轮数",
+    });
+    await user.clear(maxRoundsInput);
+    await user.type(maxRoundsInput, "24");
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "确认开局" }));
+
+    expect(createGameRun).toHaveBeenCalledWith(
+      expect.objectContaining({ max_rounds: 20 }),
+    );
+  });
 });
