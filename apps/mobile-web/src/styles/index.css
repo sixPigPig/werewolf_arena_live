@@ -384,3 +384,33 @@ textarea {
   border-radius: 8px;
   background: #101820;
 }
+
+/* Task 7: secondary pages */
+.mobile-timeline-item {
+  position: relative;
+  min-width: 0;
+  border-left: 1px solid rgb(185 147 92 / 34%);
+  padding: 0 0 14px 16px;
+}
+
+.mobile-timeline-item::before {
+  position: absolute;
+  top: 3px;
+  left: -5px;
+  width: 9px;
+  height: 9px;
+  border: 1px solid rgb(185 147 92 / 72%);
+  background: #101820;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.mobile-timeline-item strong {
+  display: block;
+  color: #f3dfbf;
+  overflow-wrap: anywhere;
+}
+
+.mobile-timeline-item p {
+  overflow-wrap: anywhere;
+}
