@@ -92,22 +92,6 @@ http://127.0.0.1:5173
 
 开发服务器会把 `/api` 代理到 `http://localhost:8000`，因此前端页面中的 `/api/v1/...` 请求会自动转发到 FastAPI。
 
-### 手机版 Web
-
-手机版 Web 是独立 Vite 应用，复用同一个 FastAPI 后端。
-
-```bash
-pnpm --dir apps/mobile-web dev --host 127.0.0.1 --port 5174
-```
-
-地址：
-
-```text
-http://127.0.0.1:5174
-```
-
-开发服务器同样会把 `/api` 代理到 `http://localhost:8000`。
-
 ## 实时观战流程
 
 1. 打开 `http://127.0.0.1:5173/games`。
@@ -141,7 +125,4 @@ base URL 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`。新增 OpenAI
 cd apps/api && .venv/bin/python -m pytest
 cd apps/web && pnpm test -- --run
 cd apps/web && pnpm build
-pnpm --dir apps/mobile-web test -- --run
-pnpm --dir apps/mobile-web lint
-pnpm --dir apps/mobile-web build
 ```
