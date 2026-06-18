@@ -1,11 +1,1 @@
-import { apiFetch } from "../../../api/client";
-import type { GameReplay, RawGameReplayResponse } from "../types";
-
-import { normalizeGameReplay } from "./adapters";
-
-export async function getGameDetail(sessionId: string): Promise<GameReplay> {
-  const response = await apiFetch<RawGameReplayResponse>(
-    `/api/v1/games/${sessionId}`,
-  );
-  return normalizeGameReplay(response);
-}
+export { getGameDetail } from "@werewolf-arena/game-client";

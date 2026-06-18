@@ -13,6 +13,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.99.2
         version: 5.99.2(react@19.2.5)
+      '@werewolf-arena/game-client':
+        specifier: workspace:*
+        version: link:../../packages/game-client
       react:
         specifier: ^19.2.5
         version: 19.2.5

@@ -1,6 +1,1 @@
-import { apiFetch } from "../../../api/client";
-import type { ModelOptionsResponse } from "../types";
-
-export function listModelOptions(): Promise<ModelOptionsResponse> {
-  return apiFetch<ModelOptionsResponse>("/api/v1/games/model-options");
-}
+export { listModelOptions } from "@werewolf-arena/game-client";
