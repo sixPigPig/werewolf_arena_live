@@ -1,6 +1,7 @@
 import type { RouteObject } from "react-router-dom";
 
 import { MobileAppShell } from "../layout/MobileAppShell";
+import { CustomGamePage } from "../pages/CustomGamePage";
 import { GameHomePage } from "../pages/GameHomePage";
 
 function starterPage(title: string) {
@@ -22,7 +23,7 @@ export const routes: RouteObject[] = [
       { path: "players", element: starterPage("玩家") },
       { path: "history", element: starterPage("历史") },
       { path: "settings", element: starterPage("设置") },
-      { path: "custom-game", element: starterPage("自定义开局") },
+      { path: "custom-game", element: <CustomGamePage /> },
       { path: "live/:runId", element: starterPage("实时直播") },
       { path: "playback/:sessionId", element: starterPage("手机复盘") },
     ],

@@ -257,3 +257,62 @@ textarea {
 .mobile-list-row .mobile-link-button {
   flex: 0 0 auto;
 }
+
+/* Task 5: custom game wizard */
+.mobile-choice-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid rgb(185 147 92 / 22%);
+  border-radius: 8px;
+  padding: 12px;
+  color: #d9e0e6;
+  background: rgb(7 12 18 / 58%);
+}
+
+.mobile-choice-row > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mobile-choice-row strong,
+.mobile-field span {
+  color: #f1e1ca;
+}
+
+.mobile-choice-row span span {
+  color: #aeb9c3;
+  line-height: 1.4;
+}
+
+.mobile-choice-row input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
+.mobile-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mobile-field input,
+.mobile-field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgb(185 147 92 / 32%);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: #f4e6d0;
+  background: rgb(7 12 18 / 86%);
+}
+
+.mobile-field select:disabled {
+  color: #aeb9c3;
+  opacity: 1;
+}
