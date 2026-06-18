@@ -74,4 +74,43 @@ describe("useMobileGameRunEvents", () => {
     });
     expect(MockEventSource.instances[0].close).toHaveBeenCalled();
   });
+
+  it("subscribes to model retry and action quality warning events", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const { result } = renderHook(() => useMobileGameRunEvents("run_2"));
+
+    MockEventSource.instances[0].onopen?.();
+    MockEventSource.instances[0].emit("model_retry_scheduled", {
+      action: "vote",
+      actor: "夜鸦",
+      created_at: "2026-06-18T00:00:00Z",
+      id: 1,
+      payload: { attempt: 2 },
+      phase: "day",
+      round: 2,
+      run_id: "run_2",
+      session_id: "session_2",
+      type: "model_retry_scheduled",
+    });
+    MockEventSource.instances[0].emit("action_quality_warning", {
+      action: "debate",
+      actor: "烛影",
+      created_at: "2026-06-18T00:00:01Z",
+      id: 2,
+      payload: { warnings: ["off_option_fallback"] },
+      phase: "day",
+      round: 2,
+      run_id: "run_2",
+      session_id: "session_2",
+      type: "action_quality_warning",
+    });
+
+    await waitFor(() => {
+      expect(result.current.events.map((event) => event.type)).toEqual([
+        "model_retry_scheduled",
+        "action_quality_warning",
+      ]);
+    });
+  });
 });

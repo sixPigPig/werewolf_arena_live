@@ -45,8 +45,10 @@ export function LivePage() {
       return status === "completed" || status === "failed" ? false : 15000;
     },
   });
-  const { connectionState, events, latestEvent } = useMobileGameRunEvents(runId);
   const run = runQuery.data;
+  const streamRunId = run ? runId : undefined;
+  const { connectionState, events, latestEvent } =
+    useMobileGameRunEvents(streamRunId);
   const isTerminal = run?.status === "completed" || run?.status === "failed";
 
   return (

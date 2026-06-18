@@ -6,6 +6,8 @@ import type { GameSessionSummary } from "../api/types";
 import { MobileButton } from "../components/MobileButton";
 import { StatusBanner } from "../components/StatusBanner";
 
+const quickStartRuleSetId = "classic_12_seer_witch_hunter_idiot";
+
 function formatWinner(winner: string | null) {
   if (!winner) {
     return "未记录胜方";
@@ -110,6 +112,7 @@ export function GameHomePage() {
               createRunMutation.mutate({
                 max_rounds: 8,
                 player_configs: [],
+                rule_set_id: quickStartRuleSetId,
               });
             }}
             tone="primary"

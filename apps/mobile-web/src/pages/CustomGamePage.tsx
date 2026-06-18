@@ -72,13 +72,20 @@ export function CustomGamePage() {
     [ruleSets, selectedRuleSetId],
   );
   const firstModel = useMemo(() => models[0], [models]);
+  const playerLimit = activeRule?.player_count ?? 0;
+  const effectiveSelectedProfileIds =
+    playerLimit > 0
+      ? selectedProfileIds.slice(0, playerLimit)
+      : selectedProfileIds;
   const selectedProfiles = useMemo(
     () =>
-      selectedProfileIds
+      effectiveSelectedProfileIds
         .map((profileId) => profiles.find((profile) => profile.id === profileId))
         .filter((profile) => Boolean(profile)),
-    [profiles, selectedProfileIds],
+    [profiles, effectiveSelectedProfileIds],
   );
+  const isProfileSelectionFull =
+    playerLimit > 0 && effectiveSelectedProfileIds.length >= playerLimit;
 
   const createRunMutation = useMutation({
     mutationFn: (request: Parameters<typeof createGameRun>[0]) =>
@@ -92,18 +99,20 @@ export function CustomGamePage() {
     setSelectedProfileIds((current) =>
       current.includes(profileId)
         ? current.filter((selectedId) => selectedId !== profileId)
+        : activeRule && current.length >= activeRule.player_count
+          ? current
         : [...current, profileId],
     );
   };
 
   const nextDisabled =
     (step === 0 && !activeRule) ||
-    (step === 1 && selectedProfileIds.length === 0);
+    (step === 1 && effectiveSelectedProfileIds.length === 0);
 
   const confirmDisabled =
     !activeRule ||
     !firstModel ||
-    selectedProfileIds.length === 0 ||
+    effectiveSelectedProfileIds.length === 0 ||
     createRunMutation.isPending;
 
   const confirmGame = () => {
@@ -116,7 +125,7 @@ export function CustomGamePage() {
       villager_model: firstModel.id,
       werewolf_model: firstModel.id,
       max_rounds: maxRounds,
-      player_configs: selectedProfileIds.map((profileId, index) => ({
+      player_configs: effectiveSelectedProfileIds.map((profileId, index) => ({
         seat: index + 1,
         profile_id: profileId,
       })),
@@ -151,6 +160,9 @@ export function CustomGamePage() {
                   name="rule-set"
                   onChange={() => {
                     setSelectedRuleSetId(ruleSet.id);
+                    setSelectedProfileIds((current) =>
+                      current.slice(0, ruleSet.player_count),
+                    );
                   }}
                   type="radio"
                 />
@@ -174,10 +186,18 @@ export function CustomGamePage() {
                 <p>玩家档案暂时无法加载，请稍后再试。</p>
               </StatusBanner>
             ) : null}
+            <p>
+              已选 {effectiveSelectedProfileIds.length} /{" "}
+              {playerLimit || profiles.length} 人
+            </p>
             {profiles.map((profile) => (
               <label className="mobile-choice-row" key={profile.id}>
                 <input
-                  checked={selectedProfileIds.includes(profile.id)}
+                  checked={effectiveSelectedProfileIds.includes(profile.id)}
+                  disabled={
+                    !effectiveSelectedProfileIds.includes(profile.id) &&
+                    isProfileSelectionFull
+                  }
                   onChange={() => {
                     toggleProfile(profile.id);
                   }}

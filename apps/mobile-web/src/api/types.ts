@@ -16,10 +16,23 @@ export type RuleSetSummary = {
   name: string;
   description?: string;
   player_count: number;
-  roles: RoleSpecSummary[];
+  roles?: RoleSpecSummary[];
+  night_actions?: string[];
+  day_actions?: string[];
+  complexity?: string;
   sheriff_enabled?: boolean;
+  sheriff_vote_weight?: number;
   role_summary?: string;
   estimated_duration?: string;
+  werewolf_self_explosion_enabled?: boolean;
+  sheriff_badge_bomb_policy?: string;
+  speech_policy?: string;
+  speech_rounds?: number;
+  rule_tags?: string[];
+};
+
+export type RuleSetSnapshot = RuleSetSummary & {
+  roles: RoleSpecSummary[];
 };
 
 export type RuleSetsResponse = {
@@ -97,7 +110,7 @@ export type GameRun = {
   seed: number | null;
   max_rounds: number;
   rule_set_id: string;
-  rule_set: RuleSetSummary;
+  rule_set: RuleSetSnapshot;
   player_configs: PlayerConfig[];
   lineup_quality_warnings: LineupQualityWarning[];
   status: GameRunStatus;

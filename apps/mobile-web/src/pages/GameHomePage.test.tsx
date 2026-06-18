@@ -35,7 +35,7 @@ const gameRunFixture = {
   max_rounds: 8,
   rule_set_id: "classic_12",
   rule_set: {
-    id: "classic_12",
+    id: "classic_12_seer_witch_hunter_idiot",
     version: "1",
     name: "经典 12 人",
     player_count: 12,
@@ -59,11 +59,10 @@ const recentSessionFixture = {
   round_count: 6,
   created_at: "2026-06-17T00:00:00Z",
   rule_set: {
-    id: "classic_12",
+    id: "classic_12_seer_witch_hunter_idiot",
     version: "1",
     name: "经典 12 人",
     player_count: 12,
-    roles: [],
   },
   resumable: false,
 } satisfies GameSessionSummary;
@@ -103,6 +102,7 @@ describe("GameHomePage", () => {
     expect(createGameRun).toHaveBeenCalledWith({
       max_rounds: 8,
       player_configs: [],
+      rule_set_id: "classic_12_seer_witch_hunter_idiot",
     });
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith("/live/run_mobile_1");

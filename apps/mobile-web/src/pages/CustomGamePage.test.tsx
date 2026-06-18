@@ -45,7 +45,7 @@ const gameRunFixture = {
   max_rounds: 8,
   rule_set_id: "classic_12",
   rule_set: {
-    id: "classic_12",
+    id: "classic_12_seer_witch_hunter_idiot",
     version: "1",
     name: "经典 12 人",
     player_count: 12,
@@ -94,7 +94,6 @@ describe("CustomGamePage", () => {
           version: "1",
           name: "经典 12 人",
           player_count: 12,
-          roles: [],
         },
       ],
     });
@@ -162,6 +161,68 @@ describe("CustomGamePage", () => {
 
     expect(createGameRun).toHaveBeenCalledWith(
       expect.objectContaining({ max_rounds: 20 }),
+    );
+  });
+
+  it("prevents selecting more players than the active rule supports", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listRuleSets).mockResolvedValue({
+      rule_sets: [
+        {
+          id: "solo_test",
+          version: "1",
+          name: "单人测试",
+          player_count: 1,
+        },
+      ],
+    });
+    vi.mocked(listPlayerProfiles).mockResolvedValue({
+      profiles: [
+        {
+          id: "p1",
+          display_name: "夜鸦",
+          model: "deepseek-v4-flash",
+          personality_id: "oracle",
+          appearance_id: "raven",
+          avatar_image_url: "/avatars/raven.png",
+          short_description: "冷静观察的玩家",
+          favorite: true,
+          tags: ["推理"],
+          updated_at: "2026-06-18T00:00:00Z",
+        },
+        {
+          id: "p2",
+          display_name: "烛影",
+          model: "deepseek-v4-flash",
+          personality_id: "balanced",
+          appearance_id: "default",
+          avatar_image_url: "/avatars/candle.png",
+          short_description: "谨慎发言的玩家",
+          favorite: false,
+          tags: ["发言"],
+          updated_at: "2026-06-18T00:00:00Z",
+        },
+      ],
+    });
+
+    renderCustomGamePage();
+
+    await screen.findByText("单人测试");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("checkbox", { name: /夜鸦/ }));
+
+    expect(screen.getByText("已选 1 / 1 人")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /烛影/ })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "确认开局" }));
+
+    expect(createGameRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        player_configs: [{ seat: 1, profile_id: "p1" }],
+        rule_set_id: "solo_test",
+      }),
     );
   });
 });
