@@ -141,4 +141,7 @@ base URL 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`。新增 OpenAI
 cd apps/api && .venv/bin/python -m pytest
 cd apps/web && pnpm test -- --run
 cd apps/web && pnpm build
+pnpm --dir apps/mobile-web test -- --run
+pnpm --dir apps/mobile-web lint
+pnpm --dir apps/mobile-web build
 ```

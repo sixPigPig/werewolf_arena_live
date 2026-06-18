@@ -63,6 +63,9 @@ describe("MobileAppShell", () => {
 
   it("keeps fixed bottom chrome inside the phone viewport", () => {
     expect(cssBlock(":root")).toContain("--mobile-tab-bar-offset");
+    expect(cssBlock(".mobile-app-frame")).toContain("overflow: hidden");
+    expect(cssBlock(".mobile-app-shell")).toContain("height: 100svh");
+    expect(cssBlock(".mobile-app-shell")).toContain("max-height: 100svh");
     expect(cssBlock(".mobile-tab-bar")).toContain("box-sizing: border-box");
     expect(cssBlock(".mobile-tab-bar")).toContain("max-width: 100vw");
     expect(cssBlock(".mobile-fixed-action-bar")).toContain(

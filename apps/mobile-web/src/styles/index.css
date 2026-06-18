@@ -13,11 +13,13 @@ html,
 body,
 #root {
   min-width: 320px;
+  height: 100%;
   min-height: 100svh;
   margin: 0;
 }
 
 body {
+  overflow: hidden;
   background:
     radial-gradient(circle at 50% 0%, rgb(185 147 92 / 18%), transparent 28rem),
     linear-gradient(180deg, #0d1218 0%, #05070a 100%);
@@ -32,8 +34,10 @@ textarea {
 
 .mobile-app-frame {
   display: flex;
+  height: 100svh;
   min-height: 100svh;
   justify-content: center;
+  overflow: hidden;
   background: transparent;
 }
 
@@ -41,7 +45,9 @@ textarea {
   display: flex;
   flex-direction: column;
   width: min(100%, 480px);
+  height: 100svh;
   min-height: 100svh;
+  max-height: 100svh;
   background:
     linear-gradient(180deg, rgb(11 16 22 / 94%), rgb(5 7 10 / 98%)),
     radial-gradient(circle at 50% 0%, rgb(185 147 92 / 16%), transparent 18rem);
