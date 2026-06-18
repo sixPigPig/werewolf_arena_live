@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
