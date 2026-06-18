@@ -1,4 +1,4 @@
-.PHONY: install dev api web db-up db-down lint test format
+.PHONY: install dev api web mobile-web db-up db-down lint test format
 
 install:
 	cd apps/api && uv sync
@@ -14,6 +14,9 @@ api:
 
 web:
 	cd apps/web && pnpm dev --host 127.0.0.1 --port 5173
+
+mobile-web:
+	cd apps/mobile-web && pnpm dev --host 127.0.0.1 --port 5174
 
 db-up:
 	docker compose up -d db

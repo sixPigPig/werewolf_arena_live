@@ -5,6 +5,10 @@
     "dev:web": "pnpm --dir apps/web dev",
     "build:web": "pnpm --dir apps/web build",
     "lint:web": "pnpm --dir apps/web lint",
-    "test:web": "pnpm --dir apps/web test -- --run"
+    "test:web": "pnpm --dir apps/web test -- --run",
+    "dev:mobile": "pnpm --dir apps/mobile-web dev",
+    "build:mobile": "pnpm --dir apps/mobile-web build",
+    "lint:mobile": "pnpm --dir apps/mobile-web lint",
+    "test:mobile": "pnpm --dir apps/mobile-web test -- --run"
   }
 }

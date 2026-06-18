@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+:root {
+  color: #f3eadc;
+  background: #080b10;
+  font-family: Inter, "Segoe UI", sans-serif;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100svh;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(circle at 50% 0%, rgb(185 147 92 / 18%), transparent 28rem),
+    linear-gradient(180deg, #0d1218 0%, #05070a 100%);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.mobile-app-frame {
+  display: flex;
+  min-height: 100svh;
+  justify-content: center;
+  background: transparent;
+}
+
+.mobile-page-surface {
+  width: min(100%, 480px);
+  min-height: 100svh;
+  padding: 24px;
+  box-sizing: border-box;
+}
