@@ -4,13 +4,12 @@ import { useParams } from "react-router-dom";
 import {
   getGamePlayback,
   type GamePlayback,
-  type RawGameState,
-  type RawRoundState,
+  type LiveGameEvent,
 } from "@werewolf-arena/game-client";
 
-type MobilePlayback = GamePlayback & {
-  logs?: unknown[];
-  state?: RawGameState;
+type PlaybackRound = {
+  latestState: Record<string, unknown>;
+  number: number;
 };
 
 export function PlaybackPage() {
@@ -20,10 +19,9 @@ export function PlaybackPage() {
     queryFn: () => getGamePlayback(gameId ?? ""),
     enabled: Boolean(gameId),
   });
-  const playback = playbackQuery.data as MobilePlayback | undefined;
-  const state = playback?.state;
-  const winner = state?.winner ?? findWinner(playback);
-  const rounds = state?.rounds ?? [];
+  const playback = playbackQuery.data;
+  const winner = findWinner(playback);
+  const rounds = playback ? playbackRounds(playback.events) : [];
 
   return (
     <main className="mobile-page">
@@ -56,7 +54,7 @@ export function PlaybackPage() {
               </div>
               <div>
                 <dt>玩家</dt>
-                <dd>{state?.players.length ?? playerCountFromPlayback(playback)}</dd>
+                <dd>{playerCountFromPlayback(playback)}</dd>
               </div>
               <div>
                 <dt>轮数</dt>
@@ -84,27 +82,28 @@ export function PlaybackPage() {
 }
 
 type RoundSummaryProps = {
-  round: RawRoundState;
+  round: PlaybackRound;
 };
 
 function RoundSummary({ round }: RoundSummaryProps) {
-  const privateSummaries = Object.entries(round.summaries ?? {});
+  const privateSummaries = summaryEntries(round.latestState.summaries);
+  const publicSummary = stringValue(round.latestState.public_summary);
 
   return (
     <div className="mobile-replay-round-body">
-      {round.public_summary ? <p>{round.public_summary}</p> : null}
+      {publicSummary ? <p>{publicSummary}</p> : null}
       <dl className="mobile-session-meta">
         <div>
           <dt>夜晚出局</dt>
-          <dd>{round.eliminated ?? "无"}</dd>
+          <dd>{stringValue(round.latestState.eliminated) ?? "无"}</dd>
         </div>
         <div>
           <dt>白天放逐</dt>
-          <dd>{round.exiled ?? "无"}</dd>
+          <dd>{stringValue(round.latestState.exiled) ?? "无"}</dd>
         </div>
         <div>
           <dt>查验</dt>
-          <dd>{round.investigated ?? "无"}</dd>
+          <dd>{stringValue(round.latestState.investigated) ?? "无"}</dd>
         </div>
       </dl>
       {privateSummaries.length > 0 ? (
@@ -121,18 +120,61 @@ function RoundSummary({ round }: RoundSummaryProps) {
   );
 }
 
-function findWinner(playback: MobilePlayback | undefined) {
+function playbackRounds(events: LiveGameEvent[]) {
+  const roundsByNumber = new Map<number, PlaybackRound>();
+
+  for (const event of events) {
+    if (
+      event.type !== "round_started" &&
+      event.type !== "state_updated"
+    ) {
+      continue;
+    }
+    if (typeof event.round !== "number") {
+      continue;
+    }
+
+    const round = roundsByNumber.get(event.round) ?? {
+      latestState: {},
+      number: event.round,
+    };
+
+    if (event.type === "state_updated") {
+      round.latestState = { ...round.latestState, ...event.payload };
+    }
+
+    roundsByNumber.set(event.round, round);
+  }
+
+  return [...roundsByNumber.values()].sort((left, right) => left.number - right.number);
+}
+
+function findWinner(playback: GamePlayback | undefined) {
   const completedEvent = playback?.events?.find(
     (event) => event.type === "game_completed",
   );
-  const winner = completedEvent?.payload.winner;
 
-  return typeof winner === "string" ? winner : null;
+  return stringValue(completedEvent?.payload.winner);
 }
 
-function playerCountFromPlayback(playback: MobilePlayback) {
+function playerCountFromPlayback(playback: GamePlayback) {
   const startEvent = playback.events?.find((event) => event.type === "game_started");
   const players = startEvent?.payload.players;
 
   return Array.isArray(players) ? players.length : 0;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value ? value : null;
+}
+
+function summaryEntries(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+
+  return Object.entries(value).map(([player, summary]) => [
+    player,
+    String(summary),
+  ]);
 }

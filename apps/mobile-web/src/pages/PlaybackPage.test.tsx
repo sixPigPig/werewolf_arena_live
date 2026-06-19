@@ -4,6 +4,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlaybackPage } from "./PlaybackPage";
+import type { GamePlayback, LiveGameEvent } from "@werewolf-arena/game-client";
 
 const gameClientMocks = vi.hoisted(() => ({
   getGamePlayback: vi.fn(),
@@ -40,35 +41,79 @@ function renderPlaybackRoute() {
 
 describe("PlaybackPage", () => {
   beforeEach(() => {
-    gameClientMocks.getGamePlayback.mockResolvedValue({
+    const events: LiveGameEvent[] = [
+      {
+        id: 1,
+        type: "game_started",
+        run_id: "playback_session-1",
+        session_id: "session-1",
+        created_at: "2026-06-19T00:00:00Z",
+        round: null,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: {
+          players: [
+            { name: "阿青", role: "villager", model: "test-model" },
+            { name: "白石", role: "werewolf", model: "test-model" },
+          ],
+        },
+      },
+      {
+        id: 2,
+        type: "round_started",
+        run_id: "playback_session-1",
+        session_id: "session-1",
+        created_at: "2026-06-19T00:00:01Z",
+        round: 1,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: {
+          active_players: ["阿青", "白石"],
+        },
+      },
+      {
+        id: 3,
+        type: "state_updated",
+        run_id: "playback_session-1",
+        session_id: "session-1",
+        created_at: "2026-06-19T00:00:02Z",
+        round: 1,
+        phase: "day",
+        actor: null,
+        action: null,
+        payload: {
+          exiled: "白石",
+          public_summary: "白石被投票放逐。",
+          summaries: { 阿青: "锁定狼人" },
+          active_players: ["阿青"],
+        },
+      },
+      {
+        id: 4,
+        type: "game_completed",
+        run_id: "playback_session-1",
+        session_id: "session-1",
+        created_at: "2026-06-19T00:00:03Z",
+        round: null,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: {
+          winner: "villagers",
+        },
+      },
+    ];
+    const playback: GamePlayback = {
       session_id: "session-1",
       status: "complete",
-      state: {
-        session_id: "session-1",
-        players: [
-          { name: "阿青", role: "villager", model: "test-model" },
-          { name: "白石", role: "werewolf", model: "test-model" },
-        ],
-        rounds: [
-          {
-            number: 1,
-            players: ["阿青", "白石"],
-            eliminated: null,
-            protected: null,
-            investigated: null,
-            exiled: "白石",
-            debate: [],
-            bids: [],
-            votes: [],
-            summaries: { 阿青: "锁定狼人" },
-            success: true,
-          },
-        ],
-        winner: "villagers",
-        error_message: "",
-      },
-      logs: [],
-    });
+      rule_set: null,
+      resumable: false,
+      events,
+    };
+
+    gameClientMocks.getGamePlayback.mockResolvedValue(playback);
   });
 
   afterEach(() => {
@@ -81,6 +126,8 @@ describe("PlaybackPage", () => {
     expect(await screen.findByRole("heading", { name: "移动复盘" })).toBeVisible();
     expect(await screen.findByText("session-1")).toBeVisible();
     expect(screen.getByText("villagers")).toBeVisible();
+    expect(screen.getByText("第 1 轮")).toBeVisible();
+    expect(screen.getByText("白石被投票放逐。")).toBeInTheDocument();
     expect(gameClientMocks.getGamePlayback).toHaveBeenCalledWith("session-1");
   });
 });
