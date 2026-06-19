@@ -4,6 +4,8 @@
 
 - `apps/api`：FastAPI 后端
 - `apps/web`：React SPA 前端
+- `apps/mobile-web`：移动端 React SPA 前端
+- `packages/game-client`：共享前端 API client、类型与对局状态辅助逻辑
 - `docs`：架构与规划文档
 
 ## 快速开始
@@ -92,6 +94,20 @@ http://127.0.0.1:5173
 
 开发服务器会把 `/api` 代理到 `http://localhost:8000`，因此前端页面中的 `/api/v1/...` 请求会自动转发到 FastAPI。
 
+终端 3，启动移动端 Web：
+
+```bash
+make mobile-web
+```
+
+移动端地址：
+
+```text
+http://127.0.0.1:5174
+```
+
+移动端和桌面端共用 `/api/v1/...`，开发服务器会把 `/api` 代理到 `http://localhost:8000`。
+
 ## 实时观战流程
 
 1. 打开 `http://127.0.0.1:5173/games`。
@@ -125,4 +141,9 @@ base URL 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`。新增 OpenAI
 cd apps/api && .venv/bin/python -m pytest
 cd apps/web && pnpm test -- --run
 cd apps/web && pnpm build
+pnpm --dir packages/game-client test -- --run
+pnpm --dir apps/mobile-web test -- --run
+pnpm --dir apps/mobile-web build
 ```
+
+如需精确筛选 Vitest 文件，可使用 `pnpm --dir apps/mobile-web exec vitest run <files>`；当前 workspace 中 `pnpm test -- --run <files>` 会运行较宽的测试集合。

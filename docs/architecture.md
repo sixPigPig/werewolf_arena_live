@@ -4,12 +4,15 @@
 
 - `apps/api`: FastAPI service exposing `/api/v1/...`
 - `apps/web`: Vite React SPA consuming the API
+- `apps/mobile-web`: independent Vite React mobile SPA consuming the same API
+- `packages/game-client`: shared frontend API client, types, lineup helpers, replay adapters, and live-state derivation
 
 ## Local runtime
 
 - PostgreSQL runs in Docker via `docker-compose.yml`
 - The API runs locally on `http://localhost:8000`
-- The SPA runs locally on `http://localhost:5173`
+- The desktop SPA runs locally on `http://localhost:5173`
+- The mobile SPA runs locally on `http://localhost:5174`
 
 ## Request flow
 
