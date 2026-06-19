@@ -436,11 +436,10 @@ export function GamesPage() {
 
       {isProfileDrawerOpen ? (
         <div className="mobile-profile-drawer-layer">
-          <button
-            aria-label="关闭玩家卡牌库"
+          <div
+            aria-hidden="true"
             className="mobile-profile-drawer-backdrop"
             onClick={closeProfileDrawer}
-            type="button"
           />
           <section
             aria-labelledby="mobile-profile-drawer-title"
@@ -649,7 +648,7 @@ function profileMatchesSearch(profile: VirtualPlayerProfile, search: string) {
     profile.personality_text,
     profile.short_description,
     profile.strategy_profile,
-    ...profile.tags,
+    ...(profile.tags ?? []),
   ]
     .filter(Boolean)
     .some((value) => value.toLowerCase().includes(search));

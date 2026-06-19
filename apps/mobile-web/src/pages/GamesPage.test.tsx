@@ -197,6 +197,32 @@ describe("GamesPage", () => {
     ).toBeVisible();
   });
 
+  it("searches profiles when a profile has no tags", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.listPlayerProfiles.mockResolvedValue({
+      profiles: [
+        buildProfile({
+          id: "profile-1",
+          display_name: "无标签玩家",
+          model: "tagless-model",
+          tags: undefined as unknown as string[],
+        }),
+      ],
+    });
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 1 号座位，当前为 待选择",
+      }),
+    );
+    await user.type(screen.getByLabelText("搜索玩家"), "tagless");
+
+    expect(
+      screen.getByRole("button", { name: "为 1 号座位候选 无标签玩家" }),
+    ).toBeVisible();
+  });
+
   it("confirms a player card into the active seat", async () => {
     const user = userEvent.setup();
     renderGamesPage();
@@ -235,6 +261,9 @@ describe("GamesPage", () => {
     await user.click(
       screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
     );
+    expect(
+      screen.getAllByRole("button", { name: "关闭玩家卡牌库" }),
+    ).toHaveLength(1);
     await user.click(
       within(screen.getByRole("dialog", { name: "玩家卡牌库" })).getByRole(
         "button",
