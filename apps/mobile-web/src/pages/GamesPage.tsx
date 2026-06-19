@@ -236,10 +236,16 @@ export function GamesPage() {
   }
 
   return (
-    <main className="mobile-page" data-testid="mobile-games-page">
-      <header className="mobile-page-section">
-        <h1>移动大厅</h1>
-        <p>选择规则和虚拟玩家，发起一局新的狼人杀对局。</p>
+    <main className="mobile-page mobile-lobby-page" data-testid="mobile-games-page">
+      <header className="mobile-lobby-hero">
+        <div className="mobile-lobby-crest" aria-hidden="true">
+          狼
+        </div>
+        <div className="mobile-lobby-hero-copy">
+          <span>公平 · 推理 · 社交的暗夜决策</span>
+          <h1>狼人杀对局大厅</h1>
+          <p>选择规则，点亮座位，从卡牌库召集你的暗夜阵容。</p>
+        </div>
       </header>
 
       {validationError ? (
@@ -258,108 +264,139 @@ export function GamesPage() {
         </p>
       ) : null}
 
-      <section aria-labelledby="mobile-rule-title" className="mobile-page-section">
-        <h2 id="mobile-rule-title">规则</h2>
+      <section aria-labelledby="mobile-rule-title" className="mobile-lobby-section">
+        <div className="mobile-lobby-section-heading">
+          <h2 id="mobile-rule-title">规则选择</h2>
+          {selectedRuleSet ? (
+            <span>{selectedRuleSet.player_count} 人局</span>
+          ) : null}
+        </div>
         {ruleSetsQuery.isError ? <p>规则加载失败</p> : null}
-        <div className="mobile-rule-list">
-          {ruleSets.map((ruleSet) => (
-            <label className="mobile-card" key={ruleSet.id}>
-              <input
-                checked={selectedRuleSet?.id === ruleSet.id}
-                name="mobile-rule-set"
-                onChange={() => handleRuleSetChange(ruleSet.id)}
-                type="radio"
-                value={ruleSet.id}
-              />
-              <span>
+        <div className="mobile-lobby-rule-scroll">
+          {ruleSets.map((ruleSet) => {
+            const isSelected = selectedRuleSet?.id === ruleSet.id;
+            const ruleTags = getRuleTags(ruleSet);
+
+            return (
+              <label
+                className={[
+                  "mobile-lobby-rule-card",
+                  isSelected ? "mobile-lobby-rule-card-active" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={ruleSet.id}
+              >
+                <input
+                  checked={isSelected}
+                  name="mobile-rule-set"
+                  onChange={() => handleRuleSetChange(ruleSet.id)}
+                  type="radio"
+                  value={ruleSet.id}
+                />
+                <span className="mobile-lobby-rule-emblem" aria-hidden="true">
+                  {isSelected ? "✓" : "✦"}
+                </span>
                 <strong>{ruleSet.name}</strong>
                 <span>{ruleSet.role_summary ?? `${ruleSet.player_count} 人局`}</span>
-              </span>
-            </label>
-          ))}
+                {ruleTags.length > 0 ? (
+                  <span className="mobile-lobby-rule-tags">
+                    {ruleTags.map((tag) => (
+                      <em key={tag}>{tag}</em>
+                    ))}
+                  </span>
+                ) : null}
+              </label>
+            );
+          })}
           {isLoading ? <p>加载中</p> : null}
         </div>
       </section>
 
       {selectedRuleSet ? (
-        <>
-          <section aria-labelledby="mobile-seat-title" className="mobile-page-section">
-            <h2 id="mobile-seat-title">席位</h2>
-            <div className="mobile-seat-grid">
-              {Array.from({ length: playerCount }, (_, index) => index + 1).map(
-                (seat) => {
-                  const profile = selectedProfilesBySeat.get(seat);
+        <section aria-labelledby="mobile-seat-title" className="mobile-lobby-section">
+          <div className="mobile-lobby-section-heading">
+            <h2 id="mobile-seat-title">组建阵容</h2>
+            <span>
+              {selectedRuleSet.name} · {playerCount} 个座位
+            </span>
+          </div>
+          <div className="mobile-lobby-seat-grid">
+            {Array.from({ length: playerCount }, (_, index) => index + 1).map(
+              (seat) => {
+                const profile = selectedProfilesBySeat.get(seat);
+                const isActive = safeActiveSeat === seat;
 
-                  return (
-                    <button
-                      className={[
-                        "mobile-seat-button",
-                        safeActiveSeat === seat ? "mobile-seat-button-active" : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                      aria-pressed={safeActiveSeat === seat}
-                      key={seat}
-                      onClick={() => setActiveSeat(seat)}
-                      type="button"
-                    >
-                      <span>{seat} 号位</span>
-                      <strong>{profile?.display_name ?? "待选择"}</strong>
-                    </button>
-                  );
-                },
-              )}
-            </div>
-          </section>
-
-          <section aria-labelledby="mobile-profile-title" className="mobile-page-section">
-            <h2 id="mobile-profile-title">玩家库</h2>
-            {playerProfilesQuery.isError ? <p>玩家库加载失败</p> : null}
-            <div className="mobile-choice-row">
-              {profiles.map((profile) => (
-                <button
-                  className="mobile-button"
-                  key={profile.id}
-                  onClick={() => assignProfileToActiveSeat(profile.id)}
-                  type="button"
-                >
-                  {profile.display_name}
-                </button>
-              ))}
-            </div>
-          </section>
-        </>
+                return (
+                  <button
+                    aria-label={`选择 ${seat} 号座位，当前为 ${
+                      profile?.display_name ?? "待选择"
+                    }`}
+                    aria-pressed={isActive}
+                    className={[
+                      "mobile-lobby-seat-card",
+                      isActive ? "mobile-lobby-seat-card-active" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    key={seat}
+                    onClick={() => openProfileDrawer(seat)}
+                    type="button"
+                  >
+                    <span className="mobile-lobby-seat-avatar">
+                      {profile?.avatar_image_url ? (
+                        <img alt="" src={profile.avatar_image_url} />
+                      ) : (
+                        <span aria-hidden="true" />
+                      )}
+                    </span>
+                    <span className="mobile-lobby-seat-label">{seat}号座位</span>
+                    <strong>{profile?.display_name ?? "待选择"}</strong>
+                  </button>
+                );
+              },
+            )}
+          </div>
+          {playerProfilesQuery.isError ? (
+            <p className="mobile-lobby-inline-error">玩家库加载失败</p>
+          ) : null}
+        </section>
       ) : null}
 
-      <section aria-labelledby="mobile-create-title" className="mobile-page-section">
-        <h2 id="mobile-create-title">设置</h2>
-        <label className="mobile-card">
-          <span>种子</span>
-          <input
-            inputMode="numeric"
-            onChange={(event) => setSeed(event.target.value)}
-            placeholder="随机"
-            type="number"
-            value={seed}
-          />
-        </label>
-        <label className="mobile-card">
-          <span>最大轮数</span>
-          <input
-            inputMode="numeric"
-            max={20}
-            min={1}
-            onChange={(event) => {
-              setMaxRounds(event.target.value);
-              setValidationError(null);
-            }}
-            type="number"
-            value={maxRounds}
-          />
-        </label>
+      <section aria-labelledby="mobile-create-title" className="mobile-lobby-section">
+        <div className="mobile-lobby-section-heading">
+          <h2 id="mobile-create-title">填充设置</h2>
+          {activeSeatProfile ? <span>{activeSeatProfile.display_name}</span> : null}
+        </div>
+        <div className="mobile-lobby-settings-grid">
+          <label className="mobile-lobby-field">
+            <span>种子</span>
+            <input
+              inputMode="numeric"
+              onChange={(event) => setSeed(event.target.value)}
+              placeholder="随机"
+              type="number"
+              value={seed}
+            />
+          </label>
+          <label className="mobile-lobby-field">
+            <span>最大轮数</span>
+            <input
+              inputMode="numeric"
+              max={20}
+              min={1}
+              onChange={(event) => {
+                setMaxRounds(event.target.value);
+                setValidationError(null);
+              }}
+              type="number"
+              value={maxRounds}
+            />
+          </label>
+        </div>
       </section>
 
-      <div className="mobile-action-bar">
+      <div className="mobile-action-bar mobile-lobby-action-bar">
         <button
           className="mobile-button"
           disabled={!selectedRuleSet}
@@ -396,6 +433,146 @@ export function GamesPage() {
           {createGameRunMutation.isPending ? "发起中" : "发起对局"}
         </button>
       </div>
+
+      {isProfileDrawerOpen ? (
+        <div className="mobile-profile-drawer-layer">
+          <button
+            aria-label="关闭玩家卡牌库"
+            className="mobile-profile-drawer-backdrop"
+            onClick={closeProfileDrawer}
+            type="button"
+          />
+          <section
+            aria-labelledby="mobile-profile-drawer-title"
+            aria-modal="true"
+            className="mobile-profile-drawer"
+            role="dialog"
+          >
+            <div className="mobile-profile-drawer-handle" aria-hidden="true" />
+            <div className="mobile-profile-drawer-heading">
+              <div>
+                <h2 id="mobile-profile-drawer-title">玩家卡牌库</h2>
+                <p>当前选择：{safeActiveSeat}号座位</p>
+              </div>
+              <button
+                aria-label="关闭玩家卡牌库"
+                className="mobile-profile-drawer-close"
+                onClick={closeProfileDrawer}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mobile-profile-drawer-filters">
+              <label className="mobile-profile-search">
+                <span>搜索玩家</span>
+                <input
+                  onChange={(event) => setProfileSearch(event.target.value)}
+                  placeholder="搜索名称、标签、模型"
+                  type="search"
+                  value={profileSearch}
+                />
+              </label>
+              <label className="mobile-profile-select">
+                <span>收藏</span>
+                <select
+                  aria-label="收藏筛选"
+                  onChange={(event) =>
+                    setFavoriteFilter(event.target.value as "all" | "favorite")
+                  }
+                  value={favoriteFilter}
+                >
+                  <option value="all">全部玩家</option>
+                  <option value="favorite">只看收藏</option>
+                </select>
+              </label>
+              <label className="mobile-profile-select">
+                <span>策略</span>
+                <select
+                  aria-label="策略筛选"
+                  onChange={(event) => setProfileStrategyFilter(event.target.value)}
+                  value={profileStrategyFilter}
+                >
+                  <option value="all">全部策略</option>
+                  {strategyFilterOptions.map((strategy) => (
+                    <option key={strategy} value={strategy}>
+                      {formatStrategyLabel(strategy)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {playerProfilesQuery.isError ? (
+              <p className="mobile-lobby-inline-error">玩家库加载失败</p>
+            ) : null}
+            <div className="mobile-profile-card-grid">
+              {filteredProfiles.map((profile) => {
+                const isPending = pendingProfileId === profile.id;
+
+                return (
+                  <button
+                    aria-label={`为 ${safeActiveSeat} 号座位候选 ${profile.display_name}`}
+                    className={[
+                      "mobile-profile-card-choice",
+                      isPending ? "mobile-profile-card-choice-active" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    key={profile.id}
+                    onClick={() => setPendingProfileId(profile.id)}
+                    type="button"
+                  >
+                    <span className="mobile-profile-card-image">
+                      {profile.avatar_image_url ? (
+                        <img alt="" src={profile.avatar_image_url} />
+                      ) : (
+                        <span aria-hidden="true" />
+                      )}
+                      {profile.favorite ? (
+                        <em
+                          aria-label="已收藏"
+                          className="mobile-profile-card-star"
+                        >
+                          ★
+                        </em>
+                      ) : null}
+                      {isPending ? (
+                        <em
+                          aria-hidden="true"
+                          className="mobile-profile-card-check"
+                        >
+                          ✓
+                        </em>
+                      ) : null}
+                    </span>
+                    <strong>{profile.display_name}</strong>
+                    <span>{formatStrategyLabel(profile.strategy_profile)}</span>
+                    <small>{getProfileDescription(profile)}</small>
+                  </button>
+                );
+              })}
+            </div>
+            {!playerProfilesQuery.isPending && filteredProfiles.length === 0 ? (
+              <p className="mobile-profile-empty">没有匹配玩家</p>
+            ) : null}
+            <div className="mobile-profile-drawer-footer">
+              <span>
+                {pendingProfile ? pendingProfile.display_name : "请选择一张玩家卡"}
+              </span>
+              <button
+                className="mobile-button mobile-button-primary"
+                disabled={!pendingProfileId}
+                onClick={confirmPendingProfile}
+                type="button"
+              >
+                确认选择
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

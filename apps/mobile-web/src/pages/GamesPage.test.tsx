@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
@@ -235,7 +235,12 @@ describe("GamesPage", () => {
     await user.click(
       screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
     );
-    await user.click(screen.getByRole("button", { name: "关闭玩家卡牌库" }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: "玩家卡牌库" })).getByRole(
+        "button",
+        { name: "关闭玩家卡牌库" },
+      ),
+    );
 
     await waitFor(() => {
       expect(

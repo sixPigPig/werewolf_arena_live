@@ -22,8 +22,8 @@ const requiredRoutes = [
 ];
 
 const routeSmokeCases = [
-  { path: "/", heading: "移动大厅" },
-  { path: "/games", heading: "移动大厅" },
+  { path: "/", heading: "狼人杀对局大厅" },
+  { path: "/games", heading: "狼人杀对局大厅" },
   { path: "/games/wolf-1", heading: "移动复盘" },
   { path: "/games/wolf-1/live", heading: "实时观战" },
   { path: "/games/wolf-1/replay", heading: "移动复盘" },
@@ -77,7 +77,9 @@ describe("mobile app scaffold", () => {
 
     renderWithQueryClient(<RouterProvider router={router} />);
 
-    expect(await screen.findByRole("heading", { name: "移动大厅" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "狼人杀对局大厅" }),
+    ).toBeInTheDocument();
   });
 
   it("declares the required mobile routes without extras", () => {
