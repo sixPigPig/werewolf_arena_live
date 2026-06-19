@@ -1,10 +1,8 @@
 import {
-  QueryClient,
-  QueryClientProvider,
   useMutation,
   useQuery,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -19,26 +17,6 @@ import {
 } from "@werewolf-arena/game-client";
 
 export function GamesPage() {
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            retry: 1,
-            staleTime: 15_000,
-          },
-        },
-      }),
-  );
-
-  return (
-    <QueryClientProvider client={queryClient}>
-      <GamesPageContent />
-    </QueryClientProvider>
-  );
-}
-
-function GamesPageContent() {
   const navigate = useNavigate();
   const [selectedRuleSetId, setSelectedRuleSetId] = useState("");
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>([]);
@@ -78,9 +56,20 @@ function GamesPageContent() {
     () => new Set(profiles.map((profile) => profile.id)),
     [profiles],
   );
+  const playerCount = selectedRuleSet?.player_count ?? 0;
   const visiblePlayerConfigs = useMemo(
-    () => removeInvalidProfileRefs(playerConfigs, validProfileIds),
-    [playerConfigs, validProfileIds],
+    () => {
+      const validConfigs = removeInvalidProfileRefs(
+        playerConfigs,
+        validProfileIds,
+      );
+
+      return selectedRuleSet
+        ? resizeLineupForPlayerCount(validConfigs, selectedRuleSet.player_count)
+            .configs
+        : validConfigs;
+    },
+    [playerConfigs, selectedRuleSet, validProfileIds],
   );
   const selectedProfilesBySeat = useMemo(() => {
     const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
@@ -92,7 +81,7 @@ function GamesPageContent() {
       ]),
     );
   }, [profiles, visiblePlayerConfigs]);
-  const playerCount = selectedRuleSet?.player_count ?? 0;
+  const safeActiveSeat = clampSeat(activeSeat, playerCount);
   const isLoading = ruleSetsQuery.isPending || playerProfilesQuery.isPending;
   const isSubmitDisabled =
     isLoading ||
@@ -101,30 +90,6 @@ function GamesPageContent() {
     !selectedRuleSet ||
     createGameRunMutation.isPending;
 
-  useEffect(() => {
-    if (selectedRuleSetId || ruleSets.length === 0) {
-      return;
-    }
-    setSelectedRuleSetId(ruleSets[0].id);
-  }, [ruleSets, selectedRuleSetId]);
-
-  useEffect(() => {
-    if (!selectedRuleSet) {
-      return;
-    }
-    setActiveSeat((currentSeat) =>
-      currentSeat >= 1 && currentSeat <= selectedRuleSet.player_count
-        ? currentSeat
-        : 1,
-    );
-    setPlayerConfigs((currentConfigs) =>
-      resizeLineupForPlayerCount(
-        removeInvalidProfileRefs(currentConfigs, validProfileIds),
-        selectedRuleSet.player_count,
-      ).configs,
-    );
-  }, [selectedRuleSet, validProfileIds]);
-
   function handleRuleSetChange(ruleSetId: string) {
     const nextRuleSet = ruleSets.find((ruleSet) => ruleSet.id === ruleSetId);
     setSelectedRuleSetId(ruleSetId);
@@ -132,6 +97,9 @@ function GamesPageContent() {
     setShortage(false);
 
     if (nextRuleSet) {
+      setActiveSeat((currentSeat) =>
+        clampSeat(currentSeat, nextRuleSet.player_count),
+      );
       setPlayerConfigs((currentConfigs) =>
         resizeLineupForPlayerCount(
           removeInvalidProfileRefs(currentConfigs, validProfileIds),
@@ -145,7 +113,7 @@ function GamesPageContent() {
     setValidationError(null);
     setShortage(false);
     setPlayerConfigs((currentConfigs) =>
-      upsertSeatProfile(currentConfigs, activeSeat, profileId),
+      upsertSeatProfile(currentConfigs, safeActiveSeat, profileId),
     );
   }
 
@@ -277,10 +245,11 @@ function GamesPageContent() {
                     <button
                       className={[
                         "mobile-seat-button",
-                        activeSeat === seat ? "mobile-seat-button-active" : "",
+                        safeActiveSeat === seat ? "mobile-seat-button-active" : "",
                       ]
                         .filter(Boolean)
                         .join(" ")}
+                      aria-pressed={safeActiveSeat === seat}
                       key={seat}
                       onClick={() => setActiveSeat(seat)}
                       type="button"
@@ -408,4 +377,8 @@ function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
     })
     .filter((config) => hasPlayerConfig(config))
     .sort((left, right) => left.seat - right.seat);
+}
+
+function clampSeat(seat: number, playerCount: number) {
+  return seat >= 1 && seat <= playerCount ? seat : 1;
 }

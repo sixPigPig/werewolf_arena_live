@@ -1,7 +1,9 @@
 /// <reference types="node" />
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
+import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { RouterProvider, createMemoryRouter, type RouteObject } from "react-router-dom";
 
@@ -56,11 +58,24 @@ function collectPublicRoutePaths(routeObjects: RouteObject[], parentPath = ""): 
   });
 }
 
+function renderWithQueryClient(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
+
 describe("mobile app scaffold", () => {
   it("redirects the mobile root route to games", async () => {
     const router = createMemoryRouter(routes, { initialEntries: ["/"] });
 
-    render(<RouterProvider router={router} />);
+    renderWithQueryClient(<RouterProvider router={router} />);
 
     expect(await screen.findByRole("heading", { name: "移动大厅" })).toBeInTheDocument();
   });
@@ -72,7 +87,9 @@ describe("mobile app scaffold", () => {
   it("renders every required mobile route", async () => {
     for (const routeCase of routeSmokeCases) {
       const router = createMemoryRouter(routes, { initialEntries: [routeCase.path] });
-      const { unmount } = render(<RouterProvider router={router} />);
+      const { unmount } = renderWithQueryClient(
+        <RouterProvider router={router} />,
+      );
 
       expect(await screen.findByRole("heading", { name: routeCase.heading })).toBeInTheDocument();
 
