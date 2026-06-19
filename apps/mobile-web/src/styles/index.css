@@ -301,6 +301,136 @@ textarea {
   color: #e2e8f0;
 }
 
+.mobile-session-list,
+.mobile-replay-rounds {
+  display: grid;
+  gap: 12px;
+}
+
+.mobile-session-card {
+  display: grid;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid rgb(244 232 210 / 12%);
+  border-radius: 8px;
+  background: #141a20;
+  color: #f4e8d2;
+}
+
+.mobile-session-card-heading {
+  display: flex;
+  min-width: 0;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mobile-session-card-heading h2 {
+  overflow-wrap: anywhere;
+  color: #f4e8d2;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.mobile-session-card-heading span {
+  min-height: 28px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  padding: 6px 9px;
+  background: rgb(245 212 139 / 14%);
+  color: #f5d48b;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.mobile-session-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.mobile-session-meta div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.mobile-session-meta dt,
+.mobile-session-meta dd {
+  margin: 0;
+}
+
+.mobile-session-meta dt {
+  color: #8f9aaa;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.mobile-session-meta dd {
+  overflow-wrap: anywhere;
+  color: #f4e8d2;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.mobile-session-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.mobile-replay-details {
+  border: 1px solid rgb(244 232 210 / 12%);
+  border-radius: 8px;
+  background: #11171d;
+  color: #f4e8d2;
+}
+
+.mobile-replay-details summary {
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 12px;
+  color: #f6d892;
+  font-weight: 700;
+}
+
+.mobile-replay-round-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+.mobile-replay-summary-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mobile-replay-summary-list li {
+  display: grid;
+  gap: 3px;
+  border-radius: 8px;
+  padding: 10px;
+  background: rgb(9 13 18 / 72%);
+}
+
+.mobile-replay-summary-list strong {
+  color: #f6d892;
+  font-size: 13px;
+}
+
+.mobile-replay-summary-list span {
+  color: #c8bda8;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .mobile-app-frame {
   width: 100%;
   max-width: 480px;

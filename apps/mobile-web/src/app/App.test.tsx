@@ -24,7 +24,7 @@ const requiredRoutes = [
 const routeSmokeCases = [
   { path: "/", heading: "移动大厅" },
   { path: "/games", heading: "移动大厅" },
-  { path: "/games/wolf-1", heading: "对局详情" },
+  { path: "/games/wolf-1", heading: "移动复盘" },
   { path: "/games/wolf-1/live", heading: "实时观战" },
   { path: "/games/wolf-1/replay", heading: "移动复盘" },
   { path: "/players", heading: "玩家图鉴" },

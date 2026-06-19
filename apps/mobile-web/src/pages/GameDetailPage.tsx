@@ -1,7 +1,7 @@
+import { Navigate, useParams } from "react-router-dom";
+
 export function GameDetailPage() {
-  return (
-    <main className="mobile-page">
-      <h1>对局详情</h1>
-    </main>
-  );
+  const { gameId } = useParams();
+
+  return <Navigate replace to={`/games/${gameId ?? ""}/replay`} />;
 }
