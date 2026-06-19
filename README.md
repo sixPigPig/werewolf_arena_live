@@ -46,7 +46,7 @@ cd apps/api
 
 ## 本地运行
 
-后端和前端需要在两个终端分别运行。
+后端、桌面端和移动端可分别在独立终端运行；只看桌面端时启动前两个即可。
 
 终端 1，启动 FastAPI：
 
@@ -131,11 +131,13 @@ base URL 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`。新增 OpenAI
 
 ## 质量检查
 
+API 和桌面端 Web 检查：
+
 - `make lint`
 - `make test`
 - `cd apps/web && pnpm build`
 
-常用单独命令：
+完整前端/共享包检查：
 
 ```bash
 cd apps/api && .venv/bin/python -m pytest
