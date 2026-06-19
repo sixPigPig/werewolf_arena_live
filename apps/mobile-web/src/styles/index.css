@@ -388,6 +388,128 @@ textarea {
   text-decoration: none;
 }
 
+.mobile-live-page {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.mobile-live-summary,
+.mobile-live-event {
+  display: grid;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid rgb(244 232 210 / 12%);
+  border-radius: 8px;
+  background: #11171d;
+  color: #f4e8d2;
+}
+
+.mobile-live-event > span {
+  color: #8f9aaa;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.mobile-live-event > strong {
+  overflow-wrap: anywhere;
+  color: #f6d892;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.mobile-live-player-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mobile-live-player {
+  display: grid;
+  min-width: 0;
+  min-height: 112px;
+  box-sizing: border-box;
+  align-content: start;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgb(244 232 210 / 12%);
+  border-radius: 8px;
+  background: #141a20;
+  color: #f4e8d2;
+}
+
+.mobile-live-player span {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgb(245 212 139 / 14%);
+  color: #f5d48b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mobile-live-player strong,
+.mobile-live-player em,
+.mobile-live-player small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-live-player strong {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.mobile-live-player em {
+  color: #c8bda8;
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1.25;
+}
+
+.mobile-live-player small {
+  color: #8f9aaa;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.mobile-live-action-bar {
+  position: fixed;
+  right: max(16px, calc((100vw - 480px) / 2 + 16px));
+  bottom: calc(78px + env(safe-area-inset-bottom));
+  left: max(16px, calc((100vw - 480px) / 2 + 16px));
+  z-index: 9;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid rgb(244 232 210 / 12%);
+  border-radius: 8px;
+  background: rgb(13 17 23 / 94%);
+  backdrop-filter: blur(16px);
+}
+
+.mobile-live-action-bar .mobile-button {
+  min-width: 0;
+}
+
+.mobile-live-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  text-decoration: none;
+}
+
 .mobile-replay-details {
   border: 1px solid rgb(244 232 210 / 12%);
   border-radius: 8px;
