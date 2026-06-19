@@ -231,13 +231,13 @@ textarea {
 .mobile-lobby-page::before {
   top: 26px;
   right: 24px;
-  width: 82px;
-  height: 82px;
+  width: 54px;
+  height: 54px;
   border-radius: 999px;
-  background:
-    radial-gradient(circle at 34% 30%, #fff9dc 0 11%, #e3eced 34%, #91a5ad 61%, transparent 62%);
-  box-shadow: 0 0 34px rgb(199 220 220 / 24%);
-  opacity: 0.82;
+  background: #dfe8e5;
+  box-shadow: inset -17px 1px 0 #07101a;
+  opacity: 0.74;
+  transform: rotate(-12deg);
 }
 
 .mobile-lobby-page::after {
@@ -255,7 +255,7 @@ textarea {
     linear-gradient(to top, #02050a 0 72px, transparent 72px) 94% 60px / 28px 72px no-repeat;
 }
 
-.mobile-lobby-page > * {
+.mobile-lobby-page > :not(.mobile-action-bar) {
   position: relative;
   z-index: 1;
 }
