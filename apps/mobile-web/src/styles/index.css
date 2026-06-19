@@ -255,9 +255,12 @@ textarea {
     linear-gradient(to top, #02050a 0 72px, transparent 72px) 94% 60px / 28px 72px no-repeat;
 }
 
-.mobile-lobby-page > :not(.mobile-action-bar):not(.mobile-profile-drawer-layer) {
+.mobile-lobby-content {
   position: relative;
   z-index: 1;
+  display: grid;
+  min-width: 0;
+  gap: 18px;
 }
 
 .mobile-lobby-hero {
@@ -478,7 +481,8 @@ textarea {
 
 .mobile-lobby-seat-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -629,8 +633,7 @@ textarea {
 }
 
 .mobile-app-shell:has(.mobile-profile-drawer-layer) .mobile-tab-bar {
-  opacity: 0;
-  pointer-events: none;
+  display: none;
 }
 
 .mobile-profile-drawer-backdrop {
@@ -920,7 +923,21 @@ textarea {
 
 @media (max-width: 360px) {
   .mobile-lobby-seat-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .mobile-lobby-seat-card {
+    min-height: 104px;
+    padding: 8px 4px;
+  }
+
+  .mobile-lobby-seat-avatar {
+    width: 40px;
+    height: 40px;
+  }
+
+  .mobile-lobby-seat-card strong {
+    font-size: 12px;
   }
 
   .mobile-profile-drawer-filters {

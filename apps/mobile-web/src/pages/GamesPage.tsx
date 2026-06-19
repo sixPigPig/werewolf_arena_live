@@ -2,7 +2,7 @@ import {
   useMutation,
   useQuery,
 } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -32,6 +32,9 @@ export function GamesPage() {
   const [profileSearch, setProfileSearch] = useState("");
   const [favoriteFilter, setFavoriteFilter] = useState<"all" | "favorite">("all");
   const [profileStrategyFilter, setProfileStrategyFilter] = useState("all");
+  const lobbyContentRef = useRef<HTMLDivElement | null>(null);
+  const profileDrawerRef = useRef<HTMLElement | null>(null);
+  const profileDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const ruleSetsQuery = useQuery({
     queryKey: ["rule-sets"],
@@ -113,6 +116,97 @@ export function GamesPage() {
     !selectedRuleSet ||
     createGameRunMutation.isPending;
 
+  useEffect(() => {
+    const lobbyContent = lobbyContentRef.current as
+      | (HTMLDivElement & { inert?: boolean })
+      | null;
+
+    if (!lobbyContent) {
+      return;
+    }
+
+    lobbyContent.inert = isProfileDrawerOpen;
+    if (isProfileDrawerOpen) {
+      lobbyContent.setAttribute("inert", "");
+    } else {
+      lobbyContent.removeAttribute("inert");
+    }
+
+    return () => {
+      lobbyContent.inert = false;
+      lobbyContent.removeAttribute("inert");
+    };
+  }, [isProfileDrawerOpen]);
+
+  useEffect(() => {
+    if (!isProfileDrawerOpen) {
+      return;
+    }
+
+    const drawer = profileDrawerRef.current;
+    if (!drawer) {
+      return;
+    }
+
+    const previouslyFocusedElement =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const initialFocusTarget = getFocusableElements(drawer)[0] ?? drawer;
+    initialFocusTarget.focus();
+
+    function handleDrawerKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Tab" || !drawer) {
+        return;
+      }
+
+      const focusableElements = getFocusableElements(drawer);
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        drawer.focus();
+        return;
+      }
+
+      const firstFocusable = focusableElements[0];
+      const lastFocusable = focusableElements[focusableElements.length - 1];
+      const activeElement =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+
+      if (!activeElement || !drawer.contains(activeElement)) {
+        event.preventDefault();
+        firstFocusable.focus();
+        return;
+      }
+
+      if (event.shiftKey && activeElement === firstFocusable) {
+        event.preventDefault();
+        lastFocusable.focus();
+        return;
+      }
+
+      if (!event.shiftKey && activeElement === lastFocusable) {
+        event.preventDefault();
+        firstFocusable.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleDrawerKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleDrawerKeyDown);
+      const focusTarget =
+        profileDrawerTriggerRef.current ?? previouslyFocusedElement;
+
+      if (focusTarget && document.contains(focusTarget)) {
+        focusTarget.focus();
+      }
+
+      profileDrawerTriggerRef.current = null;
+    };
+  }, [isProfileDrawerOpen]);
+
   function handleRuleSetChange(ruleSetId: string) {
     const nextRuleSet = ruleSets.find((ruleSet) => ruleSet.id === ruleSetId);
     setSelectedRuleSetId(ruleSetId);
@@ -140,8 +234,9 @@ export function GamesPage() {
     );
   }
 
-  function openProfileDrawer(seat: number) {
+  function openProfileDrawer(seat: number, trigger: HTMLButtonElement) {
     const profile = selectedProfilesBySeat.get(seat) ?? null;
+    profileDrawerTriggerRef.current = trigger;
     setActiveSeat(seat);
     setPendingProfileId(profile?.id ?? null);
     setProfileSearch("");
@@ -237,32 +332,37 @@ export function GamesPage() {
 
   return (
     <main className="mobile-page mobile-lobby-page" data-testid="mobile-games-page">
-      <header className="mobile-lobby-hero">
-        <div className="mobile-lobby-crest" aria-hidden="true">
-          狼
-        </div>
-        <div className="mobile-lobby-hero-copy">
-          <span>公平 · 推理 · 社交的暗夜决策</span>
-          <h1>狼人杀对局大厅</h1>
-          <p>选择规则，点亮座位，从卡牌库召集你的暗夜阵容。</p>
-        </div>
-      </header>
+      <div
+        aria-hidden={isProfileDrawerOpen ? true : undefined}
+        className="mobile-lobby-content"
+        ref={lobbyContentRef}
+      >
+        <header className="mobile-lobby-hero">
+          <div className="mobile-lobby-crest" aria-hidden="true">
+            狼
+          </div>
+          <div className="mobile-lobby-hero-copy">
+            <span>公平 · 推理 · 社交的暗夜决策</span>
+            <h1>狼人杀对局大厅</h1>
+            <p>选择规则，点亮座位，从卡牌库召集你的暗夜阵容。</p>
+          </div>
+        </header>
 
-      {validationError ? (
-        <p className="mobile-status-banner" role="alert">
-          {validationError}
-        </p>
-      ) : null}
-      {shortage ? (
-        <p className="mobile-status-banner" role="alert">
-          玩家库玩家不足
-        </p>
-      ) : null}
-      {createGameRunMutation.isError ? (
-        <p className="mobile-status-banner" role="alert">
-          无法发起对局
-        </p>
-      ) : null}
+        {validationError ? (
+          <p className="mobile-status-banner" role="alert">
+            {validationError}
+          </p>
+        ) : null}
+        {shortage ? (
+          <p className="mobile-status-banner" role="alert">
+            玩家库玩家不足
+          </p>
+        ) : null}
+        {createGameRunMutation.isError ? (
+          <p className="mobile-status-banner" role="alert">
+            无法发起对局
+          </p>
+        ) : null}
 
       <section aria-labelledby="mobile-rule-title" className="mobile-lobby-section">
         <div className="mobile-lobby-section-heading">
@@ -340,7 +440,7 @@ export function GamesPage() {
                       .filter(Boolean)
                       .join(" ")}
                     key={seat}
-                    onClick={() => openProfileDrawer(seat)}
+                    onClick={(event) => openProfileDrawer(seat, event.currentTarget)}
                     type="button"
                   >
                     <span className="mobile-lobby-seat-avatar">
@@ -401,42 +501,43 @@ export function GamesPage() {
         </div>
       </section>
 
-      <div className="mobile-action-bar mobile-lobby-action-bar">
-        <button
-          className="mobile-button"
-          disabled={!selectedRuleSet}
-          onClick={() => fillEmptySeats()}
-          type="button"
-        >
-          随机补齐
-        </button>
-        <button
-          className="mobile-button"
-          disabled={!selectedRuleSet}
-          onClick={() => fillEmptySeats({ favoritesOnly: true })}
-          type="button"
-        >
-          收藏补齐
-        </button>
-        <button
-          className="mobile-button"
-          onClick={() => {
-            setPlayerConfigs([]);
-            setShortage(false);
-            setValidationError(null);
-          }}
-          type="button"
-        >
-          清空席位
-        </button>
-        <button
-          className="mobile-button mobile-button-primary"
-          disabled={isSubmitDisabled}
-          onClick={handleSubmit}
-          type="button"
-        >
-          {createGameRunMutation.isPending ? "发起中" : "发起对局"}
-        </button>
+        <div className="mobile-action-bar mobile-lobby-action-bar">
+          <button
+            className="mobile-button"
+            disabled={!selectedRuleSet}
+            onClick={() => fillEmptySeats()}
+            type="button"
+          >
+            随机补齐
+          </button>
+          <button
+            className="mobile-button"
+            disabled={!selectedRuleSet}
+            onClick={() => fillEmptySeats({ favoritesOnly: true })}
+            type="button"
+          >
+            收藏补齐
+          </button>
+          <button
+            className="mobile-button"
+            onClick={() => {
+              setPlayerConfigs([]);
+              setShortage(false);
+              setValidationError(null);
+            }}
+            type="button"
+          >
+            清空席位
+          </button>
+          <button
+            className="mobile-button mobile-button-primary"
+            disabled={isSubmitDisabled}
+            onClick={handleSubmit}
+            type="button"
+          >
+            {createGameRunMutation.isPending ? "发起中" : "发起对局"}
+          </button>
+        </div>
       </div>
 
       {isProfileDrawerOpen ? (
@@ -450,7 +551,9 @@ export function GamesPage() {
             aria-labelledby="mobile-profile-drawer-title"
             aria-modal="true"
             className="mobile-profile-drawer"
+            ref={profileDrawerRef}
             role="dialog"
+            tabIndex={-1}
           >
             <div className="mobile-profile-drawer-handle" aria-hidden="true" />
             <div className="mobile-profile-drawer-heading">
@@ -616,6 +719,24 @@ function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
 
 function clampSeat(seat: number, playerCount: number) {
   return seat >= 1 && seat <= playerCount ? seat : 1;
+}
+
+function getFocusableElements(container: HTMLElement) {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      [
+        "a[href]",
+        "button:not([disabled])",
+        "input:not([disabled])",
+        "select:not([disabled])",
+        "textarea:not([disabled])",
+        "[tabindex]:not([tabindex='-1'])",
+      ].join(","),
+    ),
+  ).filter((element) => {
+    const ariaHidden = element.getAttribute("aria-hidden") === "true";
+    return !ariaHidden && !element.hidden;
+  });
 }
 
 type ProfileFilters = {

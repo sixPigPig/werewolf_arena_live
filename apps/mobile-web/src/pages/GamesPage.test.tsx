@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -195,6 +197,60 @@ describe("GamesPage", () => {
     expect(
       screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
     ).toBeVisible();
+  });
+
+  it("keeps keyboard focus inside the player card drawer and restores it", async () => {
+    const user = userEvent.setup();
+    renderGamesPage();
+
+    const seatButton = await screen.findByRole("button", {
+      name: "选择 1 号座位，当前为 待选择",
+    });
+    await user.click(seatButton);
+
+    const dialog = screen.getByRole("dialog", { name: "玩家卡牌库" });
+    await waitFor(() => {
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    });
+    expect(document.querySelector(".mobile-lobby-content")).toHaveAttribute(
+      "inert",
+    );
+
+    for (let index = 0; index < 12; index += 1) {
+      await user.tab();
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    }
+
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "关闭玩家卡牌库" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "玩家卡牌库" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(seatButton).toHaveFocus();
+    expect(document.querySelector(".mobile-lobby-content")).not.toHaveAttribute(
+      "inert",
+    );
+  });
+
+  it("lays out eight seats as two horizontal rows on mobile", async () => {
+    gameClientMocks.listRuleSets.mockResolvedValue({
+      rule_sets: [{ ...classicRuleSet, player_count: 8 }],
+    });
+    renderGamesPage();
+
+    await screen.findByRole("button", {
+      name: "选择 8 号座位，当前为 待选择",
+    });
+
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const seatGridRule = styles.match(/\.mobile-lobby-seat-grid\s*{[^}]+}/)?.[0];
+
+    expect(seatGridRule).toContain("grid-template-columns: repeat(4");
+    expect(seatGridRule).toContain("grid-template-rows: repeat(2");
   });
 
   it("searches profiles when a profile has no tags", async () => {
