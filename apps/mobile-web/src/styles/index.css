@@ -208,6 +208,96 @@ textarea {
   line-height: 1.4;
 }
 
+.mobile-player-list {
+  display: grid;
+  gap: 12px;
+}
+
+.mobile-player-card {
+  display: flex;
+  min-width: 0;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid rgb(244 232 210 / 12%);
+  border-radius: 8px;
+  background: #141a20;
+  color: #f4e8d2;
+}
+
+.mobile-player-avatar {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #090d12;
+}
+
+.mobile-player-card-body {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.mobile-player-card-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mobile-player-card-heading h2 {
+  overflow-wrap: anywhere;
+  color: #f4e8d2;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.mobile-player-favorite,
+.mobile-player-tag {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  border-radius: 8px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.mobile-player-favorite {
+  flex: 0 0 auto;
+  background: rgb(245 212 139 / 16%);
+  color: #f5d48b;
+}
+
+.mobile-player-model,
+.mobile-player-description,
+.mobile-player-speaking {
+  color: #c8bda8;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mobile-player-model {
+  overflow-wrap: anywhere;
+  color: #f6d892;
+}
+
+.mobile-player-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mobile-player-tag {
+  background: rgb(148 163 184 / 14%);
+  color: #e2e8f0;
+}
+
 .mobile-app-frame {
   width: 100%;
   max-width: 480px;
