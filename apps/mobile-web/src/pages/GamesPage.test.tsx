@@ -119,8 +119,21 @@ describe("GamesPage", () => {
     });
     gameClientMocks.listPlayerProfiles.mockResolvedValue({
       profiles: [
-        buildProfile({ id: "profile-1", display_name: "阿青", favorite: true }),
-        buildProfile({ id: "profile-2", display_name: "白石" }),
+        buildProfile({
+          id: "profile-1",
+          display_name: "阿青",
+          favorite: true,
+          short_description: "雾夜里的分析者",
+          strategy_profile: "analysis",
+          tags: ["分析"],
+        }),
+        buildProfile({
+          id: "profile-2",
+          display_name: "白石",
+          short_description: "稳健守序的观察者",
+          strategy_profile: "balanced",
+          tags: ["均衡"],
+        }),
       ],
     });
     gameClientMocks.createGameRun.mockResolvedValue(buildRun());
@@ -165,5 +178,74 @@ describe("GamesPage", () => {
 
     expect(await screen.findByText("玩家库玩家不足")).toBeVisible();
     expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
+  });
+
+  it("opens the player card drawer from a selected seat", async () => {
+    const user = userEvent.setup();
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 1 号座位，当前为 待选择",
+      }),
+    );
+
+    expect(screen.getByRole("dialog", { name: "玩家卡牌库" })).toBeVisible();
+    expect(screen.getByText("当前选择：1号座位")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
+    ).toBeVisible();
+  });
+
+  it("confirms a player card into the active seat", async () => {
+    const user = userEvent.setup();
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 1 号座位，当前为 待选择",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
+    );
+    await user.click(screen.getByRole("button", { name: "确认选择" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "玩家卡牌库" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "选择 1 号座位，当前为 阿青",
+      }),
+    ).toBeVisible();
+  });
+
+  it("closes the player card drawer without changing the seat", async () => {
+    const user = userEvent.setup();
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 1 号座位，当前为 待选择",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
+    );
+    await user.click(screen.getByRole("button", { name: "关闭玩家卡牌库" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "玩家卡牌库" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "选择 1 号座位，当前为 待选择",
+      }),
+    ).toBeVisible();
   });
 });
