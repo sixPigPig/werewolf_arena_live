@@ -81,7 +81,7 @@ function HistorySessionCard({
   onResume,
   session,
 }: HistorySessionCardProps) {
-  const canResume = session.resumable || session.status === "partial";
+  const canResume = session.resumable === true;
 
   return (
     <article className="mobile-session-card">
@@ -107,23 +107,26 @@ function HistorySessionCard({
           <dd>{formatDate(session.created_at)}</dd>
         </div>
       </dl>
-      {canResume ? (
-        <button
-          className="mobile-button mobile-button-primary"
-          disabled={isResuming}
-          onClick={onResume}
-          type="button"
-        >
-          {isResuming ? "继续中" : "继续对局"}
-        </button>
-      ) : (
+      <div className="mobile-session-actions">
+        {canResume ? (
+          <button
+            aria-label={`继续对局 ${session.session_id}`}
+            className="mobile-button mobile-button-primary"
+            disabled={isResuming}
+            onClick={onResume}
+            type="button"
+          >
+            {isResuming ? "继续中" : "继续对局"}
+          </button>
+        ) : null}
         <Link
+          aria-label={`查看复盘 ${session.session_id}`}
           className="mobile-button mobile-session-link"
           to={`/games/${session.session_id}/replay`}
         >
           查看复盘
         </Link>
-      )}
+      </div>
     </article>
   );
 }

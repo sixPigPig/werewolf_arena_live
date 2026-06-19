@@ -376,6 +376,11 @@ textarea {
   line-height: 1.35;
 }
 
+.mobile-session-actions {
+  display: grid;
+  gap: 8px;
+}
+
 .mobile-session-link {
   display: inline-flex;
   align-items: center;
