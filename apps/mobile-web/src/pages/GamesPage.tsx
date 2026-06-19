@@ -14,6 +14,8 @@ import {
   removeInvalidProfileRefs,
   resizeLineupForPlayerCount,
   type PlayerConfig,
+  type RuleSetSummary,
+  type VirtualPlayerProfile,
 } from "@werewolf-arena/game-client";
 
 export function GamesPage() {
@@ -25,6 +27,11 @@ export function GamesPage() {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [shortage, setShortage] = useState(false);
   const [activeSeat, setActiveSeat] = useState(1);
+  const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
+  const [pendingProfileId, setPendingProfileId] = useState<string | null>(null);
+  const [profileSearch, setProfileSearch] = useState("");
+  const [favoriteFilter, setFavoriteFilter] = useState<"all" | "favorite">("all");
+  const [profileStrategyFilter, setProfileStrategyFilter] = useState("all");
 
   const ruleSetsQuery = useQuery({
     queryKey: ["rule-sets"],
@@ -82,6 +89,22 @@ export function GamesPage() {
     );
   }, [profiles, visiblePlayerConfigs]);
   const safeActiveSeat = clampSeat(activeSeat, playerCount);
+  const activeSeatProfile = selectedProfilesBySeat.get(safeActiveSeat) ?? null;
+  const pendingProfile =
+    profiles.find((profile) => profile.id === pendingProfileId) ?? null;
+  const strategyFilterOptions = useMemo(
+    () => getStrategyFilterOptions(profiles),
+    [profiles],
+  );
+  const filteredProfiles = useMemo(
+    () =>
+      filterProfiles(profiles, {
+        favoriteFilter,
+        search: profileSearch,
+        strategy: profileStrategyFilter,
+      }),
+    [favoriteFilter, profileSearch, profileStrategyFilter, profiles],
+  );
   const isLoading = ruleSetsQuery.isPending || playerProfilesQuery.isPending;
   const isSubmitDisabled =
     isLoading ||
@@ -115,6 +138,32 @@ export function GamesPage() {
     setPlayerConfigs((currentConfigs) =>
       upsertSeatProfile(currentConfigs, safeActiveSeat, profileId),
     );
+  }
+
+  function openProfileDrawer(seat: number) {
+    const profile = selectedProfilesBySeat.get(seat) ?? null;
+    setActiveSeat(seat);
+    setPendingProfileId(profile?.id ?? null);
+    setProfileSearch("");
+    setFavoriteFilter("all");
+    setProfileStrategyFilter("all");
+    setValidationError(null);
+    setShortage(false);
+    setIsProfileDrawerOpen(true);
+  }
+
+  function closeProfileDrawer() {
+    setIsProfileDrawerOpen(false);
+    setPendingProfileId(null);
+  }
+
+  function confirmPendingProfile() {
+    if (!pendingProfileId) {
+      return;
+    }
+    assignProfileToActiveSeat(pendingProfileId);
+    setIsProfileDrawerOpen(false);
+    setPendingProfileId(null);
   }
 
   function fillEmptySeats(options?: { favoritesOnly?: boolean }) {
@@ -381,4 +430,87 @@ function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
 
 function clampSeat(seat: number, playerCount: number) {
   return seat >= 1 && seat <= playerCount ? seat : 1;
+}
+
+type ProfileFilters = {
+  favoriteFilter: "all" | "favorite";
+  search: string;
+  strategy: string;
+};
+
+function filterProfiles(
+  profiles: VirtualPlayerProfile[],
+  filters: ProfileFilters,
+) {
+  const search = filters.search.trim().toLowerCase();
+
+  return profiles.filter((profile) => {
+    if (filters.favoriteFilter === "favorite" && !profile.favorite) {
+      return false;
+    }
+
+    if (
+      filters.strategy !== "all" &&
+      profile.strategy_profile !== filters.strategy
+    ) {
+      return false;
+    }
+
+    if (!search) {
+      return true;
+    }
+
+    return profileMatchesSearch(profile, search);
+  });
+}
+
+function profileMatchesSearch(profile: VirtualPlayerProfile, search: string) {
+  return [
+    profile.display_name,
+    profile.model,
+    profile.personality_id,
+    profile.personality_text,
+    profile.short_description,
+    profile.strategy_profile,
+    ...profile.tags,
+  ]
+    .filter(Boolean)
+    .some((value) => value.toLowerCase().includes(search));
+}
+
+function getStrategyFilterOptions(profiles: VirtualPlayerProfile[]) {
+  return [...new Set(profiles.map((profile) => profile.strategy_profile))]
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function getRuleTags(ruleSet: RuleSetSummary) {
+  const tags = [
+    ...(ruleSet.rule_tags ?? []),
+    ruleSet.complexity,
+    ruleSet.estimated_duration,
+  ].filter((tag): tag is string => Boolean(tag));
+
+  return tags.slice(0, 3);
+}
+
+function formatStrategyLabel(strategy: string) {
+  const strategyLabels: Record<string, string> = {
+    analysis: "分析型",
+    balanced: "均衡型",
+    deceptive: "策略型",
+    defensive: "防御型",
+    aggressive: "进攻型",
+  };
+
+  return strategyLabels[strategy] ?? strategy;
+}
+
+function getProfileDescription(profile: VirtualPlayerProfile) {
+  return (
+    profile.short_description ||
+    profile.personality_text ||
+    profile.model ||
+    "暗夜牌局候选人"
+  );
 }
