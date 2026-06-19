@@ -1,15 +1,12 @@
-import { QueryClientContext, useQuery } from "@tanstack/react-query";
-import { useContext } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { listPlayerProfiles } from "@werewolf-arena/game-client";
-import { queryClient } from "../lib/query-client";
 
 export function PlayersPage() {
-  const queryClientFromContext = useContext(QueryClientContext);
   const playerProfilesQuery = useQuery({
     queryKey: ["player-profiles"],
     queryFn: listPlayerProfiles,
-  }, queryClientFromContext ?? queryClient);
+  });
 
   const profiles = playerProfilesQuery.data?.profiles ?? [];
 
@@ -55,13 +52,13 @@ export function PlayersPage() {
                   </p>
                 ) : null}
                 {profile.tags.length > 0 ? (
-                  <div className="mobile-player-tags" aria-label="玩家标签">
+                  <ul className="mobile-player-tags" aria-label="玩家标签">
                     {profile.tags.map((tag) => (
-                      <span className="mobile-player-tag" key={tag}>
+                      <li className="mobile-player-tag" key={tag}>
                         {tag}
-                      </span>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 ) : null}
                 {profile.speaking_style ? (
                   <p className="mobile-player-speaking">

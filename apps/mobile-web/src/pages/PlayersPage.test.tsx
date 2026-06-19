@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -97,7 +98,53 @@ describe("PlayersPage", () => {
     expect(await screen.findByText("月下猎人")).toBeVisible();
     expect(screen.getByText("deepseek-v4-flash")).toBeVisible();
     expect(screen.getByText("冷静复盘型玩家")).toBeVisible();
-    expect(screen.getByText("控场")).toBeVisible();
+    const tags = screen.getByRole("list", { name: "玩家标签" });
+    expect(within(tags).getByRole("listitem")).toHaveTextContent("控场");
     expect(screen.getByText("编辑能力不在第一版范围内")).toBeVisible();
+  });
+
+  it("shows loading copy while reading player profiles", () => {
+    gameClientMocks.listPlayerProfiles.mockReturnValue(new Promise(() => undefined));
+
+    renderWithQueryClient(<PlayersPage />);
+
+    expect(screen.getByText("正在读取玩家档案...")).toBeVisible();
+    expect(screen.getByText("编辑能力不在第一版范围内")).toBeVisible();
+  });
+
+  it("shows an alert when player profiles cannot be read", async () => {
+    gameClientMocks.listPlayerProfiles.mockRejectedValue(new Error("network down"));
+
+    renderWithQueryClient(<PlayersPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法读取玩家档案");
+    expect(screen.getByText("编辑能力不在第一版范围内")).toBeVisible();
+  });
+
+  it("shows empty copy when the player library has no profiles", async () => {
+    gameClientMocks.listPlayerProfiles.mockResolvedValue({ profiles: [] });
+
+    renderWithQueryClient(<PlayersPage />);
+
+    expect(await screen.findByText("暂无玩家档案")).toBeVisible();
+    expect(screen.getByText("编辑能力不在第一版范围内")).toBeVisible();
+  });
+
+  it("keeps the first version read-only", async () => {
+    renderWithQueryClient(<PlayersPage />);
+
+    expect(await screen.findByText("编辑能力不在第一版范围内")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /编辑|新增|创建|保存|删除/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /编辑|新增|创建|保存|删除/ })).not.toBeInTheDocument();
+  });
+
+  it("relies on the surrounding QueryClientProvider", () => {
+    const source = readFileSync("src/pages/PlayersPage.tsx", "utf8");
+
+    expect(source).not.toContain("QueryClientContext");
+    expect(source).not.toContain("../lib/query-client");
+    expect(source).toContain(
+      'useQuery({\n    queryKey: ["player-profiles"],\n    queryFn: listPlayerProfiles,\n  })',
+    );
   });
 });
