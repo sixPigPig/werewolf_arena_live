@@ -344,11 +344,16 @@ export function GamesPage() {
                     type="button"
                   >
                     <span className="mobile-lobby-seat-avatar">
+                      <span aria-hidden="true" />
                       {profile?.avatar_image_url ? (
-                        <img alt="" src={profile.avatar_image_url} />
-                      ) : (
-                        <span aria-hidden="true" />
-                      )}
+                        <img
+                          alt=""
+                          onError={(event) => {
+                            event.currentTarget.hidden = true;
+                          }}
+                          src={profile.avatar_image_url}
+                        />
+                      ) : null}
                     </span>
                     <span className="mobile-lobby-seat-label">{seat}号座位</span>
                     <strong>{profile?.display_name ?? "待选择"}</strong>
@@ -524,11 +529,16 @@ export function GamesPage() {
                     type="button"
                   >
                     <span className="mobile-profile-card-image">
+                      <span aria-hidden="true" />
                       {profile.avatar_image_url ? (
-                        <img alt="" src={profile.avatar_image_url} />
-                      ) : (
-                        <span aria-hidden="true" />
-                      )}
+                        <img
+                          alt=""
+                          onError={(event) => {
+                            event.currentTarget.hidden = true;
+                          }}
+                          src={profile.avatar_image_url}
+                        />
+                      ) : null}
                       {profile.favorite ? (
                         <em
                           aria-label="已收藏"

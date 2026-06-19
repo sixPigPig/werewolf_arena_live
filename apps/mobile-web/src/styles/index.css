@@ -255,7 +255,7 @@ textarea {
     linear-gradient(to top, #02050a 0 72px, transparent 72px) 94% 60px / 28px 72px no-repeat;
 }
 
-.mobile-lobby-page > :not(.mobile-action-bar) {
+.mobile-lobby-page > :not(.mobile-action-bar):not(.mobile-profile-drawer-layer) {
   position: relative;
   z-index: 1;
 }
@@ -505,6 +505,7 @@ textarea {
 }
 
 .mobile-lobby-seat-avatar {
+  position: relative;
   display: block;
   width: 46px;
   height: 46px;
@@ -517,6 +518,8 @@ textarea {
 .mobile-lobby-seat-avatar img,
 .mobile-lobby-seat-avatar > span {
   display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
 }
@@ -598,6 +601,7 @@ textarea {
   padding: 0 10px;
   background: #050910;
   color: #f4e8d2;
+  font-size: 14px;
 }
 
 .mobile-lobby-action-bar {
@@ -611,6 +615,8 @@ textarea {
   min-width: 0;
   overflow: hidden;
   border-radius: 6px;
+  font-size: 15px;
+  line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -618,7 +624,12 @@ textarea {
 .mobile-profile-drawer-layer {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.mobile-app-shell:has(.mobile-profile-drawer-layer) .mobile-tab-bar {
+  opacity: 0;
   pointer-events: none;
 }
 
@@ -743,6 +754,7 @@ textarea {
   padding: 0 10px;
   background: #050910;
   color: #f4e8d2;
+  font-size: 14px;
 }
 
 .mobile-profile-card-grid {
@@ -787,6 +799,8 @@ textarea {
 .mobile-profile-card-image img,
 .mobile-profile-card-image > span {
   display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
 }
@@ -899,6 +913,8 @@ textarea {
 .mobile-profile-drawer-footer .mobile-button {
   min-width: 0;
   border-radius: 6px;
+  font-size: 15px;
+  line-height: 1.1;
   white-space: nowrap;
 }
 
