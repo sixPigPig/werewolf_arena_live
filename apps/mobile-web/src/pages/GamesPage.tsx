@@ -5,6 +5,15 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import lobbyHeroBanner from "../assets/mobile-lobby-hero-banner.png";
+import classic12SelectedCard from "../assets/rule-cards/classic-12-selected.png";
+import classic12UnselectedCard from "../assets/rule-cards/classic-12-unselected.png";
+import classic8SelectedCard from "../assets/rule-cards/classic-8-selected.png";
+import classic8UnselectedCard from "../assets/rule-cards/classic-8-unselected.png";
+import social8SelectedCard from "../assets/rule-cards/social-8-selected.png";
+import social8UnselectedCard from "../assets/rule-cards/social-8-unselected.png";
+import starter6SelectedCard from "../assets/rule-cards/starter-6-selected.png";
+import starter6UnselectedCard from "../assets/rule-cards/starter-6-unselected.png";
 import {
   createGameRun,
   hasPlayerConfig,
@@ -14,7 +23,6 @@ import {
   removeInvalidProfileRefs,
   resizeLineupForPlayerCount,
   type PlayerConfig,
-  type RuleSetSummary,
   type VirtualPlayerProfile,
 } from "@werewolf-arena/game-client";
 
@@ -28,6 +36,7 @@ export function GamesPage() {
   const [shortage, setShortage] = useState(false);
   const [activeSeat, setActiveSeat] = useState(1);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
+  const [isClearConfirming, setIsClearConfirming] = useState(false);
   const [pendingProfileId, setPendingProfileId] = useState<string | null>(null);
   const [profileSearch, setProfileSearch] = useState("");
   const [favoriteFilter, setFavoriteFilter] = useState<"all" | "favorite">("all");
@@ -35,6 +44,8 @@ export function GamesPage() {
   const lobbyContentRef = useRef<HTMLDivElement | null>(null);
   const profileDrawerRef = useRef<HTMLElement | null>(null);
   const profileDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const ruleScrollRef = useRef<HTMLDivElement | null>(null);
+  const ruleCardRefs = useRef(new Map<string, HTMLLabelElement>());
 
   const ruleSetsQuery = useQuery({
     queryKey: ["rule-sets"],
@@ -91,10 +102,26 @@ export function GamesPage() {
       ]),
     );
   }, [profiles, visiblePlayerConfigs]);
+  const assignedSeatByProfileId = useMemo(
+    () =>
+      new Map(
+        visiblePlayerConfigs
+          .filter((config) => Boolean(config.profile_id))
+          .map((config) => [config.profile_id as string, config.seat]),
+      ),
+    [visiblePlayerConfigs],
+  );
   const safeActiveSeat = clampSeat(activeSeat, playerCount);
   const activeSeatProfile = selectedProfilesBySeat.get(safeActiveSeat) ?? null;
+  const launchStatus = useMemo(
+    () => buildLineupLaunchStatus(visiblePlayerConfigs, profiles, playerCount),
+    [playerCount, profiles, visiblePlayerConfigs],
+  );
   const pendingProfile =
     profiles.find((profile) => profile.id === pendingProfileId) ?? null;
+  const pendingAssignedSeat = pendingProfile
+    ? assignedSeatByProfileId.get(pendingProfile.id)
+    : undefined;
   const strategyFilterOptions = useMemo(
     () => getStrategyFilterOptions(profiles),
     [profiles],
@@ -115,6 +142,18 @@ export function GamesPage() {
     playerProfilesQuery.isError ||
     !selectedRuleSet ||
     createGameRunMutation.isPending;
+  const isLaunchDisabled = isSubmitDisabled || !launchStatus.canLaunch;
+  const canAdvanceAfterConfirm = pendingProfile
+    ? hasNextEmptySeat(
+        upsertSeatProfile(
+          visiblePlayerConfigs,
+          safeActiveSeat,
+          pendingProfile.id,
+        ),
+        playerCount,
+        safeActiveSeat,
+      )
+    : false;
 
   useEffect(() => {
     const lobbyContent = lobbyContentRef.current as
@@ -207,11 +246,31 @@ export function GamesPage() {
     };
   }, [isProfileDrawerOpen]);
 
-  function handleRuleSetChange(ruleSetId: string) {
+  useEffect(() => {
+    if (!isClearConfirming) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsClearConfirming(false);
+    }, 3000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isClearConfirming]);
+
+  function handleRuleSetChange(
+    ruleSetId: string,
+    options: { scrollCardIntoView?: boolean } = {},
+  ) {
     const nextRuleSet = ruleSets.find((ruleSet) => ruleSet.id === ruleSetId);
     setSelectedRuleSetId(ruleSetId);
     setValidationError(null);
     setShortage(false);
+    setIsClearConfirming(false);
+
+    if (options.scrollCardIntoView) {
+      scrollRuleCardIntoView(ruleSetId);
+    }
 
     if (nextRuleSet) {
       setActiveSeat((currentSeat) =>
@@ -226,12 +285,21 @@ export function GamesPage() {
     }
   }
 
-  function assignProfileToActiveSeat(profileId: string) {
-    setValidationError(null);
-    setShortage(false);
-    setPlayerConfigs((currentConfigs) =>
-      upsertSeatProfile(currentConfigs, safeActiveSeat, profileId),
-    );
+  function scrollRuleCardIntoView(ruleSetId: string) {
+    const ruleCard = ruleCardRefs.current.get(ruleSetId);
+    const ruleScroll = ruleScrollRef.current;
+
+    if (!ruleCard || !ruleScroll) {
+      return;
+    }
+
+    const scrollLeft =
+      ruleCard.offsetLeft - (ruleScroll.clientWidth - ruleCard.offsetWidth) / 2;
+
+    ruleScroll.scrollTo({
+      left: Math.max(0, scrollLeft),
+      behavior: "smooth",
+    });
   }
 
   function openProfileDrawer(seat: number, trigger: HTMLButtonElement) {
@@ -244,6 +312,7 @@ export function GamesPage() {
     setProfileStrategyFilter("all");
     setValidationError(null);
     setShortage(false);
+    setIsClearConfirming(false);
     setIsProfileDrawerOpen(true);
   }
 
@@ -252,11 +321,35 @@ export function GamesPage() {
     setPendingProfileId(null);
   }
 
-  function confirmPendingProfile() {
-    if (!pendingProfileId) {
+  function confirmPendingProfile(
+    options: { advanceToNextEmpty?: boolean } = {},
+  ) {
+    if (!pendingProfile) {
       return;
     }
-    assignProfileToActiveSeat(pendingProfileId);
+
+    const nextConfigs = upsertSeatProfile(
+      visiblePlayerConfigs,
+      safeActiveSeat,
+      pendingProfile.id,
+    );
+    const nextEmptySeat = findNextEmptySeat(
+      nextConfigs,
+      playerCount,
+      safeActiveSeat,
+    );
+
+    setValidationError(null);
+    setShortage(false);
+    setIsClearConfirming(false);
+    setPlayerConfigs(nextConfigs);
+
+    if (options.advanceToNextEmpty && nextEmptySeat) {
+      setActiveSeat(nextEmptySeat);
+      setPendingProfileId(null);
+      return;
+    }
+
     setIsProfileDrawerOpen(false);
     setPendingProfileId(null);
   }
@@ -267,6 +360,7 @@ export function GamesPage() {
     }
     setValidationError(null);
     setShortage(false);
+    setIsClearConfirming(false);
     setPlayerConfigs(
       randomFillEmptySeats(
         visiblePlayerConfigs,
@@ -277,7 +371,33 @@ export function GamesPage() {
     );
   }
 
+  function handleClearSeats() {
+    const hasAssignedSeats = visiblePlayerConfigs.some((config) =>
+      hasPlayerConfig(config),
+    );
+
+    if (!hasAssignedSeats) {
+      setPlayerConfigs([]);
+      setShortage(false);
+      setValidationError(null);
+      setIsClearConfirming(false);
+      return;
+    }
+
+    if (!isClearConfirming) {
+      setIsClearConfirming(true);
+      return;
+    }
+
+    setPlayerConfigs([]);
+    setShortage(false);
+    setValidationError(null);
+    setIsClearConfirming(false);
+  }
+
   function handleSubmit() {
+    setIsClearConfirming(false);
+
     if (!selectedRuleSet) {
       return;
     }
@@ -333,19 +453,18 @@ export function GamesPage() {
   return (
     <main className="mobile-page mobile-lobby-page" data-testid="mobile-games-page">
       <div
-        aria-hidden={isProfileDrawerOpen ? true : undefined}
         className="mobile-lobby-content"
         ref={lobbyContentRef}
       >
-        <header className="mobile-lobby-hero">
-          <div className="mobile-lobby-crest" aria-hidden="true">
-            狼
-          </div>
-          <div className="mobile-lobby-hero-copy">
-            <span>公平 · 推理 · 社交的暗夜决策</span>
-            <h1>狼人杀对局大厅</h1>
-            <p>选择规则，点亮座位，从卡牌库召集你的暗夜阵容。</p>
-          </div>
+        <header className="mobile-lobby-hero" aria-labelledby="mobile-lobby-title">
+          <img
+            alt="狼人杀对局大厅"
+            className="mobile-lobby-hero-image"
+            src={lobbyHeroBanner}
+          />
+          <h1 className="mobile-sr-only" id="mobile-lobby-title">
+            狼人杀对局大厅
+          </h1>
         </header>
 
         {validationError ? (
@@ -372,44 +491,98 @@ export function GamesPage() {
           ) : null}
         </div>
         {ruleSetsQuery.isError ? <p>规则加载失败</p> : null}
-        <div className="mobile-lobby-rule-scroll">
-          {ruleSets.map((ruleSet) => {
-            const isSelected = selectedRuleSet?.id === ruleSet.id;
-            const ruleTags = getRuleTags(ruleSet);
+        <div className="mobile-lobby-rule-picker">
+          <div className="mobile-lobby-rule-scroll" ref={ruleScrollRef}>
+            {ruleSets.map((ruleSet) => {
+              const isSelected = selectedRuleSet?.id === ruleSet.id;
+              const ruleCardImage = getRuleCardImage(ruleSet.id, isSelected);
+              const ruleCardFallbackSummary =
+                ruleSet.role_summary ?? ruleSet.complexity ?? "自定义规则";
+              const ruleCardAccessibleName = ruleCardImage
+                ? `选择规则 ${ruleSet.name}`
+                : [
+                    `选择规则 ${ruleSet.name}`,
+                    `${ruleSet.player_count} 人局`,
+                    ruleCardFallbackSummary,
+                  ].join("，");
 
-            return (
-              <label
-                className={[
-                  "mobile-lobby-rule-card",
-                  isSelected ? "mobile-lobby-rule-card-active" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                key={ruleSet.id}
-              >
-                <input
-                  checked={isSelected}
-                  name="mobile-rule-set"
-                  onChange={() => handleRuleSetChange(ruleSet.id)}
-                  type="radio"
-                  value={ruleSet.id}
-                />
-                <span className="mobile-lobby-rule-emblem" aria-hidden="true">
-                  {isSelected ? "✓" : "✦"}
-                </span>
-                <strong>{ruleSet.name}</strong>
-                <span>{ruleSet.role_summary ?? `${ruleSet.player_count} 人局`}</span>
-                {ruleTags.length > 0 ? (
-                  <span className="mobile-lobby-rule-tags">
-                    {ruleTags.map((tag) => (
-                      <em key={tag}>{tag}</em>
-                    ))}
-                  </span>
-                ) : null}
-              </label>
-            );
-          })}
-          {isLoading ? <p>加载中</p> : null}
+              return (
+                <label
+                  className={[
+                    "mobile-lobby-rule-card",
+                    isSelected ? "mobile-lobby-rule-card-active" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={ruleSet.id}
+                  ref={(element) => {
+                    if (element) {
+                      ruleCardRefs.current.set(ruleSet.id, element);
+                    } else {
+                      ruleCardRefs.current.delete(ruleSet.id);
+                    }
+                  }}
+                >
+                  <input
+                    aria-label={ruleCardAccessibleName}
+                    checked={isSelected}
+                    name="mobile-rule-set"
+                    onChange={() => handleRuleSetChange(ruleSet.id)}
+                    type="radio"
+                    value={ruleSet.id}
+                  />
+                  {ruleCardImage ? (
+                    <img
+                      alt=""
+                      aria-hidden="true"
+                      className="mobile-lobby-rule-card-image"
+                      src={ruleCardImage}
+                    />
+                  ) : (
+                    <span className="mobile-lobby-rule-card-fallback">
+                      <strong>{ruleSet.name}</strong>
+                      <span>{ruleSet.player_count} 人局</span>
+                      <small>{ruleCardFallbackSummary}</small>
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+            {isLoading ? <p>加载中</p> : null}
+          </div>
+          {ruleSets.length > 0 ? (
+            <div
+              aria-label="规则选择指示"
+              className="mobile-lobby-rule-dots"
+              role="group"
+            >
+              {ruleSets.map((ruleSet) => {
+                const isSelected = selectedRuleSet?.id === ruleSet.id;
+                const tone = getRuleCardTone(ruleSet.id);
+
+                return (
+                  <button
+                    aria-current={isSelected ? "true" : undefined}
+                    aria-label={`切换到规则 ${ruleSet.name}`}
+                    className={[
+                      "mobile-lobby-rule-dot",
+                      `mobile-lobby-rule-dot-${tone}`,
+                      isSelected ? "mobile-lobby-rule-dot-active" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    key={ruleSet.id}
+                    onClick={() =>
+                      handleRuleSetChange(ruleSet.id, {
+                        scrollCardIntoView: true,
+                      })
+                    }
+                    type="button"
+                  />
+                );
+              })}
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -502,6 +675,9 @@ export function GamesPage() {
       </section>
 
         <div className="mobile-action-bar mobile-lobby-action-bar">
+          <span className="mobile-lobby-launch-status">
+            {launchStatus.summaryText}
+          </span>
           <button
             className="mobile-button"
             disabled={!selectedRuleSet}
@@ -519,23 +695,25 @@ export function GamesPage() {
             收藏补齐
           </button>
           <button
-            className="mobile-button"
-            onClick={() => {
-              setPlayerConfigs([]);
-              setShortage(false);
-              setValidationError(null);
-            }}
+            className={[
+              "mobile-button",
+              isClearConfirming ? "mobile-lobby-clear-confirming" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            disabled={createGameRunMutation.isPending}
+            onClick={handleClearSeats}
             type="button"
           >
-            清空席位
+            {isClearConfirming ? "确认清空" : "清空席位"}
           </button>
           <button
             className="mobile-button mobile-button-primary"
-            disabled={isSubmitDisabled}
+            disabled={isLaunchDisabled}
             onClick={handleSubmit}
             type="button"
           >
-            {createGameRunMutation.isPending ? "发起中" : "发起对局"}
+            {createGameRunMutation.isPending ? "发起中" : launchStatus.ctaLabel}
           </button>
         </div>
       </div>
@@ -617,10 +795,19 @@ export function GamesPage() {
             <div className="mobile-profile-card-grid">
               {filteredProfiles.map((profile) => {
                 const isPending = pendingProfileId === profile.id;
+                const assignedSeat = assignedSeatByProfileId.get(profile.id);
+                const seatStatusLabel = getProfileSeatStatusLabel(
+                  assignedSeat,
+                  safeActiveSeat,
+                );
 
                 return (
                   <button
-                    aria-label={`为 ${safeActiveSeat} 号座位候选 ${profile.display_name}`}
+                    aria-label={getProfileChoiceAriaLabel(
+                      safeActiveSeat,
+                      profile,
+                      seatStatusLabel,
+                    )}
                     className={[
                       "mobile-profile-card-choice",
                       isPending ? "mobile-profile-card-choice-active" : "",
@@ -661,6 +848,11 @@ export function GamesPage() {
                     </span>
                     <strong>{profile.display_name}</strong>
                     <span>{formatStrategyLabel(profile.strategy_profile)}</span>
+                    {seatStatusLabel ? (
+                      <span className="mobile-profile-card-seat-status">
+                        {seatStatusLabel}
+                      </span>
+                    ) : null}
                     <small>{getProfileDescription(profile)}</small>
                   </button>
                 );
@@ -674,12 +866,26 @@ export function GamesPage() {
                 {pendingProfile ? pendingProfile.display_name : "请选择一张玩家卡"}
               </span>
               <button
-                className="mobile-button mobile-button-primary"
-                disabled={!pendingProfileId}
-                onClick={confirmPendingProfile}
+                className="mobile-button mobile-profile-drawer-secondary-action"
+                disabled={!canAdvanceAfterConfirm}
+                onClick={() =>
+                  confirmPendingProfile({ advanceToNextEmpty: true })
+                }
                 type="button"
               >
-                确认选择
+                确认并下一位
+              </button>
+              <button
+                className="mobile-button mobile-button-primary"
+                disabled={!pendingProfile}
+                onClick={() => confirmPendingProfile()}
+                type="button"
+              >
+                {getConfirmProfileButtonLabel(
+                  pendingProfile,
+                  pendingAssignedSeat,
+                  safeActiveSeat,
+                )}
               </button>
             </div>
           </section>
@@ -702,6 +908,48 @@ function upsertSeatProfile(
     .sort((left, right) => left.seat - right.seat);
 }
 
+function getProfileSeatStatusLabel(
+  assignedSeat: number | undefined,
+  activeSeat: number,
+) {
+  if (!assignedSeat) {
+    return null;
+  }
+
+  return assignedSeat === activeSeat
+    ? "当前座位"
+    : `已在 ${assignedSeat} 号座位`;
+}
+
+function getProfileChoiceAriaLabel(
+  activeSeat: number,
+  profile: VirtualPlayerProfile,
+  seatStatusLabel: string | null,
+) {
+  return [
+    `为 ${activeSeat} 号座位候选 ${profile.display_name}`,
+    seatStatusLabel,
+  ]
+    .filter(Boolean)
+    .join("，");
+}
+
+function getConfirmProfileButtonLabel(
+  pendingProfile: VirtualPlayerProfile | null,
+  assignedSeat: number | undefined,
+  activeSeat: number,
+) {
+  if (!pendingProfile) {
+    return "确认选择";
+  }
+
+  if (assignedSeat && assignedSeat !== activeSeat) {
+    return `移动到 ${activeSeat} 号座位`;
+  }
+
+  return "确认选择";
+}
+
 function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
   return configs
     .filter((config) => config.seat >= 1 && config.seat <= playerCount)
@@ -717,8 +965,106 @@ function normalizePlayerConfigs(configs: PlayerConfig[], playerCount: number) {
     .sort((left, right) => left.seat - right.seat);
 }
 
+type LineupLaunchStatus = {
+  assignedCount: number;
+  emptySeatCount: number;
+  profileShortageCount: number;
+  summaryText: string;
+  ctaLabel: string;
+  canLaunch: boolean;
+};
+
+function buildLineupLaunchStatus(
+  configs: PlayerConfig[],
+  profiles: VirtualPlayerProfile[],
+  playerCount: number,
+): LineupLaunchStatus {
+  const assignedProfileIds = new Set(
+    configs
+      .map((config) => config.profile_id)
+      .filter((profileId): profileId is string => Boolean(profileId)),
+  );
+  const assignedCount = assignedProfileIds.size;
+  const emptySeatCount = Math.max(playerCount - assignedCount, 0);
+  const availableProfileCount = Math.max(profiles.length - assignedCount, 0);
+  const profileShortageCount = Math.max(
+    emptySeatCount - availableProfileCount,
+    0,
+  );
+  const countPrefix = `已选 ${assignedCount}/${playerCount}`;
+
+  if (playerCount === 0) {
+    return {
+      assignedCount,
+      emptySeatCount,
+      profileShortageCount: 0,
+      summaryText: "等待规则加载",
+      ctaLabel: "发起对局",
+      canLaunch: false,
+    };
+  }
+
+  if (profileShortageCount > 0) {
+    return {
+      assignedCount,
+      emptySeatCount,
+      profileShortageCount,
+      summaryText: `${countPrefix} · 还差 ${profileShortageCount} 名玩家`,
+      ctaLabel: `还差 ${profileShortageCount} 名玩家`,
+      canLaunch: false,
+    };
+  }
+
+  if (emptySeatCount > 0) {
+    return {
+      assignedCount,
+      emptySeatCount,
+      profileShortageCount,
+      summaryText: `${countPrefix} · 可自动补齐`,
+      ctaLabel: "补齐并发起",
+      canLaunch: true,
+    };
+  }
+
+  return {
+    assignedCount,
+    emptySeatCount,
+    profileShortageCount,
+    summaryText: `${countPrefix} · 阵容已就绪`,
+    ctaLabel: "发起对局",
+    canLaunch: true,
+  };
+}
+
 function clampSeat(seat: number, playerCount: number) {
   return seat >= 1 && seat <= playerCount ? seat : 1;
+}
+
+function findNextEmptySeat(
+  configs: PlayerConfig[],
+  playerCount: number,
+  currentSeat: number,
+) {
+  const assignedSeats = new Set(
+    configs
+      .filter((config) => Boolean(config.profile_id))
+      .map((config) => config.seat),
+  );
+  const seats = Array.from({ length: playerCount }, (_, index) => index + 1);
+  const afterCurrent = seats.filter((seat) => seat > currentSeat);
+  const beforeOrCurrent = seats.filter((seat) => seat <= currentSeat);
+
+  return [...afterCurrent, ...beforeOrCurrent].find(
+    (seat) => !assignedSeats.has(seat),
+  );
+}
+
+function hasNextEmptySeat(
+  configs: PlayerConfig[],
+  playerCount: number,
+  currentSeat: number,
+) {
+  return findNextEmptySeat(configs, playerCount, currentSeat) !== undefined;
 }
 
 function getFocusableElements(container: HTMLElement) {
@@ -791,16 +1137,6 @@ function getStrategyFilterOptions(profiles: VirtualPlayerProfile[]) {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function getRuleTags(ruleSet: RuleSetSummary) {
-  const tags = [
-    ...(ruleSet.rule_tags ?? []),
-    ruleSet.complexity,
-    ruleSet.estimated_duration,
-  ].filter((tag): tag is string => Boolean(tag));
-
-  return tags.slice(0, 3);
-}
-
 function formatStrategyLabel(strategy: string) {
   const strategyLabels: Record<string, string> = {
     analysis: "分析型",
@@ -820,4 +1156,52 @@ function getProfileDescription(profile: VirtualPlayerProfile) {
     profile.model ||
     "暗夜牌局候选人"
   );
+}
+
+type RuleCardImages = {
+  selected: string;
+  unselected: string;
+};
+
+const ruleCardImagesById: Partial<Record<string, RuleCardImages>> = {
+  classic_8: {
+    selected: classic8SelectedCard,
+    unselected: classic8UnselectedCard,
+  },
+  starter_6: {
+    selected: starter6SelectedCard,
+    unselected: starter6UnselectedCard,
+  },
+  social_8: {
+    selected: social8SelectedCard,
+    unselected: social8UnselectedCard,
+  },
+  classic_12_seer_witch_hunter_idiot: {
+    selected: classic12SelectedCard,
+    unselected: classic12UnselectedCard,
+  },
+};
+
+function getRuleCardImage(
+  ruleSetId: string,
+  isSelected: boolean,
+): string | null {
+  const images = ruleCardImagesById[ruleSetId];
+
+  if (!images) {
+    return null;
+  }
+
+  return isSelected ? images.selected : images.unselected;
+}
+
+function getRuleCardTone(ruleSetId: string) {
+  const tones: Record<string, string> = {
+    classic_8: "classic",
+    starter_6: "starter",
+    social_8: "social",
+    classic_12_seer_witch_hunter_idiot: "advanced",
+  };
+
+  return tones[ruleSetId] ?? "classic";
 }
