@@ -35,28 +35,25 @@ def upgrade() -> None:
         "player_avatar_assets",
         ["sha256"],
     )
-    op.add_column(
-        "virtual_player_profiles",
-        sa.Column("avatar_asset_id", sa.String(length=80), nullable=True),
-    )
-    op.create_foreign_key(
-        "fk_virtual_player_profiles_avatar_asset_id",
-        "virtual_player_profiles",
-        "player_avatar_assets",
-        ["avatar_asset_id"],
-        ["id"],
-    )
+    with op.batch_alter_table("virtual_player_profiles") as batch_op:
+        batch_op.add_column(sa.Column("avatar_asset_id", sa.String(length=80), nullable=True))
+        batch_op.create_foreign_key(
+            "fk_virtual_player_profiles_avatar_asset_id",
+            "player_avatar_assets",
+            ["avatar_asset_id"],
+            ["id"],
+        )
     _seed_system_avatar_assets()
     _backfill_system_avatar_profiles()
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "fk_virtual_player_profiles_avatar_asset_id",
-        "virtual_player_profiles",
-        type_="foreignkey",
-    )
-    op.drop_column("virtual_player_profiles", "avatar_asset_id")
+    with op.batch_alter_table("virtual_player_profiles") as batch_op:
+        batch_op.drop_constraint(
+            "fk_virtual_player_profiles_avatar_asset_id",
+            type_="foreignkey",
+        )
+        batch_op.drop_column("avatar_asset_id")
     op.drop_index("ix_player_avatar_assets_sha256", table_name="player_avatar_assets")
     op.drop_table("player_avatar_assets")
 
@@ -100,7 +97,13 @@ def _backfill_system_avatar_profiles() -> None:
                 SET avatar_asset_id = :asset_id,
                     avatar_image_mime = 'image/png'
                 WHERE avatar_asset_id IS NULL
-                  AND (appearance_id = :appearance_id OR avatar_image_url = :legacy_url)
+                  AND (
+                    avatar_image_url = :legacy_url
+                    OR (
+                        appearance_id = :appearance_id
+                        AND (avatar_image_url IS NULL OR avatar_image_url = '')
+                    )
+                  )
                 """
             ),
             {
