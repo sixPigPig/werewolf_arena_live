@@ -41,6 +41,8 @@ players: [
 ],
 ```
 
+Also set `gameStartedEvent.round` to `1` and `gameStartedEvent.phase` to `"day"` so the derived day label is `第 1 天`.
+
 - [ ] **Step 2: Import the stylesheet reader**
 
 At the top of `LivePage.test.tsx`, add the Node fs import:
@@ -71,10 +73,10 @@ it("renders mobile live details for the route game id", async () => {
     screen.getByRole("region", { name: "玩家席位" }),
   ).toBeVisible();
   expect(
-    screen.getByRole("article", { name: "1号 阿青 villager 等待" }),
+    screen.getByRole("article", { name: "1号 阿青 平民 存活" }),
   ).toBeVisible();
   expect(
-    screen.getByRole("article", { name: "4号 木子 witch 等待" }),
+    screen.getByRole("article", { name: "4号 木子 女巫 存活" }),
   ).toBeVisible();
   expect(gameClientMocks.getGameRun).toHaveBeenCalledWith("run-1");
   expect(gameClientMocks.useGameRunEvents).toHaveBeenCalledWith("run-1");
@@ -88,15 +90,17 @@ Append this test inside `describe("LivePage", () => { ... })`:
 ```tsx
 it("hides the bottom mobile tab bar on the immersive live page", () => {
   const styles = readFileSync("src/styles/index.css", "utf8");
+  const tabBarRule =
+    styles.match(
+      /\.mobile-app-shell:has\(\.mobile-live-page\) \.mobile-tab-bar\s*{[^}]+}/,
+    )?.[0] ?? "";
+  const contentRegionRule =
+    styles.match(
+      /\.mobile-app-shell:has\(\.mobile-live-page\) \.mobile-content-region\s*{[^}]+}/,
+    )?.[0] ?? "";
 
-  expect(styles).toContain(
-    ".mobile-app-shell:has(.mobile-live-page) .mobile-tab-bar",
-  );
-  expect(styles).toContain("display: none");
-  expect(styles).toContain(
-    ".mobile-app-shell:has(.mobile-live-page) .mobile-content-region",
-  );
-  expect(styles).toContain("padding-bottom: 0");
+  expect(tabBarRule).toContain("display: none");
+  expect(contentRegionRule).toContain("padding-bottom: 0");
 });
 ```
 
@@ -105,10 +109,10 @@ it("hides the bottom mobile tab bar on the immersive live page", () => {
 Run:
 
 ```bash
-pnpm --dir apps/mobile-web test -- --run src/pages/LivePage.test.tsx
+pnpm --dir apps/mobile-web test --run src/pages/LivePage.test.tsx
 ```
 
-Expected: FAIL because the current page still renders a visible `实时观战` heading, has no `返回对局大厅` button, no `region` named `玩家席位`, no article names like `1号 阿青 villager 等待`, and no live-page tab-bar hiding CSS.
+Expected: FAIL because the current page still renders a visible `实时观战` heading, has no `返回对局大厅` button, no `region` named `玩家席位`, no article names like `1号 阿青 平民 存活`, and no live-page tab-bar hiding CSS.
 
 - [ ] **Step 6: Commit the failing tests**
 
@@ -540,7 +544,7 @@ function navigateBackToGames(navigate: ReturnType<typeof useNavigate>) {
 Run:
 
 ```bash
-pnpm --dir apps/mobile-web test -- --run src/pages/LivePage.test.tsx
+pnpm --dir apps/mobile-web test --run src/pages/LivePage.test.tsx
 ```
 
 Expected: The render assertions pass or only the CSS contract test fails because the stylesheet is not implemented yet.
@@ -1029,7 +1033,7 @@ Add this media query after the new live styles:
 Run:
 
 ```bash
-pnpm --dir apps/mobile-web test -- --run src/pages/LivePage.test.tsx
+pnpm --dir apps/mobile-web test --run src/pages/LivePage.test.tsx
 ```
 
 Expected: PASS.
