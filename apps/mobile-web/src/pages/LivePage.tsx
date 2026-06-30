@@ -90,15 +90,12 @@ export function LivePage() {
 
   return (
     <main className="mobile-page mobile-live-page">
-      <h1
-        aria-hidden={runQuery.isPending ? true : undefined}
-        className="mobile-sr-only"
-      >
-        实时观战
-      </h1>
+      <h1 className="mobile-sr-only">实时观战</h1>
 
       {runQuery.isPending ? (
-        <p className="mobile-status-banner">正在读取实时对局...</p>
+        <p className="mobile-status-banner" role="status">
+          正在读取实时对局...
+        </p>
       ) : null}
       {runQuery.isError ? (
         <p className="mobile-status-banner" role="alert">
@@ -109,6 +106,17 @@ export function LivePage() {
         <p className="mobile-status-banner" role="alert">
           无法继续对局
         </p>
+      ) : null}
+
+      {!run && runQuery.isPending ? (
+        <section className="mobile-live-theater" aria-label="实时观战剧场">
+          <LiveTheaterTopBar
+            connectionState={connectionState}
+            liveStatusLabel={liveStatus.label}
+            onBack={() => navigateBackToGames(navigate)}
+            ruleName="实时对局"
+          />
+        </section>
       ) : null}
 
       {run ? (
@@ -422,12 +430,16 @@ function avatarInitial(name: string, seatNumber: number) {
 
 function roleShortLabel(role: string) {
   const labels: Record<string, string> = {
+    guard: "守",
+    doctor: "医",
     hunter: "猎",
     idiot: "白",
     seer: "预",
     villager: "民",
     werewolf: "狼",
     witch: "巫",
+    守卫: "守",
+    医生: "医",
     平民: "民",
     村民: "民",
     狼人: "狼",
@@ -436,12 +448,15 @@ function roleShortLabel(role: string) {
     猎人: "猎",
     白痴: "白",
   };
+  const trimmed = role.trim();
+  const normalized = trimmed.toLowerCase();
 
-  return labels[role] ?? "未知";
+  return labels[normalized] ?? labels[trimmed] ?? (trimmed.slice(0, 1) || "未知");
 }
 
 function navigateBackToGames(navigate: ReturnType<typeof useNavigate>) {
-  if (window.history.length > 1) {
+  const historyState = window.history.state as { idx?: number } | null;
+  if (typeof historyState?.idx === "number" && historyState.idx > 0) {
     navigate(-1);
     return;
   }
