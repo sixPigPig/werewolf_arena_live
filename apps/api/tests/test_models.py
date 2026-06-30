@@ -2,6 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
+from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 
@@ -44,6 +45,7 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "avatar_image_url",
         "avatar_image_path",
         "avatar_image_mime",
+        "avatar_asset_id",
         "short_description",
         "background_story",
         "speaking_style",
@@ -157,3 +159,39 @@ def test_virtual_player_profile_has_rich_character_columns() -> None:
     ):
         assert column_name in table.c
         assert table.c[column_name].nullable is False
+
+
+def test_player_avatar_asset_table_is_registered_in_metadata() -> None:
+    assert PlayerAvatarAsset.__table__.name == "player_avatar_assets"
+    assert "player_avatar_assets" in Base.metadata.tables
+
+
+def test_player_avatar_asset_table_matches_expected_schema() -> None:
+    table = PlayerAvatarAsset.__table__
+    column_names = set(table.columns.keys())
+
+    assert column_names == {
+        "id",
+        "source",
+        "content_type",
+        "data",
+        "sha256",
+        "size_bytes",
+        "created_at",
+    }
+    assert table.c.id.primary_key is True
+    assert table.c.source.nullable is False
+    assert table.c.content_type.nullable is False
+    assert table.c.data.nullable is False
+    assert table.c.sha256.nullable is False
+    assert table.c.sha256.index is True
+    assert table.c.size_bytes.nullable is False
+    assert table.c.created_at.server_default is not None
+
+
+def test_virtual_player_profile_has_avatar_asset_reference() -> None:
+    table = VirtualPlayerProfile.__table__
+
+    assert "avatar_asset_id" in table.columns
+    assert table.c.avatar_asset_id.nullable is True
+    assert table.c.avatar_asset_id.foreign_keys

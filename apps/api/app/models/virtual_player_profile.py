@@ -23,6 +23,11 @@ class VirtualPlayerProfile(Base):
     avatar_image_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
     avatar_image_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
     avatar_image_mime: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    avatar_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("player_avatar_assets.id"),
+        nullable=True,
+        default=None,
+    )
     short_description: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     background_story: Mapped[str] = mapped_column(Text, nullable=False, default="")
     speaking_style: Mapped[str] = mapped_column(Text, nullable=False, default="")
