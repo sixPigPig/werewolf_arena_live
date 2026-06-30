@@ -1177,7 +1177,7 @@ textarea {
     linear-gradient(180deg, rgb(30 4 7 / 94%) 0 14%, rgb(8 10 16 / 92%) 42%, rgb(26 17 10 / 96%) 100%);
 }
 
-.mobile-live-page > .mobile-status-banner {
+.mobile-live-page:has(.mobile-live-theater) > .mobile-status-banner {
   position: absolute;
   top: calc(62px + env(safe-area-inset-top));
   right: 10px;
@@ -1594,11 +1594,16 @@ textarea {
   min-height: 40px;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   border-color: rgb(255 230 177 / 34%);
+  padding-right: 8px;
+  padding-left: 8px;
   background: rgb(55 34 18 / 82%);
   color: #fff3d7;
   text-align: center;
   text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 360px) {
