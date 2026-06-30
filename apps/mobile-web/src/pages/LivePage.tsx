@@ -11,6 +11,7 @@ import {
   useGameRunEvents,
   useLiveDirector,
   type GameRun,
+  type GodViewPlayer,
   type LiveGameEvent,
 } from "@werewolf-arena/game-client";
 
@@ -89,12 +90,16 @@ export function LivePage() {
 
   return (
     <main className="mobile-page mobile-live-page">
-      <header className="mobile-page-section">
-        <h1>实时观战</h1>
-        <p>{run?.rule_set?.name ?? "正在读取规则"}</p>
-      </header>
+      <h1
+        aria-hidden={runQuery.isPending ? true : undefined}
+        className="mobile-sr-only"
+      >
+        实时观战
+      </h1>
 
-      {runQuery.isPending ? <p>正在读取实时对局...</p> : null}
+      {runQuery.isPending ? (
+        <p className="mobile-status-banner">正在读取实时对局...</p>
+      ) : null}
       {runQuery.isError ? (
         <p className="mobile-status-banner" role="alert">
           无法读取实时对局
@@ -107,138 +112,341 @@ export function LivePage() {
       ) : null}
 
       {run ? (
-        <>
-          <LiveSummary
-            connectionState={connectionState}
-            liveStatusLabel={liveStatus.label}
-            run={run}
-          />
-          <CurrentEventPanel
-            currentEvent={currentEvent}
-            currentPhase={spectatorState.currentPhase ?? godViewState.phaseLabel}
-            currentRound={spectatorState.currentRound}
-          />
-          {godViewState.players.length > 0 ? (
-            <section aria-label="玩家席位" className="mobile-live-player-grid">
-              {godViewState.players.map((player) => (
-                <article className="mobile-live-player" key={player.name}>
-                  <span>{player.seatNumber}</span>
-                  <strong>{player.name}</strong>
-                  <em>{player.role || "未知身份"}</em>
-                  <small>{player.stageStatus.label}</small>
-                </article>
-              ))}
-            </section>
-          ) : null}
-          <div className="mobile-live-action-bar" aria-label="实时观战操作">
-            <button
-              className="mobile-button"
-              onClick={director.togglePaused}
-              type="button"
-            >
-              {director.isPaused ? "继续" : "暂停"}
-            </button>
-            <button
-              className="mobile-button"
-              onClick={() => director.setSpeed(director.speed === 1 ? 2 : 1)}
-              type="button"
-            >
-              {director.speed === 1 ? "1x" : "2x"}
-            </button>
-            <button
-              className="mobile-button"
-              onClick={director.catchUpToLatest}
-              type="button"
-            >
-              追到最新
-            </button>
-            {canResumeRun ? (
-              <button
-                className="mobile-button mobile-button-primary"
-                disabled={resumeMutation.isPending}
-                onClick={() => resumeMutation.mutate(run.session_id)}
-                type="button"
-              >
-                {resumeMutation.isPending ? "继续中" : "继续对局"}
-              </button>
-            ) : null}
-            {isTerminalRunStatus(run.status) || terminalEvent ? (
-              <Link
-                className="mobile-button mobile-live-link"
-                to={`/games/${run.session_id}/replay`}
-              >
-                查看复盘
-              </Link>
-            ) : null}
-          </div>
-        </>
+        <LiveTheater
+          canResumeRun={canResumeRun}
+          connectionState={connectionState}
+          currentEvent={currentEvent}
+          director={director}
+          godViewState={godViewState}
+          liveStatusLabel={liveStatus.label}
+          onBack={() => navigateBackToGames(navigate)}
+          onResumeRun={() => resumeMutation.mutate(run.session_id)}
+          resumeIsPending={resumeMutation.isPending}
+          run={run}
+          terminalEvent={terminalEvent}
+        />
       ) : null}
     </main>
   );
 }
 
-type LiveSummaryProps = {
+type LiveDirectorControlsState = ReturnType<typeof useLiveDirector>;
+type GodViewState = ReturnType<typeof deriveGodViewState>;
+
+type LiveTheaterProps = {
+  canResumeRun: boolean;
   connectionState: string;
+  currentEvent: LiveGameEvent | null;
+  director: LiveDirectorControlsState;
+  godViewState: GodViewState;
   liveStatusLabel: string;
+  onBack: () => void;
+  onResumeRun: () => void;
+  resumeIsPending: boolean;
   run: GameRun;
+  terminalEvent: LiveGameEvent | undefined;
 };
 
-function LiveSummary({ connectionState, liveStatusLabel, run }: LiveSummaryProps) {
+function LiveTheater({
+  canResumeRun,
+  connectionState,
+  currentEvent,
+  director,
+  godViewState,
+  liveStatusLabel,
+  onBack,
+  onResumeRun,
+  resumeIsPending,
+  run,
+  terminalEvent,
+}: LiveTheaterProps) {
+  const currentPlayer = getCurrentTheaterPlayer(godViewState);
+  const { left, right } = splitPlayersForColumns(godViewState.players);
+
   return (
-    <section aria-label="实时概要" className="mobile-live-summary">
-      <dl className="mobile-session-meta">
-        <div>
-          <dt>规则</dt>
-          <dd>{run.rule_set?.name ?? "未知规则"}</dd>
-        </div>
-        <div>
-          <dt>会话</dt>
-          <dd>{run.session_id}</dd>
-        </div>
-        <div>
-          <dt>连接</dt>
-          <dd>{connectionLabel(connectionState)}</dd>
-        </div>
-        <div>
-          <dt>状态</dt>
-          <dd>{liveStatusLabel}</dd>
-        </div>
-        <div>
-          <dt>事件</dt>
-          <dd>{run.event_count}</dd>
-        </div>
-      </dl>
+    <section className="mobile-live-theater" aria-label="实时观战剧场">
+      <LiveTheaterTopBar
+        connectionState={connectionState}
+        liveStatusLabel={liveStatusLabel}
+        onBack={onBack}
+        ruleName={run.rule_set?.name ?? "实时对局"}
+      />
+      <LiveSkyBanner
+        dayNightLabel={godViewState.dayNightLabel}
+        phaseLabel={godViewState.phaseLabel}
+      />
+      <section className="mobile-live-seat-stage" aria-label="玩家席位">
+        <LiveSeatColumn players={left} side="left" />
+        <LiveCenterStage
+          currentEvent={currentEvent}
+          currentPlayer={currentPlayer}
+          godViewState={godViewState}
+        />
+        <LiveSeatColumn players={right} side="right" />
+      </section>
+      <LiveTheaterControls
+        canResumeRun={canResumeRun}
+        currentPlayer={currentPlayer}
+        director={director}
+        godViewState={godViewState}
+        onResumeRun={onResumeRun}
+        resumeIsPending={resumeIsPending}
+        run={run}
+        terminalEvent={terminalEvent}
+      />
     </section>
   );
 }
 
-type CurrentEventPanelProps = {
-  currentEvent: LiveGameEvent | null;
-  currentPhase: string | null;
-  currentRound: number | null;
+type LiveTheaterTopBarProps = {
+  connectionState: string;
+  liveStatusLabel: string;
+  onBack: () => void;
+  ruleName: string;
 };
 
-function CurrentEventPanel({
-  currentEvent,
-  currentPhase,
-  currentRound,
-}: CurrentEventPanelProps) {
+function LiveTheaterTopBar({
+  connectionState,
+  liveStatusLabel,
+  onBack,
+  ruleName,
+}: LiveTheaterTopBarProps) {
   return (
-    <section aria-label="当前事件" className="mobile-live-event">
-      <span>当前事件</span>
-      <strong>{currentEvent?.type ?? "等待事件"}</strong>
-      <dl className="mobile-session-meta">
-        <div>
-          <dt>轮次</dt>
-          <dd>{typeof currentRound === "number" ? `第 ${currentRound} 轮` : "未开始"}</dd>
-        </div>
-        <div>
-          <dt>阶段</dt>
-          <dd>{currentPhase || "等待阶段"}</dd>
-        </div>
-      </dl>
+    <header className="mobile-live-theater-top">
+      <button
+        aria-label="返回对局大厅"
+        className="mobile-live-back-button"
+        onClick={onBack}
+        type="button"
+      >
+        ‹
+      </button>
+      <div>
+        <strong>{ruleName}</strong>
+        <span>{liveStatusLabel}</span>
+      </div>
+      <span className="mobile-live-connection">
+        {connectionLabel(connectionState)}
+      </span>
+    </header>
+  );
+}
+
+type LiveSkyBannerProps = {
+  dayNightLabel: string;
+  phaseLabel: string;
+};
+
+function LiveSkyBanner({ dayNightLabel, phaseLabel }: LiveSkyBannerProps) {
+  return (
+    <section className="mobile-live-sky" aria-label="当前轮次">
+      <div className="mobile-live-sky-orb" aria-hidden="true" />
+      <div className="mobile-live-day-banner">
+        <span>{phaseLabel}</span>
+        <strong>{dayNightLabel}</strong>
+      </div>
     </section>
   );
+}
+
+type LiveSeatColumnProps = {
+  players: GodViewPlayer[];
+  side: "left" | "right";
+};
+
+function LiveSeatColumn({ players, side }: LiveSeatColumnProps) {
+  return (
+    <div className={`mobile-live-seat-column mobile-live-seat-column-${side}`}>
+      {players.map((player) => (
+        <LiveSeatAvatar key={player.name} player={player} />
+      ))}
+    </div>
+  );
+}
+
+type LiveSeatAvatarProps = {
+  player: GodViewPlayer;
+};
+
+function LiveSeatAvatar({ player }: LiveSeatAvatarProps) {
+  const roleLabel = roleShortLabel(player.role);
+  const statusLabel = player.isSpeaking ? "发言中" : player.stageStatus.label;
+  const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}`;
+  const className = [
+    "mobile-live-seat",
+    player.isSpeaking ? "mobile-live-seat-speaking" : "",
+    player.isAlive ? "" : "mobile-live-seat-out",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <article aria-label={seatLabel} className={className}>
+      <span className="mobile-live-seat-number">{player.seatNumber}</span>
+      <span className="mobile-live-seat-avatar">
+        {player.avatarImageUrl ? (
+          <img alt="" src={player.avatarImageUrl} />
+        ) : (
+          <span>{avatarInitial(player.name, player.seatNumber)}</span>
+        )}
+      </span>
+      <span className="mobile-live-seat-role">{roleLabel}</span>
+      <strong>{player.name}</strong>
+      <small>{statusLabel}</small>
+    </article>
+  );
+}
+
+type LiveCenterStageProps = {
+  currentEvent: LiveGameEvent | null;
+  currentPlayer: GodViewPlayer | null;
+  godViewState: GodViewState;
+};
+
+function LiveCenterStage({
+  currentEvent,
+  currentPlayer,
+  godViewState,
+}: LiveCenterStageProps) {
+  return (
+    <section className="mobile-live-center-stage" aria-label="当前舞台">
+      <div className="mobile-live-presenter" aria-hidden="true">
+        {currentPlayer
+          ? avatarInitial(currentPlayer.name, currentPlayer.seatNumber)
+          : "?"}
+      </div>
+      <span>{currentPlayer ? `${currentPlayer.seatNumber}号` : "等待"}</span>
+      <strong>{currentPlayer?.name ?? "等待玩家行动"}</strong>
+      <em>{currentPlayer?.stageStatus.label ?? godViewState.currentSeatLabel}</em>
+      <p>{currentEvent?.type ?? "等待事件"}</p>
+      {currentEvent?.action ? <small>{currentEvent.action}</small> : null}
+    </section>
+  );
+}
+
+type LiveTheaterControlsProps = {
+  canResumeRun: boolean;
+  currentPlayer: GodViewPlayer | null;
+  director: LiveDirectorControlsState;
+  godViewState: GodViewState;
+  onResumeRun: () => void;
+  resumeIsPending: boolean;
+  run: GameRun;
+  terminalEvent: LiveGameEvent | undefined;
+};
+
+function LiveTheaterControls({
+  canResumeRun,
+  currentPlayer,
+  director,
+  godViewState,
+  onResumeRun,
+  resumeIsPending,
+  run,
+  terminalEvent,
+}: LiveTheaterControlsProps) {
+  return (
+    <footer className="mobile-live-control-deck" aria-label="实时观战操作">
+      <div className="mobile-live-focus-strip">
+        <span>{currentPlayer ? `${currentPlayer.seatNumber}` : "-"}</span>
+        <strong>{currentPlayer?.name ?? "等待行动"}</strong>
+        <em>{godViewState.countdownLabel}</em>
+      </div>
+      <div className="mobile-live-action-bar">
+        <button
+          className="mobile-button"
+          onClick={director.togglePaused}
+          type="button"
+        >
+          {director.isPaused ? "继续" : "暂停"}
+        </button>
+        <button
+          className="mobile-button"
+          onClick={() => director.setSpeed(director.speed === 1 ? 2 : 1)}
+          type="button"
+        >
+          {director.speed === 1 ? "1x" : "2x"}
+        </button>
+        <button
+          className="mobile-button"
+          onClick={director.catchUpToLatest}
+          type="button"
+        >
+          最新
+        </button>
+        {canResumeRun ? (
+          <button
+            className="mobile-button mobile-button-primary"
+            disabled={resumeIsPending}
+            onClick={onResumeRun}
+            type="button"
+          >
+            {resumeIsPending ? "继续中" : "继续对局"}
+          </button>
+        ) : null}
+        {isTerminalRunStatus(run.status) || terminalEvent ? (
+          <Link
+            className="mobile-button mobile-live-link"
+            to={`/games/${run.session_id}/replay`}
+          >
+            复盘
+          </Link>
+        ) : null}
+      </div>
+    </footer>
+  );
+}
+
+function getCurrentTheaterPlayer(state: GodViewState) {
+  return (
+    state.speakerFlow.current ??
+    state.players.find((player) => player.isSpeaking) ??
+    null
+  );
+}
+
+function splitPlayersForColumns(players: GodViewPlayer[]) {
+  const midpoint = Math.ceil(players.length / 2);
+
+  return {
+    left: players.slice(0, midpoint),
+    right: players.slice(midpoint),
+  };
+}
+
+function avatarInitial(name: string, seatNumber: number) {
+  const trimmed = name.trim();
+
+  return trimmed ? trimmed.slice(0, 1) : String(seatNumber);
+}
+
+function roleShortLabel(role: string) {
+  const labels: Record<string, string> = {
+    hunter: "猎",
+    idiot: "白",
+    seer: "预",
+    villager: "民",
+    werewolf: "狼",
+    witch: "巫",
+    平民: "民",
+    村民: "民",
+    狼人: "狼",
+    预言家: "预",
+    女巫: "巫",
+    猎人: "猎",
+    白痴: "白",
+  };
+
+  return labels[role] ?? "未知";
+}
+
+function navigateBackToGames(navigate: ReturnType<typeof useNavigate>) {
+  if (window.history.length > 1) {
+    navigate(-1);
+    return;
+  }
+
+  navigate("/games");
 }
 
 function connectionLabel(state: string) {
