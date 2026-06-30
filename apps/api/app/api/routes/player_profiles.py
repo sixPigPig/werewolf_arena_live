@@ -19,6 +19,7 @@ from app.werewolf.player_avatar_assets import (
     PlayerAvatarAssetStore,
     avatar_asset_url,
     player_avatar_asset_store_for_logs_dir,
+    resolve_profile_avatar_reference,
     save_uploaded_avatar_asset,
 )
 from app.werewolf.player_presets import (
@@ -89,6 +90,7 @@ class PlayerProfileBase(BaseModel):
     personality_text: str = ""
     appearance_id: str = Field(default="default", min_length=1, max_length=40)
     avatar_prompt: str = Field(default="", max_length=1000)
+    avatar_asset_id: str | None = Field(default=None, max_length=80)
     avatar_image_url: str = Field(default="", max_length=1000)
     avatar_image_mime: str = Field(default="", max_length=80)
     short_description: str = Field(default="", max_length=160)
@@ -112,6 +114,7 @@ class PlayerProfileBase(BaseModel):
         "personality_text",
         "appearance_id",
         "avatar_prompt",
+        "avatar_asset_id",
         "avatar_image_url",
         "avatar_image_mime",
         "short_description",
@@ -164,6 +167,7 @@ class UpdatePlayerProfileRequest(BaseModel):
     personality_text: str | None = None
     appearance_id: str | None = Field(default=None, min_length=1, max_length=40)
     avatar_prompt: str | None = Field(default=None, max_length=1000)
+    avatar_asset_id: str | None = Field(default=None, max_length=80)
     avatar_image_url: str | None = Field(default=None, max_length=1000)
     avatar_image_mime: str | None = Field(default=None, max_length=80)
     short_description: str | None = Field(default=None, max_length=160)
@@ -223,6 +227,7 @@ class UpdatePlayerProfileRequest(BaseModel):
         "personality_text",
         "appearance_id",
         "avatar_prompt",
+        "avatar_asset_id",
         "avatar_image_url",
         "avatar_image_mime",
         "short_description",
@@ -277,6 +282,7 @@ class PlayerProfileResponse(BaseModel):
     personality_text: str
     appearance_id: str
     avatar_prompt: str
+    avatar_asset_id: str | None
     avatar_image_url: str
     avatar_image_mime: str
     short_description: str
@@ -420,6 +426,13 @@ def get_player_profile_ai_provider():
     return create_model_provider()
 
 
+def _profile_response(profile: VirtualPlayerProfile) -> PlayerProfileResponse:
+    payload = PlayerProfileResponse.model_validate(profile)
+    if profile.avatar_asset_id:
+        payload.avatar_image_url = avatar_asset_url(profile.avatar_asset_id)
+    return payload
+
+
 @router.post("/avatar", response_model=AvatarUploadResponse, status_code=201)
 def upload_player_avatar(
     request: AvatarUploadRequest,
@@ -489,47 +502,61 @@ def list_player_profiles(
         )
     except RecoverableDatabaseError as exc:
         raise _profile_database_unavailable() from exc
-    return PlayerProfileListResponse(profiles=profiles)
+    return PlayerProfileListResponse(
+        profiles=[_profile_response(profile) for profile in profiles]
+    )
 
 
 @router.post("", response_model=PlayerProfileResponse, status_code=201)
 def create_player_profile(
     request: CreatePlayerProfileRequest,
     db: Annotated[Session, Depends(get_db)],
-) -> VirtualPlayerProfile:
+) -> PlayerProfileResponse:
     _validate_presets(request.personality_id, request.appearance_id)
     personality_text = request.personality_text or default_personality_text(request.personality_id)
-    profile = VirtualPlayerProfile(
-        id=str(uuid.uuid4()),
-        owner_user_id=None,
-        display_name=request.display_name,
-        model=request.model,
-        personality_id=request.personality_id,
-        personality_text=personality_text,
-        appearance_id=request.appearance_id,
-        avatar_prompt=request.avatar_prompt,
-        avatar_image_url=request.avatar_image_url,
-        avatar_image_path="",
-        avatar_image_mime=request.avatar_image_mime,
-        short_description=request.short_description,
-        background_story=request.background_story,
-        speaking_style=request.speaking_style,
-        catchphrases=request.catchphrases,
-        strategy_profile=request.strategy_profile,
-        risk_tolerance=request.risk_tolerance,
-        bluffing_tendency=request.bluffing_tendency,
-        trust_tendency=request.trust_tendency,
-        leadership_tendency=request.leadership_tendency,
-        talkativeness=request.talkativeness,
-        example_messages=request.example_messages,
-        favorite=request.favorite,
-        tags=request.tags,
-    )
     try:
+        resolved_avatar = resolve_profile_avatar_reference(
+            db,
+            avatar_asset_id=request.avatar_asset_id,
+            appearance_id=request.appearance_id,
+            avatar_image_url=request.avatar_image_url,
+            avatar_image_mime=request.avatar_image_mime,
+            logs_dir=settings.werewolf_logs_dir,
+        )
+        profile = VirtualPlayerProfile(
+            id=str(uuid.uuid4()),
+            owner_user_id=None,
+            display_name=request.display_name,
+            model=request.model,
+            personality_id=request.personality_id,
+            personality_text=personality_text,
+            appearance_id=request.appearance_id,
+            avatar_prompt=request.avatar_prompt,
+            avatar_image_url=resolved_avatar.url,
+            avatar_image_path="",
+            avatar_image_mime=resolved_avatar.mime,
+            avatar_asset_id=resolved_avatar.id,
+            short_description=request.short_description,
+            background_story=request.background_story,
+            speaking_style=request.speaking_style,
+            catchphrases=request.catchphrases,
+            strategy_profile=request.strategy_profile,
+            risk_tolerance=request.risk_tolerance,
+            bluffing_tendency=request.bluffing_tendency,
+            trust_tendency=request.trust_tendency,
+            leadership_tendency=request.leadership_tendency,
+            talkativeness=request.talkativeness,
+            example_messages=request.example_messages,
+            favorite=request.favorite,
+            tags=request.tags,
+        )
         db.add(profile)
         db.commit()
         db.refresh(profile)
-        return profile
+        return _profile_response(profile)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RecoverableDatabaseError as exc:
         db.rollback()
         raise _profile_database_unavailable() from exc
@@ -567,8 +594,8 @@ def generate_player_profile_ai_draft(
 def get_player_profile(
     profile_id: str,
     db: Annotated[Session, Depends(get_db)],
-) -> VirtualPlayerProfile:
-    return _get_profile_or_404(profile_id, db)
+) -> PlayerProfileResponse:
+    return _profile_response(_get_profile_or_404(profile_id, db))
 
 
 @router.patch("/{profile_id}", response_model=PlayerProfileResponse)
@@ -576,7 +603,7 @@ def update_player_profile(
     profile_id: str,
     request: UpdatePlayerProfileRequest,
     db: Annotated[Session, Depends(get_db)],
-) -> VirtualPlayerProfile:
+) -> PlayerProfileResponse:
     profile = _get_profile_or_404(profile_id, db)
     updates = request.model_dump(exclude_unset=True)
 
@@ -588,6 +615,19 @@ def update_player_profile(
     _validate_presets(personality_id, appearance_id)
 
     try:
+        resolved_avatar = resolve_profile_avatar_reference(
+            db,
+            avatar_asset_id=updates.get("avatar_asset_id", profile.avatar_asset_id),
+            appearance_id=appearance_id,
+            avatar_image_url=updates.get("avatar_image_url", profile.avatar_image_url),
+            avatar_image_mime=updates.get("avatar_image_mime", profile.avatar_image_mime),
+            logs_dir=settings.werewolf_logs_dir,
+        )
+        updates["avatar_asset_id"] = resolved_avatar.id
+        updates["avatar_image_url"] = resolved_avatar.url
+        updates["avatar_image_mime"] = resolved_avatar.mime
+        updates["avatar_image_path"] = ""
+
         for field_name, value in updates.items():
             setattr(profile, field_name, value)
 
@@ -599,7 +639,10 @@ def update_player_profile(
         profile.updated_at = datetime.now(UTC)
         db.commit()
         db.refresh(profile)
-        return profile
+        return _profile_response(profile)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RecoverableDatabaseError as exc:
         db.rollback()
         raise _profile_database_unavailable() from exc

@@ -40,6 +40,13 @@ class FilePlayerAvatarAsset:
     content_type: str
 
 
+@dataclass(frozen=True)
+class ResolvedAvatarReference:
+    id: str | None
+    url: str
+    mime: str
+
+
 def avatar_asset_url(asset_id: str) -> str:
     return f"{settings.api_v1_prefix}/player-profiles/avatar-assets/{asset_id}"
 
@@ -118,15 +125,22 @@ def save_uploaded_avatar_asset(
     )
 
 
-def system_avatar_asset_id_for_appearance(appearance_id: str) -> str | None:
-    return SYSTEM_AVATAR_ASSET_IDS.get(appearance_id)
+def system_avatar_asset_id_for_appearance(appearance_id: str | None) -> str | None:
+    if not appearance_id:
+        return None
+    return SYSTEM_AVATAR_ASSET_IDS.get(appearance_id.strip())
 
 
-def system_avatar_asset_id_for_legacy_url(avatar_image_url: str) -> str | None:
-    return LEGACY_SYSTEM_AVATAR_URLS.get(avatar_image_url)
+def system_avatar_asset_id_for_legacy_url(avatar_image_url: str | None) -> str | None:
+    if not avatar_image_url:
+        return None
+    return LEGACY_SYSTEM_AVATAR_URLS.get(avatar_image_url.strip())
 
 
-def legacy_avatar_file_path(logs_dir: str | Path, avatar_image_url: str) -> Path | None:
+def legacy_avatar_file_path(logs_dir: str | Path, avatar_image_url: str | None) -> Path | None:
+    if not avatar_image_url:
+        return None
+    avatar_image_url = avatar_image_url.strip()
     legacy_prefix = f"{settings.api_v1_prefix}/player-profiles/avatar/"
     if not avatar_image_url.startswith(legacy_prefix):
         return None
@@ -134,6 +148,59 @@ def legacy_avatar_file_path(logs_dir: str | Path, avatar_image_url: str) -> Path
     if Path(filename).name != filename:
         return None
     return Path(logs_dir) / "player_profile_assets" / filename
+
+
+def resolve_profile_avatar_reference(
+    db: Session,
+    *,
+    avatar_asset_id: str | None,
+    appearance_id: str | None,
+    avatar_image_url: str | None,
+    avatar_image_mime: str | None,
+    logs_dir: str | Path,
+) -> ResolvedAvatarReference:
+    trimmed_asset_id = avatar_asset_id.strip() if isinstance(avatar_asset_id, str) else ""
+    if trimmed_asset_id:
+        asset = db.get(PlayerAvatarAsset, trimmed_asset_id)
+        if asset is None:
+            raise ValueError("Avatar asset not found")
+        return ResolvedAvatarReference(
+            id=asset.id,
+            url=avatar_asset_url(asset.id),
+            mime=asset.content_type,
+        )
+
+    system_asset_id = system_avatar_asset_id_for_appearance(
+        appearance_id
+    ) or system_avatar_asset_id_for_legacy_url(avatar_image_url)
+    if system_asset_id is not None:
+        return ResolvedAvatarReference(
+            id=system_asset_id,
+            url=avatar_asset_url(system_asset_id),
+            mime="image/png",
+        )
+
+    legacy_path = legacy_avatar_file_path(logs_dir, avatar_image_url)
+    if legacy_path is not None:
+        if not legacy_path.is_file():
+            raise ValueError("Legacy avatar image file not found")
+        asset = create_avatar_asset(
+            db,
+            source="migrated",
+            content_type=avatar_image_mime or "",
+            data=legacy_path.read_bytes(),
+        )
+        return ResolvedAvatarReference(
+            id=asset.id,
+            url=avatar_asset_url(asset.id),
+            mime=asset.content_type,
+        )
+
+    return ResolvedAvatarReference(
+        id=None,
+        url=avatar_image_url or "",
+        mime=avatar_image_mime or "",
+    )
 
 
 class PlayerAvatarAssetStore:
