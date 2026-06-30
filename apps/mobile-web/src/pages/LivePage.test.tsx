@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
@@ -62,6 +64,8 @@ const gameStartedEvent: LiveGameEvent = {
     players: [
       { name: "阿青", role: "villager", model: "test-model" },
       { name: "白石", role: "werewolf", model: "test-model" },
+      { name: "南风", role: "seer", model: "test-model" },
+      { name: "木子", role: "witch", model: "test-model" },
     ],
   },
 };
@@ -108,11 +112,39 @@ describe("LivePage", () => {
   it("renders mobile live details for the route game id", async () => {
     renderLiveRoute();
 
-    expect(await screen.findByRole("heading", { name: "实时观战" })).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "实时观战" }),
+    ).toHaveClass("mobile-sr-only");
+    expect(
+      screen.getByRole("button", { name: "返回对局大厅" }),
+    ).toBeVisible();
     expect((await screen.findAllByText("经典 8 人"))[0]).toBeVisible();
     expect(screen.getByText("连接正常")).toBeVisible();
     expect(screen.getByText("game_started")).toBeVisible();
+    expect(screen.getByText("第 1 天")).toBeVisible();
+    expect(
+      screen.getByRole("region", { name: "玩家席位" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("article", { name: "1号 阿青 villager 等待" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("article", { name: "4号 木子 witch 等待" }),
+    ).toBeVisible();
     expect(gameClientMocks.getGameRun).toHaveBeenCalledWith("run-1");
     expect(gameClientMocks.useGameRunEvents).toHaveBeenCalledWith("run-1");
+  });
+
+  it("hides the bottom mobile tab bar on the immersive live page", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+
+    expect(styles).toContain(
+      ".mobile-app-shell:has(.mobile-live-page) .mobile-tab-bar",
+    );
+    expect(styles).toContain("display: none");
+    expect(styles).toContain(
+      ".mobile-app-shell:has(.mobile-live-page) .mobile-content-region",
+    );
+    expect(styles).toContain("padding-bottom: 0");
   });
 });
