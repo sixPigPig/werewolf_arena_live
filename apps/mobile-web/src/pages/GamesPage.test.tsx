@@ -236,10 +236,10 @@ describe("GamesPage", () => {
     const imageRule = styles.match(/\.mobile-lobby-rule-card-image\s*{[^}]+}/)?.[0];
     const pickerRule = styles.match(/\.mobile-lobby-rule-picker\s*{[^}]+}/)?.[0];
 
-    expect(pickerRule).toContain("gap: 2px");
+    expect(pickerRule).toContain("gap: 0");
     expect(scrollRule).toContain("grid-auto-columns: calc((100% - 8px) / 3)");
     expect(scrollRule).toContain("gap: 4px");
-    expect(scrollRule).toContain("padding: 0 1px 2px");
+    expect(scrollRule).toContain("padding: 0 1px 0");
     expect(imageRule).toContain("aspect-ratio: 3 / 4");
     expect(styles).not.toContain(".mobile-lobby-rule-card:focus-within");
     [
@@ -331,9 +331,10 @@ describe("GamesPage", () => {
       styles.match(/\.mobile-lobby-rule-dot-active::before\s*{[^}]+}/)?.[0] ?? "";
 
     expect(dotsRule).toContain("justify-content: center");
-    expect(dotsRule).toContain("min-height: 10px");
-    expect(dotRule).toContain("width: 36px");
-    expect(dotRule).toContain("height: 36px");
+    expect(dotsRule).toContain("gap: 4px");
+    expect(dotsRule).toContain("min-height: 20px");
+    expect(dotRule).toContain("width: 22px");
+    expect(dotRule).toContain("height: 20px");
     expect(dotRule).toContain("background: transparent");
     expect(dotBeforeRule).toContain("width: 7px");
     expect(dotBeforeRule).toContain("height: 7px");
@@ -574,7 +575,7 @@ describe("GamesPage", () => {
     expect(seatGridRule).toContain("grid-template-rows: repeat(2");
     expect(seatCardRule).toContain("min-height: 52px");
     expect(actionBarRule).toContain("grid-template-columns: repeat(4");
-    expect(actionBarRule).toContain("bottom: calc(68px");
+    expect(actionBarRule).toContain("bottom: calc(var(--mobile-tab-frame-height) + 6px");
   });
 
   it("searches profiles when a profile has no tags", async () => {

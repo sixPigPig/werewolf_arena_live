@@ -113,4 +113,24 @@ describe("mobile app scaffold", () => {
 
     expect(html.style.fontSize).toBe("37.5px");
   });
+
+  it("keeps mobile typography compact for phone reading", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const bodyRule = styles.match(/(?:^|\n)body\s*{[^}]+}/)?.[0] ?? "";
+    const pageTitleRule =
+      styles.match(/(?:^|\n)\.mobile-page h1\s*{[^}]+}/)?.[0] ?? "";
+    const buttonRule =
+      styles.match(/(?:^|\n)\.mobile-button\s*{[^}]+}/)?.[0] ?? "";
+    const liveEventRule =
+      styles.match(/(?:^|\n)\.mobile-live-event > strong\s*{[^}]+}/)?.[0] ?? "";
+    const drawerTitleRule =
+      styles.match(/(?:^|\n)\.mobile-profile-drawer-heading h2\s*{[^}]+}/)
+        ?.[0] ?? "";
+
+    expect(bodyRule).toContain("font-size: 14px");
+    expect(pageTitleRule).toContain("font-size: 20px");
+    expect(buttonRule).toContain("font-size: 13px");
+    expect(liveEventRule).toContain("font-size: 17px");
+    expect(drawerTitleRule).toContain("font-size: 16px");
+  });
 });
