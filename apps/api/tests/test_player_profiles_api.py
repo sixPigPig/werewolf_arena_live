@@ -542,6 +542,37 @@ def test_create_profile_migrates_explicit_legacy_uploaded_url_before_appearance(
     assert asset.data == PNG_BYTES
 
 
+def test_create_profile_migrates_legacy_uploaded_url_with_empty_mime(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    legacy_root = tmp_path / "player_profile_assets"
+    legacy_root.mkdir()
+    (legacy_root / "legacy.png").write_bytes(PNG_BYTES)
+    monkeypatch.setattr(player_profiles_routes.settings, "werewolf_logs_dir", str(tmp_path))
+
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "空 MIME 旧头像玩家",
+            "model": "gpt-4.1-mini",
+            "avatar_image_url": "/api/v1/player-profiles/avatar/legacy.png",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["avatar_asset_id"].startswith("migrated-")
+    assert payload["avatar_image_mime"] == "image/png"
+
+    with TestingSessionLocal() as session:
+        asset = session.get(PlayerAvatarAsset, payload["avatar_asset_id"])
+
+    assert asset is not None
+    assert asset.source == "migrated"
+    assert asset.content_type == "image/png"
+
+
 def test_create_profile_rejects_missing_legacy_uploaded_avatar_file() -> None:
     response = client.post(
         "/api/v1/player-profiles",
@@ -696,6 +727,45 @@ def test_patch_profile_binds_database_avatar_asset_from_explicit_url() -> None:
     assert stored.avatar_asset_id == uploaded["avatar_asset_id"]
 
 
+def test_patch_profile_clears_database_avatar_asset_when_set_to_null() -> None:
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "待清空头像玩家", "model": "gpt-4.1-mini"},
+    ).json()
+    uploaded = client.post(
+        "/api/v1/player-profiles/avatar",
+        json={
+            "filename": "portrait.png",
+            "content_type": "image/png",
+            "data_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+        },
+    ).json()
+    client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={"avatar_asset_id": uploaded["avatar_asset_id"]},
+    )
+
+    patch_response = client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={"avatar_asset_id": None},
+    )
+
+    assert patch_response.status_code == 200
+    patched = patch_response.json()
+    assert patched["avatar_asset_id"] is None
+    assert patched["avatar_image_url"] == ""
+    assert patched["avatar_image_mime"] == ""
+
+    with TestingSessionLocal() as session:
+        stored = session.get(VirtualPlayerProfile, created["id"])
+
+    assert stored is not None
+    assert stored.avatar_asset_id is None
+    assert stored.avatar_image_url == ""
+    assert stored.avatar_image_mime == ""
+    assert stored.avatar_image_path == ""
+
+
 def test_patch_profile_normalizes_legacy_system_avatar_url() -> None:
     created = client.post(
         "/api/v1/player-profiles",
@@ -772,6 +842,156 @@ def test_patch_profile_migrates_existing_legacy_uploaded_avatar_file(tmp_path, m
     assert asset.source == "migrated"
     assert asset.content_type == "image/png"
     assert asset.data == PNG_BYTES
+
+
+def test_patch_profile_migrates_legacy_uploaded_url_with_empty_mime(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    legacy_root = tmp_path / "player_profile_assets"
+    legacy_root.mkdir()
+    (legacy_root / "legacy.png").write_bytes(PNG_BYTES)
+    monkeypatch.setattr(player_profiles_routes.settings, "werewolf_logs_dir", str(tmp_path))
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "待迁移空 MIME 玩家", "model": "gpt-4.1-mini"},
+    ).json()
+
+    patch_response = client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={"avatar_image_url": "/api/v1/player-profiles/avatar/legacy.png"},
+    )
+
+    assert patch_response.status_code == 200
+    patched = patch_response.json()
+    assert patched["avatar_asset_id"].startswith("migrated-")
+    assert patched["avatar_image_mime"] == "image/png"
+
+    with TestingSessionLocal() as session:
+        asset = session.get(PlayerAvatarAsset, patched["avatar_asset_id"])
+
+    assert asset is not None
+    assert asset.source == "migrated"
+    assert asset.content_type == "image/png"
+
+
+def test_patch_display_name_only_preserves_missing_legacy_avatar_fields() -> None:
+    with TestingSessionLocal() as session:
+        profile = VirtualPlayerProfile(
+            id="profile-with-missing-legacy-avatar",
+            owner_user_id=None,
+            display_name="旧头像字段玩家",
+            model="gpt-4.1-mini",
+            personality_id="balanced",
+            personality_text="custom text",
+            appearance_id="default",
+            avatar_prompt="",
+            avatar_image_url="/api/v1/player-profiles/avatar/missing.png",
+            avatar_image_path="legacy/path/missing.png",
+            avatar_image_mime="image/png",
+            avatar_asset_id=None,
+            short_description="",
+            background_story="",
+            speaking_style="",
+            catchphrases=[],
+            strategy_profile="balanced",
+            risk_tolerance=3,
+            bluffing_tendency=3,
+            trust_tendency=3,
+            leadership_tendency=3,
+            talkativeness=3,
+            example_messages=[],
+            favorite=False,
+            tags=[],
+        )
+        session.add(profile)
+        session.commit()
+
+    patch_response = client.patch(
+        "/api/v1/player-profiles/profile-with-missing-legacy-avatar",
+        json={"display_name": "只改名字"},
+    )
+
+    assert patch_response.status_code == 200
+    patched = patch_response.json()
+    assert patched["display_name"] == "只改名字"
+    assert patched["avatar_asset_id"] is None
+    assert patched["avatar_image_url"] == "/api/v1/player-profiles/avatar/missing.png"
+    assert patched["avatar_image_mime"] == "image/png"
+
+    with TestingSessionLocal() as session:
+        stored = session.get(VirtualPlayerProfile, "profile-with-missing-legacy-avatar")
+
+    assert stored is not None
+    assert stored.display_name == "只改名字"
+    assert stored.avatar_asset_id is None
+    assert stored.avatar_image_url == "/api/v1/player-profiles/avatar/missing.png"
+    assert stored.avatar_image_mime == "image/png"
+    assert stored.avatar_image_path == "legacy/path/missing.png"
+
+
+def test_patch_display_name_only_does_not_rewrite_database_avatar_fields() -> None:
+    with TestingSessionLocal() as session:
+        asset = create_avatar_asset(
+            session,
+            asset_id="uploaded-preserve-on-name-change",
+            content_type="image/png",
+            data=PNG_BYTES,
+            source="uploaded",
+        )
+        profile = VirtualPlayerProfile(
+            id="profile-with-db-avatar-to-preserve",
+            owner_user_id=None,
+            display_name="DB 头像字段玩家",
+            model="gpt-4.1-mini",
+            personality_id="balanced",
+            personality_text="custom text",
+            appearance_id="default",
+            avatar_prompt="",
+            avatar_image_url="/legacy/stored-url.png",
+            avatar_image_path="legacy/path/stored.png",
+            avatar_image_mime="image/png",
+            avatar_asset_id=asset.id,
+            short_description="",
+            background_story="",
+            speaking_style="",
+            catchphrases=[],
+            strategy_profile="balanced",
+            risk_tolerance=3,
+            bluffing_tendency=3,
+            trust_tendency=3,
+            leadership_tendency=3,
+            talkativeness=3,
+            example_messages=[],
+            favorite=False,
+            tags=[],
+        )
+        session.add(profile)
+        session.commit()
+
+    patch_response = client.patch(
+        "/api/v1/player-profiles/profile-with-db-avatar-to-preserve",
+        json={"display_name": "只改 DB 头像玩家名字"},
+    )
+
+    assert patch_response.status_code == 200
+    patched = patch_response.json()
+    assert patched["display_name"] == "只改 DB 头像玩家名字"
+    assert patched["avatar_asset_id"] == "uploaded-preserve-on-name-change"
+    assert (
+        patched["avatar_image_url"]
+        == "/api/v1/player-profiles/avatar-assets/uploaded-preserve-on-name-change"
+    )
+
+    with TestingSessionLocal() as session:
+        stored = session.get(VirtualPlayerProfile, "profile-with-db-avatar-to-preserve")
+
+    assert stored is not None
+    assert stored.display_name == "只改 DB 头像玩家名字"
+    assert stored.avatar_asset_id == "uploaded-preserve-on-name-change"
+    assert stored.avatar_image_url == "/legacy/stored-url.png"
+    assert stored.avatar_image_mime == "image/png"
+    assert stored.avatar_image_path == "legacy/path/stored.png"
 
 
 def test_get_and_list_profiles_map_avatar_asset_id_to_asset_url() -> None:

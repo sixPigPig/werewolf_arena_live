@@ -615,22 +615,39 @@ def update_player_profile(
     _validate_presets(personality_id, appearance_id)
 
     try:
-        avatar_asset_id = updates.get(
+        avatar_update_fields = {
             "avatar_asset_id",
-            None if "avatar_image_url" in updates else profile.avatar_asset_id,
+            "avatar_image_url",
+            "avatar_image_mime",
+            "appearance_id",
+        }
+        should_resolve_avatar = any(field_name in updates for field_name in avatar_update_fields)
+        explicit_asset_clear = (
+            "avatar_asset_id" in updates and updates["avatar_asset_id"] is None
         )
-        resolved_avatar = resolve_profile_avatar_reference(
-            db,
-            avatar_asset_id=avatar_asset_id,
-            appearance_id=appearance_id,
-            avatar_image_url=updates.get("avatar_image_url", profile.avatar_image_url),
-            avatar_image_mime=updates.get("avatar_image_mime", profile.avatar_image_mime),
-            logs_dir=settings.werewolf_logs_dir,
-        )
-        updates["avatar_asset_id"] = resolved_avatar.id
-        updates["avatar_image_url"] = resolved_avatar.url
-        updates["avatar_image_mime"] = resolved_avatar.mime
-        updates["avatar_image_path"] = ""
+        explicit_avatar_url = updates.get("avatar_image_url", "")
+        if explicit_asset_clear and not explicit_avatar_url:
+            updates["avatar_asset_id"] = None
+            updates["avatar_image_url"] = ""
+            updates["avatar_image_mime"] = ""
+            updates["avatar_image_path"] = ""
+        elif should_resolve_avatar:
+            avatar_asset_id = updates.get(
+                "avatar_asset_id",
+                None if "avatar_image_url" in updates else profile.avatar_asset_id,
+            )
+            resolved_avatar = resolve_profile_avatar_reference(
+                db,
+                avatar_asset_id=avatar_asset_id,
+                appearance_id=appearance_id,
+                avatar_image_url=updates.get("avatar_image_url", profile.avatar_image_url),
+                avatar_image_mime=updates.get("avatar_image_mime", profile.avatar_image_mime),
+                logs_dir=settings.werewolf_logs_dir,
+            )
+            updates["avatar_asset_id"] = resolved_avatar.id
+            updates["avatar_image_url"] = resolved_avatar.url
+            updates["avatar_image_mime"] = resolved_avatar.mime
+            updates["avatar_image_path"] = ""
 
         for field_name, value in updates.items():
             setattr(profile, field_name, value)

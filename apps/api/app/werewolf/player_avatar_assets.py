@@ -51,6 +51,17 @@ def avatar_asset_url(asset_id: str) -> str:
     return f"{settings.api_v1_prefix}/player-profiles/avatar-assets/{asset_id}"
 
 
+def avatar_content_type_for_filename(filename_or_path: str | Path) -> str:
+    suffix = Path(filename_or_path).suffix.lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    return "application/octet-stream"
+
+
 def avatar_asset_id_for_url(url: str | None) -> str | None:
     if not url:
         return None
@@ -211,7 +222,7 @@ def resolve_profile_avatar_reference(
             asset = create_avatar_asset(
                 db,
                 source="migrated",
-                content_type=avatar_image_mime or "",
+                content_type=avatar_image_mime or avatar_content_type_for_filename(legacy_path),
                 data=legacy_path.read_bytes(),
             )
             return ResolvedAvatarReference(
@@ -271,14 +282,7 @@ class PlayerAvatarAssetStore:
         return path
 
     def content_type_for(self, filename: str) -> str:
-        suffix = Path(filename).suffix.lower()
-        if suffix == ".png":
-            return "image/png"
-        if suffix in {".jpg", ".jpeg"}:
-            return "image/jpeg"
-        if suffix == ".webp":
-            return "image/webp"
-        return "application/octet-stream"
+        return avatar_content_type_for_filename(filename)
 
 
 def player_avatar_asset_store_for_logs_dir(logs_dir: str | Path) -> PlayerAvatarAssetStore:
