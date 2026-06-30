@@ -10,12 +10,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes import player_profiles as player_profiles_routes
-from app.api.routes.player_profiles import get_player_avatar_asset_store
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
-from app.werewolf.player_avatar_assets import PlayerAvatarAssetStore
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.player_profile_store import PlayerProfileFileStore
 from app.werewolf.player_presets import default_personality_text
@@ -43,12 +42,14 @@ def isolated_db() -> Generator[None, None, None]:
     app.dependency_overrides[get_db] = override_get_db
     with TestingSessionLocal() as session:
         session.query(VirtualPlayerProfile).delete()
+        session.query(PlayerAvatarAsset).delete()
         session.query(User).delete()
         session.commit()
     yield
     app.dependency_overrides.clear()
     with TestingSessionLocal() as session:
         session.query(VirtualPlayerProfile).delete()
+        session.query(PlayerAvatarAsset).delete()
         session.query(User).delete()
         session.commit()
 
@@ -288,47 +289,57 @@ def test_create_profile_returns_rich_character_defaults() -> None:
     assert payload["favorite"] is False
 
 
-def test_upload_avatar_image_returns_served_asset_url(tmp_path) -> None:
-    app.dependency_overrides[get_player_avatar_asset_store] = lambda: PlayerAvatarAssetStore(
-        tmp_path / "player_profile_assets"
+def test_upload_avatar_image_returns_database_asset_url() -> None:
+    response = client.post(
+        "/api/v1/player-profiles/avatar",
+        json={
+            "filename": "portrait.png",
+            "content_type": "image/png",
+            "data_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+        },
     )
-    try:
-        response = client.post(
-            "/api/v1/player-profiles/avatar",
-            json={
-                "filename": "portrait.png",
-                "content_type": "image/png",
-                "data_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
-            },
-        )
-        payload = response.json()
-        served_response = client.get(payload["avatar_image_url"])
-    finally:
-        app.dependency_overrides.clear()
+    payload = response.json()
+    served_response = client.get(payload["avatar_image_url"])
 
     assert response.status_code == 201
-    assert payload["avatar_image_url"].startswith("/api/v1/player-profiles/avatar/")
+    asset_id = payload["avatar_asset_id"]
+    assert asset_id.startswith("uploaded-")
+    assert payload["avatar_image_url"] == f"/api/v1/player-profiles/avatar-assets/{asset_id}"
     assert payload["avatar_image_mime"] == "image/png"
     assert served_response.status_code == 200
     assert served_response.headers["content-type"] == "image/png"
+    assert (
+        served_response.headers["cache-control"]
+        == "public, max-age=31536000, immutable"
+    )
     assert served_response.content == PNG_BYTES
 
+    with TestingSessionLocal() as session:
+        asset = session.get(PlayerAvatarAsset, asset_id)
 
-def test_upload_avatar_image_rejects_unsupported_type(tmp_path) -> None:
-    app.dependency_overrides[get_player_avatar_asset_store] = lambda: PlayerAvatarAssetStore(
-        tmp_path / "player_profile_assets"
+    assert asset is not None
+    assert asset.source == "uploaded"
+    assert asset.content_type == "image/png"
+    assert asset.data == PNG_BYTES
+    assert asset.size_bytes == len(PNG_BYTES)
+
+
+def test_get_avatar_asset_returns_404_for_missing_asset() -> None:
+    response = client.get("/api/v1/player-profiles/avatar-assets/missing-asset")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Avatar asset not found"
+
+
+def test_upload_avatar_image_rejects_unsupported_type() -> None:
+    response = client.post(
+        "/api/v1/player-profiles/avatar",
+        json={
+            "filename": "portrait.txt",
+            "content_type": "text/plain",
+            "data_base64": base64.b64encode(b"not an image").decode("ascii"),
+        },
     )
-    try:
-        response = client.post(
-            "/api/v1/player-profiles/avatar",
-            json={
-                "filename": "portrait.txt",
-                "content_type": "text/plain",
-                "data_base64": base64.b64encode(b"not an image").decode("ascii"),
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Unsupported avatar image type"

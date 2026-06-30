@@ -13,10 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
+from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.player_avatar_assets import (
     PlayerAvatarAssetStore,
+    avatar_asset_url,
     player_avatar_asset_store_for_logs_dir,
+    save_uploaded_avatar_asset,
 )
 from app.werewolf.player_presets import (
     default_personality_text,
@@ -304,6 +307,7 @@ class AvatarUploadRequest(BaseModel):
 
 
 class AvatarUploadResponse(BaseModel):
+    avatar_asset_id: str
     avatar_image_url: str
     avatar_image_mime: str
 
@@ -419,19 +423,45 @@ def get_player_profile_ai_provider():
 @router.post("/avatar", response_model=AvatarUploadResponse, status_code=201)
 def upload_player_avatar(
     request: AvatarUploadRequest,
-    store: Annotated[PlayerAvatarAssetStore, Depends(get_player_avatar_asset_store)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> AvatarUploadResponse:
     try:
-        asset = store.save(
+        asset = save_uploaded_avatar_asset(
+            db,
             content_type=request.content_type,
             data_base64=request.data_base64,
         )
+        db.commit()
+        db.refresh(asset)
     except ValueError as exc:
+        db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RecoverableDatabaseError as exc:
+        db.rollback()
+        raise _profile_database_unavailable() from exc
 
     return AvatarUploadResponse(
-        avatar_image_url=f"{settings.api_v1_prefix}/player-profiles/avatar/{asset.filename}",
+        avatar_asset_id=asset.id,
+        avatar_image_url=avatar_asset_url(asset.id),
         avatar_image_mime=asset.content_type,
+    )
+
+
+@router.get("/avatar-assets/{asset_id}")
+def get_player_avatar_asset(
+    asset_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    try:
+        asset = db.get(PlayerAvatarAsset, asset_id)
+    except RecoverableDatabaseError as exc:
+        raise _profile_database_unavailable() from exc
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Avatar asset not found")
+    return Response(
+        content=asset.data,
+        media_type=asset.content_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
 
 
