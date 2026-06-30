@@ -1622,6 +1622,64 @@ textarea {
   }
 }
 
+@media (max-height: 700px) {
+  .mobile-live-theater {
+    grid-template-rows: auto minmax(128px, 22svh) minmax(0, 1fr) auto;
+    padding: calc(8px + env(safe-area-inset-top)) 8px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-live-sky {
+    min-height: 128px;
+  }
+
+  .mobile-live-sky-orb {
+    width: min(64vw, 220px);
+  }
+
+  .mobile-live-day-banner {
+    top: 44px;
+    min-height: 48px;
+  }
+
+  .mobile-live-day-banner strong {
+    font-size: 24px;
+  }
+
+  .mobile-live-seat-column {
+    gap: 3px;
+  }
+
+  .mobile-live-seat-avatar {
+    width: clamp(32px, 10.8vw, 40px);
+  }
+
+  .mobile-live-seat strong {
+    font-size: 10px;
+  }
+
+  .mobile-live-seat small {
+    display: none;
+  }
+
+  .mobile-live-center-stage {
+    gap: 3px;
+    padding: 8px 6px 10px;
+  }
+
+  .mobile-live-presenter {
+    width: clamp(70px, 23vw, 92px);
+  }
+
+  .mobile-live-focus-strip {
+    min-height: 44px;
+  }
+
+  .mobile-live-action-bar .mobile-button,
+  .mobile-live-link {
+    min-height: 36px;
+  }
+}
+
 .mobile-replay-details {
   border: 1px solid rgb(244 232 210 / 12%);
   border-radius: 8px;

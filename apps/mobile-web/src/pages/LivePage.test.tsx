@@ -149,4 +149,15 @@ describe("LivePage", () => {
     expect(tabBarRule).toContain("display: none");
     expect(contentRegionRule).toContain("padding-bottom: 0");
   });
+
+  it("compresses theater seats on short phone screens", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+
+    expect(styles).toMatch(
+      /@media \(max-height: 700px\) {[\s\S]*?\.mobile-live-seat-avatar\s*{[^}]+width: clamp\(32px, 10\.8vw, 40px\)/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-height: 700px\) {[\s\S]*?\.mobile-live-seat small\s*{[^}]+display: none/,
+    );
+  });
 });
