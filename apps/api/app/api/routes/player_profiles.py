@@ -431,6 +431,8 @@ def upload_player_avatar(
             content_type=request.content_type,
             data_base64=request.data_base64,
         )
+        asset_id = asset.id
+        asset_content_type = asset.content_type
         db.commit()
     except ValueError as exc:
         db.rollback()
@@ -440,9 +442,9 @@ def upload_player_avatar(
         raise _profile_database_unavailable() from exc
 
     return AvatarUploadResponse(
-        avatar_asset_id=asset.id,
-        avatar_image_url=avatar_asset_url(asset.id),
-        avatar_image_mime=asset.content_type,
+        avatar_asset_id=asset_id,
+        avatar_image_url=avatar_asset_url(asset_id),
+        avatar_image_mime=asset_content_type,
     )
 
 
