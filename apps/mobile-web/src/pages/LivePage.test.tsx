@@ -56,8 +56,8 @@ const gameStartedEvent: LiveGameEvent = {
   run_id: "run-1",
   session_id: "session-1",
   created_at: "2026-06-19T00:00:02Z",
-  round: null,
-  phase: null,
+  round: 1,
+  phase: "day",
   actor: null,
   action: null,
   payload: {
@@ -126,10 +126,10 @@ describe("LivePage", () => {
       screen.getByRole("region", { name: "玩家席位" }),
     ).toBeVisible();
     expect(
-      screen.getByRole("article", { name: "1号 阿青 villager 等待" }),
+      screen.getByRole("article", { name: "1号 阿青 平民 存活" }),
     ).toBeVisible();
     expect(
-      screen.getByRole("article", { name: "4号 木子 witch 等待" }),
+      screen.getByRole("article", { name: "4号 木子 女巫 存活" }),
     ).toBeVisible();
     expect(gameClientMocks.getGameRun).toHaveBeenCalledWith("run-1");
     expect(gameClientMocks.useGameRunEvents).toHaveBeenCalledWith("run-1");
@@ -137,14 +137,16 @@ describe("LivePage", () => {
 
   it("hides the bottom mobile tab bar on the immersive live page", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
+    const tabBarRule =
+      styles.match(
+        /\.mobile-app-shell:has\(\.mobile-live-page\) \.mobile-tab-bar\s*{[^}]+}/,
+      )?.[0] ?? "";
+    const contentRegionRule =
+      styles.match(
+        /\.mobile-app-shell:has\(\.mobile-live-page\) \.mobile-content-region\s*{[^}]+}/,
+      )?.[0] ?? "";
 
-    expect(styles).toContain(
-      ".mobile-app-shell:has(.mobile-live-page) .mobile-tab-bar",
-    );
-    expect(styles).toContain("display: none");
-    expect(styles).toContain(
-      ".mobile-app-shell:has(.mobile-live-page) .mobile-content-region",
-    );
-    expect(styles).toContain("padding-bottom: 0");
+    expect(tabBarRule).toContain("display: none");
+    expect(contentRegionRule).toContain("padding-bottom: 0");
   });
 });
