@@ -504,6 +504,44 @@ def test_create_profile_normalizes_legacy_system_avatar_url() -> None:
     assert payload["avatar_image_mime"] == "image/png"
 
 
+def test_create_profile_migrates_explicit_legacy_uploaded_url_before_appearance(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    legacy_root = tmp_path / "player_profile_assets"
+    legacy_root.mkdir()
+    (legacy_root / "legacy.png").write_bytes(PNG_BYTES)
+    monkeypatch.setattr(player_profiles_routes.settings, "werewolf_logs_dir", str(tmp_path))
+
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "显式旧头像玩家",
+            "model": "gpt-4.1-mini",
+            "appearance_id": "gothic-male-1",
+            "avatar_image_url": "/api/v1/player-profiles/avatar/legacy.png",
+            "avatar_image_mime": "image/png",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["avatar_asset_id"].startswith("migrated-")
+    assert payload["avatar_asset_id"] != "system-gothic-male-1"
+    assert (
+        payload["avatar_image_url"]
+        == f"/api/v1/player-profiles/avatar-assets/{payload['avatar_asset_id']}"
+    )
+
+    with TestingSessionLocal() as session:
+        asset = session.get(PlayerAvatarAsset, payload["avatar_asset_id"])
+
+    assert asset is not None
+    assert asset.source == "migrated"
+    assert asset.content_type == "image/png"
+    assert asset.data == PNG_BYTES
+
+
 def test_create_profile_rejects_missing_legacy_uploaded_avatar_file() -> None:
     response = client.post(
         "/api/v1/player-profiles",
@@ -517,6 +555,77 @@ def test_create_profile_rejects_missing_legacy_uploaded_avatar_file() -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Legacy avatar image file not found"
+
+
+def test_create_profile_rejects_missing_explicit_legacy_url_before_appearance() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "缺失显式旧头像玩家",
+            "model": "gpt-4.1-mini",
+            "appearance_id": "gothic-male-1",
+            "avatar_image_url": "/api/v1/player-profiles/avatar/missing.png",
+            "avatar_image_mime": "image/png",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Legacy avatar image file not found"
+
+
+def test_create_profile_preserves_explicit_external_avatar_url_before_appearance() -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "外部头像玩家",
+            "model": "gpt-4.1-mini",
+            "appearance_id": "gothic-female-2",
+            "avatar_image_url": "https://example.test/avatar.png",
+            "avatar_image_mime": "image/png",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["avatar_asset_id"] is None
+    assert payload["avatar_image_url"] == "https://example.test/avatar.png"
+    assert payload["avatar_image_mime"] == "image/png"
+
+    with TestingSessionLocal() as session:
+        profile = session.get(VirtualPlayerProfile, payload["id"])
+
+    assert profile is not None
+    assert profile.avatar_asset_id is None
+    assert profile.avatar_image_url == "https://example.test/avatar.png"
+
+
+def test_create_profile_binds_database_avatar_asset_from_explicit_url() -> None:
+    with TestingSessionLocal() as session:
+        asset = create_avatar_asset(
+            session,
+            asset_id="uploaded-url-only-avatar",
+            content_type="image/png",
+            data=PNG_BYTES,
+            source="uploaded",
+        )
+        asset_id = asset.id
+        session.commit()
+
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "URL 绑定头像玩家",
+            "model": "gpt-4.1-mini",
+            "appearance_id": "gothic-male-1",
+            "avatar_image_url": "/api/v1/player-profiles/avatar-assets/uploaded-url-only-avatar",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["avatar_asset_id"] == asset_id
+    assert payload["avatar_image_url"] == "/api/v1/player-profiles/avatar-assets/uploaded-url-only-avatar"
+    assert payload["avatar_image_mime"] == "image/png"
 
 
 def test_patch_profile_binds_database_avatar_asset_id() -> None:
@@ -552,6 +661,39 @@ def test_patch_profile_binds_database_avatar_asset_id() -> None:
     assert stored.avatar_asset_id == uploaded["avatar_asset_id"]
     assert stored.avatar_image_url == uploaded["avatar_image_url"]
     assert stored.avatar_image_path == ""
+
+
+def test_patch_profile_binds_database_avatar_asset_from_explicit_url() -> None:
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "待 URL 绑定头像玩家", "model": "gpt-4.1-mini"},
+    ).json()
+    upload_response = client.post(
+        "/api/v1/player-profiles/avatar",
+        json={
+            "filename": "portrait.png",
+            "content_type": "image/png",
+            "data_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+        },
+    )
+    uploaded = upload_response.json()
+
+    patch_response = client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={"avatar_image_url": uploaded["avatar_image_url"]},
+    )
+
+    assert patch_response.status_code == 200
+    patched = patch_response.json()
+    assert patched["avatar_asset_id"] == uploaded["avatar_asset_id"]
+    assert patched["avatar_image_url"] == uploaded["avatar_image_url"]
+    assert patched["avatar_image_mime"] == "image/png"
+
+    with TestingSessionLocal() as session:
+        stored = session.get(VirtualPlayerProfile, created["id"])
+
+    assert stored is not None
+    assert stored.avatar_asset_id == uploaded["avatar_asset_id"]
 
 
 def test_patch_profile_normalizes_legacy_system_avatar_url() -> None:

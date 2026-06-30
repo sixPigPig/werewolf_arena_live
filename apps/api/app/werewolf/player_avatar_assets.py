@@ -51,6 +51,19 @@ def avatar_asset_url(asset_id: str) -> str:
     return f"{settings.api_v1_prefix}/player-profiles/avatar-assets/{asset_id}"
 
 
+def avatar_asset_id_for_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    url = url.strip()
+    asset_prefix = f"{settings.api_v1_prefix}/player-profiles/avatar-assets/"
+    if not url.startswith(asset_prefix):
+        return None
+    asset_id = url.removeprefix(asset_prefix)
+    if not asset_id or Path(asset_id).name != asset_id:
+        return None
+    return asset_id
+
+
 def normalize_avatar_content_type(content_type: str) -> str:
     normalized_type = content_type.lower().strip()
     if normalized_type == "image/jpg":
@@ -170,9 +183,50 @@ def resolve_profile_avatar_reference(
             mime=asset.content_type,
         )
 
-    system_asset_id = system_avatar_asset_id_for_appearance(
-        appearance_id
-    ) or system_avatar_asset_id_for_legacy_url(avatar_image_url)
+    trimmed_url = avatar_image_url.strip() if isinstance(avatar_image_url, str) else ""
+    if trimmed_url:
+        system_asset_id = system_avatar_asset_id_for_legacy_url(trimmed_url)
+        if system_asset_id is not None:
+            return ResolvedAvatarReference(
+                id=system_asset_id,
+                url=avatar_asset_url(system_asset_id),
+                mime="image/png",
+            )
+
+        url_asset_id = avatar_asset_id_for_url(trimmed_url)
+        if url_asset_id is not None:
+            asset = db.get(PlayerAvatarAsset, url_asset_id)
+            if asset is None:
+                raise ValueError("Avatar asset not found")
+            return ResolvedAvatarReference(
+                id=asset.id,
+                url=avatar_asset_url(asset.id),
+                mime=asset.content_type,
+            )
+
+        legacy_path = legacy_avatar_file_path(logs_dir, trimmed_url)
+        if legacy_path is not None:
+            if not legacy_path.is_file():
+                raise ValueError("Legacy avatar image file not found")
+            asset = create_avatar_asset(
+                db,
+                source="migrated",
+                content_type=avatar_image_mime or "",
+                data=legacy_path.read_bytes(),
+            )
+            return ResolvedAvatarReference(
+                id=asset.id,
+                url=avatar_asset_url(asset.id),
+                mime=asset.content_type,
+            )
+
+        return ResolvedAvatarReference(
+            id=None,
+            url=trimmed_url,
+            mime=avatar_image_mime or "",
+        )
+
+    system_asset_id = system_avatar_asset_id_for_appearance(appearance_id)
     if system_asset_id is not None:
         return ResolvedAvatarReference(
             id=system_asset_id,
@@ -180,25 +234,9 @@ def resolve_profile_avatar_reference(
             mime="image/png",
         )
 
-    legacy_path = legacy_avatar_file_path(logs_dir, avatar_image_url)
-    if legacy_path is not None:
-        if not legacy_path.is_file():
-            raise ValueError("Legacy avatar image file not found")
-        asset = create_avatar_asset(
-            db,
-            source="migrated",
-            content_type=avatar_image_mime or "",
-            data=legacy_path.read_bytes(),
-        )
-        return ResolvedAvatarReference(
-            id=asset.id,
-            url=avatar_asset_url(asset.id),
-            mime=asset.content_type,
-        )
-
     return ResolvedAvatarReference(
         id=None,
-        url=avatar_image_url or "",
+        url="",
         mime=avatar_image_mime or "",
     )
 

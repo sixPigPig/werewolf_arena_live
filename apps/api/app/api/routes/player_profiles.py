@@ -615,9 +615,13 @@ def update_player_profile(
     _validate_presets(personality_id, appearance_id)
 
     try:
+        avatar_asset_id = updates.get(
+            "avatar_asset_id",
+            None if "avatar_image_url" in updates else profile.avatar_asset_id,
+        )
         resolved_avatar = resolve_profile_avatar_reference(
             db,
-            avatar_asset_id=updates.get("avatar_asset_id", profile.avatar_asset_id),
+            avatar_asset_id=avatar_asset_id,
             appearance_id=appearance_id,
             avatar_image_url=updates.get("avatar_image_url", profile.avatar_image_url),
             avatar_image_mime=updates.get("avatar_image_mime", profile.avatar_image_mime),
