@@ -10,12 +10,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes import player_profiles as player_profiles_routes
+from app.api.routes.player_profiles import get_player_avatar_asset_store
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.werewolf.player_avatar_assets import PlayerAvatarAssetStore, create_avatar_asset
 from app.werewolf.player_profile_store import PlayerProfileFileStore
 from app.werewolf.player_presets import default_personality_text
 
@@ -324,11 +326,114 @@ def test_upload_avatar_image_returns_database_asset_url() -> None:
     assert asset.size_bytes == len(PNG_BYTES)
 
 
+def test_upload_avatar_image_normalizes_jpg_alias_and_reuses_database_asset() -> None:
+    first_response = client.post(
+        "/api/v1/player-profiles/avatar",
+        json={
+            "filename": "portrait.jpg",
+            "content_type": "image/jpg",
+            "data_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+        },
+    )
+    second_response = client.post(
+        "/api/v1/player-profiles/avatar",
+        json={
+            "filename": "portrait.jpeg",
+            "content_type": " image/jpeg ",
+            "data_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+        },
+    )
+    first_payload = first_response.json()
+    second_payload = second_response.json()
+    served_response = client.get(first_payload["avatar_image_url"])
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+    assert first_payload["avatar_asset_id"] == second_payload["avatar_asset_id"]
+    assert first_payload["avatar_image_mime"] == "image/jpeg"
+    assert second_payload["avatar_image_mime"] == "image/jpeg"
+    assert served_response.status_code == 200
+    assert served_response.headers["content-type"] == "image/jpeg"
+    assert served_response.content == PNG_BYTES
+
+
+def test_create_avatar_asset_normalizes_content_type_for_dedupe() -> None:
+    with TestingSessionLocal() as session:
+        first_asset = create_avatar_asset(
+            session,
+            content_type="image/jpg",
+            data=PNG_BYTES,
+            source="uploaded",
+        )
+        session.commit()
+        first_asset_id = first_asset.id
+
+        second_asset = create_avatar_asset(
+            session,
+            content_type=" image/jpeg ",
+            data=PNG_BYTES,
+            source="uploaded",
+        )
+        session.commit()
+
+        assets = session.query(PlayerAvatarAsset).all()
+
+    assert second_asset.id == first_asset_id
+    assert len(assets) == 1
+    assert assets[0].content_type == "image/jpeg"
+
+
 def test_get_avatar_asset_returns_404_for_missing_asset() -> None:
     response = client.get("/api/v1/player-profiles/avatar-assets/missing-asset")
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Avatar asset not found"
+
+
+def test_upload_avatar_image_returns_503_when_database_is_unavailable() -> None:
+    app.dependency_overrides[get_db] = override_broken_db
+    try:
+        response = client.post(
+            "/api/v1/player-profiles/avatar",
+            json={
+                "filename": "portrait.png",
+                "content_type": "image/png",
+                "data_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Player profile database unavailable"
+
+
+def test_get_avatar_asset_returns_503_when_database_is_unavailable() -> None:
+    app.dependency_overrides[get_db] = override_broken_db
+    try:
+        response = client.get("/api/v1/player-profiles/avatar-assets/uploaded-missing")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Player profile database unavailable"
+
+
+def test_legacy_avatar_file_route_serves_existing_file(tmp_path) -> None:
+    asset_root = tmp_path / "player_profile_assets"
+    asset_root.mkdir()
+    (asset_root / "legacy.png").write_bytes(PNG_BYTES)
+    app.dependency_overrides[get_player_avatar_asset_store] = lambda: PlayerAvatarAssetStore(
+        asset_root
+    )
+    try:
+        response = client.get("/api/v1/player-profiles/avatar/legacy.png")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content == PNG_BYTES
 
 
 def test_upload_avatar_image_rejects_unsupported_type() -> None:

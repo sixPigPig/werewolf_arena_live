@@ -74,12 +74,13 @@ def create_avatar_asset(
     source: str,
     asset_id: str | None = None,
 ) -> PlayerAvatarAsset:
+    normalized_type = normalize_avatar_content_type(content_type)
     sha256 = hashlib.sha256(data).hexdigest()
     existing = (
         db.query(PlayerAvatarAsset)
         .filter(
             PlayerAvatarAsset.sha256 == sha256,
-            PlayerAvatarAsset.content_type == content_type,
+            PlayerAvatarAsset.content_type == normalized_type,
             PlayerAvatarAsset.source == source,
         )
         .first()
@@ -90,7 +91,7 @@ def create_avatar_asset(
     asset = PlayerAvatarAsset(
         id=asset_id or f"{source}-{uuid.uuid4().hex}",
         source=source,
-        content_type=content_type,
+        content_type=normalized_type,
         data=data,
         sha256=sha256,
         size_bytes=len(data),

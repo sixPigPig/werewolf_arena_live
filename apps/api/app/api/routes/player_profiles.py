@@ -432,7 +432,6 @@ def upload_player_avatar(
             data_base64=request.data_base64,
         )
         db.commit()
-        db.refresh(asset)
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
