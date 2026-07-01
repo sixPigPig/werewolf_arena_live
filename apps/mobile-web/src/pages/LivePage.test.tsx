@@ -218,11 +218,31 @@ describe("LivePage", () => {
     expect(contentRegionRule).toContain("padding-bottom: 0");
   });
 
+  it("uses gothic spectator surfaces for the mobile live theater", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const pageRule =
+      styles.match(/(?:^|\n)\.mobile-live-page\s*{[^}]+}/)?.[0] ?? "";
+    const theaterBeforeRule =
+      styles.match(/\.mobile-live-theater::before\s*{[^}]+}/)?.[0] ?? "";
+    const skyOrbRule =
+      styles.match(/(?:^|\n)\.mobile-live-sky-orb\s*{[^}]+}/)?.[0] ?? "";
+    const presenterRule =
+      styles.match(/(?:^|\n)\.mobile-live-presenter\s*{[^}]+}/)?.[0] ?? "";
+    const focusRule =
+      styles.match(/(?:^|\n)\.mobile-live-focus-strip\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(pageRule).toContain("mobile-gothic-castle-background.png");
+    expect(theaterBeforeRule).toContain("linear-gradient(180deg");
+    expect(skyOrbRule).toContain("border: 4px double");
+    expect(presenterRule).toContain("aspect-ratio: 0.66");
+    expect(focusRule).toContain("grid-template-columns: 42px minmax(0, 1fr) auto");
+  });
+
   it("compresses theater seats on short phone screens", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
 
     expect(styles).toMatch(
-      /@media \(max-height: 700px\) {[\s\S]*?\.mobile-live-seat-avatar\s*{[^}]+width: clamp\(32px, 10\.8vw, 40px\)/,
+      /@media \(max-height: 700px\) {[\s\S]*?\.mobile-live-seat-avatar\s*{[^}]+width: clamp\(34px, 10\.8vw, 42px\)/,
     );
     expect(styles).toMatch(
       /@media \(max-height: 700px\) {[\s\S]*?\.mobile-live-seat small\s*{[^}]+display: none/,
