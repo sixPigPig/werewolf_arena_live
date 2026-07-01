@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -183,6 +184,23 @@ describe("LivePage", () => {
       "src",
       "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
     );
+  });
+
+  it("does not reveal a future speaker delta while playback is paused", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, speakingDeltaEvent],
+      latestEvent: speakingDeltaEvent,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+
+    await user.click(await screen.findByRole("button", { name: "暂停" }));
+    expect(screen.getByRole("button", { name: "继续" })).toBeVisible();
+
+    const stage = await screen.findByRole("region", { name: "当前舞台" });
+    expect(within(stage).queryByText("阿青")).not.toBeInTheDocument();
   });
 
   it("hides the bottom mobile tab bar on the immersive live page", () => {

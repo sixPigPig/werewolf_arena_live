@@ -55,6 +55,7 @@ export function LivePage() {
 
     const visibleEvents = events.filter((event) => event.id <= currentEventId);
     if (
+      !director.isPaused &&
       latestEvent &&
       latestEvent.id > currentEventId &&
       isLiveSpeakerDelta(latestEvent) &&
@@ -64,7 +65,7 @@ export function LivePage() {
     }
 
     return visibleEvents;
-  }, [director.currentEventId, events, latestEvent]);
+  }, [director.currentEventId, director.isPaused, events, latestEvent]);
   const currentEvent =
     stageEvents.find((event) => event.id === director.currentEventId) ??
     latestEvent;
