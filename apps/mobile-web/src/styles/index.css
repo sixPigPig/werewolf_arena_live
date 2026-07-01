@@ -1179,9 +1179,9 @@ textarea {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 50% 17%, rgb(187 239 255 / 28%) 0 12%, rgb(97 178 205 / 15%) 23%, transparent 41%),
+    radial-gradient(circle at 50% 18%, rgb(174 218 229 / 14%) 0 10%, rgb(73 130 151 / 9%) 22%, transparent 42%),
     linear-gradient(90deg, rgb(4 5 9 / 78%), transparent 21% 79%, rgb(4 5 9 / 82%)),
-    linear-gradient(180deg, rgb(4 6 12 / 14%) 0 42%, rgb(8 5 5 / 58%) 100%);
+    linear-gradient(180deg, rgb(3 5 10 / 12%) 0 38%, rgb(8 5 5 / 64%) 100%);
   pointer-events: none;
   content: "";
 }
@@ -1350,19 +1350,37 @@ textarea {
 }
 
 .mobile-live-sky-orb {
-  width: min(74vw, 310px);
+  position: relative;
+  width: min(66vw, 268px);
   aspect-ratio: 1;
   box-sizing: border-box;
   border: 4px double rgb(215 174 91 / 82%);
   border-radius: 999px;
   background:
-    radial-gradient(circle at 38% 28%, #f5fcff 0 12%, #c9eef5 18%, #7dc6d9 36%, #29576e 68%, #0a1720 100%);
+    radial-gradient(circle at 52% 35%, rgb(244 250 250 / 92%) 0 8%, rgb(175 207 212 / 56%) 9% 15%, transparent 16%),
+    radial-gradient(ellipse at 50% 48%, rgb(35 54 66 / 54%) 0 42%, rgb(5 9 14 / 80%) 68%, rgb(0 0 0 / 24%) 100%),
+    linear-gradient(180deg, rgb(8 14 20 / 74%), rgb(3 5 9 / 86%));
   box-shadow:
-    inset 0 0 0 9px rgb(5 8 12 / 72%),
-    inset 0 0 0 13px rgb(166 118 47 / 46%),
+    inset 0 0 0 8px rgb(5 8 12 / 76%),
+    inset 0 0 0 12px rgb(166 118 47 / 48%),
     inset -18px -24px 34px rgb(0 0 0 / 38%),
-    0 0 24px rgb(172 234 255 / 28%),
+    0 0 18px rgb(172 234 255 / 16%),
     0 12px 28px rgb(0 0 0 / 44%);
+}
+
+.mobile-live-sky-orb::before {
+  position: absolute;
+  inset: 16px;
+  border: 1px solid rgb(222 180 93 / 26%);
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, transparent 0 49%, rgb(222 180 93 / 32%) 49% 51%, transparent 51%),
+    linear-gradient(0deg, transparent 0 49%, rgb(222 180 93 / 22%) 49% 51%, transparent 51%);
+  box-shadow:
+    inset 0 0 24px rgb(0 0 0 / 44%),
+    0 0 18px rgb(0 0 0 / 34%);
+  pointer-events: none;
+  content: "";
 }
 
 .mobile-live-day-banner {
@@ -1768,7 +1786,7 @@ textarea {
   }
 
   .mobile-live-sky-orb {
-    width: min(62vw, 218px);
+    width: min(58vw, 204px);
   }
 
   .mobile-live-day-banner {

@@ -56,6 +56,7 @@ export function LivePage() {
     const visibleEvents = events.filter((event) => event.id <= currentEventId);
     if (
       !director.isPaused &&
+      director.backlogCount === 0 &&
       latestEvent &&
       latestEvent.id > currentEventId &&
       isLiveSpeakerDelta(latestEvent) &&
@@ -65,10 +66,14 @@ export function LivePage() {
     }
 
     return visibleEvents;
-  }, [director.currentEventId, director.isPaused, events, latestEvent]);
-  const currentEvent =
-    stageEvents.find((event) => event.id === director.currentEventId) ??
-    latestEvent;
+  }, [
+    director.backlogCount,
+    director.currentEventId,
+    director.isPaused,
+    events,
+    latestEvent,
+  ]);
+  const currentEvent = stageEvents.at(-1) ?? latestEvent;
   const spectatorState = useMemo(
     () => deriveLiveSpectatorState(stageEvents),
     [stageEvents],

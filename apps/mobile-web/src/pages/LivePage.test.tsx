@@ -88,6 +88,33 @@ const speakingDeltaEvent: LiveGameEvent = {
   },
 };
 
+const backlogPhaseEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "phase_started",
+  actor: null,
+  action: null,
+  payload: { phase: "day" },
+};
+
+const backlogRequestEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 3,
+  type: "model_request_started",
+  actor: "阿青",
+  action: "debate",
+  payload: { request_id: "req-2" },
+};
+
+const backlogSpeakingDeltaEvent: LiveGameEvent = {
+  ...speakingDeltaEvent,
+  id: 4,
+  payload: {
+    request_id: "req-2",
+    visible_text: "我先听后置位发言。",
+  },
+};
+
 function renderLiveRoute() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -178,6 +205,7 @@ describe("LivePage", () => {
 
     const stage = await screen.findByRole("region", { name: "当前舞台" });
     expect(within(stage).getByText("阿青")).toBeVisible();
+    expect(within(stage).getByText("model_response_delta")).toBeVisible();
 
     const presenterImage = stage.querySelector(".mobile-live-presenter img");
     expect(presenterImage).toHaveAttribute(
@@ -201,6 +229,27 @@ describe("LivePage", () => {
 
     const stage = await screen.findByRole("region", { name: "当前舞台" });
     expect(within(stage).queryByText("阿青")).not.toBeInTheDocument();
+  });
+
+  it("does not reveal a future speaker delta while catching up backlog", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [
+        gameStartedEvent,
+        backlogPhaseEvent,
+        backlogRequestEvent,
+        backlogSpeakingDeltaEvent,
+      ],
+      latestEvent: backlogSpeakingDeltaEvent,
+    });
+
+    renderLiveRoute();
+
+    const stage = await screen.findByRole("region", { name: "当前舞台" });
+    expect(within(stage).queryByText("阿青")).not.toBeInTheDocument();
+    expect(
+      within(stage).queryByText("model_response_delta"),
+    ).not.toBeInTheDocument();
   });
 
   it("hides the bottom mobile tab bar on the immersive live page", () => {
