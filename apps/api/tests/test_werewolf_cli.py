@@ -9,8 +9,14 @@ from sqlalchemy.pool import StaticPool
 import app.cli as cli
 from app.cli import main
 from app.db.base import Base
+from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.runner import GameRunError, RunGameResult
+
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+    b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+)
 
 
 def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
@@ -305,3 +311,161 @@ def test_import_player_profiles_command_rolls_back_database_failure(
     assert exit_code == 1
     assert "导入玩家档案失败" in error
     assert session.rolled_back is True
+
+
+def test_migrate_player_avatar_assets_command_imports_legacy_files(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr(cli, "SessionLocal", testing_session, raising=False)
+    asset_dir = tmp_path / "player_profile_assets"
+    asset_dir.mkdir()
+    (asset_dir / "legacy.png").write_bytes(PNG_BYTES)
+    with testing_session() as session:
+        session.add(
+            VirtualPlayerProfile(
+                id="legacy-profile",
+                owner_user_id=None,
+                display_name="旧图玩家",
+                model="deepseek-v4-flash",
+                personality_id="balanced",
+                personality_text="稳健推进。",
+                appearance_id="default",
+                avatar_prompt="",
+                avatar_image_url="/api/v1/player-profiles/avatar/legacy.png",
+                avatar_image_path="",
+                avatar_image_mime="image/png",
+                tags=[],
+            )
+        )
+        session.commit()
+
+    exit_code = main(["migrate-player-avatar-assets", "--logs-dir", str(tmp_path)])
+    output = capsys.readouterr().out
+
+    with testing_session() as session:
+        profile = session.get(VirtualPlayerProfile, "legacy-profile")
+        assets = session.query(PlayerAvatarAsset).all()
+
+    assert exit_code == 0
+    assert "扫描=1 导入=1 复用=0 缺失=0 回填=1" in output
+    assert profile is not None
+    assert profile.avatar_asset_id == assets[0].id
+    assert assets[0].source == "migrated"
+    assert assets[0].data == PNG_BYTES
+
+
+def test_migrate_player_avatar_assets_command_reuses_and_counts_missing_files(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr(cli, "SessionLocal", testing_session, raising=False)
+    asset_dir = tmp_path / "player_profile_assets"
+    asset_dir.mkdir()
+    (asset_dir / "shared.png").write_bytes(PNG_BYTES)
+    with testing_session() as session:
+        for profile_id, filename in (
+            ("legacy-profile-a", "shared.png"),
+            ("legacy-profile-b", "shared.png"),
+            ("missing-profile", "missing.png"),
+        ):
+            session.add(
+                VirtualPlayerProfile(
+                    id=profile_id,
+                    owner_user_id=None,
+                    display_name=profile_id,
+                    model="deepseek-v4-flash",
+                    personality_id="balanced",
+                    personality_text="稳健推进。",
+                    appearance_id="default",
+                    avatar_prompt="",
+                    avatar_image_url=f"/api/v1/player-profiles/avatar/{filename}",
+                    avatar_image_path="",
+                    avatar_image_mime="image/png",
+                    tags=[],
+                )
+            )
+        session.commit()
+
+    exit_code = main(["migrate-player-avatar-assets", "--logs-dir", str(tmp_path)])
+    output = capsys.readouterr().out
+
+    with testing_session() as session:
+        profile_a = session.get(VirtualPlayerProfile, "legacy-profile-a")
+        profile_b = session.get(VirtualPlayerProfile, "legacy-profile-b")
+        missing_profile = session.get(VirtualPlayerProfile, "missing-profile")
+        assets = session.query(PlayerAvatarAsset).all()
+
+    assert exit_code == 0
+    assert "扫描=3 导入=1 复用=1 缺失=1 回填=2" in output
+    assert len(assets) == 1
+    assert profile_a is not None
+    assert profile_b is not None
+    assert missing_profile is not None
+    assert profile_a.avatar_asset_id == profile_b.avatar_asset_id == assets[0].id
+    assert missing_profile.avatar_asset_id is None
+    assert missing_profile.avatar_image_url == "/api/v1/player-profiles/avatar/missing.png"
+
+
+def test_import_player_profiles_maps_legacy_system_avatar_to_asset_id(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "player_profiles.json"
+    source.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "profiles": [
+                    {
+                        "id": "legacy-system-profile",
+                        "display_name": "内设旧图",
+                        "model": "deepseek-v4-flash",
+                        "appearance_id": "default",
+                        "avatar_image_url": "/player-avatars/gothic-female-1.png",
+                        "avatar_image_mime": "image/png",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr(cli, "SessionLocal", testing_session, raising=False)
+
+    exit_code = main(["import-player-profiles", "--source", str(source)])
+    capsys.readouterr()
+
+    with testing_session() as session:
+        imported = session.get(VirtualPlayerProfile, "legacy-system-profile")
+
+    assert exit_code == 0
+    assert imported is not None
+    assert imported.avatar_asset_id == "system-gothic-female-1"
+    assert imported.avatar_image_url == (
+        "/api/v1/player-profiles/avatar-assets/system-gothic-female-1"
+    )

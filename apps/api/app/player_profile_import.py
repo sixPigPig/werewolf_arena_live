@@ -7,7 +7,9 @@ from pathlib import Path
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.werewolf.player_avatar_assets import resolve_profile_avatar_reference
 from app.werewolf.player_profile_store import PlayerProfileFileStore, StoredPlayerProfile
 
 
@@ -44,10 +46,10 @@ def import_player_profiles(source: Path, db: Session) -> PlayerProfileImportResu
                 skipped_count += 1
                 continue
             seen_ids.add(profile.id)
-            db.add(_database_profile(profile))
+            db.add(_database_profile(profile, db))
             imported_count += 1
         db.commit()
-    except SQLAlchemyError as exc:
+    except (SQLAlchemyError, ValueError) as exc:
         db.rollback()
         raise PlayerProfileImportError("导入玩家档案失败") from exc
 
@@ -58,7 +60,15 @@ def import_player_profiles(source: Path, db: Session) -> PlayerProfileImportResu
     )
 
 
-def _database_profile(profile: StoredPlayerProfile) -> VirtualPlayerProfile:
+def _database_profile(profile: StoredPlayerProfile, db: Session) -> VirtualPlayerProfile:
+    avatar = resolve_profile_avatar_reference(
+        db,
+        avatar_asset_id=profile.avatar_asset_id,
+        appearance_id=profile.appearance_id,
+        avatar_image_url=profile.avatar_image_url,
+        avatar_image_mime=profile.avatar_image_mime,
+        logs_dir=settings.werewolf_logs_dir,
+    )
     return VirtualPlayerProfile(
         id=profile.id,
         owner_user_id=profile.owner_user_id,
@@ -68,9 +78,10 @@ def _database_profile(profile: StoredPlayerProfile) -> VirtualPlayerProfile:
         personality_text=profile.personality_text,
         appearance_id=profile.appearance_id,
         avatar_prompt=profile.avatar_prompt,
-        avatar_image_url=profile.avatar_image_url,
-        avatar_image_path=profile.avatar_image_path,
-        avatar_image_mime=profile.avatar_image_mime,
+        avatar_image_url=avatar.url,
+        avatar_image_path="",
+        avatar_image_mime=avatar.mime,
+        avatar_asset_id=avatar.id,
         short_description=profile.short_description,
         background_story=profile.background_story,
         speaking_style=profile.speaking_style,

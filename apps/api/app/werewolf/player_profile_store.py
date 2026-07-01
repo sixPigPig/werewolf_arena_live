@@ -17,6 +17,7 @@ class StoredPlayerProfile:
     personality_text: str
     appearance_id: str
     avatar_prompt: str
+    avatar_asset_id: str | None
     avatar_image_url: str
     avatar_image_path: str
     avatar_image_mime: str
@@ -93,6 +94,7 @@ def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None
         ),
         appearance_id=appearance_id,
         avatar_prompt=str(payload.get("avatar_prompt") or ""),
+        avatar_asset_id=_optional_string(payload.get("avatar_asset_id")),
         avatar_image_url=str(payload.get("avatar_image_url") or ""),
         avatar_image_path=str(payload.get("avatar_image_path") or ""),
         avatar_image_mime=str(payload.get("avatar_image_mime") or ""),

@@ -7,7 +7,12 @@ from typing import Sequence
 
 import uvicorn
 
+from app.core.config import settings
 from app.db.session import SessionLocal
+from app.player_avatar_asset_migration import (
+    PlayerAvatarAssetMigrationError,
+    migrate_player_avatar_assets,
+)
 from app.player_profile_import import PlayerProfileImportError, import_player_profiles
 from app.werewolf.evaluator import evaluate_replay
 from app.werewolf.providers import default_model_name
@@ -45,6 +50,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     import_profiles_parser.add_argument("--source", type=Path, required=True)
     import_profiles_parser.set_defaults(func=_import_player_profiles_command)
+
+    migrate_avatar_parser = subparsers.add_parser(
+        "migrate-player-avatar-assets",
+        help="Import legacy file-backed player avatar images into PostgreSQL.",
+    )
+    migrate_avatar_parser.add_argument(
+        "--logs-dir",
+        type=Path,
+        default=Path(settings.werewolf_logs_dir),
+    )
+    migrate_avatar_parser.set_defaults(func=_migrate_player_avatar_assets_command)
 
     evaluate_parser = subparsers.add_parser(
         "evaluate-replay",
@@ -96,6 +112,26 @@ def _import_player_profiles_command(args: argparse.Namespace) -> int:
         f"读取={result.read_count} "
         f"导入={result.imported_count} "
         f"跳过={result.skipped_count}"
+    )
+    return 0
+
+
+def _migrate_player_avatar_assets_command(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        result = migrate_player_avatar_assets(logs_dir=args.logs_dir, db=db)
+    except PlayerAvatarAssetMigrationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+    print(
+        f"扫描={result.scanned_count} "
+        f"导入={result.imported_count} "
+        f"复用={result.reused_count} "
+        f"缺失={result.missing_count} "
+        f"回填={result.updated_count}"
     )
     return 0
 
