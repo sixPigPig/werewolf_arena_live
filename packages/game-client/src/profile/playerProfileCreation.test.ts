@@ -39,6 +39,7 @@ function profile(
     favorite: false,
     appearance_id: "default",
     avatar_prompt: "",
+    avatar_asset_id: null,
     avatar_image_url: "",
     avatar_image_mime: "",
     tags: [],
@@ -55,7 +56,8 @@ describe("player profile creation helpers", () => {
       display_name: "新玩家",
       model: "deepseek-chat",
       appearance_id: "gothic-male-1",
-      avatar_image_url: "/player-avatars/gothic-male-1.png",
+      avatar_asset_id: "system-gothic-male-1",
+      avatar_image_url: "/api/v1/player-profiles/avatar-assets/system-gothic-male-1",
       avatar_image_mime: "image/png",
     };
 
@@ -65,7 +67,8 @@ describe("player profile creation helpers", () => {
       display_name: "新玩家",
       model: "deepseek-chat",
       appearance_id: "gothic-male-1",
-      avatar_image_url: "/player-avatars/gothic-male-1.png",
+      avatar_asset_id: "system-gothic-male-1",
+      avatar_image_url: "/api/v1/player-profiles/avatar-assets/system-gothic-male-1",
       avatar_image_mime: "image/png",
       personality_id: "aggressive",
       strategy_profile: "pressure_attacker",
@@ -125,7 +128,8 @@ describe("player profile creation helpers", () => {
       display_name: " alpha 阿夜 ",
       model: "deepseek-chat",
       strategy_profile: "logic_leader",
-      avatar_image_url: "/player-avatars/gothic-male-1.png",
+      avatar_asset_id: "system-gothic-male-1",
+      avatar_image_url: "",
     };
 
     expect(

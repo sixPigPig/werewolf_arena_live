@@ -245,7 +245,9 @@ export function getPlayerProfileCreationReadiness(
     hasDuplicateProfileName(profiles, draft.display_name, editingProfileId);
   const hasPersona = Boolean(draft.personality_id && draft.strategy_profile);
   const hasAppearance = Boolean(
-    draft.avatar_image_url?.trim() || draft.appearance_id?.trim(),
+    draft.avatar_asset_id?.trim() ||
+      draft.avatar_image_url?.trim() ||
+      draft.appearance_id?.trim(),
   );
   const items: PlayerProfileCreationChecklistItem[] = [
     { id: "name", label: "昵称", isComplete: hasName && !hasDuplicateName },

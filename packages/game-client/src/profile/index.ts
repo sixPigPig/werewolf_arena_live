@@ -1,3 +1,4 @@
+export * from "./avatarImageUrl";
 export * from "./playerProfileCreation";
 export * from "./playerProfileOptions";
 export * from "./playerStrategyOptions";

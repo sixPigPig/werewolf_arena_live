@@ -140,6 +140,7 @@ export type RawPlayer = {
   personality?: string;
   appearance_id?: string;
   avatar_prompt?: string;
+  avatar_asset_id?: string | null;
   avatar_image_url?: string;
   profile_id?: string | null;
   tags?: string[];
@@ -372,6 +373,7 @@ export type VirtualPlayerProfile = {
   favorite: boolean;
   appearance_id: string;
   avatar_prompt: string;
+  avatar_asset_id: string | null;
   avatar_image_url: string;
   avatar_image_mime: string;
   tags: string[];
@@ -384,6 +386,7 @@ export type PlayerProfilesResponse = {
 };
 
 export type PlayerAvatarUploadResponse = {
+  avatar_asset_id: string;
   avatar_image_url: string;
   avatar_image_mime: string;
 };
@@ -432,6 +435,7 @@ export type PlayerProfileRequest = {
   favorite?: boolean;
   appearance_id?: string;
   avatar_prompt?: string;
+  avatar_asset_id?: string | null;
   avatar_image_url?: string;
   avatar_image_mime?: string;
   tags?: string[];
@@ -456,6 +460,7 @@ export const DEFAULT_PLAYER_PROFILE_DRAFT: PlayerProfileRequest = {
   favorite: false,
   appearance_id: "default",
   avatar_prompt: "",
+  avatar_asset_id: "",
   avatar_image_url: "",
   avatar_image_mime: "",
   tags: [],
