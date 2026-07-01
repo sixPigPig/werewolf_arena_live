@@ -18,6 +18,7 @@ from app.api.routes.games import (
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION, RESUME_CHECKPOINT_FILE
@@ -65,12 +66,14 @@ def isolated_db() -> Generator[None, None, None]:
     app.dependency_overrides[get_db] = override_get_db
     with TestingSessionLocal() as session:
         session.query(VirtualPlayerProfile).delete()
+        session.query(PlayerAvatarAsset).delete()
         session.query(User).delete()
         session.commit()
     yield
     app.dependency_overrides.clear()
     with TestingSessionLocal() as session:
         session.query(VirtualPlayerProfile).delete()
+        session.query(PlayerAvatarAsset).delete()
         session.query(User).delete()
         session.commit()
 
@@ -453,15 +456,27 @@ def test_create_game_run_resolves_profile_configs(
 ) -> None:
     with TestingSessionLocal() as session:
         session.add(
+            PlayerAvatarAsset(
+                id="system-gothic-female-2",
+                source="system",
+                content_type="image/png",
+                data=b"png-bytes",
+                sha256="0" * 64,
+                size_bytes=9,
+            )
+        )
+        session.add(
             VirtualPlayerProfile(
                 id="profile-alpha",
                 display_name="控场位",
                 model="profile-model",
                 personality_id="cautious",
                 personality_text="谨慎控场，避免过早暴露身份。",
-                appearance_id="moonlit",
+                appearance_id="gothic-female-2",
                 avatar_prompt="silver moon portrait",
-                avatar_image_url="/api/v1/player-profiles/avatar/profile-alpha.png",
+                avatar_image_url="/player-avatars/gothic-female-2.png",
+                avatar_image_mime="image/png",
+                avatar_asset_id="system-gothic-female-2",
                 tags=["控场"],
             )
         )
@@ -523,7 +538,7 @@ def test_create_game_run_resolves_profile_configs(
         "personality": expected_personality,
         "appearance_id": "crimson",
         "avatar_prompt": "silver moon portrait",
-        "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
+        "avatar_image_url": "/api/v1/player-profiles/avatar-assets/system-gothic-female-2",
         "tags": ["压迫", "控场"],
     }
     background_configs = captured[0]["player_configs"]

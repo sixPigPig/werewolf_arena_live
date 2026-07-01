@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.werewolf.player_avatar_assets import avatar_asset_url
 from app.werewolf.player_profile_prompts import compose_player_profile_prompt
 from app.werewolf.player_presets import default_personality_text
 
@@ -98,7 +99,7 @@ def player_config_from_profile(
         ),
         avatar_image_url=(
             _override_string(overrides, "avatar_image_url")
-            or _profile_string(profile, "avatar_image_url")
+            or _profile_avatar_image_url(profile)
             or ""
         ),
         tags=_tags_from_value(
@@ -169,6 +170,15 @@ def _profile_string(profile: object | None, key: str) -> str | None:
     if profile is None:
         return None
     return clean_optional_string(getattr(profile, key, None))
+
+
+def _profile_avatar_image_url(profile: object | None) -> str | None:
+    if profile is None:
+        return None
+    avatar_asset_id = clean_optional_string(getattr(profile, "avatar_asset_id", None))
+    if avatar_asset_id is not None:
+        return avatar_asset_url(avatar_asset_id)
+    return _profile_string(profile, "avatar_image_url")
 
 
 def _tags_from_value(value: object) -> tuple[str, ...]:
