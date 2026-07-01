@@ -53,8 +53,18 @@ export function LivePage() {
       return EMPTY_EVENTS;
     }
 
-    return events.filter((event) => event.id <= currentEventId);
-  }, [director.currentEventId, events]);
+    const visibleEvents = events.filter((event) => event.id <= currentEventId);
+    if (
+      latestEvent &&
+      latestEvent.id > currentEventId &&
+      isLiveSpeakerDelta(latestEvent) &&
+      !visibleEvents.some((event) => event.id === latestEvent.id)
+    ) {
+      return [...visibleEvents, latestEvent];
+    }
+
+    return visibleEvents;
+  }, [director.currentEventId, events, latestEvent]);
   const currentEvent =
     stageEvents.find((event) => event.id === director.currentEventId) ??
     latestEvent;
@@ -320,12 +330,24 @@ function LiveCenterStage({
   currentPlayer,
   godViewState,
 }: LiveCenterStageProps) {
+  const presenterAvatarImageUrl = currentPlayer
+    ? resolveAvatarImageUrl({
+        avatar_image_url: currentPlayer.avatarImageUrl,
+      })
+    : null;
+
   return (
     <section className="mobile-live-center-stage" aria-label="当前舞台">
       <div className="mobile-live-presenter" aria-hidden="true">
-        {currentPlayer
-          ? avatarInitial(currentPlayer.name, currentPlayer.seatNumber)
-          : "?"}
+        {presenterAvatarImageUrl ? (
+          <img alt="" src={presenterAvatarImageUrl} />
+        ) : (
+          <span>
+            {currentPlayer
+              ? avatarInitial(currentPlayer.name, currentPlayer.seatNumber)
+              : "?"}
+          </span>
+        )}
       </div>
       <span>{currentPlayer ? `${currentPlayer.seatNumber}号` : "等待"}</span>
       <strong>{currentPlayer?.name ?? "等待玩家行动"}</strong>
@@ -456,6 +478,15 @@ function roleShortLabel(role: string) {
   const normalized = trimmed.toLowerCase();
 
   return labels[normalized] ?? labels[trimmed] ?? (trimmed.slice(0, 1) || "未知");
+}
+
+function isLiveSpeakerDelta(event: LiveGameEvent) {
+  return (
+    event.type === "model_response_delta" &&
+    (event.action === "debate" ||
+      event.action === "sheriff_speech" ||
+      event.action === "sheriff_pk_speech")
+  );
 }
 
 function navigateBackToGames(navigate: ReturnType<typeof useNavigate>) {

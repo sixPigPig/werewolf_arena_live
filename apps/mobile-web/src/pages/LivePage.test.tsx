@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -72,6 +72,18 @@ const gameStartedEvent: LiveGameEvent = {
       { name: "南风", role: "seer", model: "test-model" },
       { name: "木子", role: "witch", model: "test-model" },
     ],
+  },
+};
+
+const speakingDeltaEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "model_response_delta",
+  actor: "阿青",
+  action: "debate",
+  payload: {
+    request_id: "req-1",
+    visible_text: "我先听后置位发言。",
   },
 };
 
@@ -149,6 +161,25 @@ describe("LivePage", () => {
     const avatar = seat.querySelector("img");
 
     expect(avatar).toHaveAttribute(
+      "src",
+      "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
+    );
+  });
+
+  it("renders the current stage presenter with the speaker avatar asset", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, speakingDeltaEvent],
+      latestEvent: speakingDeltaEvent,
+    });
+
+    renderLiveRoute();
+
+    const stage = await screen.findByRole("region", { name: "当前舞台" });
+    expect(within(stage).getByText("阿青")).toBeVisible();
+
+    const presenterImage = stage.querySelector(".mobile-live-presenter img");
+    expect(presenterImage).toHaveAttribute(
       "src",
       "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
     );
