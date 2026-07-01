@@ -3,7 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { VirtualPlayerLibrary } from "./VirtualPlayerLibrary";
-import { SYSTEM_PLAYER_AVATARS } from "../systemPlayerAvatars";
+import {
+  SYSTEM_PLAYER_AVATARS,
+  systemPlayerAvatarImageUrl,
+} from "../systemPlayerAvatars";
 import type {
   ModelOption,
   PlayerProfileRequest,
@@ -40,6 +43,7 @@ function profile(
     favorite: false,
     appearance_id: "default",
     avatar_prompt: "",
+    avatar_asset_id: null,
     avatar_image_url: "",
     avatar_image_mime: "",
     tags: [],
@@ -61,6 +65,7 @@ function renderLibrary(
     isModelOptionsError: false,
     isSaving: false,
     onUploadAvatar: vi.fn().mockResolvedValue({
+      avatar_asset_id: "uploaded-dropped",
       avatar_image_url: "/api/v1/player-profiles/avatar/dropped.png",
       avatar_image_mime: "image/png",
     }),
@@ -128,14 +133,18 @@ describe("VirtualPlayerLibrary", () => {
       screen
         .getByTestId("virtual-player-avatar-dropzone")
         .querySelector("img"),
-    ).toHaveAttribute("src", SYSTEM_PLAYER_AVATARS[0].imageUrl);
+    ).toHaveAttribute(
+      "src",
+      systemPlayerAvatarImageUrl(SYSTEM_PLAYER_AVATARS[0]),
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "保存虚拟玩家" }));
 
     await waitFor(() =>
       expect(onCreateProfile).toHaveBeenCalledWith(
         expect.objectContaining({
-          avatar_image_url: SYSTEM_PLAYER_AVATARS[0].imageUrl,
+          avatar_asset_id: SYSTEM_PLAYER_AVATARS[0].assetId,
+          avatar_image_url: systemPlayerAvatarImageUrl(SYSTEM_PLAYER_AVATARS[0]),
           avatar_image_mime: "image/png",
         }),
       ),
@@ -258,6 +267,27 @@ describe("VirtualPlayerLibrary", () => {
 
     expect(portrait).toBeInTheDocument();
     expect(portrait).toHaveAttribute("data-display", "full-image");
+  });
+
+  it("resolves database avatar asset URLs in player card portraits", () => {
+    renderLibrary({
+      profiles: [
+        profile({
+          id: "profile-asset-portrait",
+          display_name: "资产阿夜",
+          avatar_asset_id: "system-gothic-female-2",
+          avatar_image_url: "/player-avatars/gothic-female-2.png",
+          avatar_image_mime: "image/png",
+        }),
+      ],
+    });
+
+    expect(
+      screen.getByRole("img", { name: "资产阿夜 人物形象" }),
+    ).toHaveAttribute(
+      "src",
+      "/api/v1/player-profiles/avatar-assets/system-gothic-female-2",
+    );
   });
 
   it("shows backend default personality text in the prompt preview when personality text is blank", async () => {
@@ -512,7 +542,8 @@ describe("VirtualPlayerLibrary", () => {
     await waitFor(() =>
       expect(onCreateProfile).toHaveBeenCalledWith(
         expect.objectContaining({
-          avatar_image_url: SYSTEM_PLAYER_AVATARS[2].imageUrl,
+          avatar_asset_id: SYSTEM_PLAYER_AVATARS[2].assetId,
+          avatar_image_url: systemPlayerAvatarImageUrl(SYSTEM_PLAYER_AVATARS[2]),
           avatar_image_mime: "image/png",
         }),
       ),

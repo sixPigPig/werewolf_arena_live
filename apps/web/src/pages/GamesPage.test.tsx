@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithClient } from "../tests/renderWithClient";
 import { GamesPage } from "./GamesPage";
+import type { VirtualPlayerProfile } from "../features/games/types";
 
 function ruleSetsResponse() {
   return {
@@ -74,7 +75,7 @@ function ruleSetsResponse() {
   };
 }
 
-function playerProfilesResponse() {
+function playerProfilesResponse(): { profiles: VirtualPlayerProfile[] } {
   return {
     profiles: [
       {
@@ -84,8 +85,21 @@ function playerProfilesResponse() {
         model: "MiniMax-M2.7",
         personality_id: "cautious",
         personality_text: "谨慎保守。",
+        short_description: "",
+        background_story: "",
+        speaking_style: "",
+        catchphrases: [],
+        strategy_profile: "balanced",
+        risk_tolerance: 3,
+        bluffing_tendency: 3,
+        trust_tendency: 3,
+        leadership_tendency: 3,
+        talkativeness: 3,
+        example_messages: [],
+        favorite: false,
         appearance_id: "moonlit",
         avatar_prompt: "银发观察者",
+        avatar_asset_id: null,
         avatar_image_url: "/api/v1/player-profiles/avatar/profile-1.png",
         avatar_image_mime: "image/png",
         tags: ["控场"],
@@ -614,6 +628,43 @@ describe("GamesPage", () => {
     expect(
       new Set(body.player_configs.map((config: { profile_id: string }) => config.profile_id)).size,
     ).toBe(8);
+  });
+
+  it("renders lineup picker and seat avatars through API asset URLs", async () => {
+    const profilesResponse = fullPlayerProfilesResponse(8);
+    profilesResponse.profiles[0] = {
+      ...profilesResponse.profiles[0],
+      avatar_asset_id: "system-gothic-female-1",
+      avatar_image_url: "/player-avatars/gothic-female-1.png",
+      avatar_image_mime: "image/png",
+    };
+    mockLobbyRequests(profilesResponse);
+
+    renderWithClient(<GamesPage />, "/games");
+
+    const playerColumn = within(
+      await screen.findByTestId("lobby-lineup-workbench"),
+    ).getByTestId("lobby-player-column");
+    const profileButton = within(playerColumn).getByRole("button", {
+      name: "为 1 号座位选择 冷静的阿夜",
+    });
+
+    expect(
+      within(profileButton).getByRole("img", {
+        name: "冷静的阿夜 人物形象",
+      }),
+    ).toHaveAttribute(
+      "src",
+      "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
+    );
+
+    await userEvent.click(profileButton);
+
+    const seatButton = screen.getByRole("button", { name: "1号冷静的阿夜" });
+    expect(seatButton.querySelector("img")).toHaveAttribute(
+      "src",
+      "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
+    );
   });
 
   it("filters the player picker by search and favorites", async () => {

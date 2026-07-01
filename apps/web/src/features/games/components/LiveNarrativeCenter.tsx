@@ -1,6 +1,7 @@
 import { Badge } from "../../../components/ui";
 import type { LiveNarrativeState, NarrativeCueTone } from "../liveNarrative";
 import { appearanceClassName } from "../playerProfileOptions";
+import { resolveAvatarImageUrl } from "../types";
 
 type LiveNarrativeCenterProps = {
   narrative: LiveNarrativeState;
@@ -22,6 +23,9 @@ const TONE_CLASS_BY_TONE: Record<NarrativeCueTone, string> = {
 export function LiveNarrativeCenter({ narrative }: LiveNarrativeCenterProps) {
   const { cue, speaker } = narrative;
   const displayText = cue.speechText.trim() ? cue.speechText : cue.performerLine;
+  const speakerAvatarImageUrl = speaker
+    ? resolveAvatarImageUrl({ avatar_image_url: speaker.avatarImageUrl })
+    : "";
 
   return (
     <div
@@ -55,11 +59,11 @@ export function LiveNarrativeCenter({ narrative }: LiveNarrativeCenterProps) {
           <div
             className={`relative flex aspect-[3/4] items-center justify-center overflow-hidden rounded-md border-2 border-amber-300/45 bg-gradient-to-br from-[#26323b] to-[#05070a] ${appearanceClassName(speaker.appearanceId)}`}
           >
-            {speaker.avatarImageUrl ? (
+            {speakerAvatarImageUrl ? (
               <img
                 alt={`${speaker.name} 当前发言形象`}
                 className="h-full w-full object-cover"
-                src={speaker.avatarImageUrl}
+                src={speakerAvatarImageUrl}
               />
             ) : (
               <span className="text-3xl font-black text-amber-50">

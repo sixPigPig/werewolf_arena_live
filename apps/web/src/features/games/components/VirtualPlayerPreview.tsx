@@ -7,7 +7,7 @@ import {
   composeProfilePromptPreview,
   normalizeTendency,
 } from "../profilePromptPreview";
-import type { PlayerProfileRequest } from "../types";
+import { resolveAvatarImageUrl, type PlayerProfileRequest } from "../types";
 
 type VirtualPlayerPreviewProps = {
   draft: PlayerProfileRequest;
@@ -23,16 +23,17 @@ export function VirtualPlayerPreview({
     STRATEGY_OPTIONS.find((option) => option.id === draft.strategy_profile) ??
     STRATEGY_OPTIONS[0];
   const promptPreview = composeProfilePromptPreview(draft);
+  const avatarImageUrl = resolveAvatarImageUrl(draft);
 
   return (
     <aside aria-label="虚拟玩家预览" className="virtual-player-preview">
       <div className="virtual-player-preview-topline">
         <div className="virtual-player-preview-portrait">
-          {draft.avatar_image_url ? (
+          {avatarImageUrl ? (
             <img
               alt=""
               aria-hidden="true"
-              src={draft.avatar_image_url}
+              src={avatarImageUrl}
             />
           ) : (
             <span aria-hidden="true">{displayName.charAt(0) || "?"}</span>

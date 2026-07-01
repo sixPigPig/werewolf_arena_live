@@ -5,7 +5,11 @@ import { Button, SelectField, TextField } from "../../../components/ui";
 
 import { personalityLabel, PERSONALITY_OPTIONS } from "../playerProfileOptions";
 import { STRATEGY_OPTIONS } from "../playerStrategyOptions";
-import type { PlayerConfig, VirtualPlayerProfile } from "../types";
+import {
+  resolveAvatarImageUrl,
+  type PlayerConfig,
+  type VirtualPlayerProfile,
+} from "../types";
 
 type ProfilePickerProps = {
   configs: PlayerConfig[];
@@ -176,6 +180,7 @@ export function ProfilePicker({
           const isOccupiedElsewhere = Boolean(
             occupiedSeat && occupiedSeat !== selectedSeat,
           );
+          const avatarImageUrl = resolveAvatarImageUrl(profile);
 
           return (
             <button
@@ -191,10 +196,10 @@ export function ProfilePicker({
               type="button"
             >
               <span className="player-config-role-portrait">
-                {profile.avatar_image_url ? (
+                {avatarImageUrl ? (
                   <img
                     alt={`${profile.display_name} 人物形象`}
-                    src={profile.avatar_image_url}
+                    src={avatarImageUrl}
                   />
                 ) : (
                   <span aria-hidden="true">

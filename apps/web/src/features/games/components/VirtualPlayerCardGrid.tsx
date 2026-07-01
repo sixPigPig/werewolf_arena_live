@@ -7,7 +7,7 @@ import {
   personalityLabel,
 } from "../playerProfileOptions";
 import { STRATEGY_OPTIONS } from "../playerStrategyOptions";
-import type { VirtualPlayerProfile } from "../types";
+import { resolveAvatarImageUrl, type VirtualPlayerProfile } from "../types";
 
 type VirtualPlayerCardGridProps = {
   profiles: VirtualPlayerProfile[];
@@ -234,24 +234,23 @@ export function VirtualPlayerCardGrid({
                 STRATEGY_OPTIONS.find(
                   (option) => option.id === profile.strategy_profile,
                 ) ?? STRATEGY_OPTIONS[0];
+              const avatarImageUrl = resolveAvatarImageUrl(profile);
 
               return (
                 <li className="virtual-player-card" key={profile.id}>
                   <span
                     className={[
                       "virtual-player-card-portrait",
-                      profile.avatar_image_url
+                      avatarImageUrl
                         ? "virtual-player-card-portrait-image"
                         : appearanceClassName(profile.appearance_id),
                     ].join(" ")}
-                    data-display={
-                      profile.avatar_image_url ? "full-image" : "fallback"
-                    }
+                    data-display={avatarImageUrl ? "full-image" : "fallback"}
                   >
-                    {profile.avatar_image_url ? (
+                    {avatarImageUrl ? (
                       <img
                         alt={`${profile.display_name} 人物形象`}
-                        src={profile.avatar_image_url}
+                        src={avatarImageUrl}
                       />
                     ) : (
                       profile.display_name.trim().charAt(0) || "?"

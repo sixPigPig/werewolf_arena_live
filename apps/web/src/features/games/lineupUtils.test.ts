@@ -36,6 +36,7 @@ function profile(
     favorite: false,
     appearance_id: "moonlit",
     avatar_prompt: "",
+    avatar_asset_id: overrides.avatar_asset_id ?? null,
     avatar_image_url: "",
     avatar_image_mime: "",
     tags: [],

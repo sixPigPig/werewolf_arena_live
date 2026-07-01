@@ -137,6 +137,30 @@ describe("LiveNarrativeCenter", () => {
     ).toHaveAttribute("src", "https://example.test/sam.png");
   });
 
+  it("resolves database avatar asset URLs for speaker images", () => {
+    render(
+      <LiveNarrativeCenter
+        narrative={narrative({
+          speaker: {
+            appearanceId: "gothic-male-2",
+            avatarImageUrl: "/player-avatars/gothic-male-2.png",
+            camp: "好人阵营",
+            name: "Sam",
+            role: "村民",
+            seatNumber: 8,
+          },
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("img", { name: /Sam 当前发言形象/ }),
+    ).toHaveAttribute(
+      "src",
+      "/api/v1/player-profiles/avatar-assets/system-gothic-male-2",
+    );
+  });
+
   it("omits event id and detail badges when values are empty", () => {
     render(
       <LiveNarrativeCenter

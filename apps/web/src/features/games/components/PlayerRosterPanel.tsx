@@ -5,6 +5,7 @@ import {
   appearanceClassName,
   personalityLabel,
 } from "../playerProfileOptions";
+import { resolveAvatarImageUrl } from "../types";
 
 export type PlayerRosterState =
   | "alive"
@@ -85,6 +86,9 @@ function RosterRow({
 }) {
   const role = roleTone(player.role);
   const state = stateTone(player.state, player.role);
+  const avatarImageUrl = resolveAvatarImageUrl({
+    avatar_image_url: player.avatarImageUrl,
+  });
   const isInteractive = Boolean(onSelectPlayer);
   const handleSelect = () => onSelectPlayer?.(player.name);
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -123,11 +127,11 @@ function RosterRow({
           player.state === "dead" ? "grayscale" : ""
         }`}
       >
-        {player.avatarImageUrl ? (
+        {avatarImageUrl ? (
           <img
             alt={`${player.name} 人物形象`}
             className="h-full w-full rounded-full object-cover"
-            src={player.avatarImageUrl}
+            src={avatarImageUrl}
           />
         ) : (
           avatarText(player.name)

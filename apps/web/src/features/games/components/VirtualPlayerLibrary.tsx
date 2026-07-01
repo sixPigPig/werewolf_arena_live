@@ -23,6 +23,7 @@ import {
 } from "../playerProfileCreation";
 import {
   randomSystemPlayerAvatar,
+  systemPlayerAvatarImageUrl,
   type SystemPlayerAvatar,
 } from "../systemPlayerAvatars";
 import type {
@@ -198,6 +199,7 @@ function profileToDraft(profile: VirtualPlayerProfile): PlayerProfileRequest {
     favorite: profile.favorite ?? false,
     appearance_id: profile.appearance_id || "default",
     avatar_prompt: profile.avatar_prompt || "",
+    avatar_asset_id: profile.avatar_asset_id ?? null,
     avatar_image_url: profile.avatar_image_url || "",
     avatar_image_mime: profile.avatar_image_mime || "",
     tags: profile.tags ?? [],
@@ -382,7 +384,8 @@ export function VirtualPlayerLibrary({
     setDraft((current) => ({
       ...current,
       appearance_id: avatar.id,
-      avatar_image_url: avatar.imageUrl,
+      avatar_asset_id: avatar.assetId,
+      avatar_image_url: systemPlayerAvatarImageUrl(avatar),
       avatar_image_mime: avatar.mime,
     }));
   };
@@ -406,7 +409,8 @@ export function VirtualPlayerLibrary({
             reservedProfiles,
           ),
           appearance_id: avatar.id,
-          avatar_image_url: avatar.imageUrl,
+          avatar_asset_id: avatar.assetId,
+          avatar_image_url: systemPlayerAvatarImageUrl(avatar),
           avatar_image_mime: avatar.mime,
         },
         DEFAULT_PLAYER_CREATION_PRESET_ID,
@@ -590,6 +594,7 @@ export function VirtualPlayerLibrary({
       example_messages: cleanList(draft.example_messages),
       favorite: Boolean(draft.favorite),
       avatar_prompt: draft.avatar_prompt?.trim() ?? "",
+      avatar_asset_id: draft.avatar_asset_id?.trim() ?? null,
       avatar_image_url: draft.avatar_image_url?.trim() ?? "",
       avatar_image_mime: draft.avatar_image_mime?.trim() ?? "",
       tags: cleanList(draft.tags),
@@ -645,6 +650,7 @@ export function VirtualPlayerLibrary({
       const response = await onUploadAvatar(file);
       setDraft((current) => ({
         ...current,
+        avatar_asset_id: response.avatar_asset_id,
         avatar_image_url: response.avatar_image_url,
         avatar_image_mime: response.avatar_image_mime,
       }));

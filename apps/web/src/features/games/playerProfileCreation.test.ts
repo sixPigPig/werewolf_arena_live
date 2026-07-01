@@ -39,6 +39,7 @@ function profile(
     favorite: false,
     appearance_id: "default",
     avatar_prompt: "",
+    avatar_asset_id: rest.avatar_asset_id ?? null,
     avatar_image_url: "",
     avatar_image_mime: "",
     tags: [],

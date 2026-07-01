@@ -3,6 +3,7 @@ import type { KeyboardEvent } from "react";
 import { withGlassPanel } from "../../../components/ui/glass";
 import type { GodViewPlayer } from "../liveGodView";
 import { appearanceClassName } from "../playerProfileOptions";
+import { resolveAvatarImageUrl } from "../types";
 import { formatVoteCount } from "./voteFormatting";
 
 type GodViewRosterPanelProps = {
@@ -62,6 +63,9 @@ function GodViewRosterRow({
   onSelectPlayer: (name: string) => void;
 }) {
   const tone = playerTone(player);
+  const avatarImageUrl = resolveAvatarImageUrl({
+    avatar_image_url: player.avatarImageUrl,
+  });
   const handleSelect = () => onSelectPlayer(player.name);
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -96,11 +100,11 @@ function GodViewRosterRow({
             player.isAlive ? "" : "grayscale opacity-65"
           }`}
         >
-          {player.avatarImageUrl ? (
+          {avatarImageUrl ? (
             <img
               alt={`${player.name} 虚拟头像`}
               className="h-full w-full object-cover"
-              src={player.avatarImageUrl}
+              src={avatarImageUrl}
             />
           ) : (
             avatarText(player.name)

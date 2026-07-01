@@ -8,6 +8,7 @@ import type { GodViewPlayer, GodViewState } from "../liveGodView";
 import type { LiveNarrativeState } from "../liveNarrative";
 import type { LivePlayer } from "../liveSpectator";
 import { appearanceClassName } from "../playerProfileOptions";
+import { resolveAvatarImageUrl } from "../types";
 import { LiveNarrativeCenter } from "./LiveNarrativeCenter";
 
 type LiveDirectorStageProps = {
@@ -238,6 +239,9 @@ function StagePlayerCard({
   const role = roleTone(player.role);
   const liveAction = livePlayer?.lastAction ? actionLabel(livePlayer.lastAction) : "";
   const liveDetail = livePlayer?.lastDetail ?? "";
+  const avatarImageUrl = resolveAvatarImageUrl({
+    avatar_image_url: player.avatarImageUrl,
+  });
 
   return (
     <article
@@ -270,11 +274,11 @@ function StagePlayerCard({
               className="absolute -inset-1 rounded-full border border-teal-200/55 shadow-[0_0_20px_rgba(45,212,191,0.42)] animate-pulse"
             />
           ) : null}
-          {player.avatarImageUrl ? (
+          {avatarImageUrl ? (
             <img
               alt={`${player.name} 虚拟头像`}
               className="relative z-10 h-full w-full object-cover"
-              src={player.avatarImageUrl}
+              src={avatarImageUrl}
             />
           ) : (
             <span className="relative z-10">{avatarText(player.name)}</span>

@@ -1,5 +1,9 @@
 import { appearanceClassName, personalityLabel } from "../playerProfileOptions";
-import type { PlayerConfig, VirtualPlayerProfile } from "../types";
+import {
+  resolveAvatarImageUrl,
+  type PlayerConfig,
+  type VirtualPlayerProfile,
+} from "../types";
 
 type SeatGridProps = {
   configs: PlayerConfig[];
@@ -23,6 +27,7 @@ export function SeatGrid({
       {seats.map((seat) => {
         const config = configs.find((item) => item.seat === seat);
         const profile = profiles.find((item) => item.id === config?.profile_id);
+        const avatarImageUrl = profile ? resolveAvatarImageUrl(profile) : "";
         const isSelected = selectedSeat === seat;
         const isInvalid = Boolean(config?.profile_id && !profile);
 
@@ -42,13 +47,13 @@ export function SeatGrid({
             <span
               className={[
                 "player-config-seat-frame",
-                profile?.avatar_image_url
+                avatarImageUrl
                   ? ""
                   : appearanceClassName(profile?.appearance_id),
               ].join(" ")}
             >
-              {profile?.avatar_image_url ? (
-                <img alt="" aria-hidden="true" src={profile.avatar_image_url} />
+              {avatarImageUrl ? (
+                <img alt="" aria-hidden="true" src={avatarImageUrl} />
               ) : (
                 <span aria-hidden="true" className="player-config-seat-placeholder" />
               )}

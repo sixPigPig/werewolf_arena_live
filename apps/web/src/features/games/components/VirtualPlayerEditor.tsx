@@ -24,9 +24,14 @@ import {
 } from "../playerStrategyOptions";
 import {
   SYSTEM_PLAYER_AVATARS,
+  systemPlayerAvatarImageUrl,
   type SystemPlayerAvatar,
 } from "../systemPlayerAvatars";
-import type { ModelOption, PlayerProfileRequest } from "../types";
+import {
+  resolveAvatarImageUrl,
+  type ModelOption,
+  type PlayerProfileRequest,
+} from "../types";
 import { VirtualPlayerPreview } from "./VirtualPlayerPreview";
 
 type VirtualPlayerEditorProps = {
@@ -118,6 +123,7 @@ export const VirtualPlayerEditor = forwardRef<
   const modelLabel =
     modelOptions.find((option) => option.id === draft.model)?.label ??
     draft.model;
+  const draftAvatarImageUrl = resolveAvatarImageUrl(draft);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -330,10 +336,10 @@ export const VirtualPlayerEditor = forwardRef<
               type="file"
             />
             <div className="virtual-player-avatar-preview">
-              {draft.avatar_image_url ? (
+              {draftAvatarImageUrl ? (
                 <img
                   alt={`${draft.display_name || "虚拟玩家"} 人物形象`}
-                  src={draft.avatar_image_url}
+                  src={draftAvatarImageUrl}
                 />
               ) : (
                 <span
@@ -347,7 +353,10 @@ export const VirtualPlayerEditor = forwardRef<
           </label>
           <div className="virtual-player-system-avatars">
             {SYSTEM_PLAYER_AVATARS.map((avatar) => {
-              const isSelected = draft.avatar_image_url === avatar.imageUrl;
+              const avatarImageUrl = systemPlayerAvatarImageUrl(avatar);
+              const isSelected =
+                draft.avatar_asset_id === avatar.assetId ||
+                draftAvatarImageUrl === avatarImageUrl;
 
               return (
                 <button
@@ -360,7 +369,7 @@ export const VirtualPlayerEditor = forwardRef<
                   onClick={() => onApplySystemAvatar(avatar)}
                   type="button"
                 >
-                  <img alt="" aria-hidden="true" src={avatar.imageUrl} />
+                  <img alt="" aria-hidden="true" src={avatarImageUrl} />
                   <span>{avatar.label}</span>
                 </button>
               );
