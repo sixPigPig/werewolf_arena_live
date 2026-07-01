@@ -21,6 +21,7 @@ import {
   listRuleSets,
   randomFillEmptySeats,
   removeInvalidProfileRefs,
+  resolveAvatarImageUrl,
   resizeLineupForPlayerCount,
   type PlayerConfig,
   type VirtualPlayerProfile,
@@ -598,6 +599,9 @@ export function GamesPage() {
             {Array.from({ length: playerCount }, (_, index) => index + 1).map(
               (seat) => {
                 const profile = selectedProfilesBySeat.get(seat);
+                const avatarImageUrl = profile
+                  ? resolveAvatarImageUrl(profile)
+                  : "";
                 const isActive = safeActiveSeat === seat;
 
                 return (
@@ -618,13 +622,13 @@ export function GamesPage() {
                   >
                     <span className="mobile-lobby-seat-avatar">
                       <span aria-hidden="true" />
-                      {profile?.avatar_image_url ? (
+                      {avatarImageUrl ? (
                         <img
                           alt=""
                           onError={(event) => {
                             event.currentTarget.hidden = true;
                           }}
-                          src={profile.avatar_image_url}
+                          src={avatarImageUrl}
                         />
                       ) : null}
                     </span>
@@ -800,6 +804,7 @@ export function GamesPage() {
                   assignedSeat,
                   safeActiveSeat,
                 );
+                const avatarImageUrl = resolveAvatarImageUrl(profile);
 
                 return (
                   <button
@@ -820,13 +825,13 @@ export function GamesPage() {
                   >
                     <span className="mobile-profile-card-image">
                       <span aria-hidden="true" />
-                      {profile.avatar_image_url ? (
+                      {avatarImageUrl ? (
                         <img
                           alt=""
                           onError={(event) => {
                             event.currentTarget.hidden = true;
                           }}
-                          src={profile.avatar_image_url}
+                          src={avatarImageUrl}
                         />
                       ) : null}
                       {profile.favorite ? (

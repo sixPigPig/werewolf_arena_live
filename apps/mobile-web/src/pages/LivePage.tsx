@@ -8,6 +8,7 @@ import {
   deriveLiveSpectatorState,
   getGameRun,
   resumeGameRun,
+  resolveAvatarImageUrl,
   useGameRunEvents,
   useLiveDirector,
   type GameRun,
@@ -280,6 +281,9 @@ function LiveSeatAvatar({ player }: LiveSeatAvatarProps) {
   const roleLabel = roleShortLabel(player.role);
   const statusLabel = player.isSpeaking ? "发言中" : player.stageStatus.label;
   const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}`;
+  const avatarImageUrl = resolveAvatarImageUrl({
+    avatar_image_url: player.avatarImageUrl,
+  });
   const className = [
     "mobile-live-seat",
     player.isSpeaking ? "mobile-live-seat-speaking" : "",
@@ -292,8 +296,8 @@ function LiveSeatAvatar({ player }: LiveSeatAvatarProps) {
     <article aria-label={seatLabel} className={className}>
       <span className="mobile-live-seat-number">{player.seatNumber}</span>
       <span className="mobile-live-seat-avatar">
-        {player.avatarImageUrl ? (
-          <img alt="" src={player.avatarImageUrl} />
+        {avatarImageUrl ? (
+          <img alt="" src={avatarImageUrl} />
         ) : (
           <span>{avatarInitial(player.name, player.seatNumber)}</span>
         )}

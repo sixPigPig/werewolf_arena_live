@@ -62,7 +62,12 @@ const gameStartedEvent: LiveGameEvent = {
   action: null,
   payload: {
     players: [
-      { name: "阿青", role: "villager", model: "test-model" },
+      {
+        name: "阿青",
+        role: "villager",
+        model: "test-model",
+        avatar_image_url: "/player-avatars/gothic-female-1.png",
+      },
       { name: "白石", role: "werewolf", model: "test-model" },
       { name: "南风", role: "seer", model: "test-model" },
       { name: "木子", role: "witch", model: "test-model" },
@@ -133,6 +138,20 @@ describe("LivePage", () => {
     ).toBeVisible();
     expect(gameClientMocks.getGameRun).toHaveBeenCalledWith("run-1");
     expect(gameClientMocks.useGameRunEvents).toHaveBeenCalledWith("run-1");
+  });
+
+  it("renders live seat avatars through API asset URLs", async () => {
+    renderLiveRoute();
+
+    const seat = await screen.findByRole("article", {
+      name: "1号 阿青 平民 存活",
+    });
+    const avatar = seat.querySelector("img");
+
+    expect(avatar).toHaveAttribute(
+      "src",
+      "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
+    );
   });
 
   it("hides the bottom mobile tab bar on the immersive live page", () => {

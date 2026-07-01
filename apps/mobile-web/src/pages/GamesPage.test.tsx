@@ -90,6 +90,7 @@ function buildProfile(
     favorite: overrides.favorite ?? false,
     appearance_id: overrides.appearance_id ?? "default",
     avatar_prompt: "",
+    avatar_asset_id: profileOverrides.avatar_asset_id ?? null,
     avatar_image_url: "",
     avatar_image_mime: "",
     tags: [],
@@ -516,6 +517,39 @@ describe("GamesPage", () => {
     expect(
       screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
     ).toBeVisible();
+  });
+
+  it("renders player card drawer avatars through API asset URLs", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.listPlayerProfiles.mockResolvedValue({
+      profiles: [
+        buildProfile({
+          id: "profile-1",
+          display_name: "阿青",
+          avatar_asset_id: "system-gothic-male-1",
+          avatar_image_url: "/player-avatars/gothic-male-1.png",
+          avatar_image_mime: "image/png",
+        }),
+        buildProfile({
+          id: "profile-2",
+          display_name: "白石",
+        }),
+      ],
+    });
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 1 号座位，当前为 待选择",
+      }),
+    );
+
+    const drawer = await screen.findByRole("dialog", { name: "玩家卡牌库" });
+    const avatar = drawer.querySelector(".mobile-profile-card-image img");
+    expect(avatar).toHaveAttribute(
+      "src",
+      "/api/v1/player-profiles/avatar-assets/system-gothic-male-1",
+    );
   });
 
   it("keeps keyboard focus inside the player card drawer and restores it", async () => {

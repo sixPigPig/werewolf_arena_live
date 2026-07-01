@@ -47,6 +47,7 @@ function buildProfile(
     favorite: overrides.favorite ?? false,
     appearance_id: overrides.appearance_id ?? "default",
     avatar_prompt: "",
+    avatar_asset_id: profileOverrides.avatar_asset_id ?? null,
     avatar_image_url: "",
     avatar_image_mime: "",
     tags: [],
@@ -101,6 +102,28 @@ describe("PlayersPage", () => {
     const tags = screen.getByRole("list", { name: "玩家标签" });
     expect(within(tags).getByRole("listitem")).toHaveTextContent("控场");
     expect(screen.getByText("编辑能力不在第一版范围内")).toBeVisible();
+  });
+
+  it("renders player avatars through API asset URLs", async () => {
+    gameClientMocks.listPlayerProfiles.mockResolvedValue({
+      profiles: [
+        buildProfile({
+          id: "moon-hunter",
+          display_name: "月下猎人",
+          avatar_asset_id: "system-gothic-female-1",
+          avatar_image_url: "/player-avatars/gothic-female-1.png",
+          avatar_image_mime: "image/png",
+        }),
+      ],
+    });
+
+    renderWithQueryClient(<PlayersPage />);
+
+    const avatar = await screen.findByRole("img", { name: "月下猎人 头像" });
+    expect(avatar).toHaveAttribute(
+      "src",
+      "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
+    );
   });
 
   it("shows loading copy while reading player profiles", () => {

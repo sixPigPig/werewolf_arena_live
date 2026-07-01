@@ -1,6 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { listPlayerProfiles } from "@werewolf-arena/game-client";
+import {
+  listPlayerProfiles,
+  resolveAvatarImageUrl,
+} from "@werewolf-arena/game-client";
 
 export function PlayersPage() {
   const playerProfilesQuery = useQuery({
@@ -29,45 +32,49 @@ export function PlayersPage() {
 
       {profiles.length > 0 ? (
         <section aria-label="玩家档案列表" className="mobile-player-list">
-          {profiles.map((profile) => (
-            <article className="mobile-player-card" key={profile.id}>
-              {profile.avatar_image_url ? (
-                <img
-                  alt={`${profile.display_name} 头像`}
-                  className="mobile-player-avatar"
-                  src={profile.avatar_image_url}
-                />
-              ) : null}
-              <div className="mobile-player-card-body">
-                <div className="mobile-player-card-heading">
-                  <h2>{profile.display_name}</h2>
-                  {profile.favorite ? (
-                    <span className="mobile-player-favorite">收藏</span>
+          {profiles.map((profile) => {
+            const avatarImageUrl = resolveAvatarImageUrl(profile);
+
+            return (
+              <article className="mobile-player-card" key={profile.id}>
+                {avatarImageUrl ? (
+                  <img
+                    alt={`${profile.display_name} 头像`}
+                    className="mobile-player-avatar"
+                    src={avatarImageUrl}
+                  />
+                ) : null}
+                <div className="mobile-player-card-body">
+                  <div className="mobile-player-card-heading">
+                    <h2>{profile.display_name}</h2>
+                    {profile.favorite ? (
+                      <span className="mobile-player-favorite">收藏</span>
+                    ) : null}
+                  </div>
+                  <p className="mobile-player-model">{profile.model}</p>
+                  {profile.short_description ? (
+                    <p className="mobile-player-description">
+                      {profile.short_description}
+                    </p>
+                  ) : null}
+                  {profile.tags.length > 0 ? (
+                    <ul className="mobile-player-tags" aria-label="玩家标签">
+                      {profile.tags.map((tag) => (
+                        <li className="mobile-player-tag" key={tag}>
+                          {tag}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {profile.speaking_style ? (
+                    <p className="mobile-player-speaking">
+                      说话风格：{profile.speaking_style}
+                    </p>
                   ) : null}
                 </div>
-                <p className="mobile-player-model">{profile.model}</p>
-                {profile.short_description ? (
-                  <p className="mobile-player-description">
-                    {profile.short_description}
-                  </p>
-                ) : null}
-                {profile.tags.length > 0 ? (
-                  <ul className="mobile-player-tags" aria-label="玩家标签">
-                    {profile.tags.map((tag) => (
-                      <li className="mobile-player-tag" key={tag}>
-                        {tag}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                {profile.speaking_style ? (
-                  <p className="mobile-player-speaking">
-                    说话风格：{profile.speaking_style}
-                  </p>
-                ) : null}
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </section>
       ) : null}
     </main>
