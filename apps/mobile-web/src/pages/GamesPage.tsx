@@ -484,7 +484,10 @@ export function GamesPage() {
           </p>
         ) : null}
 
-      <section aria-labelledby="mobile-rule-title" className="mobile-lobby-section">
+      <section
+        aria-labelledby="mobile-rule-title"
+        className="mobile-lobby-section mobile-lobby-board-section"
+      >
         <div className="mobile-lobby-section-heading">
           <h2 id="mobile-rule-title">规则选择</h2>
           {selectedRuleSet ? (
@@ -588,7 +591,10 @@ export function GamesPage() {
       </section>
 
       {selectedRuleSet ? (
-        <section aria-labelledby="mobile-seat-title" className="mobile-lobby-section">
+        <section
+          aria-labelledby="mobile-seat-title"
+          className="mobile-lobby-section mobile-lobby-board-section"
+        >
           <div className="mobile-lobby-section-heading">
             <h2 id="mobile-seat-title">组建阵容</h2>
             <span>
@@ -645,7 +651,10 @@ export function GamesPage() {
         </section>
       ) : null}
 
-      <section aria-labelledby="mobile-create-title" className="mobile-lobby-section">
+      <section
+        aria-labelledby="mobile-create-title"
+        className="mobile-lobby-section mobile-lobby-board-section"
+      >
         <div className="mobile-lobby-section-heading">
           <h2 id="mobile-create-title">填充设置</h2>
           {activeSeatProfile ? <span>{activeSeatProfile.display_name}</span> : null}

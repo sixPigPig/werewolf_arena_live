@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
@@ -149,6 +150,124 @@ function readPngMetadata(path: string) {
   };
 }
 
+function readPngRgbaImage(path: string) {
+  const image = readFileSync(path);
+  const signature = image.subarray(0, 8).toString("hex");
+  if (signature !== "89504e470d0a1a0a") {
+    throw new Error("Expected a PNG image");
+  }
+
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idatChunks: Buffer[] = [];
+
+  while (offset < image.length) {
+    const length = image.readUInt32BE(offset);
+    const type = image.subarray(offset + 4, offset + 8).toString("ascii");
+    const data = image.subarray(offset + 8, offset + 8 + length);
+    offset += 12 + length;
+
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data.readUInt8(8);
+      colorType = data.readUInt8(9);
+    }
+    if (type === "IDAT") {
+      idatChunks.push(Buffer.from(data));
+    }
+    if (type === "IEND") {
+      break;
+    }
+  }
+
+  if (bitDepth !== 8 || colorType !== 6) {
+    throw new Error("Expected an 8-bit RGBA PNG");
+  }
+
+  const raw = inflateSync(Buffer.concat(idatChunks));
+  const bytesPerPixel = 4;
+  const stride = width * bytesPerPixel;
+  const pixels = Buffer.alloc(height * stride);
+  let rawOffset = 0;
+
+  for (let y = 0; y < height; y += 1) {
+    const filter = raw[rawOffset];
+    rawOffset += 1;
+    for (let x = 0; x < stride; x += 1) {
+      const current = raw[rawOffset + x];
+      const left = x >= bytesPerPixel ? pixels[y * stride + x - bytesPerPixel] : 0;
+      const up = y > 0 ? pixels[(y - 1) * stride + x] : 0;
+      const upLeft =
+        y > 0 && x >= bytesPerPixel
+          ? pixels[(y - 1) * stride + x - bytesPerPixel]
+          : 0;
+      let value = current;
+
+      if (filter === 1) {
+        value = current + left;
+      } else if (filter === 2) {
+        value = current + up;
+      } else if (filter === 3) {
+        value = current + Math.floor((left + up) / 2);
+      } else if (filter === 4) {
+        value = current + paeth(left, up, upLeft);
+      } else if (filter !== 0) {
+        throw new Error(`Unsupported PNG filter ${filter}`);
+      }
+
+      pixels[y * stride + x] = value & 0xff;
+    }
+    rawOffset += stride;
+  }
+
+  return { width, height, pixels };
+}
+
+function paeth(left: number, up: number, upLeft: number) {
+  const estimate = left + up - upLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const upDistance = Math.abs(estimate - up);
+  const upLeftDistance = Math.abs(estimate - upLeft);
+
+  if (leftDistance <= upDistance && leftDistance <= upLeftDistance) return left;
+  if (upDistance <= upLeftDistance) return up;
+  return upLeft;
+}
+
+function getAlphaAt(
+  image: ReturnType<typeof readPngRgbaImage>,
+  x: number,
+  y: number,
+) {
+  return image.pixels[(y * image.width + x) * 4 + 3];
+}
+
+function getAlphaBounds(image: ReturnType<typeof readPngRgbaImage>) {
+  let left = image.width;
+  let top = image.height;
+  let right = -1;
+  let bottom = -1;
+
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      if (getAlphaAt(image, x, y) === 0) {
+        continue;
+      }
+
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x);
+      bottom = Math.max(bottom, y);
+    }
+  }
+
+  return { bottom, left, right, top };
+}
+
 describe("GamesPage", () => {
   beforeEach(() => {
     gameClientMocks.listRuleSets.mockResolvedValue({
@@ -289,6 +408,23 @@ describe("GamesPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("locks the lobby page against vertical scrolling while preserving rule card swiping", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const contentRegionLockRule =
+      styles.match(
+        /\.mobile-app-shell:has\(\.mobile-lobby-page\) \.mobile-content-region\s*{[^}]+}/,
+      )?.[0] ?? "";
+    const lobbyPageRule =
+      styles.match(/(?:^|\n)\.mobile-lobby-page\s*{[^}]+}/)?.[0] ?? "";
+    const ruleScrollRule =
+      styles.match(/(?:^|\n)\.mobile-lobby-rule-scroll\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(contentRegionLockRule).toContain("overflow: hidden");
+    expect(lobbyPageRule).toContain("height: 100%");
+    expect(lobbyPageRule).toContain("overflow: hidden");
+    expect(ruleScrollRule).toContain("overflow-x: auto");
+  });
+
   it("centers rule indicator dots and highlights the selected rule color", async () => {
     const user = userEvent.setup();
     const scrollTo = vi.fn();
@@ -344,6 +480,47 @@ describe("GamesPage", () => {
     expect(styles).toContain(".mobile-lobby-rule-dot-starter");
     expect(styles).toContain(".mobile-lobby-rule-dot-social");
     expect(styles).toContain(".mobile-lobby-rule-dot-advanced");
+  });
+
+  it("adds gothic board backgrounds behind the three lobby section headings", async () => {
+    renderGamesPage();
+
+    const headingNames = ["规则选择", "组建阵容", "填充设置"];
+
+    for (const headingName of headingNames) {
+      const heading = await screen.findByRole("heading", { name: headingName });
+      const section = heading.closest("section");
+      const headingRow = heading.closest(".mobile-lobby-section-heading");
+
+      expect(section).toHaveClass("mobile-lobby-board-section");
+      expect(headingRow).toHaveClass("mobile-lobby-section-heading");
+    }
+
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const boardTitleRule =
+      styles.match(
+        /\.mobile-lobby-board-section\s+\.mobile-lobby-section-heading\s+h2\s*{[^}]+}/,
+      )?.[0] ?? "";
+
+    expect(boardTitleRule).toContain("lobby-section-title-board.png");
+    expect(boardTitleRule).toContain("background-size: 100% 100%");
+    expect(boardTitleRule).toContain("min-height: 48px");
+    expect(readPngMetadata("src/assets/lobby-section-title-board.png")).toEqual({
+      width: 512,
+      height: 156,
+      colorType: 6,
+    });
+
+    const boardImage = readPngRgbaImage(
+      "src/assets/lobby-section-title-board.png",
+    );
+    const alphaBounds = getAlphaBounds(boardImage);
+    expect(getAlphaAt(boardImage, 4, 4)).toBe(0);
+    expect(getAlphaAt(boardImage, 256, Math.floor(boardImage.height / 2))).toBe(
+      255,
+    );
+    expect(alphaBounds.top).toBe(10);
+    expect(boardImage.height - 1 - alphaBounds.bottom).toBe(10);
   });
 
   it("fills empty seats and creates a live game run", async () => {
