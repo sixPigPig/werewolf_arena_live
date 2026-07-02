@@ -318,6 +318,29 @@ textarea {
   white-space: nowrap;
 }
 
+.mobile-lobby-section-heading .mobile-lobby-seat-summary {
+  display: inline-flex;
+  flex: 0 1 160px;
+  min-height: 28px;
+  max-width: 48%;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  padding: 0 18px;
+  background-color: transparent;
+  background-image: url("../assets/lobby-wide-title-board.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  color: #f3ead0;
+  font-size: 9px;
+  font-weight: 800;
+  text-align: center;
+  text-shadow: 0 2px 4px rgb(0 0 0 / 88%);
+}
+
 .mobile-lobby-board-section .mobile-lobby-section-heading {
   min-height: 42px;
   align-items: center;
@@ -494,30 +517,75 @@ textarea {
 .mobile-lobby-seat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, auto);
   gap: 5px;
 }
 
 .mobile-lobby-seat-card {
+  position: relative;
   display: grid;
+  width: 100%;
+  aspect-ratio: 935 / 983;
   min-width: 0;
-  min-height: 52px;
+  min-height: 0;
   box-sizing: border-box;
+  align-content: center;
   justify-items: center;
   gap: 2px;
   padding: 4px 3px;
-  border: 1px solid rgb(166 184 202 / 18%);
+  border: 0;
   border-radius: 6px;
-  background: rgb(10 16 23 / 92%);
+  background-color: transparent;
+  background-image:
+    url("../assets/lobby-seat-card-frame-alpha.png"),
+    url("../assets/lobby-seat-card-stone-bg.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
   color: #f4e8d2;
+  overflow: hidden;
   text-align: center;
 }
 
 .mobile-lobby-seat-card-active {
-  border-color: rgb(229 188 99 / 78%);
+  background-image:
+    url("../assets/lobby-seat-card-frame-alpha.png"),
+    url("../assets/lobby-seat-card-stone-bg.png");
+  box-shadow:
+    inset 0 0 0 1px rgb(247 215 144 / 18%),
+    0 0 0 1px rgb(229 188 99 / 58%);
+}
+
+.mobile-lobby-seat-card-filled {
+  background-image: none;
+  padding: 0;
+}
+
+.mobile-lobby-seat-card-filled::before,
+.mobile-lobby-seat-card-filled::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+}
+
+.mobile-lobby-seat-card-filled::before {
+  z-index: 1;
   background:
-    linear-gradient(180deg, rgb(37 29 14 / 95%), rgb(9 17 26 / 95%));
-  box-shadow: inset 0 0 0 1px rgb(247 215 144 / 18%);
+    linear-gradient(180deg, rgb(2 6 12 / 10%) 0%, transparent 38%, rgb(2 6 12 / 76%) 100%);
+}
+
+.mobile-lobby-seat-card-filled::after {
+  z-index: 2;
+  background-image: url("../assets/lobby-seat-card-frame-alpha.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+.mobile-lobby-seat-card-filled.mobile-lobby-seat-card-active::before {
+  background:
+    linear-gradient(180deg, rgb(189 137 48 / 28%) 0%, rgb(2 6 12 / 8%) 42%, rgb(2 6 12 / 78%) 100%);
 }
 
 .mobile-lobby-seat-avatar {
@@ -529,6 +597,16 @@ textarea {
   border: 1px solid rgb(218 179 96 / 28%);
   border-radius: 6px;
   background: #050910;
+}
+
+.mobile-lobby-seat-card-filled .mobile-lobby-seat-avatar {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 6px;
 }
 
 .mobile-lobby-seat-avatar img,
@@ -544,30 +622,41 @@ textarea {
   object-fit: cover;
 }
 
+.mobile-lobby-seat-card-filled .mobile-lobby-seat-avatar img {
+  object-position: center top;
+}
+
 .mobile-lobby-seat-avatar > span {
   background:
     linear-gradient(145deg, rgb(21 35 49 / 92%), rgb(35 25 11 / 86%));
 }
 
-.mobile-lobby-seat-label,
 .mobile-lobby-seat-card strong {
+  position: relative;
+  z-index: 3;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.mobile-lobby-seat-label {
-  color: #d4b977;
-  font-size: 9px;
-  font-weight: 800;
-  line-height: 1.15;
-}
-
-.mobile-lobby-seat-card strong {
   color: #f4e8d2;
   font-size: 10px;
+  font-weight: 800;
   line-height: 1.2;
+}
+
+.mobile-lobby-seat-card-filled strong {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  left: 7px;
+  box-sizing: border-box;
+  max-width: calc(100% - 14px);
+  border: 1px solid rgb(229 188 99 / 22%);
+  border-radius: 4px;
+  padding: 3px 4px;
+  background: rgb(3 7 12 / 72%);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 48%);
+  font-size: 9px;
 }
 
 .mobile-lobby-inline-error {
@@ -589,13 +678,20 @@ textarea {
 
 .mobile-lobby-field {
   display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
   min-width: 0;
-  gap: 4px;
+  min-height: 58px;
+  align-items: center;
+  gap: 8px;
   box-sizing: border-box;
-  padding: 5px;
-  border: 1px solid rgb(166 184 202 / 18%);
-  border-radius: 6px;
-  background: rgb(10 16 23 / 86%);
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background-color: transparent;
+  background-image: url("../assets/lobby-settings-field-bg.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
 }
 
 .mobile-lobby-field span {
@@ -609,8 +705,9 @@ textarea {
 }
 
 .mobile-lobby-field input {
+  width: 100%;
   min-width: 0;
-  min-height: 26px;
+  min-height: 30px;
   box-sizing: border-box;
   border: 1px solid rgb(218 179 96 / 24%);
   border-radius: 6px;
@@ -622,12 +719,17 @@ textarea {
 
 .mobile-lobby-action-bar {
   bottom: calc(var(--mobile-tab-frame-height) + 6px + env(safe-area-inset-bottom));
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-  padding: 8px;
-  border-color: rgb(166 184 202 / 18%);
-  border-radius: 6px;
-  background: rgb(6 10 16 / 94%);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 18px 20px 16px;
+  border: 0;
+  border-radius: 10px;
+  background-color: transparent;
+  background-image: url("../assets/lobby-action-bar-bg.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  backdrop-filter: none;
 }
 
 .mobile-lobby-launch-status {
@@ -644,21 +746,84 @@ textarea {
 }
 
 .mobile-lobby-action-bar .mobile-button {
+  display: inline-grid;
+  width: 100%;
+  height: 42px;
   min-width: 0;
+  min-height: 42px;
+  place-items: center;
   overflow: hidden;
-  border-radius: 6px;
-  min-height: 40px;
+  border: 0;
+  border-radius: 0;
   padding: 0 6px;
+  background-color: transparent;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
   font-size: 12px;
+  font-weight: 900;
   line-height: 1.1;
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 86%),
+    0 0 8px rgb(0 0 0 / 60%);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.mobile-lobby-action-bar .mobile-button:disabled {
+  opacity: 1;
+}
+
+.mobile-lobby-action-bar .mobile-button > span {
+  display: block;
+}
+
+.mobile-lobby-action-bar .mobile-lobby-favorite-fill {
+  background-image: url("../assets/lobby-buttons/button-favorite-fill.png");
+  color: #f8ebc8;
+}
+
+.mobile-lobby-action-bar .mobile-lobby-favorite-fill:disabled {
+  background-image: url("../assets/lobby-buttons/button-favorite-fill-disabled.png");
+  color: #b9b4a8;
+}
+
+.mobile-lobby-action-bar .mobile-lobby-clear-seats {
+  background-image: url("../assets/lobby-buttons/button-clear-seats.png");
+  color: #f8ebc8;
+}
+
+.mobile-lobby-action-bar .mobile-lobby-clear-seats:disabled {
+  background-image: url("../assets/lobby-buttons/button-clear-disabled.png");
+  color: #b9b4a8;
+}
+
+.mobile-lobby-action-bar .mobile-lobby-launch-auto-fill {
+  background-image: url("../assets/lobby-buttons/button-launch-autofill.png");
+  color: #fff7d6;
+  text-shadow:
+    0 2px 2px rgb(0 0 0 / 92%),
+    0 0 6px rgb(61 31 0 / 72%);
+}
+
+.mobile-lobby-action-bar .mobile-lobby-launch-ready {
+  background-image: url("../assets/lobby-buttons/button-launch-ready.png");
+  color: #f8fbff;
+}
+
+.mobile-lobby-action-bar .mobile-lobby-launch-shortage {
+  background-image: url("../assets/lobby-buttons/button-launch-shortage.png");
+  color: #c6b899;
+}
+
+.mobile-lobby-action-bar .mobile-lobby-launch-pending {
+  background-image: url("../assets/lobby-buttons/button-launch-pending.png");
+  color: #e4f0ff;
+}
+
 .mobile-lobby-action-bar .mobile-lobby-clear-confirming {
-  border-color: rgb(248 113 113 / 58%);
-  background: rgb(66 16 16 / 84%);
-  color: #fecaca;
+  background-image: url("../assets/lobby-buttons/button-clear-confirm.png");
+  color: #ffe7d8;
 }
 
 .mobile-profile-drawer-layer {
@@ -994,7 +1159,6 @@ textarea {
   }
 
   .mobile-lobby-seat-card {
-    min-height: 50px;
     padding: 4px 3px;
   }
 

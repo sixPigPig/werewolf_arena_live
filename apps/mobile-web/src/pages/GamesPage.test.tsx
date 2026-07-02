@@ -246,7 +246,31 @@ function getAlphaAt(
   return image.pixels[(y * image.width + x) * 4 + 3];
 }
 
-function getAlphaBounds(image: ReturnType<typeof readPngRgbaImage>) {
+function countPixelsAboveAlpha(
+  image: ReturnType<typeof readPngRgbaImage>,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+  alpha: number,
+) {
+  let count = 0;
+
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      if (getAlphaAt(image, x, y) > alpha) {
+        count += 1;
+      }
+    }
+  }
+
+  return count;
+}
+
+function getAlphaBounds(
+  image: ReturnType<typeof readPngRgbaImage>,
+  minAlpha = 0,
+) {
   let left = image.width;
   let top = image.height;
   let right = -1;
@@ -254,7 +278,7 @@ function getAlphaBounds(image: ReturnType<typeof readPngRgbaImage>) {
 
   for (let y = 0; y < image.height; y += 1) {
     for (let x = 0; x < image.width; x += 1) {
-      if (getAlphaAt(image, x, y) === 0) {
+      if (getAlphaAt(image, x, y) <= minAlpha) {
         continue;
       }
 
@@ -266,6 +290,81 @@ function getAlphaBounds(image: ReturnType<typeof readPngRgbaImage>) {
   }
 
   return { bottom, left, right, top };
+}
+
+function expectLobbyButtonBackgroundAssets() {
+  const styles = readFileSync("src/styles/index.css", "utf8");
+  const actionButtonRule =
+    styles.match(
+      /\.mobile-lobby-action-bar\s+\.mobile-button\s*{[^}]+}/,
+    )?.[0] ?? "";
+  const actionButtonTextRule =
+    styles.match(
+      /\.mobile-lobby-action-bar\s+\.mobile-button\s+>\s+span\s*{[^}]+}/,
+    )?.[0] ?? "";
+  const buttonAssets = [
+    [".mobile-lobby-favorite-fill", "button-favorite-fill.png"],
+    [
+      ".mobile-lobby-favorite-fill:disabled",
+      "button-favorite-fill-disabled.png",
+    ],
+    [".mobile-lobby-clear-seats", "button-clear-seats.png"],
+    [".mobile-lobby-clear-seats:disabled", "button-clear-disabled.png"],
+    [".mobile-lobby-clear-confirming", "button-clear-confirm.png"],
+    [".mobile-lobby-launch-auto-fill", "button-launch-autofill.png"],
+    [".mobile-lobby-launch-ready", "button-launch-ready.png"],
+    [".mobile-lobby-launch-shortage", "button-launch-shortage.png"],
+    [".mobile-lobby-launch-pending", "button-launch-pending.png"],
+  ];
+  const expectedBoundsByAlpha = new Map<number, ReturnType<typeof getAlphaBounds>>();
+
+  expect(actionButtonRule).toContain("width: 100%");
+  expect(actionButtonRule).toContain("height: 42px");
+  expect(actionButtonTextRule).toContain("display: block");
+  expect(actionButtonTextRule).toContain("transform: translateY(3px)");
+
+  for (const [selector, assetName] of buttonAssets) {
+    expect(styles).toContain(selector);
+    expect(styles).toContain(`lobby-buttons/${assetName}`);
+    expect(readPngMetadata(`src/assets/lobby-buttons/${assetName}`)).toEqual({
+      width: 480,
+      height: 180,
+      colorType: 6,
+    });
+
+    const image = readPngRgbaImage(`src/assets/lobby-buttons/${assetName}`);
+    for (const minAlpha of [0, 16, 64, 128]) {
+      const bounds = getAlphaBounds(image, minAlpha);
+      const expectedBounds = expectedBoundsByAlpha.get(minAlpha);
+
+      if (expectedBounds) {
+        expect(bounds).toEqual(expectedBounds);
+      } else {
+        expectedBoundsByAlpha.set(minAlpha, bounds);
+      }
+
+      expect(bounds.left).toBeLessThanOrEqual(18);
+      expect(image.width - 1 - bounds.right).toBeLessThanOrEqual(18);
+      expect(bounds.top).toBe(image.height - 1 - bounds.bottom);
+      expect(bounds.top).toBeGreaterThanOrEqual(12);
+    }
+
+    const highAlphaBounds = getAlphaBounds(image, 200);
+    expect(highAlphaBounds.top).toBeGreaterThanOrEqual(12);
+    expect(image.height - 1 - highAlphaBounds.bottom).toBeGreaterThanOrEqual(
+      12,
+    );
+    expect(
+      countPixelsAboveAlpha(image, 210, 134, 270, image.height - 12, 200),
+    ).toBeGreaterThan(240);
+  }
+
+  const autoFillLaunchRule =
+    styles.match(
+      /\.mobile-lobby-action-bar\s+\.mobile-lobby-launch-auto-fill\s*{[^}]+}/,
+    )?.[0] ?? "";
+  expect(autoFillLaunchRule).toContain("color: #fff7d6");
+  expect(autoFillLaunchRule).toContain("0 2px 2px rgb(0 0 0 / 92%)");
 }
 
 describe("GamesPage", () => {
@@ -504,7 +603,7 @@ describe("GamesPage", () => {
 
     expect(boardTitleRule).toContain("lobby-section-title-board.png");
     expect(boardTitleRule).toContain("background-size: 100% 100%");
-    expect(boardTitleRule).toContain("min-height: 48px");
+    expect(boardTitleRule).toContain("min-height: 42px");
     expect(readPngMetadata("src/assets/lobby-section-title-board.png")).toEqual({
       width: 512,
       height: 156,
@@ -523,12 +622,126 @@ describe("GamesPage", () => {
     expect(boardImage.height - 1 - alphaBounds.bottom).toBe(10);
   });
 
-  it("fills empty seats and creates a live game run", async () => {
+  it("keeps lobby settings labels and inputs on the same row", async () => {
+    renderGamesPage();
+
+    expect(await screen.findByLabelText("种子")).toBeVisible();
+    expect(screen.getByRole("spinbutton", { name: "最大轮数" })).toBeVisible();
+
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const fieldRule =
+      styles.match(/\.mobile-lobby-field\s*{[^}]+}/)?.[0] ?? "";
+    const fieldInputRule =
+      styles.match(/\.mobile-lobby-field\s+input\s*{[^}]+}/)?.[0] ?? "";
+    const fieldBackground = readPngRgbaImage(
+      "src/assets/lobby-settings-field-bg.png",
+    );
+
+    expect(fieldRule).toContain("grid-template-columns: max-content minmax(0, 1fr)");
+    expect(fieldRule).toContain("align-items: center");
+    expect(fieldRule).toContain("gap: 8px");
+    expect(fieldRule).toContain("lobby-settings-field-bg.png");
+    expect(fieldRule).toContain("background-size: 100% 100%");
+    expect(fieldRule).toContain("border: 0");
+    expect(fieldInputRule).toContain("width: 100%");
+    expect(readPngMetadata("src/assets/lobby-settings-field-bg.png")).toEqual({
+      width: 768,
+      height: 192,
+      colorType: 6,
+    });
+    expect(getAlphaAt(fieldBackground, 0, 0)).toBe(0);
+    expect(
+      getAlphaAt(
+        fieldBackground,
+        Math.floor(fieldBackground.width / 2),
+        Math.floor(fieldBackground.height / 2),
+      ),
+    ).toBe(255);
+  });
+
+  it("removes the rule count badge and frames the seat summary with the wide board", async () => {
+    gameClientMocks.listRuleSets.mockResolvedValue({
+      rule_sets: [classic12RuleSet],
+    });
+    renderGamesPage();
+
+    const ruleHeading = await screen.findByRole("heading", { name: "规则选择" });
+    const ruleSection = ruleHeading.closest("section");
+    expect(ruleSection).not.toBeNull();
+    expect(within(ruleSection as HTMLElement).queryByText("12 人局")).not.toBeInTheDocument();
+
+    const seatSummary = await screen.findByText("12 人预女猎白局 · 12 个座位");
+    expect(seatSummary).toHaveClass("mobile-lobby-seat-summary");
+
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const seatSummaryRule =
+      styles.match(
+        /\.mobile-lobby-section-heading\s+\.mobile-lobby-seat-summary\s*{[^}]+}/,
+      )?.[0] ?? "";
+    const boardTitleRule =
+      styles.match(
+        /\.mobile-lobby-board-section\s+\.mobile-lobby-section-heading\s+h2\s*{[^}]+}/,
+      )?.[0] ?? "";
+
+    expect(seatSummaryRule).toContain("lobby-wide-title-board.png");
+    expect(seatSummaryRule).toContain("background-size: 100% 100%");
+    expect(seatSummaryRule).toContain("flex: 0 1 160px");
+    expect(seatSummaryRule).toContain("min-height: 28px");
+    expect(seatSummaryRule).toContain("font-size: 9px");
+    expect(boardTitleRule).toContain("min-height: 42px");
+    expect(boardTitleRule).toContain("font-size: 12px");
+    expect(readPngMetadata("src/assets/lobby-wide-title-board.png")).toEqual({
+      width: 1685,
+      height: 294,
+      colorType: 6,
+    });
+  });
+
+  it("shows only bold choose copy inside empty lobby seat cards", async () => {
+    renderGamesPage();
+
+    const seatButton = await screen.findByRole("button", {
+      name: "选择 1 号座位，当前为 请选择",
+    });
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const seatCardTextRule =
+      styles.match(/\.mobile-lobby-seat-card\s+strong\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(within(seatButton).queryByText("1号座位")).not.toBeInTheDocument();
+    expect(within(seatButton).getByText("请选择")).toBeVisible();
+    expect(seatButton.querySelector(".mobile-lobby-seat-avatar")).toBeNull();
+    expect(seatCardTextRule).toContain("font-weight: 800");
+  });
+
+  it("auto-fills empty seats on the first launch tap and creates on the second", async () => {
     const user = userEvent.setup();
     const { router } = renderGamesPage();
 
-    await user.click(await screen.findByRole("button", { name: "随机补齐" }));
-    await user.click(screen.getByRole("button", { name: "发起对局" }));
+    expect(
+      screen.queryByRole("button", { name: "随机补齐" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收藏补齐" })).toHaveClass(
+      "mobile-lobby-favorite-fill",
+    );
+    expect(screen.getByRole("button", { name: "清空席位" })).toHaveClass(
+      "mobile-lobby-clear-seats",
+    );
+
+    const fillLaunchButton = await screen.findByRole("button", {
+      name: "补齐发起",
+    });
+    expect(fillLaunchButton).toHaveClass("mobile-lobby-launch-auto-fill");
+
+    await user.click(fillLaunchButton);
+
+    expect(await screen.findByText("已选 2/2 · 阵容已就绪")).toBeVisible();
+    const readyLaunchButton = screen.getByRole("button", { name: "发起对局" });
+    expect(readyLaunchButton).toBeEnabled();
+    expect(readyLaunchButton).toHaveClass("mobile-lobby-launch-ready");
+    expect(readyLaunchButton).not.toHaveClass("mobile-lobby-launch-auto-fill");
+    expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
+
+    await user.click(readyLaunchButton);
 
     await waitFor(() => {
       expect(gameClientMocks.createGameRun).toHaveBeenCalledWith({
@@ -552,7 +765,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
     await user.click(
@@ -582,7 +795,7 @@ describe("GamesPage", () => {
     await user.click(screen.getByRole("button", { name: "确认清空" }));
     expect(
       screen.getByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     ).toBeVisible();
   });
@@ -593,7 +806,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
     await user.click(
@@ -611,7 +824,7 @@ describe("GamesPage", () => {
     await user.click(screen.getByRole("button", { name: "清空席位" }));
     expect(screen.getByRole("button", { name: "确认清空" })).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "补齐并发起" }));
+    await user.click(screen.getByRole("button", { name: "补齐发起" }));
 
     expect(screen.getByText("最大轮数必须是 1 到 20 的整数")).toBeVisible();
     expect(screen.getByRole("button", { name: "清空席位" })).toBeVisible();
@@ -624,26 +837,32 @@ describe("GamesPage", () => {
     );
     renderGamesPage();
 
-    await user.click(await screen.findByRole("button", { name: "随机补齐" }));
+    await user.click(await screen.findByRole("button", { name: "补齐发起" }));
     await user.click(screen.getByRole("button", { name: "发起对局" }));
 
     expect(screen.getByRole("button", { name: "发起中" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发起中" })).toHaveClass(
+      "mobile-lobby-launch-pending",
+    );
     expect(screen.getByRole("button", { name: "清空席位" })).toBeDisabled();
   });
 
   it("blocks creation when the player library cannot fill the selected rule set", async () => {
-    const user = userEvent.setup();
     gameClientMocks.listPlayerProfiles.mockResolvedValue({
       profiles: [buildProfile({ id: "profile-1", display_name: "阿青" })],
     });
     renderGamesPage();
 
-    await user.click(await screen.findByRole("button", { name: "随机补齐" }));
-
-    expect(await screen.findByText("已选 1/2 · 还差 1 名玩家")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "随机补齐" }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByText("已选 0/2 · 还差 1 名玩家")).toBeVisible();
     expect(
       screen.getByRole("button", { name: "还差 1 名玩家" }),
     ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "还差 1 名玩家" })).toHaveClass(
+      "mobile-lobby-launch-shortage",
+    );
     expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
   });
 
@@ -652,18 +871,22 @@ describe("GamesPage", () => {
 
     expect(await screen.findByText("已选 0/2 · 可自动补齐")).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "补齐并发起" }),
+      screen.getByRole("button", { name: "补齐发起" }),
     ).toBeEnabled();
+
+    expectLobbyButtonBackgroundAssets();
   });
 
   it("shows a ready launch state when every seat has a player", async () => {
     const user = userEvent.setup();
     renderGamesPage();
 
-    await user.click(await screen.findByRole("button", { name: "随机补齐" }));
+    await user.click(await screen.findByRole("button", { name: "补齐发起" }));
 
     expect(await screen.findByText("已选 2/2 · 阵容已就绪")).toBeVisible();
-    expect(screen.getByRole("button", { name: "发起对局" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "发起对局" })).toHaveClass(
+      "mobile-lobby-launch-ready",
+    );
   });
 
   it("blocks launch before submit when the player library cannot fill the lineup", async () => {
@@ -685,7 +908,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
 
@@ -717,7 +940,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
 
@@ -734,7 +957,7 @@ describe("GamesPage", () => {
     renderGamesPage();
 
     const seatButton = await screen.findByRole("button", {
-      name: "选择 1 号座位，当前为 待选择",
+      name: "选择 1 号座位，当前为 请选择",
     });
     await user.click(seatButton);
 
@@ -773,7 +996,7 @@ describe("GamesPage", () => {
     renderGamesPage();
 
     await screen.findByRole("button", {
-      name: "选择 8 号座位，当前为 待选择",
+      name: "选择 8 号座位，当前为 请选择",
     });
 
     const styles = readFileSync("src/styles/index.css", "utf8");
@@ -781,12 +1004,32 @@ describe("GamesPage", () => {
     const seatCardRule = styles.match(/\.mobile-lobby-seat-card\s*{[^}]+}/)?.[0];
     const actionBarRule =
       styles.match(/\.mobile-lobby-action-bar\s*{[^}]+}/)?.[0] ?? "";
+    const actionBarBackground = readPngRgbaImage(
+      "src/assets/lobby-action-bar-bg.png",
+    );
 
     expect(seatGridRule).toContain("grid-template-columns: repeat(4");
     expect(seatGridRule).toContain("grid-template-rows: repeat(2");
-    expect(seatCardRule).toContain("min-height: 52px");
-    expect(actionBarRule).toContain("grid-template-columns: repeat(4");
+    expect(seatCardRule).toContain("aspect-ratio: 935 / 983");
+    expect(seatCardRule).toContain("min-height: 0");
+    expect(actionBarRule).toContain("grid-template-columns: repeat(3");
     expect(actionBarRule).toContain("bottom: calc(var(--mobile-tab-frame-height) + 6px");
+    expect(actionBarRule).toContain("lobby-action-bar-bg.png");
+    expect(actionBarRule).toContain("background-size: 100% 100%");
+    expect(actionBarRule).toContain("border: 0");
+    expect(readPngMetadata("src/assets/lobby-action-bar-bg.png")).toEqual({
+      width: 1146,
+      height: 244,
+      colorType: 6,
+    });
+    expect(getAlphaAt(actionBarBackground, 0, 0)).toBe(0);
+    expect(
+      getAlphaAt(
+        actionBarBackground,
+        Math.floor(actionBarBackground.width / 2),
+        Math.floor(actionBarBackground.height / 2),
+      ),
+    ).toBe(255);
   });
 
   it("searches profiles when a profile has no tags", async () => {
@@ -805,7 +1048,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
     await user.type(screen.getByLabelText("搜索玩家"), "tagless");
@@ -821,7 +1064,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
     await user.click(
@@ -838,7 +1081,109 @@ describe("GamesPage", () => {
       screen.getByRole("button", {
         name: "选择 1 号座位，当前为 阿青",
       }),
-    ).toBeVisible();
+    ).toHaveClass("mobile-lobby-seat-card-filled");
+    const fillSettingsHeading = screen.getByRole("heading", {
+      name: "填充设置",
+    });
+    const fillSettingsHeadingRow = fillSettingsHeading.closest(
+      ".mobile-lobby-section-heading",
+    );
+
+    expect(fillSettingsHeadingRow).not.toBeNull();
+    expect(
+      within(fillSettingsHeadingRow as HTMLElement).queryByText("阿青"),
+    ).not.toBeInTheDocument();
+
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const seatCardRule =
+      styles.match(/\.mobile-lobby-seat-card\s*{[^}]+}/)?.[0] ?? "";
+    const filledSeatRule =
+      styles.match(/\.mobile-lobby-seat-card-filled\s*{[^}]+}/)?.[0] ?? "";
+    const filledSeatFrameRule =
+      [...styles.matchAll(/\.mobile-lobby-seat-card-filled::after\s*{[^}]+}/g)]
+        .map((match) => match[0])
+        .find((rule) => rule.includes("background-image")) ?? "";
+    const filledSeatAvatarRule =
+      styles.match(
+        /\.mobile-lobby-seat-card-filled\s+\.mobile-lobby-seat-avatar\s*{[^}]+}/,
+      )?.[0] ?? "";
+    const filledSeatAvatarImageRule =
+      styles.match(
+        /\.mobile-lobby-seat-card-filled\s+\.mobile-lobby-seat-avatar\s+img\s*{[^}]+}/,
+      )?.[0] ?? "";
+    const filledSeatNameRule =
+      styles.match(
+        /\.mobile-lobby-seat-card-filled\s+strong\s*{[^}]+}/,
+      )?.[0] ?? "";
+    const stoneSeatBackground = readPngRgbaImage(
+      "src/assets/lobby-seat-card-stone-bg.png",
+    );
+    const selectedSeatFrame = readPngRgbaImage(
+      "src/assets/lobby-seat-card-frame-alpha.png",
+    );
+
+    expect(seatCardRule).toContain("lobby-seat-card-frame-alpha.png");
+    expect(seatCardRule).toContain("lobby-seat-card-stone-bg.png");
+    expect(filledSeatRule).toContain("background-image: none");
+    expect(filledSeatFrameRule).toContain("lobby-seat-card-frame-alpha.png");
+    expect(filledSeatAvatarRule).toContain("position: absolute");
+    expect(filledSeatAvatarRule).toContain("inset: 0");
+    expect(filledSeatAvatarRule).toContain("width: 100%");
+    expect(filledSeatAvatarRule).toContain("height: 100%");
+    expect(filledSeatAvatarImageRule).toContain("object-position: center top");
+    expect(filledSeatNameRule).toContain("position: absolute");
+    expect(filledSeatNameRule).toContain("bottom: 7px");
+    expect(
+      getAlphaAt(
+        stoneSeatBackground,
+        Math.floor(stoneSeatBackground.width / 2),
+        Math.floor(stoneSeatBackground.height / 2),
+      ),
+    ).toBe(255);
+    expect(getAlphaAt(stoneSeatBackground, 0, 0)).toBe(0);
+    expect(
+      getAlphaAt(
+        stoneSeatBackground,
+        Math.floor(stoneSeatBackground.width / 2),
+        40,
+      ),
+    ).toBe(0);
+    expect(
+      getAlphaAt(
+        selectedSeatFrame,
+        Math.floor(selectedSeatFrame.width / 2),
+        Math.floor(selectedSeatFrame.height / 2),
+      ),
+    ).toBe(0);
+    expect(getAlphaAt(selectedSeatFrame, 300, 300)).toBe(0);
+
+    const decorativeRegions = [
+      [0, 330, 150, 650],
+      [selectedSeatFrame.width - 150, 330, selectedSeatFrame.width, 650],
+      [330, 0, 605, 150],
+      [330, selectedSeatFrame.height - 150, 605, selectedSeatFrame.height],
+      [0, 0, 220, 220],
+      [selectedSeatFrame.width - 220, 0, selectedSeatFrame.width, 220],
+      [0, selectedSeatFrame.height - 220, 220, selectedSeatFrame.height],
+      [
+        selectedSeatFrame.width - 220,
+        selectedSeatFrame.height - 220,
+        selectedSeatFrame.width,
+        selectedSeatFrame.height,
+      ],
+    ];
+    for (const [left, top, right, bottom] of decorativeRegions) {
+      expect(
+        countPixelsAboveAlpha(
+          selectedSeatFrame,
+          left,
+          top,
+          right,
+          bottom,
+          200,
+        ),
+      ).toBeGreaterThan(1_000);
+    }
   });
 
   it("labels player cards that are already assigned and confirms moves explicitly", async () => {
@@ -847,7 +1192,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
     await user.click(
@@ -857,7 +1202,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 2 号座位，当前为 待选择",
+        name: "选择 2 号座位，当前为 请选择",
       }),
     );
 
@@ -876,7 +1221,7 @@ describe("GamesPage", () => {
     });
     expect(
       screen.getByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     ).toBeVisible();
     expect(
@@ -892,7 +1237,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
     await user.click(
@@ -916,7 +1261,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
     await user.click(
@@ -943,7 +1288,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
     await user.click(
@@ -986,7 +1331,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     );
     await user.click(
@@ -1009,7 +1354,7 @@ describe("GamesPage", () => {
     });
     expect(
       screen.getByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "选择 1 号座位，当前为 请选择",
       }),
     ).toBeVisible();
   });

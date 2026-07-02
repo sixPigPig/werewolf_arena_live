@@ -113,7 +113,6 @@ export function GamesPage() {
     [visiblePlayerConfigs],
   );
   const safeActiveSeat = clampSeat(activeSeat, playerCount);
-  const activeSeatProfile = selectedProfilesBySeat.get(safeActiveSeat) ?? null;
   const launchStatus = useMemo(
     () => buildLineupLaunchStatus(visiblePlayerConfigs, profiles, playerCount),
     [playerCount, profiles, visiblePlayerConfigs],
@@ -144,6 +143,9 @@ export function GamesPage() {
     !selectedRuleSet ||
     createGameRunMutation.isPending;
   const isLaunchDisabled = isSubmitDisabled || !launchStatus.canLaunch;
+  const launchButtonStateClass = createGameRunMutation.isPending
+    ? "mobile-lobby-launch-pending"
+    : getLaunchButtonStateClass(launchStatus);
   const canAdvanceAfterConfirm = pendingProfile
     ? hasNextEmptySeat(
         upsertSeatProfile(
@@ -443,6 +445,11 @@ export function GamesPage() {
     setShortage(false);
     setValidationError(null);
     setPlayerConfigs(filledPlayerConfigs);
+
+    if (launchStatus.emptySeatCount > 0) {
+      return;
+    }
+
     createGameRunMutation.mutate({
       rule_set_id: selectedRuleSet.id,
       seed: seed ? Number(seed) : null,
@@ -490,9 +497,6 @@ export function GamesPage() {
       >
         <div className="mobile-lobby-section-heading">
           <h2 id="mobile-rule-title">规则选择</h2>
-          {selectedRuleSet ? (
-            <span>{selectedRuleSet.player_count} 人局</span>
-          ) : null}
         </div>
         {ruleSetsQuery.isError ? <p>规则加载失败</p> : null}
         <div className="mobile-lobby-rule-picker">
@@ -597,7 +601,7 @@ export function GamesPage() {
         >
           <div className="mobile-lobby-section-heading">
             <h2 id="mobile-seat-title">组建阵容</h2>
-            <span>
+            <span className="mobile-lobby-seat-summary">
               {selectedRuleSet.name} · {playerCount} 个座位
             </span>
           </div>
@@ -609,16 +613,18 @@ export function GamesPage() {
                   ? resolveAvatarImageUrl(profile)
                   : "";
                 const isActive = safeActiveSeat === seat;
+                const seatDisplayName = profile?.display_name ?? "请选择";
 
                 return (
                   <button
                     aria-label={`选择 ${seat} 号座位，当前为 ${
-                      profile?.display_name ?? "待选择"
+                      seatDisplayName
                     }`}
                     aria-pressed={isActive}
                     className={[
                       "mobile-lobby-seat-card",
                       isActive ? "mobile-lobby-seat-card-active" : "",
+                      profile ? "mobile-lobby-seat-card-filled" : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
@@ -626,20 +632,21 @@ export function GamesPage() {
                     onClick={(event) => openProfileDrawer(seat, event.currentTarget)}
                     type="button"
                   >
-                    <span className="mobile-lobby-seat-avatar">
-                      <span aria-hidden="true" />
-                      {avatarImageUrl ? (
-                        <img
-                          alt=""
-                          onError={(event) => {
-                            event.currentTarget.hidden = true;
-                          }}
-                          src={avatarImageUrl}
-                        />
-                      ) : null}
-                    </span>
-                    <span className="mobile-lobby-seat-label">{seat}号座位</span>
-                    <strong>{profile?.display_name ?? "待选择"}</strong>
+                    {profile ? (
+                      <span className="mobile-lobby-seat-avatar">
+                        <span aria-hidden="true" />
+                        {avatarImageUrl ? (
+                          <img
+                            alt=""
+                            onError={(event) => {
+                              event.currentTarget.hidden = true;
+                            }}
+                            src={avatarImageUrl}
+                          />
+                        ) : null}
+                      </span>
+                    ) : null}
+                    <strong>{seatDisplayName}</strong>
                   </button>
                 );
               },
@@ -657,7 +664,6 @@ export function GamesPage() {
       >
         <div className="mobile-lobby-section-heading">
           <h2 id="mobile-create-title">填充设置</h2>
-          {activeSeatProfile ? <span>{activeSeatProfile.display_name}</span> : null}
         </div>
         <div className="mobile-lobby-settings-grid">
           <label className="mobile-lobby-field">
@@ -692,24 +698,17 @@ export function GamesPage() {
             {launchStatus.summaryText}
           </span>
           <button
-            className="mobile-button"
-            disabled={!selectedRuleSet}
-            onClick={() => fillEmptySeats()}
-            type="button"
-          >
-            随机补齐
-          </button>
-          <button
-            className="mobile-button"
+            className="mobile-button mobile-lobby-favorite-fill"
             disabled={!selectedRuleSet}
             onClick={() => fillEmptySeats({ favoritesOnly: true })}
             type="button"
           >
-            收藏补齐
+            <span>收藏补齐</span>
           </button>
           <button
             className={[
               "mobile-button",
+              "mobile-lobby-clear-seats",
               isClearConfirming ? "mobile-lobby-clear-confirming" : "",
             ]
               .filter(Boolean)
@@ -718,15 +717,23 @@ export function GamesPage() {
             onClick={handleClearSeats}
             type="button"
           >
-            {isClearConfirming ? "确认清空" : "清空席位"}
+            <span>{isClearConfirming ? "确认清空" : "清空席位"}</span>
           </button>
           <button
-            className="mobile-button mobile-button-primary"
+            className={[
+              "mobile-button",
+              "mobile-button-primary",
+              launchButtonStateClass,
+            ]
+              .filter(Boolean)
+              .join(" ")}
             disabled={isLaunchDisabled}
             onClick={handleSubmit}
             type="button"
           >
-            {createGameRunMutation.isPending ? "发起中" : launchStatus.ctaLabel}
+            <span>
+              {createGameRunMutation.isPending ? "发起中" : launchStatus.ctaLabel}
+            </span>
           </button>
         </div>
       </div>
@@ -988,6 +995,18 @@ type LineupLaunchStatus = {
   canLaunch: boolean;
 };
 
+function getLaunchButtonStateClass(status: LineupLaunchStatus) {
+  if (status.canLaunch) {
+    return status.emptySeatCount > 0
+      ? "mobile-lobby-launch-auto-fill"
+      : "mobile-lobby-launch-ready";
+  }
+
+  return status.profileShortageCount > 0
+    ? "mobile-lobby-launch-shortage"
+    : "";
+}
+
 function buildLineupLaunchStatus(
   configs: PlayerConfig[],
   profiles: VirtualPlayerProfile[],
@@ -1035,7 +1054,7 @@ function buildLineupLaunchStatus(
       emptySeatCount,
       profileShortageCount,
       summaryText: `${countPrefix} · 可自动补齐`,
-      ctaLabel: "补齐并发起",
+      ctaLabel: "补齐发起",
       canLaunch: true,
     };
   }
