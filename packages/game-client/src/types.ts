@@ -370,6 +370,7 @@ export type VirtualPlayerProfile = {
   leadership_tendency: number;
   talkativeness: number;
   example_messages: string[];
+  display_order: number;
   favorite: boolean;
   appearance_id: string;
   avatar_prompt: string;

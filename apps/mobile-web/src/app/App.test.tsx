@@ -126,11 +126,16 @@ describe("mobile app scaffold", () => {
     const drawerTitleRule =
       styles.match(/(?:^|\n)\.mobile-profile-drawer-heading h2\s*{[^}]+}/)
         ?.[0] ?? "";
+    const drawerSubtitleRule =
+      styles.match(/(?:^|\n)\.mobile-profile-drawer-heading p\s*{[^}]+}/)
+        ?.[0] ?? "";
 
     expect(bodyRule).toContain("font-size: 14px");
     expect(pageTitleRule).toContain("font-size: 20px");
     expect(buttonRule).toContain("font-size: 13px");
     expect(liveStageTitleRule).toContain("font-size: 18px");
-    expect(drawerTitleRule).toContain("font-size: 16px");
+    expect(drawerTitleRule).toContain("font-size: 18px");
+    expect(drawerTitleRule).toContain("line-height: 18px");
+    expect(drawerSubtitleRule).toContain("font-size: 11px");
   });
 });

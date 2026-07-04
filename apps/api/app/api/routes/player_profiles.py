@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from sqlalchemy import func
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -296,6 +297,7 @@ class PlayerProfileResponse(BaseModel):
     leadership_tendency: int
     talkativeness: int
     example_messages: list[str]
+    display_order: int
     favorite: bool
     tags: list[str]
     created_at: datetime
@@ -497,7 +499,7 @@ def list_player_profiles(
     try:
         profiles = (
             db.query(VirtualPlayerProfile)
-            .order_by(VirtualPlayerProfile.updated_at.desc(), VirtualPlayerProfile.id.desc())
+            .order_by(VirtualPlayerProfile.display_order.asc(), VirtualPlayerProfile.id.asc())
             .all()
         )
     except RecoverableDatabaseError as exc:
@@ -547,6 +549,7 @@ def create_player_profile(
             leadership_tendency=request.leadership_tendency,
             talkativeness=request.talkativeness,
             example_messages=request.example_messages,
+            display_order=_next_profile_display_order(db),
             favorite=request.favorite,
             tags=request.tags,
         )
@@ -606,6 +609,7 @@ def update_player_profile(
 ) -> PlayerProfileResponse:
     profile = _get_profile_or_404(profile_id, db)
     updates = request.model_dump(exclude_unset=True)
+    favorite_changed = "favorite" in updates and updates["favorite"] != profile.favorite
 
     personality_changed = (
         "personality_id" in updates and updates["personality_id"] != profile.personality_id
@@ -657,6 +661,13 @@ def update_player_profile(
         elif "personality_text" in updates and not profile.personality_text:
             profile.personality_text = default_personality_text(profile.personality_id)
 
+        if favorite_changed:
+            _move_profile_to_display_position(
+                db,
+                profile,
+                1 if profile.favorite else "end",
+            )
+
         profile.updated_at = datetime.now(UTC)
         db.commit()
         db.refresh(profile)
@@ -695,6 +706,36 @@ def _get_profile_or_404(
     if profile is None:
         raise HTTPException(status_code=404, detail="Player profile not found")
     return profile
+
+
+def _next_profile_display_order(db: Session) -> int:
+    current_max = db.query(func.max(VirtualPlayerProfile.display_order)).scalar()
+    return int(current_max or 0) + 1
+
+
+def _move_profile_to_display_position(
+    db: Session,
+    profile: VirtualPlayerProfile,
+    position: int | Literal["end"],
+) -> None:
+    profiles = (
+        db.query(VirtualPlayerProfile)
+        .order_by(VirtualPlayerProfile.display_order.asc(), VirtualPlayerProfile.id.asc())
+        .all()
+    )
+    remaining_profiles = [
+        candidate for candidate in profiles if candidate.id != profile.id
+    ]
+    target_index = (
+        len(remaining_profiles)
+        if position == "end"
+        else max(0, min(position - 1, len(remaining_profiles)))
+    )
+    reordered_profiles = remaining_profiles.copy()
+    reordered_profiles.insert(target_index, profile)
+
+    for display_order, candidate in enumerate(reordered_profiles, start=1):
+        candidate.display_order = display_order
 
 
 def _profile_database_unavailable() -> HTTPException:

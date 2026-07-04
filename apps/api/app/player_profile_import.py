@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -41,12 +42,14 @@ def import_player_profiles(source: Path, db: Session) -> PlayerProfileImportResu
     skipped_count = 0
     seen_ids: set[str] = set()
     try:
+        next_display_order = _next_profile_display_order(db)
         for profile in profiles:
             if profile.id in seen_ids or db.get(VirtualPlayerProfile, profile.id) is not None:
                 skipped_count += 1
                 continue
             seen_ids.add(profile.id)
-            db.add(_database_profile(profile, db))
+            db.add(_database_profile(profile, db, display_order=next_display_order))
+            next_display_order += 1
             imported_count += 1
         db.commit()
     except (SQLAlchemyError, ValueError) as exc:
@@ -60,7 +63,12 @@ def import_player_profiles(source: Path, db: Session) -> PlayerProfileImportResu
     )
 
 
-def _database_profile(profile: StoredPlayerProfile, db: Session) -> VirtualPlayerProfile:
+def _database_profile(
+    profile: StoredPlayerProfile,
+    db: Session,
+    *,
+    display_order: int,
+) -> VirtualPlayerProfile:
     avatar = resolve_profile_avatar_reference(
         db,
         avatar_asset_id=profile.avatar_asset_id,
@@ -93,8 +101,14 @@ def _database_profile(profile: StoredPlayerProfile, db: Session) -> VirtualPlaye
         leadership_tendency=profile.leadership_tendency,
         talkativeness=profile.talkativeness,
         example_messages=profile.example_messages,
+        display_order=display_order,
         favorite=profile.favorite,
         tags=profile.tags,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
+
+
+def _next_profile_display_order(db: Session) -> int:
+    current_max = db.query(func.max(VirtualPlayerProfile.display_order)).scalar()
+    return int(current_max or 0) + 1

@@ -290,6 +290,12 @@ def test_import_player_profiles_command_rolls_back_database_failure(
         def get(self, *_args: object) -> None:
             return None
 
+        def query(self, *_args: object) -> "FailingSession":
+            return self
+
+        def scalar(self) -> int:
+            return 0
+
         def add(self, _value: object) -> None:
             pass
 

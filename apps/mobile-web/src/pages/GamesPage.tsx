@@ -1,8 +1,20 @@
 import {
   useMutation,
   useQuery,
+  useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  LoaderCircle,
+  Star,
+  StarCheck,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import lobbyHeroBanner from "../assets/mobile-lobby-hero-banner.png";
@@ -15,6 +27,10 @@ import social8UnselectedCard from "../assets/rule-cards/social-8-unselected.png"
 import starter6SelectedCard from "../assets/rule-cards/starter-6-selected.png";
 import starter6UnselectedCard from "../assets/rule-cards/starter-6-unselected.png";
 import {
+  MobileBottomSelect,
+  type MobileBottomSelectOption,
+} from "../components/MobileBottomSelect";
+import {
   createGameRun,
   hasPlayerConfig,
   listPlayerProfiles,
@@ -23,12 +39,20 @@ import {
   removeInvalidProfileRefs,
   resolveAvatarImageUrl,
   resizeLineupForPlayerCount,
+  updatePlayerProfile,
   type PlayerConfig,
+  type PlayerProfilesResponse,
   type VirtualPlayerProfile,
 } from "@werewolf-arena/game-client";
 
+const FAVORITE_FILTER_OPTIONS: MobileBottomSelectOption<"all" | "favorite">[] = [
+  { label: "全部玩家", value: "all" },
+  { label: "只看收藏", value: "favorite" },
+];
+
 export function GamesPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [selectedRuleSetId, setSelectedRuleSetId] = useState("");
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>([]);
   const [seed, setSeed] = useState("");
@@ -43,10 +67,14 @@ export function GamesPage() {
   const [favoriteFilter, setFavoriteFilter] = useState<"all" | "favorite">("all");
   const [profileStrategyFilter, setProfileStrategyFilter] = useState("all");
   const lobbyContentRef = useRef<HTMLDivElement | null>(null);
-  const profileDrawerRef = useRef<HTMLElement | null>(null);
-  const profileDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const profileCardScrollRef = useRef<HTMLDivElement | null>(null);
+  const profilePullDistanceRef = useRef(0);
+  const profilePullStartYRef = useRef<number | null>(null);
+  const shouldRefreshProfilesOnNextDrawerOpenRef = useRef(false);
   const ruleScrollRef = useRef<HTMLDivElement | null>(null);
   const ruleCardRefs = useRef(new Map<string, HTMLLabelElement>());
+  const seatButtonRefs = useRef(new Map<number, HTMLButtonElement>());
+  const [profilePullDistance, setProfilePullDistance] = useState(0);
 
   const ruleSetsQuery = useQuery({
     queryKey: ["rule-sets"],
@@ -60,6 +88,36 @@ export function GamesPage() {
     mutationFn: (request: Parameters<typeof createGameRun>[0]) =>
       createGameRun(request),
     onSuccess: (run) => navigate(`/games/${run.run_id}/live`),
+  });
+  const updateProfileFavoriteMutation = useMutation({
+    mutationFn: ({
+      favorite,
+      profileId,
+    }: {
+      favorite: boolean;
+      profileId: string;
+    }) => updatePlayerProfile(profileId, { favorite }),
+    onSuccess: (updatedProfile) => {
+      shouldRefreshProfilesOnNextDrawerOpenRef.current = true;
+      queryClient.setQueryData<PlayerProfilesResponse>(
+        ["player-profiles"],
+        (currentProfiles) => {
+          if (!currentProfiles) {
+            return currentProfiles;
+          }
+
+          return {
+            profiles: currentProfiles.profiles.map((profile) => {
+              if (profile.id !== updatedProfile.id) {
+                return profile;
+              }
+
+              return updatedProfile;
+            }),
+          };
+        },
+      );
+    },
   });
 
   const ruleSets = useMemo(
@@ -157,97 +215,19 @@ export function GamesPage() {
         safeActiveSeat,
       )
     : false;
-
-  useEffect(() => {
-    const lobbyContent = lobbyContentRef.current as
-      | (HTMLDivElement & { inert?: boolean })
-      | null;
-
-    if (!lobbyContent) {
-      return;
-    }
-
-    lobbyContent.inert = isProfileDrawerOpen;
-    if (isProfileDrawerOpen) {
-      lobbyContent.setAttribute("inert", "");
-    } else {
-      lobbyContent.removeAttribute("inert");
-    }
-
-    return () => {
-      lobbyContent.inert = false;
-      lobbyContent.removeAttribute("inert");
-    };
-  }, [isProfileDrawerOpen]);
-
-  useEffect(() => {
-    if (!isProfileDrawerOpen) {
-      return;
-    }
-
-    const drawer = profileDrawerRef.current;
-    if (!drawer) {
-      return;
-    }
-
-    const previouslyFocusedElement =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    const initialFocusTarget = getFocusableElements(drawer)[0] ?? drawer;
-    initialFocusTarget.focus();
-
-    function handleDrawerKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Tab" || !drawer) {
-        return;
-      }
-
-      const focusableElements = getFocusableElements(drawer);
-      if (focusableElements.length === 0) {
-        event.preventDefault();
-        drawer.focus();
-        return;
-      }
-
-      const firstFocusable = focusableElements[0];
-      const lastFocusable = focusableElements[focusableElements.length - 1];
-      const activeElement =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
-
-      if (!activeElement || !drawer.contains(activeElement)) {
-        event.preventDefault();
-        firstFocusable.focus();
-        return;
-      }
-
-      if (event.shiftKey && activeElement === firstFocusable) {
-        event.preventDefault();
-        lastFocusable.focus();
-        return;
-      }
-
-      if (!event.shiftKey && activeElement === lastFocusable) {
-        event.preventDefault();
-        firstFocusable.focus();
-      }
-    }
-
-    document.addEventListener("keydown", handleDrawerKeyDown);
-
-    return () => {
-      document.removeEventListener("keydown", handleDrawerKeyDown);
-      const focusTarget =
-        profileDrawerTriggerRef.current ?? previouslyFocusedElement;
-
-      if (focusTarget && document.contains(focusTarget)) {
-        focusTarget.focus();
-      }
-
-      profileDrawerTriggerRef.current = null;
-    };
-  }, [isProfileDrawerOpen]);
+  const profileRefreshStatus = playerProfilesQuery.isFetching
+    ? "refreshing"
+    : profilePullDistance >= 64
+      ? "ready"
+      : profilePullDistance > 0
+        ? "pulling"
+        : "idle";
+  const profileRefreshIndicatorStyle = {
+    "--mobile-profile-refresh-offset": `${Math.min(
+      Math.max(profilePullDistance, playerProfilesQuery.isFetching ? 48 : 0),
+      72,
+    )}px`,
+  } as CSSProperties;
 
   useEffect(() => {
     if (!isClearConfirming) {
@@ -307,7 +287,10 @@ export function GamesPage() {
 
   function openProfileDrawer(seat: number, trigger: HTMLButtonElement) {
     const profile = selectedProfilesBySeat.get(seat) ?? null;
-    profileDrawerTriggerRef.current = trigger;
+    if (shouldRefreshProfilesOnNextDrawerOpenRef.current) {
+      shouldRefreshProfilesOnNextDrawerOpenRef.current = false;
+      void playerProfilesQuery.refetch();
+    }
     setActiveSeat(seat);
     setPendingProfileId(profile?.id ?? null);
     setProfileSearch("");
@@ -317,6 +300,7 @@ export function GamesPage() {
     setShortage(false);
     setIsClearConfirming(false);
     setIsProfileDrawerOpen(true);
+    focusSeatAndScrollRowToTop(seat, trigger);
   }
 
   function closeProfileDrawer() {
@@ -350,6 +334,7 @@ export function GamesPage() {
     if (options.advanceToNextEmpty && nextEmptySeat) {
       setActiveSeat(nextEmptySeat);
       setPendingProfileId(null);
+      focusSeatAndScrollRowToTop(nextEmptySeat);
       return;
     }
 
@@ -372,6 +357,83 @@ export function GamesPage() {
         options,
       ),
     );
+  }
+
+  function handleToggleProfileFavorite(profile: VirtualPlayerProfile) {
+    setValidationError(null);
+    setShortage(false);
+    setIsClearConfirming(false);
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    updateProfileFavoriteMutation.mutate({
+      favorite: !profile.favorite,
+      profileId: profile.id,
+    });
+  }
+
+  function setProfilePullDistanceValue(distance: number) {
+    profilePullDistanceRef.current = distance;
+    setProfilePullDistance(distance);
+  }
+
+  function resetProfilePull() {
+    profilePullStartYRef.current = null;
+    setProfilePullDistanceValue(0);
+  }
+
+  function handleProfilePullStart(clientY: number) {
+    if (playerProfilesQuery.isFetching) {
+      return;
+    }
+
+    if ((profileCardScrollRef.current?.scrollTop ?? 0) > 0) {
+      return;
+    }
+
+    profilePullStartYRef.current = clientY;
+    setProfilePullDistanceValue(0);
+  }
+
+  function handleProfilePullMove(clientY: number, preventDefault: () => void) {
+    const startY = profilePullStartYRef.current;
+
+    if (startY === null) {
+      return;
+    }
+
+    if ((profileCardScrollRef.current?.scrollTop ?? 0) > 0) {
+      resetProfilePull();
+      return;
+    }
+
+    const distance = clientY - startY;
+
+    if (distance <= 0) {
+      setProfilePullDistanceValue(0);
+      return;
+    }
+
+    if (distance > 8) {
+      preventDefault();
+    }
+
+    setProfilePullDistanceValue(Math.min(distance, 96));
+  }
+
+  function handleProfilePullEnd() {
+    const shouldRefresh = profilePullDistanceRef.current >= 64;
+
+    profilePullStartYRef.current = null;
+
+    if (!shouldRefresh) {
+      setProfilePullDistanceValue(0);
+      return;
+    }
+
+    void playerProfilesQuery.refetch().finally(() => {
+      setProfilePullDistanceValue(0);
+    });
   }
 
   function handleClearSeats() {
@@ -458,8 +520,37 @@ export function GamesPage() {
     });
   }
 
+  function focusSeatAndScrollRowToTop(
+    seat: number,
+    fallbackButton?: HTMLButtonElement,
+  ) {
+    const seatButton = seatButtonRefs.current.get(seat) ?? fallbackButton;
+
+    if (!seatButton) {
+      return;
+    }
+
+    seatButton.focus({ preventScroll: true });
+    window.requestAnimationFrame(() => {
+      seatButton.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+        inline: "nearest",
+      });
+    });
+  }
+
   return (
-    <main className="mobile-page mobile-lobby-page" data-testid="mobile-games-page">
+    <main
+      className={[
+        "mobile-page",
+        "mobile-lobby-page",
+        isProfileDrawerOpen ? "mobile-lobby-page-drawer-open" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      data-testid="mobile-games-page"
+    >
       <div
         className="mobile-lobby-content"
         ref={lobbyContentRef}
@@ -630,6 +721,13 @@ export function GamesPage() {
                       .join(" ")}
                     key={seat}
                     onClick={(event) => openProfileDrawer(seat, event.currentTarget)}
+                    ref={(element) => {
+                      if (element) {
+                        seatButtonRefs.current.set(seat, element);
+                      } else {
+                        seatButtonRefs.current.delete(seat);
+                      }
+                    }}
                     type="button"
                   >
                     {profile ? (
@@ -743,148 +841,232 @@ export function GamesPage() {
           <div
             aria-hidden="true"
             className="mobile-profile-drawer-backdrop"
-            onClick={closeProfileDrawer}
           />
           <section
             aria-labelledby="mobile-profile-drawer-title"
-            aria-modal="true"
+            aria-modal="false"
             className="mobile-profile-drawer"
-            ref={profileDrawerRef}
             role="dialog"
             tabIndex={-1}
           >
-            <div className="mobile-profile-drawer-handle" aria-hidden="true" />
-            <div className="mobile-profile-drawer-heading">
-              <div>
-                <h2 id="mobile-profile-drawer-title">玩家卡牌库</h2>
-                <p>当前选择：{safeActiveSeat}号座位</p>
-              </div>
-              <button
-                aria-label="关闭玩家卡牌库"
-                className="mobile-profile-drawer-close"
-                onClick={closeProfileDrawer}
-                type="button"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="mobile-profile-drawer-filters">
-              <label className="mobile-profile-search">
-                <span>搜索玩家</span>
-                <input
-                  onChange={(event) => setProfileSearch(event.target.value)}
-                  placeholder="搜索名称、标签、模型"
-                  type="search"
-                  value={profileSearch}
-                />
-              </label>
-              <label className="mobile-profile-select">
-                <span>收藏</span>
-                <select
-                  aria-label="收藏筛选"
-                  onChange={(event) =>
-                    setFavoriteFilter(event.target.value as "all" | "favorite")
-                  }
-                  value={favoriteFilter}
-                >
-                  <option value="all">全部玩家</option>
-                  <option value="favorite">只看收藏</option>
-                </select>
-              </label>
-              <label className="mobile-profile-select">
-                <span>策略</span>
-                <select
-                  aria-label="策略筛选"
-                  onChange={(event) => setProfileStrategyFilter(event.target.value)}
-                  value={profileStrategyFilter}
-                >
-                  <option value="all">全部策略</option>
-                  {strategyFilterOptions.map((strategy) => (
-                    <option key={strategy} value={strategy}>
-                      {formatStrategyLabel(strategy)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            {playerProfilesQuery.isError ? (
-              <p className="mobile-lobby-inline-error">玩家库加载失败</p>
-            ) : null}
-            <div className="mobile-profile-card-grid">
-              {filteredProfiles.map((profile) => {
-                const isPending = pendingProfileId === profile.id;
-                const assignedSeat = assignedSeatByProfileId.get(profile.id);
-                const seatStatusLabel = getProfileSeatStatusLabel(
-                  assignedSeat,
-                  safeActiveSeat,
-                );
-                const avatarImageUrl = resolveAvatarImageUrl(profile);
-
-                return (
+            <div className="mobile-profile-drawer-top">
+              <div className="mobile-profile-drawer-handle" aria-hidden="true" />
+              <div className="mobile-profile-drawer-heading">
+                <div className="mobile-profile-drawer-title-row">
+                  <h2 id="mobile-profile-drawer-title">玩家卡牌库</h2>
                   <button
-                    aria-label={getProfileChoiceAriaLabel(
-                      safeActiveSeat,
-                      profile,
-                      seatStatusLabel,
-                    )}
-                    className={[
-                      "mobile-profile-card-choice",
-                      isPending ? "mobile-profile-card-choice-active" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    key={profile.id}
-                    onClick={() => setPendingProfileId(profile.id)}
+                    aria-label="关闭玩家卡牌库"
+                    className="mobile-profile-drawer-close"
+                    onClick={closeProfileDrawer}
                     type="button"
                   >
-                    <span className="mobile-profile-card-image">
-                      <span aria-hidden="true" />
-                      {avatarImageUrl ? (
-                        <img
-                          alt=""
-                          onError={(event) => {
-                            event.currentTarget.hidden = true;
-                          }}
-                          src={avatarImageUrl}
-                        />
-                      ) : null}
-                      {profile.favorite ? (
-                        <em
-                          aria-label="已收藏"
-                          className="mobile-profile-card-star"
-                        >
-                          ★
-                        </em>
-                      ) : null}
-                      {isPending ? (
-                        <em
-                          aria-hidden="true"
-                          className="mobile-profile-card-check"
-                        >
-                          ✓
-                        </em>
-                      ) : null}
-                    </span>
-                    <strong>{profile.display_name}</strong>
-                    <span>{formatStrategyLabel(profile.strategy_profile)}</span>
-                    {seatStatusLabel ? (
-                      <span className="mobile-profile-card-seat-status">
-                        {seatStatusLabel}
-                      </span>
-                    ) : null}
-                    <small>{getProfileDescription(profile)}</small>
+                    ×
                   </button>
-                );
-              })}
+                </div>
+                <p>当前选择：{safeActiveSeat}号座位</p>
+              </div>
+
+              <div className="mobile-profile-drawer-filters">
+                <label className="mobile-profile-search">
+                  <span>搜索玩家</span>
+                  <input
+                    onChange={(event) => setProfileSearch(event.target.value)}
+                    placeholder="搜索名称、标签、模型"
+                    type="search"
+                    value={profileSearch}
+                  />
+                </label>
+                <MobileBottomSelect
+                  className="mobile-profile-select-favorite"
+                  label="收藏"
+                  onChange={setFavoriteFilter}
+                  options={FAVORITE_FILTER_OPTIONS}
+                  value={favoriteFilter}
+                />
+                <MobileBottomSelect
+                  className="mobile-profile-select-strategy"
+                  label="策略"
+                  onChange={setProfileStrategyFilter}
+                  options={[
+                    { label: "全部策略", value: "all" },
+                    ...strategyFilterOptions.map((strategy) => ({
+                      label: formatStrategyLabel(strategy),
+                      value: strategy,
+                    })),
+                  ]}
+                  value={profileStrategyFilter}
+                />
+              </div>
+
+              {playerProfilesQuery.isError ? (
+                <p className="mobile-lobby-inline-error">玩家库加载失败</p>
+              ) : null}
             </div>
-            {!playerProfilesQuery.isPending && filteredProfiles.length === 0 ? (
-              <p className="mobile-profile-empty">没有匹配玩家</p>
-            ) : null}
+
+            <div
+              className="mobile-profile-card-scroll"
+              onTouchCancel={resetProfilePull}
+              onTouchEnd={handleProfilePullEnd}
+              onTouchMove={(event) => {
+                const touch = event.touches[0];
+                if (!touch) {
+                  return;
+                }
+                handleProfilePullMove(touch.clientY, () => {
+                  if (event.cancelable) {
+                    event.preventDefault();
+                  }
+                });
+              }}
+              onTouchStart={(event) => {
+                const touch = event.touches[0];
+                if (touch) {
+                  handleProfilePullStart(touch.clientY);
+                }
+              }}
+              ref={profileCardScrollRef}
+            >
+              <div
+                aria-hidden="true"
+                className={[
+                  "mobile-profile-refresh-indicator",
+                  `mobile-profile-refresh-indicator-${profileRefreshStatus}`,
+                ].join(" ")}
+                style={profileRefreshIndicatorStyle}
+              >
+                <span className="mobile-profile-refresh-orbit">
+                  <LoaderCircle
+                    aria-hidden="true"
+                    className="mobile-profile-refresh-spinner"
+                  />
+                </span>
+              </div>
+              <span aria-live="polite" className="mobile-sr-only">
+                {playerProfilesQuery.isFetching
+                  ? "玩家库刷新中"
+                  : profilePullDistance >= 64
+                    ? "释放刷新玩家库"
+                    : profilePullDistance > 0
+                      ? "下拉刷新玩家库"
+                      : ""}
+              </span>
+              {filteredProfiles.length > 0 ? (
+                <div className="mobile-profile-card-grid">
+                  {filteredProfiles.map((profile) => {
+                    const isPending = pendingProfileId === profile.id;
+                    const assignedSeat = assignedSeatByProfileId.get(profile.id);
+                    const seatStatusLabel = getProfileSeatStatusLabel(
+                      assignedSeat,
+                      safeActiveSeat,
+                    );
+                    const avatarImageUrl = resolveAvatarImageUrl(profile);
+                    const descriptionLines =
+                      getProfileCardDescriptionLines(profile);
+
+                    return (
+                      <div
+                        className={[
+                          "mobile-profile-card-choice",
+                          isPending ? "mobile-profile-card-choice-active" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        key={profile.id}
+                      >
+                        <button
+                          aria-label={getProfileChoiceAriaLabel(
+                            safeActiveSeat,
+                            profile,
+                            seatStatusLabel,
+                          )}
+                          className="mobile-profile-card-select-button"
+                          onClick={() => setPendingProfileId(profile.id)}
+                          type="button"
+                        >
+                          <span className="mobile-profile-card-image">
+                            <span aria-hidden="true" />
+                            {avatarImageUrl ? (
+                              <img
+                                alt=""
+                                onError={(event) => {
+                                  event.currentTarget.hidden = true;
+                                }}
+                                src={avatarImageUrl}
+                              />
+                            ) : null}
+                          </span>
+                          {isPending ? (
+                            <em
+                              aria-hidden="true"
+                              className="mobile-profile-card-check"
+                            />
+                          ) : null}
+                          <span className="mobile-profile-card-name-row">
+                            {seatStatusLabel ? (
+                              <span className="mobile-profile-card-seat-status">
+                                {seatStatusLabel}
+                              </span>
+                            ) : null}
+                            <strong>{profile.display_name}</strong>
+                          </span>
+                          <span className="mobile-profile-card-strategy">
+                            {formatStrategyLabel(profile.strategy_profile)}
+                          </span>
+                          <small>
+                            {descriptionLines.map((descriptionLine, index) => (
+                              <span
+                                className="mobile-profile-card-description-line"
+                                key={`${profile.id}-description-${index}`}
+                              >
+                                {descriptionLine}
+                              </span>
+                            ))}
+                          </small>
+                        </button>
+                        <button
+                          aria-label={`${
+                            profile.favorite ? "取消收藏" : "收藏"
+                          } ${profile.display_name}`}
+                          aria-pressed={profile.favorite}
+                          className={[
+                            "mobile-profile-card-favorite-button",
+                            profile.favorite
+                              ? "mobile-profile-card-favorite-button-active"
+                              : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                          disabled={updateProfileFavoriteMutation.isPending}
+                          onClick={() => handleToggleProfileFavorite(profile)}
+                          onPointerDown={(event) => {
+                            event.preventDefault();
+                          }}
+                          type="button"
+                        >
+                          {profile.favorite ? (
+                            <StarCheck
+                              aria-hidden="true"
+                              className="mobile-profile-card-favorite-icon"
+                            />
+                          ) : (
+                            <Star
+                              aria-hidden="true"
+                              className="mobile-profile-card-favorite-icon"
+                            />
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {!playerProfilesQuery.isPending && filteredProfiles.length === 0 ? (
+                <p className="mobile-profile-empty">没有匹配玩家</p>
+              ) : null}
+            </div>
             <div className="mobile-profile-drawer-footer">
               <span>
-                {pendingProfile ? pendingProfile.display_name : "请选择一张玩家卡"}
+                {pendingProfile ? pendingProfile.display_name : "请选择玩家"}
               </span>
               <button
                 className="mobile-button mobile-profile-drawer-secondary-action"
@@ -1100,24 +1282,6 @@ function hasNextEmptySeat(
   return findNextEmptySeat(configs, playerCount, currentSeat) !== undefined;
 }
 
-function getFocusableElements(container: HTMLElement) {
-  return Array.from(
-    container.querySelectorAll<HTMLElement>(
-      [
-        "a[href]",
-        "button:not([disabled])",
-        "input:not([disabled])",
-        "select:not([disabled])",
-        "textarea:not([disabled])",
-        "[tabindex]:not([tabindex='-1'])",
-      ].join(","),
-    ),
-  ).filter((element) => {
-    const ariaHidden = element.getAttribute("aria-hidden") === "true";
-    return !ariaHidden && !element.hidden;
-  });
-}
-
 type ProfileFilters = {
   favoriteFilter: "all" | "favorite";
   search: string;
@@ -1189,6 +1353,48 @@ function getProfileDescription(profile: VirtualPlayerProfile) {
     profile.model ||
     "暗夜牌局候选人"
   );
+}
+
+function getProfileCardDescriptionLines(profile: VirtualPlayerProfile) {
+  return splitProfileCardDescription(getProfileDescription(profile));
+}
+
+function splitProfileCardDescription(description: string) {
+  const trimmedDescription = description.trim();
+
+  if (trimmedDescription.length <= 12) {
+    return [trimmedDescription];
+  }
+
+  const maxFirstLineLength = Math.max(
+    4,
+    Math.floor(trimmedDescription.length * 0.4),
+  );
+  const punctuation = "，,、；;。.!！?？";
+  let splitIndex = 0;
+
+  for (
+    let index = 0;
+    index < Math.min(trimmedDescription.length - 1, maxFirstLineLength);
+    index += 1
+  ) {
+    if (punctuation.includes(trimmedDescription[index]) && index >= 3) {
+      splitIndex = index + 1;
+    }
+  }
+
+  if (splitIndex === 0) {
+    splitIndex = Math.max(4, Math.floor(trimmedDescription.length * 0.35));
+  }
+
+  if (splitIndex >= trimmedDescription.length - splitIndex) {
+    splitIndex = Math.max(4, Math.floor(trimmedDescription.length * 0.35));
+  }
+
+  return [
+    trimmedDescription.slice(0, splitIndex),
+    trimmedDescription.slice(splitIndex),
+  ];
 }
 
 type RuleCardImages = {

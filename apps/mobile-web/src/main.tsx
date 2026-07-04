@@ -1,4 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
+import "antd-mobile/es/global";
 import { StrictMode } from "react";
 import ReactDOM from "react-dom/client";
 

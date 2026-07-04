@@ -1053,7 +1053,7 @@ def test_get_and_list_profiles_map_avatar_asset_id_to_asset_url() -> None:
     )
 
 
-def test_list_profiles_returns_most_recently_updated_first() -> None:
+def test_list_profiles_keeps_default_order_after_profile_updates() -> None:
     created_a = client.post(
         "/api/v1/player-profiles",
         json={"display_name": "A", "model": "model-a"},
@@ -1074,6 +1074,57 @@ def test_list_profiles_returns_most_recently_updated_first() -> None:
     profiles = response.json()["profiles"]
     assert [profile["id"] for profile in profiles] == [created_a["id"], created_b["id"]]
     assert profiles[0]["display_name"] == updated_a["display_name"]
+
+
+def test_patch_favorite_moves_profile_to_front_and_unfavorite_moves_to_end() -> None:
+    created_a = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "A", "model": "model-a"},
+    ).json()
+    created_b = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "B", "model": "model-b"},
+    ).json()
+    created_c = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "C", "model": "model-c"},
+    ).json()
+
+    favorite_response = client.patch(
+        f"/api/v1/player-profiles/{created_b['id']}",
+        json={"favorite": True},
+    )
+
+    assert favorite_response.status_code == 200
+    assert favorite_response.json()["favorite"] is True
+    assert favorite_response.json()["display_order"] == 1
+    response = client.get("/api/v1/player-profiles")
+    assert response.status_code == 200
+    favorite_profiles = response.json()["profiles"]
+    assert [profile["id"] for profile in favorite_profiles] == [
+        created_b["id"],
+        created_a["id"],
+        created_c["id"],
+    ]
+    assert [profile["display_order"] for profile in favorite_profiles] == [1, 2, 3]
+
+    unfavorite_response = client.patch(
+        f"/api/v1/player-profiles/{created_b['id']}",
+        json={"favorite": False},
+    )
+
+    assert unfavorite_response.status_code == 200
+    assert unfavorite_response.json()["favorite"] is False
+    assert unfavorite_response.json()["display_order"] == 3
+    response = client.get("/api/v1/player-profiles")
+    assert response.status_code == 200
+    unfavorite_profiles = response.json()["profiles"]
+    assert [profile["id"] for profile in unfavorite_profiles] == [
+        created_a["id"],
+        created_c["id"],
+        created_b["id"],
+    ]
+    assert [profile["display_order"] for profile in unfavorite_profiles] == [1, 2, 3]
 
 
 def test_get_patch_delete_profile() -> None:

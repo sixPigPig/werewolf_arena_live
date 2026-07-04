@@ -57,6 +57,7 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "leadership_tendency",
         "talkativeness",
         "example_messages",
+        "display_order",
         "favorite",
         "tags",
         "created_at",
@@ -155,6 +156,7 @@ def test_virtual_player_profile_has_rich_character_columns() -> None:
         "leadership_tendency",
         "talkativeness",
         "example_messages",
+        "display_order",
         "favorite",
     ):
         assert column_name in table.c

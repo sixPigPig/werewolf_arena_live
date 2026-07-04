@@ -204,7 +204,7 @@ def list_available_player_profiles(
     try:
         return list(
             db.query(VirtualPlayerProfile)
-            .order_by(VirtualPlayerProfile.updated_at.desc(), VirtualPlayerProfile.id.desc())
+            .order_by(VirtualPlayerProfile.display_order.asc(), VirtualPlayerProfile.id.asc())
             .all()
         )
     except RecoverableDatabaseError as exc:

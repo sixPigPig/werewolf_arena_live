@@ -96,6 +96,7 @@ function playerProfilesResponse(): { profiles: VirtualPlayerProfile[] } {
         leadership_tendency: 3,
         talkativeness: 3,
         example_messages: [],
+        display_order: 1,
         favorite: false,
         appearance_id: "moonlit",
         avatar_prompt: "银发观察者",

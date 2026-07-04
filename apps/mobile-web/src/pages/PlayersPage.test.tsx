@@ -44,6 +44,7 @@ function buildProfile(
     leadership_tendency: 3,
     talkativeness: 3,
     example_messages: [],
+    display_order: overrides.display_order ?? 1,
     favorite: overrides.favorite ?? false,
     appearance_id: overrides.appearance_id ?? "default",
     avatar_prompt: "",

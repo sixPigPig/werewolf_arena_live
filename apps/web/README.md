@@ -13,7 +13,7 @@ make web
 也可以在当前目录直接启动：
 
 ```bash
-pnpm dev --host 127.0.0.1 --port 5173
+pnpm dev --host 0.0.0.0 --port 5173
 ```
 
 前端地址：
@@ -22,14 +22,22 @@ pnpm dev --host 127.0.0.1 --port 5173
 http://127.0.0.1:5173
 ```
 
+同一局域网内的手机或其他电脑也可以访问：
+
+```text
+http://<你的电脑局域网 IP>:5173
+```
+
 ## 后端 API
 
-本地开发时，Vite 会把 `/api` 代理到 `http://localhost:8000`。因此前端默认可以直接请求 `/api/v1/...`。
+本地开发时，Vite 会把 `/api` 代理到 `http://127.0.0.1:8000`。因此前端默认可以直接请求 `/api/v1/...`。
 
-如果需要绕过 Vite 代理，可以将 `.env.example` 复制为 `.env`，并设置：
+局域网调试时建议保持 `VITE_API_BASE_URL` 未设置，让手机请求当前 Vite 服务的 `/api` 代理。
+
+如果仅在本机需要绕过 Vite 代理，可以将 `.env.example` 复制为 `.env`，并设置：
 
 ```bash
-VITE_API_BASE_URL=http://localhost:8000
+VITE_API_BASE_URL=http://127.0.0.1:8000
 ```
 
 后端健康检查：

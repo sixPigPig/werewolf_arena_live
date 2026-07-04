@@ -47,6 +47,7 @@ class VirtualPlayerProfile(Base):
         nullable=False,
         default=list,
     )
+    display_order: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     favorite: Mapped[bool] = mapped_column(nullable=False, default=False)
     tags: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JSON), nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
