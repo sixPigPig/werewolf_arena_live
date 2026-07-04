@@ -533,6 +533,62 @@ describe("LiveGamePage", () => {
     expect(await screen.findByText("已完成")).toBeInTheDocument();
   });
 
+  it("renders live phase segments from SSE events and seeks by phase", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(runningRunResponse());
+
+    renderWithClient(
+      <Routes>
+        <Route path="/games/live/:runId" element={<LiveGamePage />} />
+      </Routes>,
+      "/games/live/run_1234abcd",
+    );
+
+    expect(await screen.findByText("实时观战")).toBeInTheDocument();
+    const source = MockEventSource.instances[0];
+
+    act(() => {
+      emitEvent(source, {
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "村民", model: "deepseek-chat" },
+          ],
+        },
+      });
+      emitEvent(source, {
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "night",
+        payload: { active_players: ["张三", "李四"] },
+      });
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "从夜一开始播放" }),
+    ).toBeInTheDocument();
+
+    act(() => {
+      emitEvent(source, {
+        id: 3,
+        type: "phase_started",
+        round: 1,
+        phase: "day",
+        payload: { active_players: ["张三", "李四"] },
+      });
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "从昼一开始播放" }));
+
+    expect(screen.getByRole("button", { name: "从昼一开始播放" })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+  });
+
   it("localizes the idle live connection state", () => {
     render(
       <LiveStatusStrip

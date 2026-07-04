@@ -34,6 +34,7 @@ export type UseLiveDirectorResult = {
   togglePaused: () => void;
   setSpeed: (speed: LiveDirectorSpeed) => void;
   advance: () => void;
+  seekToEventId: (eventId: number) => void;
   catchUpToLatest: () => void;
 };
 
@@ -194,6 +195,19 @@ export function useLiveDirector(
     moveToIndex(Math.min(currentIndex + 1, cues.length - 1));
   }, [cues.length, currentIndex, moveToIndex]);
 
+  const seekToEventId = useCallback(
+    (eventId: number) => {
+      if (cues.length === 0) {
+        moveToIndex(-1);
+        return;
+      }
+
+      const matchingIndex = cues.findIndex((cue) => cue.eventId >= eventId);
+      moveToIndex(matchingIndex === -1 ? cues.length - 1 : matchingIndex);
+    },
+    [cues, moveToIndex],
+  );
+
   useEffect(() => {
     if (lastStartedEventIdRef.current === resolvedCurrentEventId) {
       return;
@@ -279,6 +293,7 @@ export function useLiveDirector(
     togglePaused,
     setSpeed,
     advance,
+    seekToEventId,
     catchUpToLatest,
   };
 }

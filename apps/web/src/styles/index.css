@@ -768,6 +768,100 @@ body {
   scrollbar-color: rgb(214 207 191 / 68%) transparent;
 }
 
+.live-phase-bar {
+  width: 100%;
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+  border: 1px solid rgb(185 147 92 / 28%);
+  border-radius: 0.5rem;
+  background:
+    linear-gradient(180deg, rgb(8 14 20 / 72%), rgb(2 6 13 / 62%)),
+    radial-gradient(circle at 50% 0%, rgb(45 212 191 / 10%), transparent 46%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 230 184 / 8%),
+    0 14px 32px rgb(0 0 0 / 24%);
+}
+
+.live-phase-bar-track {
+  display: flex;
+  gap: 0.5rem;
+  min-height: 3rem;
+  padding: 0.45rem;
+  overflow-x: auto;
+  scrollbar-color: rgb(214 207 191 / 62%) transparent;
+}
+
+.live-phase-bar-track::-webkit-scrollbar {
+  height: 0.34rem;
+}
+
+.live-phase-bar-track::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.live-phase-bar-track::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(214 207 191 / 62%);
+}
+
+.live-phase-bar-item {
+  flex: 0 0 auto;
+}
+
+.live-phase-segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.4rem;
+  height: 2.1rem;
+  padding-inline: 0.9rem;
+  border: 1px solid rgb(148 163 184 / 30%);
+  border-radius: 0.45rem;
+  color: rgb(203 213 225 / 78%);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  background: rgb(15 23 42 / 52%);
+  box-shadow: inset 0 0 14px rgb(255 255 255 / 3%);
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.live-phase-segment:hover,
+.live-phase-segment:focus-visible {
+  border-color: rgb(251 191 36 / 58%);
+  color: rgb(254 243 199);
+  background: rgb(251 191 36 / 10%);
+  outline: none;
+}
+
+.live-phase-segment:focus-visible {
+  box-shadow:
+    inset 0 0 14px rgb(255 255 255 / 5%),
+    0 0 0 2px rgb(251 191 36 / 32%);
+}
+
+.live-phase-segment-visited {
+  border-color: rgb(45 212 191 / 30%);
+  color: rgb(204 251 241 / 86%);
+}
+
+.live-phase-segment-current {
+  border-color: rgb(251 191 36 / 78%);
+  color: rgb(255 251 235);
+  background:
+    linear-gradient(180deg, rgb(251 191 36 / 20%), rgb(15 23 42 / 60%)),
+    rgb(15 23 42 / 62%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 251 235 / 14%),
+    0 0 18px rgb(251 191 36 / 18%);
+}
+
 .god-view-bottom-board::-webkit-scrollbar {
   height: 0.34rem;
 }

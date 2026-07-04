@@ -4,5 +4,6 @@ export * from "./liveGodView";
 export * from "./liveLabels";
 export * from "./liveNarrative";
 export * from "./liveNavStatus";
+export * from "./livePhaseBar";
 export * from "./liveSpectator";
 export * from "./useGameRunEvents";

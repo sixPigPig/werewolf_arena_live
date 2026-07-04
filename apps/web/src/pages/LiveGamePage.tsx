@@ -13,6 +13,7 @@ import { LiveNavStatusBadge } from "../features/games/components/LiveNavStatusBa
 import { LiveStageExperience } from "../features/games/components/LiveStageExperience";
 import { useGameRunEvents } from "../features/games/hooks/useGameRunEvents";
 import { useLiveDirector } from "../features/games/hooks/useLiveDirector";
+import { buildLivePhaseSegments } from "../features/games/livePhaseBar";
 import { deriveGodViewState } from "../features/games/liveGodView";
 import { deriveLiveNavStatus } from "../features/games/liveNavStatus";
 import { deriveLiveSpectatorState } from "../features/games/liveSpectator";
@@ -79,6 +80,10 @@ export function LiveGamePage() {
 
     return events.filter((event) => event.id <= currentEventId);
   }, [events, currentEventId]);
+  const phaseSegments = useMemo(
+    () => buildLivePhaseSegments(events, currentEventId),
+    [events, currentEventId],
+  );
   const spectatorState = useMemo(
     () => deriveLiveSpectatorState(stageEvents),
     [stageEvents],
@@ -222,6 +227,10 @@ export function LiveGamePage() {
           godViewState={godViewState}
           mode="live"
           onDebugPanelOpenChange={handleDebugPanelOpenChange}
+          onSelectPhase={(segment) =>
+            director.seekToEventId(segment.startEventId)
+          }
+          phaseSegments={phaseSegments}
           spectatorState={spectatorState}
         />
       </main>

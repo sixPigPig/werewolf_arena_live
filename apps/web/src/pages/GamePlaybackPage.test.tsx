@@ -92,6 +92,22 @@ function playbackResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function playbackEvent(overrides: Record<string, unknown>) {
+  return {
+    id: 1,
+    type: "game_started",
+    run_id: "run_original",
+    session_id: "game_1200abcd",
+    created_at: "2026-05-19T00:00:00Z",
+    round: null,
+    phase: null,
+    actor: null,
+    action: null,
+    payload: {},
+    ...overrides,
+  };
+}
+
 describe("GamePlaybackPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -121,6 +137,72 @@ describe("GamePlaybackPage", () => {
     expect(fetch).toHaveBeenCalledWith(
       "/api/v1/games/game_1200abcd/playback",
       undefined,
+    );
+  });
+
+  it("renders a complete phase bar and seeks playback by phase", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          playbackResponse({
+            events: [
+              playbackEvent({
+                id: 1,
+                type: "game_started",
+                payload: {
+                  players: [
+                    { name: "Alice", role: "狼人", model: "deepseek-chat" },
+                    { name: "Bob", role: "村民", model: "deepseek-chat" },
+                  ],
+                },
+              }),
+              playbackEvent({
+                id: 3,
+                type: "phase_started",
+                round: 1,
+                phase: "night",
+                payload: { active_players: ["Alice", "Bob"] },
+              }),
+              playbackEvent({
+                id: 6,
+                type: "phase_started",
+                round: 1,
+                phase: "day",
+                payload: { active_players: ["Alice", "Bob"] },
+              }),
+              playbackEvent({
+                id: 9,
+                type: "phase_started",
+                round: 2,
+                phase: "night",
+                payload: { active_players: ["Alice", "Bob"] },
+              }),
+              playbackEvent({
+                id: 12,
+                type: "game_completed",
+                payload: { winner: "好人阵营" },
+              }),
+            ],
+          }),
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    renderPlaybackRoute();
+
+    expect(
+      await screen.findByRole("button", { name: "从夜一开始播放" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "从昼一开始播放" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "从夜二开始播放" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "从昼一开始播放" }));
+
+    expect(screen.getByRole("button", { name: "从昼一开始播放" })).toHaveAttribute(
+      "aria-current",
+      "step",
     );
   });
 

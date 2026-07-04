@@ -11,6 +11,7 @@ import {
 } from "../liveDebugTrace";
 import { deriveLiveNarrativeState } from "../liveNarrative";
 import type { LiveSpectatorState } from "../liveSpectator";
+import type { LivePhaseSegment } from "../livePhaseBar";
 import type { LiveGameEvent } from "../types";
 import { GodViewBottomBoard } from "./GodViewBottomBoard";
 import { GodViewIntelPanel } from "./GodViewIntelPanel";
@@ -18,6 +19,7 @@ import { GodViewSituationPanel } from "./GodViewSituationPanel";
 import { GodViewTopBar } from "./GodViewTopBar";
 import { LiveDebugPanelDialog } from "./LiveDebugPanelDialog";
 import { LiveDirectorStage } from "./LiveDirectorStage";
+import { LivePhaseBar } from "./LivePhaseBar";
 
 type LiveStageExperienceProps = {
   debugPanelOpen?: boolean;
@@ -26,6 +28,8 @@ type LiveStageExperienceProps = {
   godViewState: GodViewState;
   mode: "live" | "playback";
   onDebugPanelOpenChange?: (isOpen: boolean) => void;
+  onSelectPhase: (segment: LivePhaseSegment) => void;
+  phaseSegments: LivePhaseSegment[];
   spectatorState: LiveSpectatorState;
 };
 
@@ -36,6 +40,8 @@ export function LiveStageExperience({
   godViewState,
   mode,
   onDebugPanelOpenChange,
+  onSelectPhase,
+  phaseSegments,
   spectatorState,
 }: LiveStageExperienceProps) {
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
@@ -65,6 +71,7 @@ export function LiveStageExperience({
           <Callout.Text>该对局没有可播放事件</Callout.Text>
         </Callout.Root>
       ) : null}
+      <LivePhaseBar onSelectPhase={onSelectPhase} segments={phaseSegments} />
       <LiveStageModule
         bottom={<GodViewBottomBoard state={godViewState} />}
         left={<GodViewSituationPanel state={godViewState} />}
