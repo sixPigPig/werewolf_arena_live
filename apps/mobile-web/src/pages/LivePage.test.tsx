@@ -115,6 +115,28 @@ const backlogSpeakingDeltaEvent: LiveGameEvent = {
   },
 };
 
+const nightPhaseEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "phase_started",
+  round: 1,
+  phase: "night",
+  actor: null,
+  action: null,
+  payload: { active_players: ["阿青", "白石", "南风", "木子"] },
+};
+
+const dayPhaseEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 3,
+  type: "phase_started",
+  round: 1,
+  phase: "day",
+  actor: null,
+  action: null,
+  payload: { active_players: ["阿青", "白石", "南风", "木子"] },
+};
+
 function renderLiveRoute() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -211,6 +233,29 @@ describe("LivePage", () => {
     expect(presenterImage).toHaveAttribute(
       "src",
       "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
+    );
+  });
+
+  it("renders mobile live phase segments and seeks by phase", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, nightPhaseEvent, dayPhaseEvent],
+      latestEvent: dayPhaseEvent,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+
+    expect(
+      await screen.findByRole("button", { name: "从夜一开始播放" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "从昼一开始播放" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "从昼一开始播放" }));
+
+    expect(screen.getByRole("button", { name: "从昼一开始播放" })).toHaveAttribute(
+      "aria-current",
+      "step",
     );
   });
 

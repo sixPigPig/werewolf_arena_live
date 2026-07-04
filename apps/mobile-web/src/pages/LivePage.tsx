@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
+  buildLivePhaseSegments,
   deriveGodViewState,
   deriveLiveNavStatus,
   deriveLiveSpectatorState,
@@ -14,7 +15,10 @@ import {
   type GameRun,
   type GodViewPlayer,
   type LiveGameEvent,
+  type LivePhaseSegment,
 } from "@werewolf-arena/game-client";
+
+import { MobileLivePhaseBar } from "../components/MobileLivePhaseBar";
 
 const EMPTY_EVENTS: LiveGameEvent[] = [];
 
@@ -73,6 +77,10 @@ export function LivePage() {
     events,
     latestEvent,
   ]);
+  const phaseSegments = useMemo(
+    () => buildLivePhaseSegments(events, director.currentEventId),
+    [director.currentEventId, events],
+  );
   const currentEvent = stageEvents.at(-1) ?? latestEvent;
   const spectatorState = useMemo(
     () => deriveLiveSpectatorState(stageEvents),
@@ -145,7 +153,11 @@ export function LivePage() {
           godViewState={godViewState}
           liveStatusLabel={liveStatus.label}
           onBack={() => navigateBackToGames(navigate)}
+          onSelectPhase={(segment) =>
+            director.seekToEventId(segment.startEventId)
+          }
           onResumeRun={() => resumeMutation.mutate(run.session_id)}
+          phaseSegments={phaseSegments}
           resumeIsPending={resumeMutation.isPending}
           run={run}
           terminalEvent={terminalEvent}
@@ -166,7 +178,9 @@ type LiveTheaterProps = {
   godViewState: GodViewState;
   liveStatusLabel: string;
   onBack: () => void;
+  onSelectPhase: (segment: LivePhaseSegment) => void;
   onResumeRun: () => void;
+  phaseSegments: LivePhaseSegment[];
   resumeIsPending: boolean;
   run: GameRun;
   terminalEvent: LiveGameEvent | undefined;
@@ -180,7 +194,9 @@ function LiveTheater({
   godViewState,
   liveStatusLabel,
   onBack,
+  onSelectPhase,
   onResumeRun,
+  phaseSegments,
   resumeIsPending,
   run,
   terminalEvent,
@@ -195,6 +211,10 @@ function LiveTheater({
         liveStatusLabel={liveStatusLabel}
         onBack={onBack}
         ruleName={run.rule_set?.name ?? "实时对局"}
+      />
+      <MobileLivePhaseBar
+        onSelectPhase={onSelectPhase}
+        segments={phaseSegments}
       />
       <LiveSkyBanner
         dayNightLabel={godViewState.dayNightLabel}
