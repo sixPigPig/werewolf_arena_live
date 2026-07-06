@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine
@@ -8,8 +9,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
+from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION, ResumeCheckpointError
 from app.werewolf.replay import DatabaseReplayStore, ReplayNotFoundError
+
+_DEFAULT = object()
 
 
 @pytest.fixture
@@ -38,6 +42,46 @@ def sample_state(session_id: str, *, winner: str = "狼人阵营", error: str = 
 
 def sample_logs() -> list[dict]:
     return [{"number": 1, "debate": [], "summaries": []}]
+
+
+def sample_checkpoint(
+    session_id: str = "game_1200abcd",
+    *,
+    checkpoint_session_id: str | None = None,
+    state_session_id: str | None = None,
+    state_at_round_start: Any = _DEFAULT,
+    logs_before_round: Any = _DEFAULT,
+    schema_version: Any = _DEFAULT,
+) -> dict[str, Any]:
+    if state_at_round_start is _DEFAULT:
+        state_at_round_start = sample_state(
+            state_session_id or session_id,
+            winner="",
+            error="",
+        )
+    if logs_before_round is _DEFAULT:
+        logs_before_round = sample_logs()
+    if schema_version is _DEFAULT:
+        schema_version = CHECKPOINT_SCHEMA_VERSION
+    return {
+        "schema_version": schema_version,
+        "session_id": checkpoint_session_id or session_id,
+        "state_at_round_start": state_at_round_start,
+        "logs_before_round": logs_before_round,
+        "run_params": {
+            "villager_model": "deepseek-chat",
+            "werewolf_model": "deepseek-chat",
+            "seed": 7,
+            "max_rounds": 8,
+            "rule_set_id": "starter_6",
+            "player_configs": [],
+        },
+        "round_number": 1,
+        "active_players": ["张三"],
+        "cached_model_responses": [],
+        "failed_request": None,
+        "last_error": None,
+    }
 
 
 def test_save_complete_game_lists_and_loads_session(db_session: Session) -> None:
@@ -132,3 +176,164 @@ def test_missing_and_invalid_sessions_raise_not_found(db_session: Session) -> No
         store.load_session("../bad")
     with pytest.raises(ResumeCheckpointError):
         store.load_resume_checkpoint("game_1200abcd")
+
+
+def test_save_resume_checkpoint_rejects_checkpoint_session_mismatch(db_session: Session) -> None:
+    store = DatabaseReplayStore(db_session)
+    checkpoint = sample_checkpoint(
+        "game_1200abcd",
+        checkpoint_session_id="game_deadbeef",
+    )
+
+    with pytest.raises(ResumeCheckpointError):
+        store.save_resume_checkpoint("game_1200abcd", checkpoint)
+
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+    assert db_session.get(GameSessionRecord, "game_deadbeef") is None
+
+
+def test_save_resume_checkpoint_rejects_state_session_mismatch(db_session: Session) -> None:
+    store = DatabaseReplayStore(db_session)
+    checkpoint = sample_checkpoint(
+        "game_1200abcd",
+        state_session_id="game_deadbeef",
+    )
+
+    with pytest.raises(ResumeCheckpointError):
+        store.save_resume_checkpoint("game_1200abcd", checkpoint)
+
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+
+
+def test_save_game_payload_rejects_invalid_rounds_without_record(db_session: Session) -> None:
+    store = DatabaseReplayStore(db_session)
+    state = sample_state("game_1200abcd")
+    state["rounds"] = {"bad": True}
+
+    with pytest.raises(ReplayNotFoundError):
+        store.save_game_payload(state=state, logs=sample_logs())
+
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+
+
+def test_save_game_payload_rejects_invalid_logs_without_record(db_session: Session) -> None:
+    store = DatabaseReplayStore(db_session)
+
+    with pytest.raises(ReplayNotFoundError):
+        store.save_game_payload(state=sample_state("game_1200abcd"), logs={"bad": True})
+
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+
+
+def test_save_game_payload_rejects_invalid_state_shape(db_session: Session) -> None:
+    store = DatabaseReplayStore(db_session)
+
+    with pytest.raises(ReplayNotFoundError):
+        store.save_game_payload(state=[], logs=sample_logs())
+
+
+def test_save_game_payload_rolls_back_when_commit_fails(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = DatabaseReplayStore(db_session)
+
+    def fail_commit() -> None:
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(db_session, "commit", fail_commit)
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        store.save_game_payload(state=sample_state("game_1200abcd"), logs=sample_logs())
+
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+
+
+def test_save_resume_checkpoint_rejects_malformed_state_and_logs(
+    db_session: Session,
+) -> None:
+    store = DatabaseReplayStore(db_session)
+
+    for checkpoint in [
+        sample_checkpoint(state_at_round_start=None),
+        sample_checkpoint(state_at_round_start={"session_id": "game_1200abcd", "rounds": {}}),
+        sample_checkpoint(logs_before_round={"bad": True}),
+        sample_checkpoint(schema_version=CHECKPOINT_SCHEMA_VERSION + 1),
+    ]:
+        with pytest.raises(ResumeCheckpointError):
+            store.save_resume_checkpoint("game_1200abcd", checkpoint)
+        assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+
+
+def test_save_resume_checkpoint_rejects_non_dict_checkpoint(db_session: Session) -> None:
+    store = DatabaseReplayStore(db_session)
+
+    with pytest.raises(ResumeCheckpointError):
+        store.save_resume_checkpoint("game_1200abcd", [])
+
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+
+
+def test_load_resume_checkpoint_rejects_malformed_stored_checkpoint(
+    db_session: Session,
+) -> None:
+    db_session.add(GameSessionRecord(session_id="game_1200abcd", status="partial", resumable=True))
+    db_session.add(
+        GameReplayPayload(
+            session_id="game_1200abcd",
+            state=sample_state("game_1200abcd"),
+            logs=[],
+            checkpoint={"schema_version": CHECKPOINT_SCHEMA_VERSION},
+        )
+    )
+    db_session.commit()
+    store = DatabaseReplayStore(db_session)
+
+    with pytest.raises(ResumeCheckpointError):
+        store.load_resume_checkpoint("game_1200abcd")
+
+
+def test_partial_game_ignores_invalid_existing_checkpoint_for_resumable(
+    db_session: Session,
+) -> None:
+    db_session.add(GameSessionRecord(session_id="game_1200abcd", status="partial", resumable=True))
+    db_session.add(
+        GameReplayPayload(
+            session_id="game_1200abcd",
+            state=sample_state("game_1200abcd", winner="", error="failed"),
+            logs=[],
+            checkpoint={"schema_version": CHECKPOINT_SCHEMA_VERSION},
+        )
+    )
+    db_session.commit()
+    store = DatabaseReplayStore(db_session)
+
+    store.save_game_payload(
+        state=sample_state("game_1200abcd", winner="", error="failed"),
+        logs=sample_logs(),
+    )
+    loaded_session = store.load_session("game_1200abcd")
+
+    assert loaded_session["status"] == "partial"
+    assert loaded_session["resumable"] is False
+
+
+def test_clear_resume_checkpoint_clears_stale_record_without_payload(
+    db_session: Session,
+) -> None:
+    db_session.add(GameSessionRecord(session_id="game_1200abcd", status="partial", resumable=True))
+    db_session.commit()
+    store = DatabaseReplayStore(db_session)
+
+    store.clear_resume_checkpoint("game_1200abcd")
+
+    record = db_session.get(GameSessionRecord, "game_1200abcd")
+    assert record is not None
+    assert record.resumable is False
+
+
+def test_legacy_replay_store_symbol_is_import_only() -> None:
+    from app.werewolf.replay import ReplayStore
+
+    with pytest.raises(RuntimeError, match="DatabaseReplayStore"):
+        ReplayStore("/tmp")
