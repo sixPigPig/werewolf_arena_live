@@ -5,6 +5,7 @@ import { GameDetailPage } from "../pages/GameDetailPage";
 import { GamesPage } from "../pages/GamesPage";
 import { HistoryPage } from "../pages/HistoryPage";
 import { LivePage } from "../pages/LivePage";
+import { LiveReplayPage } from "../pages/LiveReplayPage";
 import { PlaybackPage } from "../pages/PlaybackPage";
 import { PlayerDetailPage } from "../pages/PlayerDetailPage";
 import { PlayersPage } from "../pages/PlayersPage";
@@ -18,6 +19,7 @@ export const routes: RouteObject[] = [
       { path: "games", element: <GamesPage /> },
       { path: "games/:gameId", element: <GameDetailPage /> },
       { path: "games/:gameId/live", element: <LivePage /> },
+      { path: "games/:gameId/live-replay", element: <LiveReplayPage /> },
       { path: "games/:gameId/replay", element: <PlaybackPage /> },
       { path: "players", element: <PlayersPage /> },
       { path: "players/:playerId", element: <PlayerDetailPage /> },
