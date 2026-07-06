@@ -119,8 +119,12 @@ class DatabaseReplayStore:
         payload = self.db.get(GameReplayPayload, session_id)
         if record is None or payload is None:
             raise ReplayNotFoundError
-        state = _dict_payload(payload.state)
-        logs = _list_payload(payload.logs)
+        payload_session_id, state, logs, _rounds = _validated_game_payload(
+            state=payload.state,
+            logs=payload.logs,
+        )
+        if payload_session_id != session_id:
+            raise ReplayNotFoundError
         return {
             "session_id": session_id,
             "status": record.status,

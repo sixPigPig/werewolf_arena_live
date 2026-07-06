@@ -1,4 +1,3 @@
-from pathlib import Path as FilePath
 import queue
 import random
 import threading
@@ -10,9 +9,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.werewolf.checkpoint import ResumeCheckpointError
+from app.werewolf.config import choose_player_names
 from app.werewolf.debate_realism import lineup_quality_warnings
 from app.werewolf.live import EventSink, LiveEvent, LiveRunRegistry, format_sse
 from app.werewolf.player_configs import (
@@ -24,9 +24,12 @@ from app.werewolf.player_configs import (
 )
 from app.werewolf.player_presets import is_valid_appearance, is_valid_personality
 from app.werewolf.providers import configured_model_options, default_model_name
-from app.werewolf.config import choose_player_names
-from app.werewolf.checkpoint import ResumeCheckpointError, load_resume_checkpoint
-from app.werewolf.replay import ReplayNotFoundError, ReplayStore, SESSION_ID_RE
+from app.werewolf.replay import (
+    DatabaseReplayStore,
+    GameRecordStore,
+    ReplayNotFoundError,
+    SESSION_ID_RE,
+)
 from app.werewolf.replay_playback import build_replay_playback
 from app.werewolf.rules import (
     DEFAULT_RULE_SET_ID,
@@ -66,8 +69,8 @@ class CreateGameRunRequest(BaseModel):
     player_configs: list[CreatePlayerConfigRequest] = Field(default_factory=list)
 
 
-def get_replay_store() -> ReplayStore:
-    return ReplayStore(FilePath(settings.werewolf_logs_dir))
+def get_replay_store(db: Annotated[Session, Depends(get_db)]) -> DatabaseReplayStore:
+    return DatabaseReplayStore(db)
 
 
 def get_live_registry() -> LiveRunRegistry:
@@ -212,7 +215,7 @@ def list_available_player_profiles(
 
 
 @router.get("")
-def list_games(store: Annotated[ReplayStore, Depends(get_replay_store)]) -> dict:
+def list_games(store: Annotated[GameRecordStore, Depends(get_replay_store)]) -> dict:
     return {"sessions": store.list_sessions()}
 
 
@@ -327,7 +330,7 @@ def resume_game_run(
         str,
         Path(pattern=SESSION_ID_RE),
     ],
-    store: Annotated[ReplayStore, Depends(get_replay_store)],
+    store: Annotated[GameRecordStore, Depends(get_replay_store)],
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
     response: Response,
 ) -> dict:
@@ -336,9 +339,8 @@ def resume_game_run(
         response.status_code = 200
         return active_run.to_summary()
 
-    checkpoint_directory = store.logs_root / session_id
     try:
-        checkpoint = load_resume_checkpoint(checkpoint_directory)
+        checkpoint = store.load_resume_checkpoint(session_id)
     except ResumeCheckpointError as exc:
         raise HTTPException(status_code=404, detail="Resume checkpoint not found") from exc
 
@@ -382,7 +384,6 @@ def resume_game_run(
             "run_id": run.run_id,
             "registry": registry,
             "session_id": session_id,
-            "logs_dir": store.logs_root,
         },
         daemon=True,
     )
@@ -396,7 +397,7 @@ def get_game_playback(
         str,
         Path(pattern=SESSION_ID_RE),
     ],
-    store: Annotated[ReplayStore, Depends(get_replay_store)],
+    store: Annotated[GameRecordStore, Depends(get_replay_store)],
 ) -> dict:
     try:
         return build_replay_playback(store.load_session(session_id))
@@ -410,7 +411,7 @@ def get_game(
         str,
         Path(pattern=SESSION_ID_RE),
     ],
-    store: Annotated[ReplayStore, Depends(get_replay_store)],
+    store: Annotated[GameRecordStore, Depends(get_replay_store)],
 ) -> dict:
     try:
         return store.load_session(session_id)
@@ -431,13 +432,14 @@ def _run_game_in_background(
     player_configs: list[PlayerConfig] | None = None,
 ) -> None:
     registry.mark_running(run_id)
+    db = SessionLocal()
     try:
         result = run_game(
+            record_store=DatabaseReplayStore(db),
             villager_model=villager_model,
             werewolf_model=werewolf_model,
             seed=seed,
             rule_set_id=rule_set_id,
-            logs_dir=settings.werewolf_logs_dir,
             max_rounds=max_rounds,
             session_id=session_id,
             event_sink=EventSink(registry, run_id),
@@ -449,6 +451,8 @@ def _run_game_in_background(
     except Exception as exc:
         registry.mark_failed(run_id, error=str(exc))
         return
+    finally:
+        db.close()
 
     registry.mark_completed(run_id, winner=result.winner)
 
@@ -458,13 +462,13 @@ def _resume_game_in_background(
     run_id: str,
     registry: LiveRunRegistry,
     session_id: str,
-    logs_dir: FilePath,
 ) -> None:
     registry.mark_running(run_id)
+    db = SessionLocal()
     try:
         result = resume_game(
             session_id=session_id,
-            logs_dir=logs_dir,
+            record_store=DatabaseReplayStore(db),
             event_sink=EventSink(registry, run_id),
         )
     except GameRunError as exc:
@@ -473,6 +477,8 @@ def _resume_game_in_background(
     except Exception as exc:
         registry.mark_failed(run_id, error=str(exc))
         return
+    finally:
+        db.close()
 
     registry.mark_completed(run_id, winner=result.winner)
 
