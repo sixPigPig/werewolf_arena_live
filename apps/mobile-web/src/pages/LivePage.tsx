@@ -15,7 +15,6 @@ import {
 } from "@werewolf-arena/game-client";
 
 import {
-  isTerminalRunStatus,
   MobileLiveTheater,
   MobileLiveTheaterTopBar,
 } from "../components/MobileLiveTheater";
@@ -189,4 +188,8 @@ function navigateBackToGames(navigate: ReturnType<typeof useNavigate>) {
 
 function isTerminalEvent(event: LiveGameEvent) {
   return event.type === "game_completed" || event.type === "game_failed";
+}
+
+function isTerminalRunStatus(status: string | undefined) {
+  return status === "completed" || status === "failed";
 }

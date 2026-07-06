@@ -308,7 +308,7 @@ export function LiveTheaterControls({
   );
 }
 
-export function getCurrentTheaterPlayer(state: GodViewState) {
+function getCurrentTheaterPlayer(state: GodViewState) {
   return (
     state.speakerFlow.current ??
     state.players.find((player) => player.isSpeaking) ??
@@ -316,7 +316,7 @@ export function getCurrentTheaterPlayer(state: GodViewState) {
   );
 }
 
-export function splitPlayersForColumns(players: GodViewPlayer[]) {
+function splitPlayersForColumns(players: GodViewPlayer[]) {
   const midpoint = Math.ceil(players.length / 2);
 
   return {
@@ -325,13 +325,13 @@ export function splitPlayersForColumns(players: GodViewPlayer[]) {
   };
 }
 
-export function avatarInitial(name: string, seatNumber: number) {
+function avatarInitial(name: string, seatNumber: number) {
   const trimmed = name.trim();
 
   return trimmed ? trimmed.slice(0, 1) : String(seatNumber);
 }
 
-export function roleShortLabel(role: string) {
+function roleShortLabel(role: string) {
   const labels: Record<string, string> = {
     guard: "守",
     doctor: "医",
@@ -357,8 +357,4 @@ export function roleShortLabel(role: string) {
   return (
     labels[normalized] ?? labels[trimmed] ?? (trimmed.slice(0, 1) || "未知")
   );
-}
-
-export function isTerminalRunStatus(status: string | undefined) {
-  return status === "completed" || status === "failed";
 }
