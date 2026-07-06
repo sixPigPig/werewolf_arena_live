@@ -4,6 +4,7 @@ import queue
 import random
 import threading
 from collections.abc import Generator
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -4993,3 +4994,24 @@ def test_run_game_saves_in_progress_logs_when_required_action_fails(
 
     assert logs
     assert logs[0]["number"] == 1
+
+
+def test_run_game_does_not_write_legacy_game_json_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record_store: DatabaseReplayStore,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = run_game(
+        record_store=record_store,
+        seed=7,
+        max_rounds=8,
+        provider=ScriptedChineseProvider(),
+    )
+
+    assert record_store.load_session(result.session_id)["status"] == "complete"
+    assert list(tmp_path.rglob("game_complete.json")) == []
+    assert list(tmp_path.rglob("game_partial.json")) == []
+    assert list(tmp_path.rglob("game_logs.json")) == []
+    assert list(tmp_path.rglob("resume_checkpoint.json")) == []

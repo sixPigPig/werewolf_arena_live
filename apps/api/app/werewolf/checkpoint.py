@@ -4,7 +4,6 @@ import copy
 import json
 import random
 import threading
-from pathlib import Path
 from typing import Any
 
 from app.werewolf.lm import LmLog, ModelProvider
@@ -153,38 +152,6 @@ class ResumeCheckpointManager:
         if self._checkpoint is None:
             return
         self.record_store.save_resume_checkpoint(self.session_id, self._checkpoint)
-
-
-def load_resume_checkpoint(directory: Path) -> dict[str, Any]:
-    checkpoint_path = directory / RESUME_CHECKPOINT_FILE
-    if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
-        raise ResumeCheckpointError
-    try:
-        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ResumeCheckpointError from exc
-    if not isinstance(checkpoint, dict):
-        raise ResumeCheckpointError
-    if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
-        raise ResumeCheckpointError
-    return checkpoint
-
-
-def has_resume_checkpoint(directory: Path) -> bool:
-    try:
-        load_resume_checkpoint(directory)
-    except ResumeCheckpointError:
-        return False
-    return True
-
-
-def clear_resume_checkpoint(directory: Path) -> None:
-    checkpoint_path = directory / RESUME_CHECKPOINT_FILE
-    try:
-        if checkpoint_path.exists() and not checkpoint_path.is_symlink():
-            checkpoint_path.unlink()
-    except OSError:
-        return
 
 
 def game_state_from_dict(data: dict[str, Any]) -> GameState:

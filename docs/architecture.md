@@ -25,6 +25,7 @@
 
 - PostgreSQL is the only runtime source for virtual player profiles. Profile API operations return `503` when the database is unavailable.
 - Legacy `player_profiles.json` files are migration inputs only and can be imported with `python -m app.cli import-player-profiles --source <path>`.
-- Game checkpoints, completed replays, and avatar image assets remain under `WEREWOLF_LOGS_DIR`.
+- Game checkpoints and completed replays are stored in PostgreSQL in `game_sessions` and `game_replay_payloads`.
+- Avatar image assets and legacy avatar migration inputs may still use `WEREWOLF_LOGS_DIR`.
 - Active live runs and SSE event history are held by the in-process `LiveRunRegistry`; production currently assumes one API worker.
 - Resume requests are idempotent per active `session_id` within that process.

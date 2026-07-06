@@ -1627,6 +1627,22 @@ def test_list_games_ignores_legacy_file_directories(tmp_path: Path) -> None:
     assert response.json() == {"sessions": []}
 
 
+def test_game_api_reads_database_only_when_legacy_files_exist(tmp_path: Path) -> None:
+    legacy_id = "game_1200abcd"
+    database_id = "game_05095066"
+    write_json(tmp_path / legacy_id / "game_complete.json", sample_state(legacy_id))
+    store_game_session(database_id, state=sample_state(database_id), logs=sample_logs())
+    override_replay_store()
+
+    try:
+        response = client.get("/api/v1/games")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert [item["session_id"] for item in response.json()["sessions"]] == [database_id]
+
+
 def test_get_game_detail_returns_empty_logs_when_logs_are_empty() -> None:
     session_id = "game_05095066"
     store_game_session(session_id, state=sample_state(session_id), logs=[])

@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import re
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
@@ -21,43 +20,6 @@ _SESSION_PATTERN = re.compile(SESSION_ID_RE)
 
 class ReplayNotFoundError(Exception):
     """Raised when a replay session cannot be loaded."""
-
-
-class ReplayStore:
-    # Temporary construction compatibility until API routes are converted to
-    # DatabaseReplayStore. This shim intentionally exposes no file-backed sessions.
-    def __init__(self, logs_root: Path) -> None:
-        self.logs_root = logs_root
-
-    def list_sessions(self) -> list[dict[str, Any]]:
-        return []
-
-    def load_session(self, _session_id: str) -> dict[str, Any]:
-        raise ReplayNotFoundError
-
-    def load_resume_checkpoint(self, _session_id: str) -> dict[str, Any]:
-        raise ResumeCheckpointError
-
-    def save_game(self, _state: GameState, _logs: list[RoundLog]) -> None:
-        _raise_removed_replay_store_error()
-
-    def save_game_payload(self, *, state: dict[str, Any], logs: list[Any]) -> None:
-        del state, logs
-        _raise_removed_replay_store_error()
-
-    def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, Any]) -> None:
-        del session_id, checkpoint
-        _raise_removed_replay_store_error()
-
-    def clear_resume_checkpoint(self, _session_id: str) -> None:
-        _raise_removed_replay_store_error()
-
-
-def _raise_removed_replay_store_error() -> None:
-    raise RuntimeError(
-        "ReplayStore file-backed storage has been removed; use DatabaseReplayStore "
-        "after API route conversion."
-    )
 
 
 class GameRecordStore(Protocol):

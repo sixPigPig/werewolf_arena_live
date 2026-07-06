@@ -128,7 +128,14 @@ http://<你的电脑局域网 IP>:5174
 4. 实时观战页会展示玩家列表、当前聚焦玩家、原始事件侧栏。
 5. 对局结束后点击“查看完整复盘”进入 `/games/<session_id>`。
 
-实时 run 和 SSE 事件保存在 API 进程内存中，当前部署应使用单个 API worker。同一进程内重复恢复同一对局会复用已有活动 run，不会重复启动模型任务；跨进程排他需要后续引入共享任务存储。
+新对局的历史记录、完整复盘和恢复检查点保存在 PostgreSQL。旧版 `apps/api/logs/game_*` 文件记录不会再被读取；完成迁移后可执行：
+
+```bash
+cd apps/api
+.venv/bin/python -m app.cli purge-legacy-game-records --logs-dir logs --yes
+```
+
+实时 run 和 SSE 事件仍保存在 API 进程内存中，当前部署应使用单个 API worker。同一进程内重复恢复同一对局会复用已有活动 run，不会重复启动模型任务；跨进程排他需要后续引入共享任务存储。
 
 运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。当前内置
 DeepSeek 和 MiniMax；如果 `WEREWOLF_DEFAULT_MODEL` 为空，后端会从已配置 API key 的
