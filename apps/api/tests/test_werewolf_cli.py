@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
@@ -19,6 +18,11 @@ PNG_BYTES = (
 )
 
 
+class FakeSession:
+    def close(self) -> None:
+        pass
+
+
 def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
     tmp_path,
     capsys,
@@ -32,32 +36,21 @@ def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
 
     def fake_run_game(**kwargs) -> RunGameResult:
         calls.update(kwargs)
-        return RunGameResult(
-            winner="狼人阵营",
-            session_id="session_test",
-            log_directory=Path(tmp_path) / "session_test",
-        )
+        return RunGameResult(winner="狼人阵营", session_id="game_1200abcd")
 
     monkeypatch.setattr("app.cli.run_game", fake_run_game)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
 
-    exit_code = main(
-        [
-            "run-game",
-            "--logs-dir",
-            str(tmp_path),
-            "--seed",
-            "13",
-            "--max-rounds",
-            "8",
-        ]
-    )
+    exit_code = main(["run-game", "--seed", "13", "--max-rounds", "8"])
 
     output = capsys.readouterr().out
 
     assert exit_code == 0
-    assert "胜利阵营=狼人阵营" in output
-    assert "session_id=session_test" in output
-    assert "日志目录=" in output
+    assert output.strip().splitlines() == [
+        "胜利阵营=狼人阵营",
+        "session_id=game_1200abcd",
+    ]
+    assert "record_store" in calls
     assert calls["villager_model"] == "deepseek-v4-flash"
     assert calls["werewolf_model"] == "deepseek-v4-flash"
 
@@ -82,55 +75,72 @@ def test_run_game_command_defaults_to_minimax_when_only_minimax_key_is_configure
 
     def fake_run_game(**kwargs) -> RunGameResult:
         calls.update(kwargs)
-        return RunGameResult(
-            winner="狼人阵营",
-            session_id="session_test",
-            log_directory=Path(tmp_path) / "session_test",
-        )
+        return RunGameResult(winner="狼人阵营", session_id="game_1200abcd")
 
     monkeypatch.setattr("app.cli.run_game", fake_run_game)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
 
-    exit_code = main(
-        [
-            "run-game",
-            "--logs-dir",
-            str(tmp_path),
-            "--seed",
-            "13",
-            "--max-rounds",
-            "8",
-        ]
-    )
+    exit_code = main(["run-game", "--seed", "13", "--max-rounds", "8"])
 
     capsys.readouterr()
 
     assert exit_code == 0
+    assert "record_store" in calls
     assert calls["villager_model"] == "MiniMax-M2.7"
     assert calls["werewolf_model"] == "MiniMax-M2.7"
 
 
-def test_run_game_command_returns_nonzero_on_engine_failure(tmp_path, capsys, monkeypatch) -> None:
+def test_run_game_command_returns_nonzero_on_engine_failure(capsys, monkeypatch) -> None:
     def fake_run_game(**kwargs) -> RunGameResult:
-        raise GameRunError("Maximum rounds exceeded", Path(kwargs["logs_dir"]) / "failed")
+        raise GameRunError("Maximum rounds exceeded", "game_failed")
 
     monkeypatch.setattr("app.cli.run_game", fake_run_game)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
 
-    exit_code = main(
-        [
-            "run-game",
-            "--logs-dir",
-            str(tmp_path),
-            "--seed",
-            "13",
-            "--max-rounds",
-            "0",
-        ]
-    )
+    exit_code = main(["run-game", "--seed", "13", "--max-rounds", "0"])
 
     captured = capsys.readouterr()
 
     assert exit_code == 1
     assert "Maximum rounds exceeded" in captured.err
+    assert "session_id=game_failed" in captured.err
+
+
+def test_purge_legacy_game_records_dry_run_lists_matches(tmp_path, capsys) -> None:
+    (tmp_path / "game_1200abcd").mkdir()
+    (tmp_path / "not-a-game").mkdir()
+    (tmp_path / "player_profiles.json").write_text("{}", encoding="utf-8")
+
+    exit_code = main(["purge-legacy-game-records", "--logs-dir", str(tmp_path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "匹配=1 删除=0" in output
+    assert (tmp_path / "game_1200abcd").exists()
+    assert (tmp_path / "not-a-game").exists()
+    assert (tmp_path / "player_profiles.json").exists()
+
+
+def test_purge_legacy_game_records_deletes_only_matching_directories(tmp_path, capsys) -> None:
+    (tmp_path / "game_1200abcd").mkdir()
+    (tmp_path / "game_bad").mkdir()
+    (tmp_path / "player_profile_assets").mkdir()
+    (tmp_path / "player_profiles.json").write_text("{}", encoding="utf-8")
+    target = tmp_path / "outside"
+    target.mkdir()
+    (tmp_path / "game_ffffffff").symlink_to(target, target_is_directory=True)
+
+    exit_code = main(["purge-legacy-game-records", "--logs-dir", str(tmp_path), "--yes"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "匹配=1 删除=1 跳过=1" in output
+    assert not (tmp_path / "game_1200abcd").exists()
+    assert (tmp_path / "game_bad").exists()
+    assert (tmp_path / "player_profile_assets").exists()
+    assert (tmp_path / "player_profiles.json").exists()
+    assert (tmp_path / "game_ffffffff").is_symlink()
+    assert target.exists()
 
 
 def test_serve_command_starts_uvicorn(monkeypatch) -> None:

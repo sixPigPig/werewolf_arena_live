@@ -9,6 +9,7 @@ import uvicorn
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.legacy_game_record_cleanup import purge_legacy_game_records
 from app.player_avatar_asset_migration import (
     PlayerAvatarAssetMigrationError,
     migrate_player_avatar_assets,
@@ -16,6 +17,7 @@ from app.player_avatar_asset_migration import (
 from app.player_profile_import import PlayerProfileImportError, import_player_profiles
 from app.werewolf.evaluator import evaluate_replay
 from app.werewolf.providers import default_model_name
+from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.runner import GameRunError, run_game
 
 
@@ -34,7 +36,6 @@ def _build_parser() -> argparse.ArgumentParser:
     run_game_parser.add_argument("--villager-model", default=default_model)
     run_game_parser.add_argument("--werewolf-model", default=default_model)
     run_game_parser.add_argument("--seed", type=int, default=None)
-    run_game_parser.add_argument("--logs-dir", type=Path, default=Path("logs"))
     run_game_parser.add_argument("--max-rounds", type=int, default=8)
     run_game_parser.set_defaults(func=_run_game_command)
 
@@ -62,6 +63,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     migrate_avatar_parser.set_defaults(func=_migrate_player_avatar_assets_command)
 
+    purge_records_parser = subparsers.add_parser(
+        "purge-legacy-game-records",
+        help="Delete legacy file-backed game_* records from a logs directory.",
+    )
+    purge_records_parser.add_argument(
+        "--logs-dir",
+        type=Path,
+        default=Path(settings.werewolf_logs_dir),
+    )
+    purge_records_parser.add_argument("--yes", action="store_true")
+    purge_records_parser.set_defaults(func=_purge_legacy_game_records_command)
+
     evaluate_parser = subparsers.add_parser(
         "evaluate-replay",
         help="Evaluate a game_complete.json replay for realism issues.",
@@ -73,23 +86,37 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run_game_command(args: argparse.Namespace) -> int:
+    db = SessionLocal()
     try:
         result = run_game(
+            record_store=DatabaseReplayStore(db),
             villager_model=args.villager_model,
             werewolf_model=args.werewolf_model,
             seed=args.seed,
-            logs_dir=args.logs_dir,
             max_rounds=args.max_rounds,
         )
     except GameRunError as exc:
         print(str(exc), file=sys.stderr)
-        if exc.log_directory:
-            print(f"日志目录={exc.log_directory}", file=sys.stderr)
+        if exc.session_id:
+            print(f"session_id={exc.session_id}", file=sys.stderr)
         return 1
+    finally:
+        db.close()
 
     print(f"胜利阵营={result.winner}")
     print(f"session_id={result.session_id}")
-    print(f"日志目录={result.log_directory}")
+    return 0
+
+
+def _purge_legacy_game_records_command(args: argparse.Namespace) -> int:
+    result = purge_legacy_game_records(args.logs_dir, confirm=args.yes)
+    print(
+        f"匹配={result.matched_count} "
+        f"删除={result.deleted_count} "
+        f"跳过={result.skipped_count}"
+    )
+    if not args.yes and result.matched_count:
+        print("未传入 --yes，未删除旧对局目录。")
     return 0
 
 
