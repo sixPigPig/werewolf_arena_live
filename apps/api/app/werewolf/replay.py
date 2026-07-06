@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-import json
+import copy
 import re
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
+from sqlalchemy.orm import Session
+
+from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.werewolf.checkpoint import (
+    CHECKPOINT_SCHEMA_VERSION,
     ResumeCheckpointError,
-    has_resume_checkpoint,
-    load_resume_checkpoint,
 )
-
+from app.werewolf.models import GameState, RoundLog
 
 SESSION_ID_RE = r"^game_[0-9a-f]{8}$"
 _SESSION_PATTERN = re.compile(SESSION_ID_RE)
@@ -21,185 +22,171 @@ class ReplayNotFoundError(Exception):
     """Raised when a replay session cannot be loaded."""
 
 
-class ReplayStore:
-    def __init__(self, logs_root: Path) -> None:
-        self.logs_root = logs_root
-
+class GameRecordStore(Protocol):
     def list_sessions(self) -> list[dict[str, Any]]:
-        if not self._is_directory(self.logs_root):
-            return []
-
-        sessions = []
-        try:
-            directories = list(self.logs_root.iterdir())
-        except OSError:
-            return []
-
-        for directory in directories:
-            if (
-                self._is_symlink(directory)
-                or not _SESSION_PATTERN.fullmatch(directory.name)
-            ):
-                continue
-            if not self._is_directory(directory):
-                continue
-
-            state_path, status = self._state_path_for_directory(directory)
-            checkpoint = self._checkpoint_for_directory(directory)
-            if state_path is None or status is None:
-                if checkpoint is None:
-                    continue
-                status = "partial"
-                state = checkpoint["state_at_round_start"]
-            else:
-                try:
-                    state = self._read_state(state_path)
-                except ReplayNotFoundError:
-                    continue
-
-            rounds = state.get("rounds", [])
-            sessions.append(
-                {
-                    "session_id": directory.name,
-                    "status": status,
-                    "winner": state.get("winner"),
-                    "round_count": len(rounds),
-                    "created_at": self._created_at_for_directory(directory, state_path),
-                    "rule_set": state.get("rule_set"),
-                    "resumable": checkpoint is not None,
-                }
-            )
-
-        return sorted(
-            sessions,
-            key=lambda item: (item["created_at"] or "", item["session_id"]),
-            reverse=True,
-        )
+        ...
 
     def load_session(self, session_id: str) -> dict[str, Any]:
+        ...
+
+    def load_resume_checkpoint(self, session_id: str) -> dict[str, Any]:
+        ...
+
+    def save_game(self, state: GameState, logs: list[RoundLog]) -> None:
+        ...
+
+    def save_game_payload(self, *, state: dict[str, Any], logs: list[Any]) -> None:
+        ...
+
+    def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, Any]) -> None:
+        ...
+
+    def clear_resume_checkpoint(self, session_id: str) -> None:
+        ...
+
+
+class DatabaseReplayStore:
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        records = (
+            self.db.query(GameSessionRecord)
+            .order_by(GameSessionRecord.created_at.desc(), GameSessionRecord.session_id.desc())
+            .all()
+        )
+        return [
+            {
+                "session_id": record.session_id,
+                "status": record.status,
+                "winner": record.winner,
+                "round_count": record.round_count,
+                "created_at": _format_datetime(record.created_at),
+                "rule_set": copy.deepcopy(record.rule_set),
+                "resumable": bool(record.resumable),
+            }
+            for record in records
+        ]
+
+    def load_session(self, session_id: str) -> dict[str, Any]:
+        self._validate_session_id(session_id)
+        record = self.db.get(GameSessionRecord, session_id)
+        payload = self.db.get(GameReplayPayload, session_id)
+        if record is None or payload is None:
+            raise ReplayNotFoundError
+        state = _dict_payload(payload.state)
+        logs = _list_payload(payload.logs)
+        return {
+            "session_id": session_id,
+            "status": record.status,
+            "state": copy.deepcopy(state),
+            "logs": copy.deepcopy(logs),
+            "resumable": bool(record.resumable),
+        }
+
+    def load_resume_checkpoint(self, session_id: str) -> dict[str, Any]:
+        self._validate_session_id(session_id)
+        payload = self.db.get(GameReplayPayload, session_id)
+        if payload is None or not isinstance(payload.checkpoint, dict):
+            raise ResumeCheckpointError
+        checkpoint = copy.deepcopy(payload.checkpoint)
+        if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+            raise ResumeCheckpointError
+        return checkpoint
+
+    def save_game(self, state: GameState, logs: list[RoundLog]) -> None:
+        self.save_game_payload(
+            state=state.to_dict(),
+            logs=[log.to_dict() for log in logs],
+        )
+
+    def save_game_payload(self, *, state: dict[str, Any], logs: list[Any]) -> None:
+        session_id = str(state.get("session_id") or "")
+        self._validate_session_id(session_id)
+        status = "partial" if state.get("error_message") else "complete"
+        existing_payload = self.db.get(GameReplayPayload, session_id)
+        checkpoint = existing_payload.checkpoint if existing_payload is not None else None
+        resumable = status == "partial" and isinstance(checkpoint, dict)
+        record = self._get_or_create_record(session_id)
+        record.status = status
+        record.winner = str(state.get("winner") or "") or None
+        record.round_count = len(_list_payload(state.get("rounds", [])))
+        record.rule_set = copy.deepcopy(state.get("rule_set"))
+        record.resumable = resumable
+
+        payload = self._get_or_create_payload(session_id)
+        payload.state = copy.deepcopy(state)
+        payload.logs = copy.deepcopy(logs)
+        if status == "complete":
+            payload.checkpoint = None
+            record.resumable = False
+        self.db.commit()
+
+    def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, Any]) -> None:
+        self._validate_session_id(session_id)
+        if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+            raise ResumeCheckpointError
+        state = _dict_payload(checkpoint.get("state_at_round_start"))
+        logs = _list_payload(checkpoint.get("logs_before_round", []))
+        record = self._get_or_create_record(session_id)
+        record.status = "partial"
+        record.winner = str(state.get("winner") or "") or None
+        record.round_count = len(_list_payload(state.get("rounds", [])))
+        record.rule_set = copy.deepcopy(state.get("rule_set"))
+        record.resumable = True
+
+        payload = self._get_or_create_payload(session_id)
+        payload.state = copy.deepcopy(state)
+        payload.logs = copy.deepcopy(logs)
+        payload.checkpoint = copy.deepcopy(checkpoint)
+        self.db.commit()
+
+    def clear_resume_checkpoint(self, session_id: str) -> None:
+        self._validate_session_id(session_id)
+        record = self.db.get(GameSessionRecord, session_id)
+        payload = self.db.get(GameReplayPayload, session_id)
+        if record is None or payload is None:
+            return
+        payload.checkpoint = None
+        record.resumable = False
+        self.db.commit()
+
+    def _get_or_create_record(self, session_id: str) -> GameSessionRecord:
+        record = self.db.get(GameSessionRecord, session_id)
+        if record is None:
+            record = GameSessionRecord(session_id=session_id, status="partial")
+            self.db.add(record)
+            self.db.flush()
+        return record
+
+    def _get_or_create_payload(self, session_id: str) -> GameReplayPayload:
+        payload = self.db.get(GameReplayPayload, session_id)
+        if payload is None:
+            payload = GameReplayPayload(session_id=session_id, state={}, logs=[])
+            self.db.add(payload)
+            self.db.flush()
+        return payload
+
+    def _validate_session_id(self, session_id: str) -> None:
         if not _SESSION_PATTERN.fullmatch(session_id):
             raise ReplayNotFoundError
 
-        session_dir = self.logs_root / session_id
-        if self._is_symlink(session_dir) or not self._is_directory(session_dir):
-            raise ReplayNotFoundError
 
-        try:
-            resolved_session_dir = session_dir.resolve()
-            resolved_logs_root = self.logs_root.resolve()
-            resolved_session_dir.relative_to(resolved_logs_root)
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise ReplayNotFoundError from exc
+def _dict_payload(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ReplayNotFoundError
+    return value
 
-        state_path, status = self._state_path_for_directory(session_dir)
-        checkpoint = self._checkpoint_for_directory(session_dir)
-        if state_path is None or status is None:
-            if checkpoint is None:
-                raise ReplayNotFoundError
-            return {
-                "session_id": session_id,
-                "status": "partial",
-                "state": checkpoint["state_at_round_start"],
-                "logs": checkpoint.get("logs_before_round", []),
-                "resumable": True,
-            }
 
-        logs_path = session_dir / "game_logs.json"
-        logs = self._read_logs(logs_path) if self._path_exists(logs_path) else []
-        state = self._read_state(state_path)
-        return {
-            "session_id": session_id,
-            "status": status,
-            "state": state,
-            "logs": logs,
-            "resumable": checkpoint is not None,
-        }
+def _list_payload(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        raise ReplayNotFoundError
+    return value
 
-    def _state_path_for_directory(self, directory: Path) -> tuple[Path | None, str | None]:
-        complete_path = directory / "game_complete.json"
-        if self._is_symlink(complete_path):
-            return None, None
 
-        if self._is_regular_json_file(complete_path):
-            return complete_path, "complete"
-
-        partial_path = directory / "game_partial.json"
-        if self._is_symlink(partial_path):
-            return None, None
-
-        if self._is_regular_json_file(partial_path):
-            return partial_path, "partial"
-
-        return None, None
-
-    def _path_exists(self, path: Path) -> bool:
-        try:
-            return path.exists()
-        except OSError:
-            return False
-
-    def _is_directory(self, path: Path) -> bool:
-        try:
-            return path.exists() and path.is_dir()
-        except OSError:
-            return False
-
-    def _is_symlink(self, path: Path) -> bool:
-        try:
-            return path.is_symlink()
-        except OSError:
-            return True
-
-    def _is_regular_json_file(self, path: Path) -> bool:
-        try:
-            return path.exists() and not path.is_symlink() and path.is_file()
-        except OSError:
-            return False
-
-    def _read_json(self, path: Path) -> Any:
-        if self._is_symlink(path):
-            raise ReplayNotFoundError
-
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ReplayNotFoundError from exc
-
-    def _read_state(self, path: Path) -> dict[str, Any]:
-        state = self._read_json(path)
-        if not isinstance(state, dict):
-            raise ReplayNotFoundError
-
-        rounds = state.get("rounds", [])
-        if not isinstance(rounds, list):
-            raise ReplayNotFoundError
-
-        return state
-
-    def _read_logs(self, path: Path) -> list[Any]:
-        logs = self._read_json(path)
-        if not isinstance(logs, list):
-            raise ReplayNotFoundError
-
-        return logs
-
-    def _checkpoint_for_directory(self, directory: Path) -> dict[str, Any] | None:
-        try:
-            if not has_resume_checkpoint(directory):
-                return None
-            return load_resume_checkpoint(directory)
-        except ResumeCheckpointError:
-            return None
-
-    def _created_at_for_directory(
-        self,
-        directory: Path,
-        state_path: Path | None,
-    ) -> str | None:
-        timestamp_path = state_path or directory
-        try:
-            created_at = datetime.fromtimestamp(timestamp_path.stat().st_mtime, tz=UTC)
-        except OSError:
-            return None
-
-        return created_at.isoformat().replace("+00:00", "Z")
+def _format_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
