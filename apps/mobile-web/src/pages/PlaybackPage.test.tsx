@@ -28,7 +28,10 @@ function renderPlaybackRoute() {
     },
   });
   const router = createMemoryRouter(
-    [{ path: "/games/:gameId/replay", element: <PlaybackPage /> }],
+    [
+      { path: "/games/:gameId/replay", element: <PlaybackPage /> },
+      { path: "/games/:gameId/live-replay", element: <h1>历史直播回放</h1> },
+    ],
     { initialEntries: ["/games/session-1/replay"] },
   );
 
@@ -124,6 +127,9 @@ describe("PlaybackPage", () => {
     renderPlaybackRoute();
 
     expect(await screen.findByRole("heading", { name: "移动复盘" })).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "导入直播页播放" }),
+    ).toHaveAttribute("href", "/games/session-1/live-replay");
     expect(await screen.findByText("session-1")).toBeVisible();
     expect(screen.getByText("villagers")).toBeVisible();
     expect(screen.getByText("第 1 轮")).toBeVisible();

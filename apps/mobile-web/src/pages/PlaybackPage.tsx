@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import {
   getGamePlayback,
@@ -27,6 +27,14 @@ export function PlaybackPage() {
     <main className="mobile-page">
       <header className="mobile-page-section">
         <h1>移动复盘</h1>
+        {gameId ? (
+          <Link
+            className="mobile-button mobile-session-link"
+            to={`/games/${gameId}/live-replay`}
+          >
+            导入直播页播放
+          </Link>
+        ) : null}
       </header>
 
       {playbackQuery.isPending ? <p>正在读取复盘...</p> : null}
