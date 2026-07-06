@@ -66,6 +66,9 @@ export function GamesPage() {
   const [profileSearch, setProfileSearch] = useState("");
   const [favoriteFilter, setFavoriteFilter] = useState<"all" | "favorite">("all");
   const [profileStrategyFilter, setProfileStrategyFilter] = useState("all");
+  const [pendingFavoriteProfileIds, setPendingFavoriteProfileIds] = useState(
+    () => new Set<string>(),
+  );
   const lobbyContentRef = useRef<HTMLDivElement | null>(null);
   const profileCardScrollRef = useRef<HTMLDivElement | null>(null);
   const profilePullDistanceRef = useRef(0);
@@ -97,6 +100,13 @@ export function GamesPage() {
       favorite: boolean;
       profileId: string;
     }) => updatePlayerProfile(profileId, { favorite }),
+    onMutate: ({ profileId }) => {
+      setPendingFavoriteProfileIds((currentProfileIds) => {
+        const nextProfileIds = new Set(currentProfileIds);
+        nextProfileIds.add(profileId);
+        return nextProfileIds;
+      });
+    },
     onSuccess: (updatedProfile) => {
       shouldRefreshProfilesOnNextDrawerOpenRef.current = true;
       queryClient.setQueryData<PlayerProfilesResponse>(
@@ -117,6 +127,13 @@ export function GamesPage() {
           };
         },
       );
+    },
+    onSettled: (_updatedProfile, _error, variables) => {
+      setPendingFavoriteProfileIds((currentProfileIds) => {
+        const nextProfileIds = new Set(currentProfileIds);
+        nextProfileIds.delete(variables.profileId);
+        return nextProfileIds;
+      });
     },
   });
 
@@ -954,6 +971,8 @@ export function GamesPage() {
                 <div className="mobile-profile-card-grid">
                   {filteredProfiles.map((profile) => {
                     const isPending = pendingProfileId === profile.id;
+                    const isFavoriteUpdatePending =
+                      pendingFavoriteProfileIds.has(profile.id);
                     const assignedSeat = assignedSeatByProfileId.get(profile.id);
                     const seatStatusLabel = getProfileSeatStatusLabel(
                       assignedSeat,
@@ -1036,7 +1055,7 @@ export function GamesPage() {
                           ]
                             .filter(Boolean)
                             .join(" ")}
-                          disabled={updateProfileFavoriteMutation.isPending}
+                          disabled={isFavoriteUpdatePending}
                           onClick={() => handleToggleProfileFavorite(profile)}
                           onPointerDown={(event) => {
                             event.preventDefault();

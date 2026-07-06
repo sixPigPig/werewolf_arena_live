@@ -15,6 +15,16 @@ const gameClientMocks = vi.hoisted(() => ({
   useGameRunEvents: vi.fn(),
 }));
 
+function readPngMetadata(path: string) {
+  const image = readFileSync(path);
+
+  return {
+    colorType: image.readUInt8(25),
+    height: image.readUInt32BE(20),
+    width: image.readUInt32BE(16),
+  };
+}
+
 vi.mock("@werewolf-arena/game-client", async () => {
   const actual = await vi.importActual<typeof import("@werewolf-arena/game-client")>(
     "@werewolf-arena/game-client",
@@ -152,13 +162,13 @@ function renderLiveRoute() {
     { initialEntries: ["/games/run-1/live"] },
   );
 
-  render(
+  const renderResult = render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
 
-  return { router };
+  return { router, ...renderResult };
 }
 
 describe("LivePage", () => {
@@ -186,7 +196,7 @@ describe("LivePage", () => {
       screen.getByRole("button", { name: "返回对局大厅" }),
     ).toBeVisible();
     expect((await screen.findAllByText("经典 8 人"))[0]).toBeVisible();
-    expect(screen.getByText("连接正常")).toBeVisible();
+    expect(screen.queryByText("连接正常")).not.toBeInTheDocument();
     expect(screen.getByText("game_started")).toBeVisible();
     expect(screen.getByText("第 1 天")).toBeVisible();
     expect(
@@ -236,7 +246,7 @@ describe("LivePage", () => {
     );
   });
 
-  it("renders mobile live phase segments and seeks by phase", async () => {
+  it("renders merged mobile live days and seeks by day", async () => {
     gameClientMocks.useGameRunEvents.mockReturnValue({
       connectionState: "open",
       events: [gameStartedEvent, nightPhaseEvent, dayPhaseEvent],
@@ -247,16 +257,43 @@ describe("LivePage", () => {
     renderLiveRoute();
 
     expect(
-      await screen.findByRole("button", { name: "从夜一开始播放" }),
+      await screen.findByRole("button", { name: "选择阶段，当前第1天" }),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "从昼一开始播放" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "跳转到夜一" }),
+    ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "从昼一开始播放" }));
+    await user.click(screen.getByRole("button", { name: "选择阶段，当前第1天" }));
+    expect(screen.getByRole("button", { name: "跳转到第1天" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "跳转到昼一" }),
+    ).not.toBeInTheDocument();
 
-    expect(screen.getByRole("button", { name: "从昼一开始播放" })).toHaveAttribute(
-      "aria-current",
-      "step",
+    await user.click(screen.getByRole("button", { name: "跳转到第1天" }));
+
+    expect(screen.getByRole("button", { name: "选择阶段，当前第1天" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
     );
+  });
+
+  it("places the mobile phase selector inside the theater top bar", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, nightPhaseEvent, dayPhaseEvent],
+      latestEvent: dayPhaseEvent,
+    });
+    const { container } = renderLiveRoute();
+
+    await screen.findByRole("button", { name: "选择阶段，当前第1天" });
+
+    const topBar = container.querySelector(".mobile-live-theater-top");
+    expect(topBar).not.toBeNull();
+    expect(
+      within(topBar as HTMLElement).getByRole("button", {
+        name: "选择阶段，当前第1天",
+      }),
+    ).toBeVisible();
   });
 
   it("does not reveal a future speaker delta while playback is paused", async () => {
@@ -310,14 +347,43 @@ describe("LivePage", () => {
 
     expect(tabBarRule).toContain("display: none");
     expect(contentRegionRule).toContain("padding-bottom: 0");
+    expect(contentRegionRule).toContain("overflow: hidden");
+  });
+
+  it("constrains the immersive live theater to one viewport", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const pageRule =
+      styles.match(/(?:^|\n)\.mobile-live-page\s*{[^}]+}/)?.[0] ?? "";
+    const theaterRule =
+      styles.match(/(?:^|\n)\.mobile-live-theater\s*{[^}]+}/)?.[0] ?? "";
+    const statusBannerRule =
+      styles.match(
+        /(?:^|\n)\.mobile-live-page:has\(\.mobile-live-theater\) > \.mobile-status-banner\s*{[^}]+}/,
+      )?.[0] ?? "";
+
+    expect(pageRule).toContain("height: 100svh");
+    expect(pageRule).toContain("padding: 0 var(--mobile-page-padding-inline)");
+    expect(theaterRule).toContain("height: 100%");
+    expect(theaterRule).toContain("min-height: 0");
+    expect(theaterRule).toContain(
+      "padding: calc(10px + env(safe-area-inset-top)) 0 calc(10px + env(safe-area-inset-bottom))",
+    );
+    expect(statusBannerRule).toContain("right: var(--mobile-page-padding-inline)");
+    expect(statusBannerRule).toContain("left: var(--mobile-page-padding-inline)");
   });
 
   it("uses gothic spectator surfaces for the mobile live theater", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
     const pageRule =
       styles.match(/(?:^|\n)\.mobile-live-page\s*{[^}]+}/)?.[0] ?? "";
-    const theaterBeforeRule =
-      styles.match(/\.mobile-live-theater::before\s*{[^}]+}/)?.[0] ?? "";
+    const topBarRule =
+      styles.match(/(?:^|\n)\.mobile-live-theater-top\s*{[^}]+}/)?.[0] ?? "";
+    const backButtonRule =
+      styles.match(/(?:^|\n)\.mobile-live-back-button\s*{[^}]+}/)?.[0] ?? "";
+    const genericTopBarDivRule =
+      styles.match(/(?:^|\n)\.mobile-live-theater-top div\s*{[^}]+}/)?.[0] ?? "";
+    const titleBoardRule =
+      styles.match(/(?:^|\n)\.mobile-live-title-board\s*{[^}]+}/)?.[0] ?? "";
     const skyOrbRule =
       styles.match(/(?:^|\n)\.mobile-live-sky-orb\s*{[^}]+}/)?.[0] ?? "";
     const presenterRule =
@@ -325,18 +391,119 @@ describe("LivePage", () => {
     const focusRule =
       styles.match(/(?:^|\n)\.mobile-live-focus-strip\s*{[^}]+}/)?.[0] ?? "";
 
-    expect(pageRule).toContain("mobile-gothic-castle-background.png");
-    expect(theaterBeforeRule).toContain("linear-gradient(180deg");
+    expect(pageRule).toContain("mobile-live-arena-background.png");
+    expect(topBarRule).toContain("position: relative");
+    expect(topBarRule).toContain("justify-content: center");
+    expect(topBarRule).toContain("overflow: visible");
+    expect(backButtonRule).toContain("lobby-back-button-bg.png");
+    expect(backButtonRule).toContain("background: transparent");
+    expect(backButtonRule).toContain("position: absolute");
+    expect(backButtonRule).toContain("left: 0");
+    expect(genericTopBarDivRule).toBe("");
+    expect(titleBoardRule).toContain("mobile-live-title-board-bg.png");
+    expect(titleBoardRule).toContain("background: transparent");
+    expect(titleBoardRule).toContain("position: absolute");
+    expect(titleBoardRule).toContain("left: 50%");
+    expect(titleBoardRule).toContain("translate(-50%, -50%)");
+    expect(titleBoardRule).toContain("width: min(48%, 360px)");
     expect(skyOrbRule).toContain("border: 4px double");
     expect(presenterRule).toContain("aspect-ratio: 0.66");
     expect(focusRule).toContain("grid-template-columns: 42px minmax(0, 1fr) auto");
+  });
+
+  it("styles the mobile day panel below the top-right day trigger", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const phaseBarRule =
+      styles.match(/(?:^|\n)\.mobile-live-phase-bar\s*{[^}]+}/)?.[0] ?? "";
+    const popoverRule =
+      styles.match(/(?:^|\n)\.mobile-live-phase-popover\s*{[^}]+}/)?.[0] ?? "";
+    const theaterRule =
+      styles.match(/(?:^|\n)\.mobile-live-theater\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(theaterRule).toContain(
+      "grid-template-rows: auto minmax(128px, 20svh) minmax(0, 1fr) auto",
+    );
+    expect(phaseBarRule).toContain("position: absolute");
+    expect(phaseBarRule).toContain("right: 0");
+    expect(phaseBarRule).toContain("top: calc(50% - 17px)");
+    expect(phaseBarRule).not.toContain("transform");
+    expect(popoverRule).toContain("position: fixed");
+    expect(popoverRule).toContain("top: calc(118PX + env(safe-area-inset-top))");
+    expect(popoverRule).toContain(
+      "right: max(16PX, env(safe-area-inset-right))",
+    );
+    expect(popoverRule).toContain("left: auto");
+    expect(popoverRule).toContain("transform: none");
+    expect(popoverRule).toContain("width: 176PX");
+    expect(popoverRule).toContain(
+      "max-height: min(380PX, calc(100svh - 136PX))",
+    );
+    expect(popoverRule).toContain("backdrop-filter: blur(14px)");
+    expect(popoverRule).toContain("background: rgb(6 9 14 / 78%)");
+  });
+
+  it("uses a transparent lobby back button asset", () => {
+    expect(readPngMetadata("src/assets/lobby-back-button-bg.png")).toEqual({
+      colorType: 6,
+      height: 216,
+      width: 216,
+    });
+  });
+
+  it("does not layer generated backgrounds over the full-screen live image", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const pageRule =
+      styles.match(/(?:^|\n)\.mobile-live-page\s*{[^}]+}/)?.[0] ?? "";
+    const pageOverlayRule =
+      styles.match(/(?:^|\n)\.mobile-live-page::before\s*{[^}]+}/)?.[0] ?? "";
+    const shellLiveBackgroundRule =
+      styles.match(
+        /(?:^|\n)\.mobile-app-shell:has\(\.mobile-live-page\)::before\s*{[^}]+}/,
+      )?.[0] ?? "";
+    const theaterBeforeRule =
+      styles.match(/(?:^|\n)\.mobile-live-theater::before\s*{[^}]+}/)?.[0] ?? "";
+    const theaterAfterRule =
+      styles.match(/(?:^|\n)\.mobile-live-theater::after\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(pageRule).toContain("mobile-live-arena-background.png");
+    expect(pageRule).not.toContain("mobile-gothic-castle-background.png");
+    expect(pageRule).toContain("center top / cover no-repeat");
+    expect(pageOverlayRule).toBe("");
+    expect(shellLiveBackgroundRule).toContain("content: none");
+    expect(theaterBeforeRule).toBe("");
+    expect(theaterAfterRule).toBe("");
+  });
+
+  it("uses the portrait gothic arena image as the live background", () => {
+    expect(
+      readPngMetadata("src/assets/mobile-live-arena-background.png"),
+    ).toEqual({
+      colorType: 2,
+      height: 1828,
+      width: 860,
+    });
+  });
+
+  it("keeps the lobby shell background on its original asset", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const shellBackgroundRule =
+      styles.match(/(?:^|\n)\.mobile-app-shell::before\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(shellBackgroundRule).toContain("mobile-gothic-castle-background.png");
+    expect(
+      readPngMetadata("src/assets/mobile-gothic-castle-background.png"),
+    ).toEqual({
+      colorType: 2,
+      height: 1870,
+      width: 841,
+    });
   });
 
   it("compresses theater seats on short phone screens", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
 
     expect(styles).toMatch(
-      /@media \(max-height: 700px\) {[\s\S]*?\.mobile-live-seat-avatar\s*{[^}]+width: clamp\(34px, 10\.8vw, 42px\)/,
+      /@media \(max-height: 860px\) {[\s\S]*?\.mobile-live-seat-avatar\s*{[^}]+width: clamp\(34px, 10\.8vw, 42px\)/,
     );
     expect(styles).toMatch(
       /@media \(max-height: 700px\) {[\s\S]*?\.mobile-live-seat small\s*{[^}]+display: none/,

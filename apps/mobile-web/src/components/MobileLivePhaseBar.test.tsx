@@ -36,23 +36,43 @@ const segments: LivePhaseSegment[] = [
 ];
 
 describe("MobileLivePhaseBar", () => {
-  it("renders mobile phase buttons and marks the current phase", () => {
+  it("collapses night and day phases behind a current-day trigger", () => {
     render(<MobileLivePhaseBar onSelectPhase={() => {}} segments={segments} />);
 
     expect(screen.getByTestId("mobile-live-phase-bar")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "从夜一开始播放" })).toHaveTextContent(
-      "夜一",
+    expect(
+      screen.getByRole("button", { name: "选择阶段，当前第1天" }),
+    ).toHaveTextContent("第1天");
+    expect(
+      screen.queryByRole("button", { name: "跳转到夜一" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "跳转到昼一" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens a translucent day list and marks the current day", async () => {
+    const user = userEvent.setup();
+    render(<MobileLivePhaseBar onSelectPhase={() => {}} segments={segments} />);
+
+    await user.click(screen.getByRole("button", { name: "选择阶段，当前第1天" }));
+
+    expect(screen.getByTestId("mobile-live-phase-popover")).toBeVisible();
+    expect(screen.getByRole("button", { name: "跳转到第1天" })).toHaveTextContent(
+      "第1天",
     );
-    expect(screen.getByRole("button", { name: "从昼一开始播放" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "跳转到第1天" })).toHaveAttribute(
       "aria-current",
       "step",
     );
-    expect(screen.getByRole("button", { name: "从夜二开始播放" })).not.toHaveAttribute(
+    expect(screen.getByRole("button", { name: "跳转到第2天" })).not.toHaveAttribute(
       "aria-current",
     );
+    expect(screen.queryByText("夜一")).not.toBeInTheDocument();
+    expect(screen.queryByText("昼一")).not.toBeInTheDocument();
   });
 
-  it("selects the clicked mobile phase", async () => {
+  it("selects the clicked day from its first phase and closes the list", async () => {
     const user = userEvent.setup();
     const handleSelectPhase = vi.fn();
     render(
@@ -62,9 +82,13 @@ describe("MobileLivePhaseBar", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "从夜二开始播放" }));
+    await user.click(screen.getByRole("button", { name: "选择阶段，当前第1天" }));
+    await user.click(screen.getByRole("button", { name: "跳转到第2天" }));
 
     expect(handleSelectPhase).toHaveBeenCalledWith(segments[2]);
+    expect(
+      screen.queryByRole("button", { name: "跳转到第2天" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders nothing without phase segments", () => {

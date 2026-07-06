@@ -742,7 +742,7 @@ describe("GamesPage", () => {
     expect(lobbyPageRule).not.toContain("max-height: 100%");
     expect(lobbyPageRule).not.toContain("overflow: hidden");
     expect(lobbyPageRule).toContain(
-      "calc(var(--mobile-tab-frame-height) + 128px + env(safe-area-inset-bottom))",
+      "padding: 10px var(--mobile-page-padding-inline) calc(var(--mobile-tab-frame-height) + 128px + env(safe-area-inset-bottom))",
     );
     expect(ruleScrollRule).toContain("overflow-x: auto");
   });
@@ -1321,6 +1321,29 @@ describe("GamesPage", () => {
     expect(listPlayerProfilesCallCount).toBe(1);
   });
 
+  it("keeps unrelated favorite buttons enabled while one favorite update is pending", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.updatePlayerProfile.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 1 号座位，当前为 请选择",
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "收藏 白石" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "收藏 白石" })).toBeDisabled();
+    });
+    expect(
+      screen.getByRole("button", { name: "取消收藏 阿青" }),
+    ).not.toBeDisabled();
+  });
+
   it("keeps favorite reordering deferred until the next player drawer open", async () => {
     const user = userEvent.setup();
     const alpha = buildProfile({
@@ -1690,7 +1713,7 @@ describe("GamesPage", () => {
       )?.[0] ?? "";
     const selectLabelRule =
       styles.match(
-        /(?:^|\n)\.mobile-profile-search span,\s*\n\.mobile-profile-select span\s*{[^}]+}/,
+        /(?:^|\n)\.mobile-lobby-field span,\s*\n\.mobile-profile-search span,\s*\n\.mobile-profile-select span\s*{[^}]+}/,
       )?.[0] ?? "";
     const selectTriggerTextRule =
       styles.match(
@@ -1767,9 +1790,9 @@ describe("GamesPage", () => {
     expect(selectTriggerRule).toContain("background: transparent");
     expect(selectTriggerRule).toContain("border: 0");
     expect(selectTriggerRule).toContain("text-align: left");
-    expect(selectLabelRule).toContain("font-size: 11px");
-    expect(selectTriggerRule).toContain("font-size: 11px");
-    expect(selectTriggerTextRule).toContain("font-size: 11px");
+    expect(selectLabelRule).toContain("font-size: 12px");
+    expect(selectTriggerRule).toContain("font-size: 12px");
+    expect(selectTriggerTextRule).toContain("font-size: 12px");
     expect(searchInputRule).toContain("min-height: 28px");
     expect(selectTriggerRule).toContain("min-height: 28px");
     expect(selectChevronRule).toContain("pointer-events: none");

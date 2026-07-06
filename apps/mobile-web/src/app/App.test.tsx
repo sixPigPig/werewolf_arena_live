@@ -106,6 +106,26 @@ describe("mobile app scaffold", () => {
     expect(config).toContain("rootValue: 37.5");
   });
 
+  it("locks the mobile viewport scale", () => {
+    const html = readFileSync("index.html", "utf8");
+    const viewportContent =
+      html.match(/<meta\s+[^>]*name="viewport"[^>]*content="([^"]+)"/)?.[1] ?? "";
+    const viewportOptions = viewportContent
+      .split(",")
+      .map((option) => option.trim());
+
+    expect(viewportOptions).toEqual(
+      expect.arrayContaining([
+        "width=device-width",
+        "initial-scale=1.0",
+        "minimum-scale=1.0",
+        "maximum-scale=1.0",
+        "user-scalable=no",
+        "viewport-fit=cover",
+      ]),
+    );
+  });
+
   it("sets 37.5px root font size at a 375px viewport", () => {
     const html = document.documentElement;
 
@@ -137,5 +157,55 @@ describe("mobile app scaffold", () => {
     expect(drawerTitleRule).toContain("font-size: 18px");
     expect(drawerTitleRule).toContain("line-height: 18px");
     expect(drawerSubtitleRule).toContain("font-size: 11px");
+  });
+
+  it("uses the shared 16px mobile page inline padding standard", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const rootRule = styles.match(/(?:^|\n):root\s*{[^}]+}/)?.[0] ?? "";
+    const pageRule =
+      styles.match(/(?:^|\n)\.mobile-page\s*{[^}]+}/)?.[0] ?? "";
+    const lobbyPageRule =
+      styles.match(/(?:^|\n)\.mobile-lobby-page\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(rootRule).toContain("--mobile-page-padding-inline: 16px");
+    expect(pageRule).toContain(
+      "padding: 24px var(--mobile-page-padding-inline) 160px",
+    );
+    expect(lobbyPageRule).toContain(
+      "padding: 10px var(--mobile-page-padding-inline) calc(var(--mobile-tab-frame-height) + 128px + env(safe-area-inset-bottom))",
+    );
+  });
+
+  it("keeps mobile form controls at the compact lobby size", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const baseFormControlRule =
+      styles.match(/(?:^|\n)input,\nselect,\ntextarea\s*{[^}]+}/)?.[0] ?? "";
+    const lobbyFieldRule =
+      styles.match(
+        /(?:^|\n)\.mobile-lobby-field input,\n\.mobile-profile-search input,\n\.mobile-profile-select select\s*{[^}]+}/,
+      )?.[0] ?? "";
+    const formLabelRule =
+      styles.match(
+        /(?:^|\n)\.mobile-lobby-field span,\n\.mobile-profile-search span,\n\.mobile-profile-select span\s*{[^}]+}/,
+      )?.[0] ?? "";
+    const selectTriggerRule =
+      styles.match(/(?:^|\n)\.mobile-profile-select-trigger\s*{[^}]+}/)?.[0] ??
+      "";
+    const selectTriggerTextRule =
+      styles.match(/(?:^|\n)\.mobile-profile-select-trigger span\s*{[^}]+}/)
+        ?.[0] ?? "";
+    const pickerRule =
+      styles.match(
+        /(?:^|\n)\.mobile-bottom-select-picker-popup \.adm-picker\s*{[^}]+}/,
+      )?.[0] ?? "";
+
+    expect(baseFormControlRule).toContain("font-size: 12px");
+    expect(lobbyFieldRule).toContain("font-size: 12px");
+    expect(formLabelRule).toContain("font-size: 12px");
+    expect(selectTriggerRule).toContain("font-size: 12px");
+    expect(selectTriggerTextRule).toContain("font-size: 12px");
+    expect(pickerRule).toContain("--header-button-font-size: 16px");
+    expect(pickerRule).toContain("--title-font-size: 16px");
+    expect(pickerRule).toContain("--item-font-size: 16px");
   });
 });

@@ -109,15 +109,6 @@ export function useLiveDirector(
   options: UseLiveDirectorOptions = {},
 ): UseLiveDirectorResult {
   const cues = useMemo(() => buildDirectorCues(events), [events]);
-  const [currentEventId, setCurrentEventId] = useState<number | null>(
-    () => cues[0]?.eventId ?? null,
-  );
-  const [isPaused, setIsPaused] = useState(false);
-  const [speed, setSpeedState] = useState<LiveDirectorSpeed>(1);
-  const startedAtRef = useRef(0);
-  const lastStartedEventIdRef = useRef<number | null>(null);
-  const pausedAtRef = useRef<number | null>(null);
-  const resetKeyRef = useRef(options.resetKey);
   const latestTerminalCue = useMemo(
     () =>
       [...cues]
@@ -127,29 +118,51 @@ export function useLiveDirector(
         ),
     [cues],
   );
-  const selectedCurrentEventId =
+  const [currentEventId, setCurrentEventId] = useState<number | null>(
+    () =>
+      options.startAtLatestTerminal && latestTerminalCue
+        ? latestTerminalCue.eventId
+        : (cues[0]?.eventId ?? null),
+  );
+  const [isPaused, setIsPaused] = useState(false);
+  const [speed, setSpeedState] = useState<LiveDirectorSpeed>(1);
+  const startedAtRef = useRef(0);
+  const lastStartedEventIdRef = useRef<number | null>(null);
+  const pausedAtRef = useRef<number | null>(null);
+  const resetKeyRef = useRef(options.resetKey);
+  const autoStartedTerminalEventIdRef = useRef<number | null>(
     options.startAtLatestTerminal && latestTerminalCue
       ? latestTerminalCue.eventId
-      : currentEventId;
+      : null,
+  );
 
-  if (selectedCurrentEventId !== currentEventId) {
-    setCurrentEventId(selectedCurrentEventId);
-  }
+  useEffect(() => {
+    if (!options.startAtLatestTerminal || !latestTerminalCue) {
+      return;
+    }
+
+    if (autoStartedTerminalEventIdRef.current === latestTerminalCue.eventId) {
+      return;
+    }
+
+    autoStartedTerminalEventIdRef.current = latestTerminalCue.eventId;
+    setCurrentEventId(latestTerminalCue.eventId);
+  }, [latestTerminalCue, options.startAtLatestTerminal]);
 
   const currentIndex = useMemo(() => {
     if (cues.length === 0) {
       return -1;
     }
 
-    if (selectedCurrentEventId === null) {
+    if (currentEventId === null) {
       return 0;
     }
 
     const matchingIndex = cues.findIndex(
-      (cue) => cue.eventId === selectedCurrentEventId,
+      (cue) => cue.eventId === currentEventId,
     );
     return matchingIndex === -1 ? 0 : matchingIndex;
-  }, [cues, selectedCurrentEventId]);
+  }, [cues, currentEventId]);
 
   const currentCue = currentIndex === -1 ? null : cues[currentIndex];
   const resolvedCurrentEventId = currentCue?.eventId ?? null;
@@ -169,6 +182,7 @@ export function useLiveDirector(
     startedAtRef.current = Date.now();
     lastStartedEventIdRef.current = null;
     pausedAtRef.current = null;
+    autoStartedTerminalEventIdRef.current = null;
     setCurrentEventId(null);
     setIsPaused(false);
     setSpeedState(1);

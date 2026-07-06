@@ -136,7 +136,6 @@ export function LivePage() {
       {!run && runQuery.isPending ? (
         <section className="mobile-live-theater" aria-label="实时观战剧场">
           <LiveTheaterTopBar
-            connectionState={connectionState}
             liveStatusLabel={liveStatus.label}
             onBack={() => navigateBackToGames(navigate)}
             ruleName="实时对局"
@@ -147,7 +146,6 @@ export function LivePage() {
       {run ? (
         <LiveTheater
           canResumeRun={canResumeRun}
-          connectionState={connectionState}
           currentEvent={currentEvent}
           director={director}
           godViewState={godViewState}
@@ -172,7 +170,6 @@ type GodViewState = ReturnType<typeof deriveGodViewState>;
 
 type LiveTheaterProps = {
   canResumeRun: boolean;
-  connectionState: string;
   currentEvent: LiveGameEvent | null;
   director: LiveDirectorControlsState;
   godViewState: GodViewState;
@@ -188,7 +185,6 @@ type LiveTheaterProps = {
 
 function LiveTheater({
   canResumeRun,
-  connectionState,
   currentEvent,
   director,
   godViewState,
@@ -207,14 +203,11 @@ function LiveTheater({
   return (
     <section className="mobile-live-theater" aria-label="实时观战剧场">
       <LiveTheaterTopBar
-        connectionState={connectionState}
         liveStatusLabel={liveStatusLabel}
         onBack={onBack}
-        ruleName={run.rule_set?.name ?? "实时对局"}
-      />
-      <MobileLivePhaseBar
         onSelectPhase={onSelectPhase}
-        segments={phaseSegments}
+        phaseSegments={phaseSegments}
+        ruleName={run.rule_set?.name ?? "实时对局"}
       />
       <LiveSkyBanner
         dayNightLabel={godViewState.dayNightLabel}
@@ -244,16 +237,18 @@ function LiveTheater({
 }
 
 type LiveTheaterTopBarProps = {
-  connectionState: string;
   liveStatusLabel: string;
   onBack: () => void;
+  onSelectPhase?: (segment: LivePhaseSegment) => void;
+  phaseSegments?: LivePhaseSegment[];
   ruleName: string;
 };
 
 function LiveTheaterTopBar({
-  connectionState,
   liveStatusLabel,
   onBack,
+  onSelectPhase,
+  phaseSegments = [],
   ruleName,
 }: LiveTheaterTopBarProps) {
   return (
@@ -263,16 +258,17 @@ function LiveTheaterTopBar({
         className="mobile-live-back-button"
         onClick={onBack}
         type="button"
-      >
-        ‹
-      </button>
-      <div>
+      />
+      <div className="mobile-live-title-board">
         <strong>{ruleName}</strong>
         <span>{liveStatusLabel}</span>
       </div>
-      <span className="mobile-live-connection">
-        {connectionLabel(connectionState)}
-      </span>
+      {onSelectPhase ? (
+        <MobileLivePhaseBar
+          onSelectPhase={onSelectPhase}
+          segments={phaseSegments}
+        />
+      ) : null}
     </header>
   );
 }
@@ -523,14 +519,6 @@ function navigateBackToGames(navigate: ReturnType<typeof useNavigate>) {
   }
 
   navigate("/games");
-}
-
-function connectionLabel(state: string) {
-  if (state === "open") return "连接正常";
-  if (state === "connecting") return "正在连接";
-  if (state === "error") return "连接中断";
-  if (state === "closed") return "连接已关闭";
-  return "等待连接";
 }
 
 function isTerminalEvent(event: LiveGameEvent) {

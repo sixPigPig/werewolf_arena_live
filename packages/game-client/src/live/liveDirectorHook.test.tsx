@@ -67,4 +67,19 @@ describe("useLiveDirector seekToEventId", () => {
     expect(result.current.isPaused).toBe(true);
     expect(result.current.currentEventId).toBe(5);
   });
+
+  it("allows seeking away after a completed run starts at the terminal cue", () => {
+    const { result } = renderHook(() =>
+      useLiveDirector(events, { startAtLatestTerminal: true }),
+    );
+
+    expect(result.current.currentEventId).toBe(9);
+
+    act(() => {
+      result.current.seekToEventId(3);
+    });
+
+    expect(result.current.currentEventId).toBe(3);
+    expect(result.current.currentCue?.phase).toBe("night");
+  });
 });
