@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
@@ -23,12 +24,40 @@ class ReplayNotFoundError(Exception):
 
 
 class ReplayStore:
-    # Temporary import compatibility until API routes are converted to DatabaseReplayStore.
-    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError(
-            "ReplayStore file-backed storage has been removed; use DatabaseReplayStore "
-            "after API route conversion."
-        )
+    # Temporary construction compatibility until API routes are converted to
+    # DatabaseReplayStore. This shim intentionally exposes no file-backed sessions.
+    def __init__(self, logs_root: Path) -> None:
+        self.logs_root = logs_root
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        return []
+
+    def load_session(self, _session_id: str) -> dict[str, Any]:
+        raise ReplayNotFoundError
+
+    def load_resume_checkpoint(self, _session_id: str) -> dict[str, Any]:
+        raise ResumeCheckpointError
+
+    def save_game(self, _state: GameState, _logs: list[RoundLog]) -> None:
+        _raise_removed_replay_store_error()
+
+    def save_game_payload(self, *, state: dict[str, Any], logs: list[Any]) -> None:
+        del state, logs
+        _raise_removed_replay_store_error()
+
+    def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, Any]) -> None:
+        del session_id, checkpoint
+        _raise_removed_replay_store_error()
+
+    def clear_resume_checkpoint(self, _session_id: str) -> None:
+        _raise_removed_replay_store_error()
+
+
+def _raise_removed_replay_store_error() -> None:
+    raise RuntimeError(
+        "ReplayStore file-backed storage has been removed; use DatabaseReplayStore "
+        "after API route conversion."
+    )
 
 
 class GameRecordStore(Protocol):
@@ -59,18 +88,18 @@ class DatabaseReplayStore:
         self.db = db
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        records = (
-            self.db.query(GameSessionRecord)
+        rows = (
+            self.db.query(GameSessionRecord, GameReplayPayload)
+            .join(
+                GameReplayPayload,
+                GameReplayPayload.session_id == GameSessionRecord.session_id,
+            )
             .order_by(GameSessionRecord.created_at.desc(), GameSessionRecord.session_id.desc())
             .all()
         )
         sessions = []
-        for record in records:
-            payload = self.db.get(GameReplayPayload, record.session_id)
-            checkpoint = _valid_checkpoint_or_none(
-                record.session_id,
-                payload.checkpoint if payload is not None else None,
-            )
+        for record, payload in rows:
+            checkpoint = _valid_checkpoint_or_none(record.session_id, payload.checkpoint)
             sessions.append(
                 {
                     "session_id": record.session_id,

@@ -112,6 +112,14 @@ def test_save_complete_game_lists_and_loads_session(db_session: Session) -> None
     assert loaded["resumable"] is False
 
 
+def test_list_sessions_skips_records_without_payload(db_session: Session) -> None:
+    db_session.add(GameSessionRecord(session_id="game_1200abcd", status="partial"))
+    db_session.commit()
+    store = DatabaseReplayStore(db_session)
+
+    assert store.list_sessions() == []
+
+
 def test_checkpoint_makes_partial_session_resumable(db_session: Session) -> None:
     store = DatabaseReplayStore(db_session)
     checkpoint = {
@@ -330,10 +338,3 @@ def test_clear_resume_checkpoint_clears_stale_record_without_payload(
     record = db_session.get(GameSessionRecord, "game_1200abcd")
     assert record is not None
     assert record.resumable is False
-
-
-def test_legacy_replay_store_symbol_is_import_only() -> None:
-    from app.werewolf.replay import ReplayStore
-
-    with pytest.raises(RuntimeError, match="DatabaseReplayStore"):
-        ReplayStore("/tmp")
