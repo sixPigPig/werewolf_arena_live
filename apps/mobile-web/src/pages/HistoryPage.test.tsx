@@ -51,6 +51,7 @@ function renderHistoryRoute() {
     [
       { path: "/history", element: <HistoryPage /> },
       { path: "/games/:gameId/live", element: <h1>实时观战</h1> },
+      { path: "/games/:gameId/live-replay", element: <h1>历史直播回放</h1> },
       { path: "/games/:gameId/replay", element: <h1>移动复盘</h1> },
     ],
     { initialEntries: ["/history"] },
@@ -103,6 +104,9 @@ describe("HistoryPage", () => {
     expect(
       screen.getByRole("link", { name: "查看复盘 session-1" }),
     ).toHaveAttribute("href", "/games/session-1/replay");
+    expect(
+      screen.getByRole("link", { name: "直播回放 session-1" }),
+    ).toHaveAttribute("href", "/games/session-1/live-replay");
 
     await user.click(screen.getByRole("button", { name: "继续对局 session-1" }));
 
@@ -128,6 +132,9 @@ describe("HistoryPage", () => {
     expect(
       screen.getByRole("link", { name: "查看复盘 session-1" }),
     ).toHaveAttribute("href", "/games/session-1/replay");
+    expect(
+      screen.getByRole("link", { name: "直播回放 session-1" }),
+    ).toHaveAttribute("href", "/games/session-1/live-replay");
   });
 
   it("shows replay for complete non-resumable sessions", async () => {
@@ -150,5 +157,8 @@ describe("HistoryPage", () => {
     expect(
       screen.getByRole("link", { name: "查看复盘 session-1" }),
     ).toHaveAttribute("href", "/games/session-1/replay");
+    expect(
+      screen.getByRole("link", { name: "直播回放 session-1" }),
+    ).toHaveAttribute("href", "/games/session-1/live-replay");
   });
 });

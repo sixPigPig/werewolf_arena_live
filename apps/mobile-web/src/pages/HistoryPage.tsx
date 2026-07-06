@@ -120,6 +120,13 @@ function HistorySessionCard({
           </button>
         ) : null}
         <Link
+          aria-label={`直播回放 ${session.session_id}`}
+          className="mobile-button mobile-session-link"
+          to={`/games/${session.session_id}/live-replay`}
+        >
+          直播回放
+        </Link>
+        <Link
           aria-label={`查看复盘 ${session.session_id}`}
           className="mobile-button mobile-session-link"
           to={`/games/${session.session_id}/replay`}
