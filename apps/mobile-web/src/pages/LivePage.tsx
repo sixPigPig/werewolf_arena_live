@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import {
   buildLivePhaseSegments,
@@ -9,16 +9,16 @@ import {
   deriveLiveSpectatorState,
   getGameRun,
   resumeGameRun,
-  resolveAvatarImageUrl,
   useGameRunEvents,
   useLiveDirector,
-  type GameRun,
-  type GodViewPlayer,
   type LiveGameEvent,
-  type LivePhaseSegment,
 } from "@werewolf-arena/game-client";
 
-import { MobileLivePhaseBar } from "../components/MobileLivePhaseBar";
+import {
+  isTerminalRunStatus,
+  MobileLiveTheater,
+  MobileLiveTheaterTopBar,
+} from "../components/MobileLiveTheater";
 
 const EMPTY_EVENTS: LiveGameEvent[] = [];
 
@@ -135,7 +135,7 @@ export function LivePage() {
 
       {!run && runQuery.isPending ? (
         <section className="mobile-live-theater" aria-label="实时观战剧场">
-          <LiveTheaterTopBar
+          <MobileLiveTheaterTopBar
             liveStatusLabel={liveStatus.label}
             onBack={() => navigateBackToGames(navigate)}
             ruleName="实时对局"
@@ -144,7 +144,7 @@ export function LivePage() {
       ) : null}
 
       {run ? (
-        <LiveTheater
+        <MobileLiveTheater
           canResumeRun={canResumeRun}
           currentEvent={currentEvent}
           director={director}
@@ -156,6 +156,9 @@ export function LivePage() {
           }
           onResumeRun={() => resumeMutation.mutate(run.session_id)}
           phaseSegments={phaseSegments}
+          replayLinkVisible={
+            isTerminalRunStatus(run.status) || Boolean(terminalEvent)
+          }
           resumeIsPending={resumeMutation.isPending}
           run={run}
           terminalEvent={terminalEvent}
@@ -163,343 +166,6 @@ export function LivePage() {
       ) : null}
     </main>
   );
-}
-
-type LiveDirectorControlsState = ReturnType<typeof useLiveDirector>;
-type GodViewState = ReturnType<typeof deriveGodViewState>;
-
-type LiveTheaterProps = {
-  canResumeRun: boolean;
-  currentEvent: LiveGameEvent | null;
-  director: LiveDirectorControlsState;
-  godViewState: GodViewState;
-  liveStatusLabel: string;
-  onBack: () => void;
-  onSelectPhase: (segment: LivePhaseSegment) => void;
-  onResumeRun: () => void;
-  phaseSegments: LivePhaseSegment[];
-  resumeIsPending: boolean;
-  run: GameRun;
-  terminalEvent: LiveGameEvent | undefined;
-};
-
-function LiveTheater({
-  canResumeRun,
-  currentEvent,
-  director,
-  godViewState,
-  liveStatusLabel,
-  onBack,
-  onSelectPhase,
-  onResumeRun,
-  phaseSegments,
-  resumeIsPending,
-  run,
-  terminalEvent,
-}: LiveTheaterProps) {
-  const currentPlayer = getCurrentTheaterPlayer(godViewState);
-  const { left, right } = splitPlayersForColumns(godViewState.players);
-
-  return (
-    <section className="mobile-live-theater" aria-label="实时观战剧场">
-      <LiveTheaterTopBar
-        liveStatusLabel={liveStatusLabel}
-        onBack={onBack}
-        onSelectPhase={onSelectPhase}
-        phaseSegments={phaseSegments}
-        ruleName={run.rule_set?.name ?? "实时对局"}
-      />
-      <LiveSkyBanner
-        dayNightLabel={godViewState.dayNightLabel}
-        phaseLabel={godViewState.phaseLabel}
-      />
-      <section className="mobile-live-seat-stage" aria-label="玩家席位">
-        <LiveSeatColumn players={left} side="left" />
-        <LiveCenterStage
-          currentEvent={currentEvent}
-          currentPlayer={currentPlayer}
-          godViewState={godViewState}
-        />
-        <LiveSeatColumn players={right} side="right" />
-      </section>
-      <LiveTheaterControls
-        canResumeRun={canResumeRun}
-        currentPlayer={currentPlayer}
-        director={director}
-        godViewState={godViewState}
-        onResumeRun={onResumeRun}
-        resumeIsPending={resumeIsPending}
-        run={run}
-        terminalEvent={terminalEvent}
-      />
-    </section>
-  );
-}
-
-type LiveTheaterTopBarProps = {
-  liveStatusLabel: string;
-  onBack: () => void;
-  onSelectPhase?: (segment: LivePhaseSegment) => void;
-  phaseSegments?: LivePhaseSegment[];
-  ruleName: string;
-};
-
-function LiveTheaterTopBar({
-  liveStatusLabel,
-  onBack,
-  onSelectPhase,
-  phaseSegments = [],
-  ruleName,
-}: LiveTheaterTopBarProps) {
-  return (
-    <header className="mobile-live-theater-top">
-      <button
-        aria-label="返回对局大厅"
-        className="mobile-live-back-button"
-        onClick={onBack}
-        type="button"
-      />
-      <div className="mobile-live-title-board">
-        <strong>{ruleName}</strong>
-        <span>{liveStatusLabel}</span>
-      </div>
-      {onSelectPhase ? (
-        <MobileLivePhaseBar
-          onSelectPhase={onSelectPhase}
-          segments={phaseSegments}
-        />
-      ) : null}
-    </header>
-  );
-}
-
-type LiveSkyBannerProps = {
-  dayNightLabel: string;
-  phaseLabel: string;
-};
-
-function LiveSkyBanner({ dayNightLabel, phaseLabel }: LiveSkyBannerProps) {
-  return (
-    <section className="mobile-live-sky" aria-label="当前轮次">
-      <div className="mobile-live-sky-orb" aria-hidden="true" />
-      <div className="mobile-live-day-banner">
-        <span>{phaseLabel}</span>
-        <strong>{dayNightLabel}</strong>
-      </div>
-    </section>
-  );
-}
-
-type LiveSeatColumnProps = {
-  players: GodViewPlayer[];
-  side: "left" | "right";
-};
-
-function LiveSeatColumn({ players, side }: LiveSeatColumnProps) {
-  return (
-    <div className={`mobile-live-seat-column mobile-live-seat-column-${side}`}>
-      {players.map((player) => (
-        <LiveSeatAvatar key={player.name} player={player} />
-      ))}
-    </div>
-  );
-}
-
-type LiveSeatAvatarProps = {
-  player: GodViewPlayer;
-};
-
-function LiveSeatAvatar({ player }: LiveSeatAvatarProps) {
-  const roleLabel = roleShortLabel(player.role);
-  const statusLabel = player.isSpeaking ? "发言中" : player.stageStatus.label;
-  const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}`;
-  const avatarImageUrl = resolveAvatarImageUrl({
-    avatar_image_url: player.avatarImageUrl,
-  });
-  const className = [
-    "mobile-live-seat",
-    player.isSpeaking ? "mobile-live-seat-speaking" : "",
-    player.isAlive ? "" : "mobile-live-seat-out",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return (
-    <article aria-label={seatLabel} className={className}>
-      <span className="mobile-live-seat-number">{player.seatNumber}</span>
-      <span className="mobile-live-seat-avatar">
-        {avatarImageUrl ? (
-          <img alt="" src={avatarImageUrl} />
-        ) : (
-          <span>{avatarInitial(player.name, player.seatNumber)}</span>
-        )}
-      </span>
-      <span className="mobile-live-seat-role">{roleLabel}</span>
-      <strong>{player.name}</strong>
-      <small>{statusLabel}</small>
-    </article>
-  );
-}
-
-type LiveCenterStageProps = {
-  currentEvent: LiveGameEvent | null;
-  currentPlayer: GodViewPlayer | null;
-  godViewState: GodViewState;
-};
-
-function LiveCenterStage({
-  currentEvent,
-  currentPlayer,
-  godViewState,
-}: LiveCenterStageProps) {
-  const presenterAvatarImageUrl = currentPlayer
-    ? resolveAvatarImageUrl({
-        avatar_image_url: currentPlayer.avatarImageUrl,
-      })
-    : null;
-
-  return (
-    <section className="mobile-live-center-stage" aria-label="当前舞台">
-      <div className="mobile-live-presenter" aria-hidden="true">
-        {presenterAvatarImageUrl ? (
-          <img alt="" src={presenterAvatarImageUrl} />
-        ) : (
-          <span>
-            {currentPlayer
-              ? avatarInitial(currentPlayer.name, currentPlayer.seatNumber)
-              : "?"}
-          </span>
-        )}
-      </div>
-      <span>{currentPlayer ? `${currentPlayer.seatNumber}号` : "等待"}</span>
-      <strong>{currentPlayer?.name ?? "等待玩家行动"}</strong>
-      <em>{currentPlayer?.stageStatus.label ?? godViewState.currentSeatLabel}</em>
-      <p>{currentEvent?.type ?? "等待事件"}</p>
-      {currentEvent?.action ? <small>{currentEvent.action}</small> : null}
-    </section>
-  );
-}
-
-type LiveTheaterControlsProps = {
-  canResumeRun: boolean;
-  currentPlayer: GodViewPlayer | null;
-  director: LiveDirectorControlsState;
-  godViewState: GodViewState;
-  onResumeRun: () => void;
-  resumeIsPending: boolean;
-  run: GameRun;
-  terminalEvent: LiveGameEvent | undefined;
-};
-
-function LiveTheaterControls({
-  canResumeRun,
-  currentPlayer,
-  director,
-  godViewState,
-  onResumeRun,
-  resumeIsPending,
-  run,
-  terminalEvent,
-}: LiveTheaterControlsProps) {
-  return (
-    <footer className="mobile-live-control-deck" aria-label="实时观战操作">
-      <div className="mobile-live-focus-strip">
-        <span>{currentPlayer ? `${currentPlayer.seatNumber}` : "-"}</span>
-        <strong>{currentPlayer?.name ?? "等待行动"}</strong>
-        <em>{godViewState.countdownLabel}</em>
-      </div>
-      <div className="mobile-live-action-bar">
-        <button
-          className="mobile-button"
-          onClick={director.togglePaused}
-          type="button"
-        >
-          {director.isPaused ? "继续" : "暂停"}
-        </button>
-        <button
-          className="mobile-button"
-          onClick={() => director.setSpeed(director.speed === 1 ? 2 : 1)}
-          type="button"
-        >
-          {director.speed === 1 ? "1x" : "2x"}
-        </button>
-        <button
-          className="mobile-button"
-          onClick={director.catchUpToLatest}
-          type="button"
-        >
-          最新
-        </button>
-        {canResumeRun ? (
-          <button
-            className="mobile-button mobile-button-primary"
-            disabled={resumeIsPending}
-            onClick={onResumeRun}
-            type="button"
-          >
-            {resumeIsPending ? "继续中" : "继续对局"}
-          </button>
-        ) : null}
-        {isTerminalRunStatus(run.status) || terminalEvent ? (
-          <Link
-            className="mobile-button mobile-live-link"
-            to={`/games/${run.session_id}/replay`}
-          >
-            复盘
-          </Link>
-        ) : null}
-      </div>
-    </footer>
-  );
-}
-
-function getCurrentTheaterPlayer(state: GodViewState) {
-  return (
-    state.speakerFlow.current ??
-    state.players.find((player) => player.isSpeaking) ??
-    null
-  );
-}
-
-function splitPlayersForColumns(players: GodViewPlayer[]) {
-  const midpoint = Math.ceil(players.length / 2);
-
-  return {
-    left: players.slice(0, midpoint),
-    right: players.slice(midpoint),
-  };
-}
-
-function avatarInitial(name: string, seatNumber: number) {
-  const trimmed = name.trim();
-
-  return trimmed ? trimmed.slice(0, 1) : String(seatNumber);
-}
-
-function roleShortLabel(role: string) {
-  const labels: Record<string, string> = {
-    guard: "守",
-    doctor: "医",
-    hunter: "猎",
-    idiot: "白",
-    seer: "预",
-    villager: "民",
-    werewolf: "狼",
-    witch: "巫",
-    守卫: "守",
-    医生: "医",
-    平民: "民",
-    村民: "民",
-    狼人: "狼",
-    预言家: "预",
-    女巫: "巫",
-    猎人: "猎",
-    白痴: "白",
-  };
-  const trimmed = role.trim();
-  const normalized = trimmed.toLowerCase();
-
-  return labels[normalized] ?? labels[trimmed] ?? (trimmed.slice(0, 1) || "未知");
 }
 
 function isLiveSpeakerDelta(event: LiveGameEvent) {
@@ -523,8 +189,4 @@ function navigateBackToGames(navigate: ReturnType<typeof useNavigate>) {
 
 function isTerminalEvent(event: LiveGameEvent) {
   return event.type === "game_completed" || event.type === "game_failed";
-}
-
-function isTerminalRunStatus(status: string | undefined) {
-  return status === "completed" || status === "failed";
 }
