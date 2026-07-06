@@ -2,6 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
+from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -197,3 +198,46 @@ def test_virtual_player_profile_has_avatar_asset_reference() -> None:
     assert "avatar_asset_id" in table.columns
     assert table.c.avatar_asset_id.nullable is True
     assert table.c.avatar_asset_id.foreign_keys
+
+
+def test_game_session_table_is_registered_in_metadata() -> None:
+    assert GameSessionRecord.__table__.name == "game_sessions"
+    assert "game_sessions" in Base.metadata.tables
+
+
+def test_game_session_table_matches_expected_schema() -> None:
+    table = GameSessionRecord.__table__
+    column_names = set(table.columns.keys())
+
+    assert column_names == {
+        "session_id",
+        "status",
+        "winner",
+        "round_count",
+        "rule_set",
+        "resumable",
+        "created_at",
+        "updated_at",
+    }
+    assert table.c.session_id.primary_key is True
+    assert table.c.status.nullable is False
+    assert table.c.round_count.nullable is False
+    assert table.c.resumable.nullable is False
+    assert table.c.created_at.server_default is not None
+    assert table.c.updated_at.server_default is not None
+    assert any(index.name == "ix_game_sessions_status" for index in table.indexes)
+    assert any(index.name == "ix_game_sessions_updated_at" for index in table.indexes)
+
+
+def test_game_replay_payload_table_matches_expected_schema() -> None:
+    table = GameReplayPayload.__table__
+    column_names = set(table.columns.keys())
+
+    assert column_names == {"session_id", "state", "logs", "checkpoint"}
+    assert table.c.session_id.primary_key is True
+    assert table.c.session_id.foreign_keys
+    foreign_key = next(iter(table.c.session_id.foreign_keys))
+    assert foreign_key.ondelete == "CASCADE"
+    assert table.c.state.nullable is False
+    assert table.c.logs.nullable is False
+    assert table.c.checkpoint.nullable is True
