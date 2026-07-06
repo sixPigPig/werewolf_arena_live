@@ -68,11 +68,11 @@ class ResumeCheckpointManager:
     def __init__(
         self,
         *,
-        log_directory: Path,
+        record_store: object,
         session_id: str,
         run_params: dict[str, Any],
     ) -> None:
-        self.log_directory = log_directory
+        self.record_store = record_store
         self.session_id = session_id
         self.run_params = copy.deepcopy(run_params)
         self._checkpoint: dict[str, Any] | None = None
@@ -152,14 +152,7 @@ class ResumeCheckpointManager:
     def _save(self) -> None:
         if self._checkpoint is None:
             return
-        self.log_directory.mkdir(parents=True, exist_ok=True)
-        checkpoint_path = self.log_directory / RESUME_CHECKPOINT_FILE
-        temporary_path = checkpoint_path.with_suffix(".tmp")
-        temporary_path.write_text(
-            json.dumps(self._checkpoint, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temporary_path.replace(checkpoint_path)
+        self.record_store.save_resume_checkpoint(self.session_id, self._checkpoint)
 
 
 def load_resume_checkpoint(directory: Path) -> dict[str, Any]:

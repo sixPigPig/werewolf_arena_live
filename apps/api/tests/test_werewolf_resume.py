@@ -6,16 +6,20 @@ from pathlib import Path
 import pytest
 
 from app.werewolf.checkpoint import (
+    CHECKPOINT_SCHEMA_VERSION,
     RESUME_CHECKPOINT_FILE,
     ReplayThenLiveProvider,
+    ResumeCheckpointManager,
     action_log_from_dict,
     game_state_from_dict,
     round_log_from_dict,
     round_state_from_dict,
 )
+from app.werewolf.engine import initialize_game_state
 from app.werewolf.lm import LmLog
 from app.werewolf.models import ActionLog, GameState, Player, RoundLog, RoundState
 from app.werewolf.replay import ReplayStore
+from app.werewolf.rules import get_rule_set
 from app.werewolf.runner import GameRunError, resume_game, run_game
 
 
@@ -75,6 +79,53 @@ class FailingAfterProvider(ScriptedProvider):
         if self.calls >= self.fail_after_successes:
             raise RuntimeError("model provider offline")
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class RecordingRecordStore:
+    def __init__(self) -> None:
+        self.checkpoints: list[dict[str, object]] = []
+
+    def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, object]) -> None:
+        self.checkpoints.append({"session_id": session_id, "checkpoint": checkpoint.copy()})
+
+
+def test_resume_checkpoint_manager_persists_checkpoint_to_record_store() -> None:
+    store = RecordingRecordStore()
+    manager = ResumeCheckpointManager(
+        record_store=store,
+        session_id="game_1200abcd",
+        run_params={"rule_set_id": "starter_6"},
+    )
+    state = initialize_game_state(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        rule_set=get_rule_set("starter_6"),
+    )
+
+    manager.start_round(
+        state=state,
+        logs=[],
+        round_number=1,
+        active_players=["1号玩家"],
+        rng_state=None,
+    )
+    manager.record_failure(
+        actor="1号玩家",
+        action="speech",
+        phase="day",
+        model="deepseek-chat",
+        error="model provider offline",
+    )
+
+    assert len(store.checkpoints) == 2
+    latest = store.checkpoints[-1]
+    assert latest["session_id"] == "game_1200abcd"
+    checkpoint = latest["checkpoint"]
+    assert checkpoint["schema_version"] == CHECKPOINT_SCHEMA_VERSION
+    assert checkpoint["session_id"] == "game_1200abcd"
+    assert checkpoint["last_error"] == "model provider offline"
 
 
 def test_failed_run_writes_resume_checkpoint(tmp_path: Path) -> None:
