@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from collections.abc import Generator
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from app.db.base import Base
 from app.werewolf.checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
-    RESUME_CHECKPOINT_FILE,
     ReplayThenLiveProvider,
+    ResumeCheckpointError,
     ResumeCheckpointManager,
     action_log_from_dict,
     game_state_from_dict,
@@ -18,9 +22,22 @@ from app.werewolf.checkpoint import (
 from app.werewolf.engine import initialize_game_state
 from app.werewolf.lm import LmLog
 from app.werewolf.models import ActionLog, GameState, Player, RoundLog, RoundState
-from app.werewolf.replay import ReplayStore
+from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.rules import get_rule_set
 from app.werewolf.runner import GameRunError, resume_game, run_game
+
+
+@pytest.fixture
+def record_store() -> Generator[DatabaseReplayStore, None, None]:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with TestingSessionLocal() as session:
+        yield DatabaseReplayStore(session)
 
 
 class ScriptedProvider:
@@ -128,23 +145,23 @@ def test_resume_checkpoint_manager_persists_checkpoint_to_record_store() -> None
     assert checkpoint["last_error"] == "model provider offline"
 
 
-def test_failed_run_writes_resume_checkpoint(tmp_path: Path) -> None:
+def test_failed_run_writes_resume_checkpoint(record_store: DatabaseReplayStore) -> None:
     provider = FailingAfterProvider(fail_after_successes=0)
 
     with pytest.raises(GameRunError) as error:
         run_game(
-            logs_dir=tmp_path,
+            record_store=record_store,
             provider=provider,
             seed=21,
             max_rounds=8,
             rule_set_id="starter_6",
         )
 
-    checkpoint_path = error.value.log_directory / RESUME_CHECKPOINT_FILE
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert error.value.session_id is not None
+    checkpoint = record_store.load_resume_checkpoint(error.value.session_id)
 
     assert checkpoint["schema_version"] == 1
-    assert checkpoint["session_id"] == error.value.log_directory.name
+    assert checkpoint["session_id"] == error.value.session_id
     assert checkpoint["round_number"] == 1
     assert checkpoint["active_players"]
     assert checkpoint["run_params"]["rule_set_id"] == "starter_6"
@@ -153,37 +170,38 @@ def test_failed_run_writes_resume_checkpoint(tmp_path: Path) -> None:
 
 
 def test_resume_game_replays_cached_model_responses_before_live_requests(
-    tmp_path: Path,
+    record_store: DatabaseReplayStore,
 ) -> None:
     failing_provider = FailingAfterProvider(fail_after_successes=1)
 
     with pytest.raises(GameRunError) as error:
         run_game(
-            logs_dir=tmp_path,
+            record_store=record_store,
             provider=failing_provider,
             seed=21,
             max_rounds=8,
             rule_set_id="starter_6",
         )
 
-    checkpoint_path = error.value.log_directory / RESUME_CHECKPOINT_FILE
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert error.value.session_id is not None
+    checkpoint = record_store.load_resume_checkpoint(error.value.session_id)
     assert len(checkpoint["cached_model_responses"]) == 1
     assert "prompt" in checkpoint["cached_model_responses"][0]
     assert checkpoint["cached_model_responses"][0]["prompt"]
 
     resume_provider = ScriptedProvider()
     result = resume_game(
-        logs_dir=tmp_path,
-        session_id=error.value.log_directory.name,
+        record_store=record_store,
+        session_id=error.value.session_id,
         provider=resume_provider,
     )
 
-    assert result.session_id == error.value.log_directory.name
+    assert result.session_id == error.value.session_id
     assert result.winner
     assert resume_provider.calls > 0
-    assert not checkpoint_path.exists()
-    assert (result.log_directory / "game_complete.json").exists()
+    with pytest.raises(ResumeCheckpointError):
+        record_store.load_resume_checkpoint(result.session_id)
+    assert record_store.load_session(result.session_id)["status"] == "complete"
 
 
 def test_replay_then_live_provider_uses_cached_response_first() -> None:
@@ -341,27 +359,27 @@ def test_replay_provider_keeps_prompt_and_legacy_cache_consumption_separate() ->
     assert delegate.calls == 1
 
 
-def test_replay_store_lists_checkpoint_only_session_as_resumable(tmp_path: Path) -> None:
+def test_replay_store_lists_checkpoint_only_session_as_resumable(
+    record_store: DatabaseReplayStore,
+) -> None:
     provider = FailingAfterProvider(fail_after_successes=0)
 
     with pytest.raises(GameRunError) as error:
         run_game(
-            logs_dir=tmp_path,
+            record_store=record_store,
             provider=provider,
             seed=21,
             max_rounds=8,
             rule_set_id="starter_6",
         )
 
-    partial_path = error.value.log_directory / "game_partial.json"
-    partial_path.unlink()
-
-    sessions = ReplayStore(tmp_path).list_sessions()
-    session = next(item for item in sessions if item["session_id"] == error.value.log_directory.name)
+    assert error.value.session_id is not None
+    sessions = record_store.list_sessions()
+    session = next(item for item in sessions if item["session_id"] == error.value.session_id)
 
     assert session["status"] == "partial"
     assert session["resumable"] is True
-    assert session["round_count"] == 0
+    assert session["round_count"] == 1
 
 
 def test_resume_checkpoint_preserves_self_explosion_state() -> None:

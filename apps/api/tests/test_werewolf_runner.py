@@ -3,10 +3,15 @@ import multiprocessing
 import queue
 import random
 import threading
+from collections.abc import Generator
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from app.db.base import Base
 from app.werewolf.config import HUNTER, SEER, WEREWOLF, WITCH
 from app.werewolf.checkpoint import player_from_dict, round_log_from_dict, round_state_from_dict
 from app.werewolf.engine import (
@@ -24,6 +29,7 @@ from app.werewolf.models import DeathEvent, DebateEntry, RoundLog, RoundState
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.player_profile_prompts import compose_player_profile_prompt
 from app.werewolf.prompts_zh import build_prompt
+from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.rules import (
     ACTION_DEBATE,
     ACTION_WEREWOLF_SELF_EXPLOSION,
@@ -32,6 +38,32 @@ from app.werewolf.rules import (
     get_rule_set,
 )
 from app.werewolf.runner import GameRunError, run_game
+
+
+@pytest.fixture
+def record_store() -> Generator[DatabaseReplayStore, None, None]:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with TestingSessionLocal() as session:
+        yield DatabaseReplayStore(session)
+
+
+@pytest.fixture
+def second_record_store() -> Generator[DatabaseReplayStore, None, None]:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with TestingSessionLocal() as session:
+        yield DatabaseReplayStore(session)
 
 
 class ScriptedChineseProvider:
@@ -1824,23 +1856,23 @@ def test_player_from_dict_defaults_legacy_profile_fields() -> None:
     assert player.tags == []
 
 
-def test_run_game_with_deepseek_models_writes_complete_chinese_logs(tmp_path) -> None:
+def test_run_game_with_deepseek_models_writes_complete_chinese_logs(
+    record_store: DatabaseReplayStore,
+) -> None:
     result = run_game(
-        logs_dir=tmp_path,
+        record_store=record_store,
         seed=7,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
     )
+    replay = record_store.load_session(result.session_id)
+    state = replay["state"]
+    logs = replay["logs"]
 
     assert result.winner in {"好人阵营", "狼人阵营"}
     assert result.session_id.startswith("game_")
-    assert result.log_directory.exists()
-    assert (result.log_directory / "game_complete.json").exists()
-    assert (result.log_directory / "game_logs.json").exists()
-
-    state = json.loads((result.log_directory / "game_complete.json").read_text())
-    logs = json.loads((result.log_directory / "game_logs.json").read_text())
-
+    assert replay["status"] == "complete"
+    assert replay["resumable"] is False
     assert state["winner"] == result.winner
     assert len(state["players"]) == 8
     assert state["error_message"] == ""
@@ -1855,6 +1887,7 @@ def test_run_game_with_deepseek_models_writes_complete_chinese_logs(tmp_path) ->
 def test_run_game_defaults_to_minimax_when_only_minimax_key_is_configured(
     tmp_path,
     monkeypatch,
+    record_store: DatabaseReplayStore,
 ) -> None:
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
@@ -1869,48 +1902,51 @@ def test_run_game_defaults_to_minimax_when_only_minimax_key_is_configured(
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
 
     result = run_game(
-        logs_dir=tmp_path / "logs",
+        record_store=record_store,
         seed=7,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
     )
 
-    state = json.loads((result.log_directory / "game_complete.json").read_text())
+    state = record_store.load_session(result.session_id)["state"]
 
     assert {player["model"] for player in state["players"]} == {"MiniMax-M2.7"}
 
 
-def test_run_game_is_reproducible_for_same_seed(tmp_path) -> None:
+def test_run_game_is_reproducible_for_same_seed(
+    record_store: DatabaseReplayStore,
+    second_record_store: DatabaseReplayStore,
+) -> None:
     first = run_game(
-        logs_dir=tmp_path / "first",
+        record_store=record_store,
         seed=11,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
     )
     second = run_game(
-        logs_dir=tmp_path / "second",
+        record_store=second_record_store,
         seed=11,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
     )
 
-    first_state = json.loads((first.log_directory / "game_complete.json").read_text())
-    second_state = json.loads((second.log_directory / "game_complete.json").read_text())
+    first_state = record_store.load_session(first.session_id)["state"]
+    second_state = second_record_store.load_session(second.session_id)["state"]
 
     assert first.winner == second.winner
     assert first_state["players"] == second_state["players"]
 
 
-def test_run_game_records_partial_log_when_max_rounds_is_exceeded(tmp_path) -> None:
+def test_run_game_records_partial_state_when_max_rounds_is_exceeded(
+    record_store: DatabaseReplayStore,
+) -> None:
     with pytest.raises(GameRunError) as error:
-        run_game(logs_dir=tmp_path, seed=3, max_rounds=0, provider=ScriptedChineseProvider())
+        run_game(record_store=record_store, seed=3, max_rounds=0, provider=ScriptedChineseProvider())
 
-    assert error.value.log_directory is not None
-    partial_file = error.value.log_directory / "game_partial.json"
-    assert partial_file.exists()
-
-    state = json.loads(partial_file.read_text())
-    assert "Maximum rounds exceeded" in state["error_message"]
+    assert error.value.session_id is not None
+    replay = record_store.load_session(error.value.session_id)
+    assert replay["status"] == "partial"
+    assert "Maximum rounds exceeded" in replay["state"]["error_message"]
 
 
 def test_engine_raises_max_rounds_after_positive_limit_without_winner() -> None:
@@ -1937,9 +1973,9 @@ def test_engine_raises_max_rounds_after_positive_limit_without_winner() -> None:
     assert len(state.rounds) == 1
 
 
-def test_run_game_accepts_custom_session_id(tmp_path) -> None:
+def test_run_game_accepts_custom_session_id(record_store: DatabaseReplayStore) -> None:
     result = run_game(
-        logs_dir=tmp_path,
+        record_store=record_store,
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -1948,7 +1984,7 @@ def test_run_game_accepts_custom_session_id(tmp_path) -> None:
     )
 
     assert result.session_id == "game_1200abcd"
-    assert result.log_directory == tmp_path / "game_1200abcd"
+    assert record_store.load_session("game_1200abcd")["status"] == "complete"
 
 
 class CapturingEventSink:
@@ -1959,11 +1995,11 @@ class CapturingEventSink:
         self.events.append({"type": event_type, **kwargs})
 
 
-def test_run_game_publishes_live_events(tmp_path) -> None:
+def test_run_game_publishes_live_events(record_store: DatabaseReplayStore) -> None:
     sink = CapturingEventSink()
 
     run_game(
-        logs_dir=tmp_path,
+        record_store=record_store,
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -1981,12 +2017,12 @@ def test_run_game_publishes_live_events(tmp_path) -> None:
     assert "state_updated" in event_types
 
 
-def test_run_game_publishes_streaming_model_events(tmp_path) -> None:
+def test_run_game_publishes_streaming_model_events(record_store: DatabaseReplayStore) -> None:
     sink = CapturingEventSink()
 
     with pytest.raises(GameRunError, match="Maximum rounds exceeded"):
         run_game(
-            logs_dir=tmp_path,
+            record_store=record_store,
             seed=21,
             max_rounds=1,
             provider=StreamingSpeechProvider(),
@@ -2051,16 +2087,19 @@ def test_protected_night_attack_records_attack_without_eliminating_target() -> N
     assert target in payload["active_players"]
 
 
-def test_run_game_event_sink_does_not_change_final_logs(tmp_path) -> None:
+def test_run_game_event_sink_does_not_change_final_logs(
+    record_store: DatabaseReplayStore,
+    second_record_store: DatabaseReplayStore,
+) -> None:
     baseline = run_game(
-        logs_dir=tmp_path / "baseline",
+        record_store=record_store,
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
         session_id="game_1200abcd",
     )
     with_sink = run_game(
-        logs_dir=tmp_path / "with_sink",
+        record_store=second_record_store,
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -2068,13 +2107,18 @@ def test_run_game_event_sink_does_not_change_final_logs(tmp_path) -> None:
         event_sink=CapturingEventSink(),
     )
 
-    assert _read_json_outputs(with_sink.log_directory) == _read_json_outputs(baseline.log_directory)
+    assert _read_db_outputs(second_record_store, with_sink.session_id) == _read_db_outputs(
+        record_store,
+        baseline.session_id,
+    )
 
 
-def test_live_model_events_do_not_publish_internal_model_payloads(tmp_path) -> None:
+def test_live_model_events_do_not_publish_internal_model_payloads(
+    record_store: DatabaseReplayStore,
+) -> None:
     sink = CapturingEventSink()
     run_game(
-        logs_dir=tmp_path,
+        record_store=record_store,
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -2100,16 +2144,16 @@ def test_live_model_events_do_not_publish_internal_model_payloads(tmp_path) -> N
             assert "reasoning" not in result
 
 
-def test_run_game_uses_starter_6_rule_set(tmp_path) -> None:
+def test_run_game_uses_starter_6_rule_set(record_store: DatabaseReplayStore) -> None:
     result = run_game(
-        logs_dir=tmp_path,
+        record_store=record_store,
         seed=31,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
         rule_set_id="starter_6",
     )
 
-    state = json.loads((result.log_directory / "game_complete.json").read_text())
+    state = record_store.load_session(result.session_id)["state"]
 
     assert state["rule_set"]["id"] == "starter_6"
     assert state["rule_set"]["name"] == "新手 6 人快局"
@@ -2117,17 +2161,20 @@ def test_run_game_uses_starter_6_rule_set(tmp_path) -> None:
     assert _role_counts(state["players"]) == {"狼人": 1, "预言家": 1, "守卫": 1, "村民": 3}
 
 
-def test_run_game_uses_social_8_rule_set_without_divine_actions(tmp_path) -> None:
+def test_run_game_uses_social_8_rule_set_without_divine_actions(
+    record_store: DatabaseReplayStore,
+) -> None:
     result = run_game(
-        logs_dir=tmp_path,
+        record_store=record_store,
         seed=37,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
         rule_set_id="social_8",
     )
 
-    state = json.loads((result.log_directory / "game_complete.json").read_text())
-    logs = json.loads((result.log_directory / "game_logs.json").read_text())
+    replay = record_store.load_session(result.session_id)
+    state = replay["state"]
+    logs = replay["logs"]
 
     assert len(state["players"]) == 8
     assert _role_counts(state["players"]) == {"狼人": 2, "村民": 6}
@@ -2135,31 +2182,34 @@ def test_run_game_uses_social_8_rule_set_without_divine_actions(tmp_path) -> Non
     assert logs[0]["investigate"] is None
 
 
-def test_run_game_defaults_to_classic_8_rule_set(tmp_path) -> None:
+def test_run_game_defaults_to_classic_8_rule_set(record_store: DatabaseReplayStore) -> None:
     result = run_game(
-        logs_dir=tmp_path,
+        record_store=record_store,
         seed=41,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
     )
 
-    state = json.loads((result.log_directory / "game_complete.json").read_text())
+    state = record_store.load_session(result.session_id)["state"]
 
     assert state["rule_set"]["id"] == "classic_8"
     assert len(state["players"]) == 8
 
 
-def test_run_game_uses_12_player_seer_witch_hunter_idiot_rule_set(tmp_path) -> None:
+def test_run_game_uses_12_player_seer_witch_hunter_idiot_rule_set(
+    record_store: DatabaseReplayStore,
+) -> None:
     result = run_game(
-        logs_dir=tmp_path,
+        record_store=record_store,
         seed=54,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
         rule_set_id="classic_12_seer_witch_hunter_idiot",
     )
 
-    state = json.loads((result.log_directory / "game_complete.json").read_text())
-    logs = json.loads((result.log_directory / "game_logs.json").read_text())
+    replay = record_store.load_session(result.session_id)
+    state = replay["state"]
+    logs = replay["logs"]
 
     assert state["rule_set"]["id"] == "classic_12_seer_witch_hunter_idiot"
     assert len(state["players"]) == 12
@@ -4716,10 +4766,12 @@ def test_werewolf_consensus_live_events_do_not_publish_wolf_actor() -> None:
     assert [log.actor for log in round_log.werewolf_votes[0]] == wolves
 
 
-def _read_json_outputs(log_directory) -> tuple[dict[str, object], list[object]]:
-    complete = json.loads((log_directory / "game_complete.json").read_text())
-    logs = json.loads((log_directory / "game_logs.json").read_text())
-    return _without_request_ids(complete), _without_request_ids(logs)
+def _read_db_outputs(
+    store: DatabaseReplayStore,
+    session_id: str,
+) -> tuple[dict[str, object], list[object]]:
+    replay = store.load_session(session_id)
+    return _without_request_ids(replay["state"]), _without_request_ids(replay["logs"])
 
 
 def _without_request_ids(value):
@@ -4912,7 +4964,9 @@ def test_secret_self_explosion_invalid_choice_falls_back_without_public_leak() -
     assert leaking_events == []
 
 
-def test_run_game_saves_in_progress_logs_when_required_action_fails(tmp_path) -> None:
+def test_run_game_saves_in_progress_logs_when_required_action_fails(
+    record_store: DatabaseReplayStore,
+) -> None:
     provider = FakeProvider(
         [
             {"reasoning": "非法刀口", "target": "不存在玩家"},
@@ -4921,20 +4975,21 @@ def test_run_game_saves_in_progress_logs_when_required_action_fails(tmp_path) ->
         ]
     )
 
-    with pytest.raises(GameRunError):
+    with pytest.raises(GameRunError) as error:
         run_game(
+            record_store=record_store,
             villager_model="deepseek-v4-flash",
             werewolf_model="deepseek-v4-flash",
             seed=2026061503,
-            logs_dir=tmp_path,
             max_rounds=1,
             provider=provider,
-            session_id="required_action_failure",
+            session_id="game_1200abcd",
             rule_set_id="starter_6",
         )
 
-    log_path = tmp_path / "required_action_failure" / "game_logs.json"
-    logs = json.loads(log_path.read_text(encoding="utf-8"))
+    assert error.value.session_id == "game_1200abcd"
+    replay = record_store.load_session("game_1200abcd")
+    logs = replay["logs"]
 
     assert logs
     assert logs[0]["number"] == 1

@@ -3,25 +3,22 @@ from __future__ import annotations
 import random
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 
 from app.werewolf.checkpoint import (
     ReplayThenLiveProvider,
     ResumeCheckpointError,
     ResumeCheckpointManager,
-    clear_resume_checkpoint,
     game_state_from_dict,
-    load_resume_checkpoint,
     rng_from_json_state,
     round_logs_from_dict,
 )
 from app.werewolf.config import DEFAULT_MAX_ROUNDS
 from app.werewolf.engine import GameEngine, initialize_game_state
 from app.werewolf.live import NullEventSink
-from app.werewolf.logging import save_game
 from app.werewolf.lm import ModelProvider
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.providers import create_model_provider, default_model_name
+from app.werewolf.replay import GameRecordStore
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set
 
 
@@ -29,21 +26,20 @@ from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set
 class RunGameResult:
     winner: str
     session_id: str
-    log_directory: Path
 
 
 class GameRunError(RuntimeError):
-    def __init__(self, message: str, log_directory: Path | None = None) -> None:
+    def __init__(self, message: str, session_id: str | None = None) -> None:
         super().__init__(message)
-        self.log_directory = log_directory
+        self.session_id = session_id
 
 
 def run_game(
     *,
+    record_store: GameRecordStore,
     villager_model: str | None = None,
     werewolf_model: str | None = None,
     seed: int | None = None,
-    logs_dir: str | Path = "logs",
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     provider: ModelProvider | None = None,
     session_id: str | None = None,
@@ -52,7 +48,6 @@ def run_game(
     player_configs: list[PlayerConfig] | None = None,
 ) -> RunGameResult:
     session_id = session_id or new_session_id()
-    log_directory = Path(logs_dir) / session_id
     rule_set = get_rule_set(rule_set_id)
     default_model = default_model_name()
     selected_villager_model = villager_model or default_model
@@ -75,7 +70,7 @@ def run_game(
     )
     logs = []
     checkpoint_manager = ResumeCheckpointManager(
-        log_directory=log_directory,
+        record_store=record_store,
         session_id=session_id,
         run_params=run_params,
     )
@@ -97,34 +92,32 @@ def run_game(
         if engine is not None:
             logs = engine.logs
         state.error_message = str(exc)
-        save_game(state, logs, log_directory)
-        raise GameRunError(str(exc), log_directory) from exc
+        record_store.save_game(state, logs)
+        raise GameRunError(str(exc), session_id) from exc
 
-    save_game(state, logs, log_directory)
-    clear_resume_checkpoint(log_directory)
+    record_store.save_game(state, logs)
+    record_store.clear_resume_checkpoint(session_id)
     return RunGameResult(
         winner=state.winner,
         session_id=session_id,
-        log_directory=log_directory,
     )
 
 
 def resume_game(
     *,
     session_id: str,
-    logs_dir: str | Path = "logs",
+    record_store: GameRecordStore,
     provider: ModelProvider | None = None,
     event_sink: object | None = None,
 ) -> RunGameResult:
-    log_directory = Path(logs_dir) / session_id
     try:
-        checkpoint = load_resume_checkpoint(log_directory)
+        checkpoint = record_store.load_resume_checkpoint(session_id)
     except ResumeCheckpointError as exc:
-        raise GameRunError("Resume checkpoint not found", log_directory) from exc
+        raise GameRunError("Resume checkpoint not found", session_id) from exc
 
     run_params = checkpoint.get("run_params", {})
     if not isinstance(run_params, dict):
-        raise GameRunError("Resume checkpoint is invalid", log_directory)
+        raise GameRunError("Resume checkpoint is invalid", session_id)
 
     rule_set_id = str(run_params.get("rule_set_id") or DEFAULT_RULE_SET_ID)
     rule_set = get_rule_set(rule_set_id)
@@ -140,7 +133,7 @@ def resume_game(
         delegate=provider or create_model_provider(),
     )
     checkpoint_manager = ResumeCheckpointManager(
-        log_directory=log_directory,
+        record_store=record_store,
         session_id=session_id,
         run_params=run_params,
     )
@@ -164,16 +157,15 @@ def resume_game(
         if engine is not None:
             logs_after_resume = engine.logs
         state.error_message = str(exc)
-        save_game(state, logs_before_round + logs_after_resume, log_directory)
-        raise GameRunError(str(exc), log_directory) from exc
+        record_store.save_game(state, logs_before_round + logs_after_resume)
+        raise GameRunError(str(exc), session_id) from exc
 
     logs = logs_before_round + logs_after_resume
-    save_game(state, logs, log_directory)
-    clear_resume_checkpoint(log_directory)
+    record_store.save_game(state, logs)
+    record_store.clear_resume_checkpoint(session_id)
     return RunGameResult(
         winner=state.winner,
         session_id=session_id,
-        log_directory=log_directory,
     )
 
 
