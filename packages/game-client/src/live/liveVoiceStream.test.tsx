@@ -99,6 +99,7 @@ function emitReadyUtterance(
   socket: MockWebSocket,
   utteranceId: string,
   sourceEventId: number,
+  { data = "YWJj" }: { data?: string } = {},
 ) {
   socket.emit({
     type: "voice_start",
@@ -112,7 +113,7 @@ function emitReadyUtterance(
     type: "audio_chunk",
     utterance_id: utteranceId,
     mime_type: "audio/mpeg",
-    data: "YWJj",
+    data,
   });
   socket.emit({
     type: "voice_end",
@@ -266,6 +267,68 @@ describe("live voice stream", () => {
     expect(queue.items).toHaveLength(1);
     expect(queue.items[0].status).toBe("error");
     expect(queue.errors).toEqual(["TTS failed"]);
+  });
+
+  it("ignores duplicate start messages for played utterances", () => {
+    const queue: ReturnType<typeof createVoiceQueue> = {
+      ...createVoiceQueue(),
+      items: [
+        {
+          utteranceId: "voice-1",
+          sourceEventId: 4,
+          speakerKind: "player" as const,
+          speakerName: "阿青",
+          mimeType: "audio/mpeg",
+          chunks: ["YWJj"],
+          status: "played" as const,
+        },
+      ],
+    };
+
+    const updated = enqueueVoiceMessage(queue, {
+      type: "voice_start",
+      utterance_id: "voice-1",
+      source_event_id: 8,
+      speaker_kind: "judge",
+      speaker_name: "旁白",
+      mime_type: "audio/ogg",
+    });
+
+    expect(updated.items).toEqual(queue.items);
+  });
+
+  it("ignores late chunks and terminal messages for played utterances", () => {
+    let queue: ReturnType<typeof createVoiceQueue> = {
+      ...createVoiceQueue(),
+      items: [
+        {
+          utteranceId: "voice-1",
+          sourceEventId: 4,
+          speakerKind: "player" as const,
+          speakerName: "阿青",
+          mimeType: "audio/mpeg",
+          chunks: ["YWJj"],
+          status: "played" as const,
+        },
+      ],
+    };
+
+    queue = enqueueVoiceMessage(queue, {
+      type: "audio_chunk",
+      utterance_id: "voice-1",
+      mime_type: "audio/mpeg",
+      data: "ZA==",
+    });
+    queue = enqueueVoiceMessage(queue, {
+      type: "voice_end",
+      utterance_id: "voice-1",
+      duration_ms: 1000,
+    });
+
+    expect(queue.items[0]).toMatchObject({
+      chunks: ["YWJj"],
+      status: "played",
+    });
   });
 
   it("prunes stale judge narration while retaining player speech", () => {
@@ -563,6 +626,37 @@ describe("live voice stream", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:voice-1");
   });
 
+  it("does not replay a paused utterance after unpausing", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const { revokeObjectURL } = stubObjectUrls(["blob:voice-1"]);
+    const { pause, play } = stubAudioElement();
+
+    const { rerender } = renderHook(
+      ({ isPaused }: { isPaused: boolean }) =>
+        useLiveVoiceStream("run-1", {
+          currentEventId: 4,
+          enabled: true,
+          isPaused,
+        }),
+      { initialProps: { isPaused: false } },
+    );
+
+    act(() => {
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-1", 4);
+    });
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    rerender({ isPaused: true });
+
+    await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:voice-1");
+
+    rerender({ isPaused: false });
+
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
   it("plays the second ready utterance after the first audio ends", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     const { createObjectURL, revokeObjectURL } = stubObjectUrls([
@@ -597,7 +691,7 @@ describe("live voice stream", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:voice-1");
   });
 
-  it("records an error and advances when audio playback is rejected", async () => {
+  it("records an error and advances without changing socket state when audio playback is rejected", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     stubObjectUrls(["blob:voice-1", "blob:voice-2"]);
     const play = vi
@@ -620,8 +714,65 @@ describe("live voice stream", () => {
       emitReadyUtterance(MockWebSocket.instances[0], "voice-2", 5);
     });
 
-    await waitFor(() => expect(result.current.connectionState).toBe("error"));
-    expect(result.current.errors).toEqual(["Unable to play live voice audio."]);
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(result.current.connectionState).toBe("open");
+    expect(result.current.errors).toEqual(["Unable to play live voice audio."]);
+  });
+
+  it("records an error and advances when audio base64 is invalid", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubObjectUrls(["blob:voice-2"]);
+    const { play } = stubAudioElement();
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 5,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.();
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-1", 4, {
+        data: "not valid base64!",
+      });
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-2", 5);
+    });
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    expect(result.current.connectionState).toBe("open");
+    expect(result.current.errors).toEqual(["Unable to play live voice audio."]);
+  });
+
+  it("records an error and advances when object URLs are unavailable", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: undefined,
+    });
+    const { play } = stubAudioElement();
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.();
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-1", 4);
+    });
+
+    await waitFor(() =>
+      expect(result.current.errors).toEqual([
+        "Unable to play live voice audio.",
+      ]),
+    );
+    expect(result.current.connectionState).toBe("open");
+    expect(result.current.currentItem).toBeNull();
+    expect(play).not.toHaveBeenCalled();
   });
 });

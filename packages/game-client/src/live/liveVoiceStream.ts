@@ -50,7 +50,7 @@ export type LiveVoiceQueueItem = {
   speakerName: string;
   mimeType: string;
   chunks: string[];
-  status: "receiving" | "ready" | "played" | "error";
+  status: "receiving" | "ready" | "playing" | "played" | "error";
 };
 
 export type LiveVoiceQueue = {
@@ -69,6 +69,10 @@ type VoiceQueueAction =
     }
   | {
       type: "utterance_played";
+      utteranceId: string;
+    }
+  | {
+      type: "utterance_started";
       utteranceId: string;
     };
 
@@ -141,7 +145,17 @@ export function enqueueVoiceMessage(
   }
 
   if (message.type === "voice_start") {
-    if (queue.items.some((item) => item.utteranceId === message.utterance_id)) {
+    const existingItem = queue.items.find(
+      (item) => item.utteranceId === message.utterance_id,
+    );
+    if (existingItem) {
+      if (
+        existingItem.status === "playing" ||
+        existingItem.status === "played"
+      ) {
+        return queue;
+      }
+
       return {
         ...queue,
         items: queue.items.map((item) =>
@@ -180,7 +194,9 @@ export function enqueueVoiceMessage(
     return {
       ...queue,
       items: queue.items.map((item) =>
-        item.utteranceId === message.utterance_id
+        item.utteranceId === message.utterance_id &&
+        item.status !== "playing" &&
+        item.status !== "played"
           ? { ...item, chunks: [...item.chunks, message.data] }
           : item,
       ),
@@ -190,7 +206,9 @@ export function enqueueVoiceMessage(
   return {
     ...queue,
     items: queue.items.map((item) =>
-      item.utteranceId === message.utterance_id
+      item.utteranceId === message.utterance_id &&
+      item.status !== "playing" &&
+      item.status !== "played"
         ? { ...item, status: "ready" }
         : item,
     ),
@@ -216,10 +234,52 @@ export function pruneStaleVoiceQueue(
 }
 
 function base64ToBlob(chunks: string[], mimeType: string) {
+  if (typeof globalThis.atob !== "function") {
+    throw new Error("Base64 decoding is unavailable.");
+  }
+  if (typeof globalThis.Blob !== "function") {
+    throw new Error("Blob creation is unavailable.");
+  }
+
   const bytes = chunks.flatMap((chunk) =>
-    Array.from(atob(chunk), (character) => character.charCodeAt(0)),
+    Array.from(globalThis.atob(chunk), (character) =>
+      character.charCodeAt(0),
+    ),
   );
-  return new Blob([new Uint8Array(bytes)], { type: mimeType });
+  return new globalThis.Blob([new Uint8Array(bytes)], { type: mimeType });
+}
+
+function createAudioObjectUrl(blob: Blob) {
+  if (typeof globalThis.URL?.createObjectURL !== "function") {
+    throw new Error("Object URL creation is unavailable.");
+  }
+
+  return globalThis.URL.createObjectURL(blob);
+}
+
+function revokeAudioObjectUrl(objectUrl: string) {
+  if (typeof globalThis.URL?.revokeObjectURL !== "function") {
+    return;
+  }
+
+  try {
+    globalThis.URL.revokeObjectURL(objectUrl);
+  } catch {
+    // Cleanup is best-effort; playback progression should not depend on revoke.
+  }
+}
+
+function createAudioElement() {
+  if (typeof globalThis.document?.createElement !== "function") {
+    throw new Error("Audio element creation is unavailable.");
+  }
+
+  const audio = globalThis.document.createElement("audio");
+  if (typeof audio.play !== "function") {
+    throw new Error("Audio playback is unavailable.");
+  }
+
+  return audio;
 }
 
 function voiceQueueReducer(
@@ -236,6 +296,19 @@ function voiceQueueReducer(
       items: queue.items.map((item) =>
         item.utteranceId === action.utteranceId
           ? { ...item, status: "played" }
+          : item,
+      ),
+    };
+  }
+
+  if (action.type === "utterance_started") {
+    return {
+      ...queue,
+      items: queue.items.map((item) =>
+        item.utteranceId === action.utteranceId &&
+        item.status !== "played" &&
+        item.status !== "error"
+          ? { ...item, status: "playing" }
           : item,
       ),
     };
@@ -326,30 +399,61 @@ export function useLiveVoiceStream(
     () => pruneStaleVoiceQueue(queue, currentEventId),
     [currentEventId, queue],
   );
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
+  const isConsumableItem = (item: LiveVoiceQueueItem) =>
+    !consumedUtteranceIdsRef.current.has(item.utteranceId);
   const currentItem =
-    visibleQueue.items.find((item) => item.status === "ready") ??
+    visibleQueue.items.find(
+      (item) => item.status === "playing" && isConsumableItem(item),
+    ) ??
+    visibleQueue.items.find(
+      (item) => item.status === "ready" && isConsumableItem(item),
+    ) ??
     visibleQueue.items.find((item) => item.status === "receiving") ??
     null;
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playbackKey =
+    currentItem &&
+    (currentItem.status === "ready" || currentItem.status === "playing")
+      ? currentItem.utteranceId
+      : null;
 
   useEffect(() => {
     if (!enabled || isPaused || !currentItem || currentItem.status !== "ready") {
       return;
     }
 
-    const blob = base64ToBlob(currentItem.chunks, currentItem.mimeType);
-    const objectUrl = URL.createObjectURL(blob);
-    const audio = document.createElement("audio");
     let isActive = true;
     let isReleased = false;
+    let isConsumed = false;
+    let objectUrl: string | null = null;
+    let audio: HTMLAudioElement | null = null;
+
+    const consumeUtterance = () => {
+      if (isConsumed) {
+        return;
+      }
+      isConsumed = true;
+      consumedUtteranceIdsRef.current.add(currentItem.utteranceId);
+      dispatch({
+        type: "utterance_played",
+        utteranceId: currentItem.utteranceId,
+      });
+    };
 
     const releaseAudio = () => {
       if (isReleased) {
         return;
       }
       isReleased = true;
-      audio.pause();
-      URL.revokeObjectURL(objectUrl);
+      try {
+        audio?.pause();
+      } catch {
+        // Pause cleanup is best-effort.
+      }
+      if (objectUrl) {
+        revokeAudioObjectUrl(objectUrl);
+      }
       if (audioRef.current === audio) {
         audioRef.current = null;
       }
@@ -360,35 +464,48 @@ export function useLiveVoiceStream(
         return;
       }
       releaseAudio();
-      dispatch({
-        type: "utterance_played",
-        utteranceId: currentItem.utteranceId,
-      });
+      consumeUtterance();
     };
 
-    audio.src = objectUrl;
-    audioRef.current = audio;
-    audio.addEventListener("ended", markPlayed);
-    void audio.play().catch(() => {
+    const reportPlaybackError = () => {
       if (!isActive) {
         return;
       }
-      setConnectionState("error");
+      releaseAudio();
       dispatch({
         type: "queue_error",
         message: "Unable to play live voice audio.",
       });
-      markPlayed();
-    });
+      consumeUtterance();
+    };
+
+    try {
+      const blob = base64ToBlob(currentItem.chunks, currentItem.mimeType);
+      objectUrl = createAudioObjectUrl(blob);
+      audio = createAudioElement();
+      audio.src = objectUrl;
+      audioRef.current = audio;
+      audio.addEventListener("ended", markPlayed);
+      dispatch({
+        type: "utterance_started",
+        utteranceId: currentItem.utteranceId,
+      });
+      void Promise.resolve(audio.play()).catch(reportPlaybackError);
+    } catch {
+      reportPlaybackError();
+      return;
+    }
 
     return () => {
       isActive = false;
-      audio.removeEventListener("ended", markPlayed);
+      audio?.removeEventListener("ended", markPlayed);
       releaseAudio();
+      consumeUtterance();
     };
-  }, [currentItem, enabled, isPaused]);
+  }, [playbackKey, enabled, isPaused]);
 
   useEffect(() => {
+    consumedUtteranceIdsRef.current.clear();
     dispatch({ type: "reset" });
 
     if (!enabled || !streamUrl) {
