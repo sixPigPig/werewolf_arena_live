@@ -36,11 +36,112 @@ class MockWebSocket {
   }
 }
 
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
+
+function stubObjectUrls(objectUrls = ["blob:voice"]) {
+  let nextUrlIndex = 0;
+  const createdObjects: (Blob | MediaSource)[] = [];
+  const createObjectURL = vi.fn((object: Blob | MediaSource) => {
+    createdObjects.push(object);
+    const objectUrl = objectUrls[nextUrlIndex] ?? `blob:voice-${nextUrlIndex}`;
+    nextUrlIndex += 1;
+    return objectUrl;
+  });
+  const revokeObjectURL = vi.fn();
+
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: createObjectURL,
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: revokeObjectURL,
+  });
+
+  return { createObjectURL, createdObjects, revokeObjectURL };
+}
+
+function stubAudioElement({
+  play = vi.fn().mockResolvedValue(undefined),
+  pause = vi.fn(),
+}: {
+  play?: ReturnType<typeof vi.fn>;
+  pause?: ReturnType<typeof vi.fn>;
+} = {}) {
+  const audioElements: HTMLAudioElement[] = [];
+  const createElement = document.createElement.bind(document);
+
+  vi.spyOn(document, "createElement").mockImplementation(
+    ((tagName: string, options?: ElementCreationOptions) => {
+      const element = createElement(tagName, options);
+
+      if (tagName.toLowerCase() === "audio") {
+        Object.defineProperty(element, "play", {
+          configurable: true,
+          value: play,
+        });
+        Object.defineProperty(element, "pause", {
+          configurable: true,
+          value: pause,
+        });
+        audioElements.push(element as HTMLAudioElement);
+      }
+
+      return element;
+    }) as typeof document.createElement,
+  );
+
+  return { audioElements, pause, play };
+}
+
+function emitReadyUtterance(
+  socket: MockWebSocket,
+  utteranceId: string,
+  sourceEventId: number,
+) {
+  socket.emit({
+    type: "voice_start",
+    utterance_id: utteranceId,
+    source_event_id: sourceEventId,
+    speaker_kind: "player",
+    speaker_name: "阿青",
+    mime_type: "audio/mpeg",
+  });
+  socket.emit({
+    type: "audio_chunk",
+    utterance_id: utteranceId,
+    mime_type: "audio/mpeg",
+    data: "YWJj",
+  });
+  socket.emit({
+    type: "voice_end",
+    utterance_id: utteranceId,
+    duration_ms: 1000,
+  });
+}
+
 describe("live voice stream", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     MockWebSocket.instances = [];
+    if (originalCreateObjectURL) {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: originalCreateObjectURL,
+      });
+    } else {
+      Reflect.deleteProperty(URL, "createObjectURL");
+    }
+    if (originalRevokeObjectURL) {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: originalRevokeObjectURL,
+      });
+    } else {
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    }
   });
 
   it("builds a websocket url from api base url", () => {
@@ -408,12 +509,10 @@ describe("live voice stream", () => {
     expect(socket.close).toHaveBeenCalledTimes(1);
   });
 
-  it("does not create browser audio playback side effects yet", () => {
+  it("creates and plays an audio element for a ready utterance", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
-    const AudioMock = vi.fn();
-    const BlobMock = vi.fn();
-    vi.stubGlobal("Audio", AudioMock);
-    vi.stubGlobal("Blob", BlobMock);
+    const { createObjectURL, createdObjects } = stubObjectUrls(["blob:voice-1"]);
+    const { audioElements, play } = stubAudioElement();
 
     renderHook(() =>
       useLiveVoiceStream("run-1", {
@@ -424,28 +523,105 @@ describe("live voice stream", () => {
     );
 
     act(() => {
-      MockWebSocket.instances[0].emit({
-        type: "voice_start",
-        utterance_id: "voice-1",
-        source_event_id: 4,
-        speaker_kind: "player",
-        speaker_name: "阿青",
-        mime_type: "audio/mpeg",
-      });
-      MockWebSocket.instances[0].emit({
-        type: "audio_chunk",
-        utterance_id: "voice-1",
-        mime_type: "audio/mpeg",
-        data: "YWJj",
-      });
-      MockWebSocket.instances[0].emit({
-        type: "voice_end",
-        utterance_id: "voice-1",
-        duration_ms: 1000,
-      });
+      MockWebSocket.instances[0].onopen?.();
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-1", 4);
     });
 
-    expect(AudioMock).not.toHaveBeenCalled();
-    expect(BlobMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    expect(audioElements).toHaveLength(1);
+    expect(audioElements[0].src).toBe("blob:voice-1");
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    const blob = createdObjects[0] as Blob;
+    expect(blob.type).toBe("audio/mpeg");
+    await expect(blob.text()).resolves.toBe("abc");
+  });
+
+  it("revokes object URL and pauses audio when paused", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const { revokeObjectURL } = stubObjectUrls(["blob:voice-1"]);
+    const { pause, play } = stubAudioElement();
+
+    const { rerender } = renderHook(
+      ({ isPaused }: { isPaused: boolean }) =>
+        useLiveVoiceStream("run-1", {
+          currentEventId: 4,
+          enabled: true,
+          isPaused,
+        }),
+      { initialProps: { isPaused: false } },
+    );
+
+    act(() => {
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-1", 4);
+    });
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    rerender({ isPaused: true });
+
+    await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:voice-1");
+  });
+
+  it("plays the second ready utterance after the first audio ends", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const { createObjectURL, revokeObjectURL } = stubObjectUrls([
+      "blob:voice-1",
+      "blob:voice-2",
+    ]);
+    const { audioElements, play } = stubAudioElement();
+
+    renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 5,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-1", 4);
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-2", 5);
+    });
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      audioElements[0].dispatchEvent(new Event("ended"));
+    });
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(audioElements).toHaveLength(2);
+    expect(createObjectURL).toHaveBeenCalledTimes(2);
+    expect(audioElements[1].src).toBe("blob:voice-2");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:voice-1");
+  });
+
+  it("records an error and advances when audio playback is rejected", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubObjectUrls(["blob:voice-1", "blob:voice-2"]);
+    const play = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("autoplay blocked"))
+      .mockResolvedValue(undefined);
+    stubAudioElement({ play });
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 5,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.();
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-1", 4);
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-2", 5);
+    });
+
+    await waitFor(() => expect(result.current.connectionState).toBe("error"));
+    expect(result.current.errors).toEqual(["Unable to play live voice audio."]);
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
   });
 });

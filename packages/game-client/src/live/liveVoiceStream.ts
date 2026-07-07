@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const STALE_EVENT_DISTANCE = 8;
@@ -50,7 +50,7 @@ export type LiveVoiceQueueItem = {
   speakerName: string;
   mimeType: string;
   chunks: string[];
-  status: "receiving" | "ready" | "error";
+  status: "receiving" | "ready" | "played" | "error";
 };
 
 export type LiveVoiceQueue = {
@@ -66,6 +66,10 @@ type VoiceQueueAction =
     }
   | {
       type: "reset";
+    }
+  | {
+      type: "utterance_played";
+      utteranceId: string;
     };
 
 export function resolveVoiceStreamUrl(runId: string, baseUrl = API_BASE_URL) {
@@ -211,12 +215,30 @@ export function pruneStaleVoiceQueue(
   };
 }
 
+function base64ToBlob(chunks: string[], mimeType: string) {
+  const bytes = chunks.flatMap((chunk) =>
+    Array.from(atob(chunk), (character) => character.charCodeAt(0)),
+  );
+  return new Blob([new Uint8Array(bytes)], { type: mimeType });
+}
+
 function voiceQueueReducer(
   queue: LiveVoiceQueue,
   action: VoiceQueueAction,
 ): LiveVoiceQueue {
   if (action.type === "reset") {
     return createVoiceQueue();
+  }
+
+  if (action.type === "utterance_played") {
+    return {
+      ...queue,
+      items: queue.items.map((item) =>
+        item.utteranceId === action.utteranceId
+          ? { ...item, status: "played" }
+          : item,
+      ),
+    };
   }
 
   if (action.type === "queue_error") {
@@ -308,6 +330,63 @@ export function useLiveVoiceStream(
     visibleQueue.items.find((item) => item.status === "ready") ??
     visibleQueue.items.find((item) => item.status === "receiving") ??
     null;
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    if (!enabled || isPaused || !currentItem || currentItem.status !== "ready") {
+      return;
+    }
+
+    const blob = base64ToBlob(currentItem.chunks, currentItem.mimeType);
+    const objectUrl = URL.createObjectURL(blob);
+    const audio = document.createElement("audio");
+    let isActive = true;
+    let isReleased = false;
+
+    const releaseAudio = () => {
+      if (isReleased) {
+        return;
+      }
+      isReleased = true;
+      audio.pause();
+      URL.revokeObjectURL(objectUrl);
+      if (audioRef.current === audio) {
+        audioRef.current = null;
+      }
+    };
+
+    const markPlayed = () => {
+      if (!isActive) {
+        return;
+      }
+      releaseAudio();
+      dispatch({
+        type: "utterance_played",
+        utteranceId: currentItem.utteranceId,
+      });
+    };
+
+    audio.src = objectUrl;
+    audioRef.current = audio;
+    audio.addEventListener("ended", markPlayed);
+    void audio.play().catch(() => {
+      if (!isActive) {
+        return;
+      }
+      setConnectionState("error");
+      dispatch({
+        type: "queue_error",
+        message: "Unable to play live voice audio.",
+      });
+      markPlayed();
+    });
+
+    return () => {
+      isActive = false;
+      audio.removeEventListener("ended", markPlayed);
+      releaseAudio();
+    };
+  }, [currentItem, enabled, isPaused]);
 
   useEffect(() => {
     dispatch({ type: "reset" });
