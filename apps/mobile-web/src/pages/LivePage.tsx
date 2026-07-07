@@ -60,6 +60,15 @@ export function LivePage() {
     enabled: voiceEnabled,
     isPaused: director.isPaused,
   });
+  const handleToggleVoice = () => {
+    if (voiceEnabled && voice.connectionState === "error") {
+      setVoiceEnabled(false);
+      window.setTimeout(() => setVoiceEnabled(true), 0);
+      return;
+    }
+
+    setVoiceEnabled((current) => !current);
+  };
   const stageEvents = useMemo(() => {
     const currentEventId = director.currentEventId;
     if (currentEventId === null) {
@@ -182,7 +191,7 @@ export function LivePage() {
             director.seekToEventId(segment.startEventId)
           }
           onResumeRun={() => resumeMutation.mutate(run.session_id)}
-          onToggleVoice={() => setVoiceEnabled((current) => !current)}
+          onToggleVoice={handleToggleVoice}
           phaseSegments={phaseSegments}
           replayLinkVisible={
             isTerminalRunStatus(run.status) || Boolean(terminalEvent)

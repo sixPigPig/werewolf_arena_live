@@ -3066,7 +3066,8 @@ textarea {
   }
 
   .mobile-live-action-bar {
-    gap: 6px;
+    gap: 4px;
+    padding: 11px 8px 10px;
   }
 }
 

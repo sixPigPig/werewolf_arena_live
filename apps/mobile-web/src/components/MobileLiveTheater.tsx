@@ -418,7 +418,7 @@ export function LiveTheaterControls({
         </button>
         {canToggleVoice && voiceState && onToggleVoice ? (
           <button
-            aria-label={voiceEnabled ? "关闭语音" : "开启语音"}
+            aria-label={voiceControlAriaLabel(Boolean(voiceEnabled), voiceState)}
             className="mobile-button"
             disabled={voiceState.connectionState === "unavailable"}
             onClick={onToggleVoice}
@@ -510,6 +510,17 @@ function voiceControlLabel(enabled: boolean, state: MobileLiveVoiceState) {
   }
 
   return state.currentSpeakerName ?? "语音";
+}
+
+function voiceControlAriaLabel(enabled: boolean, state: MobileLiveVoiceState) {
+  if (state.connectionState === "unavailable") {
+    return "语音不可用";
+  }
+  if (enabled && state.connectionState === "error") {
+    return "重试语音";
+  }
+
+  return enabled ? "关闭语音" : "开启语音";
 }
 
 function getCurrentTheaterPlayer(state: GodViewState) {

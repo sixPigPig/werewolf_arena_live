@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -575,7 +575,7 @@ describe("LivePage", () => {
     );
   });
 
-  it("disables the live voice control when voice streaming is unavailable", async () => {
+  it("disables the live voice control with an unavailable accessible name", async () => {
     gameClientMocks.useLiveVoiceStream.mockReturnValue({
       connectionState: "unavailable",
       currentItem: null,
@@ -585,11 +585,45 @@ describe("LivePage", () => {
 
     renderLiveRoute();
 
-    const voiceButton = await screen.findByRole("button", { name: "开启语音" });
+    const voiceButton = await screen.findByRole("button", { name: "语音不可用" });
 
     expect(voiceButton).toBeDisabled();
     expect(voiceButton.querySelector(".mobile-live-control-label")).toHaveTextContent(
       "不可用",
+    );
+  });
+
+  it("retries live voice without leaving it disabled after an error", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.useLiveVoiceStream.mockReturnValue({
+      connectionState: "error",
+      currentItem: null,
+      currentSpeakerName: null,
+      errors: ["Live voice stream connection failed."],
+    });
+
+    renderLiveRoute();
+
+    await user.click(await screen.findByRole("button", { name: "开启语音" }));
+
+    const retryButton = await screen.findByRole("button", { name: "重试语音" });
+    expect(retryButton.querySelector(".mobile-live-control-label")).toHaveTextContent(
+      "重试",
+    );
+
+    await user.click(retryButton);
+
+    await waitFor(() =>
+      expect(gameClientMocks.useLiveVoiceStream).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ enabled: false }),
+      ),
+    );
+    await waitFor(() =>
+      expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
+        "run-1",
+        expect.objectContaining({ enabled: true }),
+      ),
     );
   });
 
@@ -689,6 +723,19 @@ describe("LivePage", () => {
       styles.match(
         /(?:^|\n)\.mobile-live-action-bar \.mobile-button,\s*\n\.mobile-live-link\s*{[^}]+}/,
       )?.[0] ?? "";
+    const liveNarrowBlockStart = styles.indexOf(
+      "@media (max-width: 360px)",
+      styles.indexOf(".mobile-live-action-bar"),
+    );
+    const liveNarrowBlockEnd = styles.indexOf(
+      "@media (max-height: 860px)",
+      liveNarrowBlockStart,
+    );
+    const liveNarrowBlock = styles.slice(liveNarrowBlockStart, liveNarrowBlockEnd);
+    const narrowActionBarRule =
+      liveNarrowBlock.match(
+        /(?:^|\n)\s*\.mobile-live-action-bar\s*{[^}]+}/,
+      )?.[0] ?? "";
 
     expect(dayBannerRule).toContain("lobby-action-bar-bg.png");
     expect(dayBannerRule).toContain("border-radius: 0");
@@ -702,6 +749,8 @@ describe("LivePage", () => {
     expect(actionBarRule).toContain("lobby-action-bar-bg.png");
     expect(actionBarRule).toContain("grid-template-columns: repeat(5, minmax(0, 1fr))");
     expect(actionButtonRule).toContain("border-radius: 0");
+    expect(narrowActionBarRule).toContain("gap: 4px");
+    expect(narrowActionBarRule).toContain("padding: 11px 8px 10px");
   });
 
   it("defines staged reveal motion for live seats with reduced-motion fallback", () => {
