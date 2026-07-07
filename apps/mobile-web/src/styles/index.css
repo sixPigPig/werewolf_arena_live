@@ -2982,7 +2982,7 @@ textarea {
 
 .mobile-live-action-bar {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 7px;
   min-height: 96px;
   box-sizing: border-box;
@@ -3032,6 +3032,7 @@ textarea {
 }
 
 .mobile-live-control-label {
+  min-width: 2.5em;
   max-width: 100%;
   overflow: hidden;
   color: #f4d894;

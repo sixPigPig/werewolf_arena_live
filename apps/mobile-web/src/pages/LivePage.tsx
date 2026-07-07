@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -12,6 +12,7 @@ import {
   resumeGameRun,
   useGameRunEvents,
   useLiveDirector,
+  useLiveVoiceStream,
   type LiveGameEvent,
 } from "@werewolf-arena/game-client";
 
@@ -52,6 +53,12 @@ export function LivePage() {
     resetKey: gameId,
     startAtEventType: "game_started",
     startAtLatestTerminal: isTerminalRunStatus(run?.status),
+  });
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const voice = useLiveVoiceStream(gameId, {
+    currentEventId: director.currentEventId,
+    enabled: voiceEnabled,
+    isPaused: director.isPaused,
   });
   const stageEvents = useMemo(() => {
     const currentEventId = director.currentEventId;
@@ -175,6 +182,7 @@ export function LivePage() {
             director.seekToEventId(segment.startEventId)
           }
           onResumeRun={() => resumeMutation.mutate(run.session_id)}
+          onToggleVoice={() => setVoiceEnabled((current) => !current)}
           phaseSegments={phaseSegments}
           replayLinkVisible={
             isTerminalRunStatus(run.status) || Boolean(terminalEvent)
@@ -183,6 +191,8 @@ export function LivePage() {
           run={run}
           subtitle={subtitle}
           terminalEvent={terminalEvent}
+          voiceEnabled={voiceEnabled}
+          voiceState={voice}
         />
       ) : null}
     </main>

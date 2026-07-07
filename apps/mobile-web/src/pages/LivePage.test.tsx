@@ -13,6 +13,7 @@ const gameClientMocks = vi.hoisted(() => ({
   getGameRun: vi.fn(),
   resumeGameRun: vi.fn(),
   useGameRunEvents: vi.fn(),
+  useLiveVoiceStream: vi.fn(),
 }));
 
 function readPngMetadata(path: string) {
@@ -35,6 +36,7 @@ vi.mock("@werewolf-arena/game-client", async () => {
     getGameRun: gameClientMocks.getGameRun,
     resumeGameRun: gameClientMocks.resumeGameRun,
     useGameRunEvents: gameClientMocks.useGameRunEvents,
+    useLiveVoiceStream: gameClientMocks.useLiveVoiceStream,
   };
 });
 
@@ -211,6 +213,12 @@ describe("LivePage", () => {
       connectionState: "open",
       events: [gameStartedEvent],
       latestEvent: gameStartedEvent,
+    });
+    gameClientMocks.useLiveVoiceStream.mockReturnValue({
+      connectionState: "idle",
+      currentItem: null,
+      currentSpeakerName: null,
+      errors: [],
     });
   });
 
@@ -539,7 +547,50 @@ describe("LivePage", () => {
       expect(button.querySelector(".mobile-live-control-icon")).not.toBeNull();
       expect(button.querySelector(".mobile-live-control-label")).toHaveTextContent(name);
     }
+    const voiceButton = screen.getByRole("button", { name: "开启语音" });
+    expect(voiceButton.querySelector(".mobile-live-control-icon")).not.toBeNull();
+    expect(voiceButton.querySelector(".mobile-live-control-label")).toHaveTextContent(
+      "语音",
+    );
     expect(screen.getByRole("button", { name: "复盘" })).toBeDisabled();
+  });
+
+  it("lets the viewer enable live voice", async () => {
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+
+    const voiceButton = await screen.findByRole("button", { name: "开启语音" });
+    expect(voiceButton).toBeVisible();
+
+    await user.click(voiceButton);
+
+    expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
+      "run-1",
+      expect.objectContaining({
+        currentEventId: 1,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+  });
+
+  it("disables the live voice control when voice streaming is unavailable", async () => {
+    gameClientMocks.useLiveVoiceStream.mockReturnValue({
+      connectionState: "unavailable",
+      currentItem: null,
+      currentSpeakerName: null,
+      errors: ["Live voice streaming is unavailable."],
+    });
+
+    renderLiveRoute();
+
+    const voiceButton = await screen.findByRole("button", { name: "开启语音" });
+
+    expect(voiceButton).toBeDisabled();
+    expect(voiceButton.querySelector(".mobile-live-control-label")).toHaveTextContent(
+      "不可用",
+    );
   });
 
   it("hides the bottom mobile tab bar on the immersive live page", () => {
@@ -649,7 +700,7 @@ describe("LivePage", () => {
     expect(seatMedalRule).toContain("lobby-profile-card-light-frame-alpha.png");
     expect(nameplateRule).toContain("lobby-settings-field-bg.png");
     expect(actionBarRule).toContain("lobby-action-bar-bg.png");
-    expect(actionBarRule).toContain("grid-template-columns: repeat(4, minmax(0, 1fr))");
+    expect(actionBarRule).toContain("grid-template-columns: repeat(5, minmax(0, 1fr))");
     expect(actionButtonRule).toContain("border-radius: 0");
   });
 

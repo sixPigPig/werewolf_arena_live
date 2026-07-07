@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
-import { Gauge, Mic, Pause, Play, Radio, RotateCcw } from "lucide-react";
+import { Gauge, Mic, Pause, Play, Radio, RotateCcw, Volume2 } from "lucide-react";
 
 import {
   actionLabel,
@@ -34,6 +34,17 @@ export type MobileLiveTheaterRun = {
   rule_set?: RuleSetSummary | null;
 };
 
+export type MobileLiveVoiceState = {
+  connectionState:
+    | "idle"
+    | "connecting"
+    | "open"
+    | "error"
+    | "closed"
+    | "unavailable";
+  currentSpeakerName: string | null;
+};
+
 export type MobileLiveTheaterProps = {
   canResumeRun: boolean;
   currentEvent: LiveGameEvent | null;
@@ -43,12 +54,15 @@ export type MobileLiveTheaterProps = {
   onBack: () => void;
   onSelectPhase: (segment: LivePhaseSegment) => void;
   onResumeRun: () => void;
+  onToggleVoice?: () => void;
   phaseSegments: LivePhaseSegment[];
   replayLinkVisible: boolean;
   resumeIsPending: boolean;
   run: MobileLiveTheaterRun;
   subtitle?: MobileLiveSubtitle | null;
   terminalEvent: LiveGameEvent | undefined;
+  voiceEnabled?: boolean;
+  voiceState?: MobileLiveVoiceState;
 };
 
 export function MobileLiveTheater({
@@ -60,11 +74,14 @@ export function MobileLiveTheater({
   onBack,
   onSelectPhase,
   onResumeRun,
+  onToggleVoice,
   phaseSegments,
   replayLinkVisible,
   resumeIsPending,
   run,
   subtitle = null,
+  voiceEnabled,
+  voiceState,
 }: MobileLiveTheaterProps) {
   const currentPlayer = getCurrentTheaterPlayer(godViewState);
   const { left, right } = splitPlayersForColumns(godViewState.players);
@@ -98,9 +115,12 @@ export function MobileLiveTheater({
         director={director}
         godViewState={godViewState}
         onResumeRun={onResumeRun}
+        onToggleVoice={onToggleVoice}
         replayLinkVisible={replayLinkVisible}
         resumeIsPending={resumeIsPending}
         run={run}
+        voiceEnabled={voiceEnabled}
+        voiceState={voiceState}
       />
     </section>
   );
@@ -349,9 +369,12 @@ type LiveTheaterControlsProps = {
   director: LiveDirectorControlsState;
   godViewState: GodViewState;
   onResumeRun: () => void;
+  onToggleVoice?: () => void;
   replayLinkVisible: boolean;
   resumeIsPending: boolean;
   run: MobileLiveTheaterRun;
+  voiceEnabled?: boolean;
+  voiceState?: MobileLiveVoiceState;
 };
 
 export function LiveTheaterControls({
@@ -360,10 +383,15 @@ export function LiveTheaterControls({
   director,
   godViewState,
   onResumeRun,
+  onToggleVoice,
   replayLinkVisible,
   resumeIsPending,
   run,
+  voiceEnabled,
+  voiceState,
 }: LiveTheaterControlsProps) {
+  const canToggleVoice = Boolean(onToggleVoice && voiceState);
+
   return (
     <footer className="mobile-live-control-deck" aria-label="实时观战操作">
       <div className="mobile-live-focus-strip">
@@ -388,6 +416,22 @@ export function LiveTheaterControls({
             {director.isPaused ? "继续" : "暂停"}
           </span>
         </button>
+        {canToggleVoice && voiceState && onToggleVoice ? (
+          <button
+            aria-label={voiceEnabled ? "关闭语音" : "开启语音"}
+            className="mobile-button"
+            disabled={voiceState.connectionState === "unavailable"}
+            onClick={onToggleVoice}
+            type="button"
+          >
+            <span className="mobile-live-control-icon">
+              <Volume2 aria-hidden="true" size={18} strokeWidth={2.8} />
+            </span>
+            <span className="mobile-live-control-label">
+              {voiceControlLabel(Boolean(voiceEnabled), voiceState)}
+            </span>
+          </button>
+        ) : null}
         <button
           className="mobile-button"
           onClick={() => director.setSpeed(director.speed === 1 ? 2 : 1)}
@@ -449,6 +493,23 @@ export function LiveTheaterControls({
 
 function liveStageEventLabel(event: LiveGameEvent) {
   return event.action ? actionLabel(event.action) : liveEventTitle(event);
+}
+
+function voiceControlLabel(enabled: boolean, state: MobileLiveVoiceState) {
+  if (state.connectionState === "unavailable") {
+    return "不可用";
+  }
+  if (!enabled) {
+    return "语音";
+  }
+  if (state.connectionState === "connecting") {
+    return "连接中";
+  }
+  if (state.connectionState === "error") {
+    return "重试";
+  }
+
+  return state.currentSpeakerName ?? "语音";
 }
 
 function getCurrentTheaterPlayer(state: GodViewState) {
