@@ -5,8 +5,10 @@ import inspect
 import logging
 import queue
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
+from dataclasses import replace
 from typing import Protocol
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -30,6 +32,7 @@ logger = logging.getLogger(__name__)
 TERMINAL_EVENT_TYPES = {"game_completed", "game_failed"}
 TERMINAL_RUN_STATUSES = {"completed", "failed"}
 IDLE_POLL_SECONDS = 0.1
+REQUEST_DELTA_COALESCE_SECONDS = 0.16
 
 
 class TtsClient(Protocol):
@@ -75,19 +78,33 @@ class LiveVoiceStreamService:
 
         subscriber = self.registry.subscribe(run_id, after_id=last_event_id)
         disconnect_task = asyncio.create_task(_watch_websocket_disconnect(websocket))
+        pending_events: deque[LiveEvent] = deque()
         speaker_config = VoiceSpeakerConfig(
             player_speaker=self.config.player_speaker,
             judge_speaker=self.config.judge_speaker,
         )
         try:
             while True:
-                event = await _next_subscriber_event(subscriber, disconnect_task)
+                event = await _next_voice_event(
+                    subscriber,
+                    disconnect_task,
+                    pending_events,
+                )
                 if event is None:
                     return
                 is_terminal = event.type in TERMINAL_EVENT_TYPES
                 utterance = event_to_voice_utterance(event, speaker_config)
 
                 if utterance is not None:
+                    utterance = await _coalesce_request_deltas(
+                        utterance,
+                        subscriber,
+                        disconnect_task,
+                        pending_events,
+                        speaker_config,
+                    )
+                    if disconnect_task.done():
+                        return
                     chunks = chunk_text_for_tts(utterance.text)
                     if chunks and not await self._stream_utterance(
                         websocket,
@@ -175,6 +192,9 @@ class LiveVoiceStreamService:
                 extra={
                     "run_id": utterance.run_id,
                     "source_event_id": utterance.source_event_id,
+                    "request_id": utterance.request_id,
+                    "utterance_id": utterance.utterance_id,
+                    "speaker_kind": utterance.speaker_kind,
                 },
             )
             await websocket.send_json(
@@ -185,7 +205,7 @@ class LiveVoiceStreamService:
                     "message": "Voice synthesis failed",
                 }
             )
-            return False
+            return True
 
         await _close_async_iterator(audio_iterator)
         await websocket.send_json(
@@ -228,12 +248,94 @@ async def _next_subscriber_event(
     subscriber: queue.Queue[LiveEvent],
     disconnect_task: asyncio.Task[None],
 ) -> LiveEvent | None:
+    return await _poll_subscriber_event(
+        subscriber,
+        disconnect_task,
+        timeout_seconds=None,
+    )
+
+
+async def _poll_subscriber_event(
+    subscriber: queue.Queue[LiveEvent],
+    disconnect_task: asyncio.Task[None],
+    *,
+    timeout_seconds: float | None,
+) -> LiveEvent | None:
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
     while True:
         if disconnect_task.done():
             return None
         try:
             return subscriber.get_nowait()
         except queue.Empty:
-            done, _pending = await asyncio.wait({disconnect_task}, timeout=IDLE_POLL_SECONDS)
+            poll_timeout = IDLE_POLL_SECONDS
+            if deadline is not None:
+                remaining_seconds = deadline - time.monotonic()
+                if remaining_seconds <= 0:
+                    return None
+                poll_timeout = min(poll_timeout, remaining_seconds)
+            done, _pending = await asyncio.wait(
+                {disconnect_task},
+                timeout=poll_timeout,
+            )
             if done:
                 return None
+
+
+async def _next_voice_event(
+    subscriber: queue.Queue[LiveEvent],
+    disconnect_task: asyncio.Task[None],
+    pending_events: deque[LiveEvent],
+) -> LiveEvent | None:
+    if pending_events:
+        return pending_events.popleft()
+    return await _next_subscriber_event(subscriber, disconnect_task)
+
+
+async def _coalesce_request_deltas(
+    utterance: VoiceUtterance,
+    subscriber: queue.Queue[LiveEvent],
+    disconnect_task: asyncio.Task[None],
+    pending_events: deque[LiveEvent],
+    speaker_config: VoiceSpeakerConfig,
+) -> VoiceUtterance:
+    if utterance.request_id is None or utterance.speaker_kind != "player":
+        return utterance
+
+    texts = [utterance.text]
+    while True:
+        if pending_events:
+            event = pending_events.popleft()
+        else:
+            event = await _poll_subscriber_event(
+                subscriber,
+                disconnect_task,
+                timeout_seconds=REQUEST_DELTA_COALESCE_SECONDS,
+            )
+            if event is None:
+                break
+
+        next_utterance = event_to_voice_utterance(event, speaker_config)
+        if _is_same_request_utterance(utterance, next_utterance):
+            texts.append(next_utterance.text)
+            continue
+
+        pending_events.appendleft(event)
+        break
+
+    if len(texts) == 1:
+        return utterance
+    return replace(utterance, text="".join(texts))
+
+
+def _is_same_request_utterance(
+    utterance: VoiceUtterance,
+    next_utterance: VoiceUtterance | None,
+) -> bool:
+    return (
+        next_utterance is not None
+        and next_utterance.request_id == utterance.request_id
+        and next_utterance.speaker_kind == utterance.speaker_kind
+        and next_utterance.speaker_name == utterance.speaker_name
+        and next_utterance.action == utterance.action
+    )

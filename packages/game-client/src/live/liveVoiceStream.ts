@@ -295,7 +295,7 @@ function voiceQueueReducer(
       ...queue,
       items: queue.items.map((item) =>
         item.utteranceId === action.utteranceId
-          ? { ...item, status: "played" }
+          ? { ...item, chunks: [], status: "played" }
           : item,
       ),
     };
@@ -403,14 +403,20 @@ export function useLiveVoiceStream(
   const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
   const isConsumableItem = (item: LiveVoiceQueueItem) =>
     !consumedUtteranceIdsRef.current.has(item.utteranceId);
+  const hasReachedSourceEvent = (item: LiveVoiceQueueItem) =>
+    currentEventId !== null && currentEventId >= item.sourceEventId;
+  const isActivePlaybackItem = (item: LiveVoiceQueueItem) =>
+    isConsumableItem(item) && hasReachedSourceEvent(item);
   const currentItem =
     visibleQueue.items.find(
       (item) => item.status === "playing" && isConsumableItem(item),
     ) ??
     visibleQueue.items.find(
-      (item) => item.status === "ready" && isConsumableItem(item),
+      (item) => item.status === "ready" && isActivePlaybackItem(item),
     ) ??
-    visibleQueue.items.find((item) => item.status === "receiving") ??
+    visibleQueue.items.find(
+      (item) => item.status === "receiving" && isActivePlaybackItem(item),
+    ) ??
     null;
   const playbackKey =
     currentItem &&
@@ -419,7 +425,7 @@ export function useLiveVoiceStream(
       : null;
 
   useEffect(() => {
-    if (!enabled || isPaused || !currentItem || currentItem.status !== "ready") {
+    if (!enabled || !currentItem || currentItem.status !== "ready") {
       return;
     }
 
@@ -490,7 +496,6 @@ export function useLiveVoiceStream(
         type: "utterance_started",
         utteranceId: currentItem.utteranceId,
       });
-      void Promise.resolve(audio.play()).catch(reportPlaybackError);
     } catch {
       reportPlaybackError();
       return;
@@ -500,7 +505,43 @@ export function useLiveVoiceStream(
       isActive = false;
       audio?.removeEventListener("ended", markPlayed);
       releaseAudio();
-      consumeUtterance();
+    };
+  }, [playbackKey, enabled]);
+
+  useEffect(() => {
+    if (!enabled || !playbackKey || !audioRef.current) {
+      return;
+    }
+
+    let isActive = true;
+    const audio = audioRef.current;
+    const reportPlaybackError = () => {
+      if (!isActive) {
+        return;
+      }
+      consumedUtteranceIdsRef.current.add(playbackKey);
+      dispatch({
+        type: "queue_error",
+        message: "Unable to play live voice audio.",
+      });
+      dispatch({
+        type: "utterance_played",
+        utteranceId: playbackKey,
+      });
+    };
+
+    if (isPaused) {
+      try {
+        audio.pause();
+      } catch {
+        // Pause is best-effort; the next resume still owns playback state.
+      }
+    } else {
+      void Promise.resolve(audio.play()).catch(reportPlaybackError);
+    }
+
+    return () => {
+      isActive = false;
     };
   }, [playbackKey, enabled, isPaused]);
 
@@ -525,6 +566,9 @@ export function useLiveVoiceStream(
 
     let isActive = true;
     let hasError = false;
+    let socketHadError = false;
+    let retryCount = 0;
+    let socket: WebSocket | null = null;
 
     const reportError = (
       message: string,
@@ -538,64 +582,83 @@ export function useLiveVoiceStream(
       dispatch({ type: "queue_error", message });
     };
 
-    setConnectionState("connecting");
+    const openSocket = () => {
+      setConnectionState("connecting");
 
-    let socket: WebSocket;
-    try {
-      socket = new WebSocketConstructor(streamUrl);
-    } catch {
-      reportError("Unable to open live voice stream.");
-      return;
-    }
-
-    socket.onopen = () => {
-      if (isActive) {
-        setConnectionState("open");
-      }
-    };
-    socket.onerror = () => {
-      reportError("Live voice stream connection failed.");
-    };
-    socket.onclose = () => {
-      if (isActive && !hasError) {
-        setConnectionState("closed");
-      }
-    };
-    socket.onmessage = (event) => {
-      if (!isActive) {
-        return;
-      }
-
-      let parsed: unknown;
+      let nextSocket: WebSocket;
       try {
-        parsed = JSON.parse(String(event.data));
+        nextSocket = new WebSocketConstructor(streamUrl);
       } catch {
-        reportError("Malformed voice stream message.");
+        reportError("Unable to open live voice stream.");
         return;
       }
 
-      if (!isLiveVoiceMessage(parsed)) {
-        reportError("Malformed voice stream message.");
-        return;
-      }
+      socket = nextSocket;
+      socketHadError = false;
+      nextSocket.onopen = () => {
+        if (isActive) {
+          setConnectionState("open");
+        }
+      };
+      nextSocket.onerror = () => {
+        socketHadError = true;
+        if (retryCount >= 1) {
+          reportError("Live voice stream connection failed.");
+        }
+      };
+      nextSocket.onclose = () => {
+        if (!isActive || hasError) {
+          return;
+        }
+        if (retryCount < 1) {
+          retryCount += 1;
+          openSocket();
+          return;
+        }
+        if (socketHadError) {
+          reportError("Live voice stream connection failed.");
+          return;
+        }
+        setConnectionState("closed");
+      };
+      nextSocket.onmessage = (event) => {
+        if (!isActive) {
+          return;
+        }
 
-      if (parsed.type === "voice_unavailable") {
-        isActive = false;
-        setConnectionState("unavailable");
-        dispatch({
-          type: "queue_error",
-          message: "Live voice streaming is unavailable.",
-        });
-        socket.close();
-        return;
-      }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(String(event.data));
+        } catch {
+          reportError("Malformed voice stream message.");
+          return;
+        }
 
-      dispatch(parsed);
+        if (!isLiveVoiceMessage(parsed)) {
+          reportError("Malformed voice stream message.");
+          return;
+        }
+
+        if (parsed.type === "voice_unavailable") {
+          isActive = false;
+          setConnectionState("unavailable");
+          dispatch({
+            type: "queue_error",
+            message: "Live voice streaming is unavailable.",
+          });
+          nextSocket.close();
+          return;
+        }
+
+        dispatch(parsed);
+      };
     };
+
+    openSocket();
 
     return () => {
       isActive = false;
-      socket.close();
+      socket?.close();
     };
   }, [enabled, streamUrl]);
 
