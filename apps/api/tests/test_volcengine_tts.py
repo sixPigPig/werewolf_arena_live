@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -42,6 +43,14 @@ class FakeConnection:
         traceback: object,
     ) -> None:
         return None
+
+
+class FakeWebsocket:
+    def __init__(self, frame: str | bytes) -> None:
+        self.frame = frame
+
+    async def recv(self) -> str | bytes:
+        return self.frame
 
 
 def _message(
@@ -356,6 +365,43 @@ def test_protocol_message_str_redacts_payload_text() -> None:
     assert "session-1" in rendered
     assert "TaskRequest" in rendered
     assert "PayloadSize:" in rendered
+
+
+def test_protocol_receive_message_redacts_unexpected_text_frames(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger=protocol.__name__)
+    websocket = FakeWebsocket('{"text":"secret speech"}')
+
+    with pytest.raises(ValueError, match="length=24") as exc_info:
+        asyncio.run(protocol.receive_message(websocket))
+
+    assert "text frame" in str(exc_info.value)
+    assert "secret speech" not in str(exc_info.value)
+    assert "secret speech" not in caplog.text
+    assert "length=24" in caplog.text
+
+
+def test_protocol_receive_message_redacts_malformed_binary_trailing_bytes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger=protocol.__name__)
+    message = protocol.Message(
+        type=protocol.MsgType.FullServerResponse,
+        flag=protocol.MsgTypeFlagBits.NoSeq,
+        payload=b"{}",
+    )
+    trailing_bytes = b'{"text":"secret speech"}'
+    websocket = FakeWebsocket(message.marshal() + trailing_bytes)
+
+    with pytest.raises(ValueError, match=f"length={len(trailing_bytes)}") as exc_info:
+        asyncio.run(protocol.receive_message(websocket))
+
+    assert "Unexpected data after message" in str(exc_info.value)
+    assert "secret speech" not in str(exc_info.value)
+    assert repr(trailing_bytes) not in str(exc_info.value)
+    assert "secret speech" not in caplog.text
+    assert repr(trailing_bytes) not in caplog.text
 
 
 def test_protocol_wait_for_event_failure_includes_event_without_payload(

@@ -12,6 +12,14 @@ import websockets
 logger = logging.getLogger(__name__)
 
 
+def _frame_metadata(frame: object) -> str:
+    if isinstance(frame, str):
+        return f"text frame length={len(frame)}"
+    if isinstance(frame, bytes):
+        return f"binary frame length={len(frame)}"
+    return f"{type(frame).__name__} frame"
+
+
 class MsgType(IntEnum):
     """Message type enumeration"""
 
@@ -264,7 +272,9 @@ class Message:
         # Check for remaining data
         remaining = buffer.read()
         if remaining:
-            raise ValueError(f"Unexpected data after message: {remaining}")
+            raise ValueError(
+                f"Unexpected data after message: trailing bytes length={len(remaining)}"
+            )
 
     def _get_writers(self) -> List[Callable[[io.BytesIO], None]]:
         """Get list of writer functions"""
@@ -444,7 +454,7 @@ async def receive_message(websocket: websockets.WebSocketClientProtocol) -> Mess
     try:
         data = await websocket.recv()
         if isinstance(data, str):
-            raise ValueError(f"Unexpected text message: {data}")
+            raise ValueError(f"Unexpected text message: {_frame_metadata(data)}")
         elif isinstance(data, bytes):
             msg = Message.from_bytes(data)
             logger.info(f"Received: {msg}")
