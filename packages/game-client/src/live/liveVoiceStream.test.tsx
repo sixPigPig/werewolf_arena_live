@@ -60,6 +60,23 @@ describe("live voice stream", () => {
     );
   });
 
+  it("preserves relative api base prefixes without throwing", () => {
+    const expectedOrigin = window.location.origin.replace(/^http/, "ws");
+
+    expect(resolveVoiceStreamUrl("run/slash id", "/api")).toBe(
+      `${expectedOrigin}/api/api/v1/games/runs/run%2Fslash%20id/voice-stream`,
+    );
+    expect(resolveVoiceStreamUrl("run-1", "proxy")).toBe(
+      `${expectedOrigin}/proxy/api/v1/games/runs/run-1/voice-stream`,
+    );
+  });
+
+  it("preserves absolute api base path prefixes", () => {
+    expect(resolveVoiceStreamUrl("run-1", "https://example.com/proxy")).toBe(
+      "wss://example.com/proxy/api/v1/games/runs/run-1/voice-stream",
+    );
+  });
+
   it("groups chunks by utterance and marks completed audio", () => {
     let queue = createVoiceQueue();
     queue = enqueueVoiceMessage(queue, {
@@ -88,6 +105,43 @@ describe("live voice stream", () => {
       sourceEventId: 4,
       speakerName: "阿青",
       status: "ready",
+    });
+    expect(queue.items[0].chunks).toEqual(["YWJj"]);
+  });
+
+  it("de-dupes duplicate starts by utterance id", () => {
+    let queue = createVoiceQueue();
+    queue = enqueueVoiceMessage(queue, {
+      type: "voice_start",
+      utterance_id: "voice-1",
+      source_event_id: 4,
+      speaker_kind: "player",
+      speaker_name: "阿青",
+      mime_type: "audio/mpeg",
+    });
+    queue = enqueueVoiceMessage(queue, {
+      type: "audio_chunk",
+      utterance_id: "voice-1",
+      mime_type: "audio/mpeg",
+      data: "YWJj",
+    });
+    queue = enqueueVoiceMessage(queue, {
+      type: "voice_start",
+      utterance_id: "voice-1",
+      source_event_id: 5,
+      speaker_kind: "judge",
+      speaker_name: "旁白",
+      mime_type: "audio/ogg",
+    });
+
+    expect(queue.items).toHaveLength(1);
+    expect(queue.items[0]).toMatchObject({
+      utteranceId: "voice-1",
+      sourceEventId: 5,
+      speakerKind: "judge",
+      speakerName: "旁白",
+      mimeType: "audio/ogg",
+      status: "receiving",
     });
     expect(queue.items[0].chunks).toEqual(["YWJj"]);
   });
@@ -221,6 +275,81 @@ describe("live voice stream", () => {
 
     expect(result.current.currentSpeakerName).toBeNull();
     expect(result.current.currentItem?.speakerName).toBe("阿青");
+  });
+
+  it("resets queued speakers and errors when switching runs", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { rerender, result } = renderHook(
+      ({ runId }: { runId: string }) =>
+        useLiveVoiceStream(runId, {
+          currentEventId: 4,
+          enabled: true,
+          isPaused: false,
+        }),
+      { initialProps: { runId: "run-1" } },
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].emit({
+        type: "voice_start",
+        utterance_id: "voice-1",
+        source_event_id: 4,
+        speaker_kind: "player",
+        speaker_name: "阿青",
+        mime_type: "audio/mpeg",
+      });
+      MockWebSocket.instances[0].emitRaw("{not-json");
+    });
+
+    await waitFor(() => expect(result.current.errors).toHaveLength(1));
+    expect(result.current.currentSpeakerName).toBe("阿青");
+
+    rerender({ runId: "run-2" });
+
+    await waitFor(() => expect(result.current.currentItem).toBeNull());
+    expect(result.current.currentSpeakerName).toBeNull();
+    expect(result.current.errors).toEqual([]);
+    expect(MockWebSocket.instances[0].close).toHaveBeenCalledTimes(1);
+    expect(MockWebSocket.instances[1].url).toContain(
+      "/api/v1/games/runs/run-2/voice-stream",
+    );
+  });
+
+  it("resets queued speakers and errors when disabled", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { rerender, result } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useLiveVoiceStream("run-1", {
+          currentEventId: 4,
+          enabled,
+          isPaused: false,
+        }),
+      { initialProps: { enabled: true } },
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].emit({
+        type: "voice_start",
+        utterance_id: "voice-1",
+        source_event_id: 4,
+        speaker_kind: "player",
+        speaker_name: "阿青",
+        mime_type: "audio/mpeg",
+      });
+      MockWebSocket.instances[0].emitRaw("{not-json");
+    });
+
+    await waitFor(() => expect(result.current.errors).toHaveLength(1));
+
+    rerender({ enabled: false });
+
+    await waitFor(() => expect(result.current.currentItem).toBeNull());
+    expect(result.current.connectionState).toBe("idle");
+    expect(result.current.currentSpeakerName).toBeNull();
+    expect(result.current.errors).toEqual([]);
+    expect(MockWebSocket.instances[0].close).toHaveBeenCalledTimes(1);
   });
 
   it("reports unavailable when the browser has no websocket support", async () => {

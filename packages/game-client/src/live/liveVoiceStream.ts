@@ -2,6 +2,8 @@ import { useEffect, useMemo, useReducer, useState } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const STALE_EVENT_DISTANCE = 8;
+const VOICE_STREAM_UNAVAILABLE_ERROR =
+  "Live voice streaming is unavailable in this browser.";
 
 export type LiveVoiceConnectionState =
   | "idle"
@@ -61,24 +63,51 @@ type VoiceQueueAction =
   | {
       type: "queue_error";
       message: string;
+    }
+  | {
+      type: "reset";
     };
 
 export function resolveVoiceStreamUrl(runId: string, baseUrl = API_BASE_URL) {
   const fallbackOrigin =
     typeof window === "undefined" ? "http://localhost" : window.location.origin;
-  const base = baseUrl || fallbackOrigin;
-  const url = new URL(
-    `/api/v1/games/runs/${encodeURIComponent(runId)}/voice-stream`,
-    base,
-  );
+  const base = resolveUrlBase(baseUrl, fallbackOrigin);
+  const voiceStreamPath = `/api/v1/games/runs/${encodeURIComponent(runId)}/voice-stream`;
+  base.pathname = joinUrlPaths(base.pathname, voiceStreamPath);
+  base.search = "";
+  base.hash = "";
 
-  if (url.protocol === "https:") {
-    url.protocol = "wss:";
-  } else if (url.protocol === "http:") {
-    url.protocol = "ws:";
+  if (base.protocol === "https:") {
+    base.protocol = "wss:";
+  } else if (base.protocol === "http:") {
+    base.protocol = "ws:";
   }
 
-  return url.toString();
+  return base.toString();
+}
+
+function resolveUrlBase(baseUrl: string, fallbackOrigin: string) {
+  const normalizedBaseUrl = baseUrl.trim();
+  if (!normalizedBaseUrl) {
+    return new URL(fallbackOrigin);
+  }
+
+  try {
+    return new URL(normalizedBaseUrl);
+  } catch {
+    const relativeBase = normalizedBaseUrl.startsWith("/")
+      ? normalizedBaseUrl
+      : `/${normalizedBaseUrl}`;
+    return new URL(relativeBase, `${fallbackOrigin}/`);
+  }
+}
+
+function joinUrlPaths(prefix: string, path: string) {
+  const trimmedPrefix = prefix.replace(/\/+$/, "");
+  if (!trimmedPrefix) {
+    return path;
+  }
+  return `${trimmedPrefix}${path}`;
 }
 
 export function createVoiceQueue(): LiveVoiceQueue {
@@ -108,6 +137,24 @@ export function enqueueVoiceMessage(
   }
 
   if (message.type === "voice_start") {
+    if (queue.items.some((item) => item.utteranceId === message.utterance_id)) {
+      return {
+        ...queue,
+        items: queue.items.map((item) =>
+          item.utteranceId === message.utterance_id
+            ? {
+                ...item,
+                sourceEventId: message.source_event_id,
+                speakerKind: message.speaker_kind,
+                speakerName: message.speaker_name,
+                mimeType: message.mime_type,
+                status: "receiving",
+              }
+            : item,
+        ),
+      };
+    }
+
     return {
       ...queue,
       items: [
@@ -168,6 +215,10 @@ function voiceQueueReducer(
   queue: LiveVoiceQueue,
   action: VoiceQueueAction,
 ): LiveVoiceQueue {
+  if (action.type === "reset") {
+    return createVoiceQueue();
+  }
+
   if (action.type === "queue_error") {
     return { ...queue, errors: [...queue.errors, action.message] };
   }
@@ -259,6 +310,8 @@ export function useLiveVoiceStream(
     null;
 
   useEffect(() => {
+    dispatch({ type: "reset" });
+
     if (!enabled || !streamUrl) {
       setConnectionState("idle");
       return;
@@ -269,7 +322,7 @@ export function useLiveVoiceStream(
       setConnectionState("unavailable");
       dispatch({
         type: "queue_error",
-        message: "Live voice streaming is unavailable in this browser.",
+        message: VOICE_STREAM_UNAVAILABLE_ERROR,
       });
       return;
     }
