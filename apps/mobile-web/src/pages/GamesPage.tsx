@@ -62,6 +62,7 @@ export function GamesPage() {
   const [activeSeat, setActiveSeat] = useState(1);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
   const [isClearConfirming, setIsClearConfirming] = useState(false);
+  const [isFillOptionsOpen, setIsFillOptionsOpen] = useState(false);
   const [pendingProfileId, setPendingProfileId] = useState<string | null>(null);
   const [profileSearch, setProfileSearch] = useState("");
   const [favoriteFilter, setFavoriteFilter] = useState<"all" | "favorite">("all");
@@ -218,9 +219,14 @@ export function GamesPage() {
     !selectedRuleSet ||
     createGameRunMutation.isPending;
   const isLaunchDisabled = isSubmitDisabled || !launchStatus.canLaunch;
+  const canFillSeats =
+    !isSubmitDisabled &&
+    launchStatus.emptySeatCount > 0 &&
+    launchStatus.profileShortageCount === 0;
+  const showFillOptions = isFillOptionsOpen && canFillSeats;
   const launchButtonStateClass = createGameRunMutation.isPending
     ? "mobile-lobby-launch-pending"
-    : getLaunchButtonStateClass(launchStatus);
+    : "mobile-lobby-launch-ready";
   const canAdvanceAfterConfirm = pendingProfile
     ? hasNextEmptySeat(
         upsertSeatProfile(
@@ -267,6 +273,7 @@ export function GamesPage() {
     setValidationError(null);
     setShortage(false);
     setIsClearConfirming(false);
+    setIsFillOptionsOpen(false);
 
     if (options.scrollCardIntoView) {
       scrollRuleCardIntoView(ruleSetId);
@@ -316,6 +323,7 @@ export function GamesPage() {
     setValidationError(null);
     setShortage(false);
     setIsClearConfirming(false);
+    setIsFillOptionsOpen(false);
     setIsProfileDrawerOpen(true);
     focusSeatAndScrollRowToTop(seat, trigger);
   }
@@ -346,6 +354,7 @@ export function GamesPage() {
     setValidationError(null);
     setShortage(false);
     setIsClearConfirming(false);
+    setIsFillOptionsOpen(false);
     setPlayerConfigs(nextConfigs);
 
     if (options.advanceToNextEmpty && nextEmptySeat) {
@@ -366,6 +375,7 @@ export function GamesPage() {
     setValidationError(null);
     setShortage(false);
     setIsClearConfirming(false);
+    setIsFillOptionsOpen(false);
     setPlayerConfigs(
       randomFillEmptySeats(
         visiblePlayerConfigs,
@@ -380,6 +390,7 @@ export function GamesPage() {
     setValidationError(null);
     setShortage(false);
     setIsClearConfirming(false);
+    setIsFillOptionsOpen(false);
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
@@ -463,6 +474,7 @@ export function GamesPage() {
       setShortage(false);
       setValidationError(null);
       setIsClearConfirming(false);
+      setIsFillOptionsOpen(false);
       return;
     }
 
@@ -475,10 +487,12 @@ export function GamesPage() {
     setShortage(false);
     setValidationError(null);
     setIsClearConfirming(false);
+    setIsFillOptionsOpen(false);
   }
 
   function handleSubmit() {
     setIsClearConfirming(false);
+    setIsFillOptionsOpen(false);
 
     if (!selectedRuleSet) {
       return;
@@ -496,20 +510,12 @@ export function GamesPage() {
       return;
     }
 
-    const normalizedBaseConfigs = normalizePlayerConfigs(
+    const normalizedPlayerConfigs = normalizePlayerConfigs(
       visiblePlayerConfigs,
       selectedRuleSet.player_count,
     );
-    const filledPlayerConfigs = normalizePlayerConfigs(
-      randomFillEmptySeats(
-        normalizedBaseConfigs,
-        profiles,
-        selectedRuleSet.player_count,
-      ),
-      selectedRuleSet.player_count,
-    );
     const selectedProfileCount = new Set(
-      filledPlayerConfigs
+      normalizedPlayerConfigs
         .map((config) => config.profile_id)
         .filter((profileId): profileId is string => Boolean(profileId)),
     ).size;
@@ -517,23 +523,19 @@ export function GamesPage() {
     if (selectedProfileCount < selectedRuleSet.player_count) {
       setShortage(true);
       setValidationError(null);
-      setPlayerConfigs(filledPlayerConfigs);
+      setPlayerConfigs(normalizedPlayerConfigs);
       return;
     }
 
     setShortage(false);
     setValidationError(null);
-    setPlayerConfigs(filledPlayerConfigs);
-
-    if (launchStatus.emptySeatCount > 0) {
-      return;
-    }
+    setPlayerConfigs(normalizedPlayerConfigs);
 
     createGameRunMutation.mutate({
       rule_set_id: selectedRuleSet.id,
       seed: seed ? Number(seed) : null,
       max_rounds: parsedMaxRounds,
-      player_configs: filledPlayerConfigs,
+      player_configs: normalizedPlayerConfigs,
     });
   }
 
@@ -812,13 +814,37 @@ export function GamesPage() {
           <span className="mobile-lobby-launch-status">
             {launchStatus.summaryText}
           </span>
+          {showFillOptions ? (
+            <div className="mobile-lobby-fill-options">
+              <button
+                className="mobile-button mobile-lobby-favorite-fill"
+                onClick={() => fillEmptySeats({ favoritesOnly: true })}
+                type="button"
+              >
+                <span>收藏补齐</span>
+              </button>
+              <button
+                className="mobile-button mobile-lobby-random-fill"
+                onClick={() => fillEmptySeats()}
+                type="button"
+              >
+                <span>随机补齐</span>
+              </button>
+            </div>
+          ) : null}
           <button
-            className="mobile-button mobile-lobby-favorite-fill"
-            disabled={!selectedRuleSet}
-            onClick={() => fillEmptySeats({ favoritesOnly: true })}
+            aria-expanded={showFillOptions}
+            className="mobile-button mobile-lobby-fill-toggle"
+            disabled={!canFillSeats}
+            onClick={() => {
+              setValidationError(null);
+              setShortage(false);
+              setIsClearConfirming(false);
+              setIsFillOptionsOpen((currentIsOpen) => !currentIsOpen);
+            }}
             type="button"
           >
-            <span>收藏补齐</span>
+            <span>补齐席位</span>
           </button>
           <button
             className={[
@@ -1196,18 +1222,6 @@ type LineupLaunchStatus = {
   canLaunch: boolean;
 };
 
-function getLaunchButtonStateClass(status: LineupLaunchStatus) {
-  if (status.canLaunch) {
-    return status.emptySeatCount > 0
-      ? "mobile-lobby-launch-auto-fill"
-      : "mobile-lobby-launch-ready";
-  }
-
-  return status.profileShortageCount > 0
-    ? "mobile-lobby-launch-shortage"
-    : "";
-}
-
 function buildLineupLaunchStatus(
   configs: PlayerConfig[],
   profiles: VirtualPlayerProfile[],
@@ -1233,7 +1247,7 @@ function buildLineupLaunchStatus(
       emptySeatCount,
       profileShortageCount: 0,
       summaryText: "等待规则加载",
-      ctaLabel: "发起对局",
+      ctaLabel: "开始对局",
       canLaunch: false,
     };
   }
@@ -1244,7 +1258,7 @@ function buildLineupLaunchStatus(
       emptySeatCount,
       profileShortageCount,
       summaryText: `${countPrefix} · 还差 ${profileShortageCount} 名玩家`,
-      ctaLabel: `还差 ${profileShortageCount} 名玩家`,
+      ctaLabel: "开始对局",
       canLaunch: false,
     };
   }
@@ -1255,8 +1269,8 @@ function buildLineupLaunchStatus(
       emptySeatCount,
       profileShortageCount,
       summaryText: `${countPrefix} · 可自动补齐`,
-      ctaLabel: "补齐发起",
-      canLaunch: true,
+      ctaLabel: "开始对局",
+      canLaunch: false,
     };
   }
 
@@ -1265,7 +1279,7 @@ function buildLineupLaunchStatus(
     emptySeatCount,
     profileShortageCount,
     summaryText: `${countPrefix} · 阵容已就绪`,
-    ctaLabel: "发起对局",
+    ctaLabel: "开始对局",
     canLaunch: true,
   };
 }

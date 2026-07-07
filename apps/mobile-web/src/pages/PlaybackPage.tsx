@@ -24,9 +24,11 @@ export function PlaybackPage() {
   const rounds = playback ? playbackRounds(playback.events) : [];
 
   return (
-    <main className="mobile-page">
-      <header className="mobile-page-section">
+    <main className="mobile-page mobile-archive-page mobile-playback-page">
+      <header className="mobile-archive-hero">
+        <span>对局卷宗</span>
         <h1>移动复盘</h1>
+        <p>复核整局走势、关键轮次和每位玩家的私有摘要。</p>
         {gameId ? (
           <Link
             className="mobile-button mobile-session-link"
@@ -46,7 +48,14 @@ export function PlaybackPage() {
 
       {playback ? (
         <>
-          <section aria-label="复盘概要" className="mobile-session-card">
+          <section
+            aria-label="复盘概要"
+            className="mobile-archive-card mobile-playback-summary"
+          >
+            <div className="mobile-archive-card-heading">
+              <span>战报摘要</span>
+              <strong>{winner ? `${winner} 胜利` : "未决出"}</strong>
+            </div>
             <dl className="mobile-session-meta">
               <div>
                 <dt>会话</dt>
@@ -57,7 +66,7 @@ export function PlaybackPage() {
                 <dd>{playback.status}</dd>
               </div>
               <div>
-                <dt>胜者</dt>
+                <dt>胜者阵营</dt>
                 <dd>{winner ?? "未决出"}</dd>
               </div>
               <div>
@@ -72,6 +81,7 @@ export function PlaybackPage() {
           </section>
 
           <section aria-label="轮次摘要" className="mobile-replay-rounds">
+            <h2>轮次记录</h2>
             {rounds.length > 0 ? (
               rounds.map((round) => (
                 <details className="mobile-replay-details" key={round.number}>

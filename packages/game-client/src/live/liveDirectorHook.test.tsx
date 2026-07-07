@@ -82,4 +82,21 @@ describe("useLiveDirector seekToEventId", () => {
     expect(result.current.currentEventId).toBe(3);
     expect(result.current.currentCue?.phase).toBe("night");
   });
+
+  it("can start live playback at the first requested event type", () => {
+    const startupEvents = [
+      event({ id: 1, type: "run_created" }),
+      event({ id: 2, type: "run_started" }),
+      event({ id: 3, type: "game_started" }),
+      event({ id: 4, type: "phase_started", round: 1, phase: "night" }),
+    ];
+
+    const { result } = renderHook(() =>
+      useLiveDirector(startupEvents, { startAtEventType: "game_started" }),
+    );
+
+    expect(result.current.currentEventId).toBe(3);
+    expect(result.current.currentCue?.type).toBe("game_started");
+    expect(result.current.backlogCount).toBe(1);
+  });
 });

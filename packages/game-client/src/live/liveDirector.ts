@@ -40,6 +40,7 @@ export type UseLiveDirectorResult = {
 
 type UseLiveDirectorOptions = {
   resetKey?: string;
+  startAtEventType?: string;
   startAtLatestTerminal?: boolean;
 };
 
@@ -118,11 +119,19 @@ export function useLiveDirector(
         ),
     [cues],
   );
-  const [currentEventId, setCurrentEventId] = useState<number | null>(
+  const firstRequestedStartCue = useMemo(
     () =>
-      options.startAtLatestTerminal && latestTerminalCue
-        ? latestTerminalCue.eventId
-        : (cues[0]?.eventId ?? null),
+      options.startAtEventType
+        ? cues.find((cue) => cue.type === options.startAtEventType)
+        : undefined,
+    [cues, options.startAtEventType],
+  );
+  const preferredStartEventId =
+    options.startAtLatestTerminal && latestTerminalCue
+      ? latestTerminalCue.eventId
+      : (firstRequestedStartCue?.eventId ?? null);
+  const [currentEventId, setCurrentEventId] = useState<number | null>(
+    () => preferredStartEventId ?? cues[0]?.eventId ?? null,
   );
   const [isPaused, setIsPaused] = useState(false);
   const [speed, setSpeedState] = useState<LiveDirectorSpeed>(1);
@@ -134,6 +143,9 @@ export function useLiveDirector(
     options.startAtLatestTerminal && latestTerminalCue
       ? latestTerminalCue.eventId
       : null,
+  );
+  const autoStartedEventTypeIdRef = useRef<number | null>(
+    firstRequestedStartCue?.eventId ?? null,
   );
 
   useEffect(() => {
@@ -148,6 +160,23 @@ export function useLiveDirector(
     autoStartedTerminalEventIdRef.current = latestTerminalCue.eventId;
     setCurrentEventId(latestTerminalCue.eventId);
   }, [latestTerminalCue, options.startAtLatestTerminal]);
+
+  useEffect(() => {
+    if (!options.startAtEventType || !firstRequestedStartCue) {
+      return;
+    }
+
+    if (autoStartedEventTypeIdRef.current === firstRequestedStartCue.eventId) {
+      return;
+    }
+
+    autoStartedEventTypeIdRef.current = firstRequestedStartCue.eventId;
+    setCurrentEventId((current) =>
+      current === null || current < firstRequestedStartCue.eventId
+        ? firstRequestedStartCue.eventId
+        : current,
+    );
+  }, [firstRequestedStartCue, options.startAtEventType]);
 
   const currentIndex = useMemo(() => {
     if (cues.length === 0) {
@@ -183,6 +212,7 @@ export function useLiveDirector(
     lastStartedEventIdRef.current = null;
     pausedAtRef.current = null;
     autoStartedTerminalEventIdRef.current = null;
+    autoStartedEventTypeIdRef.current = null;
     setCurrentEventId(null);
     setIsPaused(false);
     setSpeedState(1);

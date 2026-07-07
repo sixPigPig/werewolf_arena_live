@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -135,5 +136,31 @@ describe("PlaybackPage", () => {
     expect(screen.getByText("第 1 轮")).toBeVisible();
     expect(screen.getByText("白石被投票放逐。")).toBeInTheDocument();
     expect(gameClientMocks.getGamePlayback).toHaveBeenCalledWith("session-1");
+  });
+
+  it("presents the replay as a gothic match dossier", async () => {
+    renderPlaybackRoute();
+
+    const dossier = await screen.findByRole("region", { name: "复盘概要" });
+    expect(dossier).toHaveClass("mobile-archive-card");
+    expect(dossier).toHaveClass("mobile-playback-summary");
+    expect(screen.getByText("对局卷宗")).toBeVisible();
+    expect(screen.getByText("胜者阵营")).toBeVisible();
+    expect(screen.getByText("轮次记录")).toBeVisible();
+  });
+
+  it("styles archive pages with the shared gothic dossier system", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const archivePageRule =
+      styles.match(/(?:^|\n)\.mobile-archive-page\s*{[^}]+}/)?.[0] ?? "";
+    const archiveCardRule =
+      styles.match(/(?:^|\n)\.mobile-archive-card\s*{[^}]+}/)?.[0] ?? "";
+    const archiveButtonRule =
+      styles.match(/(?:^|\n)\.mobile-archive-page \.mobile-button\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(archivePageRule).toContain("mobile-gothic-castle-background.png");
+    expect(archiveCardRule).toContain("lobby-action-bar-bg.png");
+    expect(archiveCardRule).toContain("border-radius: 0");
+    expect(archiveButtonRule).toContain("border-radius: 0");
   });
 });

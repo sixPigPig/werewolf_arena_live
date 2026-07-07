@@ -86,6 +86,29 @@ const gameStartedEvent: LiveGameEvent = {
   },
 };
 
+const runCreatedEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 1,
+  type: "run_created",
+  round: null,
+  phase: null,
+  payload: { session_id: "session-1" },
+};
+
+const runStartedEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "run_started",
+  round: null,
+  phase: null,
+  payload: {},
+};
+
+const startupGameStartedEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 3,
+};
+
 const speakingDeltaEvent: LiveGameEvent = {
   ...gameStartedEvent,
   id: 2,
@@ -197,7 +220,7 @@ describe("LivePage", () => {
     ).toBeVisible();
     expect((await screen.findAllByText("经典 8 人"))[0]).toBeVisible();
     expect(screen.queryByText("连接正常")).not.toBeInTheDocument();
-    expect(screen.getByText("game_started")).toBeVisible();
+    expect(screen.getByText("对局开始")).toBeVisible();
     expect(screen.getByText("第 1 天")).toBeVisible();
     expect(
       screen.getByRole("region", { name: "玩家席位" }),
@@ -210,6 +233,23 @@ describe("LivePage", () => {
     ).toBeVisible();
     expect(gameClientMocks.getGameRun).toHaveBeenCalledWith("run-1");
     expect(gameClientMocks.useGameRunEvents).toHaveBeenCalledWith("run-1");
+  });
+
+  it("starts live theater from game_started so startup events do not delay player entry", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [runCreatedEvent, runStartedEvent, startupGameStartedEvent],
+      latestEvent: startupGameStartedEvent,
+    });
+
+    renderLiveRoute();
+
+    expect(
+      await screen.findByRole("article", { name: "1号 阿青 平民 存活" }),
+    ).toBeVisible();
+    expect(screen.getByText("对局开始")).toBeVisible();
+    expect(screen.queryByText("运行已创建")).not.toBeInTheDocument();
+    expect(screen.queryByText("运行已开始")).not.toBeInTheDocument();
   });
 
   it("renders live seat avatars through API asset URLs", async () => {
@@ -226,6 +266,50 @@ describe("LivePage", () => {
     );
   });
 
+  it("renders live seats as gothic HUD medals with separate nameplates", async () => {
+    renderLiveRoute();
+
+    const seat = await screen.findByRole("article", {
+      name: "1号 阿青 平民 存活",
+    });
+
+    expect(seat.querySelector(".mobile-live-seat-medal")).not.toBeNull();
+    expect(seat.querySelector(".mobile-live-seat-nameplate")).not.toBeNull();
+    expect(seat.querySelector(".mobile-live-seat-status")).toHaveTextContent("存活");
+  });
+
+  it("stagger-reveals live seats from paired left and right first positions", async () => {
+    renderLiveRoute();
+
+    const leftFirstSeat = await screen.findByRole("article", {
+      name: "1号 阿青 平民 存活",
+    });
+    const leftSecondSeat = screen.getByRole("article", {
+      name: "2号 白石 狼人 存活",
+    });
+    const rightFirstSeat = screen.getByRole("article", {
+      name: "3号 南风 预言家 存活",
+    });
+    const rightSecondSeat = screen.getByRole("article", {
+      name: "4号 木子 女巫 存活",
+    });
+
+    expect(leftFirstSeat).toHaveClass("mobile-live-seat-reveal-left");
+    expect(rightFirstSeat).toHaveClass("mobile-live-seat-reveal-right");
+    expect(leftFirstSeat.getAttribute("style")).toContain(
+      "--mobile-live-seat-reveal-delay: 0ms",
+    );
+    expect(rightFirstSeat.getAttribute("style")).toContain(
+      "--mobile-live-seat-reveal-delay: 0ms",
+    );
+    expect(leftSecondSeat.getAttribute("style")).toContain(
+      "--mobile-live-seat-reveal-delay: 90ms",
+    );
+    expect(rightSecondSeat.getAttribute("style")).toContain(
+      "--mobile-live-seat-reveal-delay: 90ms",
+    );
+  });
+
   it("renders the current stage presenter with the speaker avatar asset", async () => {
     gameClientMocks.useGameRunEvents.mockReturnValue({
       connectionState: "open",
@@ -237,7 +321,8 @@ describe("LivePage", () => {
 
     const stage = await screen.findByRole("region", { name: "当前舞台" });
     expect(within(stage).getByText("阿青")).toBeVisible();
-    expect(within(stage).getByText("model_response_delta")).toBeVisible();
+    expect(within(stage).getByText("公开发言")).toBeVisible();
+    expect(within(stage).queryByText("model_response_delta")).not.toBeInTheDocument();
 
     const presenterImage = stage.querySelector(".mobile-live-presenter img");
     expect(presenterImage).toHaveAttribute(
@@ -334,6 +419,19 @@ describe("LivePage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders the director controls with gothic icon slots", async () => {
+    renderLiveRoute();
+
+    await screen.findByRole("button", { name: "暂停" });
+
+    for (const name of ["暂停", "1x", "最新", "复盘"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.querySelector(".mobile-live-control-icon")).not.toBeNull();
+      expect(button.querySelector(".mobile-live-control-label")).toHaveTextContent(name);
+    }
+    expect(screen.getByRole("button", { name: "复盘" })).toBeDisabled();
+  });
+
   it("hides the bottom mobile tab bar on the immersive live page", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
     const tabBarRule =
@@ -366,7 +464,7 @@ describe("LivePage", () => {
     expect(theaterRule).toContain("height: 100%");
     expect(theaterRule).toContain("min-height: 0");
     expect(theaterRule).toContain(
-      "padding: calc(10px + env(safe-area-inset-top)) 0 calc(10px + env(safe-area-inset-bottom))",
+      "padding: calc(12px + env(safe-area-inset-top)) 0 calc(10px + env(safe-area-inset-bottom))",
     );
     expect(statusBannerRule).toContain("right: var(--mobile-page-padding-inline)");
     expect(statusBannerRule).toContain("left: var(--mobile-page-padding-inline)");
@@ -400,23 +498,73 @@ describe("LivePage", () => {
     expect(backButtonRule).toContain("position: absolute");
     expect(backButtonRule).toContain("left: 0");
     expect(genericTopBarDivRule).toBe("");
-    expect(titleBoardRule).toContain("mobile-live-title-board-bg.png");
+    expect(titleBoardRule).toContain("lobby-wide-title-board.png");
     expect(titleBoardRule).toContain("background: transparent");
     expect(titleBoardRule).toContain("position: absolute");
     expect(titleBoardRule).toContain("left: 50%");
     expect(titleBoardRule).toContain("translate(-50%, -50%)");
-    expect(titleBoardRule).toContain("width: min(48%, 360px)");
-    expect(skyOrbRule).toContain("border: 4px double");
+    expect(titleBoardRule).toContain("width: min(56%, 340px)");
+    expect(titleBoardRule).toContain("lobby-wide-title-board.png");
+    expect(skyOrbRule).toContain("border: 3px double");
     expect(presenterRule).toContain("aspect-ratio: 0.66");
     expect(focusRule).toContain("grid-template-columns: 42px minmax(0, 1fr) auto");
+  });
+
+  it("styles the selected transparent director HUD reference", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const dayBannerRule =
+      styles.match(/(?:^|\n)\.mobile-live-day-banner\s*{[^}]+}/)?.[0] ?? "";
+    const seatStageAfterRule =
+      [...styles.matchAll(/(?:^|\n)\.mobile-live-seat-stage::after\s*{[^}]+}/g)]
+        .map((match) => match[0])
+        .find((rule) => rule.includes("radial-gradient(ellipse at 50% 88%")) ?? "";
+    const seatMedalRule =
+      styles.match(/(?:^|\n)\.mobile-live-seat-medal\s*{[^}]+}/)?.[0] ?? "";
+    const nameplateRule =
+      styles.match(/(?:^|\n)\.mobile-live-seat-nameplate\s*{[^}]+}/)?.[0] ?? "";
+    const actionBarRule =
+      styles.match(/(?:^|\n)\.mobile-live-action-bar\s*{[^}]+}/)?.[0] ?? "";
+    const actionButtonRule =
+      styles.match(
+        /(?:^|\n)\.mobile-live-action-bar \.mobile-button,\s*\n\.mobile-live-link\s*{[^}]+}/,
+      )?.[0] ?? "";
+
+    expect(dayBannerRule).toContain("lobby-action-bar-bg.png");
+    expect(dayBannerRule).toContain("border-radius: 0");
+    expect(dayBannerRule).toContain("right: calc(-1 * var(--mobile-page-padding-inline))");
+    expect(dayBannerRule).toContain("left: calc(-1 * var(--mobile-page-padding-inline))");
+    expect(dayBannerRule).toContain("min-height: 64px");
+    expect(dayBannerRule).toContain("rgb(106 15 24 / 44%)");
+    expect(seatStageAfterRule).toContain("radial-gradient(ellipse at 50% 88%");
+    expect(seatMedalRule).toContain("lobby-profile-card-light-frame-alpha.png");
+    expect(nameplateRule).toContain("lobby-settings-field-bg.png");
+    expect(actionBarRule).toContain("lobby-action-bar-bg.png");
+    expect(actionBarRule).toContain("grid-template-columns: repeat(4, minmax(0, 1fr))");
+    expect(actionButtonRule).toContain("border-radius: 0");
+  });
+
+  it("defines staged reveal motion for live seats with reduced-motion fallback", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const seatRule =
+      styles.match(/(?:^|\n)\.mobile-live-seat\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(seatRule).toContain("animation: mobile-live-seat-reveal");
+    expect(styles).toContain("@keyframes mobile-live-seat-reveal");
+    expect(styles).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) {[\s\S]*?\.mobile-live-seat\s*{[^}]+animation: none/,
+    );
   });
 
   it("styles the mobile day panel below the top-right day trigger", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
     const phaseBarRule =
       styles.match(/(?:^|\n)\.mobile-live-phase-bar\s*{[^}]+}/)?.[0] ?? "";
+    const triggerRule =
+      styles.match(/(?:^|\n)\.mobile-live-phase-trigger\s*{[^}]+}/)?.[0] ?? "";
     const popoverRule =
       styles.match(/(?:^|\n)\.mobile-live-phase-popover\s*{[^}]+}/)?.[0] ?? "";
+    const currentButtonRule =
+      styles.match(/(?:^|\n)\.mobile-live-phase-button-current\s*{[^}]+}/)?.[0] ?? "";
     const theaterRule =
       styles.match(/(?:^|\n)\.mobile-live-theater\s*{[^}]+}/)?.[0] ?? "";
 
@@ -426,20 +574,23 @@ describe("LivePage", () => {
     expect(phaseBarRule).toContain("position: absolute");
     expect(phaseBarRule).toContain("right: 0");
     expect(phaseBarRule).toContain("top: calc(50% - 17px)");
+    expect(phaseBarRule).toContain("width: var(--mobile-live-phase-width)");
     expect(phaseBarRule).not.toContain("transform");
-    expect(popoverRule).toContain("position: fixed");
-    expect(popoverRule).toContain("top: calc(118PX + env(safe-area-inset-top))");
-    expect(popoverRule).toContain(
-      "right: max(16PX, env(safe-area-inset-right))",
-    );
+    expect(triggerRule).toContain("border-radius: 0");
+    expect(triggerRule).toContain("width: 100%");
+    expect(popoverRule).toContain("position: absolute");
+    expect(popoverRule).toContain("top: calc(100% - 1px)");
+    expect(popoverRule).toContain("right: 0");
     expect(popoverRule).toContain("left: auto");
     expect(popoverRule).toContain("transform: none");
-    expect(popoverRule).toContain("width: 176PX");
+    expect(popoverRule).toContain("width: 100%");
     expect(popoverRule).toContain(
-      "max-height: min(380PX, calc(100svh - 136PX))",
+      "max-height: min(380PX, calc(100svh - 76PX))",
     );
+    expect(popoverRule).toContain("border-radius: 0");
     expect(popoverRule).toContain("backdrop-filter: blur(14px)");
-    expect(popoverRule).toContain("background: rgb(6 9 14 / 78%)");
+    expect(popoverRule).toContain("background: rgb(6 9 14 / 62%)");
+    expect(currentButtonRule).toContain("border-radius: 0");
   });
 
   it("uses a transparent lobby back button asset", () => {
@@ -503,7 +654,7 @@ describe("LivePage", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
 
     expect(styles).toMatch(
-      /@media \(max-height: 860px\) {[\s\S]*?\.mobile-live-seat-avatar\s*{[^}]+width: clamp\(34px, 10\.8vw, 42px\)/,
+      /@media \(max-height: 860px\) {[\s\S]*?\.mobile-live-seat-medal\s*{[^}]+width: clamp\(38px, 11\.2vw, 48px\)/,
     );
     expect(styles).toMatch(
       /@media \(max-height: 700px\) {[\s\S]*?\.mobile-live-seat small\s*{[^}]+display: none/,

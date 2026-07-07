@@ -48,6 +48,7 @@ export function LivePage() {
   const terminalEvent = events.find(isTerminalEvent);
   const director = useLiveDirector(events, {
     resetKey: gameId,
+    startAtEventType: "game_started",
     startAtLatestTerminal: isTerminalRunStatus(run?.status),
   });
   const stageEvents = useMemo(() => {

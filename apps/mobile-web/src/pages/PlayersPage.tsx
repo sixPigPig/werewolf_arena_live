@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 
 import {
   listPlayerProfiles,
@@ -14,8 +15,9 @@ export function PlayersPage() {
   const profiles = playerProfilesQuery.data?.profiles ?? [];
 
   return (
-    <main className="mobile-page">
-      <header className="mobile-page-section">
+    <main className="mobile-page mobile-archive-page mobile-players-page">
+      <header className="mobile-archive-hero">
+        <span>角色档案库</span>
         <h1>玩家图鉴</h1>
         <p>编辑能力不在第一版范围内</p>
       </header>
@@ -36,7 +38,11 @@ export function PlayersPage() {
             const avatarImageUrl = resolveAvatarImageUrl(profile);
 
             return (
-              <article className="mobile-player-card" key={profile.id}>
+              <article
+                aria-label={`${profile.display_name} 档案`}
+                className="mobile-archive-card mobile-player-card mobile-player-dossier-card"
+                key={profile.id}
+              >
                 {avatarImageUrl ? (
                   <img
                     alt={`${profile.display_name} 头像`}
@@ -71,6 +77,13 @@ export function PlayersPage() {
                       说话风格：{profile.speaking_style}
                     </p>
                   ) : null}
+                  <Link
+                    aria-label={`查看${profile.display_name}档案`}
+                    className="mobile-button mobile-session-link mobile-player-detail-link"
+                    to={`/players/${profile.id}`}
+                  >
+                    查看档案
+                  </Link>
                 </div>
               </article>
             );

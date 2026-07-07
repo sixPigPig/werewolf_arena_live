@@ -107,6 +107,11 @@ describe("HistoryPage", () => {
     expect(
       screen.getByRole("link", { name: "直播回放 session-1" }),
     ).toHaveAttribute("href", "/games/session-1/live-replay");
+    expect(screen.getByRole("main")).toHaveClass("mobile-archive-page");
+    expect(screen.getByText("对局档案库")).toBeVisible();
+    const card = screen.getByRole("article", { name: "session-1 对局档案" });
+    expect(card).toHaveClass("mobile-archive-card");
+    expect(card).toHaveClass("mobile-history-card");
 
     await user.click(screen.getByRole("button", { name: "继续对局 session-1" }));
 

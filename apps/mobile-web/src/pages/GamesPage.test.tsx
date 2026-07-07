@@ -505,7 +505,7 @@ function expectLobbyButtonBackgroundAssets() {
     [".mobile-lobby-clear-seats", "button-clear-seats.png"],
     [".mobile-lobby-clear-seats:disabled", "button-clear-disabled.png"],
     [".mobile-lobby-clear-confirming", "button-clear-confirm.png"],
-    [".mobile-lobby-launch-auto-fill", "button-launch-autofill.png"],
+    [".mobile-lobby-random-fill", "button-launch-autofill.png"],
     [".mobile-lobby-launch-ready", "button-launch-ready.png"],
     [".mobile-lobby-launch-shortage", "button-launch-shortage.png"],
     [".mobile-lobby-launch-pending", "button-launch-pending.png"],
@@ -552,12 +552,12 @@ function expectLobbyButtonBackgroundAssets() {
     ).toBeGreaterThan(240);
   }
 
-  const autoFillLaunchRule =
+  const randomFillRule =
     styles.match(
-      /\.mobile-lobby-action-bar\s+\.mobile-lobby-launch-auto-fill\s*{[^}]+}/,
+      /\.mobile-lobby-action-bar\s+\.mobile-lobby-random-fill\s*{[^}]+}/,
     )?.[0] ?? "";
-  expect(autoFillLaunchRule).toContain("color: #fff7d6");
-  expect(autoFillLaunchRule).toContain("0 2px 2px rgb(0 0 0 / 92%)");
+  expect(randomFillRule).toContain("color: #fff7d6");
+  expect(randomFillRule).toContain("0 2px 2px rgb(0 0 0 / 92%)");
 }
 
 describe("GamesPage", () => {
@@ -938,29 +938,59 @@ describe("GamesPage", () => {
     expect(seatCardTextRule).toContain("font-weight: 800");
   });
 
-  it("auto-fills empty seats on the first launch tap and creates on the second", async () => {
+  it("opens fill choices before creating from a completed lineup", async () => {
     const user = userEvent.setup();
     const { router } = renderGamesPage();
 
     expect(
       screen.queryByRole("button", { name: "随机补齐" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "收藏补齐" })).toHaveClass(
-      "mobile-lobby-favorite-fill",
+    expect(
+      screen.queryByRole("button", { name: "收藏补齐" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "补齐席位" })).toHaveClass(
+      "mobile-lobby-fill-toggle",
     );
     expect(screen.getByRole("button", { name: "清空席位" })).toHaveClass(
       "mobile-lobby-clear-seats",
     );
 
-    const fillLaunchButton = await screen.findByRole("button", {
-      name: "补齐发起",
+    await screen.findByText("已选 0/2 · 可自动补齐");
+    const disabledLaunchButton = screen.getByRole("button", {
+      name: "开始对局",
     });
-    expect(fillLaunchButton).toHaveClass("mobile-lobby-launch-auto-fill");
+    expect(disabledLaunchButton).toBeDisabled();
+    expect(disabledLaunchButton).toHaveClass("mobile-lobby-launch-ready");
+    expect(disabledLaunchButton).not.toHaveClass("mobile-lobby-launch-auto-fill");
 
-    await user.click(fillLaunchButton);
+    await user.click(screen.getByRole("button", { name: "补齐席位" }));
+
+    expect(screen.getByRole("button", { name: "收藏补齐" })).toHaveClass(
+      "mobile-lobby-favorite-fill",
+    );
+    expect(screen.getByRole("button", { name: "随机补齐" })).toHaveClass(
+      "mobile-lobby-random-fill",
+    );
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const fillOptionsRule =
+      styles.match(/\.mobile-lobby-fill-options\s*{[^}]+}/)?.[0] ?? "";
+    const fillOptionsArrowRule =
+      styles.match(/\.mobile-lobby-fill-options::after\s*{[^}]+}/)?.[0] ?? "";
+    expect(fillOptionsRule).toContain("position: absolute");
+    expect(fillOptionsRule).not.toContain("grid-column");
+    expect(fillOptionsRule).toContain("border:");
+    expect(fillOptionsRule).toContain("padding:");
+    expect(fillOptionsRule).toContain("background:");
+    expect(fillOptionsArrowRule).toContain("position: absolute");
+    expect(fillOptionsArrowRule).toContain("transform:");
+
+    await user.click(screen.getByRole("button", { name: "随机补齐" }));
 
     expect(await screen.findByText("已选 2/2 · 阵容已就绪")).toBeVisible();
-    const readyLaunchButton = screen.getByRole("button", { name: "发起对局" });
+    expect(
+      screen.queryByRole("button", { name: "随机补齐" }),
+    ).not.toBeInTheDocument();
+    const readyLaunchButton = screen.getByRole("button", { name: "开始对局" });
     expect(readyLaunchButton).toBeEnabled();
     expect(readyLaunchButton).toHaveClass("mobile-lobby-launch-ready");
     expect(readyLaunchButton).not.toHaveClass("mobile-lobby-launch-auto-fill");
@@ -1049,7 +1079,9 @@ describe("GamesPage", () => {
     await user.click(screen.getByRole("button", { name: "清空席位" }));
     expect(screen.getByRole("button", { name: "确认清空" })).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "补齐发起" }));
+    await user.click(screen.getByRole("button", { name: "补齐席位" }));
+    await user.click(screen.getByRole("button", { name: "随机补齐" }));
+    await user.click(screen.getByRole("button", { name: "开始对局" }));
 
     expect(screen.getByText("最大轮数必须是 1 到 20 的整数")).toBeVisible();
     expect(screen.getByRole("button", { name: "清空席位" })).toBeVisible();
@@ -1062,8 +1094,9 @@ describe("GamesPage", () => {
     );
     renderGamesPage();
 
-    await user.click(await screen.findByRole("button", { name: "补齐发起" }));
-    await user.click(screen.getByRole("button", { name: "发起对局" }));
+    await user.click(await screen.findByRole("button", { name: "补齐席位" }));
+    await user.click(screen.getByRole("button", { name: "随机补齐" }));
+    await user.click(screen.getByRole("button", { name: "开始对局" }));
 
     expect(screen.getByRole("button", { name: "发起中" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "发起中" })).toHaveClass(
@@ -1082,34 +1115,31 @@ describe("GamesPage", () => {
       screen.queryByRole("button", { name: "随机补齐" }),
     ).not.toBeInTheDocument();
     expect(await screen.findByText("已选 0/2 · 还差 1 名玩家")).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "还差 1 名玩家" }),
-    ).toBeDisabled();
-    expect(screen.getByRole("button", { name: "还差 1 名玩家" })).toHaveClass(
-      "mobile-lobby-launch-shortage",
-    );
+    expect(screen.getByRole("button", { name: "开始对局" })).toBeDisabled();
     expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
   });
 
-  it("labels launch as auto-fill when empty seats can be completed from the library", async () => {
+  it("disables launch until empty seats are completed from the library", async () => {
     renderGamesPage();
 
     expect(await screen.findByText("已选 0/2 · 可自动补齐")).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "补齐发起" }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "开始对局" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始对局" })).toHaveClass(
+      "mobile-lobby-launch-ready",
+    );
 
     expectLobbyButtonBackgroundAssets();
   });
 
-  it("shows a ready launch state when every seat has a player", async () => {
+  it("shows a confirm launch state when every seat has a player", async () => {
     const user = userEvent.setup();
     renderGamesPage();
 
-    await user.click(await screen.findByRole("button", { name: "补齐发起" }));
+    await user.click(await screen.findByRole("button", { name: "补齐席位" }));
+    await user.click(screen.getByRole("button", { name: "随机补齐" }));
 
     expect(await screen.findByText("已选 2/2 · 阵容已就绪")).toBeVisible();
-    expect(screen.getByRole("button", { name: "发起对局" })).toHaveClass(
+    expect(screen.getByRole("button", { name: "开始对局" })).toHaveClass(
       "mobile-lobby-launch-ready",
     );
   });
@@ -1121,9 +1151,7 @@ describe("GamesPage", () => {
     renderGamesPage();
 
     expect(await screen.findByText("已选 0/2 · 还差 1 名玩家")).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "还差 1 名玩家" }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始对局" })).toBeDisabled();
     expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
   });
 

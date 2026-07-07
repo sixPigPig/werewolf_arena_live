@@ -1,7 +1,12 @@
+import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
+import { Gauge, Mic, Pause, Play, Radio, RotateCcw } from "lucide-react";
 
 import {
+  actionLabel,
   deriveGodViewState,
+  liveEventTitle,
+  phaseLabel,
   resolveAvatarImageUrl,
   useLiveDirector,
   type GameRunStatus,
@@ -15,6 +20,8 @@ import { MobileLivePhaseBar } from "./MobileLivePhaseBar";
 
 type LiveDirectorControlsState = ReturnType<typeof useLiveDirector>;
 type GodViewState = ReturnType<typeof deriveGodViewState>;
+
+const LIVE_SEAT_REVEAL_STAGGER_MS = 90;
 
 export type MobileLiveTheaterRun = {
   session_id: string;
@@ -153,8 +160,13 @@ type LiveSeatColumnProps = {
 export function LiveSeatColumn({ players, side }: LiveSeatColumnProps) {
   return (
     <div className={`mobile-live-seat-column mobile-live-seat-column-${side}`}>
-      {players.map((player) => (
-        <LiveSeatAvatar key={player.name} player={player} />
+      {players.map((player, index) => (
+        <LiveSeatAvatar
+          key={player.name}
+          player={player}
+          revealIndex={index}
+          revealSide={side}
+        />
       ))}
     </div>
   );
@@ -162,9 +174,15 @@ export function LiveSeatColumn({ players, side }: LiveSeatColumnProps) {
 
 type LiveSeatAvatarProps = {
   player: GodViewPlayer;
+  revealIndex?: number;
+  revealSide?: "left" | "right";
 };
 
-export function LiveSeatAvatar({ player }: LiveSeatAvatarProps) {
+export function LiveSeatAvatar({
+  player,
+  revealIndex = 0,
+  revealSide = "left",
+}: LiveSeatAvatarProps) {
   const roleLabel = roleShortLabel(player.role);
   const statusLabel = player.isSpeaking ? "发言中" : player.stageStatus.label;
   const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}`;
@@ -173,25 +191,33 @@ export function LiveSeatAvatar({ player }: LiveSeatAvatarProps) {
   });
   const className = [
     "mobile-live-seat",
+    `mobile-live-seat-reveal-${revealSide}`,
     player.isSpeaking ? "mobile-live-seat-speaking" : "",
     player.isAlive ? "" : "mobile-live-seat-out",
   ]
     .filter(Boolean)
     .join(" ");
+  const revealStyle = {
+    "--mobile-live-seat-reveal-delay": `${revealIndex * LIVE_SEAT_REVEAL_STAGGER_MS}ms`,
+  } as CSSProperties;
 
   return (
-    <article aria-label={seatLabel} className={className}>
-      <span className="mobile-live-seat-number">{player.seatNumber}</span>
-      <span className="mobile-live-seat-avatar">
-        {avatarImageUrl ? (
-          <img alt="" src={avatarImageUrl} />
-        ) : (
-          <span>{avatarInitial(player.name, player.seatNumber)}</span>
-        )}
+    <article aria-label={seatLabel} className={className} style={revealStyle}>
+      <span className="mobile-live-seat-medal">
+        <span className="mobile-live-seat-number">{player.seatNumber}</span>
+        <span className="mobile-live-seat-avatar">
+          {avatarImageUrl ? (
+            <img alt="" src={avatarImageUrl} />
+          ) : (
+            <span>{avatarInitial(player.name, player.seatNumber)}</span>
+          )}
+        </span>
+        <span className="mobile-live-seat-role">{roleLabel}</span>
       </span>
-      <span className="mobile-live-seat-role">{roleLabel}</span>
-      <strong>{player.name}</strong>
-      <small>{statusLabel}</small>
+      <span className="mobile-live-seat-nameplate">
+        <strong>{player.name}</strong>
+        <small className="mobile-live-seat-status">{statusLabel}</small>
+      </span>
     </article>
   );
 }
@@ -225,12 +251,19 @@ export function LiveCenterStage({
               : "?"}
           </span>
         )}
+        {currentPlayer ? (
+          <span className="mobile-live-presenter-mic">
+            <Mic aria-hidden="true" size={14} strokeWidth={2.8} />
+          </span>
+        ) : null}
       </div>
       <span>{currentPlayer ? `${currentPlayer.seatNumber}号` : "等待"}</span>
       <strong>{currentPlayer?.name ?? "等待玩家行动"}</strong>
       <em>{currentPlayer?.stageStatus.label ?? godViewState.currentSeatLabel}</em>
-      <p>{currentEvent?.type ?? "等待事件"}</p>
-      {currentEvent?.action ? <small>{currentEvent.action}</small> : null}
+      <p>{currentEvent ? liveStageEventLabel(currentEvent) : "等待事件"}</p>
+      {currentEvent?.phase ? (
+        <small>{phaseLabel(currentEvent.phase)}阶段</small>
+      ) : null}
     </section>
   );
 }
@@ -269,21 +302,38 @@ export function LiveTheaterControls({
           onClick={director.togglePaused}
           type="button"
         >
-          {director.isPaused ? "继续" : "暂停"}
+          <span className="mobile-live-control-icon">
+            {director.isPaused ? (
+              <Play aria-hidden="true" size={18} strokeWidth={2.8} />
+            ) : (
+              <Pause aria-hidden="true" size={18} strokeWidth={2.8} />
+            )}
+          </span>
+          <span className="mobile-live-control-label">
+            {director.isPaused ? "继续" : "暂停"}
+          </span>
         </button>
         <button
           className="mobile-button"
           onClick={() => director.setSpeed(director.speed === 1 ? 2 : 1)}
           type="button"
         >
-          {director.speed === 1 ? "1x" : "2x"}
+          <span className="mobile-live-control-icon">
+            <Gauge aria-hidden="true" size={18} strokeWidth={2.8} />
+          </span>
+          <span className="mobile-live-control-label">
+            {director.speed === 1 ? "1x" : "2x"}
+          </span>
         </button>
         <button
           className="mobile-button"
           onClick={director.catchUpToLatest}
           type="button"
         >
-          最新
+          <span className="mobile-live-control-icon">
+            <Radio aria-hidden="true" size={18} strokeWidth={2.8} />
+          </span>
+          <span className="mobile-live-control-label">最新</span>
         </button>
         {canResumeRun ? (
           <button
@@ -292,20 +342,38 @@ export function LiveTheaterControls({
             onClick={onResumeRun}
             type="button"
           >
-            {resumeIsPending ? "继续中" : "继续对局"}
+            <span className="mobile-live-control-icon">
+              <Play aria-hidden="true" size={18} strokeWidth={2.8} />
+            </span>
+            <span className="mobile-live-control-label">
+              {resumeIsPending ? "继续中" : "继续对局"}
+            </span>
           </button>
-        ) : null}
-        {replayLinkVisible ? (
+        ) : replayLinkVisible ? (
           <Link
             className="mobile-button mobile-live-link"
             to={`/games/${run.session_id}/replay`}
           >
-            复盘
+            <span className="mobile-live-control-icon">
+              <RotateCcw aria-hidden="true" size={18} strokeWidth={2.8} />
+            </span>
+            <span className="mobile-live-control-label">复盘</span>
           </Link>
-        ) : null}
+        ) : (
+          <button className="mobile-button mobile-live-link" disabled type="button">
+            <span className="mobile-live-control-icon">
+              <RotateCcw aria-hidden="true" size={18} strokeWidth={2.8} />
+            </span>
+            <span className="mobile-live-control-label">复盘</span>
+          </button>
+        )}
       </div>
     </footer>
   );
+}
+
+function liveStageEventLabel(event: LiveGameEvent) {
+  return event.action ? actionLabel(event.action) : liveEventTitle(event);
 }
 
 function getCurrentTheaterPlayer(state: GodViewState) {

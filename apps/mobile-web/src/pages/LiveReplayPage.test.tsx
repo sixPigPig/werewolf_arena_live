@@ -164,9 +164,14 @@ describe("LiveReplayPage", () => {
       await screen.findByRole("heading", { name: "历史直播回放" }),
     ).toHaveClass("mobile-sr-only");
     expect((await screen.findAllByText("经典 8 人"))[0]).toBeVisible();
+    expect(screen.getByRole("region", { name: "实时观战剧场" })).toHaveClass(
+      "mobile-live-theater",
+    );
+    expect(screen.getByText("历史回放")).toBeVisible();
 
     const stage = await screen.findByRole("region", { name: "当前舞台" });
-    expect(within(stage).getByText("game_started")).toBeVisible();
+    expect(within(stage).getByText("对局开始")).toBeVisible();
+    expect(within(stage).queryByText("game_started")).not.toBeInTheDocument();
     expect(
       within(stage).queryByText("model_response_delta"),
     ).not.toBeInTheDocument();

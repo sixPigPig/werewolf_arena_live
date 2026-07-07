@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlayersPage } from "./PlayersPage";
@@ -69,7 +70,9 @@ function renderWithQueryClient(ui: ReactNode) {
   });
 
   return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -100,6 +103,10 @@ describe("PlayersPage", () => {
     expect(await screen.findByText("月下猎人")).toBeVisible();
     expect(screen.getByText("deepseek-v4-flash")).toBeVisible();
     expect(screen.getByText("冷静复盘型玩家")).toBeVisible();
+    expect(screen.getByRole("link", { name: "查看月下猎人档案" })).toHaveAttribute(
+      "href",
+      "/players/moon-hunter",
+    );
     const tags = screen.getByRole("list", { name: "玩家标签" });
     expect(within(tags).getByRole("listitem")).toHaveTextContent("控场");
     expect(screen.getByText("编辑能力不在第一版范围内")).toBeVisible();
@@ -170,5 +177,14 @@ describe("PlayersPage", () => {
     expect(source).toContain(
       'useQuery({\n    queryKey: ["player-profiles"],\n    queryFn: listPlayerProfiles,\n  })',
     );
+  });
+
+  it("uses the gothic player atlas card system", async () => {
+    renderWithQueryClient(<PlayersPage />);
+
+    const card = await screen.findByRole("article", { name: "月下猎人 档案" });
+    expect(card).toHaveClass("mobile-archive-card");
+    expect(card).toHaveClass("mobile-player-dossier-card");
+    expect(screen.getByText("角色档案库")).toBeVisible();
   });
 });

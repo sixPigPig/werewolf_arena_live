@@ -25,9 +25,11 @@ export function HistoryPage() {
   const sessions = gamesQuery.data?.sessions ?? [];
 
   return (
-    <main className="mobile-page">
-      <header className="mobile-page-section">
+    <main className="mobile-page mobile-archive-page mobile-history-page">
+      <header className="mobile-archive-hero">
+        <span>对局档案库</span>
         <h1>对局历史</h1>
+        <p>回看已完成的战局，或从保存点继续一局未完的夜色。</p>
         <button
           className="mobile-button"
           disabled={gamesQuery.isFetching}
@@ -84,7 +86,10 @@ function HistorySessionCard({
   const canResume = session.resumable === true;
 
   return (
-    <article className="mobile-session-card">
+    <article
+      aria-label={`${session.session_id} 对局档案`}
+      className="mobile-archive-card mobile-history-card mobile-session-card"
+    >
       <div className="mobile-session-card-heading">
         <h2>{session.session_id}</h2>
         <span>{formatStatus(session.status)}</span>
