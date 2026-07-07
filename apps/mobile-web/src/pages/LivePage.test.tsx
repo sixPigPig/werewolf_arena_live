@@ -501,6 +501,19 @@ describe("LivePage", () => {
       styles.match(
         /@media \(max-height: 860px\) {[\s\S]*?\.mobile-live-subtitle strong,\s*\n\s*\.mobile-live-subtitle span\s*{[^}]+}/,
       )?.[0] ?? "";
+    const accentFromRule = (rule: string) =>
+      rule.match(/--mobile-live-subtitle-accent:\s*(#[0-9a-fA-F]{6})/)?.[1] ?? "";
+    const judgeAccent = accentFromRule(judgeRule);
+    const playerAccents = Array.from({ length: 8 }, (_, index) => {
+      const playerRule =
+        styles.match(
+          new RegExp(
+            String.raw`(?:^|\n)\.mobile-live-subtitle-player-${index}\s*{[^}]+}`,
+          ),
+        )?.[0] ?? "";
+
+      return accentFromRule(playerRule);
+    });
 
     expect(subtitleRule).toContain("max-width: 100%");
     expect(subtitleRule).toContain("grid-template-columns: auto minmax(0, 1fr)");
@@ -509,6 +522,8 @@ describe("LivePage", () => {
     expect(judgeRule).toContain("--mobile-live-subtitle-accent: #f4c76d");
     expect(playerZeroRule).toContain("--mobile-live-subtitle-accent: #8ddfd0");
     expect(styles).toContain(".mobile-live-subtitle-player-7");
+    expect(playerAccents).not.toContain("");
+    expect(playerAccents).not.toContain(judgeAccent);
     expect(shortScreenRule).toContain("font-size: 11px");
   });
 
