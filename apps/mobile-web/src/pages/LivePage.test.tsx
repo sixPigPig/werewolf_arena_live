@@ -148,6 +148,15 @@ const backlogSpeakingDeltaEvent: LiveGameEvent = {
   },
 };
 
+const speechRequestEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "model_request_started",
+  actor: "阿青",
+  action: "debate",
+  payload: { request_id: "req-judge-speech" },
+};
+
 const nightPhaseEvent: LiveGameEvent = {
   ...gameStartedEvent,
   id: 2,
@@ -416,6 +425,65 @@ describe("LivePage", () => {
     expect(within(stage).queryByText("阿青")).not.toBeInTheDocument();
     expect(
       within(stage).queryByText("model_response_delta"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders a lower-third subtitle for public player speech", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, backlogRequestEvent, backlogSpeakingDeltaEvent],
+      latestEvent: backlogSpeakingDeltaEvent,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const subtitle = await screen.findByRole("status", {
+      name: "直播字幕",
+    });
+
+    expect(subtitle).toHaveClass("mobile-live-subtitle");
+    expect(subtitle).toHaveClass("mobile-live-subtitle-player-0");
+    expect(within(subtitle).getByText("阿青")).toBeVisible();
+    expect(within(subtitle).getByText("我先听后置位发言。")).toBeVisible();
+  });
+
+  it("renders a judge subtitle for public speech prompts", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, speechRequestEvent],
+      latestEvent: speechRequestEvent,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const subtitle = await screen.findByRole("status", {
+      name: "直播字幕",
+    });
+
+    expect(subtitle).toHaveClass("mobile-live-subtitle-judge");
+    expect(within(subtitle).getByText("法官")).toBeVisible();
+    expect(within(subtitle).getByText("请听 阿青 的发言。")).toBeVisible();
+  });
+
+  it("does not render subtitles for non-speech live events", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent],
+      latestEvent: gameStartedEvent,
+    });
+
+    renderLiveRoute();
+
+    await screen.findByRole("region", { name: "当前舞台" });
+
+    expect(
+      screen.queryByRole("status", { name: "直播字幕" }),
     ).not.toBeInTheDocument();
   });
 

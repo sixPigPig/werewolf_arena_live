@@ -17,6 +17,7 @@ import {
 } from "@werewolf-arena/game-client";
 
 import { MobileLivePhaseBar } from "./MobileLivePhaseBar";
+import type { MobileLiveSubtitle } from "./mobileLiveSubtitle";
 
 type LiveDirectorControlsState = ReturnType<typeof useLiveDirector>;
 type GodViewState = ReturnType<typeof deriveGodViewState>;
@@ -42,6 +43,7 @@ export type MobileLiveTheaterProps = {
   replayLinkVisible: boolean;
   resumeIsPending: boolean;
   run: MobileLiveTheaterRun;
+  subtitle?: MobileLiveSubtitle | null;
   terminalEvent: LiveGameEvent | undefined;
 };
 
@@ -58,6 +60,7 @@ export function MobileLiveTheater({
   replayLinkVisible,
   resumeIsPending,
   run,
+  subtitle = null,
 }: MobileLiveTheaterProps) {
   const currentPlayer = getCurrentTheaterPlayer(godViewState);
   const { left, right } = splitPlayersForColumns(godViewState.players);
@@ -81,6 +84,7 @@ export function MobileLiveTheater({
           currentEvent={currentEvent}
           currentPlayer={currentPlayer}
           godViewState={godViewState}
+          subtitle={subtitle}
         />
         <LiveSeatColumn players={right} side="right" />
       </section>
@@ -226,12 +230,14 @@ type LiveCenterStageProps = {
   currentEvent: LiveGameEvent | null;
   currentPlayer: GodViewPlayer | null;
   godViewState: GodViewState;
+  subtitle: MobileLiveSubtitle | null;
 };
 
 export function LiveCenterStage({
   currentEvent,
   currentPlayer,
   godViewState,
+  subtitle,
 }: LiveCenterStageProps) {
   const presenterAvatarImageUrl = currentPlayer
     ? resolveAvatarImageUrl({
@@ -261,10 +267,31 @@ export function LiveCenterStage({
       <strong>{currentPlayer?.name ?? "等待玩家行动"}</strong>
       <em>{currentPlayer?.stageStatus.label ?? godViewState.currentSeatLabel}</em>
       <p>{currentEvent ? liveStageEventLabel(currentEvent) : "等待事件"}</p>
+      {subtitle ? <LiveSubtitle subtitle={subtitle} /> : null}
       {currentEvent?.phase ? (
         <small>{phaseLabel(currentEvent.phase)}阶段</small>
       ) : null}
     </section>
+  );
+}
+
+type LiveSubtitleProps = {
+  subtitle: MobileLiveSubtitle;
+};
+
+function LiveSubtitle({ subtitle }: LiveSubtitleProps) {
+  const className = [
+    "mobile-live-subtitle",
+    subtitle.tone === "judge"
+      ? "mobile-live-subtitle-judge"
+      : `mobile-live-subtitle-player-${subtitle.colorIndex}`,
+  ].join(" ");
+
+  return (
+    <div aria-label="直播字幕" className={className} role="status">
+      <strong>{subtitle.speakerName}</strong>
+      <span>{subtitle.text}</span>
+    </div>
   );
 }
 

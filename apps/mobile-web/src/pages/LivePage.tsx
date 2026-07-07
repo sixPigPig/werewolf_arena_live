@@ -5,6 +5,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   buildLivePhaseSegments,
   deriveGodViewState,
+  deriveLiveNarrativeState,
   deriveLiveNavStatus,
   deriveLiveSpectatorState,
   getGameRun,
@@ -18,6 +19,7 @@ import {
   MobileLiveTheater,
   MobileLiveTheaterTopBar,
 } from "../components/MobileLiveTheater";
+import { deriveMobileLiveSubtitle } from "../components/mobileLiveSubtitle";
 
 const EMPTY_EVENTS: LiveGameEvent[] = [];
 
@@ -101,6 +103,24 @@ export function LivePage() {
       stageEvents,
     ],
   );
+  const narrativeState = useMemo(
+    () =>
+      deriveLiveNarrativeState({
+        cue: director.currentCue,
+        events: stageEvents,
+        godViewState,
+        spectatorState,
+      }),
+    [director.currentCue, godViewState, spectatorState, stageEvents],
+  );
+  const subtitle = useMemo(
+    () =>
+      deriveMobileLiveSubtitle({
+        godViewState,
+        narrativeState,
+      }),
+    [godViewState, narrativeState],
+  );
   const liveStatus = deriveLiveNavStatus({
     backlogCount: director.backlogCount,
     connectionState,
@@ -161,6 +181,7 @@ export function LivePage() {
           }
           resumeIsPending={resumeMutation.isPending}
           run={run}
+          subtitle={subtitle}
           terminalEvent={terminalEvent}
         />
       ) : null}
