@@ -487,6 +487,31 @@ describe("LivePage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("styles mobile live subtitles as a lower-third speech HUD", () => {
+    const styles = readFileSync("src/styles/index.css", "utf8");
+    const subtitleRule =
+      styles.match(/(?:^|\n)\.mobile-live-subtitle\s*{[^}]+}/)?.[0] ?? "";
+    const subtitleTextRule =
+      styles.match(/(?:^|\n)\.mobile-live-subtitle span\s*{[^}]+}/)?.[0] ?? "";
+    const judgeRule =
+      styles.match(/(?:^|\n)\.mobile-live-subtitle-judge\s*{[^}]+}/)?.[0] ?? "";
+    const playerZeroRule =
+      styles.match(/(?:^|\n)\.mobile-live-subtitle-player-0\s*{[^}]+}/)?.[0] ?? "";
+    const shortScreenRule =
+      styles.match(
+        /@media \(max-height: 860px\) {[\s\S]*?\.mobile-live-subtitle strong,\s*\n\s*\.mobile-live-subtitle span\s*{[^}]+}/,
+      )?.[0] ?? "";
+
+    expect(subtitleRule).toContain("max-width: 100%");
+    expect(subtitleRule).toContain("grid-template-columns: auto minmax(0, 1fr)");
+    expect(subtitleTextRule).toContain("-webkit-line-clamp: 2");
+    expect(subtitleTextRule).toContain("word-break: break-word");
+    expect(judgeRule).toContain("--mobile-live-subtitle-accent: #f4c76d");
+    expect(playerZeroRule).toContain("--mobile-live-subtitle-accent: #8ddfd0");
+    expect(styles).toContain(".mobile-live-subtitle-player-7");
+    expect(shortScreenRule).toContain("font-size: 11px");
+  });
+
   it("renders the director controls with gothic icon slots", async () => {
     renderLiveRoute();
 
