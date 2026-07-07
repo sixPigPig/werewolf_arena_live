@@ -10,7 +10,8 @@ dependencies = [
   "psycopg[binary]",
   "pydantic-settings",
   "sqlalchemy",
-  "uvicorn[standard]"
+  "uvicorn[standard]",
+  "websockets"
 ]
 
 [dependency-groups]

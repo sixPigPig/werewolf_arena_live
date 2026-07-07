@@ -614,6 +614,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -632,6 +633,7 @@ requires-dist = [
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extras = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.metadata.requires-dev]
