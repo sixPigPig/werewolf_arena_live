@@ -193,6 +193,34 @@ describe("LiveReplayPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders replay subtitles for public player speech", async () => {
+    const user = userEvent.setup();
+
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        events: [
+          gameStartedEvent,
+          phaseStartedEvent,
+          requestStartedEvent,
+          responseDeltaEvent,
+        ],
+      }),
+    );
+
+    renderLiveReplayRoute();
+
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const subtitle = await screen.findByRole("status", {
+      name: "直播字幕",
+    });
+
+    expect(subtitle).toHaveClass("mobile-live-subtitle");
+    expect(subtitle).toHaveClass("mobile-live-subtitle-player-0");
+    expect(within(subtitle).getByText("阿青")).toBeVisible();
+    expect(within(subtitle).getByText("我先听后置位发言。")).toBeVisible();
+  });
+
   it("renders the phase selector", async () => {
     const user = userEvent.setup();
 
