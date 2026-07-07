@@ -1,34 +1,40 @@
 import { describe, expect, it } from "vitest";
 
+import type {
+  GodViewPlayer,
+  GodViewState,
+  LiveNarrativeState,
+  NarrativeCue,
+} from "@werewolf-arena/game-client";
+
 import {
   deriveMobileLiveSubtitle,
   type MobileLiveSubtitle,
 } from "./mobileLiveSubtitle";
 
-type TestPlayer = {
-  name: string;
-  seatNumber: number;
-};
+type TestPlayer = Pick<GodViewPlayer, "name" | "seatNumber">;
 
 function narrative(overrides: {
   actorName?: string | null;
-  action?: string | null;
+  action?: NarrativeCue["action"];
   judgeLine?: string;
-  kind: string;
+  kind: NarrativeCue["kind"];
   speechText?: string;
-}) {
+}): LiveNarrativeState {
+  const cue: NarrativeCue = {
+    eventId: 1,
+    kind: overrides.kind,
+    tone: "day",
+    judgeLine: overrides.judgeLine ?? "",
+    performerLine: "",
+    detailLine: "",
+    actorName: overrides.actorName ?? null,
+    action: overrides.action ?? null,
+    speechText: overrides.speechText ?? "",
+  };
+
   return {
-    cue: {
-      eventId: 1,
-      kind: overrides.kind,
-      tone: "day",
-      judgeLine: overrides.judgeLine ?? "",
-      performerLine: "",
-      detailLine: "",
-      actorName: overrides.actorName ?? null,
-      action: overrides.action ?? null,
-      speechText: overrides.speechText ?? "",
-    },
+    cue,
     speaker: null,
     nextSpeakerName: null,
     judgeLine: overrides.judgeLine ?? "",
@@ -37,9 +43,35 @@ function narrative(overrides: {
   };
 }
 
-function godView(players: TestPlayer[]) {
+function godView(players: TestPlayer[]): Pick<GodViewState, "players"> {
   return {
-    players,
+    players: players.map(player),
+  };
+}
+
+function player(overrides: TestPlayer): GodViewPlayer {
+  return {
+    seatNumber: overrides.seatNumber,
+    name: overrides.name,
+    role: "",
+    camp: "好人阵营",
+    identityGroup: "未知",
+    isAlive: true,
+    statusLabel: "",
+    stageStatus: {
+      kind: "idle",
+      label: "",
+    },
+    isSheriff: false,
+    isSpeaking: false,
+    voteTarget: null,
+    receivedVotes: 0,
+    suspicionScore: 0,
+    clueTags: [],
+    model: "",
+    personalityId: "",
+    appearanceId: "",
+    avatarImageUrl: "",
   };
 }
 
