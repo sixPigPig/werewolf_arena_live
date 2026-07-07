@@ -50,10 +50,7 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.ark_tts_enabled is False
     assert settings.ark_tts_api_key == ""
     assert settings.ark_tts_resource_id == "seed-tts-2.0"
-    assert (
-        settings.ark_tts_ws_url
-        == "wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection"
-    )
+    assert settings.ark_tts_ws_url == "wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection"
     assert settings.ark_tts_audio_format == "mp3"
     assert settings.ark_tts_sample_rate == 24000
 
