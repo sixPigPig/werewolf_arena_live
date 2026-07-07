@@ -5,11 +5,12 @@ import logging
 import queue
 import time
 from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from typing import Protocol
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from app.werewolf.live import LiveRunRegistry
+from app.werewolf.live import LiveEvent, LiveRunRegistry
 from app.werewolf.voice import (
     VoiceSpeakerConfig,
     VoiceUtterance,
@@ -26,6 +27,8 @@ from app.werewolf.volcengine_tts import (
 logger = logging.getLogger(__name__)
 
 TERMINAL_EVENT_TYPES = {"game_completed", "game_failed"}
+TERMINAL_RUN_STATUSES = {"completed", "failed"}
+IDLE_POLL_SECONDS = 0.1
 
 
 class TtsClient(Protocol):
@@ -59,17 +62,27 @@ class LiveVoiceStreamService:
             await websocket.send_json({"type": "voice_unavailable"})
             return
 
-        subscriber = self.registry.subscribe(run_id)
+        run = self.registry.try_get_run(run_id)
+        if run is None or run.status in TERMINAL_RUN_STATUSES:
+            return
+
+        historical_events = self.registry.events_after(run_id)
+        last_event_id = historical_events[-1].id if historical_events else None
+        run = self.registry.try_get_run(run_id)
+        if run is None or run.status in TERMINAL_RUN_STATUSES:
+            return
+
+        subscriber = self.registry.subscribe(run_id, after_id=last_event_id)
+        disconnect_task = asyncio.create_task(_watch_websocket_disconnect(websocket))
         speaker_config = VoiceSpeakerConfig(
             player_speaker=self.config.player_speaker,
             judge_speaker=self.config.judge_speaker,
         )
         try:
             while True:
-                try:
-                    event = await asyncio.to_thread(subscriber.get, True, 0.5)
-                except queue.Empty:
-                    continue
+                event = await _next_subscriber_event(subscriber, disconnect_task)
+                if event is None:
+                    return
                 is_terminal = event.type in TERMINAL_EVENT_TYPES
                 utterance = event_to_voice_utterance(event, speaker_config)
 
@@ -83,6 +96,9 @@ class LiveVoiceStreamService:
         except WebSocketDisconnect:
             return
         finally:
+            disconnect_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await disconnect_task
             self.registry.unsubscribe(run_id, subscriber)
 
     async def _stream_utterance(
@@ -147,3 +163,28 @@ class LiveVoiceStreamService:
             }
         )
         return True
+
+
+async def _watch_websocket_disconnect(websocket: WebSocket) -> None:
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                return
+    except WebSocketDisconnect:
+        return
+
+
+async def _next_subscriber_event(
+    subscriber: queue.Queue[LiveEvent],
+    disconnect_task: asyncio.Task[None],
+) -> LiveEvent | None:
+    while True:
+        if disconnect_task.done():
+            return None
+        try:
+            return subscriber.get_nowait()
+        except queue.Empty:
+            done, _pending = await asyncio.wait({disconnect_task}, timeout=IDLE_POLL_SECONDS)
+            if done:
+                return None
