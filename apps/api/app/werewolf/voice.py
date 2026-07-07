@@ -10,6 +10,7 @@ from app.werewolf.live import LiveEvent
 
 SpeakerKind = Literal["player", "judge"]
 PUBLIC_SPEECH_ACTIONS = {"debate", "sheriff_speech", "sheriff_pk_speech"}
+PUBLIC_WINNER_LABELS = {"好人阵营", "狼人阵营"}
 SENTENCE_PATTERN = re.compile(r"[^，。！？；,.!?;]+[，。！？；,.!?;]?")
 
 
@@ -33,10 +34,17 @@ class VoiceUtterance:
 
 
 def is_public_speech_event(event: LiveEvent) -> bool:
-    return event.type == "model_response_delta" and event.action in PUBLIC_SPEECH_ACTIONS
+    return (
+        event.type == "model_response_delta"
+        and event.action in PUBLIC_SPEECH_ACTIONS
+        and event.payload.get("is_public") is True
+    )
 
 
 def chunk_text_for_tts(text: str, *, max_chars: int = 24) -> list[str]:
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+
     normalized = " ".join(text.split()).strip()
     if not normalized:
         return []
@@ -131,7 +139,9 @@ def _judge_text_for_event(event: LiveEvent) -> str | None:
     if event.type == "phase_started" and event.phase == "day":
         return "天亮了，进入白天发言。"
     if event.type == "game_completed":
-        winner = _string_payload(event, "winner") or "胜利阵营"
+        winner = _string_payload(event, "winner")
+        if winner not in PUBLIC_WINNER_LABELS:
+            winner = "胜利阵营"
         return f"对局结束，{winner}获胜。"
     if event.type == "game_failed":
         return "对局异常中断。"
