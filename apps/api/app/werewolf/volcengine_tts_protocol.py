@@ -431,6 +431,14 @@ class Message:
         return ", ".join(parts)
 
 
+def volcengine_tts_error_message(
+    message: Message,
+    *,
+    prefix: str = "Volcengine TTS failure",
+) -> str:
+    return f"{prefix}: {message}"
+
+
 async def receive_message(websocket: websockets.WebSocketClientProtocol) -> Message:
     """Receive message from websocket"""
     try:
@@ -456,12 +464,24 @@ async def wait_for_event(
     """Wait for specific event"""
     while True:
         msg = await receive_message(websocket)
+        if msg.type == MsgType.Error:
+            raise RuntimeError(
+                volcengine_tts_error_message(
+                    msg,
+                    prefix="Volcengine TTS returned an error",
+                )
+            )
         if msg.type == MsgType.FullServerResponse and msg.event in [
             EventType.ConnectionFailed,
             EventType.SessionCanceled,
             EventType.SessionFailed,
         ]:
-            raise RuntimeError("Volcengine TTS returned a failure event")
+            raise RuntimeError(
+                volcengine_tts_error_message(
+                    msg,
+                    prefix="Volcengine TTS returned a failure event",
+                )
+            )
         if msg.type != msg_type or msg.event != event_type:
             raise ValueError(f"Unexpected message: {msg}")
         if msg.type == msg_type and msg.event == event_type:

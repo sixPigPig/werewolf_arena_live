@@ -146,14 +146,24 @@ class VolcengineTtsClient:
                         continue
                     if message.type == protocol.MsgType.FullServerResponse:
                         if getattr(message, "event", None) in FAILURE_EVENTS:
-                            raise RuntimeError("Volcengine TTS returned a failure event")
+                            raise RuntimeError(
+                                protocol.volcengine_tts_error_message(
+                                    message,
+                                    prefix="Volcengine TTS returned a failure event",
+                                )
+                            )
                         if getattr(message, "event", None) == protocol.EventType.SessionFinished:
                             session_finished = True
                             break
                         continue
                     if message.type == protocol.MsgType.Error:
-                        raise RuntimeError("Volcengine TTS returned an error")
-                    break
+                        raise RuntimeError(
+                            protocol.volcengine_tts_error_message(
+                                message,
+                                prefix="Volcengine TTS returned an error",
+                            )
+                        )
+                    raise RuntimeError(f"Unexpected Volcengine TTS message: {message}")
             finally:
                 if session_started and not session_finished:
                     with suppress(Exception):

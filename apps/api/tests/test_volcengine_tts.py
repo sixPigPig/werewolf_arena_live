@@ -254,20 +254,73 @@ def test_synthesize_failure_event_raises_and_attempts_cleanup(
     calls, _connect_calls = _patch_volcengine_session(
         monkeypatch,
         [
-            _message(
-                protocol.MsgType.FullServerResponse,
+            protocol.Message(
+                type=protocol.MsgType.FullServerResponse,
+                flag=protocol.MsgTypeFlagBits.WithEvent,
                 event=protocol.EventType.SessionFailed,
+                payload=b'{"text":"secret speech"}',
             )
         ],
     )
     client = VolcengineTtsClient(BASE_CONFIG)
 
-    with pytest.raises(RuntimeError, match="failure event"):
+    with pytest.raises(RuntimeError, match="SessionFailed") as exc_info:
         asyncio.run(_collect_synthesis(client))
 
+    assert "secret speech" not in str(exc_info.value)
     call_names = [call[0] for call in calls]
     assert "finish_session" in call_names
     assert call_names[-2:] == ["cancel_session", "finish_connection"]
+
+
+def test_synthesize_error_message_includes_error_code_without_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_uuids(monkeypatch)
+    calls, _connect_calls = _patch_volcengine_session(
+        monkeypatch,
+        [
+            protocol.Message(
+                type=protocol.MsgType.Error,
+                error_code=429,
+                payload=b'{"text":"secret speech"}',
+            )
+        ],
+    )
+    client = VolcengineTtsClient(BASE_CONFIG)
+
+    with pytest.raises(RuntimeError, match="429") as exc_info:
+        asyncio.run(_collect_synthesis(client))
+
+    assert "secret speech" not in str(exc_info.value)
+    assert [call[0] for call in calls][-2:] == ["cancel_session", "finish_connection"]
+
+
+def test_synthesize_unexpected_message_raises_and_attempts_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_uuids(monkeypatch)
+    calls, _connect_calls = _patch_volcengine_session(
+        monkeypatch,
+        [
+            protocol.Message(
+                type=protocol.MsgType.FrontEndResultServer,
+                flag=protocol.MsgTypeFlagBits.WithEvent,
+                event=protocol.EventType.TTSResponse,
+                session_id="session-1",
+                payload=b'{"text":"secret speech"}',
+            )
+        ],
+    )
+    client = VolcengineTtsClient(BASE_CONFIG)
+
+    with pytest.raises(RuntimeError, match="Unexpected Volcengine TTS message") as exc_info:
+        asyncio.run(_collect_synthesis(client))
+
+    error_text = str(exc_info.value)
+    assert "FrontEndResultServer" in error_text
+    assert "secret speech" not in error_text
+    assert [call[0] for call in calls][-2:] == ["cancel_session", "finish_connection"]
 
 
 def test_synthesize_unavailable_config_raises_before_connecting(
@@ -303,3 +356,52 @@ def test_protocol_message_str_redacts_payload_text() -> None:
     assert "session-1" in rendered
     assert "TaskRequest" in rendered
     assert "PayloadSize:" in rendered
+
+
+def test_protocol_wait_for_event_failure_includes_event_without_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def receive_message(_websocket: object) -> protocol.Message:
+        return protocol.Message(
+            type=protocol.MsgType.FullServerResponse,
+            flag=protocol.MsgTypeFlagBits.WithEvent,
+            event=protocol.EventType.ConnectionFailed,
+            payload=b'{"text":"secret speech"}',
+        )
+
+    monkeypatch.setattr(protocol, "receive_message", receive_message)
+
+    with pytest.raises(RuntimeError, match="ConnectionFailed") as exc_info:
+        asyncio.run(
+            protocol.wait_for_event(
+                object(),
+                protocol.MsgType.FullServerResponse,
+                protocol.EventType.ConnectionStarted,
+            )
+        )
+
+    assert "secret speech" not in str(exc_info.value)
+
+
+def test_protocol_wait_for_event_error_includes_code_without_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def receive_message(_websocket: object) -> protocol.Message:
+        return protocol.Message(
+            type=protocol.MsgType.Error,
+            error_code=503,
+            payload=b'{"text":"secret speech"}',
+        )
+
+    monkeypatch.setattr(protocol, "receive_message", receive_message)
+
+    with pytest.raises(RuntimeError, match="503") as exc_info:
+        asyncio.run(
+            protocol.wait_for_event(
+                object(),
+                protocol.MsgType.FullServerResponse,
+                protocol.EventType.ConnectionStarted,
+            )
+        )
+
+    assert "secret speech" not in str(exc_info.value)
