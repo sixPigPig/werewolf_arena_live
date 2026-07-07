@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import queue
 import time
@@ -88,7 +89,12 @@ class LiveVoiceStreamService:
 
                 if utterance is not None:
                     chunks = chunk_text_for_tts(utterance.text)
-                    if chunks and not await self._stream_utterance(websocket, utterance, chunks):
+                    if chunks and not await self._stream_utterance(
+                        websocket,
+                        utterance,
+                        chunks,
+                        disconnect_task,
+                    ):
                         return
 
                 if is_terminal:
@@ -106,6 +112,7 @@ class LiveVoiceStreamService:
         websocket: WebSocket,
         utterance: VoiceUtterance,
         chunks: list[str],
+        disconnect_task: asyncio.Task[None],
     ) -> bool:
         started_at = time.monotonic()
         mime_type = mime_type_for_format(self.config.audio_format)
@@ -120,11 +127,29 @@ class LiveVoiceStreamService:
                 "mime_type": mime_type,
             }
         )
+        audio_iterator = client.synthesize(
+            speaker=utterance.speaker,
+            text_chunks=chunks,
+        )
+        audio_task: asyncio.Task[bytes] | None = None
         try:
-            async for audio in client.synthesize(
-                speaker=utterance.speaker,
-                text_chunks=chunks,
-            ):
+            while True:
+                audio_task = asyncio.create_task(anext(audio_iterator))
+                done, _pending = await asyncio.wait(
+                    {audio_task, disconnect_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if disconnect_task in done:
+                    await _cancel_audio_task(audio_task)
+                    await _close_async_iterator(audio_iterator)
+                    return False
+
+                try:
+                    audio = audio_task.result()
+                except StopAsyncIteration:
+                    break
+                audio_task = None
+
                 _start, chunk_message, _end = build_voice_messages(
                     utterance_id=utterance.utterance_id,
                     source_event_id=utterance.source_event_id,
@@ -135,9 +160,16 @@ class LiveVoiceStreamService:
                     duration_ms=0,
                 )
                 await websocket.send_json(chunk_message)
+        except asyncio.CancelledError:
+            if audio_task is not None:
+                await _cancel_audio_task(audio_task)
+            await _close_async_iterator(audio_iterator)
+            raise
         except WebSocketDisconnect:
+            await _close_async_iterator(audio_iterator)
             raise
         except Exception:
+            await _close_async_iterator(audio_iterator)
             logger.warning(
                 "Voice synthesis failed",
                 extra={
@@ -155,6 +187,7 @@ class LiveVoiceStreamService:
             )
             return False
 
+        await _close_async_iterator(audio_iterator)
         await websocket.send_json(
             {
                 "type": "voice_end",
@@ -173,6 +206,22 @@ async def _watch_websocket_disconnect(websocket: WebSocket) -> None:
                 return
     except WebSocketDisconnect:
         return
+
+
+async def _close_async_iterator(iterator: AsyncIterator[bytes]) -> None:
+    close = getattr(iterator, "aclose", None)
+    if close is None:
+        return
+    with suppress(Exception):
+        close_result = close()
+        if inspect.isawaitable(close_result):
+            await close_result
+
+
+async def _cancel_audio_task(task: asyncio.Task[bytes]) -> None:
+    task.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        await task
 
 
 async def _next_subscriber_event(

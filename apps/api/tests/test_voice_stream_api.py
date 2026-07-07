@@ -112,6 +112,45 @@ class FailingTtsClient:
         yield b"unreachable"
 
 
+class PendingSynthesisIterator:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    def __aiter__(self) -> "PendingSynthesisIterator":
+        return self
+
+    async def __anext__(self) -> bytes:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self.closed.set()
+
+
+class PendingTtsClient:
+    iterators: list[PendingSynthesisIterator] = []
+
+    def __init__(self, config: VolcengineTtsConfig) -> None:
+        self.config = config
+
+    def synthesize(
+        self,
+        *,
+        speaker: str,
+        text_chunks: list[str],
+    ) -> PendingSynthesisIterator:
+        iterator = PendingSynthesisIterator()
+        PendingTtsClient.iterators.append(iterator)
+        return iterator
+
+
 def classic_rule_kwargs() -> dict:
     return {
         "rule_set_id": "classic_8",
@@ -470,6 +509,51 @@ def test_voice_stream_service_reports_synthesis_error_and_unsubscribes() -> None
     ]
 
 
+def test_voice_stream_service_cleans_up_pending_synthesis_on_disconnect() -> None:
+    PendingTtsClient.iterators.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=PendingTtsClient,
+    )
+
+    async def stream_and_disconnect_during_synthesis() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-public",
+                "visible_text": "我先发言。",
+                "is_public": True,
+            },
+        )
+        for _ in range(120):
+            if PendingTtsClient.iterators:
+                break
+            await asyncio.sleep(0.01)
+        assert PendingTtsClient.iterators
+        iterator = PendingTtsClient.iterators[0]
+        await asyncio.wait_for(iterator.started.wait(), timeout=1)
+
+        websocket.disconnect()
+        await asyncio.wait_for(task, timeout=1)
+
+        assert iterator.cancelled.is_set()
+        assert iterator.closed.is_set()
+
+    asyncio.run(stream_and_disconnect_during_synthesis())
+
+    assert registry.get_run(run.run_id).subscribers == []
+    assert [message["type"] for message in websocket.messages] == ["voice_start"]
+
+
 def test_voice_stream_service_unsubscribes_when_cancelled() -> None:
     registry = LiveRunRegistry()
     run = create_run(registry)
@@ -482,7 +566,7 @@ def test_voice_stream_service_unsubscribes_when_cancelled() -> None:
 
     async def run_and_cancel() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
-        await asyncio.sleep(0)
+        await wait_for_subscription(registry, run.run_id)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
