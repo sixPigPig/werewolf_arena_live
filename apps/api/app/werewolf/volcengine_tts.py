@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +13,12 @@ import websockets
 from app.werewolf import volcengine_tts_protocol as protocol
 
 logger = logging.getLogger(__name__)
+
+FAILURE_EVENTS = {
+    protocol.EventType.ConnectionFailed,
+    protocol.EventType.SessionCanceled,
+    protocol.EventType.SessionFailed,
+}
 
 
 @dataclass(frozen=True)
@@ -27,7 +34,12 @@ class VolcengineTtsConfig:
 
     @property
     def available(self) -> bool:
-        return self.enabled and bool(self.api_key.strip())
+        return (
+            self.enabled
+            and bool(self.api_key.strip())
+            and bool(self.resource_id.strip())
+            and bool(self.ws_url.strip())
+        )
 
 
 def build_tts_headers(
@@ -95,45 +107,56 @@ class VolcengineTtsClient:
             max_size=10 * 1024 * 1024,
         ) as websocket:
             session_id = str(uuid.uuid4())
-            await protocol.start_connection(websocket)
-            await protocol.wait_for_event(
-                websocket,
-                protocol.MsgType.FullServerResponse,
-                protocol.EventType.ConnectionStarted,
-            )
-            await protocol.start_session(websocket, b"{}", session_id)
-            await protocol.wait_for_event(
-                websocket,
-                protocol.MsgType.FullServerResponse,
-                protocol.EventType.SessionStarted,
-            )
-
-            for text in text_chunks:
-                request = build_tts_request(
-                    speaker=speaker,
-                    text=text,
-                    audio_format=self.config.audio_format,
-                    sample_rate=self.config.sample_rate,
-                )
-                await protocol.task_request(
+            session_started = False
+            session_finished = False
+            try:
+                await protocol.start_connection(websocket)
+                await protocol.wait_for_event(
                     websocket,
-                    json.dumps(request, ensure_ascii=False).encode("utf-8"),
-                    session_id,
+                    protocol.MsgType.FullServerResponse,
+                    protocol.EventType.ConnectionStarted,
                 )
+                await protocol.start_session(websocket, b"{}", session_id)
+                await protocol.wait_for_event(
+                    websocket,
+                    protocol.MsgType.FullServerResponse,
+                    protocol.EventType.SessionStarted,
+                )
+                session_started = True
 
-            await protocol.finish_session(websocket, session_id)
+                for text in text_chunks:
+                    request = build_tts_request(
+                        speaker=speaker,
+                        text=text,
+                        audio_format=self.config.audio_format,
+                        sample_rate=self.config.sample_rate,
+                    )
+                    await protocol.task_request(
+                        websocket,
+                        json.dumps(request, ensure_ascii=False).encode("utf-8"),
+                        session_id,
+                    )
 
-            while True:
-                message = await protocol.receive_message(websocket)
-                if message.type == protocol.MsgType.AudioOnlyServer:
-                    yield message.payload
-                    continue
-                if message.type == protocol.MsgType.FullServerResponse:
-                    if getattr(message, "event", None) == protocol.EventType.SessionFinished:
-                        break
-                    continue
-                if message.type == protocol.MsgType.Error:
-                    raise RuntimeError("Volcengine TTS returned an error")
-                break
+                await protocol.finish_session(websocket, session_id)
 
-            await protocol.finish_connection(websocket)
+                while True:
+                    message = await protocol.receive_message(websocket)
+                    if message.type == protocol.MsgType.AudioOnlyServer:
+                        yield message.payload
+                        continue
+                    if message.type == protocol.MsgType.FullServerResponse:
+                        if getattr(message, "event", None) in FAILURE_EVENTS:
+                            raise RuntimeError("Volcengine TTS returned a failure event")
+                        if getattr(message, "event", None) == protocol.EventType.SessionFinished:
+                            session_finished = True
+                            break
+                        continue
+                    if message.type == protocol.MsgType.Error:
+                        raise RuntimeError("Volcengine TTS returned an error")
+                    break
+            finally:
+                if session_started and not session_finished:
+                    with suppress(Exception):
+                        await protocol.cancel_session(websocket, session_id)
+                with suppress(Exception):
+                    await protocol.finish_connection(websocket)

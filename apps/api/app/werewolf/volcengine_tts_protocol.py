@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import logging
 import struct
@@ -412,16 +414,21 @@ class Message:
 
     def __str__(self) -> str:
         """String representation"""
-        if self.type in [MsgType.AudioOnlyServer, MsgType.AudioOnlyClient]:
-            if self.flag in [MsgTypeFlagBits.PositiveSeq, MsgTypeFlagBits.NegativeSeq]:
-                return f"MsgType: {self.type}, EventType:{self.event}, Sequence: {self.sequence}, PayloadSize: {len(self.payload)}"
-            return f"MsgType: {self.type}, EventType:{self.event}, PayloadSize: {len(self.payload)}"
-        elif self.type == MsgType.Error:
-            return f"MsgType: {self.type}, EventType:{self.event}, ErrorCode: {self.error_code}, Payload: {self.payload.decode('utf-8', 'ignore')}"
-        else:
-            if self.flag in [MsgTypeFlagBits.PositiveSeq, MsgTypeFlagBits.NegativeSeq]:
-                return f"MsgType: {self.type}, EventType:{self.event}, Sequence: {self.sequence}, Payload: {self.payload.decode('utf-8', 'ignore')}"
-            return f"MsgType: {self.type}, EventType:{self.event}, Payload: {self.payload.decode('utf-8', 'ignore')}"
+        parts = [
+            f"MsgType: {self.type}",
+            f"Flag: {self.flag.name}",
+            f"EventType:{self.event}",
+        ]
+        if self.session_id:
+            parts.append(f"SessionID: {self.session_id}")
+        if self.connect_id:
+            parts.append(f"ConnectID: {self.connect_id}")
+        if self.flag in [MsgTypeFlagBits.PositiveSeq, MsgTypeFlagBits.NegativeSeq]:
+            parts.append(f"Sequence: {self.sequence}")
+        if self.type == MsgType.Error:
+            parts.append(f"ErrorCode: {self.error_code}")
+        parts.append(f"PayloadSize: {len(self.payload)}")
+        return ", ".join(parts)
 
 
 async def receive_message(websocket: websockets.WebSocketClientProtocol) -> Message:
@@ -449,6 +456,12 @@ async def wait_for_event(
     """Wait for specific event"""
     while True:
         msg = await receive_message(websocket)
+        if msg.type == MsgType.FullServerResponse and msg.event in [
+            EventType.ConnectionFailed,
+            EventType.SessionCanceled,
+            EventType.SessionFailed,
+        ]:
+            raise RuntimeError("Volcengine TTS returned a failure event")
         if msg.type != msg_type or msg.event != event_type:
             raise ValueError(f"Unexpected message: {msg}")
         if msg.type == msg_type and msg.event == event_type:
