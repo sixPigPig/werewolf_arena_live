@@ -517,7 +517,9 @@ describe("LivePage", () => {
 
     expect(subtitleRule).toContain("max-width: 100%");
     expect(subtitleRule).toContain("grid-template-columns: auto minmax(0, 1fr)");
-    expect(subtitleTextRule).toContain("-webkit-line-clamp: 2");
+    expect(subtitleTextRule).not.toContain("-webkit-line-clamp");
+    expect(subtitleTextRule).not.toContain("text-overflow: ellipsis");
+    expect(subtitleTextRule).not.toContain("overflow: hidden");
     expect(subtitleTextRule).toContain("word-break: break-word");
     expect(judgeRule).toContain("--mobile-live-subtitle-accent: #f4c76d");
     expect(playerZeroRule).toContain("--mobile-live-subtitle-accent: #8ddfd0");

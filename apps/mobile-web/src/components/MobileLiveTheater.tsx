@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { Gauge, Mic, Pause, Play, Radio, RotateCcw } from "lucide-react";
 
@@ -17,7 +17,11 @@ import {
 } from "@werewolf-arena/game-client";
 
 import { MobileLivePhaseBar } from "./MobileLivePhaseBar";
-import type { MobileLiveSubtitle } from "./mobileLiveSubtitle";
+import {
+  splitMobileSubtitleText,
+  subtitleSegmentDurationMs,
+  type MobileLiveSubtitle,
+} from "./mobileLiveSubtitle";
 
 type LiveDirectorControlsState = ReturnType<typeof useLiveDirector>;
 type GodViewState = ReturnType<typeof deriveGodViewState>;
@@ -280,6 +284,7 @@ type LiveSubtitleProps = {
 };
 
 function LiveSubtitle({ subtitle }: LiveSubtitleProps) {
+  const { segmentText } = useLiveSubtitleSegment(subtitle);
   const className = [
     "mobile-live-subtitle",
     subtitle.tone === "judge"
@@ -290,9 +295,52 @@ function LiveSubtitle({ subtitle }: LiveSubtitleProps) {
   return (
     <div aria-label="直播字幕" className={className} role="status">
       <strong>{subtitle.speakerName}</strong>
-      <span>{subtitle.text}</span>
+      <span>{segmentText}</span>
     </div>
   );
+}
+
+function useLiveSubtitleSegment(subtitle: MobileLiveSubtitle) {
+  const segments = useMemo(
+    () => splitMobileSubtitleText(subtitle.text),
+    [subtitle.text],
+  );
+  const subtitleKey = `${subtitle.tone}:${subtitle.colorIndex}:${subtitle.speakerName}`;
+  const previousKeyRef = useRef(subtitleKey);
+  const previousTextRef = useRef(subtitle.text);
+  const [segmentIndex, setSegmentIndex] = useState(0);
+  const segmentCount = segments.length;
+  const segmentText = segments[segmentIndex] ?? subtitle.text;
+
+  useEffect(() => {
+    const isSameGrowingSpeech =
+      previousKeyRef.current === subtitleKey &&
+      subtitle.text.startsWith(previousTextRef.current);
+
+    previousKeyRef.current = subtitleKey;
+    previousTextRef.current = subtitle.text;
+    setSegmentIndex((currentIndex) =>
+      isSameGrowingSpeech ? Math.min(currentIndex, segmentCount - 1) : 0,
+    );
+  }, [segmentCount, subtitle.text, subtitleKey]);
+
+  useEffect(() => {
+    if (segmentIndex >= segmentCount - 1) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setSegmentIndex((currentIndex) =>
+        Math.min(currentIndex + 1, segmentCount - 1),
+      );
+    }, subtitleSegmentDurationMs(segmentText));
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [segmentCount, segmentIndex, segmentText, subtitleKey]);
+
+  return { segmentText };
 }
 
 type LiveTheaterControlsProps = {

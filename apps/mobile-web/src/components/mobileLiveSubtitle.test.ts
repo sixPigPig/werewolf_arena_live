@@ -9,6 +9,8 @@ import type {
 
 import {
   deriveMobileLiveSubtitle,
+  splitMobileSubtitleText,
+  subtitleSegmentDurationMs,
   type MobileLiveSubtitle,
 } from "./mobileLiveSubtitle";
 
@@ -171,5 +173,31 @@ describe("deriveMobileLiveSubtitle", () => {
     expect(first?.colorIndex).toBeGreaterThanOrEqual(0);
     expect(first?.colorIndex).toBeLessThan(8);
     expect(second?.colorIndex).toBe(first?.colorIndex);
+  });
+});
+
+describe("mobile subtitle speech pacing", () => {
+  it("splits long speech into normal subtitle lines without dropping text", () => {
+    const text =
+      "我先说第一点，昨晚平安夜说明狼刀没有成功。第二点，白石的发言像是在补逻辑。";
+    const segments = splitMobileSubtitleText(text, 14);
+
+    expect(segments.length).toBeGreaterThan(1);
+    expect(segments.join("")).toBe(text);
+    expect(segments.every((segment) => Array.from(segment).length <= 14)).toBe(
+      true,
+    );
+  });
+
+  it("uses speech-rate based segment durations with readable bounds", () => {
+    expect(subtitleSegmentDurationMs("短句")).toBe(1800);
+    expect(subtitleSegmentDurationMs("这是一句更长的普通字幕")).toBeGreaterThan(
+      subtitleSegmentDurationMs("短句"),
+    );
+    expect(
+      subtitleSegmentDurationMs(
+        "这是一句非常非常长的字幕文本，需要被限制在可读节奏内",
+      ),
+    ).toBe(4200);
   });
 });

@@ -2868,9 +2868,8 @@ textarea {
 }
 
 .mobile-live-subtitle span {
-  display: -webkit-box;
+  display: block;
   min-width: 0;
-  overflow: hidden;
   color: #fff4cf;
   font-size: 12px;
   font-weight: 800;
@@ -2878,8 +2877,6 @@ textarea {
   text-shadow: 0 2px 5px rgb(0 0 0 / 72%);
   white-space: normal;
   word-break: break-word;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
 
 .mobile-live-subtitle-judge {
