@@ -3,12 +3,13 @@ import random
 import threading
 from typing import Annotated, Iterator
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response, WebSocket
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.session import SessionLocal, get_db
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.checkpoint import ResumeCheckpointError
@@ -38,6 +39,8 @@ from app.werewolf.rules import (
     rule_set_snapshot,
 )
 from app.werewolf.runner import GameRunError, new_session_id, resume_game, run_game
+from app.werewolf.voice_stream import LiveVoiceStreamService
+from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
 
 router = APIRouter()
@@ -75,6 +78,26 @@ def get_replay_store(db: Annotated[Session, Depends(get_db)]) -> DatabaseReplayS
 
 def get_live_registry() -> LiveRunRegistry:
     return live_registry
+
+
+def get_tts_config() -> VolcengineTtsConfig:
+    return VolcengineTtsConfig(
+        enabled=settings.ark_tts_enabled,
+        api_key=settings.ark_tts_api_key,
+        resource_id=settings.ark_tts_resource_id,
+        ws_url=settings.ark_tts_ws_url,
+        player_speaker=settings.ark_tts_player_speaker,
+        judge_speaker=settings.ark_tts_judge_speaker,
+        audio_format=settings.ark_tts_audio_format,
+        sample_rate=settings.ark_tts_sample_rate,
+    )
+
+
+def get_voice_streamer(
+    registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
+    config: Annotated[VolcengineTtsConfig, Depends(get_tts_config)],
+) -> LiveVoiceStreamService:
+    return LiveVoiceStreamService(registry=registry, config=config)
 
 
 def normalize_player_config_requests(
@@ -160,11 +183,7 @@ def complete_player_configs_from_library(
     if not missing_profile_seats:
         return sorted(configs, key=lambda config: config.seat)
 
-    used_profile_ids = {
-        config.profile_id
-        for config in configs
-        if config.profile_id is not None
-    }
+    used_profile_ids = {config.profile_id for config in configs if config.profile_id is not None}
     available_profiles = [
         profile
         for profile in list_available_player_profiles(db)
@@ -194,9 +213,7 @@ def complete_player_configs_from_library(
             profile=profile,
             overrides=overrides,
         )
-        next_configs = [
-            config for config in next_configs if config.seat != seat
-        ] + [next_config]
+        next_configs = [config for config in next_configs if config.seat != seat] + [next_config]
 
     return sorted(next_configs, key=lambda config: config.seat)
 
@@ -324,6 +341,21 @@ def stream_game_run_events(
     )
 
 
+@router.websocket("/runs/{run_id}/voice-stream")
+async def stream_game_run_voice(
+    websocket: WebSocket,
+    run_id: str,
+    registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
+    streamer: Annotated[LiveVoiceStreamService, Depends(get_voice_streamer)],
+) -> None:
+    await websocket.accept()
+    if registry.try_get_run(run_id) is None:
+        await websocket.send_json({"type": "voice_error", "message": "Game run not found"})
+        await websocket.close()
+        return
+    await streamer.stream_run(run_id, websocket)
+
+
 @router.post("/{session_id}/resume", status_code=201)
 def resume_game_run(
     session_id: Annotated[
@@ -360,9 +392,7 @@ def resume_game_run(
     max_rounds = int(run_params.get("max_rounds") or 8)
     seed = run_params.get("seed")
     try:
-        checkpoint_player_configs = player_configs_from_serialized(
-            run_params.get("player_configs")
-        )
+        checkpoint_player_configs = player_configs_from_serialized(run_params.get("player_configs"))
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
     run, created = registry.get_or_create_active_run(
