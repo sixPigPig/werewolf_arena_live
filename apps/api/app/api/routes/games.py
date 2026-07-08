@@ -2,7 +2,7 @@ from collections.abc import Callable
 import queue
 import random
 import threading
-from typing import Annotated, Iterator
+from typing import Annotated, Any, Iterator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response, WebSocket
 from fastapi.responses import StreamingResponse
@@ -157,6 +157,28 @@ class SessionVoiceStore:
                 utterance_id,
                 message=message,
             )
+        finally:
+            db.close()
+
+    def find_recent_utterance(
+        self,
+        *,
+        run_id: str,
+        current_event_id: int,
+    ) -> dict[str, Any] | None:
+        db = self.session_factory()
+        try:
+            return DatabaseVoiceStore(db, session_id=self.session_id).find_recent_utterance(
+                run_id=run_id,
+                current_event_id=current_event_id,
+            )
+        finally:
+            db.close()
+
+    def load_chunks(self, utterance_id: str) -> list[bytes]:
+        db = self.session_factory()
+        try:
+            return DatabaseVoiceStore(db, session_id=self.session_id).load_chunks(utterance_id)
         finally:
             db.close()
 
@@ -439,13 +461,14 @@ async def stream_game_run_voice(
     run_id: str,
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
     streamer: Annotated[LiveVoiceStreamService, Depends(get_voice_streamer)],
+    current_event_id: Annotated[int | None, Query(ge=0)] = None,
 ) -> None:
     await websocket.accept()
     if registry.try_get_run(run_id) is None:
         await websocket.send_json({"type": "voice_error", "message": "Game run not found"})
         await websocket.close()
         return
-    await streamer.stream_run(run_id, websocket)
+    await streamer.stream_run(run_id, websocket, current_event_id=current_event_id)
 
 
 @router.post("/{session_id}/resume", status_code=201)

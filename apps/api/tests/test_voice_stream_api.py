@@ -29,8 +29,16 @@ BASE_TTS_CONFIG = VolcengineTtsConfig(
 class FakeVoiceStreamer:
     def __init__(self, *, available: bool = True) -> None:
         self.available = available
+        self.calls: list[dict] = []
 
-    async def stream_run(self, run_id: str, websocket) -> None:
+    async def stream_run(
+        self,
+        run_id: str,
+        websocket,
+        *,
+        current_event_id: int | None = None,
+    ) -> None:
+        self.calls.append({"run_id": run_id, "current_event_id": current_event_id})
         if not self.available:
             await websocket.send_json({"type": "voice_unavailable"})
             return
@@ -185,6 +193,9 @@ class RecordingVoiceStore:
         self.chunks: list[dict] = []
         self.completed: list[dict] = []
         self.failed: list[dict] = []
+        self.recent_utterance: dict | None = None
+        self.replay_chunks: list[bytes] = []
+        self.find_recent_calls: list[dict] = []
 
     def upsert_utterance(
         self,
@@ -219,6 +230,18 @@ class RecordingVoiceStore:
 
     def fail_utterance(self, utterance_id: str, *, message: str) -> None:
         self.failed.append({"utterance_id": utterance_id, "message": message})
+
+    def find_recent_utterance(
+        self,
+        *,
+        run_id: str,
+        current_event_id: int,
+    ) -> dict | None:
+        self.find_recent_calls.append({"run_id": run_id, "current_event_id": current_event_id})
+        return self.recent_utterance
+
+    def load_chunks(self, utterance_id: str) -> list[bytes]:
+        return self.replay_chunks if self.recent_utterance else []
 
 
 class FailingVoiceStore(RecordingVoiceStore):
@@ -356,6 +379,22 @@ def test_voice_stream_route_forwards_stream_messages() -> None:
             assert chunk["sample_rate"] == 24000
             assert chunk["chunk_index"] == 0
             assert ws.receive_json()["type"] == "voice_end"
+
+
+def test_voice_stream_route_forwards_current_event_id_query() -> None:
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    streamer = FakeVoiceStreamer()
+    override_registry(registry)
+    override_streamer(streamer)
+
+    with client_with_overrides() as client:
+        with client.websocket_connect(
+            f"/api/v1/games/runs/{run.run_id}/voice-stream?current_event_id=7"
+        ) as ws:
+            assert ws.receive_json()["type"] == "voice_start"
+
+    assert streamer.calls == [{"run_id": run.run_id, "current_event_id": 7}]
 
 
 def test_voice_stream_route_reports_unknown_run() -> None:
@@ -637,6 +676,151 @@ def test_voice_stream_service_does_not_replay_historical_events_on_connect() -> 
         {"speaker": "player", "text_chunks": ["这是连接后的现场发言。"]},
         {"speaker": "judge", "text_chunks": ["对局结束，", "好人阵营获胜。"]},
     ]
+
+
+def test_voice_stream_service_replays_recent_complete_utterance_then_streams_future_events() -> (
+    None
+):
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    voice_store = RecordingVoiceStore()
+    voice_store.recent_utterance = {
+        "utterance_id": "stored-voice-1",
+        "run_id": run.run_id,
+        "source_event_id": 6,
+        "last_source_event_id": 7,
+        "speaker_kind": "player",
+        "speaker_name": "阿青",
+        "audio_format": "pcm",
+        "sample_rate": 24000,
+        "mime_type": "audio/L16",
+        "status": "complete",
+        "duration_ms": 345,
+    }
+    voice_store.replay_chunks = [b"old-audio-0", b"old-audio-1"]
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
+    )
+
+    async def stream_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket, current_event_id=7))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="白石",
+            action="debate",
+            payload={
+                "request_id": "req-live-after-replay",
+                "visible_text": "这是重连后的现场发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_events())
+
+    assert voice_store.find_recent_calls == [{"run_id": run.run_id, "current_event_id": 7}]
+    assert websocket.messages[:4] == [
+        {
+            "type": "voice_start",
+            "utterance_id": "stored-voice-1",
+            "source_event_id": 6,
+            "speaker_kind": "player",
+            "speaker_name": "阿青",
+            "mime_type": "audio/L16",
+            "audio_format": "pcm",
+            "sample_rate": 24000,
+        },
+        {
+            "type": "audio_chunk",
+            "utterance_id": "stored-voice-1",
+            "chunk_index": 0,
+            "mime_type": "audio/L16",
+            "audio_format": "pcm",
+            "sample_rate": 24000,
+            "data": "b2xkLWF1ZGlvLTA=",
+        },
+        {
+            "type": "audio_chunk",
+            "utterance_id": "stored-voice-1",
+            "chunk_index": 1,
+            "mime_type": "audio/L16",
+            "audio_format": "pcm",
+            "sample_rate": 24000,
+            "data": "b2xkLWF1ZGlvLTE=",
+        },
+        {
+            "type": "voice_end",
+            "utterance_id": "stored-voice-1",
+            "duration_ms": 345,
+        },
+    ]
+    assert [message["type"] for message in websocket.messages[4:7]] == [
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+    ]
+    assert websocket.messages[4]["speaker_name"] == "白石"
+    calls = [call for instance in RecordingTtsClient.instances for call in instance.calls]
+    assert calls[0] == {
+        "speaker": "player",
+        "text_chunks": ["这是重连后的现场发言。"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "chunks"),
+    [
+        ("synthesizing", [b"partial-audio"]),
+        ("complete", []),
+    ],
+)
+def test_voice_stream_service_ignores_incomplete_or_chunkless_recent_utterance(
+    status: str,
+    chunks: list[bytes],
+) -> None:
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    voice_store = RecordingVoiceStore()
+    voice_store.recent_utterance = {
+        "utterance_id": "stored-voice-ignored",
+        "run_id": run.run_id,
+        "source_event_id": 6,
+        "last_source_event_id": 7,
+        "speaker_kind": "player",
+        "speaker_name": "阿青",
+        "audio_format": "pcm",
+        "sample_rate": 24000,
+        "mime_type": "audio/L16",
+        "status": status,
+        "duration_ms": 345,
+    }
+    voice_store.replay_chunks = chunks
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
+    )
+
+    async def stream_then_disconnect() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket, current_event_id=7))
+        await wait_for_subscription(registry, run.run_id)
+        websocket.disconnect()
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_then_disconnect())
+
+    assert websocket.messages == []
+    assert registry.get_run(run.run_id).subscribers == []
 
 
 def test_voice_stream_service_returns_without_subscribing_when_run_is_terminal() -> None:

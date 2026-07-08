@@ -9,7 +9,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from dataclasses import replace
-from typing import Protocol
+from typing import Any, Protocol
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -66,6 +66,17 @@ class VoiceStore(Protocol):
     def fail_utterance(self, utterance_id: str, *, message: str) -> None:
         pass
 
+    def find_recent_utterance(
+        self,
+        *,
+        run_id: str,
+        current_event_id: int,
+    ) -> dict[str, Any] | None:
+        pass
+
+    def load_chunks(self, utterance_id: str) -> list[bytes]:
+        pass
+
 
 class LiveVoiceStreamService:
     def __init__(
@@ -85,7 +96,13 @@ class LiveVoiceStreamService:
     def available(self) -> bool:
         return self.config.available
 
-    async def stream_run(self, run_id: str, websocket: WebSocket) -> None:
+    async def stream_run(
+        self,
+        run_id: str,
+        websocket: WebSocket,
+        *,
+        current_event_id: int | None = None,
+    ) -> None:
         if not self.available:
             await websocket.send_json({"type": "voice_unavailable"})
             return
@@ -101,14 +118,24 @@ class LiveVoiceStreamService:
             return
 
         voice_store = self.voice_store_factory(run.session_id) if self.voice_store_factory else None
-        subscriber = self.registry.subscribe(run_id, after_id=last_event_id)
         disconnect_task = asyncio.create_task(_watch_websocket_disconnect(websocket))
+        subscriber: queue.Queue[LiveEvent] | None = None
         pending_events: deque[LiveEvent] = deque()
         speaker_config = VoiceSpeakerConfig(
             player_speaker=self.config.player_speaker,
             judge_speaker=self.config.judge_speaker,
         )
         try:
+            if not await _replay_recent_utterance(
+                websocket,
+                voice_store,
+                run_id=run_id,
+                current_event_id=current_event_id,
+                disconnect_task=disconnect_task,
+            ):
+                return
+
+            subscriber = self.registry.subscribe(run_id, after_id=last_event_id)
             while True:
                 event = await _next_voice_event(
                     subscriber,
@@ -148,7 +175,8 @@ class LiveVoiceStreamService:
             disconnect_task.cancel()
             with suppress(asyncio.CancelledError):
                 await disconnect_task
-            self.registry.unsubscribe(run_id, subscriber)
+            if subscriber is not None:
+                self.registry.unsubscribe(run_id, subscriber)
 
     async def _stream_utterance(
         self,
@@ -354,6 +382,120 @@ async def _watch_websocket_disconnect(websocket: WebSocket) -> None:
                 return
     except WebSocketDisconnect:
         return
+
+
+async def _replay_recent_utterance(
+    websocket: WebSocket,
+    voice_store: VoiceStore | None,
+    *,
+    run_id: str,
+    current_event_id: int | None,
+    disconnect_task: asyncio.Task[None],
+) -> bool:
+    if voice_store is None or current_event_id is None:
+        return True
+
+    try:
+        utterance = voice_store.find_recent_utterance(
+            run_id=run_id,
+            current_event_id=current_event_id,
+        )
+    except Exception:
+        logger.warning(
+            "Voice replay lookup failed",
+            exc_info=True,
+            extra={"run_id": run_id, "current_event_id": current_event_id},
+        )
+        return True
+    if utterance is None or utterance.get("status") != "complete":
+        return True
+
+    utterance_id = utterance.get("utterance_id")
+    if not isinstance(utterance_id, str):
+        return True
+    try:
+        chunks = voice_store.load_chunks(utterance_id)
+    except Exception:
+        logger.warning(
+            "Voice replay chunk load failed",
+            exc_info=True,
+            extra={"run_id": run_id, "utterance_id": utterance_id},
+        )
+        return True
+    if not chunks:
+        return True
+
+    duration_ms = utterance.get("duration_ms")
+    if not isinstance(duration_ms, int):
+        duration_ms = 0
+    source_event_id = utterance.get("source_event_id")
+    sample_rate = utterance.get("sample_rate")
+    speaker_kind = utterance.get("speaker_kind")
+    speaker_name = utterance.get("speaker_name")
+    mime_type = utterance.get("mime_type")
+    audio_format = utterance.get("audio_format")
+    if (
+        not isinstance(source_event_id, int)
+        or speaker_kind not in {"player", "judge"}
+        or not isinstance(speaker_name, str)
+        or not isinstance(mime_type, str)
+        or not isinstance(audio_format, str)
+        or not isinstance(sample_rate, int)
+    ):
+        return True
+
+    start_message, _chunk_message, _end_message = build_voice_messages(
+        utterance_id=utterance_id,
+        source_event_id=source_event_id,
+        speaker_kind=speaker_kind,
+        speaker_name=speaker_name,
+        audio=chunks[0],
+        mime_type=mime_type,
+        duration_ms=duration_ms,
+        audio_format=audio_format,
+        sample_rate=sample_rate,
+        chunk_index=0,
+    )
+    if not await _send_replay_message(websocket, start_message, disconnect_task):
+        return False
+
+    for chunk_index, audio in enumerate(chunks):
+        _start_message, chunk_message, _end_message = build_voice_messages(
+            utterance_id=utterance_id,
+            source_event_id=source_event_id,
+            speaker_kind=speaker_kind,
+            speaker_name=speaker_name,
+            audio=audio,
+            mime_type=mime_type,
+            duration_ms=duration_ms,
+            audio_format=audio_format,
+            sample_rate=sample_rate,
+            chunk_index=chunk_index,
+        )
+        if not await _send_replay_message(websocket, chunk_message, disconnect_task):
+            return False
+
+    end_message = {
+        "type": "voice_end",
+        "utterance_id": utterance_id,
+        "duration_ms": duration_ms,
+    }
+    return await _send_replay_message(websocket, end_message, disconnect_task)
+
+
+async def _send_replay_message(
+    websocket: WebSocket,
+    message: dict[str, Any],
+    disconnect_task: asyncio.Task[None],
+) -> bool:
+    if disconnect_task.done():
+        return False
+    try:
+        await websocket.send_json(message)
+    except WebSocketDisconnect:
+        return False
+    await asyncio.sleep(0)
+    return not disconnect_task.done()
 
 
 def _persist_voice_operation(

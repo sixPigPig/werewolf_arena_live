@@ -294,7 +294,7 @@ describe("live voice stream", () => {
     const expectedOrigin = window.location.origin.replace(/^http/, "ws");
 
     expect(resolveVoiceStreamUrl("run/slash id", "/api")).toBe(
-      `${expectedOrigin}/api/api/v1/games/runs/run%2Fslash%20id/voice-stream`,
+      `${expectedOrigin}/api/v1/games/runs/run%2Fslash%20id/voice-stream`,
     );
     expect(resolveVoiceStreamUrl("run-1", "proxy")).toBe(
       `${expectedOrigin}/proxy/api/v1/games/runs/run-1/voice-stream`,
@@ -305,6 +305,18 @@ describe("live voice stream", () => {
     expect(resolveVoiceStreamUrl("run-1", "https://example.com/proxy")).toBe(
       "wss://example.com/proxy/api/v1/games/runs/run-1/voice-stream",
     );
+  });
+
+  it("appends the current event id when provided", () => {
+    expect(resolveVoiceStreamUrl("run-1", "https://example.com/api", 0)).toBe(
+      "wss://example.com/api/v1/games/runs/run-1/voice-stream?current_event_id=0",
+    );
+    expect(resolveVoiceStreamUrl("run-1", "https://example.com/api", 7)).toBe(
+      "wss://example.com/api/v1/games/runs/run-1/voice-stream?current_event_id=7",
+    );
+    expect(
+      resolveVoiceStreamUrl("run-1", "https://example.com/api", null),
+    ).toBe("wss://example.com/api/v1/games/runs/run-1/voice-stream");
   });
 
   it("groups chunks by utterance and marks completed audio", () => {
@@ -563,6 +575,45 @@ describe("live voice stream", () => {
     expect(result.current.connectionState).toBe("open");
     expect(result.current.currentSpeakerName).toBe("阿青");
     expect(result.current.currentItem?.utteranceId).toBe("voice-1");
+  });
+
+  it("opens the websocket with the initial current event id", () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 7,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    expect(MockWebSocket.instances[0].url).toContain(
+      "/api/v1/games/runs/run-1/voice-stream?current_event_id=7",
+    );
+  });
+
+  it("does not reconnect when current event id changes while connected", () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { rerender } = renderHook(
+      ({ currentEventId }: { currentEventId: number }) =>
+        useLiveVoiceStream("run-1", {
+          currentEventId,
+          enabled: true,
+          isPaused: false,
+        }),
+      { initialProps: { currentEventId: 7 } },
+    );
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+    });
+    rerender({ currentEventId: 8 });
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(socket.close).not.toHaveBeenCalled();
   });
 
   it("hides the current speaker name while paused without clearing the queue", () => {

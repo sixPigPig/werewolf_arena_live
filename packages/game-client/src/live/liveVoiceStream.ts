@@ -105,14 +105,21 @@ type VoiceQueueAction =
       utteranceId: string;
     };
 
-export function resolveVoiceStreamUrl(runId: string, baseUrl = API_BASE_URL) {
+export function resolveVoiceStreamUrl(
+  runId: string,
+  baseUrl = API_BASE_URL,
+  currentEventId?: number | null,
+) {
   const fallbackOrigin =
     typeof window === "undefined" ? "http://localhost" : window.location.origin;
   const base = resolveUrlBase(baseUrl, fallbackOrigin);
   const voiceStreamPath = `/api/v1/games/runs/${encodeURIComponent(runId)}/voice-stream`;
-  base.pathname = joinUrlPaths(base.pathname, voiceStreamPath);
+  base.pathname = joinUrlPaths(stripApiPathSuffix(base.pathname), voiceStreamPath);
   base.search = "";
   base.hash = "";
+  if (currentEventId !== null && currentEventId !== undefined) {
+    base.searchParams.set("current_event_id", String(currentEventId));
+  }
 
   if (base.protocol === "https:") {
     base.protocol = "wss:";
@@ -145,6 +152,17 @@ function joinUrlPaths(prefix: string, path: string) {
     return path;
   }
   return `${trimmedPrefix}${path}`;
+}
+
+function stripApiPathSuffix(pathname: string) {
+  const trimmedPathname = pathname.replace(/\/+$/, "");
+  if (trimmedPathname === "/api") {
+    return "";
+  }
+  if (trimmedPathname.endsWith("/api")) {
+    return trimmedPathname.slice(0, -"/api".length);
+  }
+  return pathname;
 }
 
 export function createVoiceQueue(): LiveVoiceQueue {
@@ -474,6 +492,8 @@ export function useLiveVoiceStream(
     () => (runId ? resolveVoiceStreamUrl(runId) : null),
     [runId],
   );
+  const latestCurrentEventIdRef = useRef(currentEventId);
+  latestCurrentEventIdRef.current = currentEventId;
   const visibleQueue = useMemo(
     () => pruneStaleVoiceQueue(queue, currentEventId),
     [currentEventId, queue],
@@ -960,7 +980,7 @@ export function useLiveVoiceStream(
     consumedUtteranceIdsRef.current.clear();
     dispatch({ type: "reset" });
 
-    if (!enabled || !streamUrl) {
+    if (!enabled || !streamUrl || !runId) {
       setConnectionState("idle");
       return;
     }
@@ -998,7 +1018,12 @@ export function useLiveVoiceStream(
 
       let nextSocket: WebSocket;
       try {
-        nextSocket = new WebSocketConstructor(streamUrl);
+        const connectionUrl = resolveVoiceStreamUrl(
+          runId,
+          API_BASE_URL,
+          latestCurrentEventIdRef.current,
+        );
+        nextSocket = new WebSocketConstructor(connectionUrl);
       } catch {
         reportError("Unable to open live voice stream.");
         return;
@@ -1071,7 +1096,7 @@ export function useLiveVoiceStream(
       isActive = false;
       socket?.close();
     };
-  }, [enabled, streamUrl]);
+  }, [enabled, runId, streamUrl]);
 
   return {
     connectionState,
