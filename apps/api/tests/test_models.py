@@ -3,6 +3,12 @@ from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.models.game_session import GameReplayPayload, GameSessionRecord
+from app.models.live import (
+    LiveEventRecord,
+    LiveRunRecord,
+    VoiceAudioChunkRecord,
+    VoiceUtteranceRecord,
+)
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -241,3 +247,106 @@ def test_game_replay_payload_table_matches_expected_schema() -> None:
     assert table.c.state.nullable is False
     assert table.c.logs.nullable is False
     assert table.c.checkpoint.nullable is True
+
+
+def test_live_run_table_matches_expected_schema() -> None:
+    table = LiveRunRecord.__table__
+
+    assert table.name == "live_runs"
+    assert set(table.columns.keys()) == {
+        "run_id",
+        "session_id",
+        "status",
+        "villager_model",
+        "werewolf_model",
+        "seed",
+        "max_rounds",
+        "rule_set_id",
+        "rule_set",
+        "player_configs",
+        "lineup_quality_warnings",
+        "winner",
+        "error",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "updated_at",
+    }
+    assert table.c.run_id.primary_key is True
+    assert table.c.session_id.index is True
+    assert any(index.name == "ix_live_runs_status" for index in table.indexes)
+    assert any(index.name == "ix_live_runs_updated_at" for index in table.indexes)
+
+
+def test_live_event_table_matches_expected_schema() -> None:
+    table = LiveEventRecord.__table__
+
+    assert table.name == "live_events"
+    assert set(table.columns.keys()) == {
+        "run_id",
+        "event_id",
+        "session_id",
+        "type",
+        "round",
+        "phase",
+        "actor",
+        "action",
+        "payload",
+        "created_at",
+    }
+    assert table.primary_key.columns.keys() == ["run_id", "event_id"]
+    assert table.c.run_id.foreign_keys
+    assert any(index.name == "ix_live_events_run_id_event_id" for index in table.indexes)
+    assert any(index.name == "ix_live_events_session_id" for index in table.indexes)
+    assert any(index.name == "ix_live_events_type" for index in table.indexes)
+
+
+def test_voice_utterance_table_matches_expected_schema() -> None:
+    table = VoiceUtteranceRecord.__table__
+
+    assert table.name == "voice_utterances"
+    assert set(table.columns.keys()) == {
+        "utterance_id",
+        "run_id",
+        "session_id",
+        "source_event_id",
+        "last_source_event_id",
+        "request_id",
+        "speaker_kind",
+        "speaker_name",
+        "speaker",
+        "action",
+        "text",
+        "text_hash",
+        "audio_format",
+        "sample_rate",
+        "mime_type",
+        "status",
+        "duration_ms",
+        "error_message",
+        "created_at",
+        "updated_at",
+        "completed_at",
+    }
+    assert table.c.utterance_id.primary_key is True
+    assert any(index.name == "ix_voice_utterances_run_source_event" for index in table.indexes)
+    assert any(index.name == "ix_voice_utterances_request_id" for index in table.indexes)
+    assert any(index.name == "ix_voice_utterances_text_hash" for index in table.indexes)
+    assert any(index.name == "ix_voice_utterances_status" for index in table.indexes)
+
+
+def test_voice_audio_chunk_table_matches_expected_schema() -> None:
+    table = VoiceAudioChunkRecord.__table__
+
+    assert table.name == "voice_audio_chunks"
+    assert set(table.columns.keys()) == {
+        "utterance_id",
+        "chunk_index",
+        "audio",
+        "byte_length",
+        "created_at",
+    }
+    assert table.primary_key.columns.keys() == ["utterance_id", "chunk_index"]
+    assert table.c.utterance_id.foreign_keys
+    foreign_key = next(iter(table.c.utterance_id.foreign_keys))
+    assert foreign_key.ondelete == "CASCADE"
