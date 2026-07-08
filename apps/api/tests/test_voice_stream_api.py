@@ -99,6 +99,14 @@ class DisconnectingOnVoiceEndWebSocket(FakeWebSocket):
         await super().send_json(message)
 
 
+class MarkingDisconnectOnVoiceEndWebSocket(FakeWebSocket):
+    async def send_json(self, message: dict) -> None:
+        await super().send_json(message)
+        if message.get("type") == "voice_end":
+            self.disconnect()
+            await asyncio.sleep(0)
+
+
 class RecordingTtsClient:
     instances: list["RecordingTtsClient"] = []
 
@@ -1159,6 +1167,52 @@ def test_voice_stream_service_marks_utterance_failed_when_voice_end_disconnects(
     assert [message["type"] for message in websocket.messages] == [
         "voice_start",
         "audio_chunk",
+    ]
+    assert voice_store.failed == [
+        {
+            "utterance_id": websocket.messages[0]["utterance_id"],
+            "message": "Voice stream disconnected",
+        }
+    ]
+    assert voice_store.completed == []
+
+
+def test_voice_stream_service_marks_utterance_failed_when_disconnect_task_finishes_at_voice_end() -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = MarkingDisconnectOnVoiceEndWebSocket()
+    voice_store = RecordingVoiceStore()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
+    )
+
+    async def stream_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-public",
+                "visible_text": "我先发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_events())
+
+    assert [message["type"] for message in websocket.messages[:3]] == [
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
     ]
     assert voice_store.failed == [
         {

@@ -306,6 +306,12 @@ class LiveVoiceStreamService:
 
         try:
             await _close_async_iterator(audio_iterator)
+            if _mark_voice_stream_disconnected_if_needed(
+                disconnect_task,
+                voice_store,
+                utterance,
+            ):
+                return False
             duration_ms = int((time.monotonic() - started_at) * 1000)
             await websocket.send_json(
                 {
@@ -314,6 +320,12 @@ class LiveVoiceStreamService:
                     "duration_ms": duration_ms,
                 }
             )
+            if _mark_voice_stream_disconnected_if_needed(
+                disconnect_task,
+                voice_store,
+                utterance,
+            ):
+                return False
             _persist_voice_operation(
                 voice_store,
                 utterance,
@@ -389,6 +401,21 @@ def _mark_voice_stream_interrupted(
             message=message,
         ),
     )
+
+
+def _mark_voice_stream_disconnected_if_needed(
+    disconnect_task: asyncio.Task[None],
+    voice_store: VoiceStore | None,
+    utterance: VoiceUtterance,
+) -> bool:
+    if not disconnect_task.done():
+        return False
+    _mark_voice_stream_interrupted(
+        voice_store,
+        utterance,
+        "Voice stream disconnected",
+    )
+    return True
 
 
 async def _close_async_iterator(iterator: AsyncIterator[bytes]) -> None:
