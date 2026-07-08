@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import threading
 import uuid
@@ -12,6 +13,7 @@ from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
 
 RunStatus = Literal["queued", "running", "completed", "failed"]
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
@@ -367,11 +369,21 @@ class LiveRunRegistry:
 
     def _persist_run_locked(self, run: LiveGameRun) -> None:
         if self._live_store is not None:
-            self._live_store.save_run(run)
+            try:
+                self._live_store.save_run(run)
+            except Exception:
+                logger.exception("Failed to persist live run %s", run.run_id)
 
     def _persist_event_locked(self, event: LiveEvent) -> None:
         if self._live_store is not None:
-            self._live_store.append_event(event)
+            try:
+                self._live_store.append_event(event)
+            except Exception:
+                logger.exception(
+                    "Failed to persist live event %s for run %s",
+                    event.id,
+                    event.run_id,
+                )
 
 
 class EventSink:

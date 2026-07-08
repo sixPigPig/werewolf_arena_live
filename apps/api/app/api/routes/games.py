@@ -16,8 +16,7 @@ from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.checkpoint import ResumeCheckpointError
 from app.werewolf.config import choose_player_names
 from app.werewolf.debate_realism import lineup_quality_warnings
-from app.werewolf.live import EventSink, LiveEvent, LiveRunRegistry, format_sse
-from app.werewolf.live import LiveGameRun
+from app.werewolf.live import EventSink, LiveEvent, LiveGameRun, LiveRunRegistry, format_sse
 from app.werewolf.live_store import DatabaseLiveStore
 from app.werewolf.player_configs import (
     PlayerConfig,
@@ -47,7 +46,6 @@ from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
 
 router = APIRouter()
-live_registry = LiveRunRegistry()
 RecoverableDatabaseError = (OperationalError, ProgrammingError)
 PLAYER_PROFILE_DATABASE_UNAVAILABLE = "Player profile database unavailable"
 
@@ -79,10 +77,6 @@ def get_replay_store(db: Annotated[Session, Depends(get_db)]) -> DatabaseReplayS
     return DatabaseReplayStore(db)
 
 
-def get_live_registry() -> LiveRunRegistry:
-    return live_registry
-
-
 class SessionLiveStore:
     def __init__(self, session_factory: Callable[[], Session] | None = None) -> None:
         self.session_factory = session_factory or SessionLocal
@@ -102,9 +96,11 @@ class SessionLiveStore:
             db.close()
 
 
-def attach_live_store_for_request(registry: LiveRunRegistry) -> LiveRunRegistry:
-    registry.set_live_store(SessionLiveStore(lambda: SessionLocal()))
-    return registry
+live_registry = LiveRunRegistry(live_store=SessionLiveStore())
+
+
+def get_live_registry() -> LiveRunRegistry:
+    return live_registry
 
 
 def get_tts_config() -> VolcengineTtsConfig:
@@ -302,7 +298,6 @@ def create_game_run(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     lineup_warnings = lineup_quality_warnings(player_configs)
     session_id = new_session_id()
-    registry = attach_live_store_for_request(registry)
     run = registry.create_run(
         session_id=session_id,
         villager_model=request.villager_model,
@@ -423,7 +418,6 @@ def resume_game_run(
         checkpoint_player_configs = player_configs_from_serialized(run_params.get("player_configs"))
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
-    registry = attach_live_store_for_request(registry)
     run, created = registry.get_or_create_active_run(
         session_id=session_id,
         villager_model=str(run_params.get("villager_model") or default_model_name()),

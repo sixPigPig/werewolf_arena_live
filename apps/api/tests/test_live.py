@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 
 from app.werewolf.live import LiveRunRegistry, format_sse
@@ -29,6 +30,14 @@ class RecordingLiveStore:
 
     def append_event(self, event) -> None:
         self.events.append((event.run_id, event.id, event.type))
+
+
+class FailingLiveStore:
+    def save_run(self, run) -> None:
+        raise RuntimeError(f"cannot save {run.run_id}")
+
+    def append_event(self, event) -> None:
+        raise RuntimeError(f"cannot append {event.id}")
 
 
 def test_registry_creates_run_with_initial_event() -> None:
@@ -260,3 +269,58 @@ def test_live_registry_persists_created_run_and_events() -> None:
         "run_started",
         "game_completed",
     ]
+
+
+def test_live_registry_keeps_created_run_when_persistence_fails(caplog) -> None:
+    registry = LiveRunRegistry(live_store=FailingLiveStore())
+
+    with caplog.at_level(logging.ERROR, logger="app.werewolf.live"):
+        run = registry.create_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+        )
+
+    assert run.status == "queued"
+    assert [event.type for event in run.events] == ["run_created"]
+    assert registry.get_run(run.run_id) is run
+    assert any("Failed to persist live run" in record.message for record in caplog.records)
+    assert any("Failed to persist live event" in record.message for record in caplog.records)
+
+
+def test_live_registry_publishes_to_subscriber_when_event_persistence_fails() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=run.events[-1].id)
+    registry.set_live_store(FailingLiveStore())
+
+    event = registry.publish(run.run_id, "phase_started", phase="night")
+
+    assert [item.type for item in run.events] == ["run_created", "phase_started"]
+    assert subscriber.get_nowait() is event
+
+
+def test_live_registry_marks_completed_when_persistence_fails() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    registry.set_live_store(FailingLiveStore())
+
+    event = registry.mark_completed(run.run_id, winner="好人阵营")
+
+    assert run.status == "completed"
+    assert event.type == "game_completed"
+    assert run.events[-1] is event

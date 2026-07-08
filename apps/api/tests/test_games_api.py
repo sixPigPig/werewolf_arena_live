@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes.games import (
+    SessionLiveStore,
     _run_game_in_background,
     get_live_registry,
     get_replay_store,
@@ -143,6 +144,21 @@ class ImmediateThread:
 
     def start(self) -> None:
         self.target(**self.kwargs)
+
+
+class RecordingSessionLiveStore(SessionLiveStore):
+    def __init__(self) -> None:
+        super().__init__(TestingSessionLocal)
+        self.saved_runs: list[tuple[str, str]] = []
+        self.events: list[tuple[str, int, str]] = []
+
+    def save_run(self, run) -> None:
+        self.saved_runs.append((run.run_id, run.status))
+        super().save_run(run)
+
+    def append_event(self, event) -> None:
+        self.events.append((event.run_id, event.id, event.type))
+        super().append_event(event)
 
 
 def sample_state(session_id: str, *, winner: str = "狼人阵营", error: str = "") -> dict:
@@ -988,14 +1004,14 @@ def test_create_game_run_persists_live_run_and_created_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     add_virtual_profiles(8)
-    registry = LiveRunRegistry()
+    store = RecordingSessionLiveStore()
+    registry = LiveRunRegistry(live_store=store)
     override_live_registry(registry)
     captured: list[dict[str, object]] = []
 
     def fake_background_run(**kwargs: object) -> None:
         captured.append(kwargs)
 
-    monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
     monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
     monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
 
@@ -1021,6 +1037,7 @@ def test_create_game_run_persists_live_run_and_created_event(
     assert saved_run is not None
     assert saved_run.session_id == payload["session_id"]
     assert [event.type for event in saved_events] == ["run_created"]
+    assert [event[2] for event in store.events] == ["run_created"]
     assert captured[0]["run_id"] == payload["run_id"]
 
 
@@ -1040,7 +1057,7 @@ def test_get_game_run_returns_404_for_missing_run() -> None:
 def test_run_game_in_background_publishes_registry_and_engine_events_directly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registry = LiveRunRegistry()
+    registry = LiveRunRegistry(live_store=SessionLiveStore(TestingSessionLocal))
     run = registry.create_run(
         session_id="game_1200abcd",
         villager_model="deepseek-chat",
@@ -1069,6 +1086,19 @@ def test_run_game_in_background_publishes_registry_and_engine_events_directly(
     )
 
     assert [event.type for event in registry.events_after(run.run_id)] == [
+        "run_created",
+        "run_started",
+        "phase_started",
+        "game_completed",
+    ]
+    with TestingSessionLocal() as session:
+        saved_events = (
+            session.query(LiveEventRecord)
+            .filter(LiveEventRecord.run_id == run.run_id)
+            .order_by(LiveEventRecord.event_id.asc())
+            .all()
+        )
+    assert [event.type for event in saved_events] == [
         "run_created",
         "run_started",
         "phase_started",
