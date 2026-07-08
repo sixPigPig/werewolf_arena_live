@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+from collections.abc import Generator
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.db.base import Base
+from app.models.live import LiveRunRecord
+from app.werewolf.live import LiveRunRegistry
+from app.werewolf.live_store import DatabaseLiveStore
+
+
+@pytest.fixture
+def db_session() -> Generator[Session, None, None]:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with TestingSessionLocal() as session:
+        yield session
+
+
+def test_live_store_saves_run_and_events(db_session: Session) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id="classic_8",
+        rule_set={"id": "classic_8", "name": "经典 8 人局"},
+    )
+    event = registry.publish(
+        run.run_id,
+        "model_response_delta",
+        actor="阿青",
+        action="debate",
+        payload={"request_id": "req-1", "visible_text": "我不是狼", "is_public": True},
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    store.append_event(event)
+    loaded_events = store.events_after(run.run_id)
+
+    saved_run = db_session.get(LiveRunRecord, run.run_id)
+    assert saved_run is not None
+    assert saved_run.session_id == "game_1200abcd"
+    assert [item.id for item in loaded_events] == [event.id]
+    assert loaded_events[0].payload["visible_text"] == "我不是狼"
+
+
+def test_live_store_events_after_filters_by_event_id(db_session: Session) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    first = registry.publish(run.run_id, "phase_started", phase="night")
+    second = registry.publish(run.run_id, "phase_started", phase="day")
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    store.append_event(first)
+    store.append_event(second)
+
+    assert [event.id for event in store.events_after(run.run_id, after_id=first.id)] == [
+        second.id
+    ]
+
+
+def test_live_store_updates_run_status(db_session: Session) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    run.status = "completed"
+    run.winner = "好人阵营"
+    run.completed_at = "2026-07-08T00:00:00Z"
+    store.save_run(run)
+
+    saved_run = db_session.get(LiveRunRecord, run.run_id)
+    assert saved_run is not None
+    assert saved_run.status == "completed"
+    assert saved_run.winner == "好人阵营"
