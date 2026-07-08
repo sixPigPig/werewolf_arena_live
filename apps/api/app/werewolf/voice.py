@@ -109,6 +109,9 @@ def build_voice_messages(
     audio: bytes,
     mime_type: str,
     duration_ms: int,
+    audio_format: str,
+    sample_rate: int,
+    chunk_index: int,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     return (
         {
@@ -118,11 +121,16 @@ def build_voice_messages(
             "speaker_kind": speaker_kind,
             "speaker_name": speaker_name,
             "mime_type": mime_type,
+            "audio_format": audio_format,
+            "sample_rate": sample_rate,
         },
         {
             "type": "audio_chunk",
             "utterance_id": utterance_id,
+            "chunk_index": chunk_index,
             "mime_type": mime_type,
+            "audio_format": audio_format,
+            "sample_rate": sample_rate,
             "data": base64.b64encode(audio).decode("ascii"),
         },
         {

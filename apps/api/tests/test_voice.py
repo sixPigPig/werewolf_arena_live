@@ -194,16 +194,24 @@ def test_voice_messages_serialize_audio_chunks() -> None:
         speaker_kind="player",
         speaker_name="阿青",
         audio=b"abc",
-        mime_type="audio/mpeg",
+        mime_type="audio/L16",
         duration_ms=1200,
+        audio_format="pcm",
+        sample_rate=24000,
+        chunk_index=3,
     )
 
     assert start["type"] == "voice_start"
     assert start["source_event_id"] == 10
+    assert start["audio_format"] == "pcm"
+    assert start["sample_rate"] == 24000
     assert chunk == {
         "type": "audio_chunk",
         "utterance_id": "voice_1",
-        "mime_type": "audio/mpeg",
+        "chunk_index": 3,
+        "mime_type": "audio/L16",
+        "audio_format": "pcm",
+        "sample_rate": 24000,
         "data": "YWJj",
     }
     assert end == {"type": "voice_end", "utterance_id": "voice_1", "duration_ms": 1200}

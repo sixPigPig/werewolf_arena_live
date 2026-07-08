@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     ark_tts_ws_url: str = "wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection"
     ark_tts_player_speaker: str = "zh_female_gaolengyujie_uranus_bigtts"
     ark_tts_judge_speaker: str = "zh_female_vv_uranus_bigtts"
-    ark_tts_audio_format: str = "mp3"
+    ark_tts_audio_format: str = "pcm"
     ark_tts_sample_rate: int = 24000
 
     @field_validator("cors_origins", mode="before")
