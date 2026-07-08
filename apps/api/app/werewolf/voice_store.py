@@ -145,9 +145,14 @@ class DatabaseVoiceStore:
     ) -> dict[str, Any] | None:
         record = (
             self.db.query(VoiceUtteranceRecord)
+            .join(
+                VoiceAudioChunkRecord,
+                VoiceAudioChunkRecord.utterance_id == VoiceUtteranceRecord.utterance_id,
+            )
             .filter(
                 VoiceUtteranceRecord.run_id == run_id,
                 VoiceUtteranceRecord.last_source_event_id <= current_event_id,
+                VoiceUtteranceRecord.status == "complete",
             )
             .order_by(VoiceUtteranceRecord.last_source_event_id.desc())
             .first()

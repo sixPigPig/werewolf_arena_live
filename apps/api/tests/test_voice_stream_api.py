@@ -6,11 +6,17 @@ from dataclasses import replace
 import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.api.routes.games import get_live_registry, get_voice_streamer
+from app.db.base import Base
 from app.main import app
 from app.werewolf.live import LiveRunRegistry
+from app.werewolf.voice import VoiceUtterance
 from app.werewolf.voice_stream import LiveVoiceStreamService
+from app.werewolf.voice_store import DatabaseVoiceStore
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
 
@@ -334,6 +340,39 @@ def create_run(registry: LiveRunRegistry):
         seed=21,
         max_rounds=8,
         **classic_rule_kwargs(),
+    )
+
+
+@pytest.fixture
+def db_session() -> Generator[Session, None, None]:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with TestingSessionLocal() as session:
+        yield session
+
+
+def stored_voice_utterance(
+    *,
+    utterance_id: str,
+    run_id: str,
+    source_event_id: int,
+    text: str,
+) -> VoiceUtterance:
+    return VoiceUtterance(
+        utterance_id=utterance_id,
+        run_id=run_id,
+        source_event_id=source_event_id,
+        request_id=f"req-{utterance_id}",
+        speaker_kind="player",
+        speaker_name="阿青",
+        speaker="player",
+        text=text,
+        action="debate",
     )
 
 
@@ -773,6 +812,103 @@ def test_voice_stream_service_replays_recent_complete_utterance_then_streams_fut
         "speaker": "player",
         "text_chunks": ["这是重连后的现场发言。"],
     }
+
+
+def test_voice_stream_service_replays_database_utterance_when_newer_rows_are_invalid(
+    db_session: Session,
+) -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    store = DatabaseVoiceStore(db_session, session_id=run.session_id)
+    complete = stored_voice_utterance(
+        utterance_id="stored-complete",
+        run_id=run.run_id,
+        source_event_id=4,
+        text="这是可回放的历史发言。",
+    )
+    failed = stored_voice_utterance(
+        utterance_id="stored-failed",
+        run_id=run.run_id,
+        source_event_id=7,
+        text="这是失败的历史发言。",
+    )
+    chunkless = stored_voice_utterance(
+        utterance_id="stored-chunkless",
+        run_id=run.run_id,
+        source_event_id=8,
+        text="这是没有音频的历史发言。",
+    )
+    store.upsert_utterance(
+        complete,
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.append_chunk("stored-complete", chunk_index=0, audio=b"complete-audio")
+    store.complete_utterance("stored-complete", duration_ms=456)
+    store.upsert_utterance(
+        failed,
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.append_chunk("stored-failed", chunk_index=0, audio=b"failed-audio")
+    store.fail_utterance("stored-failed", message="tts failed")
+    store.upsert_utterance(
+        chunkless,
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.complete_utterance("stored-chunkless", duration_ms=100)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda session_id: DatabaseVoiceStore(
+            db_session,
+            session_id=session_id,
+        ),
+    )
+
+    async def stream_then_disconnect() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket, current_event_id=8))
+        await wait_for_subscription(registry, run.run_id)
+        websocket.disconnect()
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_then_disconnect())
+
+    assert websocket.messages == [
+        {
+            "type": "voice_start",
+            "utterance_id": "stored-complete",
+            "source_event_id": 4,
+            "speaker_kind": "player",
+            "speaker_name": "阿青",
+            "mime_type": "audio/L16",
+            "audio_format": "pcm",
+            "sample_rate": 24000,
+        },
+        {
+            "type": "audio_chunk",
+            "utterance_id": "stored-complete",
+            "chunk_index": 0,
+            "mime_type": "audio/L16",
+            "audio_format": "pcm",
+            "sample_rate": 24000,
+            "data": "Y29tcGxldGUtYXVkaW8=",
+        },
+        {
+            "type": "voice_end",
+            "utterance_id": "stored-complete",
+            "duration_ms": 456,
+        },
+    ]
+    assert RecordingTtsClient.instances == []
+    assert registry.get_run(run.run_id).subscribers == []
 
 
 @pytest.mark.parametrize(

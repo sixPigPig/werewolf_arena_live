@@ -40,6 +40,25 @@ def utterance(text: str = "我不是狼") -> VoiceUtterance:
     )
 
 
+def stored_utterance(
+    *,
+    utterance_id: str,
+    source_event_id: int,
+    text: str,
+) -> VoiceUtterance:
+    return VoiceUtterance(
+        utterance_id=utterance_id,
+        run_id="run_1",
+        source_event_id=source_event_id,
+        request_id=f"req-{utterance_id}",
+        speaker_kind="player",
+        speaker_name="阿青",
+        speaker="zh_female_vv_uranus_bigtts",
+        text=text,
+        action="debate",
+    )
+
+
 def test_voice_store_creates_updates_chunks_and_completes(db_session: Session) -> None:
     store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
 
@@ -63,26 +82,42 @@ def test_voice_store_creates_updates_chunks_and_completes(db_session: Session) -
 
 def test_voice_store_finds_recent_utterance_for_request(db_session: Session) -> None:
     store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
-    first = utterance("第一句")
-    second = utterance("第二句")
-    second = VoiceUtterance(
-        utterance_id="voice_2",
-        run_id=second.run_id,
-        source_event_id=8,
-        request_id=second.request_id,
-        speaker_kind=second.speaker_kind,
-        speaker_name=second.speaker_name,
-        speaker=second.speaker,
-        text=second.text,
-        action=second.action,
-    )
+    first = stored_utterance(utterance_id="voice_1", source_event_id=4, text="第一句")
+    second = stored_utterance(utterance_id="voice_2", source_event_id=8, text="第二句")
 
     store.upsert_utterance(first, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
     store.upsert_utterance(second, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
+    store.append_chunk("voice_1", chunk_index=0, audio=b"old")
+    store.complete_utterance("voice_1", duration_ms=100)
+    store.append_chunk("voice_2", chunk_index=0, audio=b"new")
+    store.complete_utterance("voice_2", duration_ms=200)
 
     found = store.find_recent_utterance(run_id="run_1", current_event_id=9)
     assert found is not None
     assert found["utterance_id"] == "voice_2"
+
+
+def test_voice_store_finds_recent_replayable_utterance_when_newer_rows_are_invalid(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    complete = stored_utterance(utterance_id="voice_complete", source_event_id=4, text="可回放")
+    failed = stored_utterance(utterance_id="voice_failed", source_event_id=7, text="失败")
+    chunkless = stored_utterance(utterance_id="voice_chunkless", source_event_id=8, text="无音频")
+
+    store.upsert_utterance(complete, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
+    store.append_chunk("voice_complete", chunk_index=0, audio=b"complete-audio")
+    store.complete_utterance("voice_complete", duration_ms=300)
+    store.upsert_utterance(failed, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
+    store.append_chunk("voice_failed", chunk_index=0, audio=b"failed-audio")
+    store.fail_utterance("voice_failed", message="tts failed")
+    store.upsert_utterance(chunkless, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
+    store.complete_utterance("voice_chunkless", duration_ms=100)
+
+    found = store.find_recent_utterance(run_id="run_1", current_event_id=8)
+
+    assert found is not None
+    assert found["utterance_id"] == "voice_complete"
 
 
 def test_voice_store_defaults_new_utterance_to_synthesizing(db_session: Session) -> None:
