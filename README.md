@@ -35,6 +35,10 @@ cd apps/api && uv run alembic upgrade head
 
 数据库不可用时，玩家档案 CRUD 和依赖玩家库的开局请求会返回 `503`，不会回退到本地 JSON 文件。
 
+实时观战 run、SSE 事件、语音 utterance 和语音音频 chunk 也会写入 PostgreSQL。语音和实时事件相关表由
+`apps/api/alembic/versions/20260708_01_create_live_voice_tables.py` 创建；如果刚拉到新代码，务必先执行
+`alembic upgrade head`，否则发起对局和语音补播会缺少持久化表。
+
 如果旧版本曾在 `apps/api/logs/player_profiles.json` 写入玩家档案，可在数据库迁移完成后执行一次幂等导入：
 
 ```bash
@@ -120,6 +124,28 @@ http://<你的电脑局域网 IP>:5174
 
 移动端和桌面端共用 `/api/v1/...`，开发服务器会把 `/api` 代理到 `http://127.0.0.1:8000`。
 
+## 实时语音
+
+实时语音默认关闭。要启用火山方舟 TTS，在 `apps/api/.env` 中配置：
+
+```dotenv
+ARK_TTS_ENABLED=true
+ARK_TTS_API_KEY=<your-api-key>
+ARK_TTS_RESOURCE_ID=seed-tts-2.0
+ARK_TTS_AUDIO_FORMAT=pcm
+ARK_TTS_SAMPLE_RATE=24000
+```
+
+后端通过 `/api/v1/games/runs/<run_id>/voice-stream` WebSocket 推送语音。协议会先发送
+`voice_start`，随后边收到 TTS 音频边发送多个 `audio_chunk`，最后发送 `voice_end`；前端对
+`pcm` 音频会使用 Web Audio 边收边排播，不再等待整段音频完成才播放。非 PCM 格式仍保留
+Blob 播放兜底。
+
+语音 utterance 元数据和 chunk 会持久化到 PostgreSQL。客户端连接语音流时会带上当前事件
+`current_event_id`；如果用户晚连或短暂断线，后端会从数据库补播最近一条已完成且有音频
+chunk 的 utterance，然后再订阅后续实时事件。移动端首次开启语音会先执行浏览器音频解锁；
+如果浏览器不支持 Web Audio，会在页面上显示语音不可用/播放失败状态。
+
 ## 实时观战流程
 
 1. 打开 `http://127.0.0.1:5173/games`。
@@ -135,7 +161,8 @@ cd apps/api
 .venv/bin/python -m app.cli purge-legacy-game-records --logs-dir logs --yes
 ```
 
-实时 run 和 SSE 事件仍保存在 API 进程内存中，当前部署应使用单个 API worker。同一进程内重复恢复同一对局会复用已有活动 run，不会重复启动模型任务；跨进程排他需要后续引入共享任务存储。
+实时 run 和 SSE 事件会写入 PostgreSQL，同时活动订阅、正在运行的模型任务和内存队列仍由当前 API
+进程管理，当前部署应使用单个 API worker。同一进程内重复恢复同一对局会复用已有活动 run，不会重复启动模型任务；跨进程排他需要后续引入共享任务存储。
 
 运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。当前内置
 DeepSeek 和 MiniMax；如果 `WEREWOLF_DEFAULT_MODEL` 为空，后端会从已配置 API key 的

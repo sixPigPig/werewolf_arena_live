@@ -501,7 +501,9 @@ export function useLiveVoiceStream(
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const pcmSchedulerRef = useRef<PcmAudioScheduler | null>(null);
-  const pcmCompletionTimeoutRef = useRef<number | null>(null);
+  const pcmCompletionTimeoutRef = useRef<
+    ReturnType<typeof globalThis.setTimeout> | null
+  >(null);
   const pcmEndTimesRef = useRef<Map<string, number>>(new Map());
   const scheduledPcmChunkIndexesRef = useRef<Map<string, Set<number>>>(
     new Map(),
