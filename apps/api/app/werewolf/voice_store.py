@@ -103,6 +103,8 @@ class DatabaseVoiceStore:
         record = self.db.get(VoiceUtteranceRecord, utterance_id)
         if record is None:
             return
+        if record.status in TERMINAL_STATUSES:
+            return
         record.status = "complete"
         record.duration_ms = duration_ms
         record.error_message = None
@@ -112,6 +114,8 @@ class DatabaseVoiceStore:
     def fail_utterance(self, utterance_id: str, *, message: str) -> None:
         record = self.db.get(VoiceUtteranceRecord, utterance_id)
         if record is None:
+            return
+        if record.status in TERMINAL_STATUSES:
             return
         record.status = "failed"
         record.error_message = message

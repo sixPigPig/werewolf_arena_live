@@ -281,6 +281,54 @@ def test_voice_store_upsert_after_failure_keeps_terminal_metadata(
     assert loaded["completed_at"] == failed["completed_at"]
 
 
+def test_voice_store_complete_after_failure_keeps_failure_metadata(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("原始文本"),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.fail_utterance("voice_1", message="tts failed")
+    failed = store.load_utterance("voice_1")
+    assert failed is not None
+
+    store.complete_utterance("voice_1", duration_ms=1200)
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["status"] == "failed"
+    assert loaded["error_message"] == "tts failed"
+    assert loaded["duration_ms"] is None
+    assert loaded["completed_at"] == failed["completed_at"]
+
+
+def test_voice_store_fail_after_complete_keeps_completion_metadata(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("原始文本"),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.complete_utterance("voice_1", duration_ms=1200)
+    completed = store.load_utterance("voice_1")
+    assert completed is not None
+
+    store.fail_utterance("voice_1", message="tts failed")
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["status"] == "complete"
+    assert loaded["duration_ms"] == 1200
+    assert loaded["error_message"] is None
+    assert loaded["completed_at"] == completed["completed_at"]
+
+
 def test_voice_store_rejects_incompatible_existing_utterance(
     db_session: Session,
 ) -> None:
