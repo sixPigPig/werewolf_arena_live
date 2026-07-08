@@ -21,7 +21,7 @@ BASE_TTS_CONFIG = VolcengineTtsConfig(
     ws_url="wss://example.test",
     player_speaker="player",
     judge_speaker="judge",
-    audio_format="mp3",
+    audio_format="pcm",
     sample_rate=24000,
 )
 
@@ -41,14 +41,19 @@ class FakeVoiceStreamer:
                 "source_event_id": 2,
                 "speaker_kind": "player",
                 "speaker_name": "阿青",
-                "mime_type": "audio/mpeg",
+                "mime_type": "audio/L16",
+                "audio_format": "pcm",
+                "sample_rate": 24000,
             }
         )
         await websocket.send_json(
             {
                 "type": "audio_chunk",
                 "utterance_id": "voice_1",
-                "mime_type": "audio/mpeg",
+                "chunk_index": 0,
+                "mime_type": "audio/L16",
+                "audio_format": "pcm",
+                "sample_rate": 24000,
                 "data": "YWJj",
             }
         )
@@ -227,8 +232,15 @@ def test_voice_stream_route_forwards_stream_messages() -> None:
 
     with client_with_overrides() as client:
         with client.websocket_connect(f"/api/v1/games/runs/{run.run_id}/voice-stream") as ws:
-            assert ws.receive_json()["type"] == "voice_start"
-            assert ws.receive_json()["type"] == "audio_chunk"
+            start = ws.receive_json()
+            chunk = ws.receive_json()
+            assert start["type"] == "voice_start"
+            assert start["audio_format"] == "pcm"
+            assert start["sample_rate"] == 24000
+            assert chunk["type"] == "audio_chunk"
+            assert chunk["audio_format"] == "pcm"
+            assert chunk["sample_rate"] == 24000
+            assert chunk["chunk_index"] == 0
             assert ws.receive_json()["type"] == "voice_end"
 
 
@@ -309,7 +321,13 @@ def test_voice_stream_service_streams_public_voice_events_and_unsubscribes() -> 
         "audio_chunk",
         "voice_end",
     ]
+    assert websocket.messages[0]["audio_format"] == "pcm"
+    assert websocket.messages[0]["sample_rate"] == 24000
+    assert websocket.messages[1]["chunk_index"] == 0
+    assert websocket.messages[1]["audio_format"] == "pcm"
+    assert websocket.messages[1]["sample_rate"] == 24000
     assert websocket.messages[1]["data"] == "YWJj"
+    assert websocket.messages[4]["chunk_index"] == 0
 
 
 def test_voice_stream_service_ignores_public_action_when_flag_is_false() -> None:
@@ -541,6 +559,11 @@ def test_voice_stream_service_continues_after_synthesis_error() -> None:
         "source_event_id": websocket.messages[0]["source_event_id"],
         "message": "Voice synthesis failed",
     }
+    assert websocket.messages[2]["audio_format"] == "pcm"
+    assert websocket.messages[2]["sample_rate"] == 24000
+    assert websocket.messages[3]["chunk_index"] == 0
+    assert websocket.messages[3]["audio_format"] == "pcm"
+    assert websocket.messages[3]["sample_rate"] == 24000
 
 
 def test_voice_stream_service_groups_immediate_deltas_by_request_id() -> None:
@@ -602,6 +625,11 @@ def test_voice_stream_service_groups_immediate_deltas_by_request_id() -> None:
         "audio_chunk",
         "voice_end",
     ]
+    assert websocket.messages[0]["audio_format"] == "pcm"
+    assert websocket.messages[0]["sample_rate"] == 24000
+    assert websocket.messages[1]["chunk_index"] == 0
+    assert websocket.messages[1]["audio_format"] == "pcm"
+    assert websocket.messages[1]["sample_rate"] == 24000
 
 
 def test_voice_stream_service_groups_delayed_deltas_by_request_id() -> None:

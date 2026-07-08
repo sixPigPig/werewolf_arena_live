@@ -132,7 +132,9 @@ class LiveVoiceStreamService:
         disconnect_task: asyncio.Task[None],
     ) -> bool:
         started_at = time.monotonic()
-        mime_type = mime_type_for_format(self.config.audio_format)
+        audio_format = self.config.audio_format
+        sample_rate = self.config.sample_rate
+        mime_type = mime_type_for_format(audio_format)
         client = self.client_factory(self.config)
         await websocket.send_json(
             {
@@ -142,6 +144,8 @@ class LiveVoiceStreamService:
                 "speaker_kind": utterance.speaker_kind,
                 "speaker_name": utterance.speaker_name,
                 "mime_type": mime_type,
+                "audio_format": audio_format,
+                "sample_rate": sample_rate,
             }
         )
         audio_iterator = client.synthesize(
@@ -149,6 +153,7 @@ class LiveVoiceStreamService:
             text_chunks=chunks,
         )
         audio_task: asyncio.Task[bytes] | None = None
+        chunk_index = 0
         try:
             while True:
                 audio_task = asyncio.create_task(anext(audio_iterator))
@@ -175,8 +180,12 @@ class LiveVoiceStreamService:
                     audio=audio,
                     mime_type=mime_type,
                     duration_ms=0,
+                    audio_format=audio_format,
+                    sample_rate=sample_rate,
+                    chunk_index=chunk_index,
                 )
                 await websocket.send_json(chunk_message)
+                chunk_index += 1
         except asyncio.CancelledError:
             if audio_task is not None:
                 await _cancel_audio_task(audio_task)
