@@ -85,6 +85,21 @@ def test_voice_store_finds_recent_utterance_for_request(db_session: Session) -> 
     assert found["utterance_id"] == "voice_2"
 
 
+def test_voice_store_defaults_new_utterance_to_synthesizing(db_session: Session) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+
+    store.upsert_utterance(
+        utterance(),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["status"] == "synthesizing"
+
+
 def test_voice_store_updates_existing_utterance(db_session: Session) -> None:
     store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
     store.upsert_utterance(
@@ -111,13 +126,30 @@ def test_voice_store_updates_existing_utterance(db_session: Session) -> None:
         mime_type="audio/wav",
         status="synthesizing",
     )
+    store.upsert_utterance(
+        VoiceUtterance(
+            utterance_id="voice_1",
+            run_id="run_1",
+            source_event_id=5,
+            request_id="req-3",
+            speaker_kind="player",
+            speaker_name="阿青",
+            speaker="speaker-updated",
+            text="较早到达的补充",
+            action="debate",
+        ),
+        audio_format="wav",
+        sample_rate=48000,
+        mime_type="audio/wav",
+        status="synthesizing",
+    )
 
     loaded = store.load_utterance("voice_1")
     assert loaded is not None
     assert loaded["last_source_event_id"] == 6
-    assert loaded["request_id"] == "req-2"
+    assert loaded["request_id"] == "req-3"
     assert loaded["speaker"] == "speaker-updated"
-    assert loaded["text"] == "第一段，补充"
+    assert loaded["text"] == "较早到达的补充"
     assert loaded["audio_format"] == "wav"
     assert loaded["sample_rate"] == 48000
 
@@ -150,7 +182,7 @@ def test_voice_store_marks_utterance_failed(db_session: Session) -> None:
         mime_type="audio/L16",
     )
 
-    store.fail_utterance("voice_1", error_message="tts failed")
+    store.fail_utterance("voice_1", message="tts failed")
 
     loaded = store.load_utterance("voice_1")
     assert loaded is not None

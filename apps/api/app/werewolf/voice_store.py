@@ -34,7 +34,7 @@ class DatabaseVoiceStore:
         audio_format: str,
         sample_rate: int,
         mime_type: str,
-        status: str = "pending",
+        status: str = "synthesizing",
     ) -> None:
         text_hash = text_hash_for_voice(
             speaker=utterance.speaker,
@@ -66,7 +66,10 @@ class DatabaseVoiceStore:
         else:
             record.run_id = utterance.run_id
             record.session_id = self.session_id
-            record.last_source_event_id = utterance.source_event_id
+            record.last_source_event_id = max(
+                record.last_source_event_id,
+                utterance.source_event_id,
+            )
             record.request_id = utterance.request_id
             record.speaker_kind = utterance.speaker_kind
             record.speaker_name = utterance.speaker_name
@@ -102,12 +105,12 @@ class DatabaseVoiceStore:
         record.completed_at = datetime.now(tz=UTC)
         self._commit()
 
-    def fail_utterance(self, utterance_id: str, *, error_message: str) -> None:
+    def fail_utterance(self, utterance_id: str, *, message: str) -> None:
         record = self.db.get(VoiceUtteranceRecord, utterance_id)
         if record is None:
             return
         record.status = "failed"
-        record.error_message = error_message
+        record.error_message = message
         record.completed_at = datetime.now(tz=UTC)
         self._commit()
 
