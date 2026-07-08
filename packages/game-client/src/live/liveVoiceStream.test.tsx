@@ -136,6 +136,17 @@ function audioChunkMessage(
   };
 }
 
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, reject, resolve };
+}
+
 function stubObjectUrls(objectUrls = ["blob:voice"]) {
   let nextUrlIndex = 0;
   const createdObjects: (Blob | MediaSource)[] = [];
@@ -360,6 +371,43 @@ describe("live voice stream", () => {
     expect(queue.items).toHaveLength(1);
     expect(queue.items[0].status).toBe("error");
     expect(queue.errors).toEqual(["TTS failed"]);
+  });
+
+  it.each([
+    {
+      chunk: { audio_format: "mp3" },
+      name: "audio format",
+    },
+    {
+      chunk: { sample_rate: 16000 },
+      name: "sample rate",
+    },
+  ])("marks chunks with mismatched $name as errored", ({ chunk }) => {
+    let queue = createVoiceQueue();
+    queue = enqueueVoiceMessage(
+      queue,
+      voiceStartMessage({
+        audio_format: "pcm",
+        mime_type: "audio/L16",
+        sample_rate: 24000,
+      }),
+    );
+
+    queue = enqueueVoiceMessage(
+      queue,
+      audioChunkMessage({
+        audio_format: "pcm",
+        mime_type: "audio/L16",
+        sample_rate: 24000,
+        ...chunk,
+      }),
+    );
+
+    expect(queue.items[0]).toMatchObject({
+      chunks: [],
+      chunkMetadata: [],
+      status: "error",
+    });
   });
 
   it("ignores duplicate start messages for played utterances", () => {
@@ -820,6 +868,135 @@ describe("live voice stream", () => {
       status: "playing",
       utteranceId: "voice-1",
     });
+  });
+
+  it("dedupes duplicate PCM chunk indexes and completes after one schedule", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const { context } = stubAudioContext({ currentTime: 0, state: "running" });
+    pcmMocks.schedule.mockResolvedValue({
+      duration: 0.05,
+      endTime: 0.05,
+      startTime: 0,
+    });
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].emit(
+        voiceStartMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+        }),
+      );
+      MockWebSocket.instances[0].emit(
+        audioChunkMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+          chunk_index: 0,
+          data: "AAAAAA==",
+        }),
+      );
+      MockWebSocket.instances[0].emit(
+        audioChunkMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+          chunk_index: 0,
+          data: "/////w==",
+        }),
+      );
+      MockWebSocket.instances[0].emit({
+        type: "voice_end",
+        utterance_id: "voice-1",
+        duration_ms: 50,
+      });
+    });
+
+    await vi.waitFor(() => expect(pcmMocks.schedule).toHaveBeenCalledTimes(1));
+    expect(pcmMocks.schedule).toHaveBeenCalledWith("AAAAAA==", 24000);
+
+    context.currentTime = 0.05;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+
+    await vi.waitFor(() => expect(result.current.currentItem).toBeNull());
+  });
+
+  it("does not double-schedule when a rerender overlaps audio resume", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const firstResume = createDeferred();
+    const secondResume = createDeferred();
+    const { resume } = stubAudioContext({
+      state: "suspended",
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(firstResume.promise)
+        .mockReturnValueOnce(secondResume.promise),
+    });
+
+    renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].emit(
+        voiceStartMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+        }),
+      );
+      MockWebSocket.instances[0].emit(
+        audioChunkMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+          chunk_index: 0,
+          data: "AAAAAA==",
+        }),
+      );
+    });
+
+    await waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      MockWebSocket.instances[0].emit(
+        audioChunkMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+          chunk_index: 1,
+          data: "AQAAAA==",
+        }),
+      );
+    });
+
+    await waitFor(() => expect(resume).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      firstResume.resolve();
+      secondResume.resolve();
+      await firstResume.promise;
+      await secondResume.promise;
+    });
+
+    await waitFor(() => expect(pcmMocks.schedule).toHaveBeenCalledTimes(2));
+    expect(pcmMocks.schedule).toHaveBeenNthCalledWith(1, "AAAAAA==", 24000);
+    expect(pcmMocks.schedule).toHaveBeenNthCalledWith(2, "AQAAAA==", 24000);
   });
 
   it("waits to schedule PCM chunks until the director reaches the source event", async () => {

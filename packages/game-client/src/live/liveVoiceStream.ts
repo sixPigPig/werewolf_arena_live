@@ -229,25 +229,44 @@ export function enqueueVoiceMessage(
   if (message.type === "audio_chunk") {
     return {
       ...queue,
-      items: queue.items.map((item) =>
-        item.utteranceId === message.utterance_id &&
-        item.status !== "played" &&
-        item.status !== "error"
-          ? {
-              ...item,
-              chunks: [...item.chunks, message.data],
-              chunkMetadata: [
-                ...item.chunkMetadata,
-                {
-                  audioFormat: message.audio_format,
-                  chunkIndex: message.chunk_index,
-                  data: message.data,
-                  sampleRate: message.sample_rate,
-                },
-              ],
-            }
-          : item,
-      ),
+      items: queue.items.map((item) => {
+        if (
+          item.utteranceId !== message.utterance_id ||
+          item.status === "played" ||
+          item.status === "error"
+        ) {
+          return item;
+        }
+
+        if (
+          item.audioFormat !== message.audio_format ||
+          item.sampleRate !== message.sample_rate
+        ) {
+          return { ...item, status: "error" };
+        }
+
+        if (
+          item.chunkMetadata.some(
+            (chunk) => chunk.chunkIndex === message.chunk_index,
+          )
+        ) {
+          return item;
+        }
+
+        return {
+          ...item,
+          chunks: [...item.chunks, message.data],
+          chunkMetadata: [
+            ...item.chunkMetadata,
+            {
+              audioFormat: message.audio_format,
+              chunkIndex: message.chunk_index,
+              data: message.data,
+              sampleRate: message.sample_rate,
+            },
+          ],
+        };
+      }),
     };
   }
 
@@ -677,11 +696,23 @@ export function useLiveVoiceStream(
         if (!isPaused && pendingChunks.length > 0) {
           if (pcmAudio.context.state !== "running") {
             await pcmAudio.context.resume();
+            if (!isActive) {
+              return;
+            }
           }
           await pcmAudio.scheduler.resume();
+          if (!isActive) {
+            return;
+          }
         }
 
         for (const chunk of pendingChunks) {
+          if (!isActive) {
+            return;
+          }
+          if (scheduledIndexes.has(chunk.chunkIndex)) {
+            continue;
+          }
           scheduledIndexes.add(chunk.chunkIndex);
           const scheduledChunk = await pcmAudio.scheduler.schedule(
             chunk.data,
