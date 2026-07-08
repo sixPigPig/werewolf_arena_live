@@ -14,6 +14,7 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const STALE_EVENT_DISTANCE = 8;
+const PCM_COMPLETION_POLL_INTERVAL_MS = 25;
 const VOICE_STREAM_UNAVAILABLE_ERROR =
   "Live voice streaming is unavailable in this browser.";
 
@@ -601,13 +602,35 @@ export function useLiveVoiceStream(
 
     const scheduleCompletion = (context: AudioContext, endTime: number) => {
       clearPcmCompletionTimeout();
-      const delayMs = Math.max(0, (endTime - context.currentTime) * 1000) + 20;
-      pcmCompletionTimeoutRef.current = globalThis.setTimeout(() => {
+
+      if (isPaused || context.state !== "running") {
+        return;
+      }
+
+      const pollForCompletion = () => {
         if (!isActive) {
           return;
         }
-        consumeUtterance();
-      }, delayMs);
+        if (isPaused || context.state !== "running") {
+          pcmCompletionTimeoutRef.current = null;
+          return;
+        }
+        if (context.currentTime >= endTime) {
+          pcmCompletionTimeoutRef.current = null;
+          consumeUtterance();
+          return;
+        }
+
+        pcmCompletionTimeoutRef.current = globalThis.setTimeout(
+          pollForCompletion,
+          PCM_COMPLETION_POLL_INTERVAL_MS,
+        );
+      };
+
+      pcmCompletionTimeoutRef.current = globalThis.setTimeout(() => {
+        pcmCompletionTimeoutRef.current = null;
+        pollForCompletion();
+      }, PCM_COMPLETION_POLL_INTERVAL_MS);
     };
 
     const schedulePcmChunks = async () => {
@@ -682,6 +705,7 @@ export function useLiveVoiceStream(
 
     return () => {
       isActive = false;
+      clearPcmCompletionTimeout();
     };
   }, [
     clearPcmCompletionTimeout,
