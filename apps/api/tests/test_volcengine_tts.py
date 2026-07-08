@@ -401,6 +401,41 @@ def test_synthesize_first_audio_timeout_raises_runtime_error(
     assert call_names[-3:] == ["receive_message", "cancel_session", "finish_connection"]
 
 
+def test_synthesize_task_request_timeout_bounds_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_uuids(monkeypatch)
+    calls, _connect_calls = _patch_volcengine_session(monkeypatch, [])
+
+    async def task_request_hangs(
+        _websocket: object,
+        _payload: bytes,
+        session_id: str,
+    ) -> None:
+        calls.append(("task_request", session_id))
+        await asyncio.Event().wait()
+
+    async def cancel_session_hangs(_websocket: object, session_id: str) -> None:
+        calls.append(("cancel_session", session_id))
+        await asyncio.Event().wait()
+
+    async def finish_connection_hangs(_websocket: object) -> None:
+        calls.append(("finish_connection",))
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(tts.protocol, "task_request", task_request_hangs)
+    monkeypatch.setattr(tts.protocol, "cancel_session", cancel_session_hangs)
+    monkeypatch.setattr(tts.protocol, "finish_connection", finish_connection_hangs)
+    monkeypatch.setattr(tts, "EVENT_TIMEOUT_SECONDS", 0.01, raising=False)
+    client = VolcengineTtsClient(BASE_CONFIG)
+
+    with pytest.raises(RuntimeError, match="Volcengine TTS timed out"):
+        asyncio.run(asyncio.wait_for(_collect_synthesis(client), timeout=0.25))
+
+    call_names = [call[0] for call in calls]
+    assert call_names[-3:] == ["task_request", "cancel_session", "finish_connection"]
+
+
 def test_synthesize_audio_idle_timeout_bounds_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -154,10 +154,13 @@ class VolcengineTtsClient:
                         audio_format=self.config.audio_format,
                         sample_rate=self.config.sample_rate,
                     )
-                    await protocol.task_request(
-                        websocket,
-                        json.dumps(request, ensure_ascii=False).encode("utf-8"),
-                        session_id,
+                    await _await_with_timeout(
+                        protocol.task_request(
+                            websocket,
+                            json.dumps(request, ensure_ascii=False).encode("utf-8"),
+                            session_id,
+                        ),
+                        EVENT_TIMEOUT_SECONDS,
                     )
 
                 await _await_with_timeout(
