@@ -60,14 +60,22 @@ export function LivePage() {
     enabled: voiceEnabled,
     isPaused: director.isPaused,
   });
-  const handleToggleVoice = () => {
+  const handleToggleVoice = async () => {
     if (voiceEnabled && voice.connectionState === "error") {
       setVoiceEnabled(false);
       window.setTimeout(() => setVoiceEnabled(true), 0);
       return;
     }
 
-    setVoiceEnabled((current) => !current);
+    if (voiceEnabled) {
+      setVoiceEnabled(false);
+      return;
+    }
+
+    const audioUnlocked = await voice.unlockAudio();
+    if (audioUnlocked) {
+      setVoiceEnabled(true);
+    }
   };
   const stageEvents = useMemo(() => {
     const currentEventId = director.currentEventId;

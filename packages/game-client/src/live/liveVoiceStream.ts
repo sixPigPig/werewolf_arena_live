@@ -1,4 +1,16 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+
+import {
+  createPcmAudioScheduler,
+  type PcmAudioScheduler,
+} from "./livePcmPlayer";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const STALE_EVENT_DISTANCE = 8;
@@ -21,11 +33,16 @@ export type LiveVoiceMessage =
       speaker_kind: "player" | "judge";
       speaker_name: string;
       mime_type: string;
+      audio_format: string;
+      sample_rate: number;
     }
   | {
       type: "audio_chunk";
       utterance_id: string;
       mime_type: string;
+      chunk_index: number;
+      audio_format: string;
+      sample_rate: number;
       data: string;
     }
   | {
@@ -43,13 +60,24 @@ export type LiveVoiceMessage =
       type: "voice_unavailable";
     };
 
+export type LiveVoiceChunk = {
+  audioFormat: string;
+  chunkIndex: number;
+  data: string;
+  sampleRate: number;
+};
+
 export type LiveVoiceQueueItem = {
   utteranceId: string;
   sourceEventId: number;
   speakerKind: "player" | "judge";
   speakerName: string;
   mimeType: string;
+  audioFormat: string;
+  sampleRate: number;
   chunks: string[];
+  chunkMetadata: LiveVoiceChunk[];
+  isEnded: boolean;
   status: "receiving" | "ready" | "playing" | "played" | "error";
 };
 
@@ -166,6 +194,9 @@ export function enqueueVoiceMessage(
                 speakerKind: message.speaker_kind,
                 speakerName: message.speaker_name,
                 mimeType: message.mime_type,
+                audioFormat: message.audio_format,
+                sampleRate: message.sample_rate,
+                isEnded: false,
                 status: "receiving",
               }
             : item,
@@ -183,7 +214,11 @@ export function enqueueVoiceMessage(
           speakerKind: message.speaker_kind,
           speakerName: message.speaker_name,
           mimeType: message.mime_type,
+          audioFormat: message.audio_format,
+          sampleRate: message.sample_rate,
           chunks: [],
+          chunkMetadata: [],
+          isEnded: false,
           status: "receiving",
         },
       ],
@@ -195,9 +230,21 @@ export function enqueueVoiceMessage(
       ...queue,
       items: queue.items.map((item) =>
         item.utteranceId === message.utterance_id &&
-        item.status !== "playing" &&
-        item.status !== "played"
-          ? { ...item, chunks: [...item.chunks, message.data] }
+        item.status !== "played" &&
+        item.status !== "error"
+          ? {
+              ...item,
+              chunks: [...item.chunks, message.data],
+              chunkMetadata: [
+                ...item.chunkMetadata,
+                {
+                  audioFormat: message.audio_format,
+                  chunkIndex: message.chunk_index,
+                  data: message.data,
+                  sampleRate: message.sample_rate,
+                },
+              ],
+            }
           : item,
       ),
     };
@@ -209,7 +256,10 @@ export function enqueueVoiceMessage(
       item.utteranceId === message.utterance_id &&
       item.status !== "playing" &&
       item.status !== "played"
-        ? { ...item, status: "ready" }
+        ? { ...item, isEnded: true, status: "ready" }
+        : item.utteranceId === message.utterance_id &&
+            item.status === "playing"
+          ? { ...item, isEnded: true }
         : item,
     ),
   };
@@ -269,6 +319,10 @@ function revokeAudioObjectUrl(objectUrl: string) {
   }
 }
 
+function isPcmAudioFormat(audioFormat: string) {
+  return audioFormat.toLowerCase() === "pcm";
+}
+
 function createAudioElement() {
   if (typeof globalThis.document?.createElement !== "function") {
     throw new Error("Audio element creation is unavailable.");
@@ -295,7 +349,7 @@ function voiceQueueReducer(
       ...queue,
       items: queue.items.map((item) =>
         item.utteranceId === action.utteranceId
-          ? { ...item, chunks: [], status: "played" }
+          ? { ...item, chunks: [], chunkMetadata: [], status: "played" }
           : item,
       ),
     };
@@ -344,7 +398,9 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
       typeof value.source_event_id === "number" &&
       isSpeakerKind(value.speaker_kind) &&
       typeof value.speaker_name === "string" &&
-      typeof value.mime_type === "string"
+      typeof value.mime_type === "string" &&
+      typeof value.audio_format === "string" &&
+      typeof value.sample_rate === "number"
     );
   }
 
@@ -352,6 +408,9 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
     return (
       typeof value.utterance_id === "string" &&
       typeof value.mime_type === "string" &&
+      typeof value.chunk_index === "number" &&
+      typeof value.audio_format === "string" &&
+      typeof value.sample_rate === "number" &&
       typeof value.data === "string"
     );
   }
@@ -400,7 +459,80 @@ export function useLiveVoiceStream(
     [currentEventId, queue],
   );
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const pcmSchedulerRef = useRef<PcmAudioScheduler | null>(null);
+  const pcmCompletionTimeoutRef = useRef<number | null>(null);
+  const pcmEndTimesRef = useRef<Map<string, number>>(new Map());
+  const scheduledPcmChunkIndexesRef = useRef<Map<string, Set<number>>>(
+    new Map(),
+  );
   const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
+  const clearPcmCompletionTimeout = useCallback(() => {
+    if (pcmCompletionTimeoutRef.current === null) {
+      return;
+    }
+    globalThis.clearTimeout(pcmCompletionTimeoutRef.current);
+    pcmCompletionTimeoutRef.current = null;
+  }, []);
+  const closePcmScheduler = useCallback(() => {
+    const scheduler = pcmSchedulerRef.current;
+    audioContextRef.current = null;
+    pcmSchedulerRef.current = null;
+    pcmEndTimesRef.current.clear();
+    scheduledPcmChunkIndexesRef.current.clear();
+    clearPcmCompletionTimeout();
+    void scheduler?.close().catch(() => {
+      // AudioContext cleanup is best-effort.
+    });
+  }, [clearPcmCompletionTimeout]);
+  const ensurePcmScheduler = useCallback(() => {
+    if (audioContextRef.current && pcmSchedulerRef.current) {
+      return {
+        context: audioContextRef.current,
+        scheduler: pcmSchedulerRef.current,
+      };
+    }
+
+    const AudioContextConstructor =
+      globalThis.AudioContext ??
+      (globalThis as typeof globalThis & {
+        webkitAudioContext?: typeof AudioContext;
+      }).webkitAudioContext;
+    if (typeof AudioContextConstructor !== "function") {
+      return null;
+    }
+
+    const context = new AudioContextConstructor();
+    const scheduler = createPcmAudioScheduler(context);
+    audioContextRef.current = context;
+    pcmSchedulerRef.current = scheduler;
+
+    return { context, scheduler };
+  }, []);
+  const unlockAudio = useCallback(async () => {
+    const pcmAudio = ensurePcmScheduler();
+    if (!pcmAudio) {
+      dispatch({
+        type: "queue_error",
+        message: "当前浏览器不支持语音播放。",
+      });
+      return false;
+    }
+
+    try {
+      if (pcmAudio.context.state !== "running") {
+        await pcmAudio.context.resume();
+      }
+      await pcmAudio.scheduler.resume();
+      return true;
+    } catch {
+      dispatch({
+        type: "queue_error",
+        message: "Unable to play live voice audio.",
+      });
+      return false;
+    }
+  }, [ensurePcmScheduler]);
   const isConsumableItem = (item: LiveVoiceQueueItem) =>
     !consumedUtteranceIdsRef.current.has(item.utteranceId);
   const hasReachedSourceEvent = (item: LiveVoiceQueueItem) =>
@@ -418,11 +550,147 @@ export function useLiveVoiceStream(
       (item) => item.status === "receiving" && isActivePlaybackItem(item),
     ) ??
     null;
-  const playbackKey =
+  const blobPlaybackKey =
     currentItem &&
+    !isPcmAudioFormat(currentItem.audioFormat) &&
     (currentItem.status === "ready" || currentItem.status === "playing")
       ? currentItem.utteranceId
       : null;
+  const pcmPlaybackKey =
+    currentItem && isPcmAudioFormat(currentItem.audioFormat)
+      ? [
+          currentItem.utteranceId,
+          currentItem.status,
+          currentItem.chunkMetadata.length,
+          currentItem.isEnded ? "ended" : "receiving",
+        ].join(":")
+      : null;
+
+  useEffect(() => {
+    if (
+      !enabled ||
+      !currentItem ||
+      !pcmPlaybackKey ||
+      (!isActivePlaybackItem(currentItem) && currentItem.status !== "playing")
+    ) {
+      return;
+    }
+
+    let isActive = true;
+
+    const consumeUtterance = () => {
+      consumedUtteranceIdsRef.current.add(currentItem.utteranceId);
+      scheduledPcmChunkIndexesRef.current.delete(currentItem.utteranceId);
+      pcmEndTimesRef.current.delete(currentItem.utteranceId);
+      dispatch({
+        type: "utterance_played",
+        utteranceId: currentItem.utteranceId,
+      });
+    };
+
+    const reportPlaybackError = () => {
+      if (!isActive) {
+        return;
+      }
+      dispatch({
+        type: "queue_error",
+        message: "Unable to play live voice audio.",
+      });
+      consumeUtterance();
+    };
+
+    const scheduleCompletion = (context: AudioContext, endTime: number) => {
+      clearPcmCompletionTimeout();
+      const delayMs = Math.max(0, (endTime - context.currentTime) * 1000) + 20;
+      pcmCompletionTimeoutRef.current = globalThis.setTimeout(() => {
+        if (!isActive) {
+          return;
+        }
+        consumeUtterance();
+      }, delayMs);
+    };
+
+    const schedulePcmChunks = async () => {
+      const pcmAudio = ensurePcmScheduler();
+      if (!pcmAudio) {
+        dispatch({
+          type: "queue_error",
+          message: "当前浏览器不支持语音播放。",
+        });
+        consumeUtterance();
+        return;
+      }
+
+      try {
+        const scheduledIndexes =
+          scheduledPcmChunkIndexesRef.current.get(currentItem.utteranceId) ??
+          new Set<number>();
+        scheduledPcmChunkIndexesRef.current.set(
+          currentItem.utteranceId,
+          scheduledIndexes,
+        );
+
+        let didSchedule = false;
+        let latestEndTime =
+          pcmEndTimesRef.current.get(currentItem.utteranceId) ??
+          pcmAudio.context.currentTime;
+        const chunks = [...currentItem.chunkMetadata].sort(
+          (left, right) => left.chunkIndex - right.chunkIndex,
+        );
+        const pendingChunks = chunks.filter(
+          (chunk) => !scheduledIndexes.has(chunk.chunkIndex),
+        );
+
+        if (!isPaused && pendingChunks.length > 0) {
+          if (pcmAudio.context.state !== "running") {
+            await pcmAudio.context.resume();
+          }
+          await pcmAudio.scheduler.resume();
+        }
+
+        for (const chunk of pendingChunks) {
+          scheduledIndexes.add(chunk.chunkIndex);
+          const scheduledChunk = await pcmAudio.scheduler.schedule(
+            chunk.data,
+            chunk.sampleRate,
+          );
+          if (!isActive) {
+            return;
+          }
+          didSchedule = true;
+          latestEndTime = Math.max(latestEndTime, scheduledChunk.endTime);
+        }
+
+        if (didSchedule && currentItem.status !== "playing") {
+          dispatch({
+            type: "utterance_started",
+            utteranceId: currentItem.utteranceId,
+          });
+        }
+
+        pcmEndTimesRef.current.set(currentItem.utteranceId, latestEndTime);
+
+        if (currentItem.isEnded && scheduledIndexes.size >= chunks.length) {
+          scheduleCompletion(pcmAudio.context, latestEndTime);
+        }
+      } catch {
+        reportPlaybackError();
+      }
+    };
+
+    void schedulePcmChunks();
+
+    return () => {
+      isActive = false;
+    };
+  }, [
+    clearPcmCompletionTimeout,
+    currentItem,
+    enabled,
+    ensurePcmScheduler,
+    isPaused,
+    pcmPlaybackKey,
+  ]);
 
   useEffect(() => {
     if (!enabled || !currentItem || currentItem.status !== "ready") {
@@ -506,10 +774,10 @@ export function useLiveVoiceStream(
       audio?.removeEventListener("ended", markPlayed);
       releaseAudio();
     };
-  }, [playbackKey, enabled]);
+  }, [blobPlaybackKey, enabled]);
 
   useEffect(() => {
-    if (!enabled || !playbackKey || !audioRef.current) {
+    if (!enabled || !blobPlaybackKey || !audioRef.current) {
       return;
     }
 
@@ -519,14 +787,14 @@ export function useLiveVoiceStream(
       if (!isActive) {
         return;
       }
-      consumedUtteranceIdsRef.current.add(playbackKey);
+      consumedUtteranceIdsRef.current.add(blobPlaybackKey);
       dispatch({
         type: "queue_error",
         message: "Unable to play live voice audio.",
       });
       dispatch({
         type: "utterance_played",
-        utteranceId: playbackKey,
+        utteranceId: blobPlaybackKey,
       });
     };
 
@@ -543,7 +811,46 @@ export function useLiveVoiceStream(
     return () => {
       isActive = false;
     };
-  }, [playbackKey, enabled, isPaused]);
+  }, [blobPlaybackKey, enabled, isPaused]);
+
+  useEffect(() => {
+    if (!enabled || !pcmSchedulerRef.current) {
+      return;
+    }
+
+    let isActive = true;
+    const reportPlaybackError = () => {
+      if (!isActive) {
+        return;
+      }
+      dispatch({
+        type: "queue_error",
+        message: "Unable to play live voice audio.",
+      });
+    };
+
+    if (isPaused) {
+      void pcmSchedulerRef.current.suspend().catch(reportPlaybackError);
+    } else {
+      void pcmSchedulerRef.current.resume().catch(reportPlaybackError);
+    }
+
+    return () => {
+      isActive = false;
+    };
+  }, [enabled, isPaused, pcmPlaybackKey]);
+
+  useEffect(() => {
+    if (!enabled) {
+      closePcmScheduler();
+    }
+  }, [closePcmScheduler, enabled]);
+
+  useEffect(() => {
+    return () => {
+      closePcmScheduler();
+    };
+  }, [closePcmScheduler, streamUrl]);
 
   useEffect(() => {
     consumedUtteranceIdsRef.current.clear();
@@ -667,5 +974,6 @@ export function useLiveVoiceStream(
     currentSpeakerName: isPaused ? null : currentItem?.speakerName ?? null,
     currentItem,
     errors: visibleQueue.errors,
+    unlockAudio,
   };
 }

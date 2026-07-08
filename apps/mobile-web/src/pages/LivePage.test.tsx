@@ -16,6 +16,8 @@ const gameClientMocks = vi.hoisted(() => ({
   useLiveVoiceStream: vi.fn(),
 }));
 
+let unlockAudio: ReturnType<typeof vi.fn>;
+
 function readPngMetadata(path: string) {
   const image = readFileSync(path);
 
@@ -207,6 +209,7 @@ function renderLiveRoute() {
 
 describe("LivePage", () => {
   beforeEach(() => {
+    unlockAudio = vi.fn().mockResolvedValue(true);
     gameClientMocks.getGameRun.mockResolvedValue(run);
     gameClientMocks.resumeGameRun.mockResolvedValue(run);
     gameClientMocks.useGameRunEvents.mockReturnValue({
@@ -219,6 +222,7 @@ describe("LivePage", () => {
       currentItem: null,
       currentSpeakerName: null,
       errors: [],
+      unlockAudio,
     });
   });
 
@@ -555,8 +559,15 @@ describe("LivePage", () => {
     expect(screen.getByRole("button", { name: "复盘" })).toBeDisabled();
   });
 
-  it("lets the viewer enable live voice", async () => {
+  it("unlocks audio before enabling live voice", async () => {
     const user = userEvent.setup();
+    unlockAudio.mockImplementation(async () => {
+      expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
+        "run-1",
+        expect.objectContaining({ enabled: false }),
+      );
+      return true;
+    });
 
     renderLiveRoute();
 
@@ -565,6 +576,7 @@ describe("LivePage", () => {
 
     await user.click(voiceButton);
 
+    expect(unlockAudio).toHaveBeenCalledTimes(1);
     expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
       "run-1",
       expect.objectContaining({
@@ -575,12 +587,30 @@ describe("LivePage", () => {
     );
   });
 
+  it("does not enable live voice when audio unlock fails", async () => {
+    const user = userEvent.setup();
+    unlockAudio.mockResolvedValue(false);
+
+    renderLiveRoute();
+
+    await user.click(await screen.findByRole("button", { name: "开启语音" }));
+
+    expect(unlockAudio).toHaveBeenCalledTimes(1);
+    expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
+      "run-1",
+      expect.objectContaining({
+        enabled: false,
+      }),
+    );
+  });
+
   it("disables the live voice control with an unavailable accessible name", async () => {
     gameClientMocks.useLiveVoiceStream.mockReturnValue({
       connectionState: "unavailable",
       currentItem: null,
       currentSpeakerName: null,
       errors: ["Live voice streaming is unavailable."],
+      unlockAudio,
     });
 
     renderLiveRoute();
@@ -600,6 +630,7 @@ describe("LivePage", () => {
       currentItem: null,
       currentSpeakerName: null,
       errors: ["Live voice stream connection failed."],
+      unlockAudio,
     });
 
     renderLiveRoute();
