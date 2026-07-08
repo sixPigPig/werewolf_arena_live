@@ -1018,10 +1018,12 @@ def test_voice_stream_service_cleans_up_pending_synthesis_on_disconnect() -> Non
     registry = LiveRunRegistry()
     run = create_run(registry)
     websocket = FakeWebSocket()
+    voice_store = RecordingVoiceStore()
     service = LiveVoiceStreamService(
         registry=registry,
         config=BASE_TTS_CONFIG,
         client_factory=PendingTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
     )
 
     async def stream_and_disconnect_during_synthesis() -> None:
@@ -1056,6 +1058,12 @@ def test_voice_stream_service_cleans_up_pending_synthesis_on_disconnect() -> Non
 
     assert registry.get_run(run.run_id).subscribers == []
     assert [message["type"] for message in websocket.messages] == ["voice_start"]
+    assert voice_store.failed == [
+        {
+            "utterance_id": websocket.messages[0]["utterance_id"],
+            "message": "Voice stream disconnected",
+        }
+    ]
 
 
 def test_voice_stream_service_unsubscribes_when_cancelled() -> None:

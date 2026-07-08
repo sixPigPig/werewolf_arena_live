@@ -203,6 +203,11 @@ class LiveVoiceStreamService:
                 if disconnect_task in done:
                     await _cancel_audio_task(audio_task)
                     await _close_async_iterator(audio_iterator)
+                    _mark_voice_stream_interrupted(
+                        voice_store,
+                        utterance,
+                        "Voice stream disconnected",
+                    )
                     return False
 
                 try:
@@ -239,9 +244,19 @@ class LiveVoiceStreamService:
             if audio_task is not None:
                 await _cancel_audio_task(audio_task)
             await _close_async_iterator(audio_iterator)
+            _mark_voice_stream_interrupted(
+                voice_store,
+                utterance,
+                "Voice stream canceled",
+            )
             raise
         except WebSocketDisconnect:
             await _close_async_iterator(audio_iterator)
+            _mark_voice_stream_interrupted(
+                voice_store,
+                utterance,
+                "Voice stream disconnected",
+            )
             raise
         except Exception:
             await _close_async_iterator(audio_iterator)
@@ -328,6 +343,22 @@ def _persist_voice_operation(
                 "persistence_operation": persistence_operation,
             },
         )
+
+
+def _mark_voice_stream_interrupted(
+    voice_store: VoiceStore | None,
+    utterance: VoiceUtterance,
+    message: str,
+) -> None:
+    _persist_voice_operation(
+        voice_store,
+        utterance,
+        "fail_utterance",
+        lambda: voice_store.fail_utterance(
+            utterance.utterance_id,
+            message=message,
+        ),
+    )
 
 
 async def _close_async_iterator(iterator: AsyncIterator[bytes]) -> None:
