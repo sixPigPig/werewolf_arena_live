@@ -1,7 +1,13 @@
+export type PcmScheduledChunk = {
+  duration: number;
+  endTime: number;
+  startTime: number;
+};
+
 export type PcmAudioScheduler = {
   close(): Promise<void>;
   resume(): Promise<void>;
-  schedule(base64Pcm: string, sampleRate: number): Promise<void>;
+  schedule(base64Pcm: string, sampleRate: number): Promise<PcmScheduledChunk>;
   suspend(): Promise<void>;
 };
 
@@ -50,7 +56,7 @@ export function createPcmAudioScheduler(context: AudioContext): PcmAudioSchedule
       nextPlaybackTime = Math.max(nextPlaybackTime, context.currentTime);
     },
 
-    async schedule(base64Pcm: string, sampleRate: number): Promise<void> {
+    async schedule(base64Pcm: string, sampleRate: number): Promise<PcmScheduledChunk> {
       const samples = pcm16ToFloat32(base64ToPcm16(base64Pcm));
       const buffer = context.createBuffer(1, samples.length, sampleRate);
       buffer.copyToChannel(samples, 0);
@@ -61,7 +67,10 @@ export function createPcmAudioScheduler(context: AudioContext): PcmAudioSchedule
 
       const startTime = Math.max(nextPlaybackTime, context.currentTime);
       source.start(startTime);
-      nextPlaybackTime = startTime + buffer.duration;
+      const endTime = startTime + buffer.duration;
+      nextPlaybackTime = endTime;
+
+      return { duration: buffer.duration, endTime, startTime };
     },
 
     async suspend(): Promise<void> {

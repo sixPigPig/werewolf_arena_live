@@ -38,9 +38,13 @@ describe("livePcmPlayer", () => {
     const context = createFakeAudioContext({ currentTime: 10 });
     const scheduler = createPcmAudioScheduler(context);
 
-    await scheduler.schedule(encodePcm16ToBase64([0, 32767]), 2);
-    await scheduler.schedule(encodePcm16ToBase64([-32768, 0]), 2);
+    const firstChunk = await scheduler.schedule(encodePcm16ToBase64([0, 32767]), 2);
+    const secondChunk = await scheduler.schedule(encodePcm16ToBase64([-32768, 0]), 2);
 
+    expect([firstChunk, secondChunk]).toEqual([
+      { duration: 1, endTime: 11, startTime: 10 },
+      { duration: 1, endTime: 12, startTime: 11 },
+    ]);
     expect(context.startedAt).toEqual([10, 11]);
     expect(context.buffers.map((buffer) => buffer.samples)).toEqual([
       [0, 32767 / 32768],
