@@ -4,12 +4,13 @@ from collections.abc import Generator
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.live import LiveRunRecord
-from app.werewolf.live import LiveRunRegistry
+from app.werewolf.live import LiveEvent, LiveRunRegistry
 from app.werewolf.live_store import DatabaseLiveStore
 
 
@@ -77,6 +78,74 @@ def test_live_store_events_after_filters_by_event_id(db_session: Session) -> Non
     assert [event.id for event in store.events_after(run.run_id, after_id=first.id)] == [
         second.id
     ]
+
+
+def test_live_store_duplicate_event_raises_and_preserves_original(
+    db_session: Session,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    event = registry.publish(
+        run.run_id,
+        "model_response_delta",
+        payload={"visible_text": "original"},
+    )
+    duplicate = LiveEvent(
+        id=event.id,
+        type=event.type,
+        run_id=event.run_id,
+        session_id=event.session_id,
+        created_at=event.created_at,
+        payload={"visible_text": "overwritten"},
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    store.append_event(event)
+    with pytest.raises(IntegrityError):
+        store.append_event(duplicate)
+
+    loaded_events = store.events_after(run.run_id)
+    assert [item.id for item in loaded_events] == [event.id]
+    assert loaded_events[0].payload["visible_text"] == "original"
+
+
+def test_live_store_rolls_back_duplicate_append_before_next_append(
+    db_session: Session,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    first = registry.publish(run.run_id, "phase_started", phase="night")
+    second = registry.publish(run.run_id, "phase_started", phase="day")
+    duplicate = LiveEvent(
+        id=first.id,
+        type=first.type,
+        run_id=first.run_id,
+        session_id=first.session_id,
+        created_at=first.created_at,
+        phase="duplicate",
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    store.append_event(first)
+    with pytest.raises(IntegrityError):
+        store.append_event(duplicate)
+    store.append_event(second)
+
+    assert [event.id for event in store.events_after(run.run_id)] == [first.id, second.id]
 
 
 def test_live_store_updates_run_status(db_session: Session) -> None:

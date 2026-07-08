@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from datetime import UTC, datetime
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.live import LiveEventRecord, LiveRunRecord
@@ -51,7 +52,7 @@ class DatabaseLiveStore:
         record.error = run.error
         record.started_at = parse_live_datetime(run.started_at)
         record.completed_at = parse_live_datetime(run.completed_at)
-        self.db.commit()
+        self._commit()
 
     def append_event(self, event: LiveEvent) -> None:
         record = LiveEventRecord(
@@ -66,8 +67,8 @@ class DatabaseLiveStore:
             payload=event.payload,
             created_at=parse_live_datetime(event.created_at) or datetime.now(tz=UTC),
         )
-        self.db.merge(record)
-        self.db.commit()
+        self.db.add(record)
+        self._commit()
 
     def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]:
         query = self.db.query(LiveEventRecord).filter(LiveEventRecord.run_id == run_id)
@@ -89,3 +90,10 @@ class DatabaseLiveStore:
             )
             for row in rows
         ]
+
+    def _commit(self) -> None:
+        try:
+            self.db.commit()
+        except SQLAlchemyError:
+            self.db.rollback()
+            raise
