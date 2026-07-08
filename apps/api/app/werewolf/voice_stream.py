@@ -320,12 +320,6 @@ class LiveVoiceStreamService:
                     "duration_ms": duration_ms,
                 }
             )
-            if _mark_voice_stream_disconnected_if_needed(
-                disconnect_task,
-                voice_store,
-                utterance,
-            ):
-                return False
             _persist_voice_operation(
                 voice_store,
                 utterance,

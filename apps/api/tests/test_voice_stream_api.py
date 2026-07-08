@@ -1177,7 +1177,7 @@ def test_voice_stream_service_marks_utterance_failed_when_voice_end_disconnects(
     assert voice_store.completed == []
 
 
-def test_voice_stream_service_marks_utterance_failed_when_disconnect_task_finishes_at_voice_end() -> None:
+def test_voice_stream_service_completes_when_disconnect_task_finishes_after_voice_end() -> None:
     RecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
@@ -1214,13 +1214,9 @@ def test_voice_stream_service_marks_utterance_failed_when_disconnect_task_finish
         "audio_chunk",
         "voice_end",
     ]
-    assert voice_store.failed == [
-        {
-            "utterance_id": websocket.messages[0]["utterance_id"],
-            "message": "Voice stream disconnected",
-        }
-    ]
-    assert voice_store.completed == []
+    assert voice_store.failed == []
+    assert voice_store.completed[0]["utterance_id"] == websocket.messages[0]["utterance_id"]
+    assert voice_store.completed[0]["duration_ms"] == websocket.messages[2]["duration_ms"]
 
 
 def test_voice_stream_service_unsubscribes_when_cancelled() -> None:
