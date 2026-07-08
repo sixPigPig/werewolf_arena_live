@@ -4,6 +4,7 @@ export * from "./liveGodView";
 export * from "./liveLabels";
 export * from "./liveNarrative";
 export * from "./liveNavStatus";
+export * from "./livePlaybackVoice";
 export * from "./livePcmPlayer";
 export * from "./livePhaseBar";
 export * from "./liveSpectator";

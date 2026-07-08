@@ -135,6 +135,54 @@ def test_voice_store_finds_recent_replayable_utterance_when_newer_rows_are_inval
     assert found["utterance_id"] == "voice_complete"
 
 
+def test_voice_store_lists_playback_voices_with_base64_chunks(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    first = stored_utterance(utterance_id="voice_first", source_event_id=4, text="第一句")
+    second = stored_utterance(utterance_id="voice_second", source_event_id=8, text="第二句")
+    failed = stored_utterance(utterance_id="voice_failed", source_event_id=9, text="失败")
+    chunkless = stored_utterance(utterance_id="voice_chunkless", source_event_id=10, text="无音频")
+    invalid_kind = stored_utterance(
+        utterance_id="voice_invalid_kind",
+        source_event_id=11,
+        text="无效类型",
+        speaker_kind="moderator",
+    )
+
+    store.upsert_utterance(second, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
+    store.append_chunk("voice_second", chunk_index=0, audio=b"second-0")
+    store.complete_utterance("voice_second", duration_ms=200)
+    store.upsert_utterance(first, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
+    store.append_chunk("voice_first", chunk_index=1, audio=b"first-1")
+    store.append_chunk("voice_first", chunk_index=0, audio=b"first-0")
+    store.complete_utterance("voice_first", duration_ms=100)
+    store.upsert_utterance(failed, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
+    store.append_chunk("voice_failed", chunk_index=0, audio=b"failed")
+    store.fail_utterance("voice_failed", message="tts failed")
+    store.upsert_utterance(chunkless, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
+    store.complete_utterance("voice_chunkless", duration_ms=50)
+    store.upsert_utterance(
+        invalid_kind,
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.append_chunk("voice_invalid_kind", chunk_index=0, audio=b"invalid")
+    store.complete_utterance("voice_invalid_kind", duration_ms=50)
+
+    voices = store.list_playback_voices()
+
+    assert [voice["utterance_id"] for voice in voices] == ["voice_first", "voice_second"]
+    assert voices[0]["source_event_id"] == 4
+    assert voices[0]["duration_ms"] == 100
+    assert voices[0]["chunks"] == [
+        {"chunk_index": 0, "data": "Zmlyc3QtMA=="},
+        {"chunk_index": 1, "data": "Zmlyc3QtMQ=="},
+    ]
+    assert voices[1]["chunks"] == [{"chunk_index": 0, "data": "c2Vjb25kLTA="}]
+
+
 def test_voice_store_defaults_new_utterance_to_synthesizing(db_session: Session) -> None:
     store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
 

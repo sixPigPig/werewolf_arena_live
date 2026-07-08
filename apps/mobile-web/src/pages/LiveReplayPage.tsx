@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -10,6 +10,7 @@ import {
   getGamePlayback,
   resumeGameRun,
   useLiveDirector,
+  usePlaybackVoice,
   type GamePlayback,
   type GameRunStatus,
   type LiveGameEvent,
@@ -39,6 +40,29 @@ export function LiveReplayPage() {
     startAtLatestTerminal: false,
   });
   const currentEventId = director.currentEventId;
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const voice = usePlaybackVoice(playback?.voices ?? [], {
+    currentEventId,
+    enabled: voiceEnabled,
+    isPaused: director.isPaused,
+  });
+  const handleToggleVoice = async () => {
+    if (voiceEnabled && voice.connectionState === "error") {
+      setVoiceEnabled(false);
+      window.setTimeout(() => setVoiceEnabled(true), 0);
+      return;
+    }
+
+    if (voiceEnabled) {
+      setVoiceEnabled(false);
+      return;
+    }
+
+    const audioUnlocked = await voice.unlockAudio();
+    if (audioUnlocked) {
+      setVoiceEnabled(true);
+    }
+  };
   const stageEvents = useMemo(() => {
     if (currentEventId === null) {
       return EMPTY_EVENTS;
@@ -138,12 +162,15 @@ export function LiveReplayPage() {
             director.seekToEventId(segment.startEventId)
           }
           onResumeRun={() => resumeMutation.mutate(run.session_id)}
+          onToggleVoice={handleToggleVoice}
           phaseSegments={phaseSegments}
           replayLinkVisible={true}
           resumeIsPending={resumeMutation.isPending}
           run={run}
           subtitle={subtitle}
           terminalEvent={terminalEvent}
+          voiceEnabled={voiceEnabled}
+          voiceState={voice}
         />
       ) : null}
     </main>

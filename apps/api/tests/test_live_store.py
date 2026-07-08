@@ -80,6 +80,58 @@ def test_live_store_events_after_filters_by_event_id(db_session: Session) -> Non
     ]
 
 
+def test_live_store_returns_latest_eventful_playback_events_for_session(
+    db_session: Session,
+) -> None:
+    first_registry = LiveRunRegistry()
+    first_run = first_registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    first_event = first_registry.publish(first_run.run_id, "phase_started", phase="night")
+
+    empty_registry = LiveRunRegistry()
+    empty_run = empty_registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=8,
+        max_rounds=8,
+    )
+
+    latest_registry = LiveRunRegistry()
+    latest_run = latest_registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=9,
+        max_rounds=8,
+    )
+    latest_event = latest_registry.publish(
+        latest_run.run_id,
+        "model_response_delta",
+        actor="阿青",
+        action="debate",
+        payload={"request_id": "req-1", "visible_text": "我不是狼", "is_public": True},
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(first_run)
+    store.append_event(first_event)
+    store.save_run(empty_run)
+    store.save_run(latest_run)
+    store.append_event(latest_event)
+
+    playback_events = store.playback_events_for_session("game_1200abcd")
+
+    assert [event["id"] for event in playback_events] == [latest_event.id]
+    assert {event["run_id"] for event in playback_events} == {"playback_game_1200abcd"}
+    assert playback_events[-1]["payload"]["visible_text"] == "我不是狼"
+
+
 def test_live_store_duplicate_event_raises_and_preserves_original(
     db_session: Session,
 ) -> None:

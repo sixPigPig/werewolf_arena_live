@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 from datetime import UTC, datetime
+from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -89,6 +91,28 @@ class DatabaseLiveStore:
                 payload=copy.deepcopy(row.payload),
             )
             for row in rows
+        ]
+
+    def playback_events_for_session(self, session_id: str) -> list[dict[str, Any]]:
+        eventful_run = (
+            self.db.query(LiveEventRecord.run_id)
+            .join(LiveRunRecord, LiveRunRecord.run_id == LiveEventRecord.run_id)
+            .filter(LiveRunRecord.session_id == session_id)
+            .group_by(LiveEventRecord.run_id)
+            .order_by(func.max(LiveEventRecord.created_at).desc())
+            .first()
+        )
+        if eventful_run is None:
+            return []
+
+        eventful_run_id = eventful_run[0]
+        playback_run_id = f"playback_{session_id}"
+        return [
+            {
+                **event.to_dict(),
+                "run_id": playback_run_id,
+            }
+            for event in self.events_after(eventful_run_id)
         ]
 
     def _commit(self) -> None:

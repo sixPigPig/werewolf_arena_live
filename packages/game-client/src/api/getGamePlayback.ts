@@ -1,6 +1,14 @@
 import { apiFetch } from "./client";
 import type { GamePlayback } from "../types";
 
-export function getGamePlayback(sessionId: string): Promise<GamePlayback> {
-  return apiFetch<GamePlayback>(`/api/v1/games/${sessionId}/playback`);
+type GamePlaybackResponse = Omit<GamePlayback, "voices"> & {
+  voices?: GamePlayback["voices"];
+};
+
+export async function getGamePlayback(sessionId: string): Promise<GamePlayback> {
+  const playback = await apiFetch<GamePlaybackResponse>(
+    `/api/v1/games/${sessionId}/playback`,
+  );
+
+  return { ...playback, voices: playback.voices ?? [] };
 }

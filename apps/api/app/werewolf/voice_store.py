@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 from datetime import UTC, datetime
 from typing import Any
@@ -136,6 +137,52 @@ class DatabaseVoiceStore:
             .all()
         )
         return [row.audio for row in rows]
+
+    def list_playback_voices(self) -> list[dict[str, Any]]:
+        rows = (
+            self.db.query(VoiceUtteranceRecord, VoiceAudioChunkRecord)
+            .join(
+                VoiceAudioChunkRecord,
+                VoiceAudioChunkRecord.utterance_id == VoiceUtteranceRecord.utterance_id,
+            )
+            .filter(
+                VoiceUtteranceRecord.session_id == self.session_id,
+                VoiceUtteranceRecord.status == "complete",
+                VoiceUtteranceRecord.speaker_kind.in_(("player", "judge")),
+                VoiceUtteranceRecord.sample_rate > 0,
+            )
+            .order_by(
+                VoiceUtteranceRecord.source_event_id.asc(),
+                VoiceUtteranceRecord.utterance_id.asc(),
+                VoiceAudioChunkRecord.chunk_index.asc(),
+            )
+            .all()
+        )
+
+        voices_by_id: dict[str, dict[str, Any]] = {}
+        for utterance, chunk in rows:
+            voice = voices_by_id.setdefault(
+                utterance.utterance_id,
+                {
+                    "utterance_id": utterance.utterance_id,
+                    "source_event_id": utterance.source_event_id,
+                    "last_source_event_id": utterance.last_source_event_id,
+                    "speaker_kind": utterance.speaker_kind,
+                    "speaker_name": utterance.speaker_name,
+                    "mime_type": utterance.mime_type,
+                    "audio_format": utterance.audio_format,
+                    "sample_rate": utterance.sample_rate,
+                    "duration_ms": utterance.duration_ms,
+                    "chunks": [],
+                },
+            )
+            voice["chunks"].append(
+                {
+                    "chunk_index": chunk.chunk_index,
+                    "data": base64.b64encode(chunk.audio).decode("ascii"),
+                }
+            )
+        return list(voices_by_id.values())
 
     def find_recent_utterance(
         self,

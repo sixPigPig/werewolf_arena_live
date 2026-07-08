@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import type { GamePlayback, LiveGameEvent } from "@werewolf-arena/game-client";
 const gameClientMocks = vi.hoisted(() => ({
   getGamePlayback: vi.fn(),
   resumeGameRun: vi.fn(),
+  usePlaybackVoice: vi.fn(),
 }));
 
 vi.mock("@werewolf-arena/game-client", async () => {
@@ -21,6 +22,7 @@ vi.mock("@werewolf-arena/game-client", async () => {
     ...actual,
     getGamePlayback: gameClientMocks.getGamePlayback,
     resumeGameRun: gameClientMocks.resumeGameRun,
+    usePlaybackVoice: gameClientMocks.usePlaybackVoice,
   };
 });
 
@@ -107,6 +109,7 @@ function buildPlayback(overrides: Partial<GamePlayback> = {}): GamePlayback {
       roles: [],
     },
     resumable: false,
+    voices: [],
     events: [
       gameStartedEvent,
       phaseStartedEvent,
@@ -150,6 +153,12 @@ describe("LiveReplayPage", () => {
     gameClientMocks.resumeGameRun.mockResolvedValue({
       run_id: "run-resumed",
       session_id: "session-1",
+    });
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "idle",
+      currentSpeakerName: null,
+      errors: [],
+      unlockAudio: vi.fn(async () => true),
     });
   });
 
@@ -259,5 +268,62 @@ describe("LiveReplayPage", () => {
     expect(gameClientMocks.resumeGameRun).toHaveBeenCalledWith("session-1");
     await screen.findByRole("heading", { name: "实时观战" });
     expect(router.state.location.pathname).toBe("/games/run-resumed/live");
+  });
+
+  it("enables saved replay voice after unlocking audio", async () => {
+    const unlockAudio = vi.fn(async () => true);
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "idle",
+      currentSpeakerName: null,
+      errors: [],
+      unlockAudio,
+    });
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        voices: [
+          {
+            utterance_id: "voice-1",
+            source_event_id: 4,
+            last_source_event_id: 4,
+            speaker_kind: "player",
+            speaker_name: "阿青",
+            mime_type: "audio/L16",
+            audio_format: "pcm",
+            sample_rate: 24000,
+            duration_ms: 100,
+            chunks: [{ chunk_index: 0, data: "YWJj" }],
+          },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+
+    renderLiveReplayRoute();
+
+    await user.click(await screen.findByRole("button", { name: "开启语音" }));
+
+    expect(unlockAudio).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(gameClientMocks.usePlaybackVoice).toHaveBeenLastCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ utterance_id: "voice-1" }),
+        ]),
+        expect.objectContaining({ enabled: true, isPaused: false }),
+      );
+    });
+  });
+
+  it("shows unavailable replay voice when the playback has no saved voice", async () => {
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "unavailable",
+      currentSpeakerName: null,
+      errors: ["这局回放没有保存的语音。"],
+      unlockAudio: vi.fn(async () => false),
+    });
+
+    renderLiveReplayRoute();
+
+    expect(await screen.findByRole("button", { name: "语音不可用" })).toBeDisabled();
+    expect(screen.getByText("这局回放没有保存的语音。")).toBeVisible();
   });
 });

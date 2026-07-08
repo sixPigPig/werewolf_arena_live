@@ -528,12 +528,31 @@ export type LiveGameEvent = {
   payload: Record<string, unknown>;
 };
 
+export type PlaybackVoiceChunk = {
+  chunk_index: number;
+  data: string;
+};
+
+export type PlaybackVoiceUtterance = {
+  utterance_id: string;
+  source_event_id: number;
+  last_source_event_id: number;
+  speaker_kind: "player" | "judge";
+  speaker_name: string;
+  mime_type: string;
+  audio_format: string;
+  sample_rate: number;
+  duration_ms: number | null;
+  chunks: PlaybackVoiceChunk[];
+};
+
 export type GamePlayback = {
   session_id: string;
   status: GameStatus;
   rule_set?: RuleSetSummary | null;
   resumable?: boolean;
   events: LiveGameEvent[];
+  voices: PlaybackVoiceUtterance[];
 };
 
 export type LiveStageRun = Pick<

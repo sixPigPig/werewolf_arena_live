@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createGameRun } from "./createGameRun";
+import { getGamePlayback } from "./getGamePlayback";
 import { listGames } from "./listGames";
 import { listPlayerProfiles } from "./listPlayerProfiles";
 import { resumeGameRun } from "./resumeGameRun";
@@ -99,6 +100,61 @@ describe("game API endpoints", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/games/session-2/resume", {
       method: "POST",
+    });
+  });
+
+  it("loads game playback from the existing backend contract", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        session_id: "session-1",
+        status: "complete",
+        rule_set: null,
+        resumable: false,
+        events: [],
+        voices: [
+          {
+            utterance_id: "voice-1",
+            source_event_id: 4,
+            last_source_event_id: 4,
+            speaker_kind: "player",
+            speaker_name: "阿青",
+            mime_type: "audio/L16",
+            audio_format: "pcm",
+            sample_rate: 24000,
+            duration_ms: 120,
+            chunks: [{ chunk_index: 0, data: "YWJj" }],
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getGamePlayback("session-1")).resolves.toMatchObject({
+      session_id: "session-1",
+      voices: [{ utterance_id: "voice-1" }],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/games/session-1/playback",
+      undefined,
+    );
+  });
+
+  it("defaults missing playback voices to an empty list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          session_id: "session-1",
+          status: "complete",
+          rule_set: null,
+          resumable: false,
+          events: [],
+        }),
+      ),
+    );
+
+    await expect(getGamePlayback("session-1")).resolves.toMatchObject({
+      voices: [],
     });
   });
 });

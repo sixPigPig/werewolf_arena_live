@@ -549,11 +549,28 @@ def get_game_playback(
         Path(pattern=SESSION_ID_RE),
     ],
     store: Annotated[GameRecordStore, Depends(get_replay_store)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     try:
-        return build_replay_playback(store.load_session(session_id))
+        playback = build_replay_playback(store.load_session(session_id))
     except ReplayNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Game session not found") from exc
+
+    try:
+        persisted_events = DatabaseLiveStore(db).playback_events_for_session(session_id)
+    except RecoverableDatabaseError:
+        persisted_events = []
+
+    if not persisted_events:
+        playback["voices"] = []
+        return playback
+
+    playback["events"] = persisted_events
+    try:
+        playback["voices"] = DatabaseVoiceStore(db, session_id=session_id).list_playback_voices()
+    except RecoverableDatabaseError:
+        playback["voices"] = []
+    return playback
 
 
 @router.get("/{session_id}")

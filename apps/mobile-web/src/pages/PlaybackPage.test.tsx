@@ -115,6 +115,7 @@ describe("PlaybackPage", () => {
       rule_set: null,
       resumable: false,
       events,
+      voices: [],
     };
 
     gameClientMocks.getGamePlayback.mockResolvedValue(playback);

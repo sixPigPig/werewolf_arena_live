@@ -20,7 +20,12 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.game_session import GameReplayPayload, GameSessionRecord
-from app.models.live import LiveEventRecord, LiveRunRecord
+from app.models.live import (
+    LiveEventRecord,
+    LiveRunRecord,
+    VoiceAudioChunkRecord,
+    VoiceUtteranceRecord,
+)
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -28,6 +33,8 @@ from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.player_presets import default_personality_text
 from app.werewolf.replay import DatabaseReplayStore
+from app.werewolf.voice import VoiceUtterance
+from app.werewolf.voice_store import DatabaseVoiceStore
 
 
 engine = create_engine(
@@ -69,6 +76,8 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
     with TestingSessionLocal() as session:
+        session.query(VoiceAudioChunkRecord).delete()
+        session.query(VoiceUtteranceRecord).delete()
         session.query(LiveEventRecord).delete()
         session.query(LiveRunRecord).delete()
         session.query(GameReplayPayload).delete()
@@ -80,6 +89,8 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     yield
     app.dependency_overrides.clear()
     with TestingSessionLocal() as session:
+        session.query(VoiceAudioChunkRecord).delete()
+        session.query(VoiceUtteranceRecord).delete()
         session.query(LiveEventRecord).delete()
         session.query(LiveRunRecord).delete()
         session.query(GameReplayPayload).delete()
@@ -1378,6 +1389,99 @@ def test_get_game_playback_returns_complete_playback_events() -> None:
     assert "private gamestate secret" not in serialized_events
     assert "secret player reasoning" not in serialized_events
     assert "李四" in serialized_events
+
+
+def test_get_game_playback_returns_persisted_events_and_saved_voices() -> None:
+    session_id = "game_a110e001"
+    store_game_session(session_id)
+    registry = LiveRunRegistry(live_store=RecordingSessionLiveStore())
+    run = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    event = registry.publish(
+        run.run_id,
+        "model_response_delta",
+        actor="阿青",
+        action="debate",
+        payload={"request_id": "req-voice", "visible_text": "我不是狼", "is_public": True},
+    )
+    with TestingSessionLocal() as session:
+        voice_store = DatabaseVoiceStore(session, session_id=session_id)
+        voice_store.upsert_utterance(
+            VoiceUtterance(
+                utterance_id="voice_api_1",
+                run_id=run.run_id,
+                source_event_id=event.id,
+                request_id="req-voice",
+                speaker_kind="player",
+                speaker_name="阿青",
+                speaker="player",
+                text="我不是狼",
+                action="debate",
+            ),
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
+        voice_store.append_chunk("voice_api_1", chunk_index=0, audio=b"abc")
+        voice_store.complete_utterance("voice_api_1", duration_ms=123)
+
+    response = client.get(f"/api/v1/games/{session_id}/playback")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [event["id"] for event in payload["events"]] == [1, event.id]
+    assert {event["run_id"] for event in payload["events"]} == {f"playback_{session_id}"}
+    assert payload["voices"] == [
+        {
+            "utterance_id": "voice_api_1",
+            "source_event_id": event.id,
+            "last_source_event_id": event.id,
+            "speaker_kind": "player",
+            "speaker_name": "阿青",
+            "mime_type": "audio/L16",
+            "audio_format": "pcm",
+            "sample_rate": 24000,
+            "duration_ms": 123,
+            "chunks": [{"chunk_index": 0, "data": "YWJj"}],
+        }
+    ]
+
+
+def test_get_game_playback_omits_saved_voices_without_persisted_live_events() -> None:
+    session_id = "game_b00ce002"
+    store_game_session(session_id)
+    with TestingSessionLocal() as session:
+        voice_store = DatabaseVoiceStore(session, session_id=session_id)
+        voice_store.upsert_utterance(
+            VoiceUtterance(
+                utterance_id="voice_unaligned",
+                run_id="run_missing",
+                source_event_id=99,
+                request_id="req-missing",
+                speaker_kind="player",
+                speaker_name="阿青",
+                speaker="player",
+                text="不要错位播放",
+                action="debate",
+            ),
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
+        voice_store.append_chunk("voice_unaligned", chunk_index=0, audio=b"abc")
+        voice_store.complete_utterance("voice_unaligned", duration_ms=123)
+
+    response = client.get(f"/api/v1/games/{session_id}/playback")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["events"][0]["run_id"] == f"playback_{session_id}"
+    assert payload["voices"] == []
 
 
 def test_get_game_playback_suppresses_secret_wolf_consensus_actions() -> None:
