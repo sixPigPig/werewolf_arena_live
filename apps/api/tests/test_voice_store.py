@@ -100,7 +100,7 @@ def test_voice_store_defaults_new_utterance_to_synthesizing(db_session: Session)
     assert loaded["status"] == "synthesizing"
 
 
-def test_voice_store_updates_existing_utterance(db_session: Session) -> None:
+def test_voice_store_updates_existing_utterance_text_and_recency(db_session: Session) -> None:
     store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
     store.upsert_utterance(
         utterance("第一段"),
@@ -114,16 +114,56 @@ def test_voice_store_updates_existing_utterance(db_session: Session) -> None:
             utterance_id="voice_1",
             run_id="run_1",
             source_event_id=6,
-            request_id="req-2",
+            request_id="req-1",
             speaker_kind="player",
             speaker_name="阿青",
-            speaker="speaker-updated",
+            speaker="zh_female_vv_uranus_bigtts",
             text="第一段，补充",
             action="debate",
         ),
-        audio_format="wav",
-        sample_rate=48000,
-        mime_type="audio/wav",
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+        status="synthesizing",
+    )
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["source_event_id"] == 4
+    assert loaded["last_source_event_id"] == 6
+    assert loaded["request_id"] == "req-1"
+    assert loaded["speaker"] == "zh_female_vv_uranus_bigtts"
+    assert loaded["text"] == "第一段，补充"
+    assert loaded["audio_format"] == "pcm"
+    assert loaded["sample_rate"] == 24000
+
+
+def test_voice_store_ignores_stale_upsert_without_overwriting_fields(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("第一段"),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+        status="synthesizing",
+    )
+    store.upsert_utterance(
+        VoiceUtterance(
+            utterance_id="voice_1",
+            run_id="run_1",
+            source_event_id=6,
+            request_id="req-1",
+            speaker_kind="player",
+            speaker_name="阿青",
+            speaker="zh_female_vv_uranus_bigtts",
+            text="较新的文本",
+            action="debate",
+        ),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
         status="synthesizing",
     )
     store.upsert_utterance(
@@ -131,11 +171,11 @@ def test_voice_store_updates_existing_utterance(db_session: Session) -> None:
             utterance_id="voice_1",
             run_id="run_1",
             source_event_id=5,
-            request_id="req-3",
+            request_id="req-stale",
             speaker_kind="player",
             speaker_name="阿青",
-            speaker="speaker-updated",
-            text="较早到达的补充",
+            speaker="speaker-stale",
+            text="过期文本",
             action="debate",
         ),
         audio_format="wav",
@@ -147,11 +187,128 @@ def test_voice_store_updates_existing_utterance(db_session: Session) -> None:
     loaded = store.load_utterance("voice_1")
     assert loaded is not None
     assert loaded["last_source_event_id"] == 6
-    assert loaded["request_id"] == "req-3"
-    assert loaded["speaker"] == "speaker-updated"
-    assert loaded["text"] == "较早到达的补充"
-    assert loaded["audio_format"] == "wav"
-    assert loaded["sample_rate"] == 48000
+    assert loaded["request_id"] == "req-1"
+    assert loaded["speaker"] == "zh_female_vv_uranus_bigtts"
+    assert loaded["text"] == "较新的文本"
+    assert loaded["text_hash"] == text_hash_for_voice(
+        speaker="zh_female_vv_uranus_bigtts",
+        audio_format="pcm",
+        sample_rate=24000,
+        text="较新的文本",
+    )
+    assert loaded["audio_format"] == "pcm"
+    assert loaded["sample_rate"] == 24000
+    assert loaded["mime_type"] == "audio/L16"
+    assert loaded["status"] == "synthesizing"
+
+
+def test_voice_store_upsert_after_complete_keeps_terminal_metadata(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("原始文本"),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.complete_utterance("voice_1", duration_ms=1200)
+    completed = store.load_utterance("voice_1")
+    assert completed is not None
+
+    store.upsert_utterance(
+        VoiceUtterance(
+            utterance_id="voice_1",
+            run_id="run_1",
+            source_event_id=6,
+            request_id="req-1",
+            speaker_kind="player",
+            speaker_name="阿青",
+            speaker="zh_female_vv_uranus_bigtts",
+            text="不应重开",
+            action="debate",
+        ),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["status"] == "complete"
+    assert loaded["text"] == "原始文本"
+    assert loaded["duration_ms"] == 1200
+    assert loaded["completed_at"] == completed["completed_at"]
+    assert loaded["error_message"] is None
+
+
+def test_voice_store_upsert_after_failure_keeps_terminal_metadata(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("原始文本"),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.fail_utterance("voice_1", message="tts failed")
+    failed = store.load_utterance("voice_1")
+    assert failed is not None
+
+    store.upsert_utterance(
+        VoiceUtterance(
+            utterance_id="voice_1",
+            run_id="run_1",
+            source_event_id=6,
+            request_id="req-1",
+            speaker_kind="player",
+            speaker_name="阿青",
+            speaker="zh_female_vv_uranus_bigtts",
+            text="不应重开",
+            action="debate",
+        ),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["status"] == "failed"
+    assert loaded["text"] == "原始文本"
+    assert loaded["error_message"] == "tts failed"
+    assert loaded["completed_at"] == failed["completed_at"]
+
+
+def test_voice_store_rejects_incompatible_existing_utterance(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance(),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+
+    with pytest.raises(ValueError):
+        store.upsert_utterance(
+            VoiceUtterance(
+                utterance_id="voice_1",
+                run_id="run_1",
+                source_event_id=4,
+                request_id="req-1",
+                speaker_kind="player",
+                speaker_name="阿青",
+                speaker="speaker-incompatible",
+                text="同一条不同声音",
+                action="debate",
+            ),
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
 
 
 def test_voice_store_duplicate_chunk_index_raises_and_session_remains_usable(

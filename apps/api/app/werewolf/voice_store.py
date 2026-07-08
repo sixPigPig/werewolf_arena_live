@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.models.live import VoiceAudioChunkRecord, VoiceUtteranceRecord
 from app.werewolf.voice import VoiceUtterance
 
+TERMINAL_STATUSES = {"complete", "failed"}
+
 
 def text_hash_for_voice(
     *,
@@ -64,24 +66,26 @@ class DatabaseVoiceStore:
             )
             self.db.add(record)
         else:
-            record.run_id = utterance.run_id
-            record.session_id = self.session_id
+            if utterance.source_event_id < record.last_source_event_id:
+                return
+            _raise_for_incompatible_upsert(
+                record,
+                utterance,
+                session_id=self.session_id,
+                audio_format=audio_format,
+                sample_rate=sample_rate,
+                mime_type=mime_type,
+            )
+            if record.status in TERMINAL_STATUSES:
+                return
             record.last_source_event_id = max(
                 record.last_source_event_id,
                 utterance.source_event_id,
             )
-            record.request_id = utterance.request_id
-            record.speaker_kind = utterance.speaker_kind
-            record.speaker_name = utterance.speaker_name
-            record.speaker = utterance.speaker
-            record.action = utterance.action
             record.text = utterance.text
             record.text_hash = text_hash
-            record.audio_format = audio_format
-            record.sample_rate = sample_rate
-            record.mime_type = mime_type
-            record.status = status
-            record.error_message = None
+            if status not in TERMINAL_STATUSES:
+                record.status = status
         self._commit()
 
     def append_chunk(self, utterance_id: str, *, chunk_index: int, audio: bytes) -> None:
@@ -180,3 +184,32 @@ def _utterance_record_to_dict(record: VoiceUtteranceRecord) -> dict[str, Any]:
         "updated_at": record.updated_at,
         "completed_at": record.completed_at,
     }
+
+
+def _raise_for_incompatible_upsert(
+    record: VoiceUtteranceRecord,
+    utterance: VoiceUtterance,
+    *,
+    session_id: str,
+    audio_format: str,
+    sample_rate: int,
+    mime_type: str,
+) -> None:
+    comparisons = (
+        ("run_id", record.run_id, utterance.run_id),
+        ("session_id", record.session_id, session_id),
+        ("request_id", record.request_id, utterance.request_id),
+        ("speaker_kind", record.speaker_kind, utterance.speaker_kind),
+        ("speaker_name", record.speaker_name, utterance.speaker_name),
+        ("speaker", record.speaker, utterance.speaker),
+        ("action", record.action, utterance.action),
+        ("audio_format", record.audio_format, audio_format),
+        ("sample_rate", record.sample_rate, sample_rate),
+        ("mime_type", record.mime_type, mime_type),
+    )
+    mismatches = [name for name, existing, incoming in comparisons if existing != incoming]
+    if mismatches:
+        fields = ", ".join(mismatches)
+        raise ValueError(
+            f"Incompatible voice utterance upsert for {utterance.utterance_id}: {fields}"
+        )
