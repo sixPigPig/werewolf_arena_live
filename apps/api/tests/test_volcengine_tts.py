@@ -401,6 +401,52 @@ def test_synthesize_first_audio_timeout_raises_runtime_error(
     assert call_names[-3:] == ["receive_message", "cancel_session", "finish_connection"]
 
 
+def test_synthesize_audio_idle_timeout_bounds_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_uuids(monkeypatch)
+    calls, _connect_calls = _patch_volcengine_session(monkeypatch, [])
+    messages = iter(
+        [
+            _message(protocol.MsgType.AudioOnlyServer, payload=b"audio-1"),
+        ]
+    )
+
+    async def receive_message_then_hang(_websocket: object) -> SimpleNamespace:
+        calls.append(("receive_message",))
+        try:
+            return next(messages)
+        except StopIteration:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    async def cancel_session_hangs(_websocket: object, _session_id: str) -> None:
+        calls.append(("cancel_session", _session_id))
+        await asyncio.Event().wait()
+
+    async def finish_connection_hangs(_websocket: object) -> None:
+        calls.append(("finish_connection",))
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(tts.protocol, "receive_message", receive_message_then_hang)
+    monkeypatch.setattr(tts.protocol, "cancel_session", cancel_session_hangs)
+    monkeypatch.setattr(tts.protocol, "finish_connection", finish_connection_hangs)
+    monkeypatch.setattr(tts, "AUDIO_IDLE_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(tts, "EVENT_TIMEOUT_SECONDS", 0.01, raising=False)
+    client = VolcengineTtsClient(BASE_CONFIG)
+
+    with pytest.raises(RuntimeError, match="Volcengine TTS timed out"):
+        asyncio.run(asyncio.wait_for(_collect_synthesis(client), timeout=0.25))
+
+    call_names = [call[0] for call in calls]
+    assert call_names[-4:] == [
+        "receive_message",
+        "receive_message",
+        "cancel_session",
+        "finish_connection",
+    ]
+
+
 def test_protocol_message_str_redacts_payload_text() -> None:
     message = protocol.Message(
         type=protocol.MsgType.FullClientRequest,

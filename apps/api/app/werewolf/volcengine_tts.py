@@ -203,9 +203,15 @@ class VolcengineTtsClient:
             finally:
                 if session_started and not session_finished:
                     with suppress(Exception):
-                        await protocol.cancel_session(websocket, session_id)
+                        await _await_with_timeout(
+                            protocol.cancel_session(websocket, session_id),
+                            EVENT_TIMEOUT_SECONDS,
+                        )
                 with suppress(Exception):
-                    await protocol.finish_connection(websocket)
+                    await _await_with_timeout(
+                        protocol.finish_connection(websocket),
+                        EVENT_TIMEOUT_SECONDS,
+                    )
 
 
 async def _await_with_timeout(awaitable: Any, timeout_seconds: float) -> Any:
