@@ -6,7 +6,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
@@ -125,10 +125,19 @@ class LiveGameRun:
         }
 
 
+class LiveStore(Protocol):
+    def save_run(self, run: LiveGameRun) -> None:
+        ...
+
+    def append_event(self, event: LiveEvent) -> None:
+        ...
+
+
 class LiveRunRegistry:
-    def __init__(self) -> None:
+    def __init__(self, live_store: LiveStore | None = None) -> None:
         self._runs: dict[str, LiveGameRun] = {}
         self._lock = threading.RLock()
+        self._live_store = live_store
 
     def create_run(
         self,
@@ -164,6 +173,7 @@ class LiveRunRegistry:
                 lineup_quality_warnings=lineup_warning_data,
             )
             self._runs[run.run_id] = run
+            self._persist_run_locked(run)
             self._publish_locked(
                 run,
                 "run_created",
@@ -223,6 +233,10 @@ class LiveRunRegistry:
         with self._lock:
             return self._runs.get(run_id)
 
+    def set_live_store(self, live_store: LiveStore | None) -> None:
+        with self._lock:
+            self._live_store = live_store
+
     def _active_run_for_session_locked(self, session_id: str) -> LiveGameRun | None:
         return next(
             (
@@ -238,6 +252,7 @@ class LiveRunRegistry:
             run = self._runs[run_id]
             run.status = "running"
             run.started_at = utc_now()
+            self._persist_run_locked(run)
             return self._publish_locked(run, "run_started")
 
     def mark_completed(self, run_id: str, *, winner: str) -> LiveEvent:
@@ -246,6 +261,7 @@ class LiveRunRegistry:
             run.status = "completed"
             run.winner = winner
             run.completed_at = utc_now()
+            self._persist_run_locked(run)
             return self._publish_locked(
                 run,
                 "game_completed",
@@ -258,6 +274,7 @@ class LiveRunRegistry:
             run.status = "failed"
             run.error = error
             run.completed_at = utc_now()
+            self._persist_run_locked(run)
             return self._publish_locked(
                 run,
                 "game_failed",
@@ -343,9 +360,18 @@ class LiveRunRegistry:
         )
         run.next_event_id += 1
         run.events.append(event)
+        self._persist_event_locked(event)
         for subscriber in run.subscribers:
             subscriber.put(event)
         return event
+
+    def _persist_run_locked(self, run: LiveGameRun) -> None:
+        if self._live_store is not None:
+            self._live_store.save_run(run)
+
+    def _persist_event_locked(self, event: LiveEvent) -> None:
+        if self._live_store is not None:
+            self._live_store.append_event(event)
 
 
 class EventSink:

@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import queue
 import random
 import threading
@@ -16,6 +17,8 @@ from app.werewolf.checkpoint import ResumeCheckpointError
 from app.werewolf.config import choose_player_names
 from app.werewolf.debate_realism import lineup_quality_warnings
 from app.werewolf.live import EventSink, LiveEvent, LiveRunRegistry, format_sse
+from app.werewolf.live import LiveGameRun
+from app.werewolf.live_store import DatabaseLiveStore
 from app.werewolf.player_configs import (
     PlayerConfig,
     clean_optional_string,
@@ -78,6 +81,30 @@ def get_replay_store(db: Annotated[Session, Depends(get_db)]) -> DatabaseReplayS
 
 def get_live_registry() -> LiveRunRegistry:
     return live_registry
+
+
+class SessionLiveStore:
+    def __init__(self, session_factory: Callable[[], Session] | None = None) -> None:
+        self.session_factory = session_factory or SessionLocal
+
+    def save_run(self, run: LiveGameRun) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseLiveStore(db).save_run(run)
+        finally:
+            db.close()
+
+    def append_event(self, event: LiveEvent) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseLiveStore(db).append_event(event)
+        finally:
+            db.close()
+
+
+def attach_live_store_for_request(registry: LiveRunRegistry) -> LiveRunRegistry:
+    registry.set_live_store(SessionLiveStore(lambda: SessionLocal()))
+    return registry
 
 
 def get_tts_config() -> VolcengineTtsConfig:
@@ -275,6 +302,7 @@ def create_game_run(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     lineup_warnings = lineup_quality_warnings(player_configs)
     session_id = new_session_id()
+    registry = attach_live_store_for_request(registry)
     run = registry.create_run(
         session_id=session_id,
         villager_model=request.villager_model,
@@ -395,6 +423,7 @@ def resume_game_run(
         checkpoint_player_configs = player_configs_from_serialized(run_params.get("player_configs"))
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
+    registry = attach_live_store_for_request(registry)
     run, created = registry.get_or_create_active_run(
         session_id=session_id,
         villager_model=str(run_params.get("villager_model") or default_model_name()),

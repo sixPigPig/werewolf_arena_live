@@ -19,6 +19,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.game_session import GameReplayPayload, GameSessionRecord
+from app.models.live import LiveEventRecord, LiveRunRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -63,9 +64,12 @@ def override_get_db() -> Generator[Session, None, None]:
 
 
 @pytest.fixture(autouse=True)
-def isolated_db() -> Generator[None, None, None]:
+def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
     with TestingSessionLocal() as session:
+        session.query(LiveEventRecord).delete()
+        session.query(LiveRunRecord).delete()
         session.query(GameReplayPayload).delete()
         session.query(GameSessionRecord).delete()
         session.query(VirtualPlayerProfile).delete()
@@ -75,6 +79,8 @@ def isolated_db() -> Generator[None, None, None]:
     yield
     app.dependency_overrides.clear()
     with TestingSessionLocal() as session:
+        session.query(LiveEventRecord).delete()
+        session.query(LiveRunRecord).delete()
         session.query(GameReplayPayload).delete()
         session.query(GameSessionRecord).delete()
         session.query(VirtualPlayerProfile).delete()
@@ -945,7 +951,7 @@ def test_list_games_includes_rule_set_summary(tmp_path: Path) -> None:
     assert response.json()["sessions"][0]["rule_set"]["id"] == "social_8"
 
 
-def test_create_game_run_returns_run_status(
+def test_create_game_run_returns_live_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -976,6 +982,46 @@ def test_create_game_run_returns_run_status(
     assert payload["status"] in {"queued", "running", "completed", "failed"}
     assert payload["event_count"] >= 1
     assert started == [payload["run_id"]]
+
+
+def test_create_game_run_persists_live_run_and_created_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"seed": 21, "max_rounds": 1},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    payload = response.json()
+    with TestingSessionLocal() as session:
+        saved_run = session.get(LiveRunRecord, payload["run_id"])
+        saved_events = (
+            session.query(LiveEventRecord)
+            .filter(LiveEventRecord.run_id == payload["run_id"])
+            .order_by(LiveEventRecord.event_id.asc())
+            .all()
+        )
+
+    assert saved_run is not None
+    assert saved_run.session_id == payload["session_id"]
+    assert [event.type for event in saved_events] == ["run_created"]
+    assert captured[0]["run_id"] == payload["run_id"]
 
 
 def test_get_game_run_returns_404_for_missing_run() -> None:

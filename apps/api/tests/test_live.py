@@ -19,6 +19,18 @@ def classic_rule_kwargs() -> dict:
     }
 
 
+class RecordingLiveStore:
+    def __init__(self) -> None:
+        self.saved_runs = []
+        self.events = []
+
+    def save_run(self, run) -> None:
+        self.saved_runs.append((run.run_id, run.status, run.winner, run.error))
+
+    def append_event(self, event) -> None:
+        self.events.append((event.run_id, event.id, event.type))
+
+
 def test_registry_creates_run_with_initial_event() -> None:
     registry = LiveRunRegistry()
 
@@ -226,3 +238,25 @@ def test_format_sse_preserves_unicode_and_payload_history_is_stable() -> None:
         "players": ["张三", "李四"],
         "meta": {"phase": "夜晚"},
     }
+
+
+def test_live_registry_persists_created_run_and_events() -> None:
+    store = RecordingLiveStore()
+    registry = LiveRunRegistry(live_store=store)
+
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    registry.mark_running(run.run_id)
+    registry.mark_completed(run.run_id, winner="好人阵营")
+
+    assert [item[1] for item in store.saved_runs] == ["queued", "running", "completed"]
+    assert [item[2] for item in store.events] == [
+        "run_created",
+        "run_started",
+        "game_completed",
+    ]
