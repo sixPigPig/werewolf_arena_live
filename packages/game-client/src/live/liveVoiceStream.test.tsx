@@ -1039,6 +1039,81 @@ describe("live voice stream", () => {
     await vi.waitFor(() => expect(result.current.currentItem).toBeNull());
   });
 
+  it("re-arms PCM completion after a suspended audio context resumes", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const { context } = stubAudioContext({ currentTime: 0, state: "running" });
+    pcmMocks.schedule.mockResolvedValue({
+      duration: 0.05,
+      endTime: 0.05,
+      startTime: 0,
+    });
+
+    const { rerender, result } = renderHook(
+      ({ isPaused }: { isPaused: boolean }) =>
+        useLiveVoiceStream("run-1", {
+          currentEventId: 4,
+          enabled: true,
+          isPaused,
+        }),
+      { initialProps: { isPaused: false } },
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].emit(
+        voiceStartMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+        }),
+      );
+      MockWebSocket.instances[0].emit(
+        audioChunkMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+          data: "AAAAAA==",
+        }),
+      );
+    });
+
+    await vi.waitFor(() => expect(pcmMocks.schedule).toHaveBeenCalledTimes(1));
+
+    context.state = "suspended";
+    rerender({ isPaused: true });
+    await vi.waitFor(() => expect(pcmMocks.suspend).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      MockWebSocket.instances[0].emit({
+        type: "voice_end",
+        utterance_id: "voice-1",
+        duration_ms: 50,
+      });
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(result.current.currentItem).toMatchObject({
+      status: "playing",
+      utteranceId: "voice-1",
+    });
+
+    pcmMocks.resume.mockImplementation(async () => {
+      context.state = "running";
+    });
+    context.currentTime = 0.05;
+    rerender({ isPaused: false });
+
+    await vi.waitFor(() => expect(pcmMocks.resume).toHaveBeenCalled());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+
+    await vi.waitFor(() => expect(result.current.currentItem).toBeNull());
+  });
+
   it("pauses audio without revoking the object URL when paused", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     const { revokeObjectURL } = stubObjectUrls(["blob:voice-1"]);

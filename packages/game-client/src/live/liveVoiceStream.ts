@@ -467,7 +467,11 @@ export function useLiveVoiceStream(
   const scheduledPcmChunkIndexesRef = useRef<Map<string, Set<number>>>(
     new Map(),
   );
+  const isPausedRef = useRef(isPaused);
   const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
   const clearPcmCompletionTimeout = useCallback(() => {
     if (pcmCompletionTimeoutRef.current === null) {
       return;
@@ -486,6 +490,55 @@ export function useLiveVoiceStream(
       // AudioContext cleanup is best-effort.
     });
   }, [clearPcmCompletionTimeout]);
+  const consumePcmUtterance = useCallback((utteranceId: string) => {
+    consumedUtteranceIdsRef.current.add(utteranceId);
+    scheduledPcmChunkIndexesRef.current.delete(utteranceId);
+    pcmEndTimesRef.current.delete(utteranceId);
+    dispatch({
+      type: "utterance_played",
+      utteranceId,
+    });
+  }, []);
+  const armPcmCompletionPoll = useCallback(
+    ({
+      context,
+      endTime,
+      utteranceId,
+    }: {
+      context: AudioContext;
+      endTime: number;
+      utteranceId: string;
+    }) => {
+      clearPcmCompletionTimeout();
+
+      if (isPausedRef.current || context.state !== "running") {
+        return;
+      }
+
+      const pollForCompletion = () => {
+        if (isPausedRef.current || context.state !== "running") {
+          pcmCompletionTimeoutRef.current = null;
+          return;
+        }
+        if (context.currentTime >= endTime) {
+          pcmCompletionTimeoutRef.current = null;
+          consumePcmUtterance(utteranceId);
+          return;
+        }
+
+        pcmCompletionTimeoutRef.current = globalThis.setTimeout(
+          pollForCompletion,
+          PCM_COMPLETION_POLL_INTERVAL_MS,
+        );
+      };
+
+      pcmCompletionTimeoutRef.current = globalThis.setTimeout(() => {
+        pcmCompletionTimeoutRef.current = null;
+        pollForCompletion();
+      }, PCM_COMPLETION_POLL_INTERVAL_MS);
+    },
+    [clearPcmCompletionTimeout, consumePcmUtterance],
+  );
   const ensurePcmScheduler = useCallback(() => {
     if (audioContextRef.current && pcmSchedulerRef.current) {
       return {
@@ -579,16 +632,6 @@ export function useLiveVoiceStream(
 
     let isActive = true;
 
-    const consumeUtterance = () => {
-      consumedUtteranceIdsRef.current.add(currentItem.utteranceId);
-      scheduledPcmChunkIndexesRef.current.delete(currentItem.utteranceId);
-      pcmEndTimesRef.current.delete(currentItem.utteranceId);
-      dispatch({
-        type: "utterance_played",
-        utteranceId: currentItem.utteranceId,
-      });
-    };
-
     const reportPlaybackError = () => {
       if (!isActive) {
         return;
@@ -597,40 +640,7 @@ export function useLiveVoiceStream(
         type: "queue_error",
         message: "Unable to play live voice audio.",
       });
-      consumeUtterance();
-    };
-
-    const scheduleCompletion = (context: AudioContext, endTime: number) => {
-      clearPcmCompletionTimeout();
-
-      if (isPaused || context.state !== "running") {
-        return;
-      }
-
-      const pollForCompletion = () => {
-        if (!isActive) {
-          return;
-        }
-        if (isPaused || context.state !== "running") {
-          pcmCompletionTimeoutRef.current = null;
-          return;
-        }
-        if (context.currentTime >= endTime) {
-          pcmCompletionTimeoutRef.current = null;
-          consumeUtterance();
-          return;
-        }
-
-        pcmCompletionTimeoutRef.current = globalThis.setTimeout(
-          pollForCompletion,
-          PCM_COMPLETION_POLL_INTERVAL_MS,
-        );
-      };
-
-      pcmCompletionTimeoutRef.current = globalThis.setTimeout(() => {
-        pcmCompletionTimeoutRef.current = null;
-        pollForCompletion();
-      }, PCM_COMPLETION_POLL_INTERVAL_MS);
+      consumePcmUtterance(currentItem.utteranceId);
     };
 
     const schedulePcmChunks = async () => {
@@ -640,7 +650,7 @@ export function useLiveVoiceStream(
           type: "queue_error",
           message: "当前浏览器不支持语音播放。",
         });
-        consumeUtterance();
+        consumePcmUtterance(currentItem.utteranceId);
         return;
       }
 
@@ -694,7 +704,11 @@ export function useLiveVoiceStream(
         pcmEndTimesRef.current.set(currentItem.utteranceId, latestEndTime);
 
         if (currentItem.isEnded && scheduledIndexes.size >= chunks.length) {
-          scheduleCompletion(pcmAudio.context, latestEndTime);
+          armPcmCompletionPoll({
+            context: pcmAudio.context,
+            endTime: latestEndTime,
+            utteranceId: currentItem.utteranceId,
+          });
         }
       } catch {
         reportPlaybackError();
@@ -708,7 +722,9 @@ export function useLiveVoiceStream(
       clearPcmCompletionTimeout();
     };
   }, [
+    armPcmCompletionPoll,
     clearPcmCompletionTimeout,
+    consumePcmUtterance,
     currentItem,
     enabled,
     ensurePcmScheduler,
@@ -853,16 +869,49 @@ export function useLiveVoiceStream(
       });
     };
 
+    const scheduler = pcmSchedulerRef.current;
+
     if (isPaused) {
-      void pcmSchedulerRef.current.suspend().catch(reportPlaybackError);
+      clearPcmCompletionTimeout();
+      void scheduler.suspend().catch(reportPlaybackError);
     } else {
-      void pcmSchedulerRef.current.resume().catch(reportPlaybackError);
+      void (async () => {
+        await scheduler.resume();
+        if (!isActive || !currentItem || !isPcmAudioFormat(currentItem.audioFormat)) {
+          return;
+        }
+        const scheduledIndexes = scheduledPcmChunkIndexesRef.current.get(
+          currentItem.utteranceId,
+        );
+        const latestEndTime = pcmEndTimesRef.current.get(currentItem.utteranceId);
+        const context = audioContextRef.current;
+        if (
+          currentItem.isEnded &&
+          context &&
+          latestEndTime !== undefined &&
+          scheduledIndexes &&
+          scheduledIndexes.size >= currentItem.chunkMetadata.length
+        ) {
+          armPcmCompletionPoll({
+            context,
+            endTime: latestEndTime,
+            utteranceId: currentItem.utteranceId,
+          });
+        }
+      })().catch(reportPlaybackError);
     }
 
     return () => {
       isActive = false;
     };
-  }, [enabled, isPaused, pcmPlaybackKey]);
+  }, [
+    armPcmCompletionPoll,
+    clearPcmCompletionTimeout,
+    currentItem,
+    enabled,
+    isPaused,
+    pcmPlaybackKey,
+  ]);
 
   useEffect(() => {
     if (!enabled) {
