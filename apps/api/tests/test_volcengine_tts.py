@@ -34,8 +34,8 @@ class FakeConnection:
         self.websocket = websocket
 
     def __await__(self):
-        async def _connect() -> "FakeConnection":
-            return self
+        async def _connect() -> object:
+            return self.websocket
 
         return _connect().__await__()
 
@@ -377,6 +377,70 @@ def test_synthesize_lifecycle_timeout_raises_runtime_error(
         asyncio.run(asyncio.wait_for(_collect_synthesis(client), timeout=0.25))
 
     assert calls == [("start_connection",), ("finish_connection",)]
+
+
+def test_synthesize_timeout_not_masked_by_websocket_context_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_uuids(monkeypatch)
+    calls: list[tuple] = []
+
+    class ContextCloseRaisesWebsocket:
+        def __await__(self):
+            async def _connect() -> "ContextCloseRaisesWebsocket":
+                return self
+
+            return _connect().__await__()
+
+        async def __aenter__(self) -> "ContextCloseRaisesWebsocket":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc_value: object,
+            traceback: object,
+        ) -> None:
+            calls.append(("context_close",))
+            raise RuntimeError("websocket close masked primary timeout")
+
+        async def close(self) -> None:
+            calls.append(("close",))
+            await asyncio.Event().wait()
+
+    def connect(_ws_url: str, **_kwargs: object) -> ContextCloseRaisesWebsocket:
+        return ContextCloseRaisesWebsocket()
+
+    async def start_connection(_websocket: object) -> None:
+        calls.append(("start_connection",))
+
+    async def wait_forever(
+        _websocket: object,
+        _msg_type: protocol.MsgType,
+        _event_type: protocol.EventType,
+    ) -> None:
+        calls.append(("wait_for_event",))
+        await asyncio.Event().wait()
+
+    async def finish_connection(_websocket: object) -> None:
+        calls.append(("finish_connection",))
+
+    monkeypatch.setattr(tts.websockets, "connect", connect)
+    monkeypatch.setattr(tts.protocol, "start_connection", start_connection)
+    monkeypatch.setattr(tts.protocol, "wait_for_event", wait_forever)
+    monkeypatch.setattr(tts.protocol, "finish_connection", finish_connection)
+    monkeypatch.setattr(tts, "EVENT_TIMEOUT_SECONDS", 0.01, raising=False)
+    client = VolcengineTtsClient(BASE_CONFIG)
+
+    with pytest.raises(RuntimeError, match="Volcengine TTS timed out"):
+        asyncio.run(asyncio.wait_for(_collect_synthesis(client), timeout=0.25))
+
+    assert [call[0] for call in calls] == [
+        "start_connection",
+        "wait_for_event",
+        "finish_connection",
+        "close",
+    ]
 
 
 def test_synthesize_first_audio_timeout_raises_runtime_error(

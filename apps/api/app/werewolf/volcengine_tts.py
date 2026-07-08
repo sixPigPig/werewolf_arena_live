@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -108,7 +109,7 @@ class VolcengineTtsClient:
         headers = build_tts_headers(self.config, connect_id=connect_id)
         logger.info("Opening Volcengine TTS session", extra={"connect_id": connect_id})
 
-        connection = await _await_with_timeout(
+        websocket = await _await_with_timeout(
             websockets.connect(
                 self.config.ws_url,
                 additional_headers=headers,
@@ -116,105 +117,106 @@ class VolcengineTtsClient:
             ),
             CONNECT_TIMEOUT_SECONDS,
         )
-        async with connection as websocket:
-            session_id = str(uuid.uuid4())
-            session_started = False
-            session_finished = False
-            try:
-                await _await_with_timeout(
-                    protocol.start_connection(websocket),
-                    EVENT_TIMEOUT_SECONDS,
+        session_id = str(uuid.uuid4())
+        session_started = False
+        session_finished = False
+        try:
+            await _await_with_timeout(
+                protocol.start_connection(websocket),
+                EVENT_TIMEOUT_SECONDS,
+            )
+            await _await_with_timeout(
+                protocol.wait_for_event(
+                    websocket,
+                    protocol.MsgType.FullServerResponse,
+                    protocol.EventType.ConnectionStarted,
+                ),
+                EVENT_TIMEOUT_SECONDS,
+            )
+            await _await_with_timeout(
+                protocol.start_session(websocket, b"{}", session_id),
+                EVENT_TIMEOUT_SECONDS,
+            )
+            await _await_with_timeout(
+                protocol.wait_for_event(
+                    websocket,
+                    protocol.MsgType.FullServerResponse,
+                    protocol.EventType.SessionStarted,
+                ),
+                EVENT_TIMEOUT_SECONDS,
+            )
+            session_started = True
+
+            for text in text_chunks:
+                request = build_tts_request(
+                    speaker=speaker,
+                    text=text,
+                    audio_format=self.config.audio_format,
+                    sample_rate=self.config.sample_rate,
                 )
                 await _await_with_timeout(
-                    protocol.wait_for_event(
+                    protocol.task_request(
                         websocket,
-                        protocol.MsgType.FullServerResponse,
-                        protocol.EventType.ConnectionStarted,
+                        json.dumps(request, ensure_ascii=False).encode("utf-8"),
+                        session_id,
                     ),
                     EVENT_TIMEOUT_SECONDS,
                 )
-                await _await_with_timeout(
-                    protocol.start_session(websocket, b"{}", session_id),
-                    EVENT_TIMEOUT_SECONDS,
-                )
-                await _await_with_timeout(
-                    protocol.wait_for_event(
-                        websocket,
-                        protocol.MsgType.FullServerResponse,
-                        protocol.EventType.SessionStarted,
-                    ),
-                    EVENT_TIMEOUT_SECONDS,
-                )
-                session_started = True
 
-                for text in text_chunks:
-                    request = build_tts_request(
-                        speaker=speaker,
-                        text=text,
-                        audio_format=self.config.audio_format,
-                        sample_rate=self.config.sample_rate,
-                    )
-                    await _await_with_timeout(
-                        protocol.task_request(
-                            websocket,
-                            json.dumps(request, ensure_ascii=False).encode("utf-8"),
-                            session_id,
-                        ),
-                        EVENT_TIMEOUT_SECONDS,
-                    )
+            await _await_with_timeout(
+                protocol.finish_session(websocket, session_id),
+                EVENT_TIMEOUT_SECONDS,
+            )
 
-                await _await_with_timeout(
-                    protocol.finish_session(websocket, session_id),
-                    EVENT_TIMEOUT_SECONDS,
+            first_audio_deadline = time.monotonic() + FIRST_AUDIO_TIMEOUT_SECONDS
+            idle_deadline: float | None = None
+            while True:
+                if idle_deadline is None:
+                    receive_timeout = _remaining_timeout(first_audio_deadline)
+                else:
+                    receive_timeout = _remaining_timeout(idle_deadline)
+                message = await _await_with_timeout(
+                    protocol.receive_message(websocket),
+                    receive_timeout,
                 )
-
-                first_audio_deadline = time.monotonic() + FIRST_AUDIO_TIMEOUT_SECONDS
-                idle_deadline: float | None = None
-                while True:
-                    if idle_deadline is None:
-                        receive_timeout = _remaining_timeout(first_audio_deadline)
-                    else:
-                        receive_timeout = _remaining_timeout(idle_deadline)
-                    message = await _await_with_timeout(
-                        protocol.receive_message(websocket),
-                        receive_timeout,
-                    )
-                    if message.type == protocol.MsgType.AudioOnlyServer:
-                        yield message.payload
-                        idle_deadline = time.monotonic() + AUDIO_IDLE_TIMEOUT_SECONDS
-                        continue
-                    if message.type == protocol.MsgType.FullServerResponse:
-                        if getattr(message, "event", None) in FAILURE_EVENTS:
-                            raise RuntimeError(
-                                protocol.volcengine_tts_error_message(
-                                    message,
-                                    prefix="Volcengine TTS returned a failure event",
-                                )
-                            )
-                        if getattr(message, "event", None) == protocol.EventType.SessionFinished:
-                            session_finished = True
-                            break
-                        continue
-                    if message.type == protocol.MsgType.Error:
+                if message.type == protocol.MsgType.AudioOnlyServer:
+                    yield message.payload
+                    idle_deadline = time.monotonic() + AUDIO_IDLE_TIMEOUT_SECONDS
+                    continue
+                if message.type == protocol.MsgType.FullServerResponse:
+                    if getattr(message, "event", None) in FAILURE_EVENTS:
                         raise RuntimeError(
                             protocol.volcengine_tts_error_message(
                                 message,
-                                prefix="Volcengine TTS returned an error",
+                                prefix="Volcengine TTS returned a failure event",
                             )
                         )
-                    raise RuntimeError(f"Unexpected Volcengine TTS message: {message}")
-            finally:
-                if session_started and not session_finished:
-                    with suppress(Exception):
-                        await _await_with_timeout(
-                            protocol.cancel_session(websocket, session_id),
-                            EVENT_TIMEOUT_SECONDS,
+                    if getattr(message, "event", None) == protocol.EventType.SessionFinished:
+                        session_finished = True
+                        break
+                    continue
+                if message.type == protocol.MsgType.Error:
+                    raise RuntimeError(
+                        protocol.volcengine_tts_error_message(
+                            message,
+                            prefix="Volcengine TTS returned an error",
                         )
+                    )
+                raise RuntimeError(f"Unexpected Volcengine TTS message: {message}")
+        finally:
+            if session_started and not session_finished:
                 with suppress(Exception):
                     await _await_with_timeout(
-                        protocol.finish_connection(websocket),
+                        protocol.cancel_session(websocket, session_id),
                         EVENT_TIMEOUT_SECONDS,
                     )
+            with suppress(Exception):
+                await _await_with_timeout(
+                    protocol.finish_connection(websocket),
+                    EVENT_TIMEOUT_SECONDS,
+                )
+            with suppress(Exception):
+                await _close_websocket(websocket)
 
 
 async def _await_with_timeout(awaitable: Any, timeout_seconds: float) -> Any:
@@ -229,3 +231,12 @@ def _remaining_timeout(deadline: float) -> float:
     if remaining <= 0:
         raise RuntimeError(TIMEOUT_ERROR_MESSAGE)
     return remaining
+
+
+async def _close_websocket(websocket: Any) -> None:
+    close = getattr(websocket, "close", None)
+    if close is None:
+        return
+    close_result = close()
+    if inspect.isawaitable(close_result):
+        await _await_with_timeout(close_result, EVENT_TIMEOUT_SECONDS)
