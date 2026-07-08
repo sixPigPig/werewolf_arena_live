@@ -289,24 +289,39 @@ class LiveVoiceStreamService:
             )
             return True
 
-        await _close_async_iterator(audio_iterator)
-        duration_ms = int((time.monotonic() - started_at) * 1000)
-        await websocket.send_json(
-            {
-                "type": "voice_end",
-                "utterance_id": utterance.utterance_id,
-                "duration_ms": duration_ms,
-            }
-        )
-        _persist_voice_operation(
-            voice_store,
-            utterance,
-            "complete_utterance",
-            lambda: voice_store.complete_utterance(
-                utterance.utterance_id,
-                duration_ms=duration_ms,
-            ),
-        )
+        try:
+            await _close_async_iterator(audio_iterator)
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            await websocket.send_json(
+                {
+                    "type": "voice_end",
+                    "utterance_id": utterance.utterance_id,
+                    "duration_ms": duration_ms,
+                }
+            )
+            _persist_voice_operation(
+                voice_store,
+                utterance,
+                "complete_utterance",
+                lambda: voice_store.complete_utterance(
+                    utterance.utterance_id,
+                    duration_ms=duration_ms,
+                ),
+            )
+        except asyncio.CancelledError:
+            _mark_voice_stream_interrupted(
+                voice_store,
+                utterance,
+                "Voice stream canceled",
+            )
+            raise
+        except WebSocketDisconnect:
+            _mark_voice_stream_interrupted(
+                voice_store,
+                utterance,
+                "Voice stream disconnected",
+            )
+            raise
         return True
 
 

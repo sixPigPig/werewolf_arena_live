@@ -85,6 +85,13 @@ class FakeWebSocket:
         return self._disconnect_event
 
 
+class DisconnectingOnVoiceEndWebSocket(FakeWebSocket):
+    async def send_json(self, message: dict) -> None:
+        if message.get("type") == "voice_end":
+            raise WebSocketDisconnect()
+        await super().send_json(message)
+
+
 class RecordingTtsClient:
     instances: list["RecordingTtsClient"] = []
 
@@ -1064,6 +1071,51 @@ def test_voice_stream_service_cleans_up_pending_synthesis_on_disconnect() -> Non
             "message": "Voice stream disconnected",
         }
     ]
+
+
+def test_voice_stream_service_marks_utterance_failed_when_voice_end_disconnects() -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = DisconnectingOnVoiceEndWebSocket()
+    voice_store = RecordingVoiceStore()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
+    )
+
+    async def stream_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-public",
+                "visible_text": "我先发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_events())
+
+    assert [message["type"] for message in websocket.messages] == [
+        "voice_start",
+        "audio_chunk",
+    ]
+    assert voice_store.failed == [
+        {
+            "utterance_id": websocket.messages[0]["utterance_id"],
+            "message": "Voice stream disconnected",
+        }
+    ]
+    assert voice_store.completed == []
 
 
 def test_voice_stream_service_unsubscribes_when_cancelled() -> None:
