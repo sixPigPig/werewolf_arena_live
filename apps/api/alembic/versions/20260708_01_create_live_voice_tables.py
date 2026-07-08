@@ -19,8 +19,8 @@ def upgrade() -> None:
         sa.Column("werewolf_model", sa.String(length=120), nullable=False),
         sa.Column("seed", sa.Integer(), nullable=True),
         sa.Column("max_rounds", sa.Integer(), nullable=False),
-        sa.Column("rule_set_id", sa.String(length=40), nullable=False),
-        sa.Column("rule_set", sa.JSON(), nullable=False),
+        sa.Column("rule_set_id", sa.String(length=80), nullable=False),
+        sa.Column("rule_set", sa.JSON(), nullable=True),
         sa.Column("player_configs", sa.JSON(), nullable=False),
         sa.Column("lineup_quality_warnings", sa.JSON(), nullable=False),
         sa.Column("winner", sa.String(length=80), nullable=True),
@@ -51,7 +51,7 @@ def upgrade() -> None:
         sa.Column("type", sa.String(length=80), nullable=False),
         sa.Column("round", sa.Integer(), nullable=True),
         sa.Column("phase", sa.String(length=40), nullable=True),
-        sa.Column("actor", sa.String(length=80), nullable=True),
+        sa.Column("actor", sa.String(length=120), nullable=True),
         sa.Column("action", sa.String(length=80), nullable=True),
         sa.Column("payload", sa.JSON(), nullable=False),
         sa.Column(
@@ -64,22 +64,22 @@ def upgrade() -> None:
 
     op.create_table(
         "voice_utterances",
-        sa.Column("utterance_id", sa.String(length=32), primary_key=True),
+        sa.Column("utterance_id", sa.String(length=40), primary_key=True),
         sa.Column("run_id", sa.String(length=32), nullable=False),
         sa.Column("session_id", sa.String(length=32), nullable=False),
         sa.Column("source_event_id", sa.Integer(), nullable=False),
-        sa.Column("last_source_event_id", sa.Integer(), nullable=True),
+        sa.Column("last_source_event_id", sa.Integer(), nullable=False),
         sa.Column("request_id", sa.String(length=80), nullable=True),
         sa.Column("speaker_kind", sa.String(length=20), nullable=False),
-        sa.Column("speaker_name", sa.String(length=80), nullable=False),
-        sa.Column("speaker", sa.String(length=80), nullable=False),
+        sa.Column("speaker_name", sa.String(length=120), nullable=False),
+        sa.Column("speaker", sa.String(length=160), nullable=False),
         sa.Column("action", sa.String(length=80), nullable=True),
         sa.Column("text", sa.Text(), nullable=False),
         sa.Column("text_hash", sa.String(length=64), nullable=False),
         sa.Column("audio_format", sa.String(length=20), nullable=False),
         sa.Column("sample_rate", sa.Integer(), nullable=False),
         sa.Column("mime_type", sa.String(length=80), nullable=False),
-        sa.Column("status", sa.String(length=20), nullable=False, server_default="pending"),
+        sa.Column("status", sa.String(length=30), nullable=False, server_default="pending"),
         sa.Column("duration_ms", sa.Integer(), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column(
@@ -95,6 +95,8 @@ def upgrade() -> None:
         "voice_utterances",
         ["run_id", "source_event_id"],
     )
+    op.create_index("ix_voice_utterances_run_id", "voice_utterances", ["run_id"])
+    op.create_index("ix_voice_utterances_session_id", "voice_utterances", ["session_id"])
     op.create_index("ix_voice_utterances_request_id", "voice_utterances", ["request_id"])
     op.create_index("ix_voice_utterances_text_hash", "voice_utterances", ["text_hash"])
     op.create_index("ix_voice_utterances_status", "voice_utterances", ["status"])
@@ -103,7 +105,7 @@ def upgrade() -> None:
         "voice_audio_chunks",
         sa.Column(
             "utterance_id",
-            sa.String(length=32),
+            sa.String(length=40),
             sa.ForeignKey("voice_utterances.utterance_id", ondelete="CASCADE"),
             primary_key=True,
         ),
@@ -121,6 +123,8 @@ def downgrade() -> None:
     op.drop_index("ix_voice_utterances_status", table_name="voice_utterances")
     op.drop_index("ix_voice_utterances_text_hash", table_name="voice_utterances")
     op.drop_index("ix_voice_utterances_request_id", table_name="voice_utterances")
+    op.drop_index("ix_voice_utterances_session_id", table_name="voice_utterances")
+    op.drop_index("ix_voice_utterances_run_id", table_name="voice_utterances")
     op.drop_index("ix_voice_utterances_run_source_event", table_name="voice_utterances")
     op.drop_table("voice_utterances")
     op.drop_index("ix_live_events_type", table_name="live_events")

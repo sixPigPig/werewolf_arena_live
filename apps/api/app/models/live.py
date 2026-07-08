@@ -21,8 +21,8 @@ class LiveRunRecord(Base):
     werewolf_model: Mapped[str] = mapped_column(String(120), nullable=False)
     seed: Mapped[int | None] = mapped_column(nullable=True)
     max_rounds: Mapped[int] = mapped_column(nullable=False)
-    rule_set_id: Mapped[str] = mapped_column(String(40), nullable=False)
-    rule_set: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    rule_set_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    rule_set: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     player_configs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     lineup_quality_warnings: Mapped[list[dict[str, str]]] = mapped_column(
         JSON, nullable=False, default=list
@@ -57,7 +57,7 @@ class LiveEventRecord(Base):
     type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     round: Mapped[int | None] = mapped_column(nullable=True)
     phase: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    actor: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(120), nullable=True)
     action: Mapped[str | None] = mapped_column(String(80), nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
@@ -69,15 +69,15 @@ class VoiceUtteranceRecord(Base):
     __tablename__ = "voice_utterances"
     __table_args__ = (Index("ix_voice_utterances_run_source_event", "run_id", "source_event_id"),)
 
-    utterance_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    run_id: Mapped[str] = mapped_column(String(32), nullable=False)
-    session_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    utterance_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     source_event_id: Mapped[int] = mapped_column(nullable=False)
-    last_source_event_id: Mapped[int | None] = mapped_column(nullable=True)
+    last_source_event_id: Mapped[int] = mapped_column(nullable=False)
     request_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     speaker_kind: Mapped[str] = mapped_column(String(20), nullable=False)
-    speaker_name: Mapped[str] = mapped_column(String(80), nullable=False)
-    speaker: Mapped[str] = mapped_column(String(80), nullable=False)
+    speaker_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    speaker: Mapped[str] = mapped_column(String(160), nullable=False)
     action: Mapped[str | None] = mapped_column(String(80), nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     text_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -85,7 +85,7 @@ class VoiceUtteranceRecord(Base):
     sample_rate: Mapped[int] = mapped_column(nullable=False)
     mime_type: Mapped[str] = mapped_column(String(80), nullable=False)
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="pending", server_default="pending", index=True
+        String(30), nullable=False, default="pending", server_default="pending", index=True
     )
     duration_ms: Mapped[int | None] = mapped_column(nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -105,7 +105,7 @@ class VoiceAudioChunkRecord(Base):
     __tablename__ = "voice_audio_chunks"
 
     utterance_id: Mapped[str] = mapped_column(
-        String(32),
+        String(40),
         ForeignKey("voice_utterances.utterance_id", ondelete="CASCADE"),
         primary_key=True,
     )

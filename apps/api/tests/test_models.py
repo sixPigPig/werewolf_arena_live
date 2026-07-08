@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import JSON, LargeBinary, String, Text, create_engine
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
@@ -12,6 +12,35 @@ from app.models.live import (
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
+
+
+def _assert_string_column(column, *, length: int, nullable: bool) -> None:
+    assert isinstance(column.type, String)
+    assert column.type.length == length
+    assert column.nullable is nullable
+
+
+def _assert_text_column(column, *, nullable: bool) -> None:
+    assert isinstance(column.type, Text)
+    assert column.nullable is nullable
+
+
+def _assert_json_column(column, *, nullable: bool) -> None:
+    assert isinstance(column.type, JSON)
+    assert column.nullable is nullable
+
+
+def _assert_index(table, name: str, columns: list[str]) -> None:
+    index = next((candidate for candidate in table.indexes if candidate.name == name), None)
+    assert index is not None
+    assert [column.name for column in index.columns] == columns
+
+
+def _assert_foreign_key(column, *, target: str, ondelete: str | None) -> None:
+    assert len(column.foreign_keys) == 1
+    foreign_key = next(iter(column.foreign_keys))
+    assert foreign_key.target_fullname == target
+    assert foreign_key.ondelete == ondelete
 
 
 def test_user_table_is_registered_in_metadata() -> None:
@@ -273,9 +302,27 @@ def test_live_run_table_matches_expected_schema() -> None:
         "updated_at",
     }
     assert table.c.run_id.primary_key is True
+    _assert_string_column(table.c.run_id, length=32, nullable=False)
     assert table.c.session_id.index is True
-    assert any(index.name == "ix_live_runs_status" for index in table.indexes)
-    assert any(index.name == "ix_live_runs_updated_at" for index in table.indexes)
+    _assert_string_column(table.c.session_id, length=32, nullable=False)
+    _assert_string_column(table.c.status, length=20, nullable=False)
+    _assert_string_column(table.c.villager_model, length=120, nullable=False)
+    _assert_string_column(table.c.werewolf_model, length=120, nullable=False)
+    assert table.c.seed.nullable is True
+    assert table.c.max_rounds.nullable is False
+    _assert_string_column(table.c.rule_set_id, length=80, nullable=False)
+    _assert_json_column(table.c.rule_set, nullable=True)
+    _assert_json_column(table.c.player_configs, nullable=False)
+    _assert_json_column(table.c.lineup_quality_warnings, nullable=False)
+    _assert_string_column(table.c.winner, length=80, nullable=True)
+    _assert_text_column(table.c.error, nullable=True)
+    assert table.c.created_at.nullable is False
+    assert table.c.started_at.nullable is True
+    assert table.c.completed_at.nullable is True
+    assert table.c.updated_at.nullable is False
+    _assert_index(table, "ix_live_runs_session_id", ["session_id"])
+    _assert_index(table, "ix_live_runs_status", ["status"])
+    _assert_index(table, "ix_live_runs_updated_at", ["updated_at"])
 
 
 def test_live_event_table_matches_expected_schema() -> None:
@@ -295,10 +342,20 @@ def test_live_event_table_matches_expected_schema() -> None:
         "created_at",
     }
     assert table.primary_key.columns.keys() == ["run_id", "event_id"]
-    assert table.c.run_id.foreign_keys
-    assert any(index.name == "ix_live_events_run_id_event_id" for index in table.indexes)
-    assert any(index.name == "ix_live_events_session_id" for index in table.indexes)
-    assert any(index.name == "ix_live_events_type" for index in table.indexes)
+    _assert_string_column(table.c.run_id, length=32, nullable=False)
+    _assert_foreign_key(table.c.run_id, target="live_runs.run_id", ondelete="CASCADE")
+    assert table.c.event_id.nullable is False
+    _assert_string_column(table.c.session_id, length=32, nullable=False)
+    _assert_string_column(table.c.type, length=80, nullable=False)
+    assert table.c.round.nullable is True
+    _assert_string_column(table.c.phase, length=40, nullable=True)
+    _assert_string_column(table.c.actor, length=120, nullable=True)
+    _assert_string_column(table.c.action, length=80, nullable=True)
+    _assert_json_column(table.c.payload, nullable=False)
+    assert table.c.created_at.nullable is False
+    _assert_index(table, "ix_live_events_run_id_event_id", ["run_id", "event_id"])
+    _assert_index(table, "ix_live_events_session_id", ["session_id"])
+    _assert_index(table, "ix_live_events_type", ["type"])
 
 
 def test_voice_utterance_table_matches_expected_schema() -> None:
@@ -329,10 +386,35 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
         "completed_at",
     }
     assert table.c.utterance_id.primary_key is True
-    assert any(index.name == "ix_voice_utterances_run_source_event" for index in table.indexes)
-    assert any(index.name == "ix_voice_utterances_request_id" for index in table.indexes)
-    assert any(index.name == "ix_voice_utterances_text_hash" for index in table.indexes)
-    assert any(index.name == "ix_voice_utterances_status" for index in table.indexes)
+    _assert_string_column(table.c.utterance_id, length=40, nullable=False)
+    assert table.c.run_id.index is True
+    _assert_string_column(table.c.run_id, length=32, nullable=False)
+    assert table.c.session_id.index is True
+    _assert_string_column(table.c.session_id, length=32, nullable=False)
+    assert table.c.source_event_id.nullable is False
+    assert table.c.last_source_event_id.nullable is False
+    _assert_string_column(table.c.request_id, length=80, nullable=True)
+    _assert_string_column(table.c.speaker_kind, length=20, nullable=False)
+    _assert_string_column(table.c.speaker_name, length=120, nullable=False)
+    _assert_string_column(table.c.speaker, length=160, nullable=False)
+    _assert_string_column(table.c.action, length=80, nullable=True)
+    _assert_text_column(table.c.text, nullable=False)
+    _assert_string_column(table.c.text_hash, length=64, nullable=False)
+    _assert_string_column(table.c.audio_format, length=20, nullable=False)
+    assert table.c.sample_rate.nullable is False
+    _assert_string_column(table.c.mime_type, length=80, nullable=False)
+    _assert_string_column(table.c.status, length=30, nullable=False)
+    assert table.c.duration_ms.nullable is True
+    _assert_text_column(table.c.error_message, nullable=True)
+    assert table.c.created_at.nullable is False
+    assert table.c.updated_at.nullable is False
+    assert table.c.completed_at.nullable is True
+    _assert_index(table, "ix_voice_utterances_run_id", ["run_id"])
+    _assert_index(table, "ix_voice_utterances_session_id", ["session_id"])
+    _assert_index(table, "ix_voice_utterances_run_source_event", ["run_id", "source_event_id"])
+    _assert_index(table, "ix_voice_utterances_request_id", ["request_id"])
+    _assert_index(table, "ix_voice_utterances_text_hash", ["text_hash"])
+    _assert_index(table, "ix_voice_utterances_status", ["status"])
 
 
 def test_voice_audio_chunk_table_matches_expected_schema() -> None:
@@ -347,6 +429,14 @@ def test_voice_audio_chunk_table_matches_expected_schema() -> None:
         "created_at",
     }
     assert table.primary_key.columns.keys() == ["utterance_id", "chunk_index"]
-    assert table.c.utterance_id.foreign_keys
-    foreign_key = next(iter(table.c.utterance_id.foreign_keys))
-    assert foreign_key.ondelete == "CASCADE"
+    _assert_string_column(table.c.utterance_id, length=40, nullable=False)
+    _assert_foreign_key(
+        table.c.utterance_id,
+        target="voice_utterances.utterance_id",
+        ondelete="CASCADE",
+    )
+    assert table.c.chunk_index.nullable is False
+    assert isinstance(table.c.audio.type, LargeBinary)
+    assert table.c.audio.nullable is False
+    assert table.c.byte_length.nullable is False
+    assert table.c.created_at.nullable is False
