@@ -175,18 +175,33 @@ class LiveVoiceStreamService:
                 status="synthesizing",
             ),
         )
-        await websocket.send_json(
-            {
-                "type": "voice_start",
-                "utterance_id": utterance.utterance_id,
-                "source_event_id": utterance.source_event_id,
-                "speaker_kind": utterance.speaker_kind,
-                "speaker_name": utterance.speaker_name,
-                "mime_type": mime_type,
-                "audio_format": audio_format,
-                "sample_rate": sample_rate,
-            }
-        )
+        try:
+            await websocket.send_json(
+                {
+                    "type": "voice_start",
+                    "utterance_id": utterance.utterance_id,
+                    "source_event_id": utterance.source_event_id,
+                    "speaker_kind": utterance.speaker_kind,
+                    "speaker_name": utterance.speaker_name,
+                    "mime_type": mime_type,
+                    "audio_format": audio_format,
+                    "sample_rate": sample_rate,
+                }
+            )
+        except asyncio.CancelledError:
+            _mark_voice_stream_interrupted(
+                voice_store,
+                utterance,
+                "Voice stream canceled",
+            )
+            raise
+        except WebSocketDisconnect:
+            _mark_voice_stream_interrupted(
+                voice_store,
+                utterance,
+                "Voice stream disconnected",
+            )
+            raise
         audio_iterator = client.synthesize(
             speaker=utterance.speaker,
             text_chunks=chunks,
