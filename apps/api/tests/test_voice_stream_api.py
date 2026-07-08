@@ -362,13 +362,14 @@ def stored_voice_utterance(
     run_id: str,
     source_event_id: int,
     text: str,
+    speaker_kind: str = "player",
 ) -> VoiceUtterance:
     return VoiceUtterance(
         utterance_id=utterance_id,
         run_id=run_id,
         source_event_id=source_event_id,
         request_id=f"req-{utterance_id}",
-        speaker_kind="player",
+        speaker_kind=speaker_kind,
         speaker_name="阿青",
         speaker="player",
         text=text,
@@ -839,6 +840,13 @@ def test_voice_stream_service_replays_database_utterance_when_newer_rows_are_inv
         source_event_id=8,
         text="这是没有音频的历史发言。",
     )
+    invalid_kind = stored_voice_utterance(
+        utterance_id="stored-invalid-kind",
+        run_id=run.run_id,
+        source_event_id=9,
+        text="这是角色类型异常的历史发言。",
+        speaker_kind="moderator",
+    )
     store.upsert_utterance(
         complete,
         audio_format="pcm",
@@ -862,6 +870,14 @@ def test_voice_stream_service_replays_database_utterance_when_newer_rows_are_inv
         mime_type="audio/L16",
     )
     store.complete_utterance("stored-chunkless", duration_ms=100)
+    store.upsert_utterance(
+        invalid_kind,
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.append_chunk("stored-invalid-kind", chunk_index=0, audio=b"invalid-kind-audio")
+    store.complete_utterance("stored-invalid-kind", duration_ms=100)
     websocket = FakeWebSocket()
     service = LiveVoiceStreamService(
         registry=registry,
@@ -874,7 +890,7 @@ def test_voice_stream_service_replays_database_utterance_when_newer_rows_are_inv
     )
 
     async def stream_then_disconnect() -> None:
-        task = asyncio.create_task(service.stream_run(run.run_id, websocket, current_event_id=8))
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket, current_event_id=9))
         await wait_for_subscription(registry, run.run_id)
         websocket.disconnect()
         await asyncio.wait_for(task, timeout=1)

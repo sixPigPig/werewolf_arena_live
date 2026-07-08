@@ -45,13 +45,14 @@ def stored_utterance(
     utterance_id: str,
     source_event_id: int,
     text: str,
+    speaker_kind: str = "player",
 ) -> VoiceUtterance:
     return VoiceUtterance(
         utterance_id=utterance_id,
         run_id="run_1",
         source_event_id=source_event_id,
         request_id=f"req-{utterance_id}",
-        speaker_kind="player",
+        speaker_kind=speaker_kind,
         speaker_name="阿青",
         speaker="zh_female_vv_uranus_bigtts",
         text=text,
@@ -104,6 +105,12 @@ def test_voice_store_finds_recent_replayable_utterance_when_newer_rows_are_inval
     complete = stored_utterance(utterance_id="voice_complete", source_event_id=4, text="可回放")
     failed = stored_utterance(utterance_id="voice_failed", source_event_id=7, text="失败")
     chunkless = stored_utterance(utterance_id="voice_chunkless", source_event_id=8, text="无音频")
+    invalid_kind = stored_utterance(
+        utterance_id="voice_invalid_kind",
+        source_event_id=9,
+        text="角色类型异常",
+        speaker_kind="moderator",
+    )
 
     store.upsert_utterance(complete, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
     store.append_chunk("voice_complete", chunk_index=0, audio=b"complete-audio")
@@ -113,8 +120,16 @@ def test_voice_store_finds_recent_replayable_utterance_when_newer_rows_are_inval
     store.fail_utterance("voice_failed", message="tts failed")
     store.upsert_utterance(chunkless, audio_format="pcm", sample_rate=24000, mime_type="audio/L16")
     store.complete_utterance("voice_chunkless", duration_ms=100)
+    store.upsert_utterance(
+        invalid_kind,
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.append_chunk("voice_invalid_kind", chunk_index=0, audio=b"invalid-kind-audio")
+    store.complete_utterance("voice_invalid_kind", duration_ms=100)
 
-    found = store.find_recent_utterance(run_id="run_1", current_event_id=8)
+    found = store.find_recent_utterance(run_id="run_1", current_event_id=9)
 
     assert found is not None
     assert found["utterance_id"] == "voice_complete"

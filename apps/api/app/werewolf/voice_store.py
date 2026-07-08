@@ -153,6 +153,8 @@ class DatabaseVoiceStore:
                 VoiceUtteranceRecord.run_id == run_id,
                 VoiceUtteranceRecord.last_source_event_id <= current_event_id,
                 VoiceUtteranceRecord.status == "complete",
+                VoiceUtteranceRecord.speaker_kind.in_(("player", "judge")),
+                VoiceUtteranceRecord.sample_rate > 0,
             )
             .order_by(VoiceUtteranceRecord.last_source_event_id.desc())
             .first()
