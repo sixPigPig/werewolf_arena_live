@@ -609,7 +609,7 @@ describe("LivePage", () => {
       connectionState: "unavailable",
       currentItem: null,
       currentSpeakerName: null,
-      errors: ["Live voice streaming is unavailable."],
+      errors: ["语音模型配置不完整，请检查 Ark API Key、资源 ID 和音色配置。"],
       unlockAudio,
     });
 
@@ -621,6 +621,9 @@ describe("LivePage", () => {
     expect(voiceButton.querySelector(".mobile-live-control-label")).toHaveTextContent(
       "不可用",
     );
+    expect(
+      screen.getByText("语音模型配置不完整，请检查 Ark API Key、资源 ID 和音色配置。"),
+    ).toBeVisible();
   });
 
   it("retries live voice without leaving it disabled after an error", async () => {

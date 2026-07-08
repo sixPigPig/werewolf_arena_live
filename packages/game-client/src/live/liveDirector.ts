@@ -18,6 +18,7 @@ export type DirectorCue = {
   importance: DirectorCueImportance;
   durationMs: number;
   compressible: boolean;
+  suppressSpeechSubtitle?: boolean;
 };
 
 export type UseLiveDirectorResult = {
@@ -44,6 +45,12 @@ type UseLiveDirectorOptions = {
   startAtLatestTerminal?: boolean;
 };
 
+type StreamedSpeechSignature = {
+  actor: string | null;
+  action: string | null;
+  text: string;
+};
+
 const CATCH_UP_BACKLOG_COUNT = 8;
 const MIN_DURATION_MS = 500;
 
@@ -52,6 +59,11 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
   const requestCueById = new Map<
     string,
     { cue: DirectorCue; visibleText: string }
+  >();
+  const streamedSpeechByRequestId = new Map<string, StreamedSpeechSignature>();
+  const streamedSpeechByActorAction = new Map<
+    string,
+    StreamedSpeechSignature
   >();
 
   for (const event of events) {
@@ -71,12 +83,28 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
 
       requestCue.visibleText += visibleText;
       const actor = event.actor || requestCue.cue.actor || "未知玩家";
+      const action = event.action || requestCue.cue.action;
       const body = `${actor}：${requestCue.visibleText}`;
+      requestCue.cue.eventId = event.id;
       requestCue.cue.title = `${actor} 正在发言`;
       requestCue.cue.body = body;
       requestCue.cue.importance = "key";
       requestCue.cue.durationMs = longTextDuration(body);
       requestCue.cue.compressible = false;
+      if (isPublicSpeechAction(action)) {
+        const signature = {
+          actor,
+          action,
+          text: normalizeSpeechText(requestCue.visibleText),
+        };
+        if (requestId) {
+          streamedSpeechByRequestId.set(requestId, signature);
+        }
+        streamedSpeechByActorAction.set(
+          streamedSpeechKey(actor, action),
+          signature,
+        );
+      }
       continue;
     }
 
@@ -95,10 +123,37 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
     }
 
     const cue = toDirectorCue(event);
+    const duplicateSpeech = duplicateStreamedSpeechForEvent(
+      event,
+      payload,
+      streamedSpeechByRequestId,
+      streamedSpeechByActorAction,
+    );
+    if (duplicateSpeech) {
+      cue.suppressSpeechSubtitle = true;
+      cue.title = duplicateSpeech.actor
+        ? `${duplicateSpeech.actor} 发言已记录`
+        : "发言已记录";
+      cue.body = "公开发言已记录，继续等待下一步。";
+      cue.importance = "action";
+      cue.durationMs = 2000;
+      cue.compressible = true;
+    }
     cues.push(cue);
 
     if (event.type === "model_request_started" && requestId) {
+      if (isPublicSpeechAction(event.action)) {
+        streamedSpeechByActorAction.delete(
+          streamedSpeechKey(event.actor, event.action),
+        );
+      }
       requestCueById.set(requestId, { cue, visibleText: "" });
+    }
+
+    if (duplicateSpeech && event.type === "state_updated") {
+      streamedSpeechByActorAction.delete(
+        streamedSpeechKey(duplicateSpeech.actor, duplicateSpeech.action),
+      );
     }
   }
 
@@ -534,6 +589,104 @@ function payloadForEvent(event: LiveGameEvent): Record<string, unknown> {
   return isRecord(event.payload) ? event.payload : {};
 }
 
+function duplicateStreamedSpeechForEvent(
+  event: LiveGameEvent,
+  payload: Record<string, unknown>,
+  streamedSpeechByRequestId: ReadonlyMap<string, StreamedSpeechSignature>,
+  streamedSpeechByActorAction: ReadonlyMap<string, StreamedSpeechSignature>,
+): StreamedSpeechSignature | null {
+  const candidate = publicSpeechCandidateForEvent(event, payload);
+  if (!candidate) {
+    return null;
+  }
+
+  const requestId = stringField(payload, "request_id");
+  const requestSignature = requestId
+    ? streamedSpeechByRequestId.get(requestId)
+    : undefined;
+  if (requestSignature && speechSignatureMatches(requestSignature, candidate)) {
+    return requestSignature;
+  }
+
+  const actorActionSignature = streamedSpeechByActorAction.get(
+    streamedSpeechKey(candidate.actor, candidate.action),
+  );
+  if (
+    actorActionSignature &&
+    speechSignatureMatches(actorActionSignature, candidate)
+  ) {
+    return actorActionSignature;
+  }
+
+  return null;
+}
+
+function publicSpeechCandidateForEvent(
+  event: LiveGameEvent,
+  payload: Record<string, unknown>,
+): StreamedSpeechSignature | null {
+  if (!isPublicSpeechAction(event.action)) {
+    return null;
+  }
+
+  if (event.type === "model_response_received") {
+    return speechCandidate(
+      event.actor,
+      event.action,
+      stringField(payload, "visible_text"),
+    );
+  }
+
+  if (event.type === "action_parsed") {
+    return speechCandidate(
+      event.actor,
+      event.action,
+      visibleSpeechText(payload),
+    );
+  }
+
+  if (event.type === "state_updated") {
+    const debateEntry = payload.debate_entry;
+    if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
+      return speechCandidate(
+        debateEntry.speaker,
+        event.action,
+        typeof debateEntry.message === "string" ? debateEntry.message : "",
+      );
+    }
+  }
+
+  return null;
+}
+
+function speechCandidate(
+  actor: string | null,
+  action: string | null,
+  text: string,
+): StreamedSpeechSignature | null {
+  const normalizedText = normalizeSpeechText(text);
+  return normalizedText ? { actor, action, text: normalizedText } : null;
+}
+
+function speechSignatureMatches(
+  streamed: StreamedSpeechSignature,
+  candidate: StreamedSpeechSignature,
+): boolean {
+  return (
+    streamed.actor === candidate.actor &&
+    streamed.action === candidate.action &&
+    streamed.text === candidate.text
+  );
+}
+
+function streamedSpeechKey(actor: string | null, action: string | null): string {
+  return `${actor ?? ""}:${action ?? ""}`;
+}
+
+function normalizeSpeechText(text: string): string {
+  return text.replace(/\s+/g, "");
+}
+
 function cueBase(event: LiveGameEvent): DirectorCue {
   return {
     eventId: event.id,
@@ -722,6 +875,25 @@ function parsedActionBody(payload: Record<string, unknown>): string {
   }
 
   return "";
+}
+
+function visibleSpeechText(payload: Record<string, unknown>): string {
+  const visibleResult = payload.visible_result;
+  if (isRecord(visibleResult)) {
+    return (
+      stringField(visibleResult, "say") ||
+      stringField(visibleResult, "summary")
+    );
+  }
+  return stringField(payload, "visible_text");
+}
+
+function isPublicSpeechAction(action: string | null): boolean {
+  return (
+    action === "debate" ||
+    action === "sheriff_speech" ||
+    action === "sheriff_pk_speech"
+  );
 }
 
 function winnerBody(payload: Record<string, unknown>): string {

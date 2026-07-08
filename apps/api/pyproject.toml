@@ -9,6 +9,7 @@ dependencies = [
   "fastapi",
   "psycopg[binary]",
   "pydantic-settings",
+  "python-socks[asyncio]",
   "sqlalchemy",
   "uvicorn[standard]",
   "websockets"

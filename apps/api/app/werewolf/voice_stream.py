@@ -33,6 +33,7 @@ TERMINAL_EVENT_TYPES = {"game_completed", "game_failed"}
 TERMINAL_RUN_STATUSES = {"completed", "failed"}
 IDLE_POLL_SECONDS = 0.1
 REQUEST_DELTA_COALESCE_SECONDS = 0.16
+TERMINAL_UNAVAILABLE_MESSAGE = "语音只支持进行中的实时对局；该对局已结束或异常中断。"
 
 
 class TtsClient(Protocol):
@@ -104,17 +105,23 @@ class LiveVoiceStreamService:
         current_event_id: int | None = None,
     ) -> None:
         if not self.available:
-            await websocket.send_json({"type": "voice_unavailable"})
+            await websocket.send_json(self.config.unavailable_payload)
             return
 
         run = self.registry.try_get_run(run_id)
-        if run is None or run.status in TERMINAL_RUN_STATUSES:
+        if run is None:
+            return
+        if run.status in TERMINAL_RUN_STATUSES:
+            await websocket.send_json(_voice_unavailable_payload("terminal"))
             return
 
         historical_events = self.registry.events_after(run_id)
         last_event_id = historical_events[-1].id if historical_events else None
         run = self.registry.try_get_run(run_id)
-        if run is None or run.status in TERMINAL_RUN_STATUSES:
+        if run is None:
+            return
+        if run.status in TERMINAL_RUN_STATUSES:
+            await websocket.send_json(_voice_unavailable_payload("terminal"))
             return
 
         voice_store = self.voice_store_factory(run.session_id) if self.voice_store_factory else None
@@ -665,3 +672,17 @@ def _is_same_request_utterance(
         and next_utterance.speaker_name == utterance.speaker_name
         and next_utterance.action == utterance.action
     )
+
+
+def _voice_unavailable_payload(reason: str) -> dict[str, str]:
+    if reason == "terminal":
+        return {
+            "type": "voice_unavailable",
+            "reason": "terminal",
+            "message": TERMINAL_UNAVAILABLE_MESSAGE,
+        }
+    return {
+        "type": "voice_unavailable",
+        "reason": reason,
+        "message": "语音服务暂不可用，请稍后重试。",
+    }

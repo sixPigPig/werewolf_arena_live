@@ -43,6 +43,7 @@ export type MobileLiveVoiceState = {
     | "closed"
     | "unavailable";
   currentSpeakerName: string | null;
+  errors?: string[];
 };
 
 export type MobileLiveTheaterProps = {
@@ -391,6 +392,7 @@ export function LiveTheaterControls({
   voiceState,
 }: LiveTheaterControlsProps) {
   const canToggleVoice = Boolean(onToggleVoice && voiceState);
+  const voiceIssueMessage = voiceState?.errors?.at(-1) ?? null;
 
   return (
     <footer className="mobile-live-control-deck" aria-label="实时观战操作">
@@ -487,6 +489,11 @@ export function LiveTheaterControls({
           </button>
         )}
       </div>
+      {voiceIssueMessage ? (
+        <p className="mobile-live-voice-notice" role="status">
+          {voiceIssueMessage}
+        </p>
+      ) : null}
     </footer>
   );
 }

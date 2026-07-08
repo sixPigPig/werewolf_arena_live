@@ -27,6 +27,8 @@ EVENT_TIMEOUT_SECONDS = 8
 FIRST_AUDIO_TIMEOUT_SECONDS = 12
 AUDIO_IDLE_TIMEOUT_SECONDS = 8
 TIMEOUT_ERROR_MESSAGE = "Volcengine TTS timed out"
+TTS_NAMESPACE = "BidirectionalTTS"
+TTS_USER_ID = "werewolf-arena-live"
 
 
 @dataclass(frozen=True)
@@ -42,12 +44,35 @@ class VolcengineTtsConfig:
 
     @property
     def available(self) -> bool:
-        return (
-            self.enabled
-            and bool(self.api_key.strip())
-            and bool(self.resource_id.strip())
-            and bool(self.ws_url.strip())
-        )
+        return self.unavailable_reason is None
+
+    @property
+    def unavailable_reason(self) -> str | None:
+        if not self.enabled:
+            return "disabled"
+        if (
+            not self.api_key.strip()
+            or not self.resource_id.strip()
+            or not self.ws_url.strip()
+            or not self.player_speaker.strip()
+            or not self.judge_speaker.strip()
+        ):
+            return "misconfigured"
+        return None
+
+    @property
+    def unavailable_message(self) -> str | None:
+        if self.unavailable_reason == "disabled":
+            return "语音服务未启用，请检查后端语音配置。"
+        if self.unavailable_reason == "misconfigured":
+            return "语音模型配置不完整，请检查 Ark API Key、资源 ID 和音色配置。"
+        return None
+
+    @property
+    def unavailable_payload(self) -> dict[str, str]:
+        reason = self.unavailable_reason or "unavailable"
+        message = self.unavailable_message or "语音服务暂不可用，请稍后重试。"
+        return {"type": "voice_unavailable", "reason": reason, "message": message}
 
 
 def build_tts_headers(
@@ -65,21 +90,32 @@ def build_tts_headers(
 
 def build_tts_request(
     *,
-    speaker: str,
     text: str,
+) -> dict[str, Any]:
+    return {
+        "namespace": TTS_NAMESPACE,
+        "req_params": {
+            "text": text,
+        },
+    }
+
+
+def build_tts_session_request(
+    *,
+    speaker: str,
     audio_format: str,
     sample_rate: int,
 ) -> dict[str, Any]:
     return {
+        "user": {"uid": TTS_USER_ID},
+        "namespace": TTS_NAMESPACE,
         "req_params": {
             "speaker": speaker,
-            "text": text,
             "audio_params": {
                 "format": audio_format,
                 "sample_rate": sample_rate,
-                "enable_timestamp": False,
             },
-        }
+        },
     }
 
 
@@ -133,8 +169,17 @@ class VolcengineTtsClient:
                 ),
                 EVENT_TIMEOUT_SECONDS,
             )
+            session_request = build_tts_session_request(
+                speaker=speaker,
+                audio_format=self.config.audio_format,
+                sample_rate=self.config.sample_rate,
+            )
             await _await_with_timeout(
-                protocol.start_session(websocket, b"{}", session_id),
+                protocol.start_session(
+                    websocket,
+                    json.dumps(session_request, ensure_ascii=False).encode("utf-8"),
+                    session_id,
+                ),
                 EVENT_TIMEOUT_SECONDS,
             )
             await _await_with_timeout(
@@ -148,12 +193,7 @@ class VolcengineTtsClient:
             session_started = True
 
             for text in text_chunks:
-                request = build_tts_request(
-                    speaker=speaker,
-                    text=text,
-                    audio_format=self.config.audio_format,
-                    sample_rate=self.config.sample_rate,
-                )
+                request = build_tts_request(text=text)
                 await _await_with_timeout(
                     protocol.task_request(
                         websocket,

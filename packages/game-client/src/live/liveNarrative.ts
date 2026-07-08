@@ -125,6 +125,10 @@ function cueForEvent({
     });
   }
 
+  if (cue.suppressSpeechSubtitle) {
+    return recordedSpeechCue(cue, actorName, nextSpeakerName);
+  }
+
   if (isPublicSpeechAction(cue.action) && cue.importance === "key") {
     const speechText = speechTextFromCue(cue.body, cue.actor);
     if (speechText) {
@@ -583,6 +587,25 @@ function fallbackCue(cue: DirectorCue, actorName: string | null): NarrativeCue {
     judgeLine: cue.title,
     performerLine: actorName ? `${actorName} 的事件更新。` : "对局事件更新。",
     detailLine: "收到未分类事件，等待后续公开结算。",
+    actorName,
+    action: cue.action,
+    speechText: "",
+  });
+}
+
+function recordedSpeechCue(
+  cue: DirectorCue,
+  actorName: string | null,
+  nextSpeakerName: string | null,
+): NarrativeCue {
+  const actor = actorName ?? cue.actor ?? "当前玩家";
+  return makeCue({
+    eventId: cue.eventId,
+    kind: "player-action",
+    tone: "day",
+    judgeLine: `${actor} 的发言已记录。`,
+    performerLine: "公开发言已进入记录。",
+    detailLine: nextLine(nextSpeakerName),
     actorName,
     action: cue.action,
     speechText: "",

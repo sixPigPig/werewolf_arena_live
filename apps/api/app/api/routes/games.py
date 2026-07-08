@@ -465,7 +465,13 @@ async def stream_game_run_voice(
 ) -> None:
     await websocket.accept()
     if registry.try_get_run(run_id) is None:
-        await websocket.send_json({"type": "voice_error", "message": "Game run not found"})
+        await websocket.send_json(
+            {
+                "type": "voice_unavailable",
+                "reason": "run_not_found",
+                "message": "对局不存在或已失效，请返回大厅重新开始。",
+            }
+        )
         await websocket.close()
         return
     await streamer.stream_run(run_id, websocket, current_event_id=current_event_id)

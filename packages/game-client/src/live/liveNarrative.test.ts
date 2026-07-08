@@ -304,7 +304,7 @@ describe("deriveLiveNarrativeState", () => {
       }),
     ];
     const cues = buildDirectorCues(events);
-    const speechCue = cues.find((cue) => cue.eventId === 2);
+    const speechCue = cues.find((cue) => cue.eventId === 3);
 
     expect(speechCue).toBeDefined();
     expect(narrativeFor(events, speechCue).cue).toMatchObject({
@@ -314,6 +314,76 @@ describe("deriveLiveNarrativeState", () => {
       performerLine: "张三 正在发言。",
       speechText: "我不是狼",
     });
+  });
+
+  it("does not repeat parsed and recorded speech after streaming deltas showed it", () => {
+    const events = [
+      event({
+        id: 2,
+        type: "model_request_started",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          model: "deepseek-chat",
+        },
+      }),
+      event({
+        id: 3,
+        type: "model_response_delta",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: {
+          request_id: "req_123",
+          visible_text: "我怀疑 Isaac",
+          is_public: true,
+        },
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: {
+          visible_result: { say: "我怀疑 Isaac" },
+        },
+      }),
+      event({
+        id: 5,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: {
+          debate_entry: { speaker: "Sam", message: "我怀疑 Isaac" },
+        },
+      }),
+    ];
+    const cues = buildDirectorCues(events);
+    const streamingCue = cues.find((cue) => cue.eventId === 3);
+    const parsedCue = cues.find((cue) => cue.eventId === 4);
+    const recordedCue = cues.find((cue) => cue.eventId === 5);
+
+    expect(narrativeFor(events, streamingCue).cue).toMatchObject({
+      kind: "player-speaking",
+      speechText: "我怀疑 Isaac",
+    });
+    expect(parsedCue?.eventId).toBe(4);
+    expect(recordedCue?.eventId).toBe(5);
+
+    const parsedNarrative = narrativeFor(events, parsedCue).cue;
+    const recordedNarrative = narrativeFor(events, recordedCue).cue;
+    expect(parsedNarrative.kind).not.toBe("player-speaking");
+    expect(parsedNarrative.speechText).toBe("");
+    expect(recordedNarrative.kind).not.toBe("player-speaking");
+    expect(recordedNarrative.speechText).toBe("");
   });
 
   it("uses visible parsed say and summary text as public speech", () => {

@@ -320,7 +320,7 @@ describe("toDirectorCue", () => {
     expect(malformedCue.body).toContain("not an object");
   });
 
-  it("coalesces streaming deltas into the matching request cue", () => {
+  it("coalesces streaming deltas into a cue anchored to the latest delta", () => {
     const cues = buildDirectorCues([
       event({
         id: 2,
@@ -355,7 +355,7 @@ describe("toDirectorCue", () => {
 
     expect(cues).toHaveLength(1);
     expect(cues[0]).toMatchObject({
-      eventId: 2,
+      eventId: 4,
       title: "张三 正在发言",
       body: "张三：我不是狼",
       importance: "key",

@@ -16,7 +16,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const STALE_EVENT_DISTANCE = 8;
 const PCM_COMPLETION_POLL_INTERVAL_MS = 25;
 const VOICE_STREAM_UNAVAILABLE_ERROR =
-  "Live voice streaming is unavailable in this browser.";
+  "当前浏览器不支持语音连接。";
+const VOICE_STREAM_SERVER_UNAVAILABLE_ERROR = "语音服务暂不可用，请稍后重试。";
 
 export type LiveVoiceConnectionState =
   | "idle"
@@ -59,6 +60,8 @@ export type LiveVoiceMessage =
     }
   | {
       type: "voice_unavailable";
+      reason?: string;
+      message?: string;
     };
 
 export type LiveVoiceChunk = {
@@ -427,7 +430,10 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
   }
 
   if (value.type === "voice_unavailable") {
-    return true;
+    return (
+      (value.reason === undefined || typeof value.reason === "string") &&
+      (value.message === undefined || typeof value.message === "string")
+    );
   }
 
   if (value.type === "voice_start") {
@@ -999,7 +1005,6 @@ export function useLiveVoiceStream(
 
     let isActive = true;
     let hasError = false;
-    let socketHadError = false;
     let retryCount = 0;
     let socket: WebSocket | null = null;
 
@@ -1032,32 +1037,41 @@ export function useLiveVoiceStream(
       }
 
       socket = nextSocket;
-      socketHadError = false;
-      nextSocket.onopen = () => {
-        if (isActive) {
-          setConnectionState("open");
-        }
-      };
-      nextSocket.onerror = () => {
-        socketHadError = true;
-        if (retryCount >= 1) {
-          reportError("Live voice stream connection failed.");
-        }
-      };
-      nextSocket.onclose = () => {
-        if (!isActive || hasError) {
+      let isAttemptSettled = false;
+      const settleSocketAttempt = (failed: boolean) => {
+        if (!isActive || hasError || isAttemptSettled) {
           return;
+        }
+        isAttemptSettled = true;
+        if (failed) {
+          try {
+            nextSocket.close();
+          } catch {
+            // Closing a failed socket is best-effort.
+          }
         }
         if (retryCount < 1) {
           retryCount += 1;
           openSocket();
           return;
         }
-        if (socketHadError) {
+        if (failed) {
           reportError("Live voice stream connection failed.");
           return;
         }
         setConnectionState("closed");
+      };
+
+      nextSocket.onopen = () => {
+        if (isActive) {
+          setConnectionState("open");
+        }
+      };
+      nextSocket.onerror = () => {
+        settleSocketAttempt(true);
+      };
+      nextSocket.onclose = () => {
+        settleSocketAttempt(false);
       };
       nextSocket.onmessage = (event) => {
         if (!isActive) {
@@ -1082,7 +1096,9 @@ export function useLiveVoiceStream(
           setConnectionState("unavailable");
           dispatch({
             type: "queue_error",
-            message: "Live voice streaming is unavailable.",
+            message:
+              parsed.message?.trim() ||
+              unavailableMessageForReason(parsed.reason),
           });
           nextSocket.close();
           return;
@@ -1107,4 +1123,20 @@ export function useLiveVoiceStream(
     errors: visibleQueue.errors,
     unlockAudio,
   };
+}
+
+function unavailableMessageForReason(reason: string | undefined) {
+  if (reason === "disabled") {
+    return "语音服务未启用，请检查后端语音配置。";
+  }
+  if (reason === "misconfigured") {
+    return "语音模型配置不完整，请检查 Ark API Key、资源 ID 和音色配置。";
+  }
+  if (reason === "terminal") {
+    return "语音只支持进行中的实时对局；该对局已结束或异常中断。";
+  }
+  if (reason === "run_not_found") {
+    return "对局不存在或已失效，请返回大厅重新开始。";
+  }
+  return VOICE_STREAM_SERVER_UNAVAILABLE_ERROR;
 }

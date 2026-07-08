@@ -710,9 +710,7 @@ describe("live voice stream", () => {
     await waitFor(() =>
       expect(result.current.connectionState).toBe("unavailable"),
     );
-    expect(result.current.errors).toEqual([
-      "Live voice streaming is unavailable in this browser.",
-    ]);
+    expect(result.current.errors).toEqual(["当前浏览器不支持语音连接。"]);
   });
 
   it("reports malformed websocket messages without throwing", async () => {
@@ -763,6 +761,34 @@ describe("live voice stream", () => {
     expect(result.current.errors).toEqual(["Malformed voice stream message."]);
   });
 
+  it("uses the server unavailable reason when voice streaming is unavailable", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 1,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.();
+      MockWebSocket.instances[0].emit({
+        type: "voice_unavailable",
+        reason: "misconfigured",
+        message: "语音模型配置不完整，请检查 Ark API Key、资源 ID 和音色配置。",
+      });
+    });
+
+    await waitFor(() =>
+      expect(result.current.connectionState).toBe("unavailable"),
+    );
+    expect(result.current.errors).toEqual([
+      "语音模型配置不完整，请检查 Ark API Key、资源 ID 和音色配置。",
+    ]);
+  });
+
   it("rejects audio chunks missing chunk metadata", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
 
@@ -790,6 +816,33 @@ describe("live voice stream", () => {
     expect(result.current.errors).toEqual(["Malformed voice stream message."]);
   });
 
+  it("maps terminal voice stream unavailability to a readable reason", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 1,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.();
+      MockWebSocket.instances[0].emit({
+        type: "voice_unavailable",
+        reason: "terminal",
+      });
+    });
+
+    await waitFor(() =>
+      expect(result.current.connectionState).toBe("unavailable"),
+    );
+    expect(result.current.errors).toEqual([
+      "语音只支持进行中的实时对局；该对局已结束或异常中断。",
+    ]);
+  });
+
   it("unlocks audio with an AudioContext while the stream is disabled", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     const { AudioContextConstructor, resume } = stubAudioContext();
@@ -813,6 +866,33 @@ describe("live voice stream", () => {
     expect(resume).toHaveBeenCalledTimes(1);
     expect(pcmMocks.createPcmAudioScheduler).toHaveBeenCalledTimes(1);
     expect(pcmMocks.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps missing run voice stream unavailability to a readable reason", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 1,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.();
+      MockWebSocket.instances[0].emit({
+        type: "voice_unavailable",
+        reason: "run_not_found",
+      });
+    });
+
+    await waitFor(() =>
+      expect(result.current.connectionState).toBe("unavailable"),
+    );
+    expect(result.current.errors).toEqual([
+      "对局不存在或已失效，请返回大厅重新开始。",
+    ]);
   });
 
   it("records a Chinese playback error when audio unlock is unsupported", async () => {
@@ -1588,6 +1668,33 @@ describe("live voice stream", () => {
     });
 
     expect(result.current.connectionState).toBe("open");
+  });
+
+  it("reports a websocket error even when the browser never emits close", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].onerror?.();
+    });
+
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(2));
+
+    act(() => {
+      MockWebSocket.instances[1].onerror?.();
+    });
+
+    await waitFor(() => expect(result.current.connectionState).toBe("error"));
+    expect(result.current.errors).toEqual([
+      "Live voice stream connection failed.",
+    ]);
   });
 
   it("records an error and advances without changing socket state when audio playback is rejected", async () => {

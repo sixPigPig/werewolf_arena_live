@@ -46,7 +46,13 @@ class FakeVoiceStreamer:
     ) -> None:
         self.calls.append({"run_id": run_id, "current_event_id": current_event_id})
         if not self.available:
-            await websocket.send_json({"type": "voice_unavailable"})
+            await websocket.send_json(
+                {
+                    "type": "voice_unavailable",
+                    "reason": "disabled",
+                    "message": "语音服务未启用，请检查后端语音配置。",
+                }
+            )
             return
         await websocket.send_json(
             {
@@ -444,8 +450,9 @@ def test_voice_stream_route_reports_unknown_run() -> None:
     with client_with_overrides() as client:
         with client.websocket_connect("/api/v1/games/runs/run_missing/voice-stream") as ws:
             assert ws.receive_json() == {
-                "type": "voice_error",
-                "message": "Game run not found",
+                "type": "voice_unavailable",
+                "reason": "run_not_found",
+                "message": "对局不存在或已失效，请返回大厅重新开始。",
             }
 
 
@@ -457,7 +464,11 @@ def test_voice_stream_route_reports_unavailable_when_disabled() -> None:
 
     with client_with_overrides() as client:
         with client.websocket_connect(f"/api/v1/games/runs/{run.run_id}/voice-stream") as ws:
-            assert ws.receive_json() == {"type": "voice_unavailable"}
+            assert ws.receive_json() == {
+                "type": "voice_unavailable",
+                "reason": "disabled",
+                "message": "语音服务未启用，请检查后端语音配置。",
+            }
 
 
 def test_voice_stream_service_streams_public_voice_events_and_unsubscribes() -> None:
@@ -975,11 +986,11 @@ def test_voice_stream_service_ignores_incomplete_or_chunkless_recent_utterance(
     assert registry.get_run(run.run_id).subscribers == []
 
 
-def test_voice_stream_service_returns_without_subscribing_when_run_is_terminal() -> None:
+def test_voice_stream_service_reports_unavailable_when_run_is_terminal() -> None:
     RecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
-    registry.mark_completed(run.run_id, winner="好人阵营")
+    registry.mark_failed(run.run_id, error="engine failed")
     websocket = FakeWebSocket()
     service = LiveVoiceStreamService(
         registry=registry,
@@ -990,7 +1001,13 @@ def test_voice_stream_service_returns_without_subscribing_when_run_is_terminal()
     asyncio.run(service.stream_run(run.run_id, websocket))
 
     assert registry.get_run(run.run_id).subscribers == []
-    assert websocket.messages == []
+    assert websocket.messages == [
+        {
+            "type": "voice_unavailable",
+            "reason": "terminal",
+            "message": "语音只支持进行中的实时对局；该对局已结束或异常中断。",
+        }
+    ]
     assert RecordingTtsClient.instances == []
 
 
@@ -1057,7 +1074,35 @@ def test_voice_stream_service_reports_unavailable_without_subscribing() -> None:
 
     asyncio.run(service.stream_run(run.run_id, websocket))
 
-    assert websocket.messages == [{"type": "voice_unavailable"}]
+    assert websocket.messages == [
+        {
+            "type": "voice_unavailable",
+            "reason": "disabled",
+            "message": "语音服务未启用，请检查后端语音配置。",
+        }
+    ]
+    assert registry.get_run(run.run_id).subscribers == []
+
+
+def test_voice_stream_service_reports_misconfigured_reason() -> None:
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=replace(BASE_TTS_CONFIG, api_key=""),
+        client_factory=RecordingTtsClient,
+    )
+
+    asyncio.run(service.stream_run(run.run_id, websocket))
+
+    assert websocket.messages == [
+        {
+            "type": "voice_unavailable",
+            "reason": "misconfigured",
+            "message": "语音模型配置不完整，请检查 Ark API Key、资源 ID 和音色配置。",
+        }
+    ]
     assert registry.get_run(run.run_id).subscribers == []
 
 

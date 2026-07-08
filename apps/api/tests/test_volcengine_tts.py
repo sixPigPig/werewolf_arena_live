@@ -168,25 +168,56 @@ def test_build_tts_headers_uses_connect_id_and_resource_id() -> None:
     }
 
 
-def test_build_tts_request_contains_speaker_text_and_audio_params() -> None:
+def test_build_tts_request_contains_namespace_and_text_only() -> None:
     request = build_tts_request(
-        speaker="player",
         text="我先发言。",
-        audio_format="mp3",
-        sample_rate=24000,
     )
 
     assert request == {
+        "namespace": "BidirectionalTTS",
+        "req_params": {
+            "text": "我先发言。",
+        },
+    }
+
+
+def test_synthesize_happy_path_sends_documented_session_and_task_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_uuids(monkeypatch)
+    calls, _connect_calls = _patch_volcengine_session(
+        monkeypatch,
+        [
+            _message(protocol.MsgType.AudioOnlyServer, payload=b"audio-1"),
+            _message(
+                protocol.MsgType.FullServerResponse,
+                event=protocol.EventType.SessionFinished,
+            ),
+        ],
+    )
+    client = VolcengineTtsClient(BASE_CONFIG)
+
+    audio = asyncio.run(_collect_synthesis(client, text_chunks=["first chunk", "second chunk"]))
+
+    assert audio == [b"audio-1"]
+    start_sessions = [call for call in calls if call[0] == "start_session"]
+    assert len(start_sessions) == 1
+    assert json.loads(start_sessions[0][1]) == {
+        "user": {"uid": "werewolf-arena-live"},
+        "namespace": "BidirectionalTTS",
         "req_params": {
             "speaker": "player",
-            "text": "我先发言。",
             "audio_params": {
                 "format": "mp3",
                 "sample_rate": 24000,
-                "enable_timestamp": False,
             },
-        }
+        },
     }
+    task_requests = [call for call in calls if call[0] == "task_request"]
+    assert [request[1] for request in task_requests] == [
+        {"namespace": "BidirectionalTTS", "req_params": {"text": "first chunk"}},
+        {"namespace": "BidirectionalTTS", "req_params": {"text": "second chunk"}},
+    ]
 
 
 def test_mime_type_for_supported_formats() -> None:
