@@ -103,6 +103,26 @@ class RecordingTtsClient:
         yield b"abc"
 
 
+class MultiChunkTtsClient:
+    instances: list["MultiChunkTtsClient"] = []
+
+    def __init__(self, config: VolcengineTtsConfig) -> None:
+        self.config = config
+        self.calls: list[dict] = []
+        MultiChunkTtsClient.instances.append(self)
+
+    async def synthesize(
+        self,
+        *,
+        speaker: str,
+        text_chunks: list[str],
+    ) -> AsyncIterator[bytes]:
+        self.calls.append({"speaker": speaker, "text_chunks": text_chunks})
+        yield b"first"
+        await asyncio.sleep(0)
+        yield b"second"
+
+
 class FailingTtsClient:
     def __init__(self, config: VolcengineTtsConfig) -> None:
         self.config = config
@@ -328,6 +348,56 @@ def test_voice_stream_service_streams_public_voice_events_and_unsubscribes() -> 
     assert websocket.messages[1]["sample_rate"] == 24000
     assert websocket.messages[1]["data"] == "YWJj"
     assert websocket.messages[4]["chunk_index"] == 0
+
+
+def test_voice_stream_service_streams_multiple_audio_chunks_per_utterance() -> None:
+    MultiChunkTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=MultiChunkTtsClient,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-public",
+                "visible_text": "我先发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    assert [message["type"] for message in websocket.messages[:4]] == [
+        "voice_start",
+        "audio_chunk",
+        "audio_chunk",
+        "voice_end",
+    ]
+    start, first_chunk, second_chunk, _end = websocket.messages[:4]
+    assert start["audio_format"] == "pcm"
+    assert start["sample_rate"] == 24000
+    assert first_chunk["chunk_index"] == 0
+    assert first_chunk["audio_format"] == "pcm"
+    assert first_chunk["sample_rate"] == 24000
+    assert first_chunk["data"] == "Zmlyc3Q="
+    assert second_chunk["chunk_index"] == 1
+    assert second_chunk["audio_format"] == "pcm"
+    assert second_chunk["sample_rate"] == 24000
+    assert second_chunk["data"] == "c2Vjb25k"
+    assert websocket.messages[5]["chunk_index"] == 0
 
 
 def test_voice_stream_service_ignores_public_action_when_flag_is_false() -> None:

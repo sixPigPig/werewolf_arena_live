@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import suppress
@@ -19,6 +21,11 @@ FAILURE_EVENTS = {
     protocol.EventType.SessionCanceled,
     protocol.EventType.SessionFailed,
 }
+CONNECT_TIMEOUT_SECONDS = 8
+EVENT_TIMEOUT_SECONDS = 8
+FIRST_AUDIO_TIMEOUT_SECONDS = 12
+AUDIO_IDLE_TIMEOUT_SECONDS = 8
+TIMEOUT_ERROR_MESSAGE = "Volcengine TTS timed out"
 
 
 @dataclass(frozen=True)
@@ -101,26 +108,42 @@ class VolcengineTtsClient:
         headers = build_tts_headers(self.config, connect_id=connect_id)
         logger.info("Opening Volcengine TTS session", extra={"connect_id": connect_id})
 
-        async with websockets.connect(
-            self.config.ws_url,
-            additional_headers=headers,
-            max_size=10 * 1024 * 1024,
-        ) as websocket:
+        connection = await _await_with_timeout(
+            websockets.connect(
+                self.config.ws_url,
+                additional_headers=headers,
+                max_size=10 * 1024 * 1024,
+            ),
+            CONNECT_TIMEOUT_SECONDS,
+        )
+        async with connection as websocket:
             session_id = str(uuid.uuid4())
             session_started = False
             session_finished = False
             try:
-                await protocol.start_connection(websocket)
-                await protocol.wait_for_event(
-                    websocket,
-                    protocol.MsgType.FullServerResponse,
-                    protocol.EventType.ConnectionStarted,
+                await _await_with_timeout(
+                    protocol.start_connection(websocket),
+                    EVENT_TIMEOUT_SECONDS,
                 )
-                await protocol.start_session(websocket, b"{}", session_id)
-                await protocol.wait_for_event(
-                    websocket,
-                    protocol.MsgType.FullServerResponse,
-                    protocol.EventType.SessionStarted,
+                await _await_with_timeout(
+                    protocol.wait_for_event(
+                        websocket,
+                        protocol.MsgType.FullServerResponse,
+                        protocol.EventType.ConnectionStarted,
+                    ),
+                    EVENT_TIMEOUT_SECONDS,
+                )
+                await _await_with_timeout(
+                    protocol.start_session(websocket, b"{}", session_id),
+                    EVENT_TIMEOUT_SECONDS,
+                )
+                await _await_with_timeout(
+                    protocol.wait_for_event(
+                        websocket,
+                        protocol.MsgType.FullServerResponse,
+                        protocol.EventType.SessionStarted,
+                    ),
+                    EVENT_TIMEOUT_SECONDS,
                 )
                 session_started = True
 
@@ -137,12 +160,25 @@ class VolcengineTtsClient:
                         session_id,
                     )
 
-                await protocol.finish_session(websocket, session_id)
+                await _await_with_timeout(
+                    protocol.finish_session(websocket, session_id),
+                    EVENT_TIMEOUT_SECONDS,
+                )
 
+                first_audio_deadline = time.monotonic() + FIRST_AUDIO_TIMEOUT_SECONDS
+                idle_deadline: float | None = None
                 while True:
-                    message = await protocol.receive_message(websocket)
+                    if idle_deadline is None:
+                        receive_timeout = _remaining_timeout(first_audio_deadline)
+                    else:
+                        receive_timeout = _remaining_timeout(idle_deadline)
+                    message = await _await_with_timeout(
+                        protocol.receive_message(websocket),
+                        receive_timeout,
+                    )
                     if message.type == protocol.MsgType.AudioOnlyServer:
                         yield message.payload
+                        idle_deadline = time.monotonic() + AUDIO_IDLE_TIMEOUT_SECONDS
                         continue
                     if message.type == protocol.MsgType.FullServerResponse:
                         if getattr(message, "event", None) in FAILURE_EVENTS:
@@ -170,3 +206,17 @@ class VolcengineTtsClient:
                         await protocol.cancel_session(websocket, session_id)
                 with suppress(Exception):
                     await protocol.finish_connection(websocket)
+
+
+async def _await_with_timeout(awaitable: Any, timeout_seconds: float) -> Any:
+    try:
+        return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+    except TimeoutError as exc:
+        raise RuntimeError(TIMEOUT_ERROR_MESSAGE) from exc
+
+
+def _remaining_timeout(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError(TIMEOUT_ERROR_MESSAGE)
+    return remaining

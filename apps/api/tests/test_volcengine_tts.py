@@ -33,6 +33,12 @@ class FakeConnection:
     def __init__(self, websocket: object) -> None:
         self.websocket = websocket
 
+    def __await__(self):
+        async def _connect() -> "FakeConnection":
+            return self
+
+        return _connect().__await__()
+
     async def __aenter__(self) -> object:
         return self.websocket
 
@@ -348,6 +354,51 @@ def test_synthesize_unavailable_config_raises_before_connecting(
         asyncio.run(_collect_synthesis(client))
 
     assert not connect_called
+
+
+def test_synthesize_lifecycle_timeout_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_uuids(monkeypatch)
+    calls, _connect_calls = _patch_volcengine_session(monkeypatch, [])
+
+    async def wait_forever(
+        _websocket: object,
+        _msg_type: protocol.MsgType,
+        _event_type: protocol.EventType,
+    ) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(tts.protocol, "wait_for_event", wait_forever)
+    monkeypatch.setattr(tts, "EVENT_TIMEOUT_SECONDS", 0.01, raising=False)
+    client = VolcengineTtsClient(BASE_CONFIG)
+
+    with pytest.raises(RuntimeError, match="Volcengine TTS timed out"):
+        asyncio.run(asyncio.wait_for(_collect_synthesis(client), timeout=0.25))
+
+    assert calls == [("start_connection",), ("finish_connection",)]
+
+
+def test_synthesize_first_audio_timeout_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_uuids(monkeypatch)
+    calls, _connect_calls = _patch_volcengine_session(monkeypatch, [])
+
+    async def receive_message_forever(_websocket: object) -> SimpleNamespace:
+        calls.append(("receive_message",))
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(tts.protocol, "receive_message", receive_message_forever)
+    monkeypatch.setattr(tts, "FIRST_AUDIO_TIMEOUT_SECONDS", 0.01, raising=False)
+    client = VolcengineTtsClient(BASE_CONFIG)
+
+    with pytest.raises(RuntimeError, match="Volcengine TTS timed out"):
+        asyncio.run(asyncio.wait_for(_collect_synthesis(client), timeout=0.25))
+
+    call_names = [call[0] for call in calls]
+    assert call_names[-3:] == ["receive_message", "cancel_session", "finish_connection"]
 
 
 def test_protocol_message_str_redacts_payload_text() -> None:
