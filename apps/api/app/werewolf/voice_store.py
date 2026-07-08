@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.live import VoiceAudioChunkRecord, VoiceUtteranceRecord
 from app.werewolf.voice import VoiceUtterance
 
-TERMINAL_STATUSES = {"complete", "failed"}
+TERMINAL_STATUSES = {"complete", "failed", "canceled"}
 
 
 def text_hash_for_voice(

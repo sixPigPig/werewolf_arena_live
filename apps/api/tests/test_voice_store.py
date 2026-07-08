@@ -281,6 +281,45 @@ def test_voice_store_upsert_after_failure_keeps_terminal_metadata(
     assert loaded["completed_at"] == failed["completed_at"]
 
 
+def test_voice_store_upsert_after_cancel_keeps_terminal_metadata(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("原始文本"),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+        status="canceled",
+    )
+
+    store.upsert_utterance(
+        VoiceUtterance(
+            utterance_id="voice_1",
+            run_id="run_1",
+            source_event_id=6,
+            request_id="req-1",
+            speaker_kind="player",
+            speaker_name="阿青",
+            speaker="zh_female_vv_uranus_bigtts",
+            text="不应重开",
+            action="debate",
+        ),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["status"] == "canceled"
+    assert loaded["text"] == "原始文本"
+    assert loaded["last_source_event_id"] == 4
+    assert loaded["duration_ms"] is None
+    assert loaded["completed_at"] is None
+    assert loaded["error_message"] is None
+
+
 def test_voice_store_complete_after_failure_keeps_failure_metadata(
     db_session: Session,
 ) -> None:
@@ -327,6 +366,50 @@ def test_voice_store_fail_after_complete_keeps_completion_metadata(
     assert loaded["duration_ms"] == 1200
     assert loaded["error_message"] is None
     assert loaded["completed_at"] == completed["completed_at"]
+
+
+def test_voice_store_complete_after_cancel_keeps_canceled_status(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("原始文本"),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+        status="canceled",
+    )
+
+    store.complete_utterance("voice_1", duration_ms=1200)
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["status"] == "canceled"
+    assert loaded["duration_ms"] is None
+    assert loaded["completed_at"] is None
+    assert loaded["error_message"] is None
+
+
+def test_voice_store_fail_after_cancel_keeps_canceled_status(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("原始文本"),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+        status="canceled",
+    )
+
+    store.fail_utterance("voice_1", message="tts failed")
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["status"] == "canceled"
+    assert loaded["duration_ms"] is None
+    assert loaded["completed_at"] is None
+    assert loaded["error_message"] is None
 
 
 def test_voice_store_rejects_incompatible_existing_utterance(
