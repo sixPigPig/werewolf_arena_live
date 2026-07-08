@@ -46,6 +46,7 @@ describe("livePcmPlayer", () => {
       [0, 32767 / 32768],
       [-1, 0],
     ]);
+    expect(context.sources.map((source) => source.buffer)).toEqual(context.buffers);
   });
 });
 
@@ -56,17 +57,20 @@ type FakeAudioBuffer = {
 };
 
 type FakeAudioBufferSourceNode = {
+  buffer: FakeAudioBuffer | null;
   connect: ReturnType<typeof vi.fn<(destination: unknown) => void>>;
   start: ReturnType<typeof vi.fn<(when: number) => void>>;
 };
 
 type FakeAudioContext = AudioContext & {
   buffers: FakeAudioBuffer[];
+  sources: FakeAudioBufferSourceNode[];
   startedAt: number[];
 };
 
 function createFakeAudioContext(options: { currentTime: number }): FakeAudioContext {
   const buffers: FakeAudioBuffer[] = [];
+  const sources: FakeAudioBufferSourceNode[] = [];
   const startedAt: number[] = [];
   const context = {
     buffers,
@@ -84,15 +88,21 @@ function createFakeAudioContext(options: { currentTime: number }): FakeAudioCont
         return buffer;
       },
     ),
-    createBufferSource: vi.fn((): FakeAudioBufferSourceNode => ({
-      connect: vi.fn((_destination: unknown) => undefined),
-      start: vi.fn((when: number) => {
-        startedAt.push(when);
-      }),
-    })),
+    createBufferSource: vi.fn((): FakeAudioBufferSourceNode => {
+      const source = {
+        buffer: null,
+        connect: vi.fn((_destination: unknown) => undefined),
+        start: vi.fn((when: number) => {
+          startedAt.push(when);
+        }),
+      };
+      sources.push(source);
+      return source;
+    }),
     currentTime: options.currentTime,
     destination: {},
     resume: vi.fn(async () => undefined),
+    sources,
     startedAt,
     state: "running",
     suspend: vi.fn(async () => undefined),

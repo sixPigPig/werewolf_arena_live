@@ -56,6 +56,7 @@ export function createPcmAudioScheduler(context: AudioContext): PcmAudioSchedule
       buffer.copyToChannel(samples, 0);
 
       const source = context.createBufferSource();
+      source.buffer = buffer;
       source.connect(context.destination);
 
       const startTime = Math.max(nextPlaybackTime, context.currentTime);
