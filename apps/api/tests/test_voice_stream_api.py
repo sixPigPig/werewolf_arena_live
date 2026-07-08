@@ -157,6 +157,78 @@ class FailingThenRecordingTtsClient:
         yield b"abc"
 
 
+class RecordingVoiceStore:
+    def __init__(self) -> None:
+        self.utterances: list[dict] = []
+        self.chunks: list[dict] = []
+        self.completed: list[dict] = []
+        self.failed: list[dict] = []
+
+    def upsert_utterance(
+        self,
+        utterance,
+        *,
+        audio_format: str,
+        sample_rate: int,
+        mime_type: str,
+        status: str = "synthesizing",
+    ) -> None:
+        self.utterances.append(
+            {
+                "utterance": utterance,
+                "audio_format": audio_format,
+                "sample_rate": sample_rate,
+                "mime_type": mime_type,
+                "status": status,
+            }
+        )
+
+    def append_chunk(self, utterance_id: str, *, chunk_index: int, audio: bytes) -> None:
+        self.chunks.append(
+            {
+                "utterance_id": utterance_id,
+                "chunk_index": chunk_index,
+                "audio": audio,
+            }
+        )
+
+    def complete_utterance(self, utterance_id: str, *, duration_ms: int) -> None:
+        self.completed.append({"utterance_id": utterance_id, "duration_ms": duration_ms})
+
+    def fail_utterance(self, utterance_id: str, *, message: str) -> None:
+        self.failed.append({"utterance_id": utterance_id, "message": message})
+
+
+class FailingVoiceStore(RecordingVoiceStore):
+    def __init__(self, *, fail_method: str) -> None:
+        super().__init__()
+        self.fail_method = fail_method
+
+    def upsert_utterance(
+        self,
+        utterance,
+        *,
+        audio_format: str,
+        sample_rate: int,
+        mime_type: str,
+        status: str = "synthesizing",
+    ) -> None:
+        if self.fail_method == "upsert_utterance":
+            raise RuntimeError("voice persistence failed")
+        super().upsert_utterance(
+            utterance,
+            audio_format=audio_format,
+            sample_rate=sample_rate,
+            mime_type=mime_type,
+            status=status,
+        )
+
+    def append_chunk(self, utterance_id: str, *, chunk_index: int, audio: bytes) -> None:
+        if self.fail_method == "append_chunk":
+            raise RuntimeError("voice persistence failed")
+        super().append_chunk(utterance_id, chunk_index=chunk_index, audio=audio)
+
+
 class PendingSynthesisIterator:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -400,6 +472,68 @@ def test_voice_stream_service_streams_multiple_audio_chunks_per_utterance() -> N
     assert websocket.messages[5]["chunk_index"] == 0
 
 
+def test_voice_stream_service_persists_successful_utterance_chunks_and_completion() -> None:
+    MultiChunkTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    voice_store = RecordingVoiceStore()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=MultiChunkTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-persist",
+                "visible_text": "我先发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    start, first_chunk, second_chunk, end = websocket.messages[:4]
+    assert [message["type"] for message in websocket.messages[:4]] == [
+        "voice_start",
+        "audio_chunk",
+        "audio_chunk",
+        "voice_end",
+    ]
+    assert voice_store.utterances[0]["utterance"].utterance_id == start["utterance_id"]
+    assert voice_store.utterances[0]["utterance"].text == "我先发言。"
+    assert voice_store.utterances[0]["audio_format"] == "pcm"
+    assert voice_store.utterances[0]["sample_rate"] == 24000
+    assert voice_store.utterances[0]["mime_type"] == "audio/L16"
+    assert voice_store.utterances[0]["status"] == "synthesizing"
+    assert voice_store.chunks[:2] == [
+        {
+            "utterance_id": start["utterance_id"],
+            "chunk_index": first_chunk["chunk_index"],
+            "audio": b"first",
+        },
+        {
+            "utterance_id": start["utterance_id"],
+            "chunk_index": second_chunk["chunk_index"],
+            "audio": b"second",
+        },
+    ]
+    assert voice_store.completed[0]["utterance_id"] == start["utterance_id"]
+    assert voice_store.completed[0]["duration_ms"] == end["duration_ms"]
+    assert voice_store.failed == []
+
+
 def test_voice_stream_service_ignores_public_action_when_flag_is_false() -> None:
     RecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
@@ -634,6 +768,127 @@ def test_voice_stream_service_continues_after_synthesis_error() -> None:
     assert websocket.messages[3]["chunk_index"] == 0
     assert websocket.messages[3]["audio_format"] == "pcm"
     assert websocket.messages[3]["sample_rate"] == 24000
+
+
+def test_voice_stream_service_persists_synthesis_failure_and_continues() -> None:
+    FailingThenRecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    voice_store = RecordingVoiceStore()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=FailingThenRecordingTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-fails",
+                "visible_text": "我先发言。",
+                "is_public": True,
+            },
+        )
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="白石",
+            action="debate",
+            payload={
+                "request_id": "req-recovers",
+                "visible_text": "我继续发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    assert [message["type"] for message in websocket.messages[:5]] == [
+        "voice_start",
+        "voice_error",
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+    ]
+    failed_utterance_id = websocket.messages[0]["utterance_id"]
+    recovered_utterance_id = websocket.messages[2]["utterance_id"]
+    assert voice_store.failed == [
+        {
+            "utterance_id": failed_utterance_id,
+            "message": "Voice synthesis failed",
+        }
+    ]
+    assert voice_store.completed[0]["utterance_id"] == recovered_utterance_id
+    assert voice_store.chunks[0] == {
+        "utterance_id": recovered_utterance_id,
+        "chunk_index": 0,
+        "audio": b"abc",
+    }
+
+
+@pytest.mark.parametrize("fail_method", ["upsert_utterance", "append_chunk"])
+def test_voice_stream_service_continues_audio_when_persistence_fails(
+    fail_method: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    voice_store = FailingVoiceStore(fail_method=fail_method)
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-persist-fails",
+                "visible_text": "我先发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    with caplog.at_level("WARNING", logger="app.werewolf.voice_stream"):
+        asyncio.run(stream_live_events())
+
+    assert [message["type"] for message in websocket.messages[:3]] == [
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+    ]
+    start, chunk, _end = websocket.messages[:3]
+    assert chunk["utterance_id"] == start["utterance_id"]
+    assert chunk["chunk_index"] == 0
+    assert chunk["data"] == "YWJj"
+    assert "voice_error" not in [message["type"] for message in websocket.messages]
+    assert any(
+        record.message == "Voice persistence failed"
+        and record.utterance_id == start["utterance_id"]
+        and record.persistence_operation == fail_method
+        for record in caplog.records
+    )
 
 
 def test_voice_stream_service_groups_immediate_deltas_by_request_id() -> None:

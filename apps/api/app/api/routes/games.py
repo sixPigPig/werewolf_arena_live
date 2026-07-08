@@ -41,7 +41,9 @@ from app.werewolf.rules import (
     rule_set_snapshot,
 )
 from app.werewolf.runner import GameRunError, new_session_id, resume_game, run_game
+from app.werewolf.voice import VoiceUtterance
 from app.werewolf.voice_stream import LiveVoiceStreamService
+from app.werewolf.voice_store import DatabaseVoiceStore
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
 
@@ -96,6 +98,69 @@ class SessionLiveStore:
             db.close()
 
 
+class SessionVoiceStore:
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        session_factory: Callable[[], Session] | None = None,
+    ) -> None:
+        self.session_id = session_id
+        self.session_factory = session_factory or SessionLocal
+
+    def upsert_utterance(
+        self,
+        utterance: VoiceUtterance,
+        *,
+        audio_format: str,
+        sample_rate: int,
+        mime_type: str,
+        status: str = "synthesizing",
+    ) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseVoiceStore(db, session_id=self.session_id).upsert_utterance(
+                utterance,
+                audio_format=audio_format,
+                sample_rate=sample_rate,
+                mime_type=mime_type,
+                status=status,
+            )
+        finally:
+            db.close()
+
+    def append_chunk(self, utterance_id: str, *, chunk_index: int, audio: bytes) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseVoiceStore(db, session_id=self.session_id).append_chunk(
+                utterance_id,
+                chunk_index=chunk_index,
+                audio=audio,
+            )
+        finally:
+            db.close()
+
+    def complete_utterance(self, utterance_id: str, *, duration_ms: int) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseVoiceStore(db, session_id=self.session_id).complete_utterance(
+                utterance_id,
+                duration_ms=duration_ms,
+            )
+        finally:
+            db.close()
+
+    def fail_utterance(self, utterance_id: str, *, message: str) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseVoiceStore(db, session_id=self.session_id).fail_utterance(
+                utterance_id,
+                message=message,
+            )
+        finally:
+            db.close()
+
+
 live_registry = LiveRunRegistry(live_store=SessionLiveStore())
 
 
@@ -120,7 +185,11 @@ def get_voice_streamer(
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
     config: Annotated[VolcengineTtsConfig, Depends(get_tts_config)],
 ) -> LiveVoiceStreamService:
-    return LiveVoiceStreamService(registry=registry, config=config)
+    return LiveVoiceStreamService(
+        registry=registry,
+        config=config,
+        voice_store_factory=lambda session_id: SessionVoiceStore(session_id=session_id),
+    )
 
 
 def normalize_player_config_requests(

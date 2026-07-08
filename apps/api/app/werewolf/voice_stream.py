@@ -45,6 +45,28 @@ class TtsClient(Protocol):
         pass
 
 
+class VoiceStore(Protocol):
+    def upsert_utterance(
+        self,
+        utterance: VoiceUtterance,
+        *,
+        audio_format: str,
+        sample_rate: int,
+        mime_type: str,
+        status: str = "synthesizing",
+    ) -> None:
+        pass
+
+    def append_chunk(self, utterance_id: str, *, chunk_index: int, audio: bytes) -> None:
+        pass
+
+    def complete_utterance(self, utterance_id: str, *, duration_ms: int) -> None:
+        pass
+
+    def fail_utterance(self, utterance_id: str, *, message: str) -> None:
+        pass
+
+
 class LiveVoiceStreamService:
     def __init__(
         self,
@@ -52,10 +74,12 @@ class LiveVoiceStreamService:
         registry: LiveRunRegistry,
         config: VolcengineTtsConfig,
         client_factory: Callable[[VolcengineTtsConfig], TtsClient] = VolcengineTtsClient,
+        voice_store_factory: Callable[[str], VoiceStore | None] | None = None,
     ) -> None:
         self.registry = registry
         self.config = config
         self.client_factory = client_factory
+        self.voice_store_factory = voice_store_factory
 
     @property
     def available(self) -> bool:
@@ -76,6 +100,7 @@ class LiveVoiceStreamService:
         if run is None or run.status in TERMINAL_RUN_STATUSES:
             return
 
+        voice_store = self.voice_store_factory(run.session_id) if self.voice_store_factory else None
         subscriber = self.registry.subscribe(run_id, after_id=last_event_id)
         disconnect_task = asyncio.create_task(_watch_websocket_disconnect(websocket))
         pending_events: deque[LiveEvent] = deque()
@@ -111,6 +136,7 @@ class LiveVoiceStreamService:
                         utterance,
                         chunks,
                         disconnect_task,
+                        voice_store,
                     ):
                         return
 
@@ -130,12 +156,25 @@ class LiveVoiceStreamService:
         utterance: VoiceUtterance,
         chunks: list[str],
         disconnect_task: asyncio.Task[None],
+        voice_store: VoiceStore | None,
     ) -> bool:
         started_at = time.monotonic()
         audio_format = self.config.audio_format
         sample_rate = self.config.sample_rate
         mime_type = mime_type_for_format(audio_format)
         client = self.client_factory(self.config)
+        _persist_voice_operation(
+            voice_store,
+            utterance,
+            "upsert_utterance",
+            lambda: voice_store.upsert_utterance(
+                utterance,
+                audio_format=audio_format,
+                sample_rate=sample_rate,
+                mime_type=mime_type,
+                status="synthesizing",
+            ),
+        )
         await websocket.send_json(
             {
                 "type": "voice_start",
@@ -185,6 +224,16 @@ class LiveVoiceStreamService:
                     chunk_index=chunk_index,
                 )
                 await websocket.send_json(chunk_message)
+                _persist_voice_operation(
+                    voice_store,
+                    utterance,
+                    "append_chunk",
+                    lambda: voice_store.append_chunk(
+                        utterance.utterance_id,
+                        chunk_index=chunk_index,
+                        audio=audio,
+                    ),
+                )
                 chunk_index += 1
         except asyncio.CancelledError:
             if audio_task is not None:
@@ -196,6 +245,15 @@ class LiveVoiceStreamService:
             raise
         except Exception:
             await _close_async_iterator(audio_iterator)
+            _persist_voice_operation(
+                voice_store,
+                utterance,
+                "fail_utterance",
+                lambda: voice_store.fail_utterance(
+                    utterance.utterance_id,
+                    message="Voice synthesis failed",
+                ),
+            )
             logger.warning(
                 "Voice synthesis failed",
                 extra={
@@ -217,12 +275,22 @@ class LiveVoiceStreamService:
             return True
 
         await _close_async_iterator(audio_iterator)
+        duration_ms = int((time.monotonic() - started_at) * 1000)
         await websocket.send_json(
             {
                 "type": "voice_end",
                 "utterance_id": utterance.utterance_id,
-                "duration_ms": int((time.monotonic() - started_at) * 1000),
+                "duration_ms": duration_ms,
             }
+        )
+        _persist_voice_operation(
+            voice_store,
+            utterance,
+            "complete_utterance",
+            lambda: voice_store.complete_utterance(
+                utterance.utterance_id,
+                duration_ms=duration_ms,
+            ),
         )
         return True
 
@@ -235,6 +303,31 @@ async def _watch_websocket_disconnect(websocket: WebSocket) -> None:
                 return
     except WebSocketDisconnect:
         return
+
+
+def _persist_voice_operation(
+    voice_store: VoiceStore | None,
+    utterance: VoiceUtterance,
+    persistence_operation: str,
+    persist: Callable[[], None],
+) -> None:
+    if voice_store is None:
+        return
+    try:
+        persist()
+    except Exception:
+        logger.warning(
+            "Voice persistence failed",
+            exc_info=True,
+            extra={
+                "run_id": utterance.run_id,
+                "source_event_id": utterance.source_event_id,
+                "request_id": utterance.request_id,
+                "utterance_id": utterance.utterance_id,
+                "speaker_kind": utterance.speaker_kind,
+                "persistence_operation": persistence_operation,
+            },
+        )
 
 
 async def _close_async_iterator(iterator: AsyncIterator[bytes]) -> None:
