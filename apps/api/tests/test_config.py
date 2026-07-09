@@ -53,6 +53,8 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.ark_tts_ws_url == "wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection"
     assert settings.ark_tts_audio_format == "pcm"
     assert settings.ark_tts_sample_rate == 24000
+    assert settings.ark_tts_judge_asset_audio_format == "mp3"
+    assert settings.ark_tts_judge_asset_sample_rate == 24000
 
 
 def test_settings_reads_tts_env_values(monkeypatch) -> None:
@@ -61,6 +63,8 @@ def test_settings_reads_tts_env_values(monkeypatch) -> None:
     monkeypatch.setenv("ARK_TTS_PLAYER_SPEAKER", "player-speaker")
     monkeypatch.setenv("ARK_TTS_JUDGE_SPEAKER", "judge-speaker")
     monkeypatch.setenv("ARK_TTS_SAMPLE_RATE", "16000")
+    monkeypatch.setenv("ARK_TTS_JUDGE_ASSET_AUDIO_FORMAT", "wav")
+    monkeypatch.setenv("ARK_TTS_JUDGE_ASSET_SAMPLE_RATE", "48000")
 
     settings = Settings(_env_file=None)
 
@@ -69,3 +73,5 @@ def test_settings_reads_tts_env_values(monkeypatch) -> None:
     assert settings.ark_tts_player_speaker == "player-speaker"
     assert settings.ark_tts_judge_speaker == "judge-speaker"
     assert settings.ark_tts_sample_rate == 16000
+    assert settings.ark_tts_judge_asset_audio_format == "wav"
+    assert settings.ark_tts_judge_asset_sample_rate == 48000

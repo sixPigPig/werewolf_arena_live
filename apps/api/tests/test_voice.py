@@ -109,9 +109,52 @@ def test_event_to_player_voice_utterance_uses_visible_text() -> None:
     assert utterance.source_event_id == 8
     assert utterance.request_id == "req-8"
     assert utterance.speaker_kind == "player"
-    assert utterance.speaker_name == "阿青"
+    assert utterance.speaker_name == "当前玩家"
     assert utterance.speaker == "player"
     assert utterance.text == "我竞选警长。"
+
+
+def test_event_to_player_voice_utterance_uses_seat_label_when_available() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(
+        8,
+        "model_response_delta",
+        actor="阿青",
+        action="debate",
+        payload={"request_id": "req-8", "visible_text": "我先发言。", "is_public": True},
+    )
+
+    utterance = event_to_voice_utterance(event, config, player_seats={"阿青": 1})
+
+    assert utterance is not None
+    assert utterance.speaker_kind == "player"
+    assert utterance.speaker_name == "1号玩家"
+    assert utterance.text == "我先发言。"
+
+
+def test_event_to_player_voice_utterance_replaces_player_names_in_speech() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(
+        8,
+        "model_response_delta",
+        actor="阿青",
+        action="debate",
+        payload={
+            "request_id": "req-8",
+            "visible_text": "我觉得白石像狼，先听南风发言。",
+            "is_public": True,
+        },
+    )
+
+    utterance = event_to_voice_utterance(
+        event,
+        config,
+        player_seats={"阿青": 1, "白石": 2, "南风": 3},
+    )
+
+    assert utterance is not None
+    assert utterance.speaker_name == "1号玩家"
+    assert utterance.text == "我觉得2号玩家像狼，先听3号玩家发言。"
 
 
 def test_event_to_voice_utterance_ignores_non_public_visible_text() -> None:
@@ -166,7 +209,25 @@ def test_event_to_judge_voice_utterance_for_phase_start_is_short() -> None:
     assert utterance.speaker_kind == "judge"
     assert utterance.speaker_name == "法官"
     assert utterance.speaker == "judge"
-    assert utterance.text == "天黑请闭眼。"
+    assert utterance.text == "夜晚降临，所有玩家请闭眼。"
+    assert utterance.static_asset_id == "night_start"
+
+
+def test_day_phase_with_multiple_night_deaths_uses_dynamic_seat_line() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(10, "phase_started", phase="day")
+
+    utterance = event_to_voice_utterance(
+        event,
+        config,
+        player_seats={"阿青": 1, "白石": 2},
+        previous_night_deaths=("阿青", "白石"),
+    )
+
+    assert utterance is not None
+    assert utterance.speaker_kind == "judge"
+    assert utterance.text == "昨夜死亡的玩家是 1号玩家、2号玩家。"
+    assert utterance.static_asset_id is None
 
 
 def test_game_completed_judge_voice_whitelists_winner_label() -> None:
@@ -182,9 +243,11 @@ def test_game_completed_judge_voice_whitelists_winner_label() -> None:
     unknown_utterance = event_to_voice_utterance(unknown_winner, config)
 
     assert known_utterance is not None
-    assert known_utterance.text == "对局结束，狼人阵营获胜。"
+    assert known_utterance.text == "游戏结束，狼人阵营获胜。"
+    assert known_utterance.static_asset_id == "game_over_wolves"
     assert unknown_utterance is not None
-    assert unknown_utterance.text == "对局结束，胜利阵营获胜。"
+    assert unknown_utterance.text == "游戏结束，胜利阵营获胜。"
+    assert unknown_utterance.static_asset_id is None
 
 
 def test_voice_messages_serialize_audio_chunks() -> None:

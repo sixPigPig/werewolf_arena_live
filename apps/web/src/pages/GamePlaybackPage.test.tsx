@@ -129,7 +129,9 @@ describe("GamePlaybackPage", () => {
     expect(screen.getByTestId("live-game-page")).toBeInTheDocument();
     expect(screen.getByText("观赛舞台")).toBeInTheDocument();
     expect(screen.getByText("法官旁白")).toBeInTheDocument();
-    expect(screen.getAllByText("对局开始").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("本局游戏开始，请所有玩家确认自己的身份牌。").length,
+    ).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: "查看复盘" })).toHaveAttribute(
       "href",
       "/games/game_1200abcd",

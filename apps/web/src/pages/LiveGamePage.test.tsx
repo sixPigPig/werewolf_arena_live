@@ -9,7 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { Route, Routes, useNavigate } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LiveDirectorControls } from "../features/games/components/LiveDirectorControls";
 import { LiveEventTimeline } from "../features/games/components/LiveEventTimeline";
@@ -17,6 +17,29 @@ import { LiveStatusStrip } from "../features/games/components/LiveStatusStrip";
 import type { LiveGameEvent } from "../features/games/types";
 import { renderWithClient } from "../tests/renderWithClient";
 import { LiveGamePage } from "./LiveGamePage";
+
+const liveVoiceStreamMocks = vi.hoisted(() => {
+  const unlockAudio = vi.fn(() => Promise.resolve(true));
+  const useLiveVoiceStream = vi.fn(() => ({
+    connectionState: "idle",
+    currentItem: null,
+    currentSpeakerName: null,
+    errors: [],
+    unlockAudio,
+  }));
+
+  return { unlockAudio, useLiveVoiceStream };
+});
+
+vi.mock("@werewolf-arena/game-client/live", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@werewolf-arena/game-client/live")>();
+
+  return {
+    ...actual,
+    useLiveVoiceStream: liveVoiceStreamMocks.useLiveVoiceStream,
+  };
+});
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -158,6 +181,17 @@ function LiveGameRouteSwitcher() {
 }
 
 describe("LiveGamePage", () => {
+  beforeEach(() => {
+    liveVoiceStreamMocks.unlockAudio.mockResolvedValue(true);
+    liveVoiceStreamMocks.useLiveVoiceStream.mockImplementation(() => ({
+      connectionState: "idle",
+      currentItem: null,
+      currentSpeakerName: null,
+      errors: [],
+      unlockAudio: liveVoiceStreamMocks.unlockAudio,
+    }));
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -260,6 +294,16 @@ describe("LiveGamePage", () => {
     expect(
       screen.queryByText("1 狼人 / 1 预言家 / 1 医生 / 3 村民"),
     ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(liveVoiceStreamMocks.unlockAudio).toHaveBeenCalled(),
+    );
+    expect(liveVoiceStreamMocks.useLiveVoiceStream).toHaveBeenCalledWith(
+      "run_1234abcd",
+      expect.objectContaining({
+        enabled: true,
+        isPaused: false,
+      }),
+    );
     const source = MockEventSource.instances[0];
     act(() => {
       source.onopen?.();
@@ -310,8 +354,8 @@ describe("LiveGamePage", () => {
     });
 
     await catchUpLiveStage();
-    expect(await screen.findByText("请 张三 发言。")).toBeInTheDocument();
-    expect(screen.getByText("张三 正在整理公开发言。")).toBeInTheDocument();
+    expect(await screen.findByText("1号玩家请发言。")).toBeInTheDocument();
+    expect(screen.getByText("1号玩家 正在整理公开发言。")).toBeInTheDocument();
 
     act(() => {
       source.emit("model_request_started", {
@@ -381,7 +425,7 @@ describe("LiveGamePage", () => {
     expect(await screen.findByText("张三 开始发言")).toBeInTheDocument();
     await catchUpLiveStage();
     expect(screen.getByText("法官旁白")).toBeInTheDocument();
-    expect(screen.getByText("请听 张三 的发言。")).toBeInTheDocument();
+    expect(screen.getByText("请听 1号玩家 的发言。")).toBeInTheDocument();
     expect(screen.getByTestId("live-narrative-center")).toHaveTextContent(
       "我不是狼",
     );
@@ -1438,7 +1482,7 @@ describe("LiveGamePage", () => {
     ).toBeInTheDocument();
     expect(
       within(screen.getByTestId("live-narrative-center")).queryByText(
-        "天亮了，进入白天发言。",
+        "天亮了，所有玩家请睁眼。",
       ),
     ).not.toBeInTheDocument();
 
@@ -1446,7 +1490,7 @@ describe("LiveGamePage", () => {
       vi.advanceTimersByTime(2500);
     });
 
-    expect(screen.getByText("天亮了，进入白天发言。")).toBeInTheDocument();
+    expect(screen.getByText("天亮了，所有玩家请睁眼。")).toBeInTheDocument();
     vi.useRealTimers();
   });
 
@@ -1498,7 +1542,7 @@ describe("LiveGamePage", () => {
 
     expect(
       within(screen.getByTestId("live-narrative-center")).getByText(
-        "对局开始",
+        "本局游戏开始，请所有玩家确认自己的身份牌。",
       ),
     ).toBeInTheDocument();
     expect(screen.getByTestId("god-view-intel-panel")).not.toHaveTextContent(
@@ -1510,7 +1554,9 @@ describe("LiveGamePage", () => {
 
     await catchUpLiveStage();
 
-    expect(screen.getByText(/李四 被放逐出局/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/2号玩家 得票最高，被放逐出局/),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("god-view-intel-panel")).toHaveTextContent(
       "投票放逐",
     );
@@ -1610,7 +1656,7 @@ describe("LiveGamePage", () => {
     });
 
     expect(
-      await screen.findByText("对局结束，狼人阵营获胜。"),
+      await screen.findByText("游戏结束，狼人阵营获胜。"),
     ).toBeInTheDocument();
     expect(screen.getByText("队列剩余：0")).toBeInTheDocument();
     expect(
@@ -1679,7 +1725,7 @@ describe("LiveGamePage", () => {
     ).toBeInTheDocument();
     expect(
       within(screen.getByTestId("live-narrative-center")).queryByText(
-        "对局结束，狼人阵营获胜。",
+        "游戏结束，狼人阵营获胜。",
       ),
     ).not.toBeInTheDocument();
     expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
@@ -1739,7 +1785,7 @@ describe("LiveGamePage", () => {
     ).toBeInTheDocument();
     expect(
       within(screen.getByTestId("live-narrative-center")).queryByText(
-        "对局结束，狼人阵营获胜。",
+        "游戏结束，狼人阵营获胜。",
       ),
     ).not.toBeInTheDocument();
     expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
@@ -1766,7 +1812,7 @@ describe("LiveGamePage", () => {
     });
     expect(await screen.findByText("已完成")).toBeInTheDocument();
     expect(
-      await screen.findByText("对局结束，狼人阵营获胜。"),
+      await screen.findByText("游戏结束，狼人阵营获胜。"),
     ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "run a" }));
@@ -1801,7 +1847,7 @@ describe("LiveGamePage", () => {
     ).toBeInTheDocument();
     expect(
       within(screen.getByTestId("live-narrative-center")).queryByText(
-        "对局结束，狼人阵营获胜。",
+        "游戏结束，狼人阵营获胜。",
       ),
     ).not.toBeInTheDocument();
     expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
@@ -1870,7 +1916,7 @@ describe("LiveGamePage", () => {
       within(settingsDialog).getByRole("button", { name: "追到最新" }).click();
     });
 
-    expect(screen.getByText("对局结束，好人阵营获胜。")).toBeInTheDocument();
+    expect(screen.getByText("游戏结束，好人阵营获胜。")).toBeInTheDocument();
     expect(screen.getByText("胜利阵营：好人阵营")).toBeInTheDocument();
     vi.useRealTimers();
   });

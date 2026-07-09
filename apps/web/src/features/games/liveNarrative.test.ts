@@ -56,7 +56,7 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "judge",
       tone: "night",
-      judgeLine: "天黑请闭眼。",
+      judgeLine: "夜晚降临，所有玩家请闭眼。",
       detailLine: "夜间行动开始，存活玩家请依次行动。",
     });
 
@@ -85,7 +85,7 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "judge",
       tone: "day",
-      judgeLine: "天亮了，昨夜平安无事。",
+      judgeLine: "昨夜平安夜。",
     });
 
     expect(
@@ -153,9 +153,9 @@ describe("deriveLiveNarrativeState", () => {
       kind: "player-thinking",
       actorName: "Sam",
       action: "debate",
-      judgeLine: "请 Sam 发言。",
-      performerLine: "Sam 正在整理公开发言。",
-      detailLine: "下一位：Isaac",
+      judgeLine: "1号玩家请发言。",
+      performerLine: "1号玩家 正在整理公开发言。",
+      detailLine: "下一位：2号玩家",
     });
   });
 
@@ -189,8 +189,8 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "player-thinking",
       tone: "day",
-      judgeLine: "请听 Sam 的发言。",
-      performerLine: "Sam 正在组织发言。",
+      judgeLine: "请听 1号玩家 的发言。",
+      performerLine: "1号玩家 正在组织发言。",
       detailLine: "玩家正在组织公开发言...",
     });
   });
@@ -225,9 +225,9 @@ describe("deriveLiveNarrativeState", () => {
       kind: "player-speaking",
       tone: "day",
       actorName: "Sam",
-      judgeLine: "请听 Sam 的发言。",
-      performerLine: "Sam 完成发言。",
-      detailLine: "下一位：Isaac",
+      judgeLine: "请听 1号玩家 的发言。",
+      performerLine: "1号玩家 完成发言。",
+      detailLine: "下一位：2号玩家",
       speechText: "我先听后置位发言。",
     });
     expect(state.cue.speechText).not.toContain("private raw");
@@ -254,7 +254,7 @@ describe("deriveLiveNarrativeState", () => {
       tone: "night",
       actorName: "Sam",
       judgeLine: "模型返回已接收。",
-      performerLine: "Sam 的行动正在解析。",
+      performerLine: "1号玩家 的行动正在解析。",
       detailLine: "行动结果等待公开结算。",
       speechText: "",
     });
@@ -304,14 +304,14 @@ describe("deriveLiveNarrativeState", () => {
       }),
     ];
     const cues = buildDirectorCues(events);
-    const speechCue = cues.find((cue) => cue.eventId === 2);
+    const speechCue = cues.find((cue) => cue.eventId === 3);
 
     expect(speechCue).toBeDefined();
     expect(narrativeFor(events, speechCue).cue).toMatchObject({
       kind: "player-speaking",
       tone: "day",
-      judgeLine: "请听 张三 的发言。",
-      performerLine: "张三 正在发言。",
+      judgeLine: "请听 1号玩家 的发言。",
+      performerLine: "1号玩家 正在发言。",
       speechText: "我不是狼",
     });
   });
@@ -321,6 +321,16 @@ describe("deriveLiveNarrativeState", () => {
       narrativeFor([
         event({
           id: 1,
+          type: "game_started",
+          payload: {
+            players: [
+              { name: "Sam", role: "村民", model: "deepseek-chat" },
+              { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+            ],
+          },
+        }),
+        event({
+          id: 2,
           type: "action_parsed",
           round: 1,
           phase: "day",
@@ -333,13 +343,23 @@ describe("deriveLiveNarrativeState", () => {
       ]).cue,
     ).toMatchObject({
       kind: "player-speaking",
-      judgeLine: "请听 Sam 的发言。",
-      performerLine: "Sam 完成发言。",
-      speechText: "我觉得今天应该先听 Isaac 发言。",
+      judgeLine: "请听 1号玩家 的发言。",
+      performerLine: "1号玩家 完成发言。",
+      speechText: "我觉得今天应该先听 2号玩家 发言。",
     });
 
     expect(
       narrativeFor([
+        event({
+          id: 1,
+          type: "game_started",
+          payload: {
+            players: [
+              { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+              { name: "Leah", role: "村民", model: "deepseek-chat" },
+            ],
+          },
+        }),
         event({
           id: 2,
           type: "action_parsed",
@@ -354,8 +374,8 @@ describe("deriveLiveNarrativeState", () => {
       ]).cue,
     ).toMatchObject({
       kind: "player-speaking",
-      judgeLine: "请听 Leah 的发言。",
-      speechText: "Isaac 的票型需要重点复盘。",
+      judgeLine: "请听 2号玩家 的发言。",
+      speechText: "1号玩家 的票型需要重点复盘。",
     });
   });
 
@@ -400,7 +420,7 @@ describe("deriveLiveNarrativeState", () => {
       kind: "vote",
       tone: "vote",
       judgeLine: "投票结果公布。",
-      detailLine: "当前最高票：Isaac，2 票。",
+      detailLine: "当前最高票：该玩家，2 票。",
     });
 
     expect(
@@ -420,7 +440,7 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "death",
       tone: "danger",
-      judgeLine: "Isaac 被放逐出局。",
+      judgeLine: "1号玩家 得票最高，被放逐出局。",
     });
 
     expect(
@@ -440,7 +460,7 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "death",
       tone: "danger",
-      judgeLine: "天亮了，昨夜 Sam 出局。",
+      judgeLine: "昨夜死亡的玩家是 1号玩家。",
     });
 
     expect(
@@ -454,7 +474,7 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "terminal",
       tone: "terminal",
-      judgeLine: "对局结束，狼人阵营获胜。",
+      judgeLine: "游戏结束，狼人阵营获胜。",
     });
   });
 
@@ -477,7 +497,7 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "judge",
       tone: "safe",
-      judgeLine: "天亮了，昨夜平安无事。",
+      judgeLine: "昨夜平安夜。",
       performerLine: "昨夜没有玩家出局。",
     });
 
@@ -498,7 +518,7 @@ describe("deriveLiveNarrativeState", () => {
 
     expect(peacefulCue.performerLine).not.toContain("Sam");
     expect(peacefulCue.performerLine).not.toContain("守卫");
-    expect(peacefulCue.detailLine).toBe("存活玩家：Sam、Isaac");
+    expect(peacefulCue.detailLine).toBe("存活玩家：1号玩家、未知玩家");
 
     const legacyProtectedCue = narrativeFor([
       event({
@@ -517,11 +537,11 @@ describe("deriveLiveNarrativeState", () => {
     expect(legacyProtectedCue).toMatchObject({
       kind: "judge",
       tone: "safe",
-      judgeLine: "天亮了，昨夜平安无事。",
+      judgeLine: "昨夜平安夜。",
       performerLine: "昨夜没有玩家出局。",
     });
     expect(legacyProtectedCue.judgeLine).not.toContain("李四 出局");
-    expect(legacyProtectedCue.detailLine).toBe("存活玩家：张三、李四");
+    expect(legacyProtectedCue.detailLine).toBe("存活玩家：未知玩家、1号玩家");
 
     expect(
       narrativeFor([
@@ -540,7 +560,7 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "player-action",
       tone: "danger",
-      judgeLine: "猎人开枪带走 Isaac。",
+      judgeLine: "该玩家 被猎人带走，出局。",
       performerLine: "技能效果已经公开。",
     });
   });
@@ -771,7 +791,7 @@ describe("deriveLiveNarrativeState", () => {
       tone: "danger",
       actorName: "Sam",
       judgeLine: "模型请求暂时失败。",
-      performerLine: "Sam 的行动暂时中断。",
+      performerLine: "1号玩家 的行动暂时中断。",
       detailLine: "模型请求超时，等待重试。",
     });
     expect(state.cue.detailLine).not.toContain("private prompt");

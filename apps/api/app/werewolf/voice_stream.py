@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import queue
 import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.live import LiveEvent, LiveRunRegistry
 from app.werewolf.voice import (
     VoiceSpeakerConfig,
@@ -79,6 +82,21 @@ class VoiceStore(Protocol):
         pass
 
 
+@dataclass
+class VoiceStreamContext:
+    player_seats: dict[str, int]
+    previous_night_deaths: tuple[str, ...] = ()
+    peaceful_night: bool = False
+
+
+@dataclass(frozen=True)
+class StaticJudgeVoiceAsset:
+    audio: bytes
+    audio_format: str
+    mime_type: str
+    sample_rate: int
+
+
 class LiveVoiceStreamService:
     def __init__(
         self,
@@ -87,11 +105,13 @@ class LiveVoiceStreamService:
         config: VolcengineTtsConfig,
         client_factory: Callable[[VolcengineTtsConfig], TtsClient] = VolcengineTtsClient,
         voice_store_factory: Callable[[str], VoiceStore | None] | None = None,
+        judge_voice_asset_dir: Path = DEFAULT_JUDGE_VOICE_ASSET_DIR,
     ) -> None:
         self.registry = registry
         self.config = config
         self.client_factory = client_factory
         self.voice_store_factory = voice_store_factory
+        self.judge_voice_asset_dir = judge_voice_asset_dir
 
     @property
     def available(self) -> bool:
@@ -128,6 +148,7 @@ class LiveVoiceStreamService:
         disconnect_task = asyncio.create_task(_watch_websocket_disconnect(websocket))
         subscriber: queue.Queue[LiveEvent] | None = None
         pending_events: deque[LiveEvent] = deque()
+        voice_context = _build_voice_context(historical_events)
         speaker_config = VoiceSpeakerConfig(
             player_speaker=self.config.player_speaker,
             judge_speaker=self.config.judge_speaker,
@@ -152,7 +173,14 @@ class LiveVoiceStreamService:
                 if event is None:
                     return
                 is_terminal = event.type in TERMINAL_EVENT_TYPES
-                utterance = event_to_voice_utterance(event, speaker_config)
+                _update_voice_context_before_event(voice_context, event)
+                utterance = event_to_voice_utterance(
+                    event,
+                    speaker_config,
+                    player_seats=voice_context.player_seats,
+                    previous_night_deaths=voice_context.previous_night_deaths,
+                    peaceful_night=voice_context.peaceful_night,
+                )
 
                 if utterance is not None:
                     utterance = await _coalesce_request_deltas(
@@ -161,11 +189,22 @@ class LiveVoiceStreamService:
                         disconnect_task,
                         pending_events,
                         speaker_config,
+                        voice_context.player_seats,
                     )
                     if disconnect_task.done():
                         return
                     chunks = chunk_text_for_tts(utterance.text)
-                    if chunks and not await self._stream_utterance(
+                    static_asset = self._static_asset_for_utterance(utterance)
+                    if static_asset is not None:
+                        if not await self._stream_static_utterance(
+                            websocket,
+                            utterance,
+                            static_asset,
+                            disconnect_task,
+                            voice_store,
+                        ):
+                            return
+                    elif chunks and not await self._stream_utterance(
                         websocket,
                         utterance,
                         chunks,
@@ -173,6 +212,8 @@ class LiveVoiceStreamService:
                         voice_store,
                     ):
                         return
+
+                _update_voice_context_after_event(voice_context, event)
 
                 if is_terminal:
                     return
@@ -184,6 +225,113 @@ class LiveVoiceStreamService:
                 await disconnect_task
             if subscriber is not None:
                 self.registry.unsubscribe(run_id, subscriber)
+
+    def _static_asset_for_utterance(
+        self,
+        utterance: VoiceUtterance,
+    ) -> StaticJudgeVoiceAsset | None:
+        if utterance.speaker_kind != "judge" or utterance.static_asset_id is None:
+            return None
+        asset = _load_static_judge_voice_asset(
+            self.judge_voice_asset_dir,
+            utterance.static_asset_id,
+        )
+        if asset is None:
+            return None
+        if asset.audio_format.lower() != self.config.audio_format.lower():
+            return None
+        return asset
+
+    async def _stream_static_utterance(
+        self,
+        websocket: WebSocket,
+        utterance: VoiceUtterance,
+        asset: StaticJudgeVoiceAsset,
+        disconnect_task: asyncio.Task[None],
+        voice_store: VoiceStore | None,
+    ) -> bool:
+        started_at = time.monotonic()
+        _persist_voice_operation(
+            voice_store,
+            utterance,
+            "upsert_utterance",
+            lambda: voice_store.upsert_utterance(
+                utterance,
+                audio_format=asset.audio_format,
+                sample_rate=asset.sample_rate,
+                mime_type=asset.mime_type,
+                status="synthesizing",
+            ),
+        )
+        start_message, chunk_message, _end_message = build_voice_messages(
+            utterance_id=utterance.utterance_id,
+            source_event_id=utterance.source_event_id,
+            speaker_kind=utterance.speaker_kind,
+            speaker_name=utterance.speaker_name,
+            audio=asset.audio,
+            mime_type=asset.mime_type,
+            duration_ms=0,
+            audio_format=asset.audio_format,
+            sample_rate=asset.sample_rate,
+            chunk_index=0,
+        )
+        try:
+            await websocket.send_json(start_message)
+            if _mark_voice_stream_disconnected_if_needed(
+                disconnect_task,
+                voice_store,
+                utterance,
+            ):
+                return False
+            await websocket.send_json(chunk_message)
+            _persist_voice_operation(
+                voice_store,
+                utterance,
+                "append_chunk",
+                lambda: voice_store.append_chunk(
+                    utterance.utterance_id,
+                    chunk_index=0,
+                    audio=asset.audio,
+                ),
+            )
+            if _mark_voice_stream_disconnected_if_needed(
+                disconnect_task,
+                voice_store,
+                utterance,
+            ):
+                return False
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            await websocket.send_json(
+                {
+                    "type": "voice_end",
+                    "utterance_id": utterance.utterance_id,
+                    "duration_ms": duration_ms,
+                }
+            )
+            _persist_voice_operation(
+                voice_store,
+                utterance,
+                "complete_utterance",
+                lambda: voice_store.complete_utterance(
+                    utterance.utterance_id,
+                    duration_ms=duration_ms,
+                ),
+            )
+        except asyncio.CancelledError:
+            _mark_voice_stream_interrupted(
+                voice_store,
+                utterance,
+                "Voice stream canceled",
+            )
+            raise
+        except WebSocketDisconnect:
+            _mark_voice_stream_interrupted(
+                voice_store,
+                utterance,
+                "Voice stream disconnected",
+            )
+            raise
+        return True
 
     async def _stream_utterance(
         self,
@@ -389,6 +537,145 @@ async def _watch_websocket_disconnect(websocket: WebSocket) -> None:
                 return
     except WebSocketDisconnect:
         return
+
+
+def _build_voice_context(events: list[LiveEvent]) -> VoiceStreamContext:
+    context = VoiceStreamContext(player_seats={})
+    for event in events:
+        _update_voice_context_before_event(context, event)
+        _update_voice_context_after_event(context, event)
+    return context
+
+
+def _update_voice_context_before_event(
+    context: VoiceStreamContext,
+    event: LiveEvent,
+) -> None:
+    payload = _payload_for_event(event)
+    if event.type == "game_started":
+        players = payload.get("players")
+        if isinstance(players, list):
+            context.player_seats = {
+                player["name"]: index
+                for index, player in enumerate(players, start=1)
+                if isinstance(player, dict) and isinstance(player.get("name"), str)
+            }
+    if event.type == "state_updated":
+        night_deaths = _night_death_names_from_payload(payload)
+        if night_deaths:
+            context.previous_night_deaths = tuple(night_deaths)
+            context.peaceful_night = False
+        elif _is_peaceful_night_payload(payload):
+            context.previous_night_deaths = ()
+            context.peaceful_night = True
+
+
+def _update_voice_context_after_event(
+    context: VoiceStreamContext,
+    event: LiveEvent,
+) -> None:
+    if event.type == "phase_started" and event.phase == "day":
+        context.previous_night_deaths = ()
+        context.peaceful_night = False
+
+
+def _night_death_names_from_payload(payload: dict[str, Any]) -> list[str]:
+    deaths = payload.get("night_deaths")
+    if isinstance(deaths, list):
+        return [
+            death["player"]
+            for death in deaths
+            if isinstance(death, dict) and isinstance(death.get("player"), str)
+        ]
+    eliminated = payload.get("eliminated")
+    return [eliminated] if isinstance(eliminated, str) and eliminated else []
+
+
+def _is_peaceful_night_payload(payload: dict[str, Any]) -> bool:
+    attacked = payload.get("attacked")
+    protected_player = payload.get("protected")
+    eliminated = payload.get("eliminated")
+    return bool(
+        (isinstance(attacked, str) and protected_player == attacked)
+        or (isinstance(eliminated, str) and protected_player == eliminated)
+        or (isinstance(protected_player, str) and eliminated is None)
+    )
+
+
+def _payload_for_event(event: LiveEvent) -> dict[str, Any]:
+    return event.payload if isinstance(event.payload, dict) else {}
+
+
+def _load_static_judge_voice_asset(
+    asset_dir: Path,
+    asset_id: str,
+) -> StaticJudgeVoiceAsset | None:
+    manifest_path = asset_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    lines = manifest.get("lines")
+    if not isinstance(lines, list):
+        return None
+
+    matching_line = next(
+        (
+            line
+            for line in lines
+            if isinstance(line, dict) and line.get("id") == asset_id
+        ),
+        None,
+    )
+    if matching_line is None or matching_line.get("exists") is False:
+        return None
+
+    filename = matching_line.get("filename")
+    if not isinstance(filename, str) or Path(filename).name != filename:
+        return None
+    audio_path = asset_dir / filename
+    if not audio_path.exists():
+        return None
+
+    audio_format = _string_manifest_value(
+        matching_line,
+        "audio_format",
+    ) or _string_manifest_value(manifest, "audio_format") or audio_path.suffix.lstrip(".")
+    if not audio_format:
+        return None
+    mime_type = (
+        _string_manifest_value(matching_line, "mime_type")
+        or _string_manifest_value(manifest, "mime_type")
+        or mime_type_for_format(audio_format)
+    )
+    sample_rate = _int_manifest_value(
+        matching_line,
+        "sample_rate",
+    ) or _int_manifest_value(manifest, "sample_rate") or 24000
+
+    try:
+        audio = audio_path.read_bytes()
+    except Exception:
+        return None
+    if not audio:
+        return None
+
+    return StaticJudgeVoiceAsset(
+        audio=audio,
+        audio_format=audio_format,
+        mime_type=mime_type,
+        sample_rate=sample_rate,
+    )
+
+
+def _string_manifest_value(data: dict[str, Any], key: str) -> str:
+    value = data.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _int_manifest_value(data: dict[str, Any], key: str) -> int | None:
+    value = data.get(key)
+    return value if isinstance(value, int) else None
 
 
 async def _replay_recent_utterance(
@@ -631,6 +918,7 @@ async def _coalesce_request_deltas(
     disconnect_task: asyncio.Task[None],
     pending_events: deque[LiveEvent],
     speaker_config: VoiceSpeakerConfig,
+    player_seats: dict[str, int],
 ) -> VoiceUtterance:
     if utterance.request_id is None or utterance.speaker_kind != "player":
         return utterance
@@ -648,7 +936,11 @@ async def _coalesce_request_deltas(
             if event is None:
                 break
 
-        next_utterance = event_to_voice_utterance(event, speaker_config)
+        next_utterance = event_to_voice_utterance(
+            event,
+            speaker_config,
+            player_seats=player_seats,
+        )
         if _is_same_request_utterance(utterance, next_utterance):
             texts.append(next_utterance.text)
             continue

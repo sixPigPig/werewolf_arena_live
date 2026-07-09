@@ -90,7 +90,7 @@ describe("deriveMobileLiveSubtitle", () => {
     });
 
     expect(subtitle).toEqual<MobileLiveSubtitle>({
-      speakerName: "阿青",
+      speakerName: "3号玩家",
       text: "我先听后置位发言。",
       tone: "player",
       colorIndex: 2,
@@ -103,14 +103,14 @@ describe("deriveMobileLiveSubtitle", () => {
       narrativeState: narrative({
         actorName: "阿青",
         action: "sheriff_speech",
-        judgeLine: "请听 阿青 的发言。",
+        judgeLine: "请听 1号玩家 的发言。",
         kind: "player-thinking",
       }),
     });
 
     expect(subtitle).toEqual<MobileLiveSubtitle>({
       speakerName: "法官",
-      text: "请听 阿青 的发言。",
+      text: "请听 1号玩家 的发言。",
       tone: "judge",
       colorIndex: 0,
     });
@@ -120,14 +120,14 @@ describe("deriveMobileLiveSubtitle", () => {
     const subtitle = deriveMobileLiveSubtitle({
       godViewState: godView([]),
       narrativeState: narrative({
-        judgeLine: "天黑请闭眼。",
+        judgeLine: "夜晚降临，所有玩家请闭眼。",
         kind: "judge",
       }),
     });
 
     expect(subtitle).toEqual<MobileLiveSubtitle>({
       speakerName: "法官",
-      text: "天黑请闭眼。",
+      text: "夜晚降临，所有玩家请闭眼。",
       tone: "judge",
       colorIndex: 0,
     });
@@ -168,7 +168,7 @@ describe("deriveMobileLiveSubtitle", () => {
       }),
     });
 
-    expect(first?.speakerName).toBe("临时玩家");
+    expect(first?.speakerName).toBe("当前玩家");
     expect(first?.tone).toBe("player");
     expect(first?.colorIndex).toBeGreaterThanOrEqual(0);
     expect(first?.colorIndex).toBeLessThan(8);

@@ -126,29 +126,43 @@ function cueForEvent({
   }
 
   if (cue.suppressSpeechSubtitle) {
-    return recordedSpeechCue(cue, actorName, nextSpeakerName);
+    return recordedSpeechCue(cue, actorName, nextSpeakerName, godViewState);
   }
 
   if (isPublicSpeechAction(cue.action) && cue.importance === "key") {
     const speechText = speechTextFromCue(cue.body, cue.actor);
     if (speechText) {
-      const actor = cue.actor ?? actorName ?? "当前玩家";
+      const actor = playerReference(cue.actor ?? actorName, godViewState);
       return makeCue({
         eventId: cue.eventId,
         kind: "player-speaking",
         tone: "day",
         judgeLine: `请听 ${actor} 的发言。`,
         performerLine: `${actor} 正在发言。`,
-        detailLine: nextLine(nextSpeakerName),
+        detailLine: nextLine(nextSpeakerName, godViewState),
         actorName: cue.actor ?? actorName,
         action: cue.action,
-        speechText,
+        speechText: replacePlayerNamesWithSeatLabels(speechText, godViewState),
       });
     }
   }
 
   if (!event) {
-    return fallbackCue(cue, actorName);
+    return fallbackCue(cue, actorName, godViewState);
+  }
+
+  if (event.type === "game_started") {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: "neutral",
+      judgeLine: "本局游戏开始，请所有玩家确认自己的身份牌。",
+      performerLine: "玩家身份已经确认。",
+      detailLine: "本局游戏开始。",
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
   }
 
   if (event.type === "phase_started") {
@@ -156,26 +170,32 @@ function cueForEvent({
   }
 
   if (event.type === "action_requested") {
-    return actionRequestedCue(cue, actorName, nextSpeakerName);
+    return actionRequestedCue(cue, actorName, nextSpeakerName, godViewState);
   }
 
   if (
     event.type === "model_request_started" ||
     event.type === "model_thinking_tick"
   ) {
-    return modelWaitingCue(cue, payload, actorName, nextSpeakerName);
+    return modelWaitingCue(cue, payload, actorName, nextSpeakerName, godViewState);
   }
 
   if (event.type === "model_request_failed") {
-    return modelRequestFailedCue(cue, payload, actorName);
+    return modelRequestFailedCue(cue, payload, actorName, godViewState);
   }
 
   if (event.type === "model_response_received") {
-    return modelResponseReceivedCue(cue, payload, actorName, nextSpeakerName);
+    return modelResponseReceivedCue(
+      cue,
+      payload,
+      actorName,
+      nextSpeakerName,
+      godViewState,
+    );
   }
 
   if (event.type === "action_parsed") {
-    return parsedActionCue(cue, payload, actorName, nextSpeakerName);
+    return parsedActionCue(cue, payload, actorName, nextSpeakerName, godViewState);
   }
 
   if (event.type === "state_updated") {
@@ -183,12 +203,12 @@ function cueForEvent({
   }
 
   if (event.type === "game_completed") {
-    const winner = stringField(payload, "winner") || "胜利阵营";
+    const winner = publicWinnerLabel(payload);
     return makeCue({
       eventId: cue.eventId,
       kind: "terminal",
       tone: "terminal",
-      judgeLine: `对局结束，${winner}获胜。`,
+      judgeLine: `游戏结束，${winner}获胜。`,
       performerLine: "胜负已经揭晓。",
       detailLine: `胜利阵营：${winner}`,
       actorName: null,
@@ -211,7 +231,7 @@ function cueForEvent({
     });
   }
 
-  return fallbackCue(cue, actorName);
+  return fallbackCue(cue, actorName, godViewState);
 }
 
 function phaseCue(
@@ -225,7 +245,7 @@ function phaseCue(
       eventId: cue.eventId,
       kind: "judge",
       tone: "night",
-      judgeLine: "天黑请闭眼。",
+      judgeLine: "夜晚降临，所有玩家请闭眼。",
       performerLine: "夜间角色开始行动。",
       detailLine: "夜间行动开始，存活玩家请依次行动。",
       actorName,
@@ -242,7 +262,10 @@ function phaseCue(
       judgeLine: dayJudgeLine(godViewState),
       performerLine: "进入白天发言。",
       detailLine: godViewState.speakerFlow.current?.name
-        ? `当前发言：${godViewState.speakerFlow.current.name}`
+        ? `当前发言：${playerReference(
+            godViewState.speakerFlow.current.name,
+            godViewState,
+          )}`
         : "等待首位玩家发言。",
       actorName,
       action: cue.action,
@@ -278,24 +301,25 @@ function phaseCue(
     });
   }
 
-  return fallbackCue(cue, actorName);
+  return fallbackCue(cue, actorName, godViewState);
 }
 
 function actionRequestedCue(
   cue: DirectorCue,
   actorName: string | null,
   nextSpeakerName: string | null,
+  godViewState: GodViewState,
 ): NarrativeCue {
-  const actor = actorName ?? "当前玩家";
+  const actor = playerReference(actorName, godViewState);
 
   if (isPublicSpeechAction(cue.action)) {
     return makeCue({
       eventId: cue.eventId,
       kind: "player-thinking",
       tone: "day",
-      judgeLine: `请 ${actor} 发言。`,
+      judgeLine: `${actor}请发言。`,
       performerLine: `${actor} 正在整理公开发言。`,
-      detailLine: nextLine(nextSpeakerName),
+      detailLine: nextLine(nextSpeakerName, godViewState),
       actorName,
       action: cue.action,
       speechText: "",
@@ -334,8 +358,9 @@ function modelWaitingCue(
   payload: Record<string, unknown>,
   actorName: string | null,
   nextSpeakerName: string | null,
+  godViewState: GodViewState,
 ): NarrativeCue {
-  const actor = actorName ?? "当前玩家";
+  const actor = playerReference(actorName, godViewState);
   const message = stringField(payload, "message") || cue.body;
 
   if (isPublicSpeechAction(cue.action)) {
@@ -345,7 +370,7 @@ function modelWaitingCue(
       tone: "day",
       judgeLine: `请听 ${actor} 的发言。`,
       performerLine: `${actor} 正在组织发言。`,
-      detailLine: message || nextLine(nextSpeakerName),
+      detailLine: message || nextLine(nextSpeakerName, godViewState),
       actorName,
       action: cue.action,
       speechText: "",
@@ -369,8 +394,9 @@ function modelRequestFailedCue(
   cue: DirectorCue,
   payload: Record<string, unknown>,
   actorName: string | null,
+  godViewState: GodViewState,
 ): NarrativeCue {
-  const actor = actorName ?? "当前玩家";
+  const actor = playerReference(actorName, godViewState);
   const publicMessage = stringField(payload, "message");
 
   return makeCue({
@@ -391,8 +417,9 @@ function modelResponseReceivedCue(
   payload: Record<string, unknown>,
   actorName: string | null,
   nextSpeakerName: string | null,
+  godViewState: GodViewState,
 ): NarrativeCue {
-  const actor = actorName ?? "当前玩家";
+  const actor = playerReference(actorName, godViewState);
   const visibleText = stringField(payload, "visible_text");
 
   if (visibleText && isPublicSpeechAction(cue.action)) {
@@ -402,10 +429,10 @@ function modelResponseReceivedCue(
       tone: "day",
       judgeLine: `请听 ${actor} 的发言。`,
       performerLine: `${actor} 完成发言。`,
-      detailLine: nextLine(nextSpeakerName),
+      detailLine: nextLine(nextSpeakerName, godViewState),
       actorName,
       action: cue.action,
-      speechText: visibleText,
+      speechText: replacePlayerNamesWithSeatLabels(visibleText, godViewState),
     });
   }
 
@@ -427,20 +454,21 @@ function parsedActionCue(
   payload: Record<string, unknown>,
   actorName: string | null,
   nextSpeakerName: string | null,
+  godViewState: GodViewState,
 ): NarrativeCue {
   const visibleText = visibleSpeechText(payload);
   if (visibleText && isPublicSpeechAction(cue.action)) {
-    const actor = actorName ?? "当前玩家";
+    const actor = playerReference(actorName, godViewState);
     return makeCue({
       eventId: cue.eventId,
       kind: "player-speaking",
       tone: "day",
       judgeLine: `请听 ${actor} 的发言。`,
       performerLine: `${actor} 完成发言。`,
-      detailLine: nextLine(nextSpeakerName),
+      detailLine: nextLine(nextSpeakerName, godViewState),
       actorName,
       action: cue.action,
-      speechText: visibleText,
+      speechText: replacePlayerNamesWithSeatLabels(visibleText, godViewState),
     });
   }
 
@@ -449,7 +477,9 @@ function parsedActionCue(
     kind: isVoteAction(cue.action) ? "vote" : "player-action",
     tone: parsedActionTone(cue),
     judgeLine: isVoteAction(cue.action) ? "投票选择已记录。" : "玩家行动已解析。",
-    performerLine: actorName ? `${actorName} 已完成行动。` : "行动已完成。",
+    performerLine: actorName
+      ? `${playerReference(actorName, godViewState)} 已完成行动。`
+      : "行动已完成。",
     detailLine: parsedActionDetailLine(cue),
     actorName,
     action: cue.action,
@@ -468,28 +498,30 @@ function stateUpdatedCue(
   if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
     const message =
       typeof debateEntry.message === "string" ? debateEntry.message : "";
+    const speakerLabel = playerReference(debateEntry.speaker, godViewState);
     return makeCue({
       eventId: cue.eventId,
       kind: "player-speaking",
       tone: "day",
-      judgeLine: `请听 ${debateEntry.speaker} 的发言。`,
-      performerLine: `${debateEntry.speaker} 完成发言。`,
-      detailLine: nextLine(nextSpeakerName),
+      judgeLine: `请听 ${speakerLabel} 的发言。`,
+      performerLine: `${speakerLabel} 完成发言。`,
+      detailLine: nextLine(nextSpeakerName, godViewState),
       actorName: debateEntry.speaker,
       action: cue.action,
-      speechText: message,
+      speechText: replacePlayerNamesWithSeatLabels(message, godViewState),
     });
   }
 
   const exiled = stringField(payload, "exiled");
   if (exiled) {
+    const exiledLabel = playerReference(exiled, godViewState, "该玩家");
     return makeCue({
       eventId: cue.eventId,
       kind: "death",
       tone: "danger",
-      judgeLine: `${exiled} 被放逐出局。`,
+      judgeLine: `${exiledLabel} 得票最高，被放逐出局。`,
       performerLine: "放逐结果已经生效。",
-      detailLine: activePlayersLine(payload),
+      detailLine: activePlayersLine(payload, godViewState),
       actorName: exiled,
       action: cue.action,
       speechText: "",
@@ -501,9 +533,9 @@ function stateUpdatedCue(
       eventId: cue.eventId,
       kind: "judge",
       tone: "safe",
-      judgeLine: "天亮了，昨夜平安无事。",
+      judgeLine: "昨夜平安夜。",
       performerLine: "昨夜没有玩家出局。",
-      detailLine: activePlayersLine(payload),
+      detailLine: activePlayersLine(payload, godViewState),
       actorName,
       action: cue.action,
       speechText: "",
@@ -516,9 +548,9 @@ function stateUpdatedCue(
       eventId: cue.eventId,
       kind: "death",
       tone: "danger",
-      judgeLine: `天亮了，昨夜 ${deathNames.join("、")} 出局。`,
+      judgeLine: `昨夜死亡的玩家是 ${joinPlayerReferences(deathNames, godViewState)}。`,
       performerLine: "夜间结算公布。",
-      detailLine: activePlayersLine(payload),
+      detailLine: activePlayersLine(payload, godViewState),
       actorName: deathNames[0],
       action: cue.action,
       speechText: "",
@@ -538,7 +570,7 @@ function stateUpdatedCue(
       performerLine: "票型已经更新。",
       detailLine:
         topTally && topTarget
-          ? `当前最高票：${topTarget}，${topTally.count} 票。`
+          ? `当前最高票：${playerReference(topTarget, godViewState, "该玩家")}，${topTally.count} 票。`
           : "本轮暂未形成有效票型。",
       actorName,
       action: cue.action,
@@ -548,20 +580,25 @@ function stateUpdatedCue(
 
   const selfExploded = stringField(payload, "werewolf_self_exploded");
   if (selfExploded && payload.sheriff_election_pending === true) {
+    const selfExplodedLabel = playerReference(
+      selfExploded,
+      godViewState,
+      "该玩家",
+    );
     return makeCue({
       eventId: cue.eventId,
       kind: "player-action",
       tone: "danger",
-      judgeLine: `${selfExploded} 发动狼人自爆。`,
+      judgeLine: `${selfExplodedLabel} 发动狼人自爆。`,
       performerLine: "技能效果已经公开。",
-      detailLine: selfExplosionInterruptionLine(payload),
+      detailLine: selfExplosionInterruptionLine(payload, godViewState),
       actorName: selfExploded,
       action: cue.action,
       speechText: "",
     });
   }
 
-  const skillLine = skillJudgeLine(payload);
+  const skillLine = skillJudgeLine(payload, godViewState);
   if (skillLine) {
     return makeCue({
       eventId: cue.eventId,
@@ -569,23 +606,30 @@ function stateUpdatedCue(
       tone: "danger",
       judgeLine: skillLine,
       performerLine: "技能效果已经公开。",
-      detailLine: activePlayersLine(payload),
+      detailLine: activePlayersLine(payload, godViewState),
       actorName,
       action: cue.action,
       speechText: "",
     });
   }
 
-  return fallbackCue(cue, actorName);
+  return fallbackCue(cue, actorName, godViewState);
 }
 
-function fallbackCue(cue: DirectorCue, actorName: string | null): NarrativeCue {
+function fallbackCue(
+  cue: DirectorCue,
+  actorName: string | null,
+  godViewState: GodViewState,
+): NarrativeCue {
+  const actorLabel = actorName
+    ? playerReference(actorName, godViewState)
+    : "对局";
   return makeCue({
     eventId: cue.eventId,
     kind: "fallback",
     tone: toneFromDirectorCue(cue),
     judgeLine: cue.title,
-    performerLine: actorName ? `${actorName} 的事件更新。` : "对局事件更新。",
+    performerLine: actorName ? `${actorLabel} 的事件更新。` : "对局事件更新。",
     detailLine: "收到未分类事件，等待后续公开结算。",
     actorName,
     action: cue.action,
@@ -597,15 +641,16 @@ function recordedSpeechCue(
   cue: DirectorCue,
   actorName: string | null,
   nextSpeakerName: string | null,
+  godViewState: GodViewState,
 ): NarrativeCue {
-  const actor = actorName ?? cue.actor ?? "当前玩家";
+  const actor = playerReference(actorName ?? cue.actor, godViewState);
   return makeCue({
     eventId: cue.eventId,
     kind: "player-action",
     tone: "day",
     judgeLine: `${actor} 的发言已记录。`,
     performerLine: "公开发言已进入记录。",
-    detailLine: nextLine(nextSpeakerName),
+    detailLine: nextLine(nextSpeakerName, godViewState),
     actorName,
     action: cue.action,
     speechText: "",
@@ -641,19 +686,62 @@ function playerToSpeaker(player: GodViewPlayer): NarrativeSpeaker {
   };
 }
 
+function playerReference(
+  name: string | null,
+  godViewState: GodViewState,
+  fallback = "当前玩家",
+): string {
+  if (!name) {
+    return fallback;
+  }
+  if (/^\d+号玩家$/.test(name.trim())) {
+    return name.trim();
+  }
+  const player = godViewState.players.find((item) => item.name === name);
+  if (!player) {
+    return fallback;
+  }
+  return `${player.seatNumber}号玩家`;
+}
+
+function joinPlayerReferences(
+  names: string[],
+  godViewState: GodViewState,
+): string {
+  const labels = names
+    .map((name) => playerReference(name, godViewState, "未知玩家"))
+    .filter(Boolean);
+  return labels.length > 0 ? labels.join("、") : "未知玩家";
+}
+
+function replacePlayerNamesWithSeatLabels(
+  text: string,
+  godViewState: GodViewState,
+): string {
+  return [...godViewState.players]
+    .sort((left, right) => right.name.length - left.name.length)
+    .reduce((currentText, player) => {
+      const name = player.name.trim();
+      if (!name) {
+        return currentText;
+      }
+      return currentText.split(name).join(`${player.seatNumber}号玩家`);
+    }, text);
+}
+
 function dayJudgeLine(godViewState: GodViewState): string {
   if (godViewState.nightResolution.label === "平安夜") {
-    return "天亮了，昨夜平安无事。";
+    return "昨夜平安夜。";
   }
   if (godViewState.nightResolution.tone === "danger") {
     const deathNames = godViewState.deaths
       .filter((death) => death.publicText === "天亮公布")
       .map((death) => death.player);
     if (deathNames.length > 0) {
-      return `天亮了，昨夜 ${deathNames.join("、")} 出局。`;
+      return `昨夜死亡的玩家是 ${joinPlayerReferences(deathNames, godViewState)}。`;
     }
   }
-  return "天亮了，进入白天发言。";
+  return "天亮了，所有玩家请睁眼。";
 }
 
 function visibleSpeechText(payload: Record<string, unknown>): string {
@@ -695,22 +783,25 @@ function isPeacefulNightPayload(payload: Record<string, unknown>): boolean {
   );
 }
 
-function skillJudgeLine(payload: Record<string, unknown>): string {
+function skillJudgeLine(
+  payload: Record<string, unknown>,
+  godViewState: GodViewState,
+): string {
   const selfExploded = stringField(payload, "werewolf_self_exploded");
   if (selfExploded) {
-    return `${selfExploded} 发动狼人自爆。`;
+    return `${playerReference(selfExploded, godViewState, "该玩家")} 发动狼人自爆。`;
   }
   const hunterShot = stringField(payload, "hunter_shot");
   if (hunterShot) {
-    return `猎人开枪带走 ${hunterShot}。`;
+    return `${playerReference(hunterShot, godViewState, "该玩家")} 被猎人带走，出局。`;
   }
   const idiotRevealed = stringField(payload, "idiot_revealed");
   if (idiotRevealed) {
-    return `${idiotRevealed} 翻牌，继续留在场上。`;
+    return `${playerReference(idiotRevealed, godViewState, "该玩家")} 翻牌为白痴。`;
   }
   const badgeTarget = stringField(payload, "sheriff_badge_target");
   if (badgeTarget) {
-    return `警徽移交给 ${badgeTarget}。`;
+    return `警徽移交给 ${playerReference(badgeTarget, godViewState, "该玩家")}。`;
   }
   if (payload.sheriff_badge_lost === true) {
     return "警徽被撕毁。";
@@ -718,23 +809,34 @@ function skillJudgeLine(payload: Record<string, unknown>): string {
   return "";
 }
 
-function selfExplosionInterruptionLine(payload: Record<string, unknown>): string {
+function selfExplosionInterruptionLine(
+  payload: Record<string, unknown>,
+  godViewState: GodViewState,
+): string {
   const reason =
     stringField(payload, "sheriff_badge_lost_reason") || "首爆中断警长竞选";
-  const activePlayers = activePlayersLine(payload);
+  const activePlayers = activePlayersLine(payload, godViewState);
   const line = `${reason}；警徽未流失，次日继续竞选。`;
   return activePlayers ? `${line}\n${activePlayers}` : line;
 }
 
-function activePlayersLine(payload: Record<string, unknown>): string {
+function activePlayersLine(
+  payload: Record<string, unknown>,
+  godViewState: GodViewState,
+): string {
   const activePlayers = payload.active_players;
   return Array.isArray(activePlayers)
-    ? `存活玩家：${activePlayers.map(String).join("、")}`
+    ? `存活玩家：${joinPlayerReferences(activePlayers.map(String), godViewState)}`
     : "";
 }
 
-function nextLine(nextSpeakerName: string | null): string {
-  return nextSpeakerName ? `下一位：${nextSpeakerName}` : "等待后续发言。";
+function nextLine(
+  nextSpeakerName: string | null,
+  godViewState: GodViewState,
+): string {
+  return nextSpeakerName
+    ? `下一位：${playerReference(nextSpeakerName, godViewState)}`
+    : "等待后续发言。";
 }
 
 function parsedActionDetailLine(cue: DirectorCue): string {
@@ -791,6 +893,13 @@ function payloadForEvent(event: LiveGameEvent): Record<string, unknown> {
 function stringField(payload: Record<string, unknown>, field: string): string {
   const value = payload[field];
   return typeof value === "string" ? value : "";
+}
+
+function publicWinnerLabel(payload: Record<string, unknown>): string {
+  const winner = stringField(payload, "winner");
+  return winner === "好人阵营" || winner === "狼人阵营" || winner === "第三方阵营"
+    ? winner
+    : "胜利阵营";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

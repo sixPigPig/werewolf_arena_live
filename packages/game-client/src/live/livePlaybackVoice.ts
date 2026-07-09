@@ -53,6 +53,8 @@ export function usePlaybackVoice(
   const [errors, setErrors] = useState<string[]>([]);
   const [currentItem, setCurrentItem] = useState<LiveVoiceQueueItem | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const blobCleanupRef = useRef<(() => void) | null>(null);
   const schedulerRef = useRef<PcmAudioScheduler | null>(null);
   const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
   const activeUtteranceIdsRef = useRef<Set<string>>(new Set());
@@ -73,6 +75,10 @@ export function usePlaybackVoice(
     }
     return "open";
   }, [enabled, errors, sortedVoices.length]);
+  const hasPcmVoice = useMemo(
+    () => sortedVoices.some((voice) => isPcmAudioFormat(voice.audio_format)),
+    [sortedVoices],
+  );
 
   const ensureScheduler = useCallback(() => {
     if (audioContextRef.current && schedulerRef.current) {
@@ -110,10 +116,20 @@ export function usePlaybackVoice(
     void scheduler?.close().catch(() => undefined);
   }, []);
 
+  const releaseBlobAudio = useCallback(() => {
+    const cleanup = blobCleanupRef.current;
+    blobCleanupRef.current = null;
+    cleanup?.();
+  }, []);
+
   const unlockAudio = useCallback(async () => {
     if (sortedVoices.length === 0) {
       pushUniqueError(setErrors, PLAYBACK_VOICE_EMPTY_MESSAGE);
       return false;
+    }
+
+    if (!hasPcmVoice) {
+      return true;
     }
 
     const audio = ensureScheduler();
@@ -132,18 +148,20 @@ export function usePlaybackVoice(
       pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
       return false;
     }
-  }, [ensureScheduler, sortedVoices.length]);
+  }, [ensureScheduler, hasPcmVoice, sortedVoices.length]);
 
   useEffect(() => {
     if (previousVoicesKeyRef.current === voicesKey) {
       return;
     }
     previousVoicesKeyRef.current = voicesKey;
+    releaseBlobAudio();
+    closeScheduler();
     consumedUtteranceIdsRef.current.clear();
     activeUtteranceIdsRef.current.clear();
     setCurrentItem(null);
     setErrors([]);
-  }, [voicesKey]);
+  }, [closeScheduler, releaseBlobAudio, voicesKey]);
 
   useEffect(() => {
     if (!enabled || sortedVoices.length > 0) {
@@ -153,7 +171,7 @@ export function usePlaybackVoice(
   }, [enabled, sortedVoices.length]);
 
   useEffect(() => {
-    if (!enabled || isPaused || currentEventId === null) {
+    if (!enabled || isPaused || currentEventId === null || currentItem !== null) {
       return;
     }
 
@@ -167,6 +185,77 @@ export function usePlaybackVoice(
       return;
     }
 
+    activeUtteranceIdsRef.current.add(nextVoice.utterance_id);
+
+    if (!isPcmAudioFormat(nextVoice.audio_format)) {
+      const utteranceId = nextVoice.utterance_id;
+      try {
+        releaseBlobAudio();
+        const chunks = nextVoice.chunks
+          .slice()
+          .sort(compareChunks)
+          .map((chunk) => chunk.data);
+        const blob = base64ToBlob(chunks, nextVoice.mime_type);
+        const objectUrl = createAudioObjectUrl(blob);
+        const audio = createAudioElement();
+        let isReleased = false;
+
+        const releaseCurrentAudio = () => {
+          if (isReleased) {
+            return;
+          }
+          isReleased = true;
+          audio.removeEventListener("ended", handleEnded);
+          audio.removeEventListener("error", handleError);
+          try {
+            audio.pause();
+          } catch {
+            // Pause cleanup is best-effort.
+          }
+          revokeAudioObjectUrl(objectUrl);
+          if (audioElementRef.current === audio) {
+            audioElementRef.current = null;
+          }
+        };
+        const finishVoice = () => {
+          releaseBlobAudio();
+          activeUtteranceIdsRef.current.delete(utteranceId);
+          consumedUtteranceIdsRef.current.add(utteranceId);
+          setCurrentItem((current) =>
+            current?.utteranceId === utteranceId ? null : current,
+          );
+        };
+        function handleEnded() {
+          finishVoice();
+        }
+        function handleError() {
+          releaseBlobAudio();
+          markVoiceFailed(
+            utteranceId,
+            activeUtteranceIdsRef,
+            consumedUtteranceIdsRef,
+          );
+          setCurrentItem((current) =>
+            current?.utteranceId === utteranceId ? null : current,
+          );
+          pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
+        }
+
+        audio.addEventListener("ended", handleEnded);
+        audio.addEventListener("error", handleError);
+        audio.src = objectUrl;
+        audioElementRef.current = audio;
+        blobCleanupRef.current = releaseCurrentAudio;
+        setCurrentItem(toQueueItem(nextVoice));
+      } catch {
+        releaseBlobAudio();
+        markVoiceFailed(utteranceId, activeUtteranceIdsRef, consumedUtteranceIdsRef);
+        setCurrentItem(null);
+        pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
+      }
+      return;
+    }
+
     const audio = ensureScheduler();
     if (!audio) {
       markVoiceFailed(nextVoice.utterance_id, activeUtteranceIdsRef, consumedUtteranceIdsRef);
@@ -174,7 +263,6 @@ export function usePlaybackVoice(
       return;
     }
 
-    activeUtteranceIdsRef.current.add(nextVoice.utterance_id);
     let isActive = true;
     void (async () => {
       try {
@@ -221,7 +309,44 @@ export function usePlaybackVoice(
     return () => {
       isActive = false;
     };
-  }, [currentEventId, enabled, ensureScheduler, isPaused, sortedVoices]);
+  }, [
+    currentEventId,
+    currentItem,
+    enabled,
+    ensureScheduler,
+    isPaused,
+    releaseBlobAudio,
+    sortedVoices,
+  ]);
+
+  useEffect(() => {
+    const audio = audioElementRef.current;
+    const utteranceId =
+      currentItem && !isPcmAudioFormat(currentItem.audioFormat)
+        ? currentItem.utteranceId
+        : null;
+    if (!enabled || !audio || utteranceId === null) {
+      return;
+    }
+
+    if (isPaused) {
+      try {
+        audio.pause();
+      } catch {
+        // Pause is best-effort; resume still owns playback state.
+      }
+      return;
+    }
+
+    void Promise.resolve(audio.play()).catch(() => {
+      releaseBlobAudio();
+      markVoiceFailed(utteranceId, activeUtteranceIdsRef, consumedUtteranceIdsRef);
+      setCurrentItem((current) =>
+        current?.utteranceId === utteranceId ? null : current,
+      );
+      pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
+    });
+  }, [currentItem, enabled, isPaused, releaseBlobAudio]);
 
   useEffect(() => {
     const scheduler = schedulerRef.current;
@@ -245,10 +370,17 @@ export function usePlaybackVoice(
     if (enabled) {
       return;
     }
+    releaseBlobAudio();
     closeScheduler();
-  }, [closeScheduler, enabled]);
+  }, [closeScheduler, enabled, releaseBlobAudio]);
 
-  useEffect(() => closeScheduler, [closeScheduler]);
+  useEffect(
+    () => () => {
+      releaseBlobAudio();
+      closeScheduler();
+    },
+    [closeScheduler, releaseBlobAudio],
+  );
 
   return {
     connectionState,
@@ -262,10 +394,15 @@ export function usePlaybackVoice(
 function isPlayablePlaybackVoice(voice: PlaybackVoiceUtterance) {
   return (
     (voice.speaker_kind === "player" || voice.speaker_kind === "judge") &&
-    voice.audio_format.toLowerCase() === "pcm" &&
+    voice.audio_format.trim().length > 0 &&
+    voice.mime_type.trim().length > 0 &&
     voice.sample_rate > 0 &&
     voice.chunks.length > 0
   );
+}
+
+function isPcmAudioFormat(audioFormat: string) {
+  return audioFormat.toLowerCase() === "pcm";
 }
 
 function comparePlaybackVoices(left: PlaybackVoiceUtterance, right: PlaybackVoiceUtterance) {
@@ -300,6 +437,55 @@ function toQueueItem(voice: PlaybackVoiceUtterance): LiveVoiceQueueItem {
     isEnded: true,
     status: "playing",
   };
+}
+
+function base64ToBlob(chunks: string[], mimeType: string) {
+  if (typeof globalThis.atob !== "function") {
+    throw new Error("Base64 decoding is unavailable.");
+  }
+  if (typeof globalThis.Blob !== "function") {
+    throw new Error("Blob creation is unavailable.");
+  }
+
+  const bytes = chunks.flatMap((chunk) =>
+    Array.from(globalThis.atob(chunk), (character) =>
+      character.charCodeAt(0),
+    ),
+  );
+  return new globalThis.Blob([new Uint8Array(bytes)], { type: mimeType });
+}
+
+function createAudioObjectUrl(blob: Blob) {
+  if (typeof globalThis.URL?.createObjectURL !== "function") {
+    throw new Error("Object URL creation is unavailable.");
+  }
+
+  return globalThis.URL.createObjectURL(blob);
+}
+
+function revokeAudioObjectUrl(objectUrl: string) {
+  if (typeof globalThis.URL?.revokeObjectURL !== "function") {
+    return;
+  }
+
+  try {
+    globalThis.URL.revokeObjectURL(objectUrl);
+  } catch {
+    // Cleanup is best-effort; playback progression should not depend on revoke.
+  }
+}
+
+function createAudioElement() {
+  if (typeof globalThis.document?.createElement !== "function") {
+    throw new Error("Audio element creation is unavailable.");
+  }
+
+  const audio = globalThis.document.createElement("audio");
+  if (typeof audio.play !== "function") {
+    throw new Error("Audio playback is unavailable.");
+  }
+
+  return audio;
 }
 
 function markVoiceFailed(

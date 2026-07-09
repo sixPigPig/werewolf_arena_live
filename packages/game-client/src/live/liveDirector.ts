@@ -40,6 +40,7 @@ export type UseLiveDirectorResult = {
 };
 
 type UseLiveDirectorOptions = {
+  holdAdvance?: boolean;
   resetKey?: string;
   startAtEventType?: string;
   startAtLatestTerminal?: boolean;
@@ -317,7 +318,12 @@ export function useLiveDirector(
   }, [resolvedCurrentEventId]);
 
   useEffect(() => {
-    if (isPaused || currentCue === null || backlogCount === 0) {
+    if (
+      isPaused ||
+      options.holdAdvance ||
+      currentCue === null ||
+      backlogCount === 0
+    ) {
       return;
     }
 
@@ -330,7 +336,14 @@ export function useLiveDirector(
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [advance, backlogCount, currentCue, effectiveDurationMs, isPaused]);
+  }, [
+    advance,
+    backlogCount,
+    currentCue,
+    effectiveDurationMs,
+    isPaused,
+    options.holdAdvance,
+  ]);
 
   const pause = useCallback(() => {
     setIsPaused((wasPaused) => {

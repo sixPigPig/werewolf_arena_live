@@ -40,14 +40,18 @@ export function deriveMobileLiveSubtitle({
       return null;
     }
 
-    const speakerName =
-      cue.actorName?.trim() || narrativeState.speaker?.name || "当前玩家";
+    const speakerKey =
+      cue.actorName?.trim() || narrativeState.speaker?.name || "";
+    const speakerName = playerSeatSubtitleName(
+      speakerKey,
+      godViewState.players,
+    );
 
     return {
       speakerName,
       text,
       tone: "player",
-      colorIndex: playerColorIndex(speakerName, godViewState.players),
+      colorIndex: playerColorIndex(speakerKey || speakerName, godViewState.players),
     };
   }
 
@@ -135,6 +139,14 @@ function playerColorIndex(
   }
 
   return modulo(hashSpeakerName(speakerName), PLAYER_COLOR_COUNT);
+}
+
+function playerSeatSubtitleName(
+  speakerName: string,
+  players: Pick<GodViewState["players"][number], "name" | "seatNumber">[],
+) {
+  const player = players.find((item) => item.name === speakerName);
+  return player ? `${player.seatNumber}号玩家` : "当前玩家";
 }
 
 function hashSpeakerName(value: string) {

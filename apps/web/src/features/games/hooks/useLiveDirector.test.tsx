@@ -114,6 +114,32 @@ describe("useLiveDirector", () => {
     expect(result.current.backlogCount).toBe(0);
   });
 
+  it("holds automatic advance while external playback is blocking", () => {
+    const events = [
+      event({ id: 1, type: "round_started", round: 1 }),
+      event({ id: 2, type: "phase_started", round: 1, phase: "day" }),
+    ];
+    const { result, rerender } = renderHook(
+      ({ holdAdvance }: { holdAdvance: boolean }) =>
+        useLiveDirector(events, { holdAdvance }),
+      { initialProps: { holdAdvance: true } },
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(result.current.effectiveDurationMs + 1000);
+    });
+    expect(result.current.currentEventId).toBe(1);
+    expect(result.current.backlogCount).toBe(1);
+
+    rerender({ holdAdvance: false });
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+
+    expect(result.current.currentEventId).toBe(2);
+    expect(result.current.backlogCount).toBe(0);
+  });
+
   it("catches up to the latest key event instead of the latest compressible cue", () => {
     const events = [
       event({ id: 1, type: "round_started", round: 1 }),

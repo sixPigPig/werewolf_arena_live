@@ -355,7 +355,7 @@ describe("toDirectorCue", () => {
 
     expect(cues).toHaveLength(1);
     expect(cues[0]).toMatchObject({
-      eventId: 2,
+      eventId: 4,
       title: "张三 正在发言",
       body: "张三：我不是狼",
       importance: "key",

@@ -29,6 +29,7 @@ type GodViewState = ReturnType<typeof deriveGodViewState>;
 const LIVE_SEAT_REVEAL_STAGGER_MS = 90;
 
 export type MobileLiveTheaterRun = {
+  error?: string | null;
   session_id: string;
   status: GameRunStatus | (string & {});
   rule_set?: RuleSetSummary | null;
@@ -81,11 +82,13 @@ export function MobileLiveTheater({
   resumeIsPending,
   run,
   subtitle = null,
+  terminalEvent,
   voiceEnabled,
   voiceState,
 }: MobileLiveTheaterProps) {
   const currentPlayer = getCurrentTheaterPlayer(godViewState);
   const { left, right } = splitPlayersForColumns(godViewState.players);
+  const failureReason = getLiveFailureReason(terminalEvent, run);
 
   return (
     <section className="mobile-live-theater" aria-label="实时观战剧场">
@@ -114,6 +117,7 @@ export function MobileLiveTheater({
         canResumeRun={canResumeRun}
         currentPlayer={currentPlayer}
         director={director}
+        failureReason={failureReason}
         godViewState={godViewState}
         onResumeRun={onResumeRun}
         onToggleVoice={onToggleVoice}
@@ -368,6 +372,7 @@ type LiveTheaterControlsProps = {
   canResumeRun: boolean;
   currentPlayer: GodViewPlayer | null;
   director: LiveDirectorControlsState;
+  failureReason: string | null;
   godViewState: GodViewState;
   onResumeRun: () => void;
   onToggleVoice?: () => void;
@@ -382,6 +387,7 @@ export function LiveTheaterControls({
   canResumeRun,
   currentPlayer,
   director,
+  failureReason,
   godViewState,
   onResumeRun,
   onToggleVoice,
@@ -489,6 +495,12 @@ export function LiveTheaterControls({
           </button>
         )}
       </div>
+      {failureReason ? (
+        <p className="mobile-live-failure-notice" role="alert">
+          <strong>对局异常中断</strong>
+          <span>{failureReason}</span>
+        </p>
+      ) : null}
       {voiceIssueMessage ? (
         <p className="mobile-live-voice-notice" role="status">
           {voiceIssueMessage}
@@ -528,6 +540,32 @@ function voiceControlAriaLabel(enabled: boolean, state: MobileLiveVoiceState) {
   }
 
   return enabled ? "关闭语音" : "开启语音";
+}
+
+function getLiveFailureReason(
+  terminalEvent: LiveGameEvent | undefined,
+  run: MobileLiveTheaterRun,
+) {
+  if (terminalEvent?.type === "game_failed") {
+    const eventError = stringField(terminalEvent.payload, "error");
+    if (eventError) {
+      return eventError;
+    }
+  }
+
+  if (run.status === "failed") {
+    const runError = run.error?.trim();
+    if (runError) {
+      return runError;
+    }
+  }
+
+  return null;
+}
+
+function stringField(payload: Record<string, unknown>, key: string) {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function getCurrentTheaterPlayer(state: GodViewState) {

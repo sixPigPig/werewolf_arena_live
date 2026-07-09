@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -49,17 +49,39 @@ export function LivePage() {
 
   const run = runQuery.data;
   const terminalEvent = events.find(isTerminalEvent);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [voiceAdvanceHold, setVoiceAdvanceHold] = useState(false);
   const director = useLiveDirector(events, {
+    holdAdvance: voiceAdvanceHold,
     resetKey: gameId,
     startAtEventType: "game_started",
     startAtLatestTerminal: isTerminalRunStatus(run?.status),
   });
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
   const voice = useLiveVoiceStream(gameId, {
     currentEventId: director.currentEventId,
     enabled: voiceEnabled,
     isPaused: director.isPaused,
   });
+  const voiceCurrentItem = voice.currentItem;
+  const unlockVoiceAudio = voice.unlockAudio;
+  useEffect(() => {
+    if (!gameId || !voiceEnabled) {
+      return;
+    }
+
+    void unlockVoiceAudio();
+  }, [gameId, unlockVoiceAudio, voiceEnabled]);
+  useEffect(() => {
+    const shouldHold =
+      voiceEnabled &&
+      isVoicePlaybackBlocking(voiceCurrentItem, director.currentEventId);
+    // Voice playback depends on the current director event, so this feeds the
+    // next render's hold flag back into the director without marking a user pause.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setVoiceAdvanceHold((current) =>
+      current === shouldHold ? current : shouldHold,
+    );
+  }, [director.currentEventId, voiceCurrentItem, voiceEnabled]);
   const handleToggleVoice = async () => {
     if (voiceEnabled && voice.connectionState === "error") {
       setVoiceEnabled(false);
@@ -241,4 +263,23 @@ function isTerminalEvent(event: LiveGameEvent) {
 
 function isTerminalRunStatus(status: string | undefined) {
   return status === "completed" || status === "failed";
+}
+
+function isVoicePlaybackBlocking(
+  currentItem:
+    | {
+        sourceEventId: number;
+        status: string;
+      }
+    | null
+    | undefined,
+  currentEventId: number | null,
+) {
+  return Boolean(
+    currentItem &&
+      currentEventId !== null &&
+      currentItem.sourceEventId <= currentEventId &&
+      currentItem.status !== "played" &&
+      currentItem.status !== "error",
+  );
 }

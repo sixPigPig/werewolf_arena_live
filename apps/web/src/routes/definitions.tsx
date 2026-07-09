@@ -5,6 +5,7 @@ import { GameDetailPage } from "../pages/GameDetailPage";
 import { GameHistoryPage } from "../pages/GameHistoryPage";
 import { GamePlaybackPage } from "../pages/GamePlaybackPage";
 import { GamesPage } from "../pages/GamesPage";
+import { JudgeVoiceAssetsPage } from "../pages/JudgeVoiceAssetsPage";
 import { LiveGamePage } from "../pages/LiveGamePage";
 import { PlayersPage } from "../pages/PlayersPage";
 
@@ -32,6 +33,10 @@ export const routes: RouteObject[] = [
   {
     path: "/components/buttons",
     element: <ComponentButtonShowcasePage />,
+  },
+  {
+    path: "/judge-voice-assets",
+    element: <JudgeVoiceAssetsPage />,
   },
   {
     path: "/games/playback/:sessionId",

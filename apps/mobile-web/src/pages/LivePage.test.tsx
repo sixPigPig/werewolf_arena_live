@@ -183,6 +183,18 @@ const dayPhaseEvent: LiveGameEvent = {
   payload: { active_players: ["阿青", "白石", "南风", "木子"] },
 };
 
+const failedEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "game_failed",
+  actor: null,
+  action: null,
+  payload: {
+    error:
+      'DeepSeek request failed with HTTP 402: {"error":{"message":"Insufficient Balance"}}',
+  },
+};
+
 function renderLiveRoute() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -458,7 +470,7 @@ describe("LivePage", () => {
 
     expect(subtitle).toHaveClass("mobile-live-subtitle");
     expect(subtitle).toHaveClass("mobile-live-subtitle-player-0");
-    expect(within(subtitle).getByText("阿青")).toBeVisible();
+    expect(within(subtitle).getByText("1号玩家")).toBeVisible();
     expect(within(subtitle).getByText("我先听后置位发言。")).toBeVisible();
   });
 
@@ -480,10 +492,10 @@ describe("LivePage", () => {
 
     expect(subtitle).toHaveClass("mobile-live-subtitle-judge");
     expect(within(subtitle).getByText("法官")).toBeVisible();
-    expect(within(subtitle).getByText("请听 阿青 的发言。")).toBeVisible();
+    expect(within(subtitle).getByText("请听 1号玩家 的发言。")).toBeVisible();
   });
 
-  it("does not render subtitles for non-speech live events", async () => {
+  it("renders a judge subtitle for game start narration", async () => {
     gameClientMocks.useGameRunEvents.mockReturnValue({
       connectionState: "open",
       events: [gameStartedEvent],
@@ -494,9 +506,12 @@ describe("LivePage", () => {
 
     await screen.findByRole("region", { name: "当前舞台" });
 
-    expect(
-      screen.queryByRole("status", { name: "直播字幕" }),
-    ).not.toBeInTheDocument();
+    const subtitle = await screen.findByRole("status", {
+      name: "直播字幕",
+    });
+
+    expect(within(subtitle).getByText("法官")).toBeVisible();
+    expect(within(subtitle).getByText("本局游戏开始，")).toBeVisible();
   });
 
   it("styles mobile live subtitles as a lower-third speech HUD", () => {
@@ -551,7 +566,7 @@ describe("LivePage", () => {
       expect(button.querySelector(".mobile-live-control-icon")).not.toBeNull();
       expect(button.querySelector(".mobile-live-control-label")).toHaveTextContent(name);
     }
-    const voiceButton = screen.getByRole("button", { name: "开启语音" });
+    const voiceButton = screen.getByRole("button", { name: "关闭语音" });
     expect(voiceButton.querySelector(".mobile-live-control-icon")).not.toBeNull();
     expect(voiceButton.querySelector(".mobile-live-control-label")).toHaveTextContent(
       "语音",
@@ -559,24 +574,13 @@ describe("LivePage", () => {
     expect(screen.getByRole("button", { name: "复盘" })).toBeDisabled();
   });
 
-  it("unlocks audio before enabling live voice", async () => {
-    const user = userEvent.setup();
-    unlockAudio.mockImplementation(async () => {
-      expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
-        "run-1",
-        expect.objectContaining({ enabled: false }),
-      );
-      return true;
-    });
-
+  it("enables and unlocks live voice automatically on entry", async () => {
     renderLiveRoute();
 
-    const voiceButton = await screen.findByRole("button", { name: "开启语音" });
+    const voiceButton = await screen.findByRole("button", { name: "关闭语音" });
     expect(voiceButton).toBeVisible();
 
-    await user.click(voiceButton);
-
-    expect(unlockAudio).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(unlockAudio).toHaveBeenCalledTimes(1));
     expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
       "run-1",
       expect.objectContaining({
@@ -587,15 +591,13 @@ describe("LivePage", () => {
     );
   });
 
-  it("does not enable live voice when audio unlock fails", async () => {
+  it("allows manually disabling live voice after automatic startup", async () => {
     const user = userEvent.setup();
-    unlockAudio.mockResolvedValue(false);
 
     renderLiveRoute();
 
-    await user.click(await screen.findByRole("button", { name: "开启语音" }));
+    await user.click(await screen.findByRole("button", { name: "关闭语音" }));
 
-    expect(unlockAudio).toHaveBeenCalledTimes(1);
     expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
       "run-1",
       expect.objectContaining({
@@ -638,8 +640,6 @@ describe("LivePage", () => {
 
     renderLiveRoute();
 
-    await user.click(await screen.findByRole("button", { name: "开启语音" }));
-
     const retryButton = await screen.findByRole("button", { name: "重试语音" });
     expect(retryButton.querySelector(".mobile-live-control-label")).toHaveTextContent(
       "重试",
@@ -659,6 +659,28 @@ describe("LivePage", () => {
         expect.objectContaining({ enabled: true }),
       ),
     );
+  });
+
+  it("shows the recorded failure reason when a live run fails", async () => {
+    gameClientMocks.getGameRun.mockResolvedValue({
+      ...run,
+      status: "failed",
+      error:
+        'DeepSeek request failed with HTTP 402: {"error":{"message":"Insufficient Balance"}}',
+    });
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "closed",
+      events: [gameStartedEvent, failedEvent],
+      latestEvent: failedEvent,
+    });
+
+    renderLiveRoute();
+
+    expect(
+      await screen.findByText(
+        'DeepSeek request failed with HTTP 402: {"error":{"message":"Insufficient Balance"}}',
+      ),
+    ).toBeVisible();
   });
 
   it("hides the bottom mobile tab bar on the immersive live page", () => {

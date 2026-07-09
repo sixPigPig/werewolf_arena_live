@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { ArenaCommandNav, ArenaNavButton } from "../app/navigation";
+import { useLiveVoiceStream } from "@werewolf-arena/game-client/live";
 import { getGameRun } from "../features/games/api/getGameRun";
 import { resumeGameRun } from "../features/games/api/resumeGameRun";
 import { LiveNavSessionBadge } from "../features/games/components/LiveNavSessionBadge";
@@ -31,6 +32,7 @@ export function LiveGamePage() {
   const [terminalStartByRunId, setTerminalStartByRunId] = useState<
     Record<string, boolean>
   >({});
+  const [voiceAdvanceHold, setVoiceAdvanceHold] = useState(false);
   const {
     data: run,
     isError,
@@ -69,9 +71,36 @@ export function LiveGamePage() {
       ? terminalStartByRunId[runId] ?? isTerminalRunStatus(run.status)
       : false;
   const director = useLiveDirector(events, {
+    holdAdvance: voiceAdvanceHold,
     resetKey: runId,
     startAtLatestTerminal: shouldStartAtTerminal,
   });
+  const voice = useLiveVoiceStream(runId, {
+    currentEventId: director.currentEventId,
+    enabled: Boolean(runId),
+    isPaused: director.isPaused,
+  });
+  const voiceCurrentItem = voice.currentItem;
+  const unlockVoiceAudio = voice.unlockAudio;
+  useEffect(() => {
+    if (!runId) {
+      return;
+    }
+
+    void unlockVoiceAudio();
+  }, [runId, unlockVoiceAudio]);
+  useEffect(() => {
+    const shouldHold = isVoicePlaybackBlocking(
+      voiceCurrentItem,
+      director.currentEventId,
+    );
+    // Voice playback depends on the current director event, so this feeds the
+    // next render's hold flag back into the director without marking a user pause.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setVoiceAdvanceHold((current) =>
+      current === shouldHold ? current : shouldHold,
+    );
+  }, [director.currentEventId, voiceCurrentItem]);
   const currentEventId = director.currentEventId;
   const stageEvents = useMemo(() => {
     if (currentEventId === null) {
@@ -240,4 +269,25 @@ export function LiveGamePage() {
 
 function isTerminalRunStatus(status: string) {
   return status === "completed" || status === "failed";
+}
+
+function isVoicePlaybackBlocking(
+  currentItem:
+    | {
+        sourceEventId: number;
+        status: string;
+      }
+    | null
+    | undefined,
+  currentEventId: number | null,
+) {
+  if (!currentItem || currentEventId === null) {
+    return false;
+  }
+
+  if (currentItem.sourceEventId > currentEventId) {
+    return false;
+  }
+
+  return currentItem.status !== "played" && currentItem.status !== "error";
 }

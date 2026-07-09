@@ -22,6 +22,9 @@ vi.mock("./livePcmPlayer", () => ({
 import { usePlaybackVoice } from "./livePlaybackVoice";
 import type { PlaybackVoiceUtterance } from "../types";
 
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
+
 function resetPcmMocks() {
   pcmMocks.close.mockReset();
   pcmMocks.resume.mockReset();
@@ -82,6 +85,73 @@ function voice(overrides: Partial<PlaybackVoiceUtterance> = {}): PlaybackVoiceUt
   };
 }
 
+function mp3Voice(overrides: Partial<PlaybackVoiceUtterance> = {}): PlaybackVoiceUtterance {
+  return voice({
+    audio_format: "mp3",
+    chunks: [{ chunk_index: 0, data: "YWJj" }],
+    mime_type: "audio/mpeg",
+    speaker_kind: "judge",
+    speaker_name: "法官",
+    ...overrides,
+  });
+}
+
+function stubObjectUrls(objectUrls = ["blob:voice"]) {
+  let nextUrlIndex = 0;
+  const createdObjects: (Blob | MediaSource)[] = [];
+  const createObjectURL = vi.fn((object: Blob | MediaSource) => {
+    createdObjects.push(object);
+    const objectUrl = objectUrls[nextUrlIndex] ?? `blob:voice-${nextUrlIndex}`;
+    nextUrlIndex += 1;
+    return objectUrl;
+  });
+  const revokeObjectURL = vi.fn();
+
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: createObjectURL,
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: revokeObjectURL,
+  });
+
+  return { createObjectURL, createdObjects, revokeObjectURL };
+}
+
+function stubAudioElement({
+  play = vi.fn().mockResolvedValue(undefined),
+  pause = vi.fn(),
+}: {
+  play?: ReturnType<typeof vi.fn>;
+  pause?: ReturnType<typeof vi.fn>;
+} = {}) {
+  const audioElements: HTMLAudioElement[] = [];
+  const createElement = document.createElement.bind(document);
+
+  vi.spyOn(document, "createElement").mockImplementation(
+    ((tagName: string, options?: ElementCreationOptions) => {
+      const element = createElement(tagName, options);
+
+      if (tagName.toLowerCase() === "audio") {
+        Object.defineProperty(element, "play", {
+          configurable: true,
+          value: play,
+        });
+        Object.defineProperty(element, "pause", {
+          configurable: true,
+          value: pause,
+        });
+        audioElements.push(element as HTMLAudioElement);
+      }
+
+      return element;
+    }) as typeof document.createElement,
+  );
+
+  return { audioElements, pause, play };
+}
+
 describe("playback voice", () => {
   beforeEach(() => {
     resetPcmMocks();
@@ -89,7 +159,25 @@ describe("playback voice", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    if (originalCreateObjectURL) {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: originalCreateObjectURL,
+      });
+    } else {
+      Reflect.deleteProperty(URL, "createObjectURL");
+    }
+    if (originalRevokeObjectURL) {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: originalRevokeObjectURL,
+      });
+    } else {
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    }
   });
 
   it("reports unavailable when enabled with no saved voices", async () => {
@@ -159,5 +247,37 @@ describe("playback voice", () => {
     await waitFor(() => {
       expect(pcmMocks.resume).toHaveBeenCalled();
     });
+  });
+
+  it("plays saved non-PCM chunks with an audio element", async () => {
+    vi.stubGlobal("AudioContext", undefined);
+    const { createObjectURL, createdObjects, revokeObjectURL } =
+      stubObjectUrls(["blob:replay-voice"]);
+    const { audioElements, play } = stubAudioElement();
+
+    const { result } = renderHook(() =>
+      usePlaybackVoice([mp3Voice()], {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    expect(result.current.connectionState).toBe("open");
+    expect(result.current.currentSpeakerName).toBe("法官");
+    expect(audioElements).toHaveLength(1);
+    expect(audioElements[0].src).toBe("blob:replay-voice");
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    const blob = createdObjects[0] as Blob;
+    expect(blob.type).toBe("audio/mpeg");
+    await expect(blob.text()).resolves.toBe("abc");
+
+    act(() => {
+      audioElements[0].dispatchEvent(new Event("ended"));
+    });
+
+    await waitFor(() => expect(result.current.currentItem).toBeNull());
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:replay-voice");
   });
 });

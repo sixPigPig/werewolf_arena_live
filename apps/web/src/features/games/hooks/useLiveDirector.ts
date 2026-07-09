@@ -25,6 +25,7 @@ export type UseLiveDirectorResult = {
 };
 
 type UseLiveDirectorOptions = {
+  holdAdvance?: boolean;
   resetKey?: string;
   startAtLatestTerminal?: boolean;
 };
@@ -146,7 +147,12 @@ export function useLiveDirector(
   }, [resolvedCurrentEventId]);
 
   useEffect(() => {
-    if (isPaused || currentCue === null || backlogCount === 0) {
+    if (
+      isPaused ||
+      options.holdAdvance ||
+      currentCue === null ||
+      backlogCount === 0
+    ) {
       return;
     }
 
@@ -165,6 +171,7 @@ export function useLiveDirector(
     currentCue,
     effectiveDurationMs,
     isPaused,
+    options.holdAdvance,
   ]);
 
   const pause = useCallback(() => {

@@ -226,7 +226,7 @@ describe("LiveReplayPage", () => {
 
     expect(subtitle).toHaveClass("mobile-live-subtitle");
     expect(subtitle).toHaveClass("mobile-live-subtitle-player-0");
-    expect(within(subtitle).getByText("阿青")).toBeVisible();
+    expect(within(subtitle).getByText("1号玩家")).toBeVisible();
     expect(within(subtitle).getByText("我先听后置位发言。")).toBeVisible();
   });
 

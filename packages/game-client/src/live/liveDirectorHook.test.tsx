@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useLiveDirector } from "./liveDirector";
 import type { LiveGameEvent } from "../types";
@@ -29,6 +29,10 @@ const events = [
 ];
 
 describe("useLiveDirector seekToEventId", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("jumps to the requested cue or the nearest available cue", () => {
     const { result } = renderHook(() => useLiveDirector(events));
 
@@ -98,5 +102,31 @@ describe("useLiveDirector seekToEventId", () => {
     expect(result.current.currentEventId).toBe(3);
     expect(result.current.currentCue?.type).toBe("game_started");
     expect(result.current.backlogCount).toBe(1);
+  });
+
+  it("does not auto-advance while external playback is holding the current cue", () => {
+    vi.useFakeTimers();
+
+    const { rerender, result } = renderHook(
+      ({ holdAdvance }: { holdAdvance: boolean }) =>
+        useLiveDirector(events, { holdAdvance }),
+      { initialProps: { holdAdvance: true } },
+    );
+
+    expect(result.current.currentEventId).toBe(1);
+
+    act(() => {
+      vi.advanceTimersByTime(30000);
+    });
+
+    expect(result.current.currentEventId).toBe(1);
+
+    rerender({ holdAdvance: false });
+
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+
+    expect(result.current.currentEventId).toBe(3);
   });
 });

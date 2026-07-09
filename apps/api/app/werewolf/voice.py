@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import re
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -10,7 +11,11 @@ from app.werewolf.live import LiveEvent
 
 SpeakerKind = Literal["player", "judge"]
 PUBLIC_SPEECH_ACTIONS = {"debate", "sheriff_speech", "sheriff_pk_speech"}
-PUBLIC_WINNER_LABELS = {"好人阵营", "狼人阵营"}
+PUBLIC_WINNER_ASSETS = {
+    "好人阵营": ("游戏结束，好人阵营获胜。", "game_over_villagers"),
+    "狼人阵营": ("游戏结束，狼人阵营获胜。", "game_over_wolves"),
+    "第三方阵营": ("游戏结束，第三方阵营获胜。", "game_over_third_party"),
+}
 SENTENCE_PATTERN = re.compile(r"[^，。！？；,.!?;]+[，。！？；,.!?;]?")
 
 
@@ -31,6 +36,13 @@ class VoiceUtterance:
     speaker: str
     text: str
     action: str | None
+    static_asset_id: str | None = None
+
+
+@dataclass(frozen=True)
+class JudgeVoiceCue:
+    text: str
+    static_asset_id: str | None = None
 
 
 def is_public_speech_event(event: LiveEvent) -> bool:
@@ -65,12 +77,17 @@ def chunk_text_for_tts(text: str, *, max_chars: int = 24) -> list[str]:
 def event_to_voice_utterance(
     event: LiveEvent,
     config: VoiceSpeakerConfig,
+    *,
+    player_seats: Mapping[str, int] | None = None,
+    previous_night_deaths: Sequence[str] = (),
+    peaceful_night: bool = False,
 ) -> VoiceUtterance | None:
     if is_public_speech_event(event):
         visible_text = _string_payload(event, "visible_text").strip()
         if not visible_text:
             return None
-        speaker_name = event.actor or "当前玩家"
+        speaker_name = _player_label(event.actor, player_seats, fallback="当前玩家")
+        spoken_text = _replace_player_names_with_seat_labels(visible_text, player_seats)
         return VoiceUtterance(
             utterance_id=f"voice_{uuid.uuid4().hex[:12]}",
             run_id=event.run_id,
@@ -79,12 +96,17 @@ def event_to_voice_utterance(
             speaker_kind="player",
             speaker_name=speaker_name,
             speaker=config.player_speaker,
-            text=visible_text,
+            text=spoken_text,
             action=event.action,
         )
 
-    judge_text = _judge_text_for_event(event)
-    if judge_text is None:
+    judge_cue = _judge_cue_for_event(
+        event,
+        player_seats=player_seats,
+        previous_night_deaths=previous_night_deaths,
+        peaceful_night=peaceful_night,
+    )
+    if judge_cue is None:
         return None
 
     return VoiceUtterance(
@@ -95,8 +117,9 @@ def event_to_voice_utterance(
         speaker_kind="judge",
         speaker_name="法官",
         speaker=config.judge_speaker,
-        text=judge_text,
+        text=judge_cue.text,
         action=event.action,
+        static_asset_id=judge_cue.static_asset_id,
     )
 
 
@@ -141,21 +164,183 @@ def build_voice_messages(
     )
 
 
-def _judge_text_for_event(event: LiveEvent) -> str | None:
+def _judge_cue_for_event(
+    event: LiveEvent,
+    *,
+    player_seats: Mapping[str, int] | None,
+    previous_night_deaths: Sequence[str],
+    peaceful_night: bool,
+) -> JudgeVoiceCue | None:
+    if event.type == "game_started":
+        return JudgeVoiceCue("本局游戏开始，请所有玩家确认自己的身份牌。", "game_intro")
     if event.type == "phase_started" and event.phase == "night":
-        return "天黑请闭眼。"
+        return JudgeVoiceCue("夜晚降临，所有玩家请闭眼。", "night_start")
     if event.type == "phase_started" and event.phase == "day":
-        return "天亮了，进入白天发言。"
+        if previous_night_deaths:
+            return JudgeVoiceCue(
+                f"昨夜死亡的玩家是 {_join_player_labels(previous_night_deaths, player_seats)}。"
+            )
+        if peaceful_night:
+            return JudgeVoiceCue("昨夜平安夜。", "dawn_peaceful")
+        return JudgeVoiceCue("天亮了，所有玩家请睁眼。", "dawn_start")
+    if event.type == "phase_started" and event.phase == "vote":
+        return JudgeVoiceCue("发言结束，进入放逐投票。", "exile_vote_start")
+    if event.type == "phase_started" and event.phase == "summary":
+        return JudgeVoiceCue("本轮进入总结，玩家整理自己的判断。")
+    if event.type == "action_requested" and event.action in PUBLIC_SPEECH_ACTIONS:
+        actor_label = _player_label(event.actor, player_seats, fallback="当前玩家")
+        return JudgeVoiceCue(
+            f"{actor_label}请发言。",
+            _seat_asset_id("speech_prompt", event.actor, player_seats),
+        )
+    if event.type == "state_updated":
+        state_cue = _state_update_judge_cue(event, player_seats)
+        if state_cue is not None:
+            return state_cue
     if event.type == "game_completed":
         winner = _string_payload(event, "winner")
-        if winner not in PUBLIC_WINNER_LABELS:
-            winner = "胜利阵营"
-        return f"对局结束，{winner}获胜。"
+        if winner in PUBLIC_WINNER_ASSETS:
+            text, static_asset_id = PUBLIC_WINNER_ASSETS[winner]
+            return JudgeVoiceCue(text, static_asset_id)
+        return JudgeVoiceCue("游戏结束，胜利阵营获胜。")
     if event.type == "game_failed":
-        return "对局异常中断。"
+        return JudgeVoiceCue("对局异常中断。")
     return None
+
+
+def _state_update_judge_cue(
+    event: LiveEvent,
+    player_seats: Mapping[str, int] | None,
+) -> JudgeVoiceCue | None:
+    sheriff_speech_order = _string_list_payload(event, "sheriff_speech_order")
+    sheriff_speech_direction = _string_payload(event, "sheriff_speech_direction")
+    if sheriff_speech_order and sheriff_speech_direction:
+        return JudgeVoiceCue(
+            "从 "
+            f"{_player_label(sheriff_speech_order[0], player_seats, fallback='当前玩家')}"
+            f" 开始，按 {sheriff_speech_direction} 发表竞选发言。"
+        )
+
+    final_candidates = _string_list_payload(event, "sheriff_final_candidates")
+    if final_candidates:
+        return JudgeVoiceCue(
+            f"仍在警上的玩家为 {_join_player_labels(final_candidates, player_seats)}。"
+        )
+
+    sheriff = _string_payload(event, "sheriff_elected") or _string_payload(event, "sheriff")
+    if sheriff:
+        return JudgeVoiceCue(
+            f"{_player_label(sheriff, player_seats, fallback='该玩家')} 当选警长，获得警徽。",
+            _seat_asset_id("sheriff_result", sheriff, player_seats),
+        )
+
+    exiled = _string_payload(event, "exiled")
+    if exiled:
+        return JudgeVoiceCue(
+            f"{_player_label(exiled, player_seats, fallback='该玩家')} 得票最高，被放逐出局。",
+            _seat_asset_id("exile_result", exiled, player_seats),
+        )
+
+    self_exploded = _string_payload(event, "werewolf_self_exploded")
+    if self_exploded:
+        return JudgeVoiceCue(
+            f"{_player_label(self_exploded, player_seats, fallback='该玩家')} 发动狼人自爆。",
+            _seat_asset_id("werewolf_self_explosion", self_exploded, player_seats),
+        )
+
+    hunter_shot = _string_payload(event, "hunter_shot")
+    if hunter_shot:
+        return JudgeVoiceCue(
+            f"{_player_label(hunter_shot, player_seats, fallback='该玩家')} 被猎人带走，出局。",
+            _seat_asset_id("hunter_shot_result", hunter_shot, player_seats),
+        )
+
+    idiot_revealed = _string_payload(event, "idiot_revealed")
+    if idiot_revealed:
+        return JudgeVoiceCue(
+            f"{_player_label(idiot_revealed, player_seats, fallback='该玩家')} 翻牌为白痴。",
+            _seat_asset_id("idiot_reveal", idiot_revealed, player_seats),
+        )
+
+    badge_target = _string_payload(event, "sheriff_badge_target")
+    if badge_target:
+        return JudgeVoiceCue(
+            f"警徽移交给 {_player_label(badge_target, player_seats, fallback='该玩家')}。",
+            _seat_asset_id("badge_transfer", badge_target, player_seats),
+        )
+
+    if event.payload.get("sheriff_badge_lost") is True:
+        return JudgeVoiceCue("警徽被撕毁。", "badge_destroyed")
+
+    return None
+
+
+def _player_label(
+    name: str | None,
+    player_seats: Mapping[str, int] | None,
+    *,
+    fallback: str,
+) -> str:
+    if name and re.fullmatch(r"\d+号玩家", name.strip()):
+        return name.strip()
+    if name and player_seats:
+        seat = player_seats.get(name)
+        if isinstance(seat, int) and seat > 0:
+            return f"{seat}号玩家"
+    return fallback
+
+
+def _join_player_labels(
+    names: Sequence[str],
+    player_seats: Mapping[str, int] | None,
+) -> str:
+    labels = [
+        _player_label(name, player_seats, fallback="未知玩家")
+        for name in names
+        if name
+    ]
+    return "、".join(labels) if labels else "未知玩家"
+
+
+def _replace_player_names_with_seat_labels(
+    text: str,
+    player_seats: Mapping[str, int] | None,
+) -> str:
+    if not player_seats:
+        return text
+
+    normalized_text = text
+    for name, seat in sorted(
+        player_seats.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        if not name or not isinstance(seat, int) or seat <= 0:
+            continue
+        normalized_text = normalized_text.replace(name, f"{seat}号玩家")
+    return normalized_text
+
+
+def _seat_asset_id(
+    template_id: str,
+    name: str | None,
+    player_seats: Mapping[str, int] | None,
+) -> str | None:
+    if not name or not player_seats:
+        return None
+    seat = player_seats.get(name)
+    if not isinstance(seat, int) or not 1 <= seat <= 12:
+        return None
+    return f"{template_id}_seat_{seat:02d}"
 
 
 def _string_payload(event: LiveEvent, key: str) -> str:
     value = event.payload.get(key)
     return value if isinstance(value, str) else ""
+
+
+def _string_list_payload(event: LiveEvent, key: str) -> list[str]:
+    value = event.payload.get(key)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]

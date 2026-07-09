@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     ark_tts_judge_speaker: str = "zh_female_vv_uranus_bigtts"
     ark_tts_audio_format: str = "pcm"
     ark_tts_sample_rate: int = 24000
+    ark_tts_judge_asset_audio_format: str = "mp3"
+    ark_tts_judge_asset_sample_rate: int = 24000
 
     @field_validator("cors_origins", mode="before")
     @classmethod
