@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { PlayerConfig, VirtualPlayerProfile } from "../types";
+import type { PlayerConfig, PublicPlayerProfileWithFavorite } from "../types";
 import {
   applyProfileToSeat,
   clearAllSeats,
@@ -13,11 +13,10 @@ import {
 } from "./lineupUtils";
 
 function profile(
-  overrides: Partial<VirtualPlayerProfile>,
-): VirtualPlayerProfile {
+  overrides: Partial<PublicPlayerProfileWithFavorite>,
+): PublicPlayerProfileWithFavorite {
   return {
     id: "profile-1",
-    owner_user_id: null,
     display_name: "冷静的阿夜",
     model: "DeepSeek",
     personality_id: "balanced",
@@ -34,15 +33,11 @@ function profile(
     talkativeness: 3,
     example_messages: [],
     display_order: 1,
-    favorite: false,
+    featured: false,
+    is_favorite: false,
     appearance_id: "moonlit",
-    avatar_prompt: "",
-    avatar_asset_id: null,
     avatar_image_url: "",
-    avatar_image_mime: "",
     tags: [],
-    created_at: "2026-05-18T00:00:00Z",
-    updated_at: "2026-05-18T00:00:00Z",
     ...overrides,
   };
 }
@@ -54,7 +49,7 @@ describe("lineupUtils", () => {
       display_name: "冷静的阿夜",
       model: "DeepSeek",
       personality_id: "cautious",
-      favorite: true,
+      is_favorite: true,
     }),
     profile({
       id: "profile-2",
@@ -187,13 +182,37 @@ describe("lineupUtils", () => {
     ]);
   });
 
-  it("can fill empty seats with favorites only", () => {
+  it("can fill empty seats with public favorites only", () => {
     const result = randomFillEmptySeats([], profiles, 3, {
       favoritesOnly: true,
       random: () => 0,
     });
 
     expect(result).toEqual([{ seat: 1, profile_id: "profile-1" }]);
+  });
+
+  it("keeps accepting the legacy favorite field during web coexistence", () => {
+    const result = randomFillEmptySeats(
+      [],
+      [
+        {
+          id: "legacy-favorite",
+          model: "DeepSeek",
+          personality_id: "balanced",
+          favorite: true,
+        },
+        {
+          id: "legacy-regular",
+          model: "DeepSeek",
+          personality_id: "balanced",
+          favorite: false,
+        },
+      ],
+      2,
+      { favoritesOnly: true, random: () => 0 },
+    );
+
+    expect(result).toEqual([{ seat: 1, profile_id: "legacy-favorite" }]);
   });
 
   it("summarizes selected profiles, empty seats, favorites, models and personalities", () => {

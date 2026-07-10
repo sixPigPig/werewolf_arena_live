@@ -2,6 +2,16 @@ export type ApiFetchOptions = {
   baseUrl?: string;
 };
 
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`Request failed with status ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 function defaultApiBaseUrl() {
   const meta = import.meta as ImportMeta & {
     env?: { VITE_API_BASE_URL?: string };
@@ -19,7 +29,7 @@ export async function apiFetch<T>(
   const response = await fetch(`${baseUrl}${path}`, init);
 
   if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}`);
+    throw new ApiError(response.status);
   }
 
   if (response.status === 204 || response.status === 205) {

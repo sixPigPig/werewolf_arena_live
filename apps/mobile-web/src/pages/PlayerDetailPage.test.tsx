@@ -4,10 +4,14 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlayerDetailPage } from "./PlayerDetailPage";
-import type { VirtualPlayerProfile } from "@werewolf-arena/game-client";
+import {
+  ApiError,
+  type PublicPlayerProfile,
+} from "@werewolf-arena/game-client";
 
 const gameClientMocks = vi.hoisted(() => ({
-  listPlayerProfiles: vi.fn(),
+  getPublicPlayerProfile: vi.fn(),
+  listPlayerProfileFavorites: vi.fn(),
 }));
 
 vi.mock("@werewolf-arena/game-client", async () => {
@@ -17,18 +21,18 @@ vi.mock("@werewolf-arena/game-client", async () => {
 
   return {
     ...actual,
-    listPlayerProfiles: gameClientMocks.listPlayerProfiles,
+    getPublicPlayerProfile: gameClientMocks.getPublicPlayerProfile,
+    listPlayerProfileFavorites: gameClientMocks.listPlayerProfileFavorites,
   };
 });
 
 function buildProfile(
-  overrides: Pick<VirtualPlayerProfile, "display_name" | "id"> &
-    Partial<VirtualPlayerProfile>,
-): VirtualPlayerProfile {
+  overrides: Pick<PublicPlayerProfile, "display_name" | "id"> &
+    Partial<PublicPlayerProfile>,
+): PublicPlayerProfile {
   const { display_name, id, ...profileOverrides } = overrides;
 
   return {
-    owner_user_id: null,
     model: overrides.model ?? "test-model",
     personality_id: overrides.personality_id ?? "balanced",
     personality_text: overrides.personality_text ?? "稳健发言，优先找逻辑漏洞。",
@@ -44,15 +48,10 @@ function buildProfile(
     talkativeness: overrides.talkativeness ?? 3,
     example_messages: overrides.example_messages ?? ["我先归一下已知信息。"],
     display_order: overrides.display_order ?? 1,
-    favorite: overrides.favorite ?? true,
+    featured: overrides.featured ?? false,
     appearance_id: overrides.appearance_id ?? "default",
-    avatar_prompt: "",
-    avatar_asset_id: profileOverrides.avatar_asset_id ?? null,
     avatar_image_url: "",
-    avatar_image_mime: "",
     tags: overrides.tags ?? ["控场", "复盘"],
-    created_at: "2026-06-19T00:00:00.000Z",
-    updated_at: "2026-06-19T00:00:00.000Z",
     ...profileOverrides,
     id,
     display_name,
@@ -79,15 +78,17 @@ function renderPlayerDetailRoute(initialPath = "/players/moon-hunter") {
 
 describe("PlayerDetailPage", () => {
   beforeEach(() => {
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [
-        buildProfile({
-          id: "moon-hunter",
-          display_name: "月下猎人",
-          model: "deepseek-v4-flash",
-          avatar_asset_id: "system-gothic-female-1",
-        }),
-      ],
+    gameClientMocks.getPublicPlayerProfile.mockResolvedValue(
+      buildProfile({
+        id: "moon-hunter",
+        display_name: "月下猎人",
+        model: "deepseek-v4-flash",
+        avatar_image_url:
+          "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
+      }),
+    );
+    gameClientMocks.listPlayerProfileFavorites.mockResolvedValue({
+      profile_ids: ["moon-hunter"],
     });
   });
 
@@ -115,8 +116,21 @@ describe("PlayerDetailPage", () => {
   });
 
   it("shows an empty state when the player id is missing from the atlas", async () => {
+    gameClientMocks.getPublicPlayerProfile.mockRejectedValue(new ApiError(404));
     renderPlayerDetailRoute("/players/unknown-player");
 
     expect(await screen.findByText("未找到玩家档案")).toBeVisible();
+  });
+
+  it("keeps profile content readable when favorites are unavailable", async () => {
+    gameClientMocks.listPlayerProfileFavorites.mockRejectedValue(
+      new Error("session unavailable"),
+    );
+
+    renderPlayerDetailRoute();
+
+    expect(await screen.findByText("月下猎人")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("收藏状态暂不可用");
+    expect(screen.getByText("玩家档案")).toBeVisible();
   });
 });

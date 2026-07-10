@@ -2,17 +2,30 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import {
-  listPlayerProfiles,
+  listPlayerProfileFavorites,
+  listPublicPlayerProfiles,
+  mergePlayerProfileFavorites,
   resolveAvatarImageUrl,
 } from "@werewolf-arena/game-client";
+import {
+  publicPlayerProfileFavoritesQueryKey,
+  publicPlayerProfilesQueryKey,
+} from "../lib/player-profile-query-keys";
 
 export function PlayersPage() {
   const playerProfilesQuery = useQuery({
-    queryKey: ["player-profiles"],
-    queryFn: listPlayerProfiles,
+    queryKey: publicPlayerProfilesQueryKey,
+    queryFn: listPublicPlayerProfiles,
+  });
+  const favoritesQuery = useQuery({
+    queryKey: publicPlayerProfileFavoritesQueryKey,
+    queryFn: listPlayerProfileFavorites,
   });
 
-  const profiles = playerProfilesQuery.data?.profiles ?? [];
+  const profiles = mergePlayerProfileFavorites(
+    playerProfilesQuery.data ?? [],
+    favoritesQuery.data?.profile_ids ?? [],
+  );
 
   return (
     <main className="mobile-page mobile-archive-page mobile-players-page">
@@ -26,6 +39,11 @@ export function PlayersPage() {
       {playerProfilesQuery.isError ? (
         <p className="mobile-status-banner" role="alert">
           无法读取玩家档案
+        </p>
+      ) : null}
+      {favoritesQuery.isError ? (
+        <p className="mobile-archive-muted" role="status">
+          收藏状态暂不可用，玩家图鉴仍可正常浏览。
         </p>
       ) : null}
       {playerProfilesQuery.isSuccess && profiles.length === 0 ? (
@@ -53,7 +71,7 @@ export function PlayersPage() {
                 <div className="mobile-player-card-body">
                   <div className="mobile-player-card-heading">
                     <h2>{profile.display_name}</h2>
-                    {profile.favorite ? (
+                    {favoritesQuery.isSuccess && profile.is_favorite ? (
                       <span className="mobile-player-favorite">收藏</span>
                     ) : null}
                   </div>

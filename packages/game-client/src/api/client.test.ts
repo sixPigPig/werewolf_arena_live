@@ -34,8 +34,13 @@ describe("apiFetch", () => {
       vi.fn(async () => new Response("nope", { status: 503 })),
     );
 
-    await expect(apiFetch("/api/v1/player-profiles")).rejects.toThrow(
-      "Request failed with status 503",
+    const request = apiFetch("/api/v1/player-profiles");
+
+    await expect(request).rejects.toEqual(
+      expect.objectContaining({
+        message: "Request failed with status 503",
+        status: 503,
+      }),
     );
   });
 

@@ -1,4 +1,12 @@
-import type { PlayerConfig, VirtualPlayerProfile } from "../types";
+import type { PlayerConfig } from "../types";
+
+export type LineupPlayerProfile = {
+  id: string;
+  model: string;
+  personality_id: string;
+  favorite?: boolean;
+  is_favorite?: boolean;
+};
 
 export type DuplicateProfileSelection = {
   profileId: string;
@@ -60,7 +68,7 @@ export function clearAllSeats() {
 
 export function randomFillEmptySeats(
   configs: PlayerConfig[],
-  profiles: VirtualPlayerProfile[],
+  profiles: LineupPlayerProfile[],
   playerCount: number,
   options: RandomFillOptions = {},
 ) {
@@ -78,7 +86,8 @@ export function randomFillEmptySeats(
   );
   const availableProfiles = profiles.filter(
     (profile) =>
-      !usedProfileIds.has(profile.id) && (!options.favoritesOnly || profile.favorite),
+      !usedProfileIds.has(profile.id) &&
+      (!options.favoritesOnly || isPlayerProfileFavorite(profile)),
   );
   let nextConfigs = [...configs];
   const nextProfiles = [...availableProfiles];
@@ -129,7 +138,7 @@ export function findDuplicateProfileSelections(
 
 export function summarizeLineup(
   configs: PlayerConfig[],
-  profiles: VirtualPlayerProfile[],
+  profiles: LineupPlayerProfile[],
   playerCount: number,
 ): LineupSummary {
   const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
@@ -151,7 +160,7 @@ export function summarizeLineup(
     }
 
     assignedCount += 1;
-    if (profile.favorite) {
+    if (isPlayerProfileFavorite(profile)) {
       favoriteCount += 1;
     }
     incrementCount(modelCounts, config.model?.trim() || profile.model);
@@ -166,6 +175,10 @@ export function summarizeLineup(
     modelCounts: mapToSortedCounts(modelCounts),
     personalityCounts: mapToSortedCounts(personalityCounts),
   };
+}
+
+function isPlayerProfileFavorite(profile: LineupPlayerProfile) {
+  return profile.is_favorite ?? profile.favorite ?? false;
 }
 
 export function removeInvalidProfileRefs(

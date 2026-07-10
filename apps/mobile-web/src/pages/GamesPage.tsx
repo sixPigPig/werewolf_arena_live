@@ -32,18 +32,25 @@ import {
 } from "../components/MobileBottomSelect";
 import {
   createGameRun,
+  favoritePlayerProfile,
   hasPlayerConfig,
-  listPlayerProfiles,
+  listPlayerProfileFavorites,
+  listPublicPlayerProfiles,
   listRuleSets,
+  mergePlayerProfileFavorites,
   randomFillEmptySeats,
   removeInvalidProfileRefs,
   resolveAvatarImageUrl,
   resizeLineupForPlayerCount,
-  updatePlayerProfile,
+  unfavoritePlayerProfile,
   type PlayerConfig,
-  type PlayerProfilesResponse,
-  type VirtualPlayerProfile,
+  type PlayerProfileFavoritesResponse,
+  type PublicPlayerProfileWithFavorite,
 } from "@werewolf-arena/game-client";
+import {
+  publicPlayerProfileFavoritesQueryKey,
+  publicPlayerProfilesQueryKey,
+} from "../lib/player-profile-query-keys";
 
 const FAVORITE_FILTER_OPTIONS: MobileBottomSelectOption<"all" | "favorite">[] = [
   { label: "全部玩家", value: "all" },
@@ -67,6 +74,7 @@ export function GamesPage() {
   const [profileSearch, setProfileSearch] = useState("");
   const [favoriteFilter, setFavoriteFilter] = useState<"all" | "favorite">("all");
   const [profileStrategyFilter, setProfileStrategyFilter] = useState("all");
+  const [favoriteUpdateError, setFavoriteUpdateError] = useState<string | null>(null);
   const [pendingFavoriteProfileIds, setPendingFavoriteProfileIds] = useState(
     () => new Set<string>(),
   );
@@ -74,7 +82,6 @@ export function GamesPage() {
   const profileCardScrollRef = useRef<HTMLDivElement | null>(null);
   const profilePullDistanceRef = useRef(0);
   const profilePullStartYRef = useRef<number | null>(null);
-  const shouldRefreshProfilesOnNextDrawerOpenRef = useRef(false);
   const ruleScrollRef = useRef<HTMLDivElement | null>(null);
   const ruleCardRefs = useRef(new Map<string, HTMLLabelElement>());
   const seatButtonRefs = useRef(new Map<number, HTMLButtonElement>());
@@ -85,8 +92,12 @@ export function GamesPage() {
     queryFn: listRuleSets,
   });
   const playerProfilesQuery = useQuery({
-    queryKey: ["player-profiles"],
-    queryFn: listPlayerProfiles,
+    queryKey: publicPlayerProfilesQueryKey,
+    queryFn: listPublicPlayerProfiles,
+  });
+  const favoritesQuery = useQuery({
+    queryKey: publicPlayerProfileFavoritesQueryKey,
+    queryFn: listPlayerProfileFavorites,
   });
   const createGameRunMutation = useMutation({
     mutationFn: (request: Parameters<typeof createGameRun>[0]) =>
@@ -95,38 +106,58 @@ export function GamesPage() {
   });
   const updateProfileFavoriteMutation = useMutation({
     mutationFn: ({
-      favorite,
+      isFavorite,
       profileId,
     }: {
-      favorite: boolean;
+      isFavorite: boolean;
       profileId: string;
-    }) => updatePlayerProfile(profileId, { favorite }),
-    onMutate: ({ profileId }) => {
+    }) =>
+      isFavorite
+        ? favoritePlayerProfile(profileId)
+        : unfavoritePlayerProfile(profileId),
+    onMutate: async ({ isFavorite, profileId }) => {
+      setFavoriteUpdateError(null);
       setPendingFavoriteProfileIds((currentProfileIds) => {
         const nextProfileIds = new Set(currentProfileIds);
         nextProfileIds.add(profileId);
         return nextProfileIds;
       });
+      await queryClient.cancelQueries({
+        queryKey: publicPlayerProfileFavoritesQueryKey,
+      });
+      const currentFavorites =
+        queryClient.getQueryData<PlayerProfileFavoritesResponse>(
+          publicPlayerProfileFavoritesQueryKey,
+        );
+      const wasFavorite = currentFavorites?.profile_ids.includes(profileId) ?? false;
+      queryClient.setQueryData<PlayerProfileFavoritesResponse>(
+        publicPlayerProfileFavoritesQueryKey,
+        (favorites) =>
+          updateFavoriteProfileIds(favorites, profileId, isFavorite),
+      );
+      return { wasFavorite };
     },
-    onSuccess: (updatedProfile) => {
-      shouldRefreshProfilesOnNextDrawerOpenRef.current = true;
-      queryClient.setQueryData<PlayerProfilesResponse>(
-        ["player-profiles"],
-        (currentProfiles) => {
-          if (!currentProfiles) {
-            return currentProfiles;
-          }
-
-          return {
-            profiles: currentProfiles.profiles.map((profile) => {
-              if (profile.id !== updatedProfile.id) {
-                return profile;
-              }
-
-              return updatedProfile;
-            }),
-          };
-        },
+    onError: (_error, variables, context) => {
+      queryClient.setQueryData<PlayerProfileFavoritesResponse>(
+        publicPlayerProfileFavoritesQueryKey,
+        (favorites) =>
+          updateFavoriteProfileIds(
+            favorites,
+            variables.profileId,
+            context?.wasFavorite ?? !variables.isFavorite,
+          ),
+      );
+      setFavoriteUpdateError("收藏更新失败，请稍后重试。");
+    },
+    onSuccess: (updatedFavorite) => {
+      queryClient.setQueryData<PlayerProfileFavoritesResponse>(
+        publicPlayerProfileFavoritesQueryKey,
+        (favorites) =>
+          updateFavoriteProfileIds(
+            favorites,
+            updatedFavorite.profile_id,
+            updatedFavorite.is_favorite,
+          ),
       );
     },
     onSettled: (_updatedProfile, _error, variables) => {
@@ -134,6 +165,9 @@ export function GamesPage() {
         const nextProfileIds = new Set(currentProfileIds);
         nextProfileIds.delete(variables.profileId);
         return nextProfileIds;
+      });
+      return queryClient.invalidateQueries({
+        queryKey: publicPlayerProfileFavoritesQueryKey,
       });
     },
   });
@@ -143,9 +177,15 @@ export function GamesPage() {
     [ruleSetsQuery.data?.rule_sets],
   );
   const profiles = useMemo(
-    () => playerProfilesQuery.data?.profiles ?? [],
-    [playerProfilesQuery.data?.profiles],
+    () =>
+      mergePlayerProfileFavorites(
+        playerProfilesQuery.data ?? [],
+        favoritesQuery.data?.profile_ids ?? [],
+      ),
+    [favoritesQuery.data?.profile_ids, playerProfilesQuery.data],
   );
+  const favoritesAvailable = favoritesQuery.isSuccess && !favoritesQuery.isError;
+  const appliedFavoriteFilter = favoritesAvailable ? favoriteFilter : "all";
   const selectedRuleSet =
     ruleSets.find((ruleSet) => ruleSet.id === selectedRuleSetId) ??
     ruleSets[0] ??
@@ -205,11 +245,11 @@ export function GamesPage() {
   const filteredProfiles = useMemo(
     () =>
       filterProfiles(profiles, {
-        favoriteFilter,
+        favoriteFilter: appliedFavoriteFilter,
         search: profileSearch,
         strategy: profileStrategyFilter,
       }),
-    [favoriteFilter, profileSearch, profileStrategyFilter, profiles],
+    [appliedFavoriteFilter, profileSearch, profileStrategyFilter, profiles],
   );
   const isLoading = ruleSetsQuery.isPending || playerProfilesQuery.isPending;
   const isSubmitDisabled =
@@ -238,7 +278,9 @@ export function GamesPage() {
         safeActiveSeat,
       )
     : false;
-  const profileRefreshStatus = playerProfilesQuery.isFetching
+  const isProfileDataFetching =
+    playerProfilesQuery.isFetching || favoritesQuery.isFetching;
+  const profileRefreshStatus = isProfileDataFetching
     ? "refreshing"
     : profilePullDistance >= 64
       ? "ready"
@@ -247,7 +289,7 @@ export function GamesPage() {
         : "idle";
   const profileRefreshIndicatorStyle = {
     "--mobile-profile-refresh-offset": `${Math.min(
-      Math.max(profilePullDistance, playerProfilesQuery.isFetching ? 48 : 0),
+      Math.max(profilePullDistance, isProfileDataFetching ? 48 : 0),
       72,
     )}px`,
   } as CSSProperties;
@@ -311,10 +353,6 @@ export function GamesPage() {
 
   function openProfileDrawer(seat: number, trigger: HTMLButtonElement) {
     const profile = selectedProfilesBySeat.get(seat) ?? null;
-    if (shouldRefreshProfilesOnNextDrawerOpenRef.current) {
-      shouldRefreshProfilesOnNextDrawerOpenRef.current = false;
-      void playerProfilesQuery.refetch();
-    }
     setActiveSeat(seat);
     setPendingProfileId(profile?.id ?? null);
     setProfileSearch("");
@@ -369,7 +407,7 @@ export function GamesPage() {
   }
 
   function fillEmptySeats(options?: { favoritesOnly?: boolean }) {
-    if (!selectedRuleSet) {
+    if (!selectedRuleSet || (options?.favoritesOnly && !favoritesAvailable)) {
       return;
     }
     setValidationError(null);
@@ -386,7 +424,10 @@ export function GamesPage() {
     );
   }
 
-  function handleToggleProfileFavorite(profile: VirtualPlayerProfile) {
+  function handleToggleProfileFavorite(profile: PublicPlayerProfileWithFavorite) {
+    if (!favoritesAvailable) {
+      return;
+    }
     setValidationError(null);
     setShortage(false);
     setIsClearConfirming(false);
@@ -395,7 +436,7 @@ export function GamesPage() {
       document.activeElement.blur();
     }
     updateProfileFavoriteMutation.mutate({
-      favorite: !profile.favorite,
+      isFavorite: !profile.is_favorite,
       profileId: profile.id,
     });
   }
@@ -411,7 +452,7 @@ export function GamesPage() {
   }
 
   function handleProfilePullStart(clientY: number) {
-    if (playerProfilesQuery.isFetching) {
+    if (isProfileDataFetching) {
       return;
     }
 
@@ -459,7 +500,10 @@ export function GamesPage() {
       return;
     }
 
-    void playerProfilesQuery.refetch().finally(() => {
+    void Promise.all([
+      playerProfilesQuery.refetch(),
+      favoritesQuery.refetch(),
+    ]).finally(() => {
       setProfilePullDistanceValue(0);
     });
   }
@@ -818,6 +862,7 @@ export function GamesPage() {
             <div className="mobile-lobby-fill-options">
               <button
                 className="mobile-button mobile-lobby-favorite-fill"
+                disabled={!favoritesAvailable}
                 onClick={() => fillEmptySeats({ favoritesOnly: true })}
                 type="button"
               >
@@ -921,10 +966,11 @@ export function GamesPage() {
                 </label>
                 <MobileBottomSelect
                   className="mobile-profile-select-favorite"
+                  disabled={!favoritesAvailable}
                   label="收藏"
                   onChange={setFavoriteFilter}
                   options={FAVORITE_FILTER_OPTIONS}
-                  value={favoriteFilter}
+                  value={appliedFavoriteFilter}
                 />
                 <MobileBottomSelect
                   className="mobile-profile-select-strategy"
@@ -943,6 +989,16 @@ export function GamesPage() {
 
               {playerProfilesQuery.isError ? (
                 <p className="mobile-lobby-inline-error">玩家库加载失败</p>
+              ) : null}
+              {favoritesQuery.isError ? (
+                <p className="mobile-lobby-inline-error" role="status">
+                  收藏状态暂不可用，仍可正常选择玩家。
+                </p>
+              ) : null}
+              {favoriteUpdateError ? (
+                <p className="mobile-lobby-inline-error" role="alert">
+                  {favoriteUpdateError}
+                </p>
               ) : null}
             </div>
 
@@ -985,7 +1041,7 @@ export function GamesPage() {
                 </span>
               </div>
               <span aria-live="polite" className="mobile-sr-only">
-                {playerProfilesQuery.isFetching
+                {isProfileDataFetching
                   ? "玩家库刷新中"
                   : profilePullDistance >= 64
                     ? "释放刷新玩家库"
@@ -1070,25 +1126,25 @@ export function GamesPage() {
                         </button>
                         <button
                           aria-label={`${
-                            profile.favorite ? "取消收藏" : "收藏"
+                            profile.is_favorite ? "取消收藏" : "收藏"
                           } ${profile.display_name}`}
-                          aria-pressed={profile.favorite}
+                          aria-pressed={profile.is_favorite}
                           className={[
                             "mobile-profile-card-favorite-button",
-                            profile.favorite
+                            profile.is_favorite
                               ? "mobile-profile-card-favorite-button-active"
                               : "",
                           ]
                             .filter(Boolean)
                             .join(" ")}
-                          disabled={isFavoriteUpdatePending}
+                          disabled={!favoritesAvailable || isFavoriteUpdatePending}
                           onClick={() => handleToggleProfileFavorite(profile)}
                           onPointerDown={(event) => {
                             event.preventDefault();
                           }}
                           type="button"
                         >
-                          {profile.favorite ? (
+                          {profile.is_favorite ? (
                             <StarCheck
                               aria-hidden="true"
                               className="mobile-profile-card-favorite-icon"
@@ -1171,7 +1227,7 @@ function getProfileSeatStatusLabel(
 
 function getProfileChoiceAriaLabel(
   activeSeat: number,
-  profile: VirtualPlayerProfile,
+  profile: PublicPlayerProfileWithFavorite,
   seatStatusLabel: string | null,
 ) {
   return [
@@ -1183,7 +1239,7 @@ function getProfileChoiceAriaLabel(
 }
 
 function getConfirmProfileButtonLabel(
-  pendingProfile: VirtualPlayerProfile | null,
+  pendingProfile: PublicPlayerProfileWithFavorite | null,
   assignedSeat: number | undefined,
   activeSeat: number,
 ) {
@@ -1224,7 +1280,7 @@ type LineupLaunchStatus = {
 
 function buildLineupLaunchStatus(
   configs: PlayerConfig[],
-  profiles: VirtualPlayerProfile[],
+  profiles: PublicPlayerProfileWithFavorite[],
   playerCount: number,
 ): LineupLaunchStatus {
   const assignedProfileIds = new Set(
@@ -1322,13 +1378,13 @@ type ProfileFilters = {
 };
 
 function filterProfiles(
-  profiles: VirtualPlayerProfile[],
+  profiles: PublicPlayerProfileWithFavorite[],
   filters: ProfileFilters,
 ) {
   const search = filters.search.trim().toLowerCase();
 
   return profiles.filter((profile) => {
-    if (filters.favoriteFilter === "favorite" && !profile.favorite) {
+    if (filters.favoriteFilter === "favorite" && !profile.is_favorite) {
       return false;
     }
 
@@ -1347,7 +1403,28 @@ function filterProfiles(
   });
 }
 
-function profileMatchesSearch(profile: VirtualPlayerProfile, search: string) {
+function updateFavoriteProfileIds(
+  favorites: PlayerProfileFavoritesResponse | undefined,
+  profileId: string,
+  isFavorite: boolean,
+) {
+  if (!favorites) {
+    return favorites;
+  }
+
+  const profileIds = new Set(favorites.profile_ids);
+  if (isFavorite) {
+    profileIds.add(profileId);
+  } else {
+    profileIds.delete(profileId);
+  }
+  return { profile_ids: [...profileIds] };
+}
+
+function profileMatchesSearch(
+  profile: PublicPlayerProfileWithFavorite,
+  search: string,
+) {
   return [
     profile.display_name,
     profile.model,
@@ -1361,7 +1438,7 @@ function profileMatchesSearch(profile: VirtualPlayerProfile, search: string) {
     .some((value) => value.toLowerCase().includes(search));
 }
 
-function getStrategyFilterOptions(profiles: VirtualPlayerProfile[]) {
+function getStrategyFilterOptions(profiles: PublicPlayerProfileWithFavorite[]) {
   return [...new Set(profiles.map((profile) => profile.strategy_profile))]
     .filter(Boolean)
     .sort((left, right) => left.localeCompare(right));
@@ -1379,7 +1456,7 @@ function formatStrategyLabel(strategy: string) {
   return strategyLabels[strategy] ?? strategy;
 }
 
-function getProfileDescription(profile: VirtualPlayerProfile) {
+function getProfileDescription(profile: PublicPlayerProfileWithFavorite) {
   return (
     profile.short_description ||
     profile.personality_text ||
@@ -1388,7 +1465,9 @@ function getProfileDescription(profile: VirtualPlayerProfile) {
   );
 }
 
-function getProfileCardDescriptionLines(profile: VirtualPlayerProfile) {
+function getProfileCardDescriptionLines(
+  profile: PublicPlayerProfileWithFavorite,
+) {
   return splitProfileCardDescription(getProfileDescription(profile));
 }
 

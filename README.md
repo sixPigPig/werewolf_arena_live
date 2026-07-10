@@ -5,6 +5,7 @@
 - `apps/api`：FastAPI 后端
 - `apps/web`：React SPA 前端
 - `apps/mobile-web`：移动端 React SPA 前端
+- `apps/admin-web`：独立运营与诊断后台
 - `packages/game-client`：共享前端 API client、类型与对局状态辅助逻辑
 - `docs`：架构与规划文档
 
@@ -15,6 +16,7 @@
 ```bash
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env
+cp apps/admin-web/.env.example apps/admin-web/.env
 ```
 
 安装依赖：
@@ -39,6 +41,18 @@ cd apps/api && uv run alembic upgrade head
 `apps/api/alembic/versions/20260708_01_create_live_voice_tables.py` 创建；如果刚拉到新代码，务必先执行
 `alembic upgrade head`，否则发起对局和语音补播会缺少持久化表。
 
+Admin 服务端会话、固定角色和审计基础表由
+`apps/api/alembic/versions/20260710_01_create_admin_auth_tables.py` 创建。Admin 联调前同样必须先执行
+`alembic upgrade head`。
+
+玩家草稿、发布、归档、推荐位和乐观锁字段由
+`apps/api/alembic/versions/20260710_02_expand_virtual_player_profile_lifecycle.py` 创建。迁移会把历史档案回填为已发布，
+并把原 `favorite` 同步到后台 `featured`；上线 API 前必须先完成该迁移。
+
+Mobile 的设备级 Guest Session 与个人玩家收藏关系由
+`apps/api/alembic/versions/20260710_03_create_public_sessions_and_favorites.py` 创建。Public Session 与 Admin Session
+完全隔离，数据库只保存会话和 CSRF secret 的哈希；该迁移不会把无法确认归属的历史全局 `favorite` 回填给 Guest。
+
 如果旧版本曾在 `apps/api/logs/player_profiles.json` 写入玩家档案，可在数据库迁移完成后执行一次幂等导入：
 
 ```bash
@@ -50,7 +64,7 @@ cd apps/api
 
 ## 本地运行
 
-后端、桌面端和移动端可分别在独立终端运行；只看桌面端时启动前两个即可。
+后端、旧桌面端、移动端和管理后台可分别在独立终端运行。
 
 终端 1，启动 FastAPI：
 
@@ -58,10 +72,15 @@ cd apps/api
 make api
 ```
 
-等价直接命令：
+`make api` 会先执行 `alembic upgrade head`，并注入仅用于本地 HTTP
+联调的开发认证与 Cookie 配置。如果手动启动，需先自行完成迁移并提供等价环境变量：
 
 ```bash
 cd apps/api
+APP_ENVIRONMENT=development \
+ADMIN_DEV_AUTH_ENABLED=true \
+ADMIN_SESSION_COOKIE_SECURE=false \
+PUBLIC_SESSION_COOKIE_SECURE=false \
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
@@ -123,6 +142,60 @@ http://<你的电脑局域网 IP>:5174
 ```
 
 移动端和桌面端共用 `/api/v1/...`，开发服务器会把 `/api` 代理到 `http://127.0.0.1:8000`。
+
+终端 4，启动管理后台：
+
+```bash
+make admin-web
+```
+
+管理后台地址：
+
+```text
+http://127.0.0.1:5175
+```
+
+`admin-web` 已接入 `/api/v1/admin/me`、服务端会话、权限路由、403、会话过期和安全登出，并完成玩家资料的服务端分页、草稿编辑、发布、归档、恢复和冲突处理。它只调用 `/api/v1/admin/*`，不调用旧匿名内容写接口。目前导航中仅开放已经接线的“虚拟玩家”，尚无 Admin API 的规划模块不会显示。
+
+默认本地模式连接真实 Admin API；`make api` 和 `make admin-web` 会启用开发会话，打开 `http://127.0.0.1:5175` 后点击“使用开发身份登录”即可进入真实玩家数据。手动启动时，API 环境需要配置：
+
+```dotenv
+APP_ENVIRONMENT=development
+ADMIN_DEV_AUTH_ENABLED=true
+ADMIN_SESSION_COOKIE_SECURE=false
+ADMIN_DEV_AUTH_EMAIL=admin@example.test
+ADMIN_DEV_AUTH_DISPLAY_NAME=Development Admin
+ADMIN_DEV_AUTH_ROLE=super_admin
+```
+
+并在 `apps/admin-web/.env` 中设置：
+
+```dotenv
+VITE_ADMIN_AUTH_ENABLED=true
+VITE_ADMIN_DEV_LOGIN_ENABLED=true
+VITE_ADMIN_PREVIEW_MODE=false
+```
+
+开发登录不接收浏览器提供的身份或角色，且在 production 环境会被后端拒绝。生产前端只有显式注入 `VITE_ADMIN_AUTH_ENABLED=true` 才进入真实认证边界，否则 fail closed；正式身份源仍需单独接入。
+
+旧 `/api/v1/player-profiles` 内容和全局收藏写入均默认关闭；如旧 Web 仍需短期联调，可仅在非 production 环境分别显式设置：
+
+```dotenv
+LEGACY_PLAYER_PROFILE_CONTENT_WRITES_ENABLED=true
+LEGACY_PLAYER_PROFILE_FAVORITE_WRITES_ENABLED=true
+```
+
+production 会拒绝启用这两个开关。Mobile 已使用 `/api/v1/public/player-profiles*`、独立 Public Session 和
+`/api/v1/public/me/favorite-player-profiles*`，不会回退匿名 PATCH。Guest 收藏按当前浏览器 Cookie 隔离；清除 Cookie 或更换设备后无法找回，跨设备同步需要后续接入正式 C 端身份源。
+
+本地 HTTP 联调还需要：
+
+```dotenv
+PUBLIC_SESSION_COOKIE_SECURE=false
+PUBLIC_CORS_ORIGINS=http://localhost:5174,http://127.0.0.1:5174
+```
+
+Public Catalog 只返回 published、未归档档案的白名单字段和受管同源头像；Guest Session、`/public/me` 与收藏响应均禁止共享缓存。
 
 ## 实时语音
 
@@ -192,6 +265,9 @@ cd apps/web && pnpm build
 pnpm --dir packages/game-client test -- --run
 pnpm --dir apps/mobile-web test -- --run
 pnpm --dir apps/mobile-web build
+pnpm --dir apps/admin-web lint
+pnpm --dir apps/admin-web test -- --run
+pnpm --dir apps/admin-web build
 ```
 
 如需精确筛选 Vitest 文件，可使用 `pnpm --dir apps/mobile-web exec vitest run <files>`；当前 workspace 中 `pnpm test -- --run <files>` 会运行较宽的测试集合。

@@ -2,19 +2,38 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 
 import {
-  listPlayerProfiles,
+  ApiError,
+  getPublicPlayerProfile,
+  listPlayerProfileFavorites,
+  mergePlayerProfileFavorites,
   resolveAvatarImageUrl,
-  type VirtualPlayerProfile,
+  type PublicPlayerProfileWithFavorite,
 } from "@werewolf-arena/game-client";
+import {
+  publicPlayerProfileFavoritesQueryKey,
+  publicPlayerProfileQueryKey,
+} from "../lib/player-profile-query-keys";
 
 export function PlayerDetailPage() {
   const { playerId } = useParams();
   const playerProfilesQuery = useQuery({
-    queryKey: ["player-profiles"],
-    queryFn: listPlayerProfiles,
+    enabled: Boolean(playerId),
+    queryKey: publicPlayerProfileQueryKey(playerId ?? ""),
+    queryFn: () => getPublicPlayerProfile(playerId ?? ""),
   });
-  const profiles = playerProfilesQuery.data?.profiles ?? [];
-  const profile = profiles.find((item) => item.id === playerId);
+  const favoritesQuery = useQuery({
+    queryKey: publicPlayerProfileFavoritesQueryKey,
+    queryFn: listPlayerProfileFavorites,
+  });
+  const profile = playerProfilesQuery.data
+    ? mergePlayerProfileFavorites(
+        [playerProfilesQuery.data],
+        favoritesQuery.data?.profile_ids ?? [],
+      )[0]
+    : undefined;
+  const isNotFound =
+    playerProfilesQuery.error instanceof ApiError &&
+    playerProfilesQuery.error.status === 404;
 
   return (
     <main className="mobile-page mobile-archive-page mobile-player-detail-page">
@@ -28,28 +47,39 @@ export function PlayerDetailPage() {
       </header>
 
       {playerProfilesQuery.isPending ? <p>正在读取玩家档案...</p> : null}
-      {playerProfilesQuery.isError ? (
+      {playerProfilesQuery.isError && !isNotFound ? (
         <p className="mobile-status-banner" role="alert">
           无法读取玩家档案
         </p>
       ) : null}
-      {playerProfilesQuery.isSuccess && !profile ? (
+      {favoritesQuery.isError ? (
+        <p className="mobile-archive-muted" role="status">
+          收藏状态暂不可用，档案内容仍可正常浏览。
+        </p>
+      ) : null}
+      {isNotFound ? (
         <section className="mobile-archive-card">
           <h2>未找到玩家档案</h2>
           <p className="mobile-archive-muted">这个角色可能已被移除或尚未同步。</p>
         </section>
       ) : null}
 
-      {profile ? <PlayerDossier profile={profile} /> : null}
+      {profile ? (
+        <PlayerDossier
+          favoriteStateAvailable={favoritesQuery.isSuccess}
+          profile={profile}
+        />
+      ) : null}
     </main>
   );
 }
 
 type PlayerDossierProps = {
-  profile: VirtualPlayerProfile;
+  favoriteStateAvailable: boolean;
+  profile: PublicPlayerProfileWithFavorite;
 };
 
-function PlayerDossier({ profile }: PlayerDossierProps) {
+function PlayerDossier({ favoriteStateAvailable, profile }: PlayerDossierProps) {
   const avatarImageUrl = resolveAvatarImageUrl(profile);
 
   return (
@@ -67,7 +97,15 @@ function PlayerDossier({ profile }: PlayerDossierProps) {
           </span>
         )}
         <div className="mobile-player-detail-copy">
-          <span>{profile.favorite ? "收藏档案" : "普通档案"}</span>
+          <span>
+            {favoriteStateAvailable
+              ? profile.is_favorite
+                ? "收藏档案"
+                : "普通档案"
+              : profile.featured
+                ? "精选档案"
+                : "玩家档案"}
+          </span>
           <h2>{profile.display_name}</h2>
           <p>{profile.short_description || "暂无简介"}</p>
           <strong>{profile.model}</strong>

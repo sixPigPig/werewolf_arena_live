@@ -17,15 +17,17 @@ import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { routes } from "../routes/definitions";
 import type {
   GameRun,
+  PublicPlayerProfile,
   RuleSetSummary,
-  VirtualPlayerProfile,
 } from "@werewolf-arena/game-client";
 
 const gameClientMocks = vi.hoisted(() => ({
   createGameRun: vi.fn(),
-  listPlayerProfiles: vi.fn(),
+  favoritePlayerProfile: vi.fn(),
+  listPlayerProfileFavorites: vi.fn(),
+  listPublicPlayerProfiles: vi.fn(),
   listRuleSets: vi.fn(),
-  updatePlayerProfile: vi.fn(),
+  unfavoritePlayerProfile: vi.fn(),
 }));
 
 vi.mock("@werewolf-arena/game-client", async () => {
@@ -36,9 +38,11 @@ vi.mock("@werewolf-arena/game-client", async () => {
   return {
     ...actual,
     createGameRun: gameClientMocks.createGameRun,
-    listPlayerProfiles: gameClientMocks.listPlayerProfiles,
+    favoritePlayerProfile: gameClientMocks.favoritePlayerProfile,
+    listPlayerProfileFavorites: gameClientMocks.listPlayerProfileFavorites,
+    listPublicPlayerProfiles: gameClientMocks.listPublicPlayerProfiles,
     listRuleSets: gameClientMocks.listRuleSets,
-    updatePlayerProfile: gameClientMocks.updatePlayerProfile,
+    unfavoritePlayerProfile: gameClientMocks.unfavoritePlayerProfile,
   };
 });
 
@@ -76,13 +80,12 @@ const classic12RuleSet: RuleSetSummary = {
 };
 
 function buildProfile(
-  overrides: Pick<VirtualPlayerProfile, "display_name" | "id"> &
-    Partial<VirtualPlayerProfile>,
-): VirtualPlayerProfile {
+  overrides: Pick<PublicPlayerProfile, "display_name" | "id"> &
+    Partial<PublicPlayerProfile>,
+): PublicPlayerProfile {
   const { display_name, id, ...profileOverrides } = overrides;
 
   return {
-    owner_user_id: null,
     model: overrides.model ?? "test-model",
     personality_id: overrides.personality_id ?? "balanced",
     personality_text: "",
@@ -98,15 +101,10 @@ function buildProfile(
     talkativeness: 3,
     example_messages: [],
     display_order: overrides.display_order ?? 1,
-    favorite: overrides.favorite ?? false,
+    featured: overrides.featured ?? false,
     appearance_id: overrides.appearance_id ?? "default",
-    avatar_prompt: "",
-    avatar_asset_id: profileOverrides.avatar_asset_id ?? null,
     avatar_image_url: "",
-    avatar_image_mime: "",
     tags: [],
-    created_at: "2026-06-19T00:00:00.000Z",
-    updated_at: "2026-06-19T00:00:00.000Z",
     ...profileOverrides,
     id,
     display_name,
@@ -565,35 +563,31 @@ describe("GamesPage", () => {
     gameClientMocks.listRuleSets.mockResolvedValue({
       rule_sets: [classicRuleSet],
     });
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [
-        buildProfile({
-          id: "profile-1",
-          display_name: "阿青",
-          favorite: true,
-          short_description: "雾夜里的分析者",
-          strategy_profile: "analysis",
-          tags: ["分析"],
-        }),
-        buildProfile({
-          id: "profile-2",
-          display_name: "白石",
-          short_description: "稳健守序的观察者",
-          strategy_profile: "balanced",
-          tags: ["均衡"],
-        }),
-      ],
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({
+        id: "profile-1",
+        display_name: "阿青",
+        short_description: "雾夜里的分析者",
+        strategy_profile: "analysis",
+        tags: ["分析"],
+      }),
+      buildProfile({
+        id: "profile-2",
+        display_name: "白石",
+        short_description: "稳健守序的观察者",
+        strategy_profile: "balanced",
+        tags: ["均衡"],
+      }),
+    ]);
+    gameClientMocks.listPlayerProfileFavorites.mockResolvedValue({
+      profile_ids: ["profile-1"],
     });
     gameClientMocks.createGameRun.mockResolvedValue(buildRun());
-    gameClientMocks.updatePlayerProfile.mockImplementation(
-      (profileId: string, request: Partial<VirtualPlayerProfile>) =>
-        Promise.resolve(
-          buildProfile({
-            id: profileId,
-            display_name: profileId,
-            ...request,
-          }),
-        ),
+    gameClientMocks.favoritePlayerProfile.mockImplementation((profileId: string) =>
+      Promise.resolve({ profile_id: profileId, is_favorite: true }),
+    );
+    gameClientMocks.unfavoritePlayerProfile.mockImplementation((profileId: string) =>
+      Promise.resolve({ profile_id: profileId, is_favorite: false }),
     );
   });
 
@@ -1106,9 +1100,9 @@ describe("GamesPage", () => {
   });
 
   it("blocks creation when the player library cannot fill the selected rule set", async () => {
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [buildProfile({ id: "profile-1", display_name: "阿青" })],
-    });
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({ id: "profile-1", display_name: "阿青" }),
+    ]);
     renderGamesPage();
 
     expect(
@@ -1145,9 +1139,9 @@ describe("GamesPage", () => {
   });
 
   it("blocks launch before submit when the player library cannot fill the lineup", async () => {
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [buildProfile({ id: "profile-1", display_name: "阿青" })],
-    });
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({ id: "profile-1", display_name: "阿青" }),
+    ]);
     renderGamesPage();
 
     expect(await screen.findByText("已选 0/2 · 还差 1 名玩家")).toBeVisible();
@@ -1216,52 +1210,14 @@ describe("GamesPage", () => {
 
   it("toggles a player favorite from a compact card-corner button without selecting the card", async () => {
     const user = userEvent.setup();
-    let isWhiteStoneFavorite = false;
-    let listPlayerProfilesCallCount = 0;
-    gameClientMocks.listPlayerProfiles.mockImplementation(() =>
-      {
-        listPlayerProfilesCallCount += 1;
-        const profiles = [
-          buildProfile({
-            id: "profile-1",
-            display_name: "阿青",
-            favorite: true,
-            short_description: "雾夜里的分析者",
-            strategy_profile: "analysis",
-            tags: ["分析"],
-          }),
-          buildProfile({
-            id: "profile-2",
-            display_name: "白石",
-            favorite: isWhiteStoneFavorite,
-            short_description: "稳健守序的观察者",
-            strategy_profile: "balanced",
-            tags: ["均衡"],
-          }),
-        ];
-
-        return Promise.resolve({
-          profiles:
-            listPlayerProfilesCallCount === 1 ? profiles : [...profiles].reverse(),
-        });
-      },
+    let favoriteIds = ["profile-1"];
+    gameClientMocks.listPlayerProfileFavorites.mockImplementation(() =>
+      Promise.resolve({ profile_ids: [...favoriteIds] }),
     );
-    gameClientMocks.updatePlayerProfile.mockImplementation(
-      (profileId: string, request: { favorite?: boolean }) => {
-        isWhiteStoneFavorite = Boolean(request.favorite);
-
-        return Promise.resolve(
-          buildProfile({
-            id: profileId,
-            display_name: "白石",
-            favorite: isWhiteStoneFavorite,
-            short_description: "稳健守序的观察者",
-            strategy_profile: "balanced",
-            tags: ["均衡"],
-          }),
-        );
-      },
-    );
+    gameClientMocks.favoritePlayerProfile.mockImplementation((profileId: string) => {
+      favoriteIds = [...favoriteIds, profileId];
+      return Promise.resolve({ profile_id: profileId, is_favorite: true });
+    });
     renderGamesPage();
 
     await user.click(
@@ -1313,10 +1269,7 @@ describe("GamesPage", () => {
     await user.click(favoriteButton);
 
     await waitFor(() => {
-      expect(gameClientMocks.updatePlayerProfile).toHaveBeenCalledWith(
-        "profile-2",
-        { favorite: true },
-      );
+      expect(gameClientMocks.favoritePlayerProfile).toHaveBeenCalledWith("profile-2");
     });
     expect(screen.getByText("请选择玩家")).toBeVisible();
     expect(
@@ -1346,12 +1299,15 @@ describe("GamesPage", () => {
         )
         .map((button) => button.getAttribute("aria-label")),
     ).toEqual(["为 1 号座位候选 阿青", "为 1 号座位候选 白石"]);
-    expect(listPlayerProfilesCallCount).toBe(1);
+    await waitFor(() => {
+      expect(gameClientMocks.listPlayerProfileFavorites).toHaveBeenCalledTimes(2);
+    });
+    expect(gameClientMocks.listPublicPlayerProfiles).toHaveBeenCalledTimes(1);
   });
 
   it("keeps unrelated favorite buttons enabled while one favorite update is pending", async () => {
     const user = userEvent.setup();
-    gameClientMocks.updatePlayerProfile.mockImplementation(
+    gameClientMocks.favoritePlayerProfile.mockImplementation(
       () => new Promise(() => undefined),
     );
     renderGamesPage();
@@ -1365,39 +1321,17 @@ describe("GamesPage", () => {
     await user.click(screen.getByRole("button", { name: "收藏 白石" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "收藏 白石" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "取消收藏 白石" })).toBeDisabled();
     });
     expect(
       screen.getByRole("button", { name: "取消收藏 阿青" }),
     ).not.toBeDisabled();
   });
 
-  it("keeps favorite reordering deferred until the next player drawer open", async () => {
+  it("keeps the catalog usable but makes favorite controls read-only when favorites fail", async () => {
     const user = userEvent.setup();
-    const alpha = buildProfile({
-      id: "profile-1",
-      display_name: "阿青",
-      favorite: false,
-    });
-    const whiteStone = buildProfile({
-      id: "profile-2",
-      display_name: "白石",
-      favorite: false,
-    });
-    let serverProfiles = [alpha, whiteStone];
-    gameClientMocks.listPlayerProfiles.mockImplementation(() =>
-      Promise.resolve({ profiles: serverProfiles }),
-    );
-    gameClientMocks.updatePlayerProfile.mockImplementation(
-      (_profileId: string, request: { favorite?: boolean }) => {
-        const updatedWhiteStone = {
-          ...whiteStone,
-          favorite: Boolean(request.favorite),
-        };
-        serverProfiles = [updatedWhiteStone, alpha];
-
-        return Promise.resolve(updatedWhiteStone);
-      },
+    gameClientMocks.listPlayerProfileFavorites.mockRejectedValue(
+      new Error("guest session unavailable"),
     );
     renderGamesPage();
 
@@ -1406,50 +1340,60 @@ describe("GamesPage", () => {
         name: "选择 1 号座位，当前为 请选择",
       }),
     );
-    expect(
-      within(screen.getByRole("dialog", { name: "玩家卡牌库" }))
-        .getAllByRole("button")
-        .filter((button) =>
-          button.getAttribute("aria-label")?.startsWith("为 1 号座位候选"),
-        )
-        .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["为 1 号座位候选 阿青", "为 1 号座位候选 白石"]);
 
-    await user.click(screen.getByRole("button", { name: "收藏 白石" }));
-    const activeFavoriteButton = await screen.findByRole("button", {
-      name: "取消收藏 白石",
-    });
     expect(
-      activeFavoriteButton.querySelector(".mobile-profile-card-favorite-icon"),
-    ).toHaveClass("lucide-star-check");
-    expect(gameClientMocks.listPlayerProfiles).toHaveBeenCalledTimes(1);
+      screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
+    ).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("收藏状态暂不可用");
+    expect(screen.getByRole("button", { name: "收藏 阿青" })).toBeDisabled();
     expect(
-      within(screen.getByRole("dialog", { name: "玩家卡牌库" }))
-        .getAllByRole("button")
-        .filter((button) =>
-          button.getAttribute("aria-label")?.startsWith("为 1 号座位候选"),
-        )
-        .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["为 1 号座位候选 阿青", "为 1 号座位候选 白石"]);
+      screen.getByRole("button", { name: "收藏筛选，当前 全部玩家" }),
+    ).toBeDisabled();
+    expect(gameClientMocks.listPublicPlayerProfiles).toHaveBeenCalledTimes(1);
+  });
 
-    await user.click(screen.getByRole("button", { name: "关闭玩家卡牌库" }));
+  it("rolls back an optimistic favorite and shows a light error", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.favoritePlayerProfile.mockRejectedValue(new Error("write failed"));
+    renderGamesPage();
+
     await user.click(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: "选择 1 号座位，当前为 请选择",
       }),
     );
+    await user.click(screen.getByRole("button", { name: "收藏 白石" }));
 
     await waitFor(() => {
-      expect(gameClientMocks.listPlayerProfiles).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("alert")).toHaveTextContent("收藏更新失败");
     });
-    expect(
-      within(screen.getByRole("dialog", { name: "玩家卡牌库" }))
-        .getAllByRole("button")
-        .filter((button) =>
-          button.getAttribute("aria-label")?.startsWith("为 1 号座位候选"),
-        )
-        .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["为 1 号座位候选 白石", "为 1 号座位候选 阿青"]);
+    expect(screen.getByRole("button", { name: "收藏 白石" })).toBeEnabled();
+  });
+
+  it("replaces stale favorite ids with the authoritative list after session recovery", async () => {
+    const user = userEvent.setup();
+    let favoriteReadCount = 0;
+    gameClientMocks.listPlayerProfileFavorites.mockImplementation(() => {
+      favoriteReadCount += 1;
+      return Promise.resolve({
+        profile_ids: favoriteReadCount === 1 ? ["profile-1"] : ["profile-2"],
+      });
+    });
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 1 号座位，当前为 请选择",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "收藏 白石" }));
+
+    await waitFor(() => {
+      expect(gameClientMocks.listPlayerProfileFavorites).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByRole("button", { name: "收藏 阿青" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "取消收藏 白石" })).toBeEnabled();
+    expect(gameClientMocks.listPublicPlayerProfiles).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes the player drawer order with a pull-down gesture", async () => {
@@ -1457,16 +1401,18 @@ describe("GamesPage", () => {
     const alpha = buildProfile({
       id: "profile-1",
       display_name: "阿青",
-      favorite: false,
     });
     const whiteStone = buildProfile({
       id: "profile-2",
       display_name: "白石",
-      favorite: true,
     });
     let serverProfiles = [alpha, whiteStone];
-    gameClientMocks.listPlayerProfiles.mockImplementation(() =>
-      Promise.resolve({ profiles: serverProfiles }),
+    let serverFavoriteIds = ["profile-1"];
+    gameClientMocks.listPublicPlayerProfiles.mockImplementation(() =>
+      Promise.resolve(serverProfiles),
+    );
+    gameClientMocks.listPlayerProfileFavorites.mockImplementation(() =>
+      Promise.resolve({ profile_ids: serverFavoriteIds }),
     );
     renderGamesPage();
 
@@ -1486,6 +1432,7 @@ describe("GamesPage", () => {
     ).toEqual(["为 1 号座位候选 阿青", "为 1 号座位候选 白石"]);
 
     serverProfiles = [whiteStone, alpha];
+    serverFavoriteIds = ["profile-2"];
     const scrollRegion = drawer.querySelector(".mobile-profile-card-scroll");
     const refreshIndicator = drawer.querySelector(
       ".mobile-profile-refresh-indicator",
@@ -1531,7 +1478,8 @@ describe("GamesPage", () => {
     fireEvent.touchEnd(scrollRegion as HTMLElement);
 
     await waitFor(() => {
-      expect(gameClientMocks.listPlayerProfiles).toHaveBeenCalledTimes(2);
+      expect(gameClientMocks.listPublicPlayerProfiles).toHaveBeenCalledTimes(2);
+      expect(gameClientMocks.listPlayerProfileFavorites).toHaveBeenCalledTimes(2);
     });
     expect(
       within(drawer)
@@ -1541,19 +1489,19 @@ describe("GamesPage", () => {
         )
         .map((button) => button.getAttribute("aria-label")),
     ).toEqual(["为 1 号座位候选 白石", "为 1 号座位候选 阿青"]);
+    expect(screen.getByRole("button", { name: "取消收藏 白石" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "收藏 阿青" })).toBeEnabled();
   });
 
   it("splits long player card descriptions into a shorter top line and longer bottom line", async () => {
     const user = userEvent.setup();
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [
-        buildProfile({
-          id: "profile-long-description",
-          display_name: "长描述玩家",
-          short_description: "沉稳控场，喜欢先盘逻辑再给站边。",
-        }),
-      ],
-    });
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({
+        id: "profile-long-description",
+        display_name: "长描述玩家",
+        short_description: "沉稳控场，喜欢先盘逻辑再给站边。",
+      }),
+    ]);
     renderGamesPage();
 
     await user.click(
@@ -1582,21 +1530,18 @@ describe("GamesPage", () => {
 
   it("renders player card drawer avatars through API asset URLs", async () => {
     const user = userEvent.setup();
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [
-        buildProfile({
-          id: "profile-1",
-          display_name: "阿青",
-          avatar_asset_id: "system-gothic-male-1",
-          avatar_image_url: "/player-avatars/gothic-male-1.png",
-          avatar_image_mime: "image/png",
-        }),
-        buildProfile({
-          id: "profile-2",
-          display_name: "白石",
-        }),
-      ],
-    });
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({
+        id: "profile-1",
+        display_name: "阿青",
+        avatar_image_url:
+          "/api/v1/player-profiles/avatar-assets/system-gothic-male-1",
+      }),
+      buildProfile({
+        id: "profile-2",
+        display_name: "白石",
+      }),
+    ]);
     renderGamesPage();
 
     await user.click(
@@ -1931,16 +1876,14 @@ describe("GamesPage", () => {
 
   it("searches profiles when a profile has no tags", async () => {
     const user = userEvent.setup();
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [
-        buildProfile({
-          id: "profile-1",
-          display_name: "无标签玩家",
-          model: "tagless-model",
-          tags: undefined as unknown as string[],
-        }),
-      ],
-    });
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({
+        id: "profile-1",
+        display_name: "无标签玩家",
+        model: "tagless-model",
+        tags: undefined as unknown as string[],
+      }),
+    ]);
     renderGamesPage();
 
     await user.click(
@@ -2795,19 +2738,19 @@ describe("GamesPage", () => {
       ),
     ).toBeEnabled();
 
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [
-        buildProfile({
-          id: "profile-2",
-          display_name: "白石",
-          short_description: "稳健守序的观察者",
-          strategy_profile: "balanced",
-          tags: ["均衡"],
-        }),
-      ],
-    });
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({
+        id: "profile-2",
+        display_name: "白石",
+        short_description: "稳健守序的观察者",
+        strategy_profile: "balanced",
+        tags: ["均衡"],
+      }),
+    ]);
     await act(async () => {
-      await queryClient.invalidateQueries({ queryKey: ["player-profiles"] });
+      await queryClient.invalidateQueries({
+        queryKey: ["public-player-profiles"],
+      });
     });
 
     const drawer = screen.getByRole("dialog", { name: "玩家卡牌库" });

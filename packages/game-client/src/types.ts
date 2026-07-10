@@ -386,6 +386,65 @@ export type PlayerProfilesResponse = {
   profiles: VirtualPlayerProfile[];
 };
 
+export type PublicPlayerProfile = {
+  id: string;
+  display_name: string;
+  model: string;
+  personality_id: string;
+  personality_text: string;
+  appearance_id: string;
+  avatar_image_url: string;
+  short_description: string;
+  background_story: string;
+  speaking_style: string;
+  catchphrases: string[];
+  strategy_profile: string;
+  risk_tolerance: number;
+  bluffing_tendency: number;
+  trust_tendency: number;
+  leadership_tendency: number;
+  talkativeness: number;
+  example_messages: string[];
+  display_order: number;
+  featured: boolean;
+  tags: string[];
+};
+
+export type PaginationResponse = {
+  page: number;
+  page_size: number;
+  total: number;
+  pages: number;
+};
+
+export type PublicPlayerProfileListResponse = {
+  items: PublicPlayerProfile[];
+  pagination: PaginationResponse;
+};
+
+export type PublicPlayerProfileWithFavorite = PublicPlayerProfile & {
+  is_favorite: boolean;
+};
+
+export type PublicViewer = {
+  kind: "guest";
+};
+
+export type PublicSessionResponse = {
+  viewer: PublicViewer;
+  csrf_token: string;
+  session_expires_at: string;
+};
+
+export type PlayerProfileFavoritesResponse = {
+  profile_ids: string[];
+};
+
+export type PlayerProfileFavoriteMutationResponse = {
+  profile_id: string;
+  is_favorite: boolean;
+};
+
 export type PlayerAvatarUploadResponse = {
   avatar_asset_id: string;
   avatar_image_url: string;

@@ -6,10 +6,11 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlayersPage } from "./PlayersPage";
-import type { VirtualPlayerProfile } from "@werewolf-arena/game-client";
+import type { PublicPlayerProfile } from "@werewolf-arena/game-client";
 
 const gameClientMocks = vi.hoisted(() => ({
-  listPlayerProfiles: vi.fn(),
+  listPlayerProfileFavorites: vi.fn(),
+  listPublicPlayerProfiles: vi.fn(),
 }));
 
 vi.mock("@werewolf-arena/game-client", async () => {
@@ -19,18 +20,18 @@ vi.mock("@werewolf-arena/game-client", async () => {
 
   return {
     ...actual,
-    listPlayerProfiles: gameClientMocks.listPlayerProfiles,
+    listPlayerProfileFavorites: gameClientMocks.listPlayerProfileFavorites,
+    listPublicPlayerProfiles: gameClientMocks.listPublicPlayerProfiles,
   };
 });
 
 function buildProfile(
-  overrides: Pick<VirtualPlayerProfile, "display_name" | "id"> &
-    Partial<VirtualPlayerProfile>,
-): VirtualPlayerProfile {
+  overrides: Pick<PublicPlayerProfile, "display_name" | "id"> &
+    Partial<PublicPlayerProfile>,
+): PublicPlayerProfile {
   const { display_name, id, ...profileOverrides } = overrides;
 
   return {
-    owner_user_id: null,
     model: overrides.model ?? "test-model",
     personality_id: overrides.personality_id ?? "balanced",
     personality_text: "",
@@ -46,15 +47,10 @@ function buildProfile(
     talkativeness: 3,
     example_messages: [],
     display_order: overrides.display_order ?? 1,
-    favorite: overrides.favorite ?? false,
+    featured: overrides.featured ?? false,
     appearance_id: overrides.appearance_id ?? "default",
-    avatar_prompt: "",
-    avatar_asset_id: profileOverrides.avatar_asset_id ?? null,
     avatar_image_url: "",
-    avatar_image_mime: "",
     tags: [],
-    created_at: "2026-06-19T00:00:00.000Z",
-    updated_at: "2026-06-19T00:00:00.000Z",
     ...profileOverrides,
     id,
     display_name,
@@ -78,18 +74,18 @@ function renderWithQueryClient(ui: ReactNode) {
 
 describe("PlayersPage", () => {
   beforeEach(() => {
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [
-        buildProfile({
-          id: "moon-hunter",
-          display_name: "月下猎人",
-          model: "deepseek-v4-flash",
-          short_description: "冷静复盘型玩家",
-          speaking_style: "短句推进",
-          favorite: true,
-          tags: ["控场"],
-        }),
-      ],
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({
+        id: "moon-hunter",
+        display_name: "月下猎人",
+        model: "deepseek-v4-flash",
+        short_description: "冷静复盘型玩家",
+        speaking_style: "短句推进",
+        tags: ["控场"],
+      }),
+    ]);
+    gameClientMocks.listPlayerProfileFavorites.mockResolvedValue({
+      profile_ids: ["moon-hunter"],
     });
   });
 
@@ -113,17 +109,14 @@ describe("PlayersPage", () => {
   });
 
   it("renders player avatars through API asset URLs", async () => {
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({
-      profiles: [
-        buildProfile({
-          id: "moon-hunter",
-          display_name: "月下猎人",
-          avatar_asset_id: "system-gothic-female-1",
-          avatar_image_url: "/player-avatars/gothic-female-1.png",
-          avatar_image_mime: "image/png",
-        }),
-      ],
-    });
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({
+        id: "moon-hunter",
+        display_name: "月下猎人",
+        avatar_image_url:
+          "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",
+      }),
+    ]);
 
     renderWithQueryClient(<PlayersPage />);
 
@@ -135,7 +128,9 @@ describe("PlayersPage", () => {
   });
 
   it("shows loading copy while reading player profiles", () => {
-    gameClientMocks.listPlayerProfiles.mockReturnValue(new Promise(() => undefined));
+    gameClientMocks.listPublicPlayerProfiles.mockReturnValue(
+      new Promise(() => undefined),
+    );
 
     renderWithQueryClient(<PlayersPage />);
 
@@ -144,7 +139,9 @@ describe("PlayersPage", () => {
   });
 
   it("shows an alert when player profiles cannot be read", async () => {
-    gameClientMocks.listPlayerProfiles.mockRejectedValue(new Error("network down"));
+    gameClientMocks.listPublicPlayerProfiles.mockRejectedValue(
+      new Error("network down"),
+    );
 
     renderWithQueryClient(<PlayersPage />);
 
@@ -153,7 +150,7 @@ describe("PlayersPage", () => {
   });
 
   it("shows empty copy when the player library has no profiles", async () => {
-    gameClientMocks.listPlayerProfiles.mockResolvedValue({ profiles: [] });
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([]);
 
     renderWithQueryClient(<PlayersPage />);
 
@@ -174,9 +171,23 @@ describe("PlayersPage", () => {
 
     expect(source).not.toContain("QueryClientContext");
     expect(source).not.toContain("../lib/query-client");
-    expect(source).toContain(
+    expect(source).not.toContain(
       'useQuery({\n    queryKey: ["player-profiles"],\n    queryFn: listPlayerProfiles,\n  })',
     );
+    expect(source).toContain("queryKey: publicPlayerProfilesQueryKey");
+    expect(source).toContain("queryFn: listPublicPlayerProfiles");
+  });
+
+  it("keeps the public catalog readable when favorites are unavailable", async () => {
+    gameClientMocks.listPlayerProfileFavorites.mockRejectedValue(
+      new Error("session unavailable"),
+    );
+
+    renderWithQueryClient(<PlayersPage />);
+
+    expect(await screen.findByText("月下猎人")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("收藏状态暂不可用");
+    expect(screen.queryByText("收藏")).not.toBeInTheDocument();
   });
 
   it("uses the gothic player atlas card system", async () => {

@@ -14,6 +14,7 @@ export type MobileBottomSelectOption<TValue extends string = string> = {
 
 type MobileBottomSelectProps<TValue extends string = string> = {
   className?: string;
+  disabled?: boolean;
   label: string;
   onChange: (value: TValue) => void;
   options: MobileBottomSelectOption<TValue>[];
@@ -22,6 +23,7 @@ type MobileBottomSelectProps<TValue extends string = string> = {
 
 export function MobileBottomSelect<TValue extends string = string>({
   className,
+  disabled = false,
   label,
   onChange,
   options,
@@ -38,6 +40,8 @@ export function MobileBottomSelect<TValue extends string = string>({
   const pickerTitle = `选择${label}筛选`;
 
   const openPicker = () => {
+    if (disabled) return;
+
     draftValueRef.current = value;
     setDraftValue(value);
     setIsOpen(true);
@@ -100,7 +104,7 @@ export function MobileBottomSelect<TValue extends string = string>({
       popupClassName="mobile-bottom-select-picker-popup"
       title={pickerTitle}
       value={[isOpen ? draftValue : value]}
-      visible={isOpen}
+      visible={isOpen && !disabled}
     >
       {() => (
         <div className={["mobile-profile-select", className].filter(Boolean).join(" ")}>
@@ -110,6 +114,7 @@ export function MobileBottomSelect<TValue extends string = string>({
             aria-haspopup="dialog"
             aria-label={`${label}筛选，当前 ${selectedLabel}`}
             className="mobile-profile-select-trigger"
+            disabled={disabled}
             onClick={openPicker}
             type="button"
           >
