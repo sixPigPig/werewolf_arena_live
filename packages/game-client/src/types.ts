@@ -533,6 +533,12 @@ export type PlaybackVoiceChunk = {
   data: string;
 };
 
+export type PlaybackVoiceSubtitleCue = {
+  end_ms: number;
+  start_ms: number;
+  text: string;
+};
+
 export type PlaybackVoiceUtterance = {
   utterance_id: string;
   source_event_id: number;
@@ -543,6 +549,7 @@ export type PlaybackVoiceUtterance = {
   audio_format: string;
   sample_rate: number;
   duration_ms: number | null;
+  subtitle_timings: PlaybackVoiceSubtitleCue[];
   chunks: PlaybackVoiceChunk[];
 };
 

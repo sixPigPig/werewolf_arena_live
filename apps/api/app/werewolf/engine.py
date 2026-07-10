@@ -123,6 +123,8 @@ class PlayerActionRequest:
     player: Player
     action: str
     options: list[str]
+    public_options: list[str]
+    public_choice_to_internal: dict[str, str]
     result_key: str
     round_state: RoundState
     phase: str
@@ -1667,23 +1669,16 @@ class GameEngine:
             payload={"active_players": active_players.copy()},
         )
         players_by_name = self.state.player_by_name()
-        summary_requests = [
-            self._build_player_action_request(
-                player=players_by_name[name],
+        for name in active_players:
+            player = players_by_name[name]
+            summary, action_log = self._player_action(
+                player=player,
                 action="summarize",
                 options=[],
                 result_key="summary",
                 round_state=round_state,
                 phase="summary",
             )
-            for name in active_players
-        ]
-        for name, (summary, action_log) in zip(
-            active_players,
-            self._player_actions_batch(summary_requests),
-            strict=True,
-        ):
-            player = players_by_name[name]
             if isinstance(summary, str) and summary:
                 round_state.private_summaries[name] = summary
                 player.add_observation(f"第{round_state.number}轮总结：{summary}")
@@ -1752,15 +1747,20 @@ class GameEngine:
         extra_world_state: dict[str, object] | None = None,
     ) -> PlayerActionRequest:
         options_snapshot = options.copy()
+        public_options = [self._public_player_reference(option) for option in options_snapshot]
+        public_choice_to_internal = dict(zip(public_options, options_snapshot, strict=True))
         world_state = self._world_state(player, options_snapshot, round_state)
         if extra_world_state:
             world_state.update(extra_world_state)
-        world_state = copy.deepcopy(world_state)
+        world_state = self._public_model_world_state(copy.deepcopy(world_state))
+        world_state["options"] = "、".join(public_options)
         is_secret_wolf_action = self._is_secret_werewolf_action(phase, action)
         return PlayerActionRequest(
             player=player,
             action=action,
             options=options_snapshot,
+            public_options=public_options,
+            public_choice_to_internal=public_choice_to_internal,
             result_key=result_key,
             round_state=round_state,
             phase=phase,
@@ -1780,7 +1780,7 @@ class GameEngine:
                 action=request.action,
                 world_state=request.world_state,
                 model=request.player.model,
-                allowed_values=request.options if request.options else None,
+                allowed_values=request.public_options if request.public_options else None,
                 result_key=request.result_key,
                 event_sink=NullEventSink() if request.is_secret_wolf_action else self.event_sink,
                 event_context={
@@ -1795,6 +1795,8 @@ class GameEngine:
             if callable(release_turn):
                 release_turn()
             raise
+        if isinstance(value, str) and request.public_choice_to_internal:
+            value = request.public_choice_to_internal.get(value, value)
         return PlayerActionResult(request=request, value=value, lm_log=lm_log)
 
     def _finalize_player_action_result(
@@ -1849,16 +1851,18 @@ class GameEngine:
             )
             visible_result = _visible_action_result(request.action, lm_log.result)
             parsed_payload = {
-                "choice": action_log.choice,
+                "choice": self._public_action_value(action_log.choice),
                 "result": visible_result,
                 "visible_result": visible_result,
-                "options": request.options.copy(),
+                "options": request.public_options.copy(),
             }
             if action_log.fallback_choice is not None:
                 parsed_payload.update(
                     {
                         "invalid_value": action_log.invalid_value,
-                        "fallback_choice": action_log.fallback_choice,
+                        "fallback_choice": self._public_action_value(
+                            action_log.fallback_choice,
+                        ),
                         "fallback_reason": action_log.fallback_reason,
                         "attempt_count": action_log.attempt_count,
                     }
@@ -1974,7 +1978,7 @@ class GameEngine:
             phase=request.phase,
             actor=request.player.name,
             action=request.action,
-            payload={"options": request.options.copy(), "result_key": request.result_key},
+            payload={"options": request.public_options.copy(), "result_key": request.result_key},
         )
 
     def _checkpoint_player_action_failure(
@@ -2027,8 +2031,8 @@ class GameEngine:
             payload={
                 "warnings": ["off_option_fallback"],
                 "invalid_value": invalid_value,
-                "fallback_choice": fallback_choice,
-                "allowed_values": request.options.copy(),
+                "fallback_choice": self._public_action_value(fallback_choice),
+                "allowed_values": request.public_options.copy(),
             },
         )
 
@@ -2192,6 +2196,54 @@ class GameEngine:
             "sheriff_pre_election_bomb_count": self.state.sheriff_pre_election_bomb_count,
             "debate_turns_left": max(0, self.debate_turns - len(round_state.debate)),
             "options": "、".join(options),
+        }
+
+    def _public_model_world_state(self, world_state: dict[str, object]) -> dict[str, object]:
+        public_state = self._public_model_value(world_state)
+        if not isinstance(public_state, dict):
+            raise TypeError("world state must remain a dictionary")
+        return public_state
+
+    def _public_model_value(self, value: object) -> object:
+        if isinstance(value, str):
+            return self._public_text(value)
+        if isinstance(value, list):
+            return [self._public_model_value(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(self._public_model_value(item) for item in value)
+        if isinstance(value, dict):
+            return {
+                self._public_text(str(key)): self._public_model_value(item)
+                for key, item in value.items()
+            }
+        return value
+
+    def _public_action_value(self, value: object | None) -> object | None:
+        if isinstance(value, str):
+            return self._public_player_reference(value)
+        return value
+
+    def _public_player_reference(self, name: str | None) -> str:
+        if not name:
+            return ""
+        labels = self._player_public_labels()
+        return labels.get(name, name)
+
+    def _public_text(self, text: str) -> str:
+        normalized_text = text
+        for name, label in sorted(
+            self._player_public_labels().items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            if name and name != label:
+                normalized_text = normalized_text.replace(name, label)
+        return normalized_text
+
+    def _player_public_labels(self) -> dict[str, str]:
+        return {
+            player.name: f"{index}号玩家"
+            for index, player in enumerate(self.state.players, start=1)
         }
 
     def _debate_guidance(

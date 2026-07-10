@@ -363,6 +363,61 @@ describe("toDirectorCue", () => {
     });
   });
 
+  it("treats streamed summary text as speech and suppresses parsed duplicates", () => {
+    const cues = buildDirectorCues([
+      event({
+        id: 2,
+        type: "model_request_started",
+        round: 1,
+        phase: "summary",
+        actor: "张三",
+        action: "summarize",
+        payload: { request_id: "req_summary", model: "deepseek-chat" },
+      }),
+      event({
+        id: 3,
+        type: "model_response_delta",
+        round: 1,
+        phase: "summary",
+        actor: "张三",
+        action: "summarize",
+        payload: {
+          request_id: "req_summary",
+          visible_text: "我会复盘票型。",
+          is_public: true,
+        },
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "summary",
+        actor: "张三",
+        action: "summarize",
+        payload: {
+          request_id: "req_summary",
+          choice: "我会复盘票型。",
+          visible_result: { summary: "我会复盘票型。" },
+        },
+      }),
+    ]);
+
+    expect(cues[0]).toMatchObject({
+      eventId: 3,
+      title: "张三 正在发言",
+      body: "张三：我会复盘票型。",
+      importance: "key",
+      compressible: false,
+    });
+    expect(cues[1]).toMatchObject({
+      eventId: 4,
+      suppressSpeechSubtitle: true,
+      body: "公开发言已记录，继续等待下一步。",
+      importance: "action",
+      compressible: true,
+    });
+  });
+
   it("caps very long visible text duration", () => {
     const message = "重要发言".repeat(80);
     const cues = buildDirectorCues([

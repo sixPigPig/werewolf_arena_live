@@ -44,6 +44,33 @@ def test_public_speech_event_matches_supported_actions() -> None:
     assert is_public_speech_event(event) is True
 
 
+def test_public_summary_delta_is_voice_speech_event() -> None:
+    event = live_event(
+        14,
+        "model_response_delta",
+        actor="阿青",
+        action="summarize",
+        payload={
+            "request_id": "req-summary",
+            "visible_text": "这一轮重点复盘票型。",
+            "is_public": True,
+        },
+        phase="summary",
+    )
+
+    utterance = event_to_voice_utterance(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+        player_seats={"阿青": 1},
+    )
+
+    assert is_public_speech_event(event) is True
+    assert utterance is not None
+    assert utterance.speaker_kind == "player"
+    assert utterance.speaker_name == "1号玩家"
+    assert utterance.text == "这一轮重点复盘票型。"
+
+
 def test_private_or_non_speech_event_is_not_public_speech() -> None:
     night_event = live_event(
         5,
@@ -132,7 +159,7 @@ def test_event_to_player_voice_utterance_uses_seat_label_when_available() -> Non
     assert utterance.text == "我先发言。"
 
 
-def test_event_to_player_voice_utterance_replaces_player_names_in_speech() -> None:
+def test_event_to_player_voice_utterance_preserves_model_visible_text() -> None:
     config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
     event = live_event(
         8,
@@ -154,7 +181,7 @@ def test_event_to_player_voice_utterance_replaces_player_names_in_speech() -> No
 
     assert utterance is not None
     assert utterance.speaker_name == "1号玩家"
-    assert utterance.text == "我觉得2号玩家像狼，先听3号玩家发言。"
+    assert utterance.text == "我觉得白石像狼，先听南风发言。"
 
 
 def test_event_to_voice_utterance_ignores_non_public_visible_text() -> None:
@@ -211,6 +238,19 @@ def test_event_to_judge_voice_utterance_for_phase_start_is_short() -> None:
     assert utterance.speaker == "judge"
     assert utterance.text == "夜晚降临，所有玩家请闭眼。"
     assert utterance.static_asset_id == "night_start"
+
+
+def test_summary_phase_judge_voice_prompts_sequential_speech() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(16, "phase_started", phase="summary")
+
+    utterance = event_to_voice_utterance(event, config)
+
+    assert utterance is not None
+    assert utterance.speaker_kind == "judge"
+    assert utterance.speaker_name == "法官"
+    assert utterance.text == "现在开始依次发言。"
+    assert utterance.static_asset_id is None
 
 
 def test_day_phase_with_multiple_night_deaths_uses_dynamic_seat_line() -> None:

@@ -75,6 +75,21 @@ class VolcengineTtsConfig:
         return {"type": "voice_unavailable", "reason": reason, "message": message}
 
 
+@dataclass(frozen=True)
+class TtsSubtitleCue:
+    text: str
+    start_ms: int
+    end_ms: int
+
+
+@dataclass(frozen=True)
+class TtsSubtitleTiming:
+    cues: tuple[TtsSubtitleCue, ...]
+
+
+TtsSynthesisItem = bytes | TtsSubtitleTiming
+
+
 def build_tts_headers(
     config: VolcengineTtsConfig,
     *,
@@ -112,6 +127,7 @@ def build_tts_session_request(
         "req_params": {
             "speaker": speaker,
             "audio_params": {
+                "enable_subtitle": True,
                 "format": audio_format,
                 "sample_rate": sample_rate,
             },
@@ -137,7 +153,7 @@ class VolcengineTtsClient:
         *,
         speaker: str,
         text_chunks: list[str],
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncIterator[TtsSynthesisItem]:
         if not self.config.available:
             raise RuntimeError("Volcengine TTS is not configured")
 
@@ -234,6 +250,13 @@ class VolcengineTtsClient:
                     if getattr(message, "event", None) == protocol.EventType.SessionFinished:
                         session_finished = True
                         break
+                    if getattr(message, "event", None) == protocol.EventType.TTSSubtitle:
+                        timing = parse_tts_subtitle_payload(message.payload)
+                        if timing is not None:
+                            yield timing
+                        if idle_deadline is not None:
+                            idle_deadline = time.monotonic() + AUDIO_IDLE_TIMEOUT_SECONDS
+                        continue
                     continue
                 if message.type == protocol.MsgType.Error:
                     raise RuntimeError(
@@ -257,6 +280,69 @@ class VolcengineTtsClient:
                 )
             with suppress(Exception):
                 await _close_websocket(websocket)
+
+
+def parse_tts_subtitle_payload(payload: bytes) -> TtsSubtitleTiming | None:
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        logger.warning("Ignoring malformed Volcengine TTS subtitle payload")
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    nested_payload = data.get("payload")
+    if isinstance(nested_payload, dict):
+        data = nested_payload
+
+    cues = tuple(_subtitle_cue_from_word(word) for word in _subtitle_words(data))
+    cues = tuple(cue for cue in cues if cue is not None)
+    if cues:
+        return TtsSubtitleTiming(cues=cues)
+
+    text = _subtitle_text(data)
+    start_ms = _subtitle_timestamp_ms(data, ("start_ms", "startTime", "start_time", "beginTime"))
+    end_ms = _subtitle_timestamp_ms(data, ("end_ms", "endTime", "end_time"))
+    if text and start_ms is not None and end_ms is not None and end_ms > start_ms:
+        return TtsSubtitleTiming(cues=(TtsSubtitleCue(text=text, start_ms=start_ms, end_ms=end_ms),))
+
+    return None
+
+
+def _subtitle_words(data: dict[str, Any]) -> list[Any]:
+    words = data.get("words")
+    return words if isinstance(words, list) else []
+
+
+def _subtitle_cue_from_word(word: Any) -> TtsSubtitleCue | None:
+    if not isinstance(word, dict):
+        return None
+    text = _subtitle_text(word)
+    start_ms = _subtitle_timestamp_ms(word, ("start_ms", "startTime", "start_time", "beginTime"))
+    end_ms = _subtitle_timestamp_ms(word, ("end_ms", "endTime", "end_time"))
+    if not text or start_ms is None or end_ms is None or end_ms <= start_ms:
+        return None
+    return TtsSubtitleCue(text=text, start_ms=start_ms, end_ms=end_ms)
+
+
+def _subtitle_text(data: dict[str, Any]) -> str:
+    for key in ("text", "word"):
+        value = data.get(key)
+        if isinstance(value, str):
+            return value.strip()
+    return ""
+
+
+def _subtitle_timestamp_ms(data: dict[str, Any], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if "ms" in key.lower():
+            return max(0, int(round(value)))
+        return max(0, int(round(float(value) * 1000)))
+    return None
 
 
 async def _await_with_timeout(awaitable: Any, timeout_seconds: float) -> Any:

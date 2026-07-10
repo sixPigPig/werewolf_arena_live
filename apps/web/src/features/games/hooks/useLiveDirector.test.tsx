@@ -81,6 +81,45 @@ describe("useLiveDirector", () => {
     expect(result.current.currentCue?.title).toBe("对局完成");
   });
 
+  it("does not jump to terminal when terminal mode turns on after live playback starts", () => {
+    const initialEvents = [
+      event({ id: 1, type: "round_started", round: 1 }),
+      event({ id: 2, type: "phase_started", round: 1, phase: "night" }),
+    ];
+    const { result, rerender } = renderHook(
+      ({
+        events,
+        startAtLatestTerminal,
+      }: {
+        events: LiveGameEvent[];
+        startAtLatestTerminal: boolean;
+      }) => useLiveDirector(events, { startAtLatestTerminal }),
+      {
+        initialProps: {
+          events: initialEvents,
+          startAtLatestTerminal: false,
+        },
+      },
+    );
+
+    expect(result.current.currentEventId).toBe(1);
+
+    rerender({
+      events: [
+        ...initialEvents,
+        event({
+          id: 3,
+          type: "game_completed",
+          payload: { winner: "好人阵营" },
+        }),
+      ],
+      startAtLatestTerminal: true,
+    });
+
+    expect(result.current.currentEventId).toBe(1);
+    expect(result.current.backlogCount).toBe(2);
+  });
+
   it("pauses and resumes director timing without dropping later events", () => {
     const { result, rerender } = renderHook(
       ({ events }: { events: LiveGameEvent[] }) => useLiveDirector(events),

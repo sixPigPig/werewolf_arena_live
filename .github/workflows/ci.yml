@@ -51,3 +51,37 @@ jobs:
       - run: cd apps/web && pnpm lint
       - run: cd apps/web && pnpm test -- --run
       - run: cd apps/web && pnpm build
+
+  admin-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/admin-web lint
+      - run: pnpm --dir apps/admin-web test -- --run
+      - run: pnpm --dir apps/admin-web build
+
+  mobile-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir packages/game-client typecheck
+      - run: pnpm --dir packages/game-client test -- --run
+      - run: pnpm --dir apps/mobile-web lint
+      - run: pnpm --dir apps/mobile-web test -- --run
+      - run: pnpm --dir apps/mobile-web build

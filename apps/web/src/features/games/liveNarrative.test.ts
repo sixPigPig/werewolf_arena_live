@@ -117,7 +117,7 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "judge",
       tone: "neutral",
-      judgeLine: "本轮进入总结，玩家整理自己的判断。",
+      judgeLine: "现在开始依次发言。",
     });
   });
 

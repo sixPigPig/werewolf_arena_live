@@ -380,6 +380,7 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
         "mime_type",
         "status",
         "duration_ms",
+        "subtitle_timings",
         "error_message",
         "created_at",
         "updated_at",
@@ -405,6 +406,7 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
     _assert_string_column(table.c.mime_type, length=80, nullable=False)
     _assert_string_column(table.c.status, length=30, nullable=False)
     assert table.c.duration_ms.nullable is True
+    _assert_json_column(table.c.subtitle_timings, nullable=True)
     _assert_text_column(table.c.error_message, nullable=True)
     assert table.c.created_at.nullable is False
     assert table.c.updated_at.nullable is False

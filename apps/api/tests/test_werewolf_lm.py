@@ -337,6 +337,14 @@ def test_parse_json_object_accepts_fenced_json() -> None:
     assert parsed == {"reasoning": "观察发言", "vote": "老周"}
 
 
+def test_parse_json_object_accepts_unescaped_newline_inside_string() -> None:
+    parsed = parse_json_object(
+        '{"reasoning":"观察发言","summary":"第一行\n第二行"}'
+    )
+
+    assert parsed == {"reasoning": "观察发言", "summary": "第一行\n第二行"}
+
+
 def test_visible_json_field_extractor_streams_only_new_public_text() -> None:
     extractor = VisibleJsonFieldExtractor("say")
 
@@ -352,6 +360,13 @@ def test_visible_json_field_extractor_decodes_escaped_text() -> None:
 
     assert extractor.update('{"summary":"第一行\\n') == "第一行\n"
     assert extractor.update('{"summary":"第一行\\n第二行"}') == "第二行"
+
+
+def test_visible_json_field_extractor_decodes_unescaped_newline() -> None:
+    extractor = VisibleJsonFieldExtractor("summary")
+
+    assert extractor.update('{"summary":"第一行\n') == "第一行\n"
+    assert extractor.update('{"summary":"第一行\n第二行"}') == "第二行"
 
 
 def test_visible_json_field_extractor_waits_for_complete_unicode_surrogate_pair() -> None:
@@ -462,6 +477,39 @@ def test_generate_action_with_events_streams_public_visible_text() -> None:
         "field": "say",
         "is_public": True,
     }
+
+
+def test_generate_action_with_events_streams_public_text_with_unescaped_newline() -> None:
+    sink = CapturingLmEventSink()
+    provider = StreamingFakeProvider(
+        ['{"reasoning":"试探",', '"say":"第一句\n', '第二句"}']
+    )
+
+    value, log = generate_action_with_events(
+        provider=provider,
+        action="debate",
+        world_state=_world_state_for_special_action("村民", ""),
+        model="deepseek-chat",
+        allowed_values=None,
+        result_key="say",
+        event_sink=sink,
+        event_context={
+            "round_number": 1,
+            "phase": "day",
+            "actor": "Alice",
+            "action": "debate",
+        },
+        request_id_factory=lambda: "req_public_newline",
+        enable_progress_ticks=False,
+    )
+
+    assert value == "第一句\n第二句"
+    assert log.raw_response == '{"reasoning":"试探","say":"第一句\n第二句"}'
+    delta_events = [event for event in sink.events if event["type"] == "model_response_delta"]
+    assert [event["payload"]["visible_text"] for event in delta_events] == [
+        "第一句\n第二句"
+    ]
+    assert [event["type"] for event in sink.events].count("model_request_failed") == 0
 
 
 def test_generate_action_with_events_suppresses_private_action_deltas() -> None:

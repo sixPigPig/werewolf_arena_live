@@ -10,7 +10,7 @@ from typing import Any, Literal
 from app.werewolf.live import LiveEvent
 
 SpeakerKind = Literal["player", "judge"]
-PUBLIC_SPEECH_ACTIONS = {"debate", "sheriff_speech", "sheriff_pk_speech"}
+PUBLIC_SPEECH_ACTIONS = {"debate", "sheriff_speech", "sheriff_pk_speech", "summarize"}
 PUBLIC_WINNER_ASSETS = {
     "好人阵营": ("游戏结束，好人阵营获胜。", "game_over_villagers"),
     "狼人阵营": ("游戏结束，狼人阵营获胜。", "game_over_wolves"),
@@ -36,6 +36,7 @@ class VoiceUtterance:
     speaker: str
     text: str
     action: str | None
+    last_source_event_id: int | None = None
     static_asset_id: str | None = None
 
 
@@ -87,7 +88,6 @@ def event_to_voice_utterance(
         if not visible_text:
             return None
         speaker_name = _player_label(event.actor, player_seats, fallback="当前玩家")
-        spoken_text = _replace_player_names_with_seat_labels(visible_text, player_seats)
         return VoiceUtterance(
             utterance_id=f"voice_{uuid.uuid4().hex[:12]}",
             run_id=event.run_id,
@@ -96,7 +96,7 @@ def event_to_voice_utterance(
             speaker_kind="player",
             speaker_name=speaker_name,
             speaker=config.player_speaker,
-            text=spoken_text,
+            text=visible_text,
             action=event.action,
         )
 
@@ -127,6 +127,7 @@ def build_voice_messages(
     *,
     utterance_id: str,
     source_event_id: int,
+    last_source_event_id: int | None = None,
     speaker_kind: SpeakerKind,
     speaker_name: str,
     audio: bytes,
@@ -136,17 +137,21 @@ def build_voice_messages(
     sample_rate: int,
     chunk_index: int,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    start_message: dict[str, Any] = {
+        "type": "voice_start",
+        "utterance_id": utterance_id,
+        "source_event_id": source_event_id,
+        "speaker_kind": speaker_kind,
+        "speaker_name": speaker_name,
+        "mime_type": mime_type,
+        "audio_format": audio_format,
+        "sample_rate": sample_rate,
+    }
+    if last_source_event_id is not None:
+        start_message["last_source_event_id"] = last_source_event_id
+
     return (
-        {
-            "type": "voice_start",
-            "utterance_id": utterance_id,
-            "source_event_id": source_event_id,
-            "speaker_kind": speaker_kind,
-            "speaker_name": speaker_name,
-            "mime_type": mime_type,
-            "audio_format": audio_format,
-            "sample_rate": sample_rate,
-        },
+        start_message,
         {
             "type": "audio_chunk",
             "utterance_id": utterance_id,
@@ -186,7 +191,7 @@ def _judge_cue_for_event(
     if event.type == "phase_started" and event.phase == "vote":
         return JudgeVoiceCue("发言结束，进入放逐投票。", "exile_vote_start")
     if event.type == "phase_started" and event.phase == "summary":
-        return JudgeVoiceCue("本轮进入总结，玩家整理自己的判断。")
+        return JudgeVoiceCue("现在开始依次发言。")
     if event.type == "action_requested" and event.action in PUBLIC_SPEECH_ACTIONS:
         actor_label = _player_label(event.actor, player_seats, fallback="当前玩家")
         return JudgeVoiceCue(
@@ -300,25 +305,6 @@ def _join_player_labels(
         if name
     ]
     return "、".join(labels) if labels else "未知玩家"
-
-
-def _replace_player_names_with_seat_labels(
-    text: str,
-    player_seats: Mapping[str, int] | None,
-) -> str:
-    if not player_seats:
-        return text
-
-    normalized_text = text
-    for name, seat in sorted(
-        player_seats.items(),
-        key=lambda item: len(item[0]),
-        reverse=True,
-    ):
-        if not name or not isinstance(seat, int) or seat <= 0:
-            continue
-        normalized_text = normalized_text.replace(name, f"{seat}号玩家")
-    return normalized_text
 
 
 def _seat_asset_id(

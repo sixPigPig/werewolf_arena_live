@@ -19,7 +19,10 @@ vi.mock("./livePcmPlayer", () => ({
   createPcmAudioScheduler: pcmMocks.createPcmAudioScheduler,
 }));
 
-import { usePlaybackVoice } from "./livePlaybackVoice";
+import {
+  currentSubtitleForPlaybackVoices,
+  usePlaybackVoice,
+} from "./livePlaybackVoice";
 import type { PlaybackVoiceUtterance } from "../types";
 
 const originalCreateObjectURL = URL.createObjectURL;
@@ -80,6 +83,7 @@ function voice(overrides: Partial<PlaybackVoiceUtterance> = {}): PlaybackVoiceUt
     audio_format: "pcm",
     sample_rate: 24000,
     duration_ms: 100,
+    subtitle_timings: [],
     chunks: [{ chunk_index: 0, data: "YWJj" }],
     ...overrides,
   };
@@ -223,6 +227,34 @@ describe("playback voice", () => {
     });
   });
 
+  it("schedules saved coalesced PCM chunks after reaching the last source event", async () => {
+    const coalescedVoice = voice({
+      last_source_event_id: 6,
+      source_event_id: 4,
+    });
+    const { rerender } = renderHook(
+      ({ currentEventId }) =>
+        usePlaybackVoice([coalescedVoice], {
+          currentEventId,
+          enabled: true,
+          isPaused: false,
+        }),
+      { initialProps: { currentEventId: 4 } },
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(pcmMocks.schedule).not.toHaveBeenCalled();
+
+    rerender({ currentEventId: 6 });
+
+    await waitFor(() => {
+      expect(pcmMocks.schedule).toHaveBeenCalledWith("YWJj", 24000);
+    });
+  });
+
   it("suspends and resumes with replay pause state", async () => {
     const { rerender } = renderHook(
       ({ isPaused }) =>
@@ -246,6 +278,57 @@ describe("playback voice", () => {
     rerender({ isPaused: false });
     await waitFor(() => {
       expect(pcmMocks.resume).toHaveBeenCalled();
+    });
+  });
+
+  it("derives the current subtitle from saved PCM timing", async () => {
+    vi.useFakeTimers();
+    const { context } = stubAudioContext({ currentTime: 10, state: "running" });
+    pcmMocks.schedule.mockResolvedValue({
+      duration: 0.82,
+      endTime: 10.82,
+      startTime: 10,
+    });
+
+    const { result } = renderHook(() =>
+      usePlaybackVoice(
+        [
+          voice({
+            speaker_name: "1号玩家",
+            subtitle_timings: [
+              { text: "我", start_ms: 18745, end_ms: 18855 },
+              { text: "先发言。", start_ms: 18855, end_ms: 19565 },
+            ],
+          }),
+        ],
+        {
+          currentEventId: 4,
+          enabled: true,
+          isPaused: false,
+        },
+      ),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(pcmMocks.schedule).toHaveBeenCalledTimes(1);
+    expect(result.current.currentSubtitle).toMatchObject({
+      speakerKind: "player",
+      speakerName: "1号玩家",
+      text: "我",
+    });
+
+    context.currentTime = 10.2;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(result.current.currentSubtitle).toMatchObject({
+      speakerKind: "player",
+      speakerName: "1号玩家",
+      text: "我先发言。",
     });
   });
 
@@ -279,5 +362,62 @@ describe("playback voice", () => {
 
     await waitFor(() => expect(result.current.currentItem).toBeNull());
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:replay-voice");
+  });
+
+  it("derives replay subtitles from saved timings without requiring audio chunks", () => {
+    const subtitle = currentSubtitleForPlaybackVoices({
+      currentEventId: 41,
+      elapsedMs: 220,
+      isPaused: false,
+      voices: [
+        voice({
+          chunks: [],
+          last_source_event_id: 41,
+          source_event_id: 32,
+          speaker_name: "2号玩家",
+          subtitle_timings: [
+            { text: "我先", start_ms: 18745, end_ms: 18855 },
+            { text: "过。", start_ms: 18855, end_ms: 19045 },
+          ],
+        }),
+      ],
+    });
+
+    expect(subtitle).toEqual({
+      speakerKind: "player",
+      speakerName: "2号玩家",
+      text: "我先过。",
+      utteranceId: "voice-1",
+    });
+  });
+
+  it("matches coalesced player replay subtitles by last source event id", () => {
+    const replayVoice = voice({
+      last_source_event_id: 41,
+      source_event_id: 32,
+      speaker_name: "2号玩家",
+      subtitle_timings: [{ text: "我先过。", start_ms: 0, end_ms: 420 }],
+    });
+
+    expect(
+      currentSubtitleForPlaybackVoices({
+        currentEventId: 32,
+        elapsedMs: 0,
+        isPaused: false,
+        voices: [replayVoice],
+      }),
+    ).toBeNull();
+    expect(
+      currentSubtitleForPlaybackVoices({
+        currentEventId: 41,
+        elapsedMs: 0,
+        isPaused: false,
+        voices: [replayVoice],
+      }),
+    ).toMatchObject({
+      speakerKind: "player",
+      speakerName: "2号玩家",
+      text: "我先过。",
+    });
   });
 });

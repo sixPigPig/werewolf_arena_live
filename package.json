@@ -2,6 +2,10 @@
   "name": "python-react-web-monorepo",
   "private": true,
   "scripts": {
+    "dev:admin": "pnpm --dir apps/admin-web dev",
+    "build:admin": "pnpm --dir apps/admin-web build",
+    "lint:admin": "pnpm --dir apps/admin-web lint",
+    "test:admin": "pnpm --dir apps/admin-web test -- --run",
     "dev:web": "pnpm --dir apps/web dev",
     "build:web": "pnpm --dir apps/web build",
     "lint:web": "pnpm --dir apps/web lint",

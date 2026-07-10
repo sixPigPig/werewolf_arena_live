@@ -25,6 +25,8 @@ from app.werewolf.voice import (
     event_to_voice_utterance,
 )
 from app.werewolf.volcengine_tts import (
+    TtsSubtitleTiming,
+    TtsSynthesisItem,
     VolcengineTtsClient,
     VolcengineTtsConfig,
     mime_type_for_format,
@@ -45,7 +47,7 @@ class TtsClient(Protocol):
         *,
         speaker: str,
         text_chunks: list[str],
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncIterator[TtsSynthesisItem]:
         pass
 
 
@@ -68,6 +70,14 @@ class VoiceStore(Protocol):
         pass
 
     def fail_utterance(self, utterance_id: str, *, message: str) -> None:
+        pass
+
+    def update_subtitle_timings(
+        self,
+        utterance_id: str,
+        *,
+        subtitle_timings: list[dict[str, Any]],
+    ) -> None:
         pass
 
     def find_recent_utterance(
@@ -95,6 +105,16 @@ class StaticJudgeVoiceAsset:
     audio_format: str
     mime_type: str
     sample_rate: int
+    subtitle_timings: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class RecentUtteranceReplayResult:
+    should_continue: bool
+    last_source_event_id: int | None = None
+
+
+PlaybackAckQueue = asyncio.Queue[str]
 
 
 class LiveVoiceStreamService:
@@ -123,6 +143,7 @@ class LiveVoiceStreamService:
         websocket: WebSocket,
         *,
         current_event_id: int | None = None,
+        playback_ack_required: bool = False,
     ) -> None:
         if not self.available:
             await websocket.send_json(self.config.unavailable_payload)
@@ -145,24 +166,48 @@ class LiveVoiceStreamService:
             return
 
         voice_store = self.voice_store_factory(run.session_id) if self.voice_store_factory else None
-        disconnect_task = asyncio.create_task(_watch_websocket_disconnect(websocket))
+        playback_acks: PlaybackAckQueue | None = (
+            asyncio.Queue() if playback_ack_required else None
+        )
+        disconnect_task = asyncio.create_task(
+            _watch_websocket_control(websocket, playback_acks)
+        )
         subscriber: queue.Queue[LiveEvent] | None = None
-        pending_events: deque[LiveEvent] = deque()
-        voice_context = _build_voice_context(historical_events)
         speaker_config = VoiceSpeakerConfig(
             player_speaker=self.config.player_speaker,
             judge_speaker=self.config.judge_speaker,
         )
         try:
-            if not await _replay_recent_utterance(
+            recent_replay = await _replay_recent_utterance(
                 websocket,
                 voice_store,
                 run_id=run_id,
                 current_event_id=current_event_id,
                 disconnect_task=disconnect_task,
-            ):
+                playback_acks=playback_acks,
+            )
+            if not recent_replay.should_continue:
                 return
 
+            if current_event_id is None:
+                replay_after_id = last_event_id
+            else:
+                replay_after_id = (
+                    recent_replay.last_source_event_id
+                    if recent_replay.last_source_event_id is not None
+                    else current_event_id - 1
+                )
+            context_events = [
+                event
+                for event in historical_events
+                if replay_after_id is None or event.id <= replay_after_id
+            ]
+            pending_events = deque(
+                event
+                for event in historical_events
+                if current_event_id is not None and event.id > replay_after_id
+            )
+            voice_context = _build_voice_context(context_events)
             subscriber = self.registry.subscribe(run_id, after_id=last_event_id)
             while True:
                 event = await _next_voice_event(
@@ -202,6 +247,7 @@ class LiveVoiceStreamService:
                             static_asset,
                             disconnect_task,
                             voice_store,
+                            playback_acks,
                         ):
                             return
                     elif chunks and not await self._stream_utterance(
@@ -210,6 +256,7 @@ class LiveVoiceStreamService:
                         chunks,
                         disconnect_task,
                         voice_store,
+                        playback_acks,
                     ):
                         return
 
@@ -238,8 +285,6 @@ class LiveVoiceStreamService:
         )
         if asset is None:
             return None
-        if asset.audio_format.lower() != self.config.audio_format.lower():
-            return None
         return asset
 
     async def _stream_static_utterance(
@@ -249,9 +294,10 @@ class LiveVoiceStreamService:
         asset: StaticJudgeVoiceAsset,
         disconnect_task: asyncio.Task[None],
         voice_store: VoiceStore | None,
+        playback_acks: PlaybackAckQueue | None,
     ) -> bool:
         started_at = time.monotonic()
-        _persist_voice_operation(
+        persistence_enabled = _persist_voice_operation(
             voice_store,
             utterance,
             "upsert_utterance",
@@ -266,6 +312,7 @@ class LiveVoiceStreamService:
         start_message, chunk_message, _end_message = build_voice_messages(
             utterance_id=utterance.utterance_id,
             source_event_id=utterance.source_event_id,
+            last_source_event_id=utterance.last_source_event_id,
             speaker_kind=utterance.speaker_kind,
             speaker_name=utterance.speaker_name,
             audio=asset.audio,
@@ -283,17 +330,41 @@ class LiveVoiceStreamService:
                 utterance,
             ):
                 return False
+            if asset.subtitle_timings:
+                subtitle_message = {
+                    "type": "subtitle_timing",
+                    "utterance_id": utterance.utterance_id,
+                    "cues": asset.subtitle_timings,
+                }
+                await websocket.send_json(subtitle_message)
+                if persistence_enabled:
+                    persistence_enabled = _persist_voice_operation(
+                        voice_store,
+                        utterance,
+                        "update_subtitle_timings",
+                        lambda: voice_store.update_subtitle_timings(
+                            utterance.utterance_id,
+                            subtitle_timings=asset.subtitle_timings,
+                        ),
+                    )
+                if _mark_voice_stream_disconnected_if_needed(
+                    disconnect_task,
+                    voice_store,
+                    utterance,
+                ):
+                    return False
             await websocket.send_json(chunk_message)
-            _persist_voice_operation(
-                voice_store,
-                utterance,
-                "append_chunk",
-                lambda: voice_store.append_chunk(
-                    utterance.utterance_id,
-                    chunk_index=0,
-                    audio=asset.audio,
-                ),
-            )
+            if persistence_enabled:
+                persistence_enabled = _persist_voice_operation(
+                    voice_store,
+                    utterance,
+                    "append_chunk",
+                    lambda: voice_store.append_chunk(
+                        utterance.utterance_id,
+                        chunk_index=0,
+                        audio=asset.audio,
+                    ),
+                )
             if _mark_voice_stream_disconnected_if_needed(
                 disconnect_task,
                 voice_store,
@@ -308,15 +379,22 @@ class LiveVoiceStreamService:
                     "duration_ms": duration_ms,
                 }
             )
-            _persist_voice_operation(
-                voice_store,
-                utterance,
-                "complete_utterance",
-                lambda: voice_store.complete_utterance(
-                    utterance.utterance_id,
-                    duration_ms=duration_ms,
-                ),
-            )
+            if persistence_enabled:
+                _persist_voice_operation(
+                    voice_store,
+                    utterance,
+                    "complete_utterance",
+                    lambda: voice_store.complete_utterance(
+                        utterance.utterance_id,
+                        duration_ms=duration_ms,
+                    ),
+                )
+            if not await _wait_for_playback_ack(
+                utterance.utterance_id,
+                playback_acks,
+                disconnect_task,
+            ):
+                return False
         except asyncio.CancelledError:
             _mark_voice_stream_interrupted(
                 voice_store,
@@ -340,13 +418,14 @@ class LiveVoiceStreamService:
         chunks: list[str],
         disconnect_task: asyncio.Task[None],
         voice_store: VoiceStore | None,
+        playback_acks: PlaybackAckQueue | None,
     ) -> bool:
         started_at = time.monotonic()
         audio_format = self.config.audio_format
         sample_rate = self.config.sample_rate
         mime_type = mime_type_for_format(audio_format)
         client = self.client_factory(self.config)
-        _persist_voice_operation(
+        persistence_enabled = _persist_voice_operation(
             voice_store,
             utterance,
             "upsert_utterance",
@@ -364,6 +443,11 @@ class LiveVoiceStreamService:
                     "type": "voice_start",
                     "utterance_id": utterance.utterance_id,
                     "source_event_id": utterance.source_event_id,
+                    **(
+                        {"last_source_event_id": utterance.last_source_event_id}
+                        if utterance.last_source_event_id is not None
+                        else {}
+                    ),
                     "speaker_kind": utterance.speaker_kind,
                     "speaker_name": utterance.speaker_name,
                     "mime_type": mime_type,
@@ -389,7 +473,7 @@ class LiveVoiceStreamService:
             speaker=utterance.speaker,
             text_chunks=chunks,
         )
-        audio_task: asyncio.Task[bytes] | None = None
+        audio_task: asyncio.Task[TtsSynthesisItem] | None = None
         chunk_index = 0
         try:
             while True:
@@ -414,6 +498,24 @@ class LiveVoiceStreamService:
                     break
                 audio_task = None
 
+                if isinstance(audio, TtsSubtitleTiming):
+                    subtitle_message = build_subtitle_timing_message(
+                        utterance.utterance_id,
+                        audio,
+                    )
+                    await websocket.send_json(subtitle_message)
+                    if persistence_enabled:
+                        persistence_enabled = _persist_voice_operation(
+                            voice_store,
+                            utterance,
+                            "update_subtitle_timings",
+                            lambda: voice_store.update_subtitle_timings(
+                                utterance.utterance_id,
+                                subtitle_timings=subtitle_message["cues"],
+                            ),
+                        )
+                    continue
+
                 _start, chunk_message, _end = build_voice_messages(
                     utterance_id=utterance.utterance_id,
                     source_event_id=utterance.source_event_id,
@@ -427,16 +529,17 @@ class LiveVoiceStreamService:
                     chunk_index=chunk_index,
                 )
                 await websocket.send_json(chunk_message)
-                _persist_voice_operation(
-                    voice_store,
-                    utterance,
-                    "append_chunk",
-                    lambda: voice_store.append_chunk(
-                        utterance.utterance_id,
-                        chunk_index=chunk_index,
-                        audio=audio,
-                    ),
-                )
+                if persistence_enabled:
+                    persistence_enabled = _persist_voice_operation(
+                        voice_store,
+                        utterance,
+                        "append_chunk",
+                        lambda: voice_store.append_chunk(
+                            utterance.utterance_id,
+                            chunk_index=chunk_index,
+                            audio=audio,
+                        ),
+                    )
                 chunk_index += 1
         except asyncio.CancelledError:
             if audio_task is not None:
@@ -458,15 +561,16 @@ class LiveVoiceStreamService:
             raise
         except Exception:
             await _close_async_iterator(audio_iterator)
-            _persist_voice_operation(
-                voice_store,
-                utterance,
-                "fail_utterance",
-                lambda: voice_store.fail_utterance(
-                    utterance.utterance_id,
-                    message="Voice synthesis failed",
-                ),
-            )
+            if persistence_enabled:
+                _persist_voice_operation(
+                    voice_store,
+                    utterance,
+                    "fail_utterance",
+                    lambda: voice_store.fail_utterance(
+                        utterance.utterance_id,
+                        message="Voice synthesis failed",
+                    ),
+                )
             logger.warning(
                 "Voice synthesis failed",
                 extra={
@@ -503,15 +607,22 @@ class LiveVoiceStreamService:
                     "duration_ms": duration_ms,
                 }
             )
-            _persist_voice_operation(
-                voice_store,
-                utterance,
-                "complete_utterance",
-                lambda: voice_store.complete_utterance(
-                    utterance.utterance_id,
-                    duration_ms=duration_ms,
-                ),
-            )
+            if persistence_enabled:
+                _persist_voice_operation(
+                    voice_store,
+                    utterance,
+                    "complete_utterance",
+                    lambda: voice_store.complete_utterance(
+                        utterance.utterance_id,
+                        duration_ms=duration_ms,
+                    ),
+                )
+            if not await _wait_for_playback_ack(
+                utterance.utterance_id,
+                playback_acks,
+                disconnect_task,
+            ):
+                return False
         except asyncio.CancelledError:
             _mark_voice_stream_interrupted(
                 voice_store,
@@ -529,14 +640,35 @@ class LiveVoiceStreamService:
         return True
 
 
-async def _watch_websocket_disconnect(websocket: WebSocket) -> None:
+async def _watch_websocket_control(
+    websocket: WebSocket,
+    playback_acks: PlaybackAckQueue | None,
+) -> None:
     try:
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
                 return
+            if playback_acks is not None:
+                utterance_id = _playback_ack_utterance_id(message)
+                if utterance_id is not None:
+                    playback_acks.put_nowait(utterance_id)
     except WebSocketDisconnect:
         return
+
+
+def _playback_ack_utterance_id(message: dict[str, Any]) -> str | None:
+    text = message.get("text")
+    if not isinstance(text, str):
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("type") != "voice_played":
+        return None
+    utterance_id = payload.get("utterance_id")
+    return utterance_id if isinstance(utterance_id, str) else None
 
 
 def _build_voice_context(events: list[LiveEvent]) -> VoiceStreamContext:
@@ -665,7 +797,145 @@ def _load_static_judge_voice_asset(
         audio_format=audio_format,
         mime_type=mime_type,
         sample_rate=sample_rate,
+        subtitle_timings=_subtitle_timings_from_manifest_line(matching_line),
     )
+
+
+def build_static_judge_playback_voices(
+    events: list[dict[str, Any]],
+    *,
+    asset_dir: Path = DEFAULT_JUDGE_VOICE_ASSET_DIR,
+    speaker_config: VoiceSpeakerConfig | None = None,
+) -> list[dict[str, Any]]:
+    config = speaker_config or VoiceSpeakerConfig(
+        player_speaker="",
+        judge_speaker="static-judge-asset",
+    )
+    voice_context = VoiceStreamContext(player_seats={})
+    voices: list[dict[str, Any]] = []
+    for event_data in events:
+        event = _live_event_from_playback_dict(event_data)
+        if event is None:
+            continue
+        _update_voice_context_before_event(voice_context, event)
+        utterance = event_to_voice_utterance(
+            event,
+            config,
+            player_seats=voice_context.player_seats,
+            previous_night_deaths=voice_context.previous_night_deaths,
+            peaceful_night=voice_context.peaceful_night,
+        )
+        if utterance is not None and utterance.static_asset_id is not None:
+            asset = _load_static_judge_voice_asset(asset_dir, utterance.static_asset_id)
+            if asset is not None:
+                start_message, chunk_message, _end_message = build_voice_messages(
+                    utterance_id=(
+                        f"static_judge_{utterance.source_event_id}_"
+                        f"{utterance.static_asset_id}"
+                    ),
+                    source_event_id=utterance.source_event_id,
+                    last_source_event_id=utterance.last_source_event_id,
+                    speaker_kind=utterance.speaker_kind,
+                    speaker_name=utterance.speaker_name,
+                    audio=asset.audio,
+                    mime_type=asset.mime_type,
+                    duration_ms=0,
+                    audio_format=asset.audio_format,
+                    sample_rate=asset.sample_rate,
+                    chunk_index=0,
+                )
+                voices.append(
+                    {
+                        "utterance_id": start_message["utterance_id"],
+                        "source_event_id": start_message["source_event_id"],
+                        "last_source_event_id": start_message.get(
+                            "last_source_event_id",
+                            start_message["source_event_id"],
+                        ),
+                        "speaker_kind": start_message["speaker_kind"],
+                        "speaker_name": start_message["speaker_name"],
+                        "mime_type": start_message["mime_type"],
+                        "audio_format": start_message["audio_format"],
+                        "sample_rate": start_message["sample_rate"],
+                        "duration_ms": None,
+                        "subtitle_timings": asset.subtitle_timings,
+                        "chunks": [
+                            {
+                                "chunk_index": chunk_message["chunk_index"],
+                                "data": chunk_message["data"],
+                            }
+                        ],
+                    }
+                )
+        _update_voice_context_after_event(voice_context, event)
+    return voices
+
+
+def _live_event_from_playback_dict(data: dict[str, Any]) -> LiveEvent | None:
+    try:
+        event_id = data.get("id")
+        event_type = data.get("type")
+        run_id = data.get("run_id")
+        session_id = data.get("session_id")
+        created_at = data.get("created_at")
+        if (
+            not isinstance(event_id, int)
+            or not isinstance(event_type, str)
+            or not isinstance(run_id, str)
+            or not isinstance(session_id, str)
+            or not isinstance(created_at, str)
+        ):
+            return None
+        payload = data.get("payload")
+        return LiveEvent(
+            id=event_id,
+            type=event_type,
+            run_id=run_id,
+            session_id=session_id,
+            created_at=created_at,
+            round=data.get("round") if isinstance(data.get("round"), int) else None,
+            phase=data.get("phase") if isinstance(data.get("phase"), str) else None,
+            actor=data.get("actor") if isinstance(data.get("actor"), str) else None,
+            action=data.get("action") if isinstance(data.get("action"), str) else None,
+            payload=payload if isinstance(payload, dict) else {},
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def build_subtitle_timing_message(
+    utterance_id: str,
+    timing: TtsSubtitleTiming,
+) -> dict[str, Any]:
+    return {
+        "type": "subtitle_timing",
+        "utterance_id": utterance_id,
+        "cues": [
+            {"text": cue.text, "start_ms": cue.start_ms, "end_ms": cue.end_ms}
+            for cue in timing.cues
+        ],
+    }
+
+
+def _subtitle_timings_from_manifest_line(line: dict[str, Any]) -> list[dict[str, Any]]:
+    timings = line.get("subtitle_timings")
+    if not isinstance(timings, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for timing in timings:
+        if not isinstance(timing, dict):
+            continue
+        text = timing.get("text")
+        start_ms = timing.get("start_ms")
+        end_ms = timing.get("end_ms")
+        if (
+            isinstance(text, str)
+            and isinstance(start_ms, int)
+            and isinstance(end_ms, int)
+            and end_ms > start_ms
+        ):
+            normalized.append({"text": text, "start_ms": start_ms, "end_ms": end_ms})
+    return normalized
 
 
 def _string_manifest_value(data: dict[str, Any], key: str) -> str:
@@ -685,9 +955,10 @@ async def _replay_recent_utterance(
     run_id: str,
     current_event_id: int | None,
     disconnect_task: asyncio.Task[None],
-) -> bool:
+    playback_acks: PlaybackAckQueue | None,
+) -> RecentUtteranceReplayResult:
     if voice_store is None or current_event_id is None:
-        return True
+        return RecentUtteranceReplayResult(should_continue=True)
 
     try:
         utterance = voice_store.find_recent_utterance(
@@ -700,13 +971,13 @@ async def _replay_recent_utterance(
             exc_info=True,
             extra={"run_id": run_id, "current_event_id": current_event_id},
         )
-        return True
+        return RecentUtteranceReplayResult(should_continue=True)
     if utterance is None or utterance.get("status") != "complete":
-        return True
+        return RecentUtteranceReplayResult(should_continue=True)
 
     utterance_id = utterance.get("utterance_id")
     if not isinstance(utterance_id, str):
-        return True
+        return RecentUtteranceReplayResult(should_continue=True)
     try:
         chunks = voice_store.load_chunks(utterance_id)
     except Exception:
@@ -715,14 +986,15 @@ async def _replay_recent_utterance(
             exc_info=True,
             extra={"run_id": run_id, "utterance_id": utterance_id},
         )
-        return True
+        return RecentUtteranceReplayResult(should_continue=True)
     if not chunks:
-        return True
+        return RecentUtteranceReplayResult(should_continue=True)
 
     duration_ms = utterance.get("duration_ms")
     if not isinstance(duration_ms, int):
         duration_ms = 0
     source_event_id = utterance.get("source_event_id")
+    last_source_event_id = utterance.get("last_source_event_id")
     sample_rate = utterance.get("sample_rate")
     speaker_kind = utterance.get("speaker_kind")
     speaker_name = utterance.get("speaker_name")
@@ -736,11 +1008,14 @@ async def _replay_recent_utterance(
         or not isinstance(audio_format, str)
         or not isinstance(sample_rate, int)
     ):
-        return True
+        return RecentUtteranceReplayResult(should_continue=True)
+    if not isinstance(last_source_event_id, int):
+        last_source_event_id = source_event_id
 
     start_message, _chunk_message, _end_message = build_voice_messages(
         utterance_id=utterance_id,
         source_event_id=source_event_id,
+        last_source_event_id=last_source_event_id,
         speaker_kind=speaker_kind,
         speaker_name=speaker_name,
         audio=chunks[0],
@@ -751,12 +1026,26 @@ async def _replay_recent_utterance(
         chunk_index=0,
     )
     if not await _send_replay_message(websocket, start_message, disconnect_task):
-        return False
+        return RecentUtteranceReplayResult(should_continue=False)
+
+    subtitle_timings = _subtitle_timings_from_utterance(utterance)
+    if subtitle_timings:
+        if not await _send_replay_message(
+            websocket,
+            {
+                "type": "subtitle_timing",
+                "utterance_id": utterance_id,
+                "cues": subtitle_timings,
+            },
+            disconnect_task,
+        ):
+            return RecentUtteranceReplayResult(should_continue=False)
 
     for chunk_index, audio in enumerate(chunks):
         _start_message, chunk_message, _end_message = build_voice_messages(
             utterance_id=utterance_id,
             source_event_id=source_event_id,
+            last_source_event_id=last_source_event_id,
             speaker_kind=speaker_kind,
             speaker_name=speaker_name,
             audio=audio,
@@ -767,14 +1056,46 @@ async def _replay_recent_utterance(
             chunk_index=chunk_index,
         )
         if not await _send_replay_message(websocket, chunk_message, disconnect_task):
-            return False
+            return RecentUtteranceReplayResult(should_continue=False)
 
     end_message = {
         "type": "voice_end",
         "utterance_id": utterance_id,
         "duration_ms": duration_ms,
     }
-    return await _send_replay_message(websocket, end_message, disconnect_task)
+    if not await _send_replay_message(websocket, end_message, disconnect_task):
+        return RecentUtteranceReplayResult(should_continue=False)
+    if not await _wait_for_playback_ack(
+        utterance_id,
+        playback_acks,
+        disconnect_task,
+    ):
+        return RecentUtteranceReplayResult(should_continue=False)
+    return RecentUtteranceReplayResult(
+        should_continue=True,
+        last_source_event_id=last_source_event_id,
+    )
+
+
+def _subtitle_timings_from_utterance(utterance: dict[str, Any]) -> list[dict[str, Any]]:
+    value = utterance.get("subtitle_timings")
+    if not isinstance(value, list):
+        return []
+    cues: list[dict[str, Any]] = []
+    for cue in value:
+        if not isinstance(cue, dict):
+            continue
+        text = cue.get("text")
+        start_ms = cue.get("start_ms")
+        end_ms = cue.get("end_ms")
+        if (
+            isinstance(text, str)
+            and isinstance(start_ms, int)
+            and isinstance(end_ms, int)
+            and end_ms > start_ms
+        ):
+            cues.append({"text": text, "start_ms": start_ms, "end_ms": end_ms})
+    return cues
 
 
 async def _send_replay_message(
@@ -792,16 +1113,43 @@ async def _send_replay_message(
     return not disconnect_task.done()
 
 
+async def _wait_for_playback_ack(
+    utterance_id: str,
+    playback_acks: PlaybackAckQueue | None,
+    disconnect_task: asyncio.Task[None],
+) -> bool:
+    if playback_acks is None:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return True
+
+    while True:
+        if disconnect_task.done():
+            return False
+        ack_task = asyncio.create_task(playback_acks.get())
+        done, pending = await asyncio.wait(
+            {ack_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if ack_task in pending:
+            ack_task.cancel()
+        if disconnect_task in done:
+            return False
+        if ack_task.result() == utterance_id:
+            return True
+
+
 def _persist_voice_operation(
     voice_store: VoiceStore | None,
     utterance: VoiceUtterance,
     persistence_operation: str,
     persist: Callable[[], None],
-) -> None:
+) -> bool:
     if voice_store is None:
-        return
+        return True
     try:
         persist()
+        return True
     except Exception:
         logger.warning(
             "Voice persistence failed",
@@ -815,6 +1163,7 @@ def _persist_voice_operation(
                 "persistence_operation": persistence_operation,
             },
         )
+        return False
 
 
 def _mark_voice_stream_interrupted(
@@ -924,6 +1273,7 @@ async def _coalesce_request_deltas(
         return utterance
 
     texts = [utterance.text]
+    last_source_event_id = utterance.last_source_event_id or utterance.source_event_id
     while True:
         if pending_events:
             event = pending_events.popleft()
@@ -943,6 +1293,10 @@ async def _coalesce_request_deltas(
         )
         if _is_same_request_utterance(utterance, next_utterance):
             texts.append(next_utterance.text)
+            last_source_event_id = max(
+                last_source_event_id,
+                next_utterance.last_source_event_id or next_utterance.source_event_id,
+            )
             continue
 
         pending_events.appendleft(event)
@@ -950,7 +1304,11 @@ async def _coalesce_request_deltas(
 
     if len(texts) == 1:
         return utterance
-    return replace(utterance, text="".join(texts))
+    return replace(
+        utterance,
+        last_source_event_id=last_source_event_id,
+        text="".join(texts),
+    )
 
 
 def _is_same_request_utterance(

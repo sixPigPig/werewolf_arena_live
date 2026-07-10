@@ -1,6 +1,7 @@
 import type {
   deriveGodViewState,
   deriveLiveNarrativeState,
+  LiveVoiceSubtitle,
 } from "@werewolf-arena/game-client";
 
 type GodViewState = ReturnType<typeof deriveGodViewState>;
@@ -20,10 +21,6 @@ export type MobileLiveSubtitle = {
 };
 
 const PLAYER_COLOR_COUNT = 8;
-const DEFAULT_SUBTITLE_LINE_LENGTH = 18;
-const SUBTITLE_CHARS_PER_SECOND = 5;
-const SUBTITLE_MIN_SEGMENT_MS = 1800;
-const SUBTITLE_MAX_SEGMENT_MS = 4200;
 
 export function deriveMobileLiveSubtitle({
   godViewState,
@@ -75,52 +72,28 @@ export function deriveMobileLiveSubtitle({
   return null;
 }
 
-export function splitMobileSubtitleText(
-  text: string,
-  maxLineLength = DEFAULT_SUBTITLE_LINE_LENGTH,
-): string[] {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return [];
+export function voiceSubtitleToMobileSubtitle(
+  subtitle: LiveVoiceSubtitle | null | undefined,
+): MobileLiveSubtitle | null {
+  if (!subtitle) {
+    return null;
   }
 
-  const phrases =
-    normalized.match(/[^，。！？；,.!?;]+[，。！？；,.!?;]?/g) ?? [normalized];
-  const segments: string[] = [];
-  let currentSegment = "";
-
-  for (const phrase of phrases) {
-    for (const piece of chunkByLength(phrase, maxLineLength)) {
-      const nextSegment = currentSegment + piece;
-      if (
-        currentSegment &&
-        Array.from(nextSegment).length > maxLineLength
-      ) {
-        segments.push(currentSegment);
-        currentSegment = piece;
-      } else {
-        currentSegment = nextSegment;
-      }
-    }
+  if (subtitle.speakerKind === "judge") {
+    return {
+      colorIndex: 0,
+      speakerName: subtitle.speakerName,
+      text: subtitle.text,
+      tone: "judge",
+    };
   }
 
-  if (currentSegment) {
-    segments.push(currentSegment);
-  }
-
-  return segments;
-}
-
-export function subtitleSegmentDurationMs(segment: string): number {
-  const readableLength = Math.max(1, Array.from(segment.trim()).length);
-  const duration = Math.round(
-    (readableLength / SUBTITLE_CHARS_PER_SECOND) * 1000,
-  );
-
-  return Math.min(
-    SUBTITLE_MAX_SEGMENT_MS,
-    Math.max(SUBTITLE_MIN_SEGMENT_MS, duration),
-  );
+  return {
+    colorIndex: playerColorIndexFromSeatLabel(subtitle.speakerName),
+    speakerName: subtitle.speakerName,
+    text: subtitle.text,
+    tone: "player",
+  };
 }
 
 function isPublicSpeechAction(action: string | null) {
@@ -156,20 +129,14 @@ function hashSpeakerName(value: string) {
   );
 }
 
-function modulo(value: number, divisor: number) {
-  return ((value % divisor) + divisor) % divisor;
+function playerColorIndexFromSeatLabel(speakerName: string) {
+  const seatMatch = speakerName.trim().match(/^(\d+)号玩家$/);
+  if (!seatMatch) {
+    return 0;
+  }
+  return modulo(Number(seatMatch[1]) - 1, PLAYER_COLOR_COUNT);
 }
 
-function chunkByLength(value: string, maxLength: number): string[] {
-  const characters = Array.from(value);
-  if (characters.length <= maxLength) {
-    return [value];
-  }
-
-  const chunks: string[] = [];
-  for (let index = 0; index < characters.length; index += maxLength) {
-    chunks.push(characters.slice(index, index + maxLength).join(""));
-  }
-
-  return chunks;
+function modulo(value: number, divisor: number) {
+  return ((value % divisor) + divisor) % divisor;
 }

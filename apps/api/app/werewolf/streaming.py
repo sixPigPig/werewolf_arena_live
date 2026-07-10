@@ -220,11 +220,46 @@ def _is_surrogate_escape_in_range(text: str, start: int, end: int) -> bool:
 def _decode_json_string_prefix(raw_value: str) -> str:
     if raw_value == "":
         return ""
-    try:
-        return json.loads(f'"{raw_value}"')
-    except json.JSONDecodeError:
-        trimmed = raw_value.rstrip("\\")
-        return json.loads('"' + trimmed + '"')
+    last_error: json.JSONDecodeError | None = None
+    for candidate in (raw_value, raw_value.rstrip("\\")):
+        literal = escape_unescaped_json_string_control_chars(f'"{candidate}"')
+        try:
+            return json.loads(literal)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return ""
+
+
+def escape_unescaped_json_string_control_chars(text: str) -> str:
+    chars: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if not in_string:
+            chars.append(char)
+            if char == '"':
+                in_string = True
+            continue
+
+        if escaped:
+            chars.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            chars.append(char)
+            escaped = True
+            continue
+        if char == '"':
+            chars.append(char)
+            in_string = False
+            continue
+        if ord(char) < 0x20:
+            chars.append(json.dumps(char)[1:-1])
+            continue
+        chars.append(char)
+    return "".join(chars)
 
 
 def extract_openai_chat_delta(chunk: bytes) -> str | None:

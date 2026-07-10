@@ -32,6 +32,7 @@ class JudgeVoiceAssetResponse(BaseModel):
     template_id: str | None = None
     template_text: str | None = None
     seat_number: int | None = None
+    subtitle_timings: list[dict[str, int | str]] = Field(default_factory=list)
 
 
 class JudgeVoiceLineListResponse(BaseModel):
@@ -146,4 +147,5 @@ def _asset_response(asset: JudgeVoiceAsset) -> JudgeVoiceAssetResponse:
         template_id=asset.template_id,
         template_text=asset.template_text,
         seat_number=asset.seat_number,
+        subtitle_timings=asset.subtitle_timings,
     )

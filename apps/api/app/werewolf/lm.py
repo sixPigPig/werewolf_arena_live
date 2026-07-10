@@ -13,6 +13,7 @@ from app.werewolf.streaming import (
     ModelRequestProgress,
     VisibleJsonFieldExtractor,
     action_visible_stream_field,
+    escape_unescaped_json_string_control_chars,
     waiting_message_for_action,
 )
 
@@ -417,7 +418,12 @@ def parse_json_object(raw_response: str) -> dict[str, Any]:
     try:
         parsed, _index = decoder.raw_decode(content)
     except json.JSONDecodeError as exc:
-        raise ValueError("Model response was not valid JSON.") from exc
+        try:
+            parsed, _index = decoder.raw_decode(
+                escape_unescaped_json_string_control_chars(content)
+            )
+        except json.JSONDecodeError:
+            raise ValueError("Model response was not valid JSON.") from exc
 
     if not isinstance(parsed, dict):
         raise ValueError("Model response JSON must be an object.")

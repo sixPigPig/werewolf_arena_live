@@ -87,6 +87,41 @@ describe("useLiveDirector seekToEventId", () => {
     expect(result.current.currentCue?.phase).toBe("night");
   });
 
+  it("does not jump to terminal when terminal mode turns on after live playback starts", () => {
+    const initialEvents = [
+      event({ id: 1, type: "game_started" }),
+      event({ id: 3, type: "phase_started", round: 1, phase: "night" }),
+    ];
+    const { rerender, result } = renderHook(
+      ({
+        liveEvents,
+        startAtLatestTerminal,
+      }: {
+        liveEvents: LiveGameEvent[];
+        startAtLatestTerminal: boolean;
+      }) => useLiveDirector(liveEvents, { startAtLatestTerminal }),
+      {
+        initialProps: {
+          liveEvents: initialEvents,
+          startAtLatestTerminal: false,
+        },
+      },
+    );
+
+    expect(result.current.currentEventId).toBe(1);
+
+    rerender({
+      liveEvents: [
+        ...initialEvents,
+        event({ id: 9, type: "game_completed", payload: { winner: "好人阵营" } }),
+      ],
+      startAtLatestTerminal: true,
+    });
+
+    expect(result.current.currentEventId).toBe(1);
+    expect(result.current.backlogCount).toBe(2);
+  });
+
   it("can start live playback at the first requested event type", () => {
     const startupEvents = [
       event({ id: 1, type: "run_created" }),

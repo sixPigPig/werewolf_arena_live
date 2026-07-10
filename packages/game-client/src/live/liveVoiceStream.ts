@@ -11,6 +11,13 @@ import {
   createPcmAudioScheduler,
   type PcmAudioScheduler,
 } from "./livePcmPlayer";
+import {
+  SUBTITLE_CLOCK_POLL_INTERVAL_MS,
+  currentSubtitleForItem,
+  isPcmAudioFormat,
+  subtitleElapsedMsForItem,
+  type LiveVoiceSubtitleClock,
+} from "./liveVoiceSubtitleClock";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const STALE_EVENT_DISTANCE = 8;
@@ -32,6 +39,7 @@ export type LiveVoiceMessage =
       type: "voice_start";
       utterance_id: string;
       source_event_id: number;
+      last_source_event_id?: number;
       speaker_kind: "player" | "judge";
       speaker_name: string;
       mime_type: string;
@@ -46,6 +54,15 @@ export type LiveVoiceMessage =
       audio_format: string;
       sample_rate: number;
       data: string;
+    }
+  | {
+      type: "subtitle_timing";
+      utterance_id: string;
+      cues: {
+        end_ms: number;
+        start_ms: number;
+        text: string;
+      }[];
     }
   | {
       type: "voice_end";
@@ -71,14 +88,29 @@ export type LiveVoiceChunk = {
   sampleRate: number;
 };
 
+export type LiveVoiceSubtitleCue = {
+  endMs: number;
+  startMs: number;
+  text: string;
+};
+
+export type LiveVoiceSubtitle = {
+  speakerKind: "player" | "judge";
+  speakerName: string;
+  text: string;
+  utteranceId: string;
+};
+
 export type LiveVoiceQueueItem = {
   utteranceId: string;
   sourceEventId: number;
+  lastSourceEventId: number;
   speakerKind: "player" | "judge";
   speakerName: string;
   mimeType: string;
   audioFormat: string;
   sampleRate: number;
+  subtitleCues: LiveVoiceSubtitleCue[];
   chunks: string[];
   chunkMetadata: LiveVoiceChunk[];
   isEnded: boolean;
@@ -123,6 +155,7 @@ export function resolveVoiceStreamUrl(
   if (currentEventId !== null && currentEventId !== undefined) {
     base.searchParams.set("current_event_id", String(currentEventId));
   }
+  base.searchParams.set("playback_ack", "1");
 
   if (base.protocol === "https:") {
     base.protocol = "wss:";
@@ -195,6 +228,7 @@ export function enqueueVoiceMessage(
   }
 
   if (message.type === "voice_start") {
+    const lastSourceEventId = liveVoiceMessageLastSourceEventId(message);
     const existingItem = queue.items.find(
       (item) => item.utteranceId === message.utterance_id,
     );
@@ -210,9 +244,13 @@ export function enqueueVoiceMessage(
         ...queue,
         items: queue.items.map((item) =>
           item.utteranceId === message.utterance_id
-            ? {
+          ? {
                 ...item,
                 sourceEventId: message.source_event_id,
+                lastSourceEventId: Math.max(
+                  item.lastSourceEventId,
+                  lastSourceEventId,
+                ),
                 speakerKind: message.speaker_kind,
                 speakerName: message.speaker_name,
                 mimeType: message.mime_type,
@@ -233,6 +271,7 @@ export function enqueueVoiceMessage(
         {
           utteranceId: message.utterance_id,
           sourceEventId: message.source_event_id,
+          lastSourceEventId,
           speakerKind: message.speaker_kind,
           speakerName: message.speaker_name,
           mimeType: message.mime_type,
@@ -240,6 +279,7 @@ export function enqueueVoiceMessage(
           sampleRate: message.sample_rate,
           chunks: [],
           chunkMetadata: [],
+          subtitleCues: [],
           isEnded: false,
           status: "receiving",
         },
@@ -291,6 +331,33 @@ export function enqueueVoiceMessage(
     };
   }
 
+  if (message.type === "subtitle_timing") {
+    return {
+      ...queue,
+      items: queue.items.map((item) => {
+        if (
+          item.utteranceId !== message.utterance_id ||
+          item.status === "played" ||
+          item.status === "error"
+        ) {
+          return item;
+        }
+
+        return {
+          ...item,
+          subtitleCues: mergeSubtitleCues(
+            item.subtitleCues,
+            message.cues.map((cue) => ({
+              endMs: cue.end_ms,
+              startMs: cue.start_ms,
+              text: cue.text,
+            })),
+          ),
+        };
+      }),
+    };
+  }
+
   return {
     ...queue,
     items: queue.items.map((item) =>
@@ -306,6 +373,31 @@ export function enqueueVoiceMessage(
   };
 }
 
+function liveVoiceMessageLastSourceEventId(
+  message: Extract<LiveVoiceMessage, { type: "voice_start" }>,
+) {
+  return Math.max(
+    message.source_event_id,
+    message.last_source_event_id ?? message.source_event_id,
+  );
+}
+
+function mergeSubtitleCues(
+  current: LiveVoiceSubtitleCue[],
+  next: LiveVoiceSubtitleCue[],
+) {
+  const cuesByKey = new Map<string, LiveVoiceSubtitleCue>();
+  for (const cue of [...current, ...next]) {
+    if (!cue.text || cue.endMs <= cue.startMs) {
+      continue;
+    }
+    cuesByKey.set(`${cue.startMs}:${cue.endMs}:${cue.text}`, cue);
+  }
+  return [...cuesByKey.values()].sort(
+    (left, right) => left.startMs - right.startMs || left.endMs - right.endMs,
+  );
+}
+
 export function pruneStaleVoiceQueue(
   queue: LiveVoiceQueue,
   currentEventId: number | null,
@@ -319,7 +411,7 @@ export function pruneStaleVoiceQueue(
     items: queue.items.filter(
       (item) =>
         item.speakerKind === "player" ||
-        currentEventId - item.sourceEventId <= STALE_EVENT_DISTANCE,
+        currentEventId - item.lastSourceEventId <= STALE_EVENT_DISTANCE,
     ),
   };
 }
@@ -360,10 +452,6 @@ function revokeAudioObjectUrl(objectUrl: string) {
   }
 }
 
-function isPcmAudioFormat(audioFormat: string) {
-  return audioFormat.toLowerCase() === "pcm";
-}
-
 function createAudioElement() {
   if (typeof globalThis.document?.createElement !== "function") {
     throw new Error("Audio element creation is unavailable.");
@@ -390,7 +478,13 @@ function voiceQueueReducer(
       ...queue,
       items: queue.items.map((item) =>
         item.utteranceId === action.utteranceId
-          ? { ...item, chunks: [], chunkMetadata: [], status: "played" }
+          ? {
+              ...item,
+              chunks: [],
+              chunkMetadata: [],
+              status: "played",
+              subtitleCues: [],
+            }
           : item,
       ),
     };
@@ -440,6 +534,8 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
     return (
       typeof value.utterance_id === "string" &&
       typeof value.source_event_id === "number" &&
+      (value.last_source_event_id === undefined ||
+        typeof value.last_source_event_id === "number") &&
       isSpeakerKind(value.speaker_kind) &&
       typeof value.speaker_name === "string" &&
       typeof value.mime_type === "string" &&
@@ -459,6 +555,14 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
     );
   }
 
+  if (value.type === "subtitle_timing") {
+    return (
+      typeof value.utterance_id === "string" &&
+      Array.isArray(value.cues) &&
+      value.cues.every(isLiveVoiceSubtitleCueMessage)
+    );
+  }
+
   if (value.type === "voice_end") {
     return (
       typeof value.utterance_id === "string" &&
@@ -473,6 +577,18 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
   return false;
 }
 
+function isLiveVoiceSubtitleCueMessage(value: unknown) {
+  return (
+    isRecord(value) &&
+    typeof value.text === "string" &&
+    typeof value.start_ms === "number" &&
+    typeof value.end_ms === "number" &&
+    Number.isFinite(value.start_ms) &&
+    Number.isFinite(value.end_ms) &&
+    value.end_ms > value.start_ms
+  );
+}
+
 export function useLiveVoiceStream(
   runId: string | undefined,
   {
@@ -485,15 +601,18 @@ export function useLiveVoiceStream(
     isPaused: boolean;
   },
 ) {
+  const hasCurrentEventId = currentEventId !== null;
   const [connectionState, setConnectionState] =
     useState<LiveVoiceConnectionState>(
-      enabled && runId ? "connecting" : "idle",
+      enabled && runId && hasCurrentEventId ? "connecting" : "idle",
     );
   const [queue, dispatch] = useReducer(
     voiceQueueReducer,
     undefined,
     createVoiceQueue,
   );
+  const [subtitleClock, setSubtitleClock] =
+    useState<LiveVoiceSubtitleClock>(null);
   const streamUrl = useMemo(
     () => (runId ? resolveVoiceStreamUrl(runId) : null),
     [runId],
@@ -510,7 +629,10 @@ export function useLiveVoiceStream(
   const pcmCompletionTimeoutRef = useRef<
     ReturnType<typeof globalThis.setTimeout> | null
   >(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const acknowledgedUtteranceIdsRef = useRef<Set<string>>(new Set());
   const pcmEndTimesRef = useRef<Map<string, number>>(new Map());
+  const pcmSubtitleStartTimesRef = useRef<Map<string, number>>(new Map());
   const scheduledPcmChunkIndexesRef = useRef<Map<string, Set<number>>>(
     new Map(),
   );
@@ -531,21 +653,41 @@ export function useLiveVoiceStream(
     audioContextRef.current = null;
     pcmSchedulerRef.current = null;
     pcmEndTimesRef.current.clear();
+    pcmSubtitleStartTimesRef.current.clear();
     scheduledPcmChunkIndexesRef.current.clear();
+    setSubtitleClock(null);
     clearPcmCompletionTimeout();
     void scheduler?.close().catch(() => {
       // AudioContext cleanup is best-effort.
     });
   }, [clearPcmCompletionTimeout]);
+  const sendPlaybackAck = useCallback((utteranceId: string) => {
+    if (acknowledgedUtteranceIdsRef.current.has(utteranceId)) {
+      return;
+    }
+    acknowledgedUtteranceIdsRef.current.add(utteranceId);
+    try {
+      socketRef.current?.send(
+        JSON.stringify({ type: "voice_played", utterance_id: utteranceId }),
+      );
+    } catch {
+      // Playback progression should not depend on ack delivery.
+    }
+  }, []);
   const consumePcmUtterance = useCallback((utteranceId: string) => {
     consumedUtteranceIdsRef.current.add(utteranceId);
+    sendPlaybackAck(utteranceId);
     scheduledPcmChunkIndexesRef.current.delete(utteranceId);
     pcmEndTimesRef.current.delete(utteranceId);
+    pcmSubtitleStartTimesRef.current.delete(utteranceId);
+    setSubtitleClock((current) =>
+      current?.utteranceId === utteranceId ? null : current,
+    );
     dispatch({
       type: "utterance_played",
       utteranceId,
     });
-  }, []);
+  }, [sendPlaybackAck]);
   const armPcmCompletionPoll = useCallback(
     ({
       context,
@@ -637,7 +779,7 @@ export function useLiveVoiceStream(
   const isConsumableItem = (item: LiveVoiceQueueItem) =>
     !consumedUtteranceIdsRef.current.has(item.utteranceId);
   const hasReachedSourceEvent = (item: LiveVoiceQueueItem) =>
-    currentEventId !== null && currentEventId >= item.sourceEventId;
+    currentEventId !== null && currentEventId >= item.lastSourceEventId;
   const isActivePlaybackItem = (item: LiveVoiceQueueItem) =>
     isConsumableItem(item) && hasReachedSourceEvent(item);
   const currentItem =
@@ -666,6 +808,53 @@ export function useLiveVoiceStream(
           currentItem.isEnded ? "ended" : "receiving",
         ].join(":")
       : null;
+  const currentSubtitle = useMemo<LiveVoiceSubtitle | null>(
+    () =>
+      currentSubtitleForItem({
+        isPaused,
+        item: currentItem,
+        subtitleClock,
+      }),
+    [currentItem, isPaused, subtitleClock],
+  );
+
+  useEffect(() => {
+    if (
+      !enabled ||
+      isPaused ||
+      !currentItem ||
+      currentItem.status !== "playing" ||
+      currentItem.subtitleCues.length === 0
+    ) {
+      return;
+    }
+
+    const updateSubtitleClock = () => {
+      const elapsedMs = subtitleElapsedMsForItem({
+        audio: audioRef.current,
+        context: audioContextRef.current,
+        item: currentItem,
+        pcmStartTimes: pcmSubtitleStartTimesRef.current,
+      });
+      if (elapsedMs === null) {
+        return;
+      }
+      setSubtitleClock({
+        elapsedMs,
+        utteranceId: currentItem.utteranceId,
+      });
+    };
+
+    updateSubtitleClock();
+    const intervalId = globalThis.setInterval(
+      updateSubtitleClock,
+      SUBTITLE_CLOCK_POLL_INTERVAL_MS,
+    );
+
+    return () => {
+      globalThis.clearInterval(intervalId);
+    };
+  }, [currentItem, enabled, isPaused]);
 
   useEffect(() => {
     if (
@@ -749,6 +938,22 @@ export function useLiveVoiceStream(
           if (!isActive) {
             return;
           }
+          if (!pcmSubtitleStartTimesRef.current.has(currentItem.utteranceId)) {
+            pcmSubtitleStartTimesRef.current.set(
+              currentItem.utteranceId,
+              scheduledChunk.startTime,
+            );
+            setSubtitleClock({
+              elapsedMs: Math.max(
+                0,
+                Math.round(
+                  (pcmAudio.context.currentTime - scheduledChunk.startTime) *
+                    1000,
+                ),
+              ),
+              utteranceId: currentItem.utteranceId,
+            });
+          }
           didSchedule = true;
           latestEndTime = Math.max(latestEndTime, scheduledChunk.endTime);
         }
@@ -808,6 +1013,10 @@ export function useLiveVoiceStream(
       }
       isConsumed = true;
       consumedUtteranceIdsRef.current.add(currentItem.utteranceId);
+      setSubtitleClock((current) =>
+        current?.utteranceId === currentItem.utteranceId ? null : current,
+      );
+      sendPlaybackAck(currentItem.utteranceId);
       dispatch({
         type: "utterance_played",
         utteranceId: currentItem.utteranceId,
@@ -873,7 +1082,7 @@ export function useLiveVoiceStream(
       audio?.removeEventListener("ended", markPlayed);
       releaseAudio();
     };
-  }, [blobPlaybackKey, enabled]);
+  }, [blobPlaybackKey, enabled, sendPlaybackAck]);
 
   useEffect(() => {
     if (!enabled || !blobPlaybackKey || !audioRef.current) {
@@ -986,9 +1195,12 @@ export function useLiveVoiceStream(
 
   useEffect(() => {
     consumedUtteranceIdsRef.current.clear();
+    acknowledgedUtteranceIdsRef.current.clear();
+    pcmSubtitleStartTimesRef.current.clear();
+    setSubtitleClock(null);
     dispatch({ type: "reset" });
 
-    if (!enabled || !streamUrl || !runId) {
+    if (!enabled || !streamUrl || !runId || !hasCurrentEventId) {
       setConnectionState("idle");
       return;
     }
@@ -1037,6 +1249,7 @@ export function useLiveVoiceStream(
       }
 
       socket = nextSocket;
+      socketRef.current = nextSocket;
       let isAttemptSettled = false;
       const settleSocketAttempt = (failed: boolean) => {
         if (!isActive || hasError || isAttemptSettled) {
@@ -1112,14 +1325,18 @@ export function useLiveVoiceStream(
 
     return () => {
       isActive = false;
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
       socket?.close();
     };
-  }, [enabled, runId, streamUrl]);
+  }, [enabled, hasCurrentEventId, runId, streamUrl]);
 
   return {
     connectionState,
     currentSpeakerName: isPaused ? null : currentItem?.speakerName ?? null,
     currentItem,
+    currentSubtitle,
     errors: visibleQueue.errors,
     unlockAudio,
   };

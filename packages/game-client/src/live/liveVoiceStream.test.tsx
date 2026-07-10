@@ -36,6 +36,7 @@ class MockWebSocket {
   onerror: (() => void) | null = null;
   onclose: (() => void) | null = null;
   close = vi.fn();
+  send = vi.fn();
   url: string;
 
   constructor(url: string) {
@@ -132,6 +133,20 @@ function audioChunkMessage(
     audio_format: "mp3",
     sample_rate: 24000,
     data: "YWJj",
+    ...overrides,
+  };
+}
+
+function subtitleTimingMessage(
+  overrides: Partial<Extract<LiveVoiceMessage, { type: "subtitle_timing" }>> = {},
+): Extract<LiveVoiceMessage, { type: "subtitle_timing" }> {
+  return {
+    type: "subtitle_timing",
+    utterance_id: "voice-1",
+    cues: [
+      { text: "我", start_ms: 0, end_ms: 180 },
+      { text: "先发言。", start_ms: 180, end_ms: 820 },
+    ],
     ...overrides,
   };
 }
@@ -275,10 +290,10 @@ describe("live voice stream", () => {
 
   it("builds a websocket url from api base url", () => {
     expect(resolveVoiceStreamUrl("run-1", "http://localhost:8000")).toBe(
-      "ws://localhost:8000/api/v1/games/runs/run-1/voice-stream",
+      "ws://localhost:8000/api/v1/games/runs/run-1/voice-stream?playback_ack=1",
     );
     expect(resolveVoiceStreamUrl("run-1", "https://example.com")).toBe(
-      "wss://example.com/api/v1/games/runs/run-1/voice-stream",
+      "wss://example.com/api/v1/games/runs/run-1/voice-stream?playback_ack=1",
     );
   });
 
@@ -286,7 +301,7 @@ describe("live voice stream", () => {
     const expectedOrigin = window.location.origin.replace(/^http/, "ws");
 
     expect(resolveVoiceStreamUrl("run-1", "")).toBe(
-      `${expectedOrigin}/api/v1/games/runs/run-1/voice-stream`,
+      `${expectedOrigin}/api/v1/games/runs/run-1/voice-stream?playback_ack=1`,
     );
   });
 
@@ -294,29 +309,29 @@ describe("live voice stream", () => {
     const expectedOrigin = window.location.origin.replace(/^http/, "ws");
 
     expect(resolveVoiceStreamUrl("run/slash id", "/api")).toBe(
-      `${expectedOrigin}/api/v1/games/runs/run%2Fslash%20id/voice-stream`,
+      `${expectedOrigin}/api/v1/games/runs/run%2Fslash%20id/voice-stream?playback_ack=1`,
     );
     expect(resolveVoiceStreamUrl("run-1", "proxy")).toBe(
-      `${expectedOrigin}/proxy/api/v1/games/runs/run-1/voice-stream`,
+      `${expectedOrigin}/proxy/api/v1/games/runs/run-1/voice-stream?playback_ack=1`,
     );
   });
 
   it("preserves absolute api base path prefixes", () => {
     expect(resolveVoiceStreamUrl("run-1", "https://example.com/proxy")).toBe(
-      "wss://example.com/proxy/api/v1/games/runs/run-1/voice-stream",
+      "wss://example.com/proxy/api/v1/games/runs/run-1/voice-stream?playback_ack=1",
     );
   });
 
   it("appends the current event id when provided", () => {
     expect(resolveVoiceStreamUrl("run-1", "https://example.com/api", 0)).toBe(
-      "wss://example.com/api/v1/games/runs/run-1/voice-stream?current_event_id=0",
+      "wss://example.com/api/v1/games/runs/run-1/voice-stream?current_event_id=0&playback_ack=1",
     );
     expect(resolveVoiceStreamUrl("run-1", "https://example.com/api", 7)).toBe(
-      "wss://example.com/api/v1/games/runs/run-1/voice-stream?current_event_id=7",
+      "wss://example.com/api/v1/games/runs/run-1/voice-stream?current_event_id=7&playback_ack=1",
     );
     expect(
       resolveVoiceStreamUrl("run-1", "https://example.com/api", null),
-    ).toBe("wss://example.com/api/v1/games/runs/run-1/voice-stream");
+    ).toBe("wss://example.com/api/v1/games/runs/run-1/voice-stream?playback_ack=1");
   });
 
   it("groups chunks by utterance and marks completed audio", () => {
@@ -337,6 +352,17 @@ describe("live voice stream", () => {
       status: "ready",
     });
     expect(queue.items[0].chunks).toEqual(["YWJj"]);
+  });
+
+  it("attaches subtitle timings to the matching utterance", () => {
+    let queue = createVoiceQueue();
+    queue = enqueueVoiceMessage(queue, voiceStartMessage());
+    queue = enqueueVoiceMessage(queue, subtitleTimingMessage());
+
+    expect(queue.items[0].subtitleCues).toEqual([
+      { text: "我", startMs: 0, endMs: 180 },
+      { text: "先发言。", startMs: 180, endMs: 820 },
+    ]);
   });
 
   it("de-dupes duplicate starts by utterance id", () => {
@@ -429,6 +455,7 @@ describe("live voice stream", () => {
         {
           utteranceId: "voice-1",
           sourceEventId: 4,
+          lastSourceEventId: 4,
           speakerKind: "player" as const,
           speakerName: "阿青",
           mimeType: "audio/mpeg",
@@ -443,6 +470,7 @@ describe("live voice stream", () => {
               sampleRate: 24000,
             },
           ],
+          subtitleCues: [],
           isEnded: true,
           status: "played" as const,
         },
@@ -467,6 +495,7 @@ describe("live voice stream", () => {
         {
           utteranceId: "voice-1",
           sourceEventId: 4,
+          lastSourceEventId: 4,
           speakerKind: "player" as const,
           speakerName: "阿青",
           mimeType: "audio/mpeg",
@@ -481,6 +510,7 @@ describe("live voice stream", () => {
               sampleRate: 24000,
             },
           ],
+          subtitleCues: [],
           isEnded: true,
           status: "played" as const,
         },
@@ -554,6 +584,30 @@ describe("live voice stream", () => {
 
     expect(MockWebSocket.instances).toHaveLength(0);
     expect(result.current.connectionState).toBe("idle");
+  });
+
+  it("waits for a current event id before connecting", () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result, rerender } = renderHook(
+      ({ currentEventId }: { currentEventId: number | null }) =>
+        useLiveVoiceStream("run-1", {
+          currentEventId,
+          enabled: true,
+          isPaused: false,
+        }),
+      { initialProps: { currentEventId: null as number | null } },
+    );
+
+    expect(MockWebSocket.instances).toHaveLength(0);
+    expect(result.current.connectionState).toBe("idle");
+
+    rerender({ currentEventId: 2 });
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0].url).toContain(
+      "/api/v1/games/runs/run-1/voice-stream?current_event_id=2",
+    );
   });
 
   it("connects when enabled and records the current speaker after a start message", () => {
@@ -959,6 +1013,36 @@ describe("live voice stream", () => {
     await expect(blob.text()).resolves.toBe("abc");
   });
 
+  it("sends playback ack after a blob utterance finishes", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubObjectUrls(["blob:voice-1"]);
+    const { audioElements, play } = stubAudioElement();
+
+    renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    const socket = MockWebSocket.instances[0];
+    act(() => {
+      socket.onopen?.();
+      emitReadyUtterance(socket, "voice-1", 4);
+    });
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      audioElements[0].dispatchEvent(new Event("ended"));
+    });
+
+    expect(socket.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "voice_played", utterance_id: "voice-1" }),
+    );
+  });
+
   it("schedules PCM chunks as they arrive before voice end", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     stubAudioContext({ state: "running" });
@@ -1171,6 +1255,52 @@ describe("live voice stream", () => {
     expect(pcmMocks.schedule).toHaveBeenCalledWith("AAAAAA==", 24000);
   });
 
+  it("waits to schedule coalesced PCM chunks until the director reaches the last source event", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubAudioContext({ state: "running" });
+
+    const { rerender } = renderHook(
+      ({ currentEventId }: { currentEventId: number }) =>
+        useLiveVoiceStream("run-1", {
+          currentEventId,
+          enabled: true,
+          isPaused: false,
+        }),
+      { initialProps: { currentEventId: 4 } },
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].emit(
+        voiceStartMessage({
+          audio_format: "pcm",
+          last_source_event_id: 6,
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+          source_event_id: 4,
+        }),
+      );
+      MockWebSocket.instances[0].emit(
+        audioChunkMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+          data: "AAAAAA==",
+        }),
+      );
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(pcmMocks.schedule).not.toHaveBeenCalled();
+
+    rerender({ currentEventId: 6 });
+
+    await waitFor(() => expect(pcmMocks.schedule).toHaveBeenCalledTimes(1));
+    expect(pcmMocks.schedule).toHaveBeenCalledWith("AAAAAA==", 24000);
+  });
+
   it("suspends and resumes the PCM scheduler when playback is paused", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     stubAudioContext({ state: "running" });
@@ -1277,6 +1407,63 @@ describe("live voice stream", () => {
     });
 
     await vi.waitFor(() => expect(result.current.currentItem).toBeNull());
+  });
+
+  it("derives the current subtitle from PCM playback time", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const { context } = stubAudioContext({ currentTime: 10, state: "running" });
+    pcmMocks.schedule.mockResolvedValue({
+      duration: 0.82,
+      endTime: 10.82,
+      startTime: 10,
+    });
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].emit(
+        voiceStartMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+          speaker_name: "1号玩家",
+        }),
+      );
+      MockWebSocket.instances[0].emit(subtitleTimingMessage());
+      MockWebSocket.instances[0].emit(
+        audioChunkMessage({
+          audio_format: "pcm",
+          mime_type: "audio/L16",
+          sample_rate: 24000,
+          data: "AAAAAA==",
+        }),
+      );
+    });
+
+    await vi.waitFor(() => expect(pcmMocks.schedule).toHaveBeenCalledTimes(1));
+    expect(result.current.currentSubtitle).toMatchObject({
+      speakerKind: "player",
+      speakerName: "1号玩家",
+      text: "我",
+    });
+
+    context.currentTime = 10.2;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(result.current.currentSubtitle).toMatchObject({
+      speakerKind: "player",
+      speakerName: "1号玩家",
+      text: "我先发言。",
+    });
   });
 
   it("does not consume a paused PCM utterance until resume and audio clock drain", async () => {

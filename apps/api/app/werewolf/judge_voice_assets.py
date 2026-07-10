@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from collections.abc import AsyncIterator, Callable
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from app.werewolf.voice import chunk_text_for_tts
 from app.werewolf.volcengine_tts import (
+    TtsSubtitleTiming,
+    TtsSynthesisItem,
     VolcengineTtsClient,
     VolcengineTtsConfig,
     mime_type_for_format,
@@ -22,7 +24,7 @@ class TtsClient(Protocol):
         *,
         speaker: str,
         text_chunks: list[str],
-    ):
+    ) -> AsyncIterator[TtsSynthesisItem]:
         pass
 
 
@@ -53,6 +55,7 @@ class JudgeVoiceAsset:
     template_id: str | None = None
     template_text: str | None = None
     seat_number: int | None = None
+    subtitle_timings: list[dict[str, int | str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -142,12 +145,14 @@ def list_judge_voice_assets(
     line_ids: list[str] | None = None,
 ) -> list[JudgeVoiceAsset]:
     selected_lines = _select_lines(line_ids)
+    subtitle_timings_by_id = _subtitle_timings_by_line_id(asset_dir / "manifest.json")
     return [
         _asset_for_line(
             line,
             asset_dir=asset_dir,
             audio_format=audio_format,
             public_base_path=public_base_path,
+            subtitle_timings=subtitle_timings_by_id.get(line.id, []),
         )
         for line in selected_lines
     ]
@@ -166,6 +171,7 @@ async def generate_judge_voice_assets(
     asset_dir.mkdir(parents=True, exist_ok=True)
     generated_ids: list[str] = []
     skipped_ids: list[str] = []
+    subtitle_timings_by_id = _subtitle_timings_by_line_id(asset_dir / "manifest.json")
 
     for line in selected_lines:
         audio_path = asset_dir / _filename_for_line(line, config.audio_format)
@@ -180,16 +186,23 @@ async def generate_judge_voice_assets(
             speaker=config.judge_speaker,
             text_chunks=text_chunks,
         ):
+            if isinstance(chunk, TtsSubtitleTiming):
+                subtitle_timings_by_id[line.id] = _subtitle_timings_from_tts(chunk)
+                continue
             audio.extend(chunk)
         _write_bytes_atomically(audio_path, bytes(audio))
         generated_ids.append(line.id)
 
-    assets = list_judge_voice_assets(
-        asset_dir=asset_dir,
-        audio_format=config.audio_format,
-        public_base_path=public_base_path,
-        line_ids=[line.id for line in selected_lines],
-    )
+    assets = [
+        _asset_for_line(
+            line,
+            asset_dir=asset_dir,
+            audio_format=config.audio_format,
+            public_base_path=public_base_path,
+            subtitle_timings=subtitle_timings_by_id.get(line.id, []),
+        )
+        for line in selected_lines
+    ]
     manifest_path = asset_dir / "manifest.json"
     _write_manifest(
         manifest_path,
@@ -280,6 +293,7 @@ def _asset_for_line(
     asset_dir: Path,
     audio_format: str,
     public_base_path: str,
+    subtitle_timings: list[dict[str, int | str]],
 ) -> JudgeVoiceAsset:
     filename = _filename_for_line(line, audio_format)
     audio_path = asset_dir / filename
@@ -294,6 +308,7 @@ def _asset_for_line(
         template_id=line.template_id,
         template_text=line.template_text,
         seat_number=line.seat_number,
+        subtitle_timings=subtitle_timings,
     )
 
 
@@ -328,3 +343,52 @@ def _write_manifest(
         encoding="utf-8",
     )
     temporary_path.replace(path)
+
+
+def _subtitle_timings_by_line_id(path: Path) -> dict[str, list[dict[str, int | str]]]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    lines = manifest.get("lines")
+    if not isinstance(lines, list):
+        return {}
+
+    timings_by_id: dict[str, list[dict[str, int | str]]] = {}
+    for line in lines:
+        if not isinstance(line, dict):
+            continue
+        line_id = line.get("id")
+        if not isinstance(line_id, str):
+            continue
+        timings = _normalize_subtitle_timings(line.get("subtitle_timings"))
+        if timings:
+            timings_by_id[line_id] = timings
+    return timings_by_id
+
+
+def _subtitle_timings_from_tts(timing: TtsSubtitleTiming) -> list[dict[str, int | str]]:
+    return [
+        {"text": cue.text, "start_ms": cue.start_ms, "end_ms": cue.end_ms}
+        for cue in timing.cues
+    ]
+
+
+def _normalize_subtitle_timings(value: object) -> list[dict[str, int | str]]:
+    if not isinstance(value, list):
+        return []
+    timings: list[dict[str, int | str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        start_ms = item.get("start_ms")
+        end_ms = item.get("end_ms")
+        if (
+            isinstance(text, str)
+            and isinstance(start_ms, int)
+            and isinstance(end_ms, int)
+            and end_ms > start_ms
+        ):
+            timings.append({"text": text, "start_ms": start_ms, "end_ms": end_ms})
+    return timings

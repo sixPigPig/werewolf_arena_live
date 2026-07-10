@@ -9,6 +9,7 @@ from app.werewolf.judge_voice_assets import (
     list_judge_voice_assets,
 )
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
+from app.werewolf.volcengine_tts import TtsSubtitleCue, TtsSubtitleTiming
 
 
 BASE_CONFIG = VolcengineTtsConfig(
@@ -36,8 +37,14 @@ class RecordingTtsClient:
         *,
         speaker: str,
         text_chunks: list[str],
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncIterator[bytes | TtsSubtitleTiming]:
         self.calls.append({"speaker": speaker, "text_chunks": text_chunks})
+        yield TtsSubtitleTiming(
+            cues=(
+                TtsSubtitleCue(text=text_chunks[0], start_ms=0, end_ms=320),
+                TtsSubtitleCue(text=text_chunks[-1], start_ms=320, end_ms=880),
+            )
+        )
         yield b"audio-"
         yield "|".join(text_chunks).encode("utf-8")
 
@@ -111,6 +118,10 @@ def test_generate_judge_voice_assets_writes_audio_and_manifest(tmp_path: Path) -
     assert manifest["mime_type"] == "audio/mpeg"
     assert [line["id"] for line in manifest["lines"]] == ["night_start", "dawn_deaths"]
     assert manifest["lines"][0]["public_url"] == "/judge-voice/night_start.mp3"
+    assert manifest["lines"][0]["subtitle_timings"] == [
+        {"text": "夜晚降临，", "start_ms": 0, "end_ms": 320},
+        {"text": "所有玩家请闭眼。", "start_ms": 320, "end_ms": 880},
+    ]
 
 
 def test_generate_judge_voice_assets_expands_template_ids(tmp_path: Path) -> None:

@@ -142,7 +142,7 @@ function cueForEvent({
         detailLine: nextLine(nextSpeakerName, godViewState),
         actorName: cue.actor ?? actorName,
         action: cue.action,
-        speechText: replacePlayerNamesWithSeatLabels(speechText, godViewState),
+        speechText,
       });
     }
   }
@@ -292,7 +292,7 @@ function phaseCue(
       eventId: cue.eventId,
       kind: "judge",
       tone: "neutral",
-      judgeLine: "本轮进入总结，玩家整理自己的判断。",
+      judgeLine: "现在开始依次发言。",
       performerLine: "总结阶段进行中。",
       detailLine: "玩家会记录本轮观察，供后续回合参考。",
       actorName,
@@ -432,7 +432,7 @@ function modelResponseReceivedCue(
       detailLine: nextLine(nextSpeakerName, godViewState),
       actorName,
       action: cue.action,
-      speechText: replacePlayerNamesWithSeatLabels(visibleText, godViewState),
+      speechText: visibleText,
     });
   }
 
@@ -468,7 +468,7 @@ function parsedActionCue(
       detailLine: nextLine(nextSpeakerName, godViewState),
       actorName,
       action: cue.action,
-      speechText: replacePlayerNamesWithSeatLabels(visibleText, godViewState),
+      speechText: visibleText,
     });
   }
 
@@ -508,7 +508,7 @@ function stateUpdatedCue(
       detailLine: nextLine(nextSpeakerName, godViewState),
       actorName: debateEntry.speaker,
       action: cue.action,
-      speechText: replacePlayerNamesWithSeatLabels(message, godViewState),
+      speechText: message,
     });
   }
 
@@ -712,21 +712,6 @@ function joinPlayerReferences(
     .map((name) => playerReference(name, godViewState, "未知玩家"))
     .filter(Boolean);
   return labels.length > 0 ? labels.join("、") : "未知玩家";
-}
-
-function replacePlayerNamesWithSeatLabels(
-  text: string,
-  godViewState: GodViewState,
-): string {
-  return [...godViewState.players]
-    .sort((left, right) => right.name.length - left.name.length)
-    .reduce((currentText, player) => {
-      const name = player.name.trim();
-      if (!name) {
-        return currentText;
-      }
-      return currentText.split(name).join(`${player.seatNumber}号玩家`);
-    }, text);
 }
 
 function dayJudgeLine(godViewState: GodViewState): string {

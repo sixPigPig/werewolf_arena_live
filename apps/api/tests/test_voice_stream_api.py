@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator, Generator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -17,7 +18,7 @@ from app.werewolf.live import LiveRunRegistry
 from app.werewolf.voice import VoiceUtterance
 from app.werewolf.voice_stream import LiveVoiceStreamService
 from app.werewolf.voice_store import DatabaseVoiceStore
-from app.werewolf.volcengine_tts import VolcengineTtsConfig
+from app.werewolf.volcengine_tts import TtsSubtitleCue, TtsSubtitleTiming, VolcengineTtsConfig
 
 
 BASE_TTS_CONFIG = VolcengineTtsConfig(
@@ -43,8 +44,15 @@ class FakeVoiceStreamer:
         websocket,
         *,
         current_event_id: int | None = None,
+        playback_ack_required: bool = False,
     ) -> None:
-        self.calls.append({"run_id": run_id, "current_event_id": current_event_id})
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "current_event_id": current_event_id,
+                "playback_ack_required": playback_ack_required,
+            }
+        )
         if not self.available:
             await websocket.send_json(
                 {
@@ -87,17 +95,37 @@ class FakeWebSocket:
         self.messages: list[dict] = []
         self.receive_calls = 0
         self._disconnect_event: asyncio.Event | None = None
+        self._incoming_messages: asyncio.Queue[dict] | None = None
 
     async def send_json(self, message: dict) -> None:
         self.messages.append(message)
 
     async def receive(self) -> dict:
         self.receive_calls += 1
-        await self._disconnect().wait()
-        raise WebSocketDisconnect()
+        incoming_task = asyncio.create_task(self._incoming().get())
+        disconnect_task = asyncio.create_task(self._disconnect().wait())
+        done, pending = await asyncio.wait(
+            {incoming_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        if disconnect_task in done:
+            raise WebSocketDisconnect()
+        return incoming_task.result()
+
+    def send_client_json(self, message: dict) -> None:
+        self._incoming().put_nowait(
+            {"type": "websocket.receive", "text": json.dumps(message)}
+        )
 
     def disconnect(self) -> None:
         self._disconnect().set()
+
+    def _incoming(self) -> asyncio.Queue[dict]:
+        if self._incoming_messages is None:
+            self._incoming_messages = asyncio.Queue()
+        return self._incoming_messages
 
     def _disconnect(self) -> asyncio.Event:
         if self._disconnect_event is None:
@@ -165,6 +193,30 @@ class MultiChunkTtsClient:
         yield b"second"
 
 
+class SubtitleTtsClient:
+    instances: list["SubtitleTtsClient"] = []
+
+    def __init__(self, config: VolcengineTtsConfig) -> None:
+        self.config = config
+        self.calls: list[dict] = []
+        SubtitleTtsClient.instances.append(self)
+
+    async def synthesize(
+        self,
+        *,
+        speaker: str,
+        text_chunks: list[str],
+    ) -> AsyncIterator[bytes | TtsSubtitleTiming]:
+        self.calls.append({"speaker": speaker, "text_chunks": text_chunks})
+        yield TtsSubtitleTiming(
+            cues=(
+                TtsSubtitleCue(text="我", start_ms=0, end_ms=180),
+                TtsSubtitleCue(text="先发言。", start_ms=180, end_ms=820),
+            )
+        )
+        yield b"abc"
+
+
 class FailingTtsClient:
     def __init__(self, config: VolcengineTtsConfig) -> None:
         self.config = config
@@ -205,6 +257,7 @@ class RecordingVoiceStore:
         self.chunks: list[dict] = []
         self.completed: list[dict] = []
         self.failed: list[dict] = []
+        self.subtitle_timings: list[dict] = []
         self.recent_utterance: dict | None = None
         self.replay_chunks: list[bytes] = []
         self.find_recent_calls: list[dict] = []
@@ -242,6 +295,16 @@ class RecordingVoiceStore:
 
     def fail_utterance(self, utterance_id: str, *, message: str) -> None:
         self.failed.append({"utterance_id": utterance_id, "message": message})
+
+    def update_subtitle_timings(
+        self,
+        utterance_id: str,
+        *,
+        subtitle_timings: list[dict],
+    ) -> None:
+        self.subtitle_timings.append(
+            {"utterance_id": utterance_id, "subtitle_timings": subtitle_timings}
+        )
 
     def find_recent_utterance(
         self,
@@ -391,6 +454,14 @@ async def wait_for_subscription(registry: LiveRunRegistry, run_id: str) -> None:
     raise AssertionError("voice stream did not subscribe")
 
 
+async def wait_for_messages(websocket: FakeWebSocket, count: int) -> None:
+    for _ in range(60):
+        if len(websocket.messages) >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"voice stream only sent {len(websocket.messages)} messages")
+
+
 def override_registry(registry: LiveRunRegistry) -> None:
     app.dependency_overrides[get_live_registry] = lambda: registry
 
@@ -440,7 +511,35 @@ def test_voice_stream_route_forwards_current_event_id_query() -> None:
         ) as ws:
             assert ws.receive_json()["type"] == "voice_start"
 
-    assert streamer.calls == [{"run_id": run.run_id, "current_event_id": 7}]
+    assert streamer.calls == [
+        {
+            "run_id": run.run_id,
+            "current_event_id": 7,
+            "playback_ack_required": False,
+        }
+    ]
+
+
+def test_voice_stream_route_forwards_playback_ack_query() -> None:
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    streamer = FakeVoiceStreamer()
+    override_registry(registry)
+    override_streamer(streamer)
+
+    with client_with_overrides() as client:
+        with client.websocket_connect(
+            f"/api/v1/games/runs/{run.run_id}/voice-stream?current_event_id=7&playback_ack=1"
+        ) as ws:
+            assert ws.receive_json()["type"] == "voice_start"
+
+    assert streamer.calls == [
+        {
+            "run_id": run.run_id,
+            "current_event_id": 7,
+            "playback_ack_required": True,
+        }
+    ]
 
 
 def test_voice_stream_route_reports_unknown_run() -> None:
@@ -471,7 +570,7 @@ def test_voice_stream_route_reports_unavailable_when_disabled() -> None:
             }
 
 
-def test_voice_stream_service_streams_public_voice_events_and_unsubscribes() -> None:
+def test_voice_stream_service_streams_public_voice_events_and_unsubscribes(tmp_path) -> None:
     RecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
@@ -480,6 +579,7 @@ def test_voice_stream_service_streams_public_voice_events_and_unsubscribes() -> 
         registry=registry,
         config=BASE_TTS_CONFIG,
         client_factory=RecordingTtsClient,
+        judge_voice_asset_dir=tmp_path / "judge-voice",
     )
 
     async def stream_live_events() -> None:
@@ -547,8 +647,24 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
           "sample_rate": 24000,
           "mime_type": "audio/mpeg",
           "lines": [
-            {"id": "night_start", "filename": "night_start.mp3", "exists": true},
-            {"id": "game_over_villagers", "filename": "game_over_villagers.mp3", "exists": true}
+            {
+              "id": "night_start",
+              "filename": "night_start.mp3",
+              "exists": true,
+              "subtitle_timings": [
+                {"text": "夜晚降临，", "start_ms": 0, "end_ms": 500},
+                {"text": "所有玩家请闭眼。", "start_ms": 500, "end_ms": 1100}
+              ]
+            },
+            {
+              "id": "game_over_villagers",
+              "filename": "game_over_villagers.mp3",
+              "exists": true,
+              "subtitle_timings": [
+                {"text": "游戏结束，", "start_ms": 0, "end_ms": 400},
+                {"text": "好人阵营获胜。", "start_ms": 400, "end_ms": 1000}
+              ]
+            }
           ]
         }
         """,
@@ -582,27 +698,38 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
     assert RecordingTtsClient.instances == []
     assert [message["type"] for message in websocket.messages] == [
         "voice_start",
+        "subtitle_timing",
         "audio_chunk",
         "voice_end",
         "voice_start",
+        "subtitle_timing",
         "audio_chunk",
         "voice_end",
     ]
-    start, chunk, _end = websocket.messages[:3]
+    start, subtitle, chunk, _end = websocket.messages[:4]
     assert start["speaker_kind"] == "judge"
     assert start["speaker_name"] == "法官"
     assert start["audio_format"] == "mp3"
     assert start["sample_rate"] == 24000
+    assert subtitle == {
+        "type": "subtitle_timing",
+        "utterance_id": start["utterance_id"],
+        "cues": [
+            {"text": "夜晚降临，", "start_ms": 0, "end_ms": 500},
+            {"text": "所有玩家请闭眼。", "start_ms": 500, "end_ms": 1100},
+        ],
+    }
     assert chunk["data"] == "c3RhdGljLW5pZ2h0"
 
 
-def test_voice_stream_service_ignores_static_judge_assets_when_format_differs_from_live_config(
+def test_voice_stream_service_uses_static_judge_assets_when_format_differs_from_live_config(
     tmp_path,
 ) -> None:
     RecordingTtsClient.instances.clear()
     asset_dir = tmp_path / "judge-voice"
     asset_dir.mkdir()
     (asset_dir / "night_start.mp3").write_bytes(b"static-night")
+    (asset_dir / "game_over_villagers.mp3").write_bytes(b"static-end")
     (asset_dir / "manifest.json").write_text(
         """
         {
@@ -610,7 +737,22 @@ def test_voice_stream_service_ignores_static_judge_assets_when_format_differs_fr
           "sample_rate": 24000,
           "mime_type": "audio/mpeg",
           "lines": [
-            {"id": "night_start", "filename": "night_start.mp3", "exists": true}
+            {
+              "id": "night_start",
+              "filename": "night_start.mp3",
+              "exists": true,
+              "subtitle_timings": [
+                {"text": "夜晚降临，", "start_ms": 0, "end_ms": 500}
+              ]
+            },
+            {
+              "id": "game_over_villagers",
+              "filename": "game_over_villagers.mp3",
+              "exists": true,
+              "subtitle_timings": [
+                {"text": "游戏结束，", "start_ms": 0, "end_ms": 400}
+              ]
+            }
           ]
         }
         """,
@@ -641,19 +783,21 @@ def test_voice_stream_service_ignores_static_judge_assets_when_format_differs_fr
 
     asyncio.run(stream_live_events())
 
-    calls = [call for instance in RecordingTtsClient.instances for call in instance.calls]
-    assert calls[0] == (
-        {"speaker": "judge", "text_chunks": ["夜晚降临，", "所有玩家请闭眼。"]}
-    )
-    start, chunk, _end = websocket.messages[:3]
+    assert RecordingTtsClient.instances == []
+    start, subtitle, chunk, _end = websocket.messages[:4]
     assert start["speaker_kind"] == "judge"
-    assert start["audio_format"] == "pcm"
+    assert start["audio_format"] == "mp3"
     assert start["sample_rate"] == 24000
-    assert chunk["audio_format"] == "pcm"
-    assert chunk["data"] == "YWJj"
+    assert subtitle == {
+        "type": "subtitle_timing",
+        "utterance_id": start["utterance_id"],
+        "cues": [{"text": "夜晚降临，", "start_ms": 0, "end_ms": 500}],
+    }
+    assert chunk["audio_format"] == "mp3"
+    assert chunk["data"] == "c3RhdGljLW5pZ2h0"
 
 
-def test_voice_stream_service_streams_multiple_audio_chunks_per_utterance() -> None:
+def test_voice_stream_service_streams_multiple_audio_chunks_per_utterance(tmp_path) -> None:
     MultiChunkTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
@@ -662,6 +806,7 @@ def test_voice_stream_service_streams_multiple_audio_chunks_per_utterance() -> N
         registry=registry,
         config=BASE_TTS_CONFIG,
         client_factory=MultiChunkTtsClient,
+        judge_voice_asset_dir=tmp_path / "judge-voice",
     )
 
     async def stream_live_events() -> None:
@@ -701,6 +846,68 @@ def test_voice_stream_service_streams_multiple_audio_chunks_per_utterance() -> N
     assert second_chunk["sample_rate"] == 24000
     assert second_chunk["data"] == "c2Vjb25k"
     assert websocket.messages[5]["chunk_index"] == 0
+
+
+def test_voice_stream_service_forwards_and_persists_subtitle_timing_events() -> None:
+    SubtitleTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    voice_store = RecordingVoiceStore()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=SubtitleTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-subtitle",
+                "visible_text": "我先发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    start, subtitle, chunk, end = websocket.messages[:4]
+    assert [message["type"] for message in websocket.messages[:4]] == [
+        "voice_start",
+        "subtitle_timing",
+        "audio_chunk",
+        "voice_end",
+    ]
+    assert subtitle == {
+        "type": "subtitle_timing",
+        "utterance_id": start["utterance_id"],
+        "cues": [
+            {"text": "我", "start_ms": 0, "end_ms": 180},
+            {"text": "先发言。", "start_ms": 180, "end_ms": 820},
+        ],
+    }
+    assert chunk["utterance_id"] == start["utterance_id"]
+    assert end["utterance_id"] == start["utterance_id"]
+    matching_timings = [
+        timing
+        for timing in voice_store.subtitle_timings
+        if timing["utterance_id"] == start["utterance_id"]
+    ]
+    assert matching_timings == [
+        {
+            "utterance_id": start["utterance_id"],
+            "subtitle_timings": subtitle["cues"],
+        }
+    ]
 
 
 def test_voice_stream_service_persists_successful_utterance_chunks_and_completion() -> None:
@@ -763,6 +970,61 @@ def test_voice_stream_service_persists_successful_utterance_chunks_and_completio
     assert voice_store.completed[0]["utterance_id"] == start["utterance_id"]
     assert voice_store.completed[0]["duration_ms"] == end["duration_ms"]
     assert voice_store.failed == []
+
+
+def test_voice_stream_service_persists_coalesced_summary_last_event_id(
+    db_session: Session,
+) -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    store = DatabaseVoiceStore(db_session, session_id=run.session_id)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda session_id: store,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        first_event = registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="summarize",
+            phase="summary",
+            payload={
+                "request_id": "req-summary",
+                "visible_text": "这一轮先看票型，",
+                "is_public": True,
+            },
+        )
+        second_event = registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="summarize",
+            phase="summary",
+            payload={
+                "request_id": "req-summary",
+                "visible_text": "再听下一轮发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+        utterance_id = websocket.messages[0]["utterance_id"]
+        loaded = store.load_utterance(utterance_id)
+        assert loaded is not None
+        assert loaded["source_event_id"] == first_event.id
+        assert loaded["last_source_event_id"] == second_event.id
+        assert loaded["text"] == "这一轮先看票型，再听下一轮发言。"
+
+    asyncio.run(stream_live_events())
 
 
 def test_voice_stream_service_ignores_public_action_when_flag_is_false() -> None:
@@ -852,6 +1114,91 @@ def test_voice_stream_service_does_not_replay_historical_events_on_connect() -> 
     ]
 
 
+def test_voice_stream_service_replays_historical_current_event_on_connect(tmp_path) -> None:
+    RecordingTtsClient.instances.clear()
+    asset_dir = tmp_path / "judge-voice"
+    asset_dir.mkdir()
+    (asset_dir / "game_intro.mp3").write_bytes(b"static-intro")
+    (asset_dir / "night_start.mp3").write_bytes(b"static-night")
+    (asset_dir / "manifest.json").write_text(
+        """
+        {
+          "audio_format": "mp3",
+          "sample_rate": 24000,
+          "mime_type": "audio/mpeg",
+          "lines": [
+            {"id": "game_intro", "filename": "game_intro.mp3", "exists": true},
+            {"id": "night_start", "filename": "night_start.mp3", "exists": true}
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    game_started = registry.publish(
+        run.run_id,
+        "game_started",
+        payload={
+            "players": [
+                {"name": "阿青", "role": "villager", "model": "test-model"},
+                {"name": "白石", "role": "werewolf", "model": "test-model"},
+            ]
+        },
+    )
+    night_started = registry.publish(
+        run.run_id,
+        "phase_started",
+        round_number=1,
+        phase="night",
+        payload={"active_players": ["阿青", "白石"]},
+    )
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=replace(BASE_TTS_CONFIG, audio_format="mp3"),
+        client_factory=RecordingTtsClient,
+        judge_voice_asset_dir=asset_dir,
+    )
+
+    async def stream_events() -> None:
+        task = asyncio.create_task(
+            service.stream_run(
+                run.run_id,
+                websocket,
+                current_event_id=game_started.id,
+            )
+        )
+        await wait_for_subscription(registry, run.run_id)
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_events())
+
+    first_start, first_chunk, first_end = websocket.messages[:3]
+    second_start, second_chunk, second_end = websocket.messages[3:6]
+    assert [message["type"] for message in websocket.messages[:6]] == [
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+    ]
+    assert first_start["source_event_id"] == game_started.id
+    assert first_start["speaker_kind"] == "judge"
+    assert first_start["speaker_name"] == "法官"
+    assert first_start["audio_format"] == "mp3"
+    assert first_chunk["data"] == "c3RhdGljLWludHJv"
+    assert first_end["utterance_id"] == first_start["utterance_id"]
+    assert second_start["source_event_id"] == night_started.id
+    assert second_start["speaker_kind"] == "judge"
+    assert second_start["speaker_name"] == "法官"
+    assert second_start["audio_format"] == "mp3"
+    assert second_chunk["data"] == "c3RhdGljLW5pZ2h0"
+    assert second_end["utterance_id"] == second_start["utterance_id"]
+
+
 def test_voice_stream_service_replays_recent_complete_utterance_then_streams_future_events() -> (
     None
 ):
@@ -881,6 +1228,10 @@ def test_voice_stream_service_replays_recent_complete_utterance_then_streams_fut
         "mime_type": "audio/L16",
         "status": "complete",
         "duration_ms": 345,
+        "subtitle_timings": [
+            {"text": "旧", "start_ms": 0, "end_ms": 120},
+            {"text": "发言", "start_ms": 120, "end_ms": 345},
+        ],
     }
     voice_store.replay_chunks = [b"old-audio-0", b"old-audio-1"]
     websocket = FakeWebSocket()
@@ -911,16 +1262,25 @@ def test_voice_stream_service_replays_recent_complete_utterance_then_streams_fut
     asyncio.run(stream_events())
 
     assert voice_store.find_recent_calls == [{"run_id": run.run_id, "current_event_id": 7}]
-    assert websocket.messages[:4] == [
+    assert websocket.messages[:5] == [
         {
             "type": "voice_start",
             "utterance_id": "stored-voice-1",
             "source_event_id": 6,
+            "last_source_event_id": 7,
             "speaker_kind": "player",
             "speaker_name": "阿青",
             "mime_type": "audio/L16",
             "audio_format": "pcm",
             "sample_rate": 24000,
+        },
+        {
+            "type": "subtitle_timing",
+            "utterance_id": "stored-voice-1",
+            "cues": [
+                {"text": "旧", "start_ms": 0, "end_ms": 120},
+                {"text": "发言", "start_ms": 120, "end_ms": 345},
+            ],
         },
         {
             "type": "audio_chunk",
@@ -946,12 +1306,12 @@ def test_voice_stream_service_replays_recent_complete_utterance_then_streams_fut
             "duration_ms": 345,
         },
     ]
-    assert [message["type"] for message in websocket.messages[4:7]] == [
+    assert [message["type"] for message in websocket.messages[5:8]] == [
         "voice_start",
         "audio_chunk",
         "voice_end",
     ]
-    assert websocket.messages[4]["speaker_name"] == "2号玩家"
+    assert websocket.messages[5]["speaker_name"] == "2号玩家"
     calls = [call for instance in RecordingTtsClient.instances for call in instance.calls]
     assert calls[0] == {
         "speaker": "player",
@@ -1046,6 +1406,7 @@ def test_voice_stream_service_replays_database_utterance_when_newer_rows_are_inv
             "type": "voice_start",
             "utterance_id": "stored-complete",
             "source_event_id": 4,
+            "last_source_event_id": 4,
             "speaker_kind": "player",
             "speaker_name": "阿青",
             "mime_type": "audio/L16",
@@ -1239,7 +1600,7 @@ def test_voice_stream_service_reports_misconfigured_reason() -> None:
     assert registry.get_run(run.run_id).subscribers == []
 
 
-def test_voice_stream_service_continues_after_synthesis_error() -> None:
+def test_voice_stream_service_continues_after_synthesis_error(tmp_path) -> None:
     FailingThenRecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
@@ -1248,6 +1609,7 @@ def test_voice_stream_service_continues_after_synthesis_error() -> None:
         registry=registry,
         config=BASE_TTS_CONFIG,
         client_factory=FailingThenRecordingTtsClient,
+        judge_voice_asset_dir=tmp_path / "judge-voice",
     )
 
     async def stream_live_events() -> None:
@@ -1427,6 +1789,62 @@ def test_voice_stream_service_continues_audio_when_persistence_fails(
     )
 
 
+def test_voice_stream_service_skips_dependent_persistence_after_upsert_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    voice_store = FailingVoiceStore(fail_method="upsert_utterance")
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-persist-parent-fails",
+                "visible_text": "我先发言。",
+                "is_public": True,
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    with caplog.at_level("WARNING", logger="app.werewolf.voice_stream"):
+        asyncio.run(stream_live_events())
+
+    assert [message["type"] for message in websocket.messages[:3]] == [
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+    ]
+    utterance_id = websocket.messages[0]["utterance_id"]
+    assert [
+        chunk for chunk in voice_store.chunks if chunk["utterance_id"] == utterance_id
+    ] == []
+    assert [
+        completed
+        for completed in voice_store.completed
+        if completed["utterance_id"] == utterance_id
+    ] == []
+    assert [
+        record.persistence_operation
+        for record in caplog.records
+        if record.message == "Voice persistence failed" and record.utterance_id == utterance_id
+    ] == ["upsert_utterance"]
+
+
 def test_voice_stream_service_groups_immediate_deltas_by_request_id() -> None:
     RecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
@@ -1546,6 +1964,84 @@ def test_voice_stream_service_groups_delayed_deltas_by_request_id() -> None:
             "speaker": "player",
             "text_chunks": ["第一句，", "第二句。"],
         }
+    ]
+
+
+def test_voice_stream_service_waits_for_playback_ack_before_next_tts_request() -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(
+            service.stream_run(
+                run.run_id,
+                websocket,
+                playback_ack_required=True,
+            )
+        )
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-first",
+                "visible_text": "我是第一位发言。",
+                "is_public": True,
+            },
+        )
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="白石",
+            action="debate",
+            payload={
+                "request_id": "req-second",
+                "visible_text": "我是第二位发言。",
+                "is_public": True,
+            },
+        )
+        await wait_for_messages(websocket, 3)
+
+        calls_before_ack = [
+            call for instance in RecordingTtsClient.instances for call in instance.calls
+        ]
+        assert calls_before_ack == [
+            {"speaker": "player", "text_chunks": ["我是第一位发言。"]},
+        ]
+        first_utterance_id = websocket.messages[0]["utterance_id"]
+        websocket.send_client_json(
+            {"type": "voice_played", "utterance_id": first_utterance_id}
+        )
+        await wait_for_messages(websocket, 6)
+
+        second_utterance_id = websocket.messages[3]["utterance_id"]
+        websocket.send_client_json(
+            {"type": "voice_played", "utterance_id": second_utterance_id}
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await wait_for_messages(websocket, 9)
+        websocket.send_client_json(
+            {"type": "voice_played", "utterance_id": websocket.messages[6]["utterance_id"]}
+        )
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    player_calls = [
+        call for instance in RecordingTtsClient.instances for call in instance.calls
+    ]
+    assert player_calls[:2] == [
+        {"speaker": "player", "text_chunks": ["我是第一位发言。"]},
+        {"speaker": "player", "text_chunks": ["我是第二位发言。"]},
     ]
 
 

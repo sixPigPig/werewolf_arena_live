@@ -1565,7 +1565,7 @@ describe("LiveGamePage", () => {
     ).toHaveAttribute("data-card-state", "out");
   });
 
-  it("opens completed runs at the terminal event instead of replaying the full backlog", async () => {
+  it("keeps completed live runs in ordered playback instead of jumping to terminal", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(
@@ -1655,20 +1655,18 @@ describe("LiveGamePage", () => {
       });
     });
 
+    expect(await screen.findByText("已完成")).toBeInTheDocument();
     expect(
-      await screen.findByText("游戏结束，狼人阵营获胜。"),
+      within(screen.getByTestId("live-narrative-center")).getByText(
+        "运行已创建",
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByText("队列剩余：0")).toBeInTheDocument();
     expect(
-      screen.getByTestId("god-view-stage-player-card-李四"),
-    ).toHaveAccessibleName(
-      /最后行动/,
-    );
-    expect(
-      screen.getByTestId("god-view-stage-player-card-张三"),
-    ).not.toHaveAccessibleName(
-      /发言中/,
-    );
+      within(screen.getByTestId("live-narrative-center")).queryByText(
+        "游戏结束，狼人阵营获胜。",
+      ),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("队列剩余：5")).toBeInTheDocument();
   });
 
   it("keeps ordered playback when a live-opened run later completes", async () => {
@@ -1731,7 +1729,7 @@ describe("LiveGamePage", () => {
     expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
   });
 
-  it("reuses each run's first terminal-start decision when switching routes", async () => {
+  it("keeps ordered playback decisions when switching routes", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     const consoleError = vi
       .spyOn(console, "error")
@@ -1812,8 +1810,16 @@ describe("LiveGamePage", () => {
     });
     expect(await screen.findByText("已完成")).toBeInTheDocument();
     expect(
-      await screen.findByText("游戏结束，狼人阵营获胜。"),
+      within(screen.getByTestId("live-narrative-center")).getByText(
+        "运行已创建",
+      ),
     ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("live-narrative-center")).queryByText(
+        "游戏结束，狼人阵营获胜。",
+      ),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("队列剩余：2")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "run a" }));
     await waitFor(() =>

@@ -9,11 +9,15 @@ import pytest
 from app.werewolf import volcengine_tts as tts
 from app.werewolf import volcengine_tts_protocol as protocol
 from app.werewolf.volcengine_tts import (
+    TtsSubtitleCue,
+    TtsSubtitleTiming,
     VolcengineTtsConfig,
     VolcengineTtsClient,
     build_tts_headers,
     build_tts_request,
+    build_tts_session_request,
     mime_type_for_format,
+    parse_tts_subtitle_payload,
 )
 
 
@@ -181,6 +185,70 @@ def test_build_tts_request_contains_namespace_and_text_only() -> None:
     }
 
 
+def test_build_tts_session_request_enables_vendor_subtitle_timestamps() -> None:
+    request = build_tts_session_request(
+        speaker="player",
+        audio_format="pcm",
+        sample_rate=24000,
+    )
+
+    assert request["req_params"]["audio_params"]["enable_subtitle"] is True
+
+
+def test_parse_tts_subtitle_payload_uses_vendor_word_timings() -> None:
+    timing = parse_tts_subtitle_payload(
+        json.dumps(
+            {
+                "phonemes": [],
+                "text": "我先发言。",
+                "words": [
+                    {"text": "我", "startTime": 0.0, "endTime": 0.18},
+                    {"text": "先", "startTime": 0.18, "endTime": 0.34},
+                    {"text": "发言。", "startTime": 0.34, "endTime": 0.82},
+                ],
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+    assert timing == TtsSubtitleTiming(
+        cues=(
+            TtsSubtitleCue(text="我", start_ms=0, end_ms=180),
+            TtsSubtitleCue(text="先", start_ms=180, end_ms=340),
+            TtsSubtitleCue(text="发言。", start_ms=340, end_ms=820),
+        )
+    )
+
+
+def test_synthesize_yields_subtitle_timing_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_uuids(monkeypatch)
+    _calls, _connect_calls = _patch_volcengine_session(
+        monkeypatch,
+        [
+            _message(
+                protocol.MsgType.FullServerResponse,
+                event=protocol.EventType.TTSSubtitle,
+                payload=b'{"words":[{"text":"A","startTime":0,"endTime":0.1}]}',
+            ),
+            _message(protocol.MsgType.AudioOnlyServer, payload=b"audio-1"),
+            _message(
+                protocol.MsgType.FullServerResponse,
+                event=protocol.EventType.SessionFinished,
+            ),
+        ],
+    )
+    client = VolcengineTtsClient(BASE_CONFIG)
+
+    items = asyncio.run(_collect_synthesis(client, text_chunks=["first chunk"]))
+
+    assert items == [
+        TtsSubtitleTiming(cues=(TtsSubtitleCue(text="A", start_ms=0, end_ms=100),)),
+        b"audio-1",
+    ]
+
+
 def test_synthesize_happy_path_sends_documented_session_and_task_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -208,6 +276,7 @@ def test_synthesize_happy_path_sends_documented_session_and_task_payloads(
         "req_params": {
             "speaker": "player",
             "audio_params": {
+                "enable_subtitle": True,
                 "format": "mp3",
                 "sample_rate": 24000,
             },

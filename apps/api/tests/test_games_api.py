@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.routes.games import (
     SessionLiveStore,
+    SessionVoiceStore,
     _run_game_in_background,
     get_live_registry,
     get_replay_store,
@@ -170,6 +171,45 @@ class RecordingSessionLiveStore(SessionLiveStore):
     def append_event(self, event) -> None:
         self.events.append((event.run_id, event.id, event.type))
         super().append_event(event)
+
+
+def test_session_voice_store_updates_subtitle_timings() -> None:
+    store = SessionVoiceStore(
+        session_id="game_1200abcd",
+        session_factory=TestingSessionLocal,
+    )
+    utterance = VoiceUtterance(
+        utterance_id="voice_session_subtitles",
+        run_id="run_session_subtitles",
+        source_event_id=1,
+        request_id="req-session-subtitles",
+        speaker_kind="judge",
+        speaker_name="法官",
+        speaker="judge",
+        text="夜晚降临。",
+        action="phase_start",
+    )
+
+    store.upsert_utterance(
+        utterance,
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.update_subtitle_timings(
+        "voice_session_subtitles",
+        subtitle_timings=[{"text": "夜晚降临。", "start_ms": 0, "end_ms": 800}],
+    )
+
+    with TestingSessionLocal() as session:
+        loaded = DatabaseVoiceStore(session, session_id="game_1200abcd").load_utterance(
+            "voice_session_subtitles"
+        )
+
+    assert loaded is not None
+    assert loaded["subtitle_timings"] == [
+        {"text": "夜晚降临。", "start_ms": 0, "end_ms": 800}
+    ]
 
 
 def sample_state(session_id: str, *, winner: str = "狼人阵营", error: str = "") -> dict:
@@ -1444,17 +1484,150 @@ def test_get_game_playback_returns_persisted_events_and_saved_voices() -> None:
             "speaker_kind": "player",
             "speaker_name": "阿青",
             "mime_type": "audio/L16",
-            "audio_format": "pcm",
+                "audio_format": "pcm",
+                "sample_rate": 24000,
+                "duration_ms": 123,
+                "subtitle_timings": [],
+                "chunks": [{"chunk_index": 0, "data": "YWJj"}],
+            }
+        ]
+
+
+def test_get_game_playback_repairs_incomplete_saved_subtitle_timings() -> None:
+    session_id = "game_a110e003"
+    store_game_session(session_id)
+    registry = LiveRunRegistry(live_store=RecordingSessionLiveStore())
+    run = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    event = registry.publish(
+        run.run_id,
+        "model_response_delta",
+        actor="阿青",
+        action="debate",
+        payload={"request_id": "req-voice", "visible_text": "我是村民，我先过。", "is_public": True},
+    )
+    with TestingSessionLocal() as session:
+        voice_store = DatabaseVoiceStore(session, session_id=session_id)
+        voice_store.upsert_utterance(
+            VoiceUtterance(
+                utterance_id="voice_api_partial_subtitle",
+                run_id=run.run_id,
+                source_event_id=event.id,
+                request_id="req-voice",
+                speaker_kind="player",
+                speaker_name="阿青",
+                speaker="player",
+                text="我是村民，我先过。",
+                action="debate",
+            ),
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
+        voice_store.update_subtitle_timings(
+            "voice_api_partial_subtitle",
+            subtitle_timings=[
+                {"text": "我先过。", "start_ms": 700, "end_ms": 1320},
+            ],
+        )
+        voice_store.append_chunk(
+            "voice_api_partial_subtitle",
+            chunk_index=0,
+            audio=b"\0" * 48000,
+        )
+        voice_store.complete_utterance("voice_api_partial_subtitle", duration_ms=123)
+
+    response = client.get(f"/api/v1/games/{session_id}/playback")
+
+    assert response.status_code == 200
+    voice = response.json()["voices"][0]
+    assert "".join(cue["text"] for cue in voice["subtitle_timings"]) == "我是村民，我先过。"
+    assert voice["subtitle_timings"][0]["start_ms"] == 0
+    assert voice["subtitle_timings"][-1]["end_ms"] == 1000
+
+
+def test_get_game_playback_adds_static_judge_voice_without_saved_voice_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_a110e002"
+    store_game_session(session_id)
+    asset_dir = tmp_path / "judge-voice"
+    asset_dir.mkdir()
+    (asset_dir / "game_intro.mp3").write_bytes(b"static-intro")
+    (asset_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "audio_format": "mp3",
+                "sample_rate": 24000,
+                "mime_type": "audio/mpeg",
+                "lines": [
+                    {
+                        "id": "game_intro",
+                        "filename": "game_intro.mp3",
+                        "exists": True,
+                        "subtitle_timings": [
+                            {"text": "本局游戏开始，", "start_ms": 0, "end_ms": 600},
+                            {"text": "请确认身份牌。", "start_ms": 600, "end_ms": 1200},
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "app.api.routes.games.DEFAULT_JUDGE_VOICE_ASSET_DIR",
+        asset_dir,
+        raising=False,
+    )
+
+    response = client.get(f"/api/v1/games/{session_id}/playback")
+
+    assert response.status_code == 200
+    payload = response.json()
+    game_started_event = next(
+        event for event in payload["events"] if event["type"] == "game_started"
+    )
+    assert payload["voices"] == [
+        {
+            "utterance_id": f"static_judge_{game_started_event['id']}_game_intro",
+            "source_event_id": game_started_event["id"],
+            "last_source_event_id": game_started_event["id"],
+            "speaker_kind": "judge",
+            "speaker_name": "法官",
+            "mime_type": "audio/mpeg",
+            "audio_format": "mp3",
             "sample_rate": 24000,
-            "duration_ms": 123,
-            "chunks": [{"chunk_index": 0, "data": "YWJj"}],
+            "duration_ms": None,
+            "subtitle_timings": [
+                {"text": "本局游戏开始，", "start_ms": 0, "end_ms": 600},
+                {"text": "请确认身份牌。", "start_ms": 600, "end_ms": 1200},
+            ],
+            "chunks": [{"chunk_index": 0, "data": "c3RhdGljLWludHJv"}],
         }
     ]
 
 
-def test_get_game_playback_omits_saved_voices_without_persisted_live_events() -> None:
+def test_get_game_playback_omits_saved_voices_without_persisted_live_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session_id = "game_b00ce002"
     store_game_session(session_id)
+    empty_asset_dir = tmp_path / "judge-voice"
+    empty_asset_dir.mkdir()
+    monkeypatch.setattr(
+        "app.api.routes.games.DEFAULT_JUDGE_VOICE_ASSET_DIR",
+        empty_asset_dir,
+        raising=False,
+    )
     with TestingSessionLocal() as session:
         voice_store = DatabaseVoiceStore(session, session_id=session_id)
         voice_store.upsert_utterance(

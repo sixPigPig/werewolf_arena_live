@@ -29,9 +29,6 @@ export function LiveGamePage() {
   const { events, connectionState } = useGameRunEvents(runId);
   const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(false);
   const debugPanelButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [terminalStartByRunId, setTerminalStartByRunId] = useState<
-    Record<string, boolean>
-  >({});
   const [voiceAdvanceHold, setVoiceAdvanceHold] = useState(false);
   const {
     data: run,
@@ -59,21 +56,9 @@ export function LiveGamePage() {
   );
   const canResumeRun =
     run?.status === "failed" || terminalEvent?.type === "game_failed";
-  if (run && runId && !(runId in terminalStartByRunId)) {
-    setTerminalStartByRunId({
-      ...terminalStartByRunId,
-      [runId]: isTerminalRunStatus(run.status),
-    });
-  }
-
-  const shouldStartAtTerminal =
-    run && runId
-      ? terminalStartByRunId[runId] ?? isTerminalRunStatus(run.status)
-      : false;
   const director = useLiveDirector(events, {
     holdAdvance: voiceAdvanceHold,
     resetKey: runId,
-    startAtLatestTerminal: shouldStartAtTerminal,
   });
   const voice = useLiveVoiceStream(runId, {
     currentEventId: director.currentEventId,
@@ -267,13 +252,10 @@ export function LiveGamePage() {
   );
 }
 
-function isTerminalRunStatus(status: string) {
-  return status === "completed" || status === "failed";
-}
-
 function isVoicePlaybackBlocking(
   currentItem:
     | {
+        lastSourceEventId?: number;
         sourceEventId: number;
         status: string;
       }
@@ -285,7 +267,8 @@ function isVoicePlaybackBlocking(
     return false;
   }
 
-  if (currentItem.sourceEventId > currentEventId) {
+  const playbackEventId = currentItem.lastSourceEventId ?? currentItem.sourceEventId;
+  if (playbackEventId > currentEventId) {
     return false;
   }
 

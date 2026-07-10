@@ -122,6 +122,7 @@ describe("game API endpoints", () => {
             audio_format: "pcm",
             sample_rate: 24000,
             duration_ms: 120,
+            subtitle_timings: [],
             chunks: [{ chunk_index: 0, data: "YWJj" }],
           },
         ],

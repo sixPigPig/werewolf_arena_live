@@ -1419,6 +1419,77 @@ def test_world_state_debate_guidance_uses_round_speech_order() -> None:
     assert any("第 5/6 位" in line for line in world_state["debate_guidance"])
 
 
+def test_player_action_prompt_uses_seat_labels_and_maps_choice_to_internal_name() -> None:
+    class SeatLabelChoiceProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            del model, temperature
+            self.prompts.append(prompt)
+            return json.dumps(
+                {"reasoning": "2号玩家发言前后矛盾。", "vote": "2号玩家"},
+                ensure_ascii=False,
+            )
+
+    rule_set = get_rule_set("starter_6")
+    custom_names = ["阿青", "白石", "南风", "岚", "乌木", "烛火"]
+    state = initialize_game_state(
+        session_id="seat_label_prompt_mapping",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=20260709,
+        rule_set=rule_set,
+        player_configs=[
+            PlayerConfig(
+                seat=index,
+                profile_id=None,
+                name=name,
+                model="",
+                personality_id="balanced",
+                personality="",
+                appearance_id="default",
+                avatar_prompt="",
+                tags=(),
+            )
+            for index, name in enumerate(custom_names, start=1)
+        ],
+    )
+    provider = SeatLabelChoiceProvider()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=1,
+        rule_set=rule_set,
+        rng=random.Random(1),
+    )
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+
+    choice, action_log = engine._player_action(
+        player=state.players[0],
+        action="vote",
+        options=[state.players[1].name],
+        result_key="vote",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert choice == "白石"
+    assert action_log.choice == "白石"
+    assert action_log.lm_log.result == {
+        "reasoning": "2号玩家发言前后矛盾。",
+        "vote": "2号玩家",
+    }
+    assert provider.prompts
+    prompt = provider.prompts[0]
+    assert "你是1号玩家，身份是" in prompt
+    assert "当前存活玩家：1号玩家、2号玩家、3号玩家、4号玩家、5号玩家、6号玩家" in prompt
+    assert "候选人：2号玩家" in prompt
+    for name in custom_names:
+        assert name not in prompt
+
+
 def test_action_quality_warning_event_is_published_for_stage_mismatch() -> None:
     class CapturingSink:
         def __init__(self) -> None:
@@ -3284,41 +3355,59 @@ def test_day_exile_vote_requests_eligible_voters_concurrently() -> None:
     assert list(round_state.vote_weights) == eligible_voters
 
 
-def test_round_summaries_request_active_players_concurrently() -> None:
+def test_round_summaries_request_active_players_sequentially() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
-        session_id="session_test_parallel_summaries",
+        session_id="session_test_sequential_summaries",
         villager_model="villager-model",
         werewolf_model="wolf-model",
         seed=59,
         rule_set=rule_set,
     )
-    active_players = [player.name for player in state.players]
-    provider = BarrierActionProvider(
-        action_key="summarize",
-        result_key="summary",
-        response_value_by_actor={
-            name: f"{name} 的并发总结"
-            for name in active_players
-        },
-        expected_calls=len(active_players),
-    )
+    active_players = [player.name for player in state.players[:3]]
+    sink = CapturingEventSink()
+    provider = ScriptedChineseProvider()
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
 
     engine._run_summaries(round_state, round_log, active_players)
 
-    assert [
-        actor for action, actor in provider.actions if action == "summarize"
-    ] == active_players
+    summary_timeline = [
+        (event["type"], event.get("actor"))
+        for event in sink.events
+        if event.get("action") == "summarize"
+        and event["type"]
+        in {
+            "action_requested",
+            "model_request_started",
+            "model_response_received",
+            "action_parsed",
+        }
+    ]
+    assert summary_timeline == [
+        (event_type, actor)
+        for actor in active_players
+        for event_type in (
+            "action_requested",
+            "model_request_started",
+            "model_response_received",
+            "action_parsed",
+        )
+    ]
     assert list(round_state.private_summaries) == active_players
     assert round_state.summaries == {}
     assert round_state.public_summary == "第1轮；没有公开出局。"
     assert [log.actor for log in round_log.summaries] == active_players
     for name in active_players:
         assert state.player_by_name()[name].observations[-1] == (
-            f"第1轮总结：{name} 的并发总结"
+            "第1轮总结：我会继续关注发言矛盾最大的玩家。"
         )
 
 

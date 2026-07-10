@@ -81,6 +81,41 @@ def test_voice_store_creates_updates_chunks_and_completes(db_session: Session) -
     assert store.load_chunks("voice_1") == [b"abc", b"def"]
 
 
+def test_voice_store_merges_subtitle_timing_updates(db_session: Session) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("我是村民，我先过。"),
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+        status="synthesizing",
+    )
+
+    store.update_subtitle_timings(
+        "voice_1",
+        subtitle_timings=[
+            {"text": "我是", "start_ms": 0, "end_ms": 240},
+            {"text": "村民，", "start_ms": 240, "end_ms": 700},
+        ],
+    )
+    store.update_subtitle_timings(
+        "voice_1",
+        subtitle_timings=[
+            {"text": "我先", "start_ms": 700, "end_ms": 1040},
+            {"text": "过。", "start_ms": 1040, "end_ms": 1320},
+        ],
+    )
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["subtitle_timings"] == [
+        {"text": "我是", "start_ms": 0, "end_ms": 240},
+        {"text": "村民，", "start_ms": 240, "end_ms": 700},
+        {"text": "我先", "start_ms": 700, "end_ms": 1040},
+        {"text": "过。", "start_ms": 1040, "end_ms": 1320},
+    ]
+
+
 def test_voice_store_finds_recent_utterance_for_request(db_session: Session) -> None:
     store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
     first = stored_utterance(utterance_id="voice_1", source_event_id=4, text="第一句")

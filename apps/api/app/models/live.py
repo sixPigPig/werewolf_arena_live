@@ -88,6 +88,7 @@ class VoiceUtteranceRecord(Base):
         String(30), nullable=False, default="pending", server_default="pending", index=True
     )
     duration_ms: Mapped[int | None] = mapped_column(nullable=True)
+    subtitle_timings: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

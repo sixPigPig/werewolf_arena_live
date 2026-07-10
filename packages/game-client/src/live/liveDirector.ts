@@ -195,6 +195,9 @@ export function useLiveDirector(
   const lastStartedEventIdRef = useRef<number | null>(null);
   const pausedAtRef = useRef<number | null>(null);
   const resetKeyRef = useRef(options.resetKey);
+  const terminalStartRequestedAtResetRef = useRef(
+    options.startAtLatestTerminal === true,
+  );
   const autoStartedTerminalEventIdRef = useRef<number | null>(
     options.startAtLatestTerminal && latestTerminalCue
       ? latestTerminalCue.eventId
@@ -205,7 +208,11 @@ export function useLiveDirector(
   );
 
   useEffect(() => {
-    if (!options.startAtLatestTerminal || !latestTerminalCue) {
+    if (
+      !terminalStartRequestedAtResetRef.current ||
+      !options.startAtLatestTerminal ||
+      !latestTerminalCue
+    ) {
       return;
     }
 
@@ -267,12 +274,14 @@ export function useLiveDirector(
     startedAtRef.current = Date.now();
     lastStartedEventIdRef.current = null;
     pausedAtRef.current = null;
+    terminalStartRequestedAtResetRef.current =
+      options.startAtLatestTerminal === true;
     autoStartedTerminalEventIdRef.current = null;
     autoStartedEventTypeIdRef.current = null;
     setCurrentEventId(null);
     setIsPaused(false);
     setSpeedState(1);
-  }, [options.resetKey]);
+  }, [options.resetKey, options.startAtLatestTerminal]);
 
   const moveToIndex = useCallback(
     (nextIndex: number) => {
@@ -905,7 +914,8 @@ function isPublicSpeechAction(action: string | null): boolean {
   return (
     action === "debate" ||
     action === "sheriff_speech" ||
-    action === "sheriff_pk_speech"
+    action === "sheriff_pk_speech" ||
+    action === "summarize"
   );
 }
 

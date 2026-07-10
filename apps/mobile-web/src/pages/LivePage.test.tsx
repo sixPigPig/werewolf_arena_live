@@ -152,15 +152,6 @@ const backlogSpeakingDeltaEvent: LiveGameEvent = {
   },
 };
 
-const speechRequestEvent: LiveGameEvent = {
-  ...gameStartedEvent,
-  id: 2,
-  type: "model_request_started",
-  actor: "阿青",
-  action: "debate",
-  payload: { request_id: "req-judge-speech" },
-};
-
 const nightPhaseEvent: LiveGameEvent = {
   ...gameStartedEvent,
   id: 2,
@@ -452,11 +443,48 @@ describe("LivePage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders a lower-third subtitle for public player speech", async () => {
+  it("does not render event-derived subtitles without voice timing", async () => {
     gameClientMocks.useGameRunEvents.mockReturnValue({
       connectionState: "open",
       events: [gameStartedEvent, backlogRequestEvent, backlogSpeakingDeltaEvent],
       latestEvent: backlogSpeakingDeltaEvent,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    await screen.findByRole("region", { name: "当前舞台" });
+    expect(
+      screen.queryByRole("status", {
+        name: "直播字幕",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders a lower-third subtitle from live voice timing", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, backlogRequestEvent, backlogSpeakingDeltaEvent],
+      latestEvent: backlogSpeakingDeltaEvent,
+    });
+    gameClientMocks.useLiveVoiceStream.mockReturnValue({
+      connectionState: "open",
+      currentItem: {
+        lastSourceEventId: 4,
+        sourceEventId: 4,
+        status: "playing",
+      },
+      currentSpeakerName: "1号玩家",
+      currentSubtitle: {
+        speakerKind: "player",
+        speakerName: "1号玩家",
+        text: "我先听后置位发言。",
+        utteranceId: "voice-1",
+      },
+      errors: [],
+      unlockAudio,
     });
     const user = userEvent.setup();
 
@@ -474,32 +502,28 @@ describe("LivePage", () => {
     expect(within(subtitle).getByText("我先听后置位发言。")).toBeVisible();
   });
 
-  it("renders a judge subtitle for public speech prompts", async () => {
-    gameClientMocks.useGameRunEvents.mockReturnValue({
-      connectionState: "open",
-      events: [gameStartedEvent, speechRequestEvent],
-      latestEvent: speechRequestEvent,
-    });
-    const user = userEvent.setup();
-
-    renderLiveRoute();
-
-    await user.click(await screen.findByRole("button", { name: "最新" }));
-
-    const subtitle = await screen.findByRole("status", {
-      name: "直播字幕",
-    });
-
-    expect(subtitle).toHaveClass("mobile-live-subtitle-judge");
-    expect(within(subtitle).getByText("法官")).toBeVisible();
-    expect(within(subtitle).getByText("请听 1号玩家 的发言。")).toBeVisible();
-  });
-
-  it("renders a judge subtitle for game start narration", async () => {
+  it("renders judge subtitles from live voice timing", async () => {
     gameClientMocks.useGameRunEvents.mockReturnValue({
       connectionState: "open",
       events: [gameStartedEvent],
       latestEvent: gameStartedEvent,
+    });
+    gameClientMocks.useLiveVoiceStream.mockReturnValue({
+      connectionState: "open",
+      currentItem: {
+        lastSourceEventId: 1,
+        sourceEventId: 1,
+        status: "playing",
+      },
+      currentSpeakerName: "法官",
+      currentSubtitle: {
+        speakerKind: "judge",
+        speakerName: "法官",
+        text: "本局游戏开始，请所有玩家确认自己的身份牌。",
+        utteranceId: "voice-judge",
+      },
+      errors: [],
+      unlockAudio,
     });
 
     renderLiveRoute();
@@ -510,8 +534,11 @@ describe("LivePage", () => {
       name: "直播字幕",
     });
 
+    expect(subtitle).toHaveClass("mobile-live-subtitle-judge");
     expect(within(subtitle).getByText("法官")).toBeVisible();
-    expect(within(subtitle).getByText("本局游戏开始，")).toBeVisible();
+    expect(
+      within(subtitle).getByText("本局游戏开始，请所有玩家确认自己的身份牌。"),
+    ).toBeVisible();
   });
 
   it("styles mobile live subtitles as a lower-third speech HUD", () => {

@@ -5,7 +5,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   buildLivePhaseSegments,
   deriveGodViewState,
-  deriveLiveNarrativeState,
   deriveLiveNavStatus,
   deriveLiveSpectatorState,
   getGameRun,
@@ -20,7 +19,7 @@ import {
   MobileLiveTheater,
   MobileLiveTheaterTopBar,
 } from "../components/MobileLiveTheater";
-import { deriveMobileLiveSubtitle } from "../components/mobileLiveSubtitle";
+import { voiceSubtitleToMobileSubtitle } from "../components/mobileLiveSubtitle";
 
 const EMPTY_EVENTS: LiveGameEvent[] = [];
 
@@ -55,7 +54,6 @@ export function LivePage() {
     holdAdvance: voiceAdvanceHold,
     resetKey: gameId,
     startAtEventType: "game_started",
-    startAtLatestTerminal: isTerminalRunStatus(run?.status),
   });
   const voice = useLiveVoiceStream(gameId, {
     currentEventId: director.currentEventId,
@@ -149,23 +147,9 @@ export function LivePage() {
       stageEvents,
     ],
   );
-  const narrativeState = useMemo(
-    () =>
-      deriveLiveNarrativeState({
-        cue: director.currentCue,
-        events: stageEvents,
-        godViewState,
-        spectatorState,
-      }),
-    [director.currentCue, godViewState, spectatorState, stageEvents],
-  );
   const subtitle = useMemo(
-    () =>
-      deriveMobileLiveSubtitle({
-        godViewState,
-        narrativeState,
-      }),
-    [godViewState, narrativeState],
+    () => voiceSubtitleToMobileSubtitle(voice.currentSubtitle),
+    [voice.currentSubtitle],
   );
   const liveStatus = deriveLiveNavStatus({
     backlogCount: director.backlogCount,
@@ -268,6 +252,7 @@ function isTerminalRunStatus(status: string | undefined) {
 function isVoicePlaybackBlocking(
   currentItem:
     | {
+        lastSourceEventId?: number;
         sourceEventId: number;
         status: string;
       }
@@ -275,11 +260,14 @@ function isVoicePlaybackBlocking(
     | undefined,
   currentEventId: number | null,
 ) {
-  return Boolean(
-    currentItem &&
-      currentEventId !== null &&
-      currentItem.sourceEventId <= currentEventId &&
-      currentItem.status !== "played" &&
-      currentItem.status !== "error",
-  );
+  if (!currentItem || currentEventId === null) {
+    return false;
+  }
+
+  const playbackEventId = currentItem.lastSourceEventId ?? currentItem.sourceEventId;
+  if (playbackEventId > currentEventId) {
+    return false;
+  }
+
+  return currentItem.status !== "played" && currentItem.status !== "error";
 }

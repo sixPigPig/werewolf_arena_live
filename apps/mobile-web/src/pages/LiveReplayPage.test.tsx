@@ -10,6 +10,7 @@ import type { GamePlayback, LiveGameEvent } from "@werewolf-arena/game-client";
 const gameClientMocks = vi.hoisted(() => ({
   getGamePlayback: vi.fn(),
   resumeGameRun: vi.fn(),
+  useLiveDirector: vi.fn(),
   usePlaybackVoice: vi.fn(),
 }));
 
@@ -22,6 +23,10 @@ vi.mock("@werewolf-arena/game-client", async () => {
     ...actual,
     getGamePlayback: gameClientMocks.getGamePlayback,
     resumeGameRun: gameClientMocks.resumeGameRun,
+    useLiveDirector: (...args: Parameters<typeof actual.useLiveDirector>) => {
+      gameClientMocks.useLiveDirector(...args);
+      return actual.useLiveDirector(...args);
+    },
     usePlaybackVoice: gameClientMocks.usePlaybackVoice,
   };
 });
@@ -202,11 +207,28 @@ describe("LiveReplayPage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders replay subtitles for public player speech", async () => {
+  it("renders timed replay subtitles from saved voice metadata without audio playback", async () => {
     const user = userEvent.setup();
 
     gameClientMocks.getGamePlayback.mockResolvedValue(
       buildPlayback({
+        voices: [
+          {
+            utterance_id: "voice-1",
+            source_event_id: 4,
+            last_source_event_id: 4,
+            speaker_kind: "player",
+            speaker_name: "1号玩家",
+            mime_type: "audio/L16",
+            audio_format: "pcm",
+            sample_rate: 24000,
+            duration_ms: 100,
+            subtitle_timings: [
+              { text: "语音时间轴字幕", start_ms: 18745, end_ms: 18845 },
+            ],
+            chunks: [],
+          },
+        ],
         events: [
           gameStartedEvent,
           phaseStartedEvent,
@@ -223,11 +245,144 @@ describe("LiveReplayPage", () => {
     const subtitle = await screen.findByRole("status", {
       name: "直播字幕",
     });
-
-    expect(subtitle).toHaveClass("mobile-live-subtitle");
     expect(subtitle).toHaveClass("mobile-live-subtitle-player-0");
     expect(within(subtitle).getByText("1号玩家")).toBeVisible();
-    expect(within(subtitle).getByText("我先听后置位发言。")).toBeVisible();
+    expect(within(subtitle).getByText("语音时间轴字幕")).toBeVisible();
+  });
+
+  it("prefers timed replay voice subtitles over event-derived subtitles", async () => {
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "open",
+      currentSpeakerName: "1号玩家",
+      currentSubtitle: {
+        speakerKind: "player",
+        speakerName: "1号玩家",
+        text: "语音时间轴字幕",
+        utteranceId: "voice-1",
+      },
+      errors: [],
+      unlockAudio: vi.fn(async () => true),
+    });
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        events: [
+          gameStartedEvent,
+          phaseStartedEvent,
+          requestStartedEvent,
+          responseDeltaEvent,
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+
+    renderLiveReplayRoute();
+
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const subtitle = await screen.findByRole("status", {
+      name: "直播字幕",
+    });
+    expect(within(subtitle).getByText("语音时间轴字幕")).toBeVisible();
+    expect(within(subtitle).queryByText("我先听后置位发言。")).not.toBeInTheDocument();
+  });
+
+  it("prefers the active playback voice subtitle over replay clock fallback", async () => {
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "open",
+      currentSpeakerName: "1号玩家",
+      currentSubtitle: {
+        speakerKind: "player",
+        speakerName: "1号玩家",
+        text: "真实语音正在说的字幕",
+        utteranceId: "voice-1",
+      },
+      errors: [],
+      unlockAudio: vi.fn(async () => true),
+    });
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        voices: [
+          {
+            utterance_id: "voice-1",
+            source_event_id: 4,
+            last_source_event_id: 4,
+            speaker_kind: "player",
+            speaker_name: "1号玩家",
+            mime_type: "audio/L16",
+            audio_format: "pcm",
+            sample_rate: 24000,
+            duration_ms: 100,
+            subtitle_timings: [
+              { text: "回放时钟兜底字幕", start_ms: 0, end_ms: 200 },
+            ],
+            chunks: [],
+          },
+        ],
+        events: [
+          gameStartedEvent,
+          phaseStartedEvent,
+          requestStartedEvent,
+          responseDeltaEvent,
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+
+    renderLiveReplayRoute();
+
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const subtitle = await screen.findByRole("status", {
+      name: "直播字幕",
+    });
+    expect(within(subtitle).getByText("真实语音正在说的字幕")).toBeVisible();
+    expect(within(subtitle).queryByText("回放时钟兜底字幕")).not.toBeInTheDocument();
+  });
+
+  it("holds replay director advancement while saved voice is playing", async () => {
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "open",
+      currentItem: {
+        lastSourceEventId: 4,
+        sourceEventId: 4,
+        status: "playing",
+      },
+      currentSpeakerName: "1号玩家",
+      currentSubtitle: {
+        speakerKind: "player",
+        speakerName: "1号玩家",
+        text: "语音时间轴字幕",
+        utteranceId: "voice-1",
+      },
+      errors: [],
+      unlockAudio: vi.fn(async () => true),
+    });
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        events: [
+          gameStartedEvent,
+          phaseStartedEvent,
+          requestStartedEvent,
+          responseDeltaEvent,
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+
+    renderLiveReplayRoute();
+
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    await waitFor(() => {
+      expect(gameClientMocks.useLiveDirector).toHaveBeenLastCalledWith(
+        expect.any(Array),
+        expect.objectContaining({
+          holdAdvance: true,
+          resetKey: "session-1",
+          startAtLatestTerminal: false,
+        }),
+      );
+    });
   });
 
   it("renders the phase selector", async () => {
@@ -270,7 +425,7 @@ describe("LiveReplayPage", () => {
     expect(router.state.location.pathname).toBe("/games/run-resumed/live");
   });
 
-  it("enables saved replay voice after unlocking audio", async () => {
+  it("enables saved replay voice when opening the page", async () => {
     const unlockAudio = vi.fn(async () => true);
     gameClientMocks.usePlaybackVoice.mockReturnValue({
       connectionState: "idle",
@@ -291,18 +446,16 @@ describe("LiveReplayPage", () => {
             audio_format: "pcm",
             sample_rate: 24000,
             duration_ms: 100,
+            subtitle_timings: [],
             chunks: [{ chunk_index: 0, data: "YWJj" }],
           },
         ],
       }),
     );
-    const user = userEvent.setup();
-
     renderLiveReplayRoute();
 
-    await user.click(await screen.findByRole("button", { name: "开启语音" }));
-
-    expect(unlockAudio).toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "关闭语音" })).toBeVisible();
+    await waitFor(() => expect(unlockAudio).toHaveBeenCalled());
     await waitFor(() => {
       expect(gameClientMocks.usePlaybackVoice).toHaveBeenLastCalledWith(
         expect.arrayContaining([

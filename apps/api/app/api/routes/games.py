@@ -42,7 +42,11 @@ from app.werewolf.rules import (
 )
 from app.werewolf.runner import GameRunError, new_session_id, resume_game, run_game
 from app.werewolf.voice import VoiceUtterance
-from app.werewolf.voice_stream import LiveVoiceStreamService
+from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
+from app.werewolf.voice_stream import (
+    LiveVoiceStreamService,
+    build_static_judge_playback_voices,
+)
 from app.werewolf.voice_store import DatabaseVoiceStore
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
@@ -156,6 +160,21 @@ class SessionVoiceStore:
             DatabaseVoiceStore(db, session_id=self.session_id).fail_utterance(
                 utterance_id,
                 message=message,
+            )
+        finally:
+            db.close()
+
+    def update_subtitle_timings(
+        self,
+        utterance_id: str,
+        *,
+        subtitle_timings: list[dict[str, Any]],
+    ) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseVoiceStore(db, session_id=self.session_id).update_subtitle_timings(
+                utterance_id,
+                subtitle_timings=subtitle_timings,
             )
         finally:
             db.close()
@@ -462,6 +481,7 @@ async def stream_game_run_voice(
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
     streamer: Annotated[LiveVoiceStreamService, Depends(get_voice_streamer)],
     current_event_id: Annotated[int | None, Query(ge=0)] = None,
+    playback_ack: Annotated[bool, Query()] = False,
 ) -> None:
     await websocket.accept()
     if registry.try_get_run(run_id) is None:
@@ -474,7 +494,12 @@ async def stream_game_run_voice(
         )
         await websocket.close()
         return
-    await streamer.stream_run(run_id, websocket, current_event_id=current_event_id)
+    await streamer.stream_run(
+        run_id,
+        websocket,
+        current_event_id=current_event_id,
+        playback_ack_required=playback_ack,
+    )
 
 
 @router.post("/{session_id}/resume", status_code=201)
@@ -561,16 +586,47 @@ def get_game_playback(
     except RecoverableDatabaseError:
         persisted_events = []
 
-    if not persisted_events:
-        playback["voices"] = []
-        return playback
+    saved_voices: list[dict[str, Any]] = []
+    if persisted_events:
+        playback["events"] = persisted_events
+        try:
+            saved_voices = DatabaseVoiceStore(
+                db,
+                session_id=session_id,
+            ).list_playback_voices()
+        except RecoverableDatabaseError:
+            saved_voices = []
 
-    playback["events"] = persisted_events
-    try:
-        playback["voices"] = DatabaseVoiceStore(db, session_id=session_id).list_playback_voices()
-    except RecoverableDatabaseError:
-        playback["voices"] = []
+    static_judge_voices = build_static_judge_playback_voices(
+        playback["events"],
+        asset_dir=DEFAULT_JUDGE_VOICE_ASSET_DIR,
+    )
+    playback["voices"] = _merge_playback_voices(saved_voices, static_judge_voices)
     return playback
+
+
+def _merge_playback_voices(
+    saved_voices: list[dict[str, Any]],
+    fallback_voices: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged = list(saved_voices)
+    saved_keys = {
+        (voice.get("source_event_id"), voice.get("speaker_kind"))
+        for voice in saved_voices
+    }
+    for voice in fallback_voices:
+        key = (voice.get("source_event_id"), voice.get("speaker_kind"))
+        if key in saved_keys:
+            continue
+        saved_keys.add(key)
+        merged.append(voice)
+    return sorted(
+        merged,
+        key=lambda voice: (
+            voice.get("source_event_id") if isinstance(voice.get("source_event_id"), int) else 0,
+            voice.get("utterance_id") if isinstance(voice.get("utterance_id"), str) else "",
+        ),
+    )
 
 
 @router.get("/{session_id}")
