@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.routes import player_profiles as player_profiles_routes
 from app.api.routes.player_profiles import get_player_avatar_asset_store
+from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -40,7 +41,8 @@ def override_get_db() -> Generator[Session, None, None]:
 
 
 @pytest.fixture(autouse=True)
-def isolated_db() -> Generator[None, None, None]:
+def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    monkeypatch.setattr(settings, "legacy_player_profile_content_writes_enabled", True)
     app.dependency_overrides[get_db] = override_get_db
     with TestingSessionLocal() as session:
         session.query(VirtualPlayerProfile).delete()
@@ -1076,7 +1078,10 @@ def test_list_profiles_keeps_default_order_after_profile_updates() -> None:
     assert profiles[0]["display_name"] == updated_a["display_name"]
 
 
-def test_patch_favorite_moves_profile_to_front_and_unfavorite_moves_to_end() -> None:
+def test_patch_favorite_moves_profile_when_legacy_favorite_flag_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "legacy_player_profile_favorite_writes_enabled", True)
     created_a = client.post(
         "/api/v1/player-profiles",
         json={"display_name": "A", "model": "model-a"},
@@ -1125,6 +1130,23 @@ def test_patch_favorite_moves_profile_to_front_and_unfavorite_moves_to_end() -> 
         created_b["id"],
     ]
     assert [profile["display_order"] for profile in unfavorite_profiles] == [1, 2, 3]
+
+
+def test_patch_favorite_is_disabled_by_default() -> None:
+    created = client.post(
+        "/api/v1/player-profiles",
+        json={"display_name": "A", "model": "model-a"},
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/player-profiles/{created['id']}",
+        json={"favorite": True},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Legacy player profile favorite writes are disabled"
+    )
 
 
 def test_get_patch_delete_profile() -> None:

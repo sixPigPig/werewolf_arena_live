@@ -178,7 +178,7 @@ def _profile_avatar_image_url(profile: object | None) -> str | None:
     avatar_asset_id = clean_optional_string(getattr(profile, "avatar_asset_id", None))
     if avatar_asset_id is not None:
         return avatar_asset_url(avatar_asset_id)
-    return _profile_string(profile, "avatar_image_url")
+    return None
 
 
 def _tags_from_value(value: object) -> tuple[str, ...]:

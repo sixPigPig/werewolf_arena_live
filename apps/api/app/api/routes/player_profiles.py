@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
-from sqlalchemy import func
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -16,16 +14,26 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.player_profiles.errors import (
+    PlayerProfileNotFound,
+    PlayerProfileTransitionError,
+    PlayerProfileValidationError,
+    PlayerProfileVersionConflict,
+)
+from app.player_profiles.service import (
+    archive_player_profile as archive_profile_service,
+    create_player_profile as create_profile_service,
+    get_published_player_profile as get_published_profile_service,
+    list_published_player_profiles,
+    update_player_profile as update_profile_service,
+)
 from app.werewolf.player_avatar_assets import (
     PlayerAvatarAssetStore,
     avatar_asset_url,
     player_avatar_asset_store_for_logs_dir,
-    resolve_profile_avatar_reference,
     save_uploaded_avatar_asset,
 )
 from app.werewolf.player_presets import (
-    default_personality_text,
-    is_valid_appearance,
     is_valid_personality,
     is_valid_strategy,
 )
@@ -75,13 +83,6 @@ def _normalize_limited_strings(value: list[str], *, max_items: int, max_length: 
     if len(normalized) > max_items:
         raise ValueError(f"At most {max_items} items are allowed")
     return normalized
-
-
-def _validate_presets(personality_id: str, appearance_id: str) -> None:
-    if not is_valid_personality(personality_id):
-        raise HTTPException(status_code=422, detail=f"Unknown personality_id: {personality_id}")
-    if not is_valid_appearance(appearance_id):
-        raise HTTPException(status_code=422, detail=f"Unknown appearance_id: {appearance_id}")
 
 
 class PlayerProfileBase(BaseModel):
@@ -440,6 +441,7 @@ def upload_player_avatar(
     request: AvatarUploadRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> AvatarUploadResponse:
+    _require_legacy_content_writes_enabled()
     try:
         asset = save_uploaded_avatar_asset(
             db,
@@ -497,11 +499,7 @@ def list_player_profiles(
     db: Annotated[Session, Depends(get_db)],
 ) -> PlayerProfileListResponse:
     try:
-        profiles = (
-            db.query(VirtualPlayerProfile)
-            .order_by(VirtualPlayerProfile.display_order.asc(), VirtualPlayerProfile.id.asc())
-            .all()
-        )
+        profiles = list_published_player_profiles(db)
     except RecoverableDatabaseError as exc:
         raise _profile_database_unavailable() from exc
     return PlayerProfileListResponse(
@@ -514,50 +512,19 @@ def create_player_profile(
     request: CreatePlayerProfileRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> PlayerProfileResponse:
-    _validate_presets(request.personality_id, request.appearance_id)
-    personality_text = request.personality_text or default_personality_text(request.personality_id)
+    _require_legacy_content_writes_enabled()
     try:
-        resolved_avatar = resolve_profile_avatar_reference(
+        profile = create_profile_service(
             db,
-            avatar_asset_id=request.avatar_asset_id,
-            appearance_id=request.appearance_id,
-            avatar_image_url=request.avatar_image_url,
-            avatar_image_mime=request.avatar_image_mime,
-            logs_dir=settings.werewolf_logs_dir,
+            values=request.model_dump(),
+            initial_status="published",
+            actor_user_id=None,
+            allow_external_avatar_url=True,
         )
-        profile = VirtualPlayerProfile(
-            id=str(uuid.uuid4()),
-            owner_user_id=None,
-            display_name=request.display_name,
-            model=request.model,
-            personality_id=request.personality_id,
-            personality_text=personality_text,
-            appearance_id=request.appearance_id,
-            avatar_prompt=request.avatar_prompt,
-            avatar_image_url=resolved_avatar.url,
-            avatar_image_path="",
-            avatar_image_mime=resolved_avatar.mime,
-            avatar_asset_id=resolved_avatar.id,
-            short_description=request.short_description,
-            background_story=request.background_story,
-            speaking_style=request.speaking_style,
-            catchphrases=request.catchphrases,
-            strategy_profile=request.strategy_profile,
-            risk_tolerance=request.risk_tolerance,
-            bluffing_tendency=request.bluffing_tendency,
-            trust_tendency=request.trust_tendency,
-            leadership_tendency=request.leadership_tendency,
-            talkativeness=request.talkativeness,
-            example_messages=request.example_messages,
-            display_order=_next_profile_display_order(db),
-            favorite=request.favorite,
-            tags=request.tags,
-        )
-        db.add(profile)
         db.commit()
         db.refresh(profile)
         return _profile_response(profile)
-    except ValueError as exc:
+    except PlayerProfileValidationError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RecoverableDatabaseError as exc:
@@ -570,6 +537,7 @@ def generate_player_profile_ai_draft(
     request: PlayerProfileAiDraftRequest,
     provider: Annotated[object, Depends(get_player_profile_ai_provider)],
 ) -> PlayerProfileAiDraftResponse:
+    _require_legacy_content_writes_enabled()
     prompt = _build_ai_player_draft_prompt(request)
     try:
         raw_response = provider.complete_json(
@@ -595,86 +563,52 @@ def generate_player_profile_ai_draft(
 
 @router.get("/{profile_id}", response_model=PlayerProfileResponse)
 def get_player_profile(
-    profile_id: str,
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PlayerProfileResponse:
-    return _profile_response(_get_profile_or_404(profile_id, db))
+    try:
+        return _profile_response(get_published_profile_service(db, profile_id))
+    except PlayerProfileNotFound as exc:
+        raise HTTPException(status_code=404, detail="Player profile not found") from exc
+    except RecoverableDatabaseError as exc:
+        raise _profile_database_unavailable() from exc
 
 
 @router.patch("/{profile_id}", response_model=PlayerProfileResponse)
 def update_player_profile(
-    profile_id: str,
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
     request: UpdatePlayerProfileRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> PlayerProfileResponse:
-    profile = _get_profile_or_404(profile_id, db)
     updates = request.model_dump(exclude_unset=True)
-    favorite_changed = "favorite" in updates and updates["favorite"] != profile.favorite
-
-    personality_changed = (
-        "personality_id" in updates and updates["personality_id"] != profile.personality_id
-    )
-    personality_id = updates.get("personality_id", profile.personality_id)
-    appearance_id = updates.get("appearance_id", profile.appearance_id)
-    _validate_presets(personality_id, appearance_id)
+    if set(updates) == {"favorite"}:
+        if not settings.legacy_player_profile_favorite_writes_enabled:
+            _raise_legacy_favorite_writes_disabled()
+    elif not settings.legacy_player_profile_content_writes_enabled:
+        _raise_legacy_content_writes_disabled()
 
     try:
-        avatar_update_fields = {
-            "avatar_asset_id",
-            "avatar_image_url",
-            "avatar_image_mime",
-            "appearance_id",
-        }
-        should_resolve_avatar = any(field_name in updates for field_name in avatar_update_fields)
-        explicit_asset_clear = (
-            "avatar_asset_id" in updates and updates["avatar_asset_id"] is None
+        get_published_profile_service(db, profile_id)
+        profile = update_profile_service(
+            db,
+            profile_id,
+            updates=updates,
+            expected_version=None,
+            actor_user_id=None,
+            allow_external_avatar_url=True,
         )
-        explicit_avatar_url = updates.get("avatar_image_url", "")
-        if explicit_asset_clear and not explicit_avatar_url:
-            updates["avatar_asset_id"] = None
-            updates["avatar_image_url"] = ""
-            updates["avatar_image_mime"] = ""
-            updates["avatar_image_path"] = ""
-        elif should_resolve_avatar:
-            avatar_asset_id = updates.get(
-                "avatar_asset_id",
-                None if "avatar_image_url" in updates else profile.avatar_asset_id,
-            )
-            resolved_avatar = resolve_profile_avatar_reference(
-                db,
-                avatar_asset_id=avatar_asset_id,
-                appearance_id=appearance_id,
-                avatar_image_url=updates.get("avatar_image_url", profile.avatar_image_url),
-                avatar_image_mime=updates.get("avatar_image_mime", profile.avatar_image_mime),
-                logs_dir=settings.werewolf_logs_dir,
-            )
-            updates["avatar_asset_id"] = resolved_avatar.id
-            updates["avatar_image_url"] = resolved_avatar.url
-            updates["avatar_image_mime"] = resolved_avatar.mime
-            updates["avatar_image_path"] = ""
-
-        for field_name, value in updates.items():
-            setattr(profile, field_name, value)
-
-        if personality_changed and "personality_text" not in updates:
-            profile.personality_text = default_personality_text(personality_id)
-        elif "personality_text" in updates and not profile.personality_text:
-            profile.personality_text = default_personality_text(profile.personality_id)
-
-        if favorite_changed:
-            _move_profile_to_display_position(
-                db,
-                profile,
-                1 if profile.favorite else "end",
-            )
-
-        profile.updated_at = datetime.now(UTC)
         db.commit()
         db.refresh(profile)
         return _profile_response(profile)
-    except ValueError as exc:
+    except PlayerProfileNotFound as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Player profile not found") from exc
+    except (PlayerProfileValidationError, PlayerProfileTransitionError) as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PlayerProfileVersionConflict as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Player profile changed; retry") from exc
     except RecoverableDatabaseError as exc:
         db.rollback()
         raise _profile_database_unavailable() from exc
@@ -682,64 +616,52 @@ def update_player_profile(
 
 @router.delete("/{profile_id}", status_code=204)
 def delete_player_profile(
-    profile_id: str,
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
-    profile = _get_profile_or_404(profile_id, db)
+    _require_legacy_content_writes_enabled()
     try:
-        db.delete(profile)
+        get_published_profile_service(db, profile_id)
+        archive_profile_service(
+            db,
+            profile_id,
+            expected_version=None,
+            actor_user_id=None,
+        )
         db.commit()
+    except PlayerProfileNotFound as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Player profile not found") from exc
+    except PlayerProfileVersionConflict as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Player profile changed; retry") from exc
     except RecoverableDatabaseError as exc:
         db.rollback()
         raise _profile_database_unavailable() from exc
     return Response(status_code=204)
 
 
-def _get_profile_or_404(
-    profile_id: str,
-    db: Session,
-) -> VirtualPlayerProfile:
-    try:
-        profile = db.get(VirtualPlayerProfile, profile_id)
-    except RecoverableDatabaseError as exc:
-        raise _profile_database_unavailable() from exc
-    if profile is None:
-        raise HTTPException(status_code=404, detail="Player profile not found")
-    return profile
-
-
-def _next_profile_display_order(db: Session) -> int:
-    current_max = db.query(func.max(VirtualPlayerProfile.display_order)).scalar()
-    return int(current_max or 0) + 1
-
-
-def _move_profile_to_display_position(
-    db: Session,
-    profile: VirtualPlayerProfile,
-    position: int | Literal["end"],
-) -> None:
-    profiles = (
-        db.query(VirtualPlayerProfile)
-        .order_by(VirtualPlayerProfile.display_order.asc(), VirtualPlayerProfile.id.asc())
-        .all()
-    )
-    remaining_profiles = [
-        candidate for candidate in profiles if candidate.id != profile.id
-    ]
-    target_index = (
-        len(remaining_profiles)
-        if position == "end"
-        else max(0, min(position - 1, len(remaining_profiles)))
-    )
-    reordered_profiles = remaining_profiles.copy()
-    reordered_profiles.insert(target_index, profile)
-
-    for display_order, candidate in enumerate(reordered_profiles, start=1):
-        candidate.display_order = display_order
-
-
 def _profile_database_unavailable() -> HTTPException:
     return HTTPException(status_code=503, detail=PLAYER_PROFILE_DATABASE_UNAVAILABLE)
+
+
+def _require_legacy_content_writes_enabled() -> None:
+    if not settings.legacy_player_profile_content_writes_enabled:
+        _raise_legacy_content_writes_disabled()
+
+
+def _raise_legacy_content_writes_disabled() -> None:
+    raise HTTPException(
+        status_code=403,
+        detail="Legacy player profile content writes are disabled",
+    )
+
+
+def _raise_legacy_favorite_writes_disabled() -> None:
+    raise HTTPException(
+        status_code=403,
+        detail="Legacy player profile favorite writes are disabled",
+    )
 
 
 def _build_ai_player_draft_prompt(request: PlayerProfileAiDraftRequest) -> str:

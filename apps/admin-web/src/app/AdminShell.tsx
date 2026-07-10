@@ -5,11 +5,41 @@ import {
   adminNavigation,
   findAdminNavItem,
 } from "@/app/admin-navigation";
+import { hasAdminPermission } from "@/features/auth/permissions";
+import { useAdminSession } from "@/features/auth/session-context";
+import type { AdminRole } from "@/features/auth/types";
+
+const roleLabels: Record<AdminRole, string> = {
+  viewer: "只读观察员",
+  content_editor: "内容编辑",
+  operator: "运行运营",
+  super_admin: "超级管理员",
+};
 
 export function AdminShell() {
   const location = useLocation();
   const [navigationOpen, setNavigationOpen] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const { logout, pendingAction, runtimeMode, session } = useAdminSession();
   const activeItem = findAdminNavItem(location.pathname);
+  const user = session?.user;
+  const visibleNavigation = adminNavigation
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) =>
+        hasAdminPermission(session?.permissions ?? [], item.permission),
+      ),
+    }))
+    .filter((section) => section.items.length > 0);
+
+  async function handleLogout() {
+    setLogoutError(null);
+    try {
+      await logout();
+    } catch (error) {
+      setLogoutError(error instanceof Error ? error.message : "退出失败，请稍后重试。");
+    }
+  }
 
   return (
     <div className="admin-app-shell">
@@ -35,7 +65,7 @@ export function AdminShell() {
         </div>
 
         <nav aria-label="后台主导航" className="admin-navigation">
-          {adminNavigation.map((section) => (
+          {visibleNavigation.map((section) => (
             <section className="admin-navigation-section" key={section.id}>
               <h2>{section.label}</h2>
               {section.items.map((item) => (
@@ -63,8 +93,12 @@ export function AdminShell() {
         <footer className="admin-sidebar-footer">
           <span className="status-dot" aria-hidden="true" />
           <span>
-            <strong>规划预览模式</strong>
-            <small>未连接 Admin API</small>
+            <strong>
+              {runtimeMode === "preview" ? "规划预览模式" : "安全会话已连接"}
+            </strong>
+            <small>
+              {runtimeMode === "preview" ? "未连接 Admin API" : "Admin API"}
+            </small>
           </span>
         </footer>
       </aside>
@@ -88,14 +122,31 @@ export function AdminShell() {
             <strong>{activeItem?.label ?? "页面"}</strong>
           </div>
           <div className="admin-topbar-actions">
-            <span className="environment-badge">LOCAL PREVIEW</span>
-            <span className="preview-principal" aria-label="当前预览角色">
+            {logoutError ? (
+              <span aria-live="assertive" className="topbar-error" role="alert">
+                {logoutError}
+              </span>
+            ) : null}
+            <span className="environment-badge">
+              {runtimeMode === "preview" ? "LOCAL PREVIEW" : "ADMIN SESSION"}
+            </span>
+            <span className="preview-principal" aria-label="当前后台身份">
               <span aria-hidden="true">超</span>
               <span>
-                <strong>超级管理员</strong>
-                <small>mock principal</small>
+                <strong>{user ? roleLabels[user.role] : "后台用户"}</strong>
+                <small>{user?.display_name ?? "unknown principal"}</small>
               </span>
             </span>
+            {runtimeMode === "authenticated" ? (
+              <button
+                className="admin-logout-button"
+                disabled={pendingAction === "logout"}
+                onClick={() => void handleLogout()}
+                type="button"
+              >
+                {pendingAction === "logout" ? "退出中" : "退出"}
+              </button>
+            ) : null}
           </div>
         </header>
 

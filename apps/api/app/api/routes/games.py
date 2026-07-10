@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import SessionLocal, get_db
-from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.player_profiles.errors import PlayerProfileNotFound
+from app.player_profiles.service import (
+    get_published_player_profile,
+    list_published_player_profiles,
+)
 from app.werewolf.checkpoint import ResumeCheckpointError
 from app.werewolf.config import choose_player_names
 from app.werewolf.debate_realism import lineup_quality_warnings
@@ -58,7 +62,7 @@ PLAYER_PROFILE_DATABASE_UNAVAILABLE = "Player profile database unavailable"
 
 class CreatePlayerConfigRequest(BaseModel):
     seat: int = Field(ge=1)
-    profile_id: str | None = Field(default=None, min_length=1)
+    profile_id: str | None = Field(default=None, min_length=1, max_length=36)
     name: str | None = Field(default=None, min_length=1, max_length=80)
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     model: str | None = Field(default=None, min_length=1, max_length=120)
@@ -260,10 +264,10 @@ def normalize_player_config_requests(
         profile = None
         if profile_id is not None:
             try:
-                profile = db.get(VirtualPlayerProfile, profile_id)
+                profile = get_published_player_profile(db, profile_id)
             except RecoverableDatabaseError as exc:
                 raise _profile_database_unavailable() from exc
-            if profile is None:
+            except PlayerProfileNotFound:
                 raise HTTPException(status_code=422, detail=f"Unknown player profile: {profile_id}")
 
         personality_id = (
@@ -355,11 +359,7 @@ def list_available_player_profiles(
     db: Session,
 ) -> list[object]:
     try:
-        return list(
-            db.query(VirtualPlayerProfile)
-            .order_by(VirtualPlayerProfile.display_order.asc(), VirtualPlayerProfile.id.asc())
-            .all()
-        )
+        return list(list_published_player_profiles(db))
     except RecoverableDatabaseError as exc:
         raise _profile_database_unavailable() from exc
 

@@ -1,8 +1,8 @@
 import json
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -15,11 +15,42 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Python React Web API"
+    app_environment: Literal["development", "test", "staging", "production"] = "development"
     api_v1_prefix: str = "/api/v1"
     cors_origins: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["http://localhost:5173"]
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+            "http://localhost:5175",
+            "http://127.0.0.1:5175",
+        ]
+    )
+    public_cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+        ]
     )
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/app"
+    admin_dev_auth_enabled: bool = False
+    admin_dev_auth_email: str = "admin@example.test"
+    admin_dev_auth_display_name: str = "Development Admin"
+    admin_dev_auth_role: Literal[
+        "viewer", "content_editor", "operator", "super_admin"
+    ] = "super_admin"
+    admin_session_cookie_name: str = "werewolf_admin_session"
+    admin_session_cookie_secure: bool = True
+    admin_session_ttl_seconds: int = Field(default=8 * 60 * 60, ge=300, le=7 * 24 * 60 * 60)
+    public_session_cookie_name: str = "werewolf_public_session"
+    public_session_cookie_secure: bool = True
+    public_session_ttl_seconds: int = Field(
+        default=30 * 24 * 60 * 60,
+        ge=300,
+        le=365 * 24 * 60 * 60,
+    )
+    legacy_player_profile_content_writes_enabled: bool = False
+    legacy_player_profile_favorite_writes_enabled: bool = False
     werewolf_logs_dir: str = "logs"
     ark_tts_enabled: bool = False
     ark_tts_api_key: str = ""
@@ -32,7 +63,7 @@ class Settings(BaseSettings):
     ark_tts_judge_asset_audio_format: str = "mp3"
     ark_tts_judge_asset_sample_rate: int = 24000
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "public_cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: str | list[str]) -> list[str]:
         if isinstance(value, str):
@@ -43,6 +74,40 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
 
         return value
+
+    @model_validator(mode="after")
+    def enforce_admin_production_safety(self) -> "Settings":
+        if self.app_environment == "production" and self.admin_dev_auth_enabled:
+            raise ValueError("ADMIN_DEV_AUTH_ENABLED cannot be enabled in production")
+        if self.app_environment == "production" and not self.admin_session_cookie_secure:
+            raise ValueError("ADMIN_SESSION_COOKIE_SECURE must be enabled in production")
+        if self.app_environment == "production" and not self.public_session_cookie_secure:
+            raise ValueError("PUBLIC_SESSION_COOKIE_SECURE must be enabled in production")
+        if self.app_environment == "production" and "*" in self.cors_origins:
+            raise ValueError("CORS_ORIGINS cannot contain '*' in production")
+        if self.app_environment == "production" and "*" in self.public_cors_origins:
+            raise ValueError("PUBLIC_CORS_ORIGINS cannot contain '*' in production")
+        if (
+            self.app_environment == "production"
+            and self.legacy_player_profile_content_writes_enabled
+        ):
+            raise ValueError(
+                "LEGACY_PLAYER_PROFILE_CONTENT_WRITES_ENABLED cannot be enabled in production"
+            )
+        if (
+            self.app_environment == "production"
+            and self.legacy_player_profile_favorite_writes_enabled
+        ):
+            raise ValueError(
+                "LEGACY_PLAYER_PROFILE_FAVORITE_WRITES_ENABLED cannot be enabled in production"
+            )
+        if self.admin_dev_auth_enabled and not self.admin_dev_auth_email.strip():
+            raise ValueError("ADMIN_DEV_AUTH_EMAIL is required when development auth is enabled")
+        if self.admin_dev_auth_enabled and not self.admin_dev_auth_display_name.strip():
+            raise ValueError(
+                "ADMIN_DEV_AUTH_DISPLAY_NAME is required when development auth is enabled"
+            )
+        return self
 
 
 @lru_cache

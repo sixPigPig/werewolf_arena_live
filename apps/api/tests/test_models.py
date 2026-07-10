@@ -1,7 +1,10 @@
+import pytest
 from sqlalchemy import JSON, LargeBinary, String, Text, create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
+from app.models.admin import AdminSession, AuditEvent
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import (
     LiveEventRecord,
@@ -10,6 +13,7 @@ from app.models.live import (
     VoiceUtteranceRecord,
 )
 from app.models.player_avatar_asset import PlayerAvatarAsset
+from app.models.public import PublicSession, UserFavoritePlayerProfile
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 
@@ -52,12 +56,165 @@ def test_user_table_matches_expected_schema() -> None:
     table = User.__table__
     column_names = set(table.columns.keys())
 
-    assert column_names == {"id", "email", "display_name", "created_at"}
+    assert column_names == {
+        "id",
+        "email",
+        "display_name",
+        "auth_provider",
+        "auth_subject",
+        "admin_role",
+        "is_active",
+        "created_at",
+        "updated_at",
+    }
     assert table.c.email.unique is True
     assert table.c.email.index is True
     assert any(index.name == "ix_users_email" for index in table.indexes)
     assert table.c.created_at.server_default is not None
     assert "now" in str(table.c.created_at.server_default.arg).lower()
+    assert table.c.admin_role.nullable is True
+    assert table.c.auth_provider.nullable is True
+    assert table.c.auth_subject.nullable is True
+    assert any(
+        constraint.name == "ck_users_auth_identity_paired"
+        for constraint in table.constraints
+    )
+    assert any(
+        constraint.name == "uq_users_auth_provider_subject"
+        for constraint in table.constraints
+    )
+    assert table.c.admin_role.index is True
+    assert table.c.is_active.nullable is False
+    assert table.c.is_active.server_default is not None
+    assert table.c.updated_at.server_default is not None
+
+
+def test_user_auth_identity_must_be_paired_and_unique() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        session.add(
+            User(
+                email="invalid-guest@example.test",
+                display_name="Invalid guest",
+                auth_provider="guest",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+        session.add(
+            User(
+                email="guest-one@example.test",
+                display_name="Guest one",
+                auth_provider="guest",
+                auth_subject="browser-subject",
+            )
+        )
+        session.commit()
+
+        session.add(
+            User(
+                email="guest-two@example.test",
+                display_name="Guest two",
+                auth_provider="guest",
+                auth_subject="browser-subject",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+
+def test_public_session_table_matches_expected_schema() -> None:
+    table = PublicSession.__table__
+
+    assert set(table.columns.keys()) == {
+        "id",
+        "user_id",
+        "token_hash",
+        "csrf_token_hash",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+    }
+    assert table.c.id.primary_key is True
+    _assert_foreign_key(table.c.user_id, target="users.id", ondelete="CASCADE")
+    _assert_string_column(table.c.token_hash, length=64, nullable=False)
+    assert table.c.token_hash.unique is True
+    assert table.c.token_hash.index is True
+    _assert_string_column(table.c.csrf_token_hash, length=64, nullable=False)
+    assert table.c.expires_at.index is True
+    assert table.c.revoked_at.index is True
+
+
+def test_user_favorite_player_profile_table_matches_expected_schema() -> None:
+    table = UserFavoritePlayerProfile.__table__
+
+    assert set(table.columns.keys()) == {
+        "user_id",
+        "player_profile_id",
+        "created_at",
+    }
+    assert table.primary_key.columns.keys() == ["user_id", "player_profile_id"]
+    _assert_foreign_key(table.c.user_id, target="users.id", ondelete="CASCADE")
+    _assert_foreign_key(
+        table.c.player_profile_id,
+        target="virtual_player_profiles.id",
+        ondelete="CASCADE",
+    )
+    _assert_index(
+        table,
+        "ix_user_favorite_player_profiles_profile_user",
+        ["player_profile_id", "user_id"],
+    )
+
+
+def test_admin_session_table_matches_expected_schema() -> None:
+    table = AdminSession.__table__
+
+    assert set(table.columns.keys()) == {
+        "id",
+        "user_id",
+        "token_hash",
+        "csrf_token_hash",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+        "ip_address",
+        "user_agent",
+    }
+    _assert_foreign_key(table.c.user_id, target="users.id", ondelete="CASCADE")
+    _assert_string_column(table.c.token_hash, length=64, nullable=False)
+    assert table.c.token_hash.unique is True
+    assert table.c.token_hash.index is True
+    _assert_string_column(table.c.csrf_token_hash, length=64, nullable=False)
+    assert table.c.expires_at.index is True
+
+
+def test_audit_event_table_matches_expected_schema() -> None:
+    table = AuditEvent.__table__
+
+    assert set(table.columns.keys()) == {
+        "id",
+        "actor_user_id",
+        "action",
+        "resource_type",
+        "resource_id",
+        "result",
+        "reason",
+        "before",
+        "after",
+        "request_id",
+        "ip_address",
+        "created_at",
+    }
+    _assert_foreign_key(table.c.actor_user_id, target="users.id", ondelete="SET NULL")
+    _assert_json_column(table.c.before, nullable=True)
+    _assert_json_column(table.c.after, nullable=True)
+    _assert_text_column(table.c.reason, nullable=True)
+    _assert_index(table, "ix_audit_events_resource", ["resource_type", "resource_id"])
 
 
 def test_virtual_player_profile_table_is_registered_in_metadata() -> None:
@@ -95,7 +252,14 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "example_messages",
         "display_order",
         "favorite",
+        "featured",
         "tags",
+        "status",
+        "version",
+        "published_at",
+        "published_by_user_id",
+        "updated_by_user_id",
+        "deleted_at",
         "created_at",
         "updated_at",
     }
@@ -109,6 +273,21 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
     assert table.c.tags.nullable is False
     assert table.c.created_at.server_default is not None
     assert table.c.updated_at.server_default is not None
+    assert table.c.status.server_default is not None
+    assert table.c.version.server_default is not None
+    assert table.c.published_at.server_default is not None
+    assert table.c.published_by_user_id.foreign_keys
+    assert table.c.updated_by_user_id.foreign_keys
+    _assert_index(
+        table,
+        "ix_virtual_player_profiles_status_display_order",
+        ["status", "display_order", "id"],
+    )
+    _assert_index(
+        table,
+        "ix_virtual_player_profiles_status_updated_at",
+        ["status", "updated_at", "id"],
+    )
 
 
 def test_virtual_player_profile_tag_append_is_persisted() -> None:

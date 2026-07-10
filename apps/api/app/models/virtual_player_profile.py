@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    JSON,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +21,45 @@ from app.db.base import Base
 
 class VirtualPlayerProfile(Base):
     __tablename__ = "virtual_player_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'published', 'archived')",
+            name="ck_virtual_player_profiles_status",
+        ),
+        CheckConstraint("version >= 1", name="ck_virtual_player_profiles_version_positive"),
+        CheckConstraint(
+            "(status = 'draft' AND published_at IS NULL AND deleted_at IS NULL) OR "
+            "(status = 'published' AND published_at IS NOT NULL AND deleted_at IS NULL) OR "
+            "(status = 'archived' AND published_at IS NOT NULL AND deleted_at IS NOT NULL)",
+            name="ck_virtual_player_profiles_lifecycle_timestamps",
+        ),
+        CheckConstraint(
+            "featured = false OR status = 'published'",
+            name="ck_virtual_player_profiles_featured_published",
+        ),
+        Index(
+            "ix_virtual_player_profiles_status_display_order",
+            "status",
+            "display_order",
+            "id",
+        ),
+        Index(
+            "ix_virtual_player_profiles_status_model",
+            "status",
+            "model",
+        ),
+        Index(
+            "ix_virtual_player_profiles_status_personality",
+            "status",
+            "personality_id",
+        ),
+        Index(
+            "ix_virtual_player_profiles_status_updated_at",
+            "status",
+            "updated_at",
+            "id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
@@ -49,7 +98,40 @@ class VirtualPlayerProfile(Base):
     )
     display_order: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     favorite: Mapped[bool] = mapped_column(nullable=False, default=False)
+    featured: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     tags: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JSON), nullable=False, default=list)
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="published",
+        server_default="published",
+    )
+    version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True).evaluates_none(),
+        nullable=True,
+        server_default=func.now(),
+    )
+    published_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    updated_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -57,3 +139,5 @@ class VirtualPlayerProfile(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    __mapper_args__ = {"version_id_col": version}

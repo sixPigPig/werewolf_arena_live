@@ -1,18 +1,14 @@
 import { lazy, Suspense, type ReactNode } from "react";
 
-const DashboardPage = lazy(() => import("@/pages/DashboardPage"));
-const ModulePage = lazy(() => import("@/pages/ModulePage"));
+const ForbiddenPage = lazy(() => import("@/pages/ForbiddenPage"));
+const LoginPage = lazy(() => import("@/pages/LoginPage"));
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage"));
-
-type ModuleId =
-  | "runs"
-  | "games"
-  | "players"
-  | "voice"
-  | "users"
-  | "roles"
-  | "audit"
-  | "settings";
+const PlayerProfilesPage = lazy(
+  () => import("@/features/player-profiles/PlayerProfilesPage"),
+);
+const PlayerProfileEditorPage = lazy(
+  () => import("@/features/player-profiles/PlayerProfileEditorPage"),
+);
 
 function LazyRoute({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteLoading />}>{children}</Suspense>;
@@ -27,18 +23,34 @@ function RouteLoading() {
   );
 }
 
-export function DashboardRoute() {
+export function LoginRoute() {
   return (
     <LazyRoute>
-      <DashboardPage />
+      <LoginPage />
     </LazyRoute>
   );
 }
 
-export function ModuleRoute({ moduleId }: { moduleId: ModuleId }) {
+export function ForbiddenRoute() {
   return (
     <LazyRoute>
-      <ModulePage moduleId={moduleId} />
+      <ForbiddenPage />
+    </LazyRoute>
+  );
+}
+
+export function PlayerProfilesRoute() {
+  return (
+    <LazyRoute>
+      <PlayerProfilesPage />
+    </LazyRoute>
+  );
+}
+
+export function PlayerProfileEditorRoute() {
+  return (
+    <LazyRoute>
+      <PlayerProfileEditorPage />
     </LazyRoute>
   );
 }

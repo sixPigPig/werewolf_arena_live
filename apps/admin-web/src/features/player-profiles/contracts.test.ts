@@ -1,0 +1,181 @@
+import {
+  createAdminPlayerProfile,
+  listAdminPlayerProfiles,
+  transitionAdminPlayerProfile,
+  updateAdminPlayerProfile,
+} from "@/features/player-profiles/api";
+import {
+  parseAdminPlayerProfile,
+  parseAdminPlayerProfileList,
+} from "@/features/player-profiles/parsers";
+import type {
+  AdminPlayerProfile,
+  CreatePlayerProfileRequest,
+} from "@/features/player-profiles/types";
+
+export const contractProfile: AdminPlayerProfile = {
+  id: "profile-1",
+  display_name: "暮鸦归票",
+  model: "deepseek-v4-flash",
+  personality_id: "analytical",
+  personality_text: "重视票型。",
+  appearance_id: "default",
+  avatar_asset_id: null,
+  avatar_image_url: "",
+  avatar_image_mime: "",
+  short_description: "逻辑控场",
+  background_story: "长期复盘。",
+  speaking_style: "先列证据。",
+  catchphrases: ["我先盘票型"],
+  strategy_profile: "logic_leader",
+  risk_tolerance: 2,
+  bluffing_tendency: 2,
+  trust_tendency: 3,
+  leadership_tendency: 5,
+  talkativeness: 4,
+  example_messages: ["先听后置位。"],
+  display_order: 1,
+  featured: false,
+  tags: ["控场"],
+  status: "draft",
+  version: 2,
+  created_at: "2026-07-01T08:00:00Z",
+  updated_at: "2026-07-10T08:00:00Z",
+  published_at: null,
+  deleted_at: null,
+  published_by: null,
+  updated_by: "1",
+};
+
+const createRequest: CreatePlayerProfileRequest = {
+  display_name: contractProfile.display_name,
+  model: contractProfile.model,
+  personality_id: contractProfile.personality_id,
+  personality_text: contractProfile.personality_text,
+  appearance_id: contractProfile.appearance_id,
+  avatar_asset_id: contractProfile.avatar_asset_id,
+  short_description: contractProfile.short_description,
+  background_story: contractProfile.background_story,
+  speaking_style: contractProfile.speaking_style,
+  catchphrases: contractProfile.catchphrases,
+  strategy_profile: contractProfile.strategy_profile,
+  risk_tolerance: contractProfile.risk_tolerance,
+  bluffing_tendency: contractProfile.bluffing_tendency,
+  trust_tendency: contractProfile.trust_tendency,
+  leadership_tendency: contractProfile.leadership_tendency,
+  talkativeness: contractProfile.talkativeness,
+  example_messages: contractProfile.example_messages,
+  featured: false,
+  tags: contractProfile.tags,
+};
+
+describe("admin player profile contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("strictly parses detail and paginated list DTOs", () => {
+    expect(parseAdminPlayerProfile(contractProfile)).toEqual(contractProfile);
+    expect(
+      parseAdminPlayerProfileList({
+        items: [contractProfile],
+        pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
+      }),
+    ).toEqual({
+      items: [contractProfile],
+      pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
+    });
+  });
+
+  it("rejects legacy favorite and malformed lifecycle data", () => {
+    expect(() =>
+      parseAdminPlayerProfile({ ...contractProfile, favorite: true }),
+    ).toThrow(/favorite/);
+    expect(() =>
+      parseAdminPlayerProfile({ ...contractProfile, status: "deleted" }),
+    ).toThrow(/状态/);
+    expect(() =>
+      parseAdminPlayerProfile({ ...contractProfile, version: 0 }),
+    ).toThrow(/version/);
+  });
+
+  it("serializes server pagination and signed sorting", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        items: [contractProfile],
+        pagination: { page: 2, page_size: 10, total: 11, pages: 2 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listAdminPlayerProfiles({
+      page: 2,
+      page_size: 10,
+      q: "暮鸦",
+      status: "draft",
+      model: "deepseek-v4-flash",
+      personality_id: "analytical",
+      sort: "updated_at",
+      direction: "desc",
+    });
+
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const parsed = new URL(url, "https://admin.test");
+    expect(parsed.pathname).toBe("/api/v1/admin/player-profiles");
+    expect(Object.fromEntries(parsed.searchParams)).toEqual({
+      page: "2",
+      page_size: "10",
+      sort: "-updated_at",
+      q: "暮鸦",
+      status: "draft",
+      model: "deepseek-v4-flash",
+      personality_id: "analytical",
+    });
+    expect(options.credentials).toBe("include");
+  });
+
+  it("adds CSRF and expected_version to writes without legacy fields", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(jsonResponse(contractProfile)),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createAdminPlayerProfile(createRequest, "csrf-player");
+    await updateAdminPlayerProfile(
+      contractProfile.id,
+      { expected_version: 2, display_name: "暮鸦归票二号" },
+      "csrf-player",
+    );
+    await transitionAdminPlayerProfile(
+      contractProfile.id,
+      "publish",
+      { expected_version: 3, reason: "内容审核通过" },
+      "csrf-player",
+    );
+
+    for (const [, options] of fetchMock.mock.calls as Array<
+      [string, RequestInit]
+    >) {
+      expect(new Headers(options.headers).get("X-CSRF-Token")).toBe(
+        "csrf-player",
+      );
+      expect(options.credentials).toBe("include");
+      expect(String(options.body)).not.toContain("favorite");
+      expect(String(options.body)).not.toContain("avatar_image_url");
+    }
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      expected_version: 2,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
+      expected_version: 3,
+      reason: "内容审核通过",
+    });
+  });
+});
+
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json" },
+    status: 200,
+  });
+}

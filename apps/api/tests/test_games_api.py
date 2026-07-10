@@ -1,9 +1,11 @@
 import json
 from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
@@ -11,12 +13,17 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes.games import (
+    CreatePlayerConfigRequest,
     SessionLiveStore,
     SessionVoiceStore,
     _run_game_in_background,
+    complete_player_configs_from_library,
     get_live_registry,
     get_replay_store,
+    list_available_player_profiles,
+    normalize_player_config_requests,
 )
+from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -75,6 +82,7 @@ def override_get_db() -> Generator[Session, None, None]:
 @pytest.fixture(autouse=True)
 def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(settings, "legacy_player_profile_content_writes_enabled", True)
     monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
     with TestingSessionLocal() as session:
         session.query(VoiceAudioChunkRecord).delete()
@@ -105,6 +113,86 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
 def write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_game_profile_selection_only_uses_published_profiles() -> None:
+    with TestingSessionLocal() as session:
+        session.add_all(
+            [
+                VirtualPlayerProfile(
+                    id="published-for-game",
+                    display_name="公开玩家",
+                    model="model-a",
+                    status="published",
+                    published_at=datetime.now(UTC),
+                    display_order=1,
+                ),
+                VirtualPlayerProfile(
+                    id="draft-for-game",
+                    display_name="草稿玩家",
+                    model="model-a",
+                    status="draft",
+                    published_at=None,
+                    display_order=2,
+                ),
+                VirtualPlayerProfile(
+                    id="archived-for-game",
+                    display_name="归档玩家",
+                    model="model-a",
+                    status="archived",
+                    published_at=datetime.now(UTC),
+                    deleted_at=datetime.now(UTC),
+                    display_order=3,
+                ),
+            ]
+        )
+        session.commit()
+
+        available = list_available_player_profiles(session)
+
+        assert [profile.id for profile in available] == ["published-for-game"]
+        with pytest.raises(HTTPException, match="Unknown player profile: draft-for-game"):
+            normalize_player_config_requests(
+                [CreatePlayerConfigRequest(seat=1, profile_id="draft-for-game")],
+                1,
+                session,
+            )
+        with pytest.raises(HTTPException, match="1 available players"):
+            complete_player_configs_from_library(
+                requests=[],
+                player_count=2,
+                seed=1,
+                db=session,
+            )
+
+
+def test_game_profile_config_drops_unmanaged_external_avatar_url() -> None:
+    with TestingSessionLocal() as session:
+        session.add(
+            VirtualPlayerProfile(
+                id="external-avatar-for-game",
+                display_name="旧外链头像玩家",
+                model="model-a",
+                avatar_image_url="https://tracker.example/avatar.png",
+                status="published",
+                published_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+
+        configs = complete_player_configs_from_library(
+            requests=[
+                CreatePlayerConfigRequest(
+                    seat=1,
+                    profile_id="external-avatar-for-game",
+                )
+            ],
+            player_count=1,
+            seed=1,
+            db=session,
+        )
+
+    assert configs[0].avatar_image_url == ""
 
 
 def override_replay_store() -> None:
