@@ -43,6 +43,14 @@ class LiveRunRecord(Base):
     )
 
 
+Index(
+    "ix_live_runs_session_created_run_desc",
+    LiveRunRecord.session_id,
+    LiveRunRecord.created_at.desc(),
+    LiveRunRecord.run_id.desc(),
+)
+
+
 class LiveEventRecord(Base):
     __tablename__ = "live_events"
     __table_args__ = (Index("ix_live_events_run_id_event_id", "run_id", "event_id"),)

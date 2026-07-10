@@ -1,6 +1,6 @@
 # Admin Web 规划、设计与开发方案
 
-状态：阶段 0、阶段 1A 认证基础、玩家管理闭环和 Mobile 玩家 Public API 切流已完成；正式身份源、其他 Public API 与管理模块尚未接入。
+状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流和 Admin 对局记录只读切片已完成；正式身份源、其他 Public API 与运行管理模块尚未接入。
 
 ## 1. 决策摘要
 
@@ -205,10 +205,9 @@ POST      /api/v1/admin/player-profiles/:id/restore
 GET       /api/v1/admin/player-profile-options
 POST      /api/v1/admin/player-avatar-assets
 
-GET  /api/v1/admin/game-sessions
-GET  /api/v1/admin/game-sessions/:id
-GET  /api/v1/admin/game-sessions/:id/debug
-POST /api/v1/admin/game-sessions/:id/resume
+GET  /api/v1/admin/games
+GET  /api/v1/admin/games/:id
+GET  /api/v1/admin/games/:id/debug
 
 GET /api/v1/admin/live-runs
 GET /api/v1/admin/live-runs/:id
@@ -262,6 +261,8 @@ GET /api/v1/admin/audit-events
 - 开发登录是联调工具，不是生产身份方案。
 - 已实现 `/api/v1/admin/player-profiles*` 的固定权限矩阵、CSRF、乐观锁、状态流转和操作审计；
 - 已实现 `/api/v1/public/player-profiles*` 白名单只读投影，只暴露已发布且未归档档案；
+- 已实现 `/api/v1/admin/games*` 的真实服务端分页筛选、只读详情白名单和 `no-store`；普通详情不返回完整 replay/event payload 或模型原文；
+- `games.debug.read` 使用独立 `/debug` endpoint，返回脱敏、限长限量的错误分类，读取行为进入审计；Admin 前端不会自动请求该接口；
 - 旧匿名内容写默认关闭且 production 禁止开启，迁移期只保留 favorite-only PATCH。
 
 ## 7. RBAC
@@ -345,7 +346,7 @@ draft -> published -> archived
 | 0 | 决策、方案、独立 Admin 骨架 | 文档、路由壳、fail-closed、CI、lint/test/build | 2–4 人日 |
 | 1 | 认证、RBAC、审计、Admin/Public DTO | 认证基础与玩家 DTO/审计已完成；仍需正式身份源和其他业务 DTO | 7–12 人日 |
 | 2 | 玩家管理纵向闭环 | 分页、编辑、发布/归档/恢复、409 已完成；AI 草稿与浏览器 E2E 待后续 | 5–8 人日 |
-| 3 | 对局与运行诊断 | 分页、详情、debug 权限、只读运行监控、恢复幂等 | 6–10 人日 |
+| 3 | 对局与运行诊断 | 对局分页、详情和独立 debug 权限已完成；只读运行监控、恢复幂等待后续 | 6–10 人日 |
 | 4 | 语音资产 | 独立持久存储、任务化生成、权限与审计 | 4–6 人日 |
 | 5 | 加固与切流 | 安全、性能、可访问性、部署和回滚演练 | 4–7 人日 |
 
@@ -357,7 +358,7 @@ draft -> published -> archived
 2. session、RBAC、审计基础和 `/admin/me`；（已完成）
 3. 抽 service，增加玩家 Public/Admin router；（已完成）
 4. 玩家管理纵向闭环；（除 AI 草稿外已完成）
-5. 对局运营和独立 debug 权限；
+5. 对局运营和独立 debug 权限；（只读对局记录已完成）
 6. 语音存储迁移和生成任务；
 7. Live run 只读监控；
 8. Mobile 切 Public API 与旧 URL 重定向；
@@ -472,4 +473,12 @@ draft -> published -> archived
 - game-client 保留 legacy API/type，旧 Web 在共存期仍可构建；Mobile 不会回退全局 favorite PATCH；
 - 当前进程内限流只适用于既有单 worker 部署，反向代理环境必须配置可信客户端地址或边缘限流；规模扩大前将过期清理迁为批处理任务。
 
-下一纵向切片进入对局与运行诊断。正式 Admin 身份源仍是生产开放后台的前置条件；正式 C 端身份源则是 Guest 收藏跨设备同步与账号合并的前置条件。
+### 阶段 3A：Admin 对局记录只读切片
+
+- `/operations/games` 连接真实 Admin API，提供服务端分页、Session/Run/模型搜索、对局状态、最新运行状态、胜方、规则、日期与排序 URL 状态；
+- `/operations/games/:sessionId` 展示玩家和完成局角色结果、公开轮次摘要、运行记录、诊断计数以及最多 50 条无 payload 事件元数据；partial/resumable 对局不公开角色、玩家/运行模型、死亡原因/来源、事件元数据或未完成轮次；
+- 普通详情严格排除 state、logs、checkpoint、event payload、prompt、raw response、私有摘要和内部凭据；
+- 受限错误摘要通过独立 `/debug` 请求，仅 `games.debug.read` 可访问，且必须由用户显式触发；读取成功写入审计，失败不影响基础详情；
+- Admin 前端覆盖真实 API 渲染、URL 筛选、loading/empty/error/404、权限导航和按需 debug 流程；未接入的运行管理仍不进入导航。
+
+下一纵向切片进入实时运行只读诊断。`mobile-web` 仍是唯一继续演进的 C 端，普通回放和观战剧场不迁入 Admin。正式 Admin 身份源仍是生产开放后台的前置条件；正式 C 端身份源则是 Guest 收藏跨设备同步与账号合并的前置条件。

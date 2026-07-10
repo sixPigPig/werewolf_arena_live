@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, JSON, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -39,3 +39,16 @@ class GameReplayPayload(Base):
     state: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     logs: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
     checkpoint: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+Index(
+    "ix_game_sessions_created_at_session_id_desc",
+    GameSessionRecord.created_at.desc(),
+    GameSessionRecord.session_id.desc(),
+)
+Index(
+    "ix_game_sessions_status_created_at_session_id_desc",
+    GameSessionRecord.status,
+    GameSessionRecord.created_at.desc(),
+    GameSessionRecord.session_id.desc(),
+)

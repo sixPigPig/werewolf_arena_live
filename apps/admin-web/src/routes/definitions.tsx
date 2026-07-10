@@ -6,6 +6,8 @@ import { AdminSessionBoundary } from "@/features/auth/AdminSessionBoundary";
 import { RequireAdminPermission } from "@/features/auth/RequireAdminPermission";
 import {
   ForbiddenRoute,
+  GameRecordDetailRoute,
+  GameRecordsRoute,
   LoginRoute,
   NotFoundRoute,
   PlayerProfileEditorRoute,
@@ -27,6 +29,22 @@ export const routes: RouteObject[] = [
             children: [
               { index: true, element: <Navigate replace to="/content/players" /> },
               { path: "overview", element: <Navigate replace to="/content/players" /> },
+              {
+                path: "operations/games",
+                element: (
+                  <RequireAdminPermission permission="games.read">
+                    <GameRecordsRoute />
+                  </RequireAdminPermission>
+                ),
+              },
+              {
+                path: "operations/games/:sessionId",
+                element: (
+                  <RequireAdminPermission permission="games.read">
+                    <GameRecordDetailRoute />
+                  </RequireAdminPermission>
+                ),
+              },
               {
                 path: "content/players",
                 element: (

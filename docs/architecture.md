@@ -3,8 +3,8 @@
 ## Applications
 
 - `apps/api`: FastAPI service exposing `/api/v1/...`
-- `apps/web`: Vite React SPA consuming the API
-- `apps/mobile-web`: independent Vite React mobile SPA consuming the same API
+- `apps/web`: legacy compatibility SPA retained during C-end migration
+- `apps/mobile-web`: independent Vite React mobile SPA and the only C-end surface that continues to evolve
 - `apps/admin-web`: independent Vite React admin SPA with a fail-closed auth/session boundary
 - `packages/game-client`: shared frontend API client, types, lineup helpers, replay adapters, and live-state derivation
 
@@ -23,6 +23,7 @@
 3. Admin authenticated development mode first calls `/api/v1/admin/me` with cookie credentials; preview mode makes no API request.
 4. The API resolves the server-side Admin session, active user and fixed-role permissions before returning the Admin shell.
 5. Mobile 玩家目录使用 `/api/v1/public/player-profiles*`，设备级收藏使用独立 Public Session 与 `/api/v1/public/me/favorite-player-profiles*`；其他游戏流量仍按后续切片迁移。
+6. Admin 对局列表与详情只调用 `/api/v1/admin/games*`；普通详情返回白名单诊断摘要，受限错误摘要必须在 `games.debug.read` 下由用户显式请求独立 `/debug`。
 
 ## Admin security boundary
 
@@ -32,6 +33,8 @@
 - `/api/v1/admin/me` returns the current user, permission set, CSRF token and expiry. Admin writes must use the server-side permission dependency and CSRF dependency.
 - Admin errors use Problem Details with stable codes and request IDs. Auth responses are `no-store`.
 - `audit_events` provides a redacted, bounded audit foundation. 玩家创建、更新、发布、归档和恢复已经记录成功/失败事件，后续 Admin 业务写入必须复用同一入口。
+- Admin 对局 API 使用 `games.read` 强制只读访问并返回 `no-store`；列表服务端分页筛选，详情不返回 replay state/log/checkpoint、event payload、prompt、raw response 或私有角色知识。partial/resumable 对局进一步隐藏角色、玩家与运行模型、死亡原因/来源、事件元数据和未完成轮次。
+- `games.debug.read` 不扩展普通详情 DTO。前端只有在用户显式点击后才调用独立 debug endpoint；该读取返回分类脱敏、限长限量的错误摘要并记录审计。
 
 ## Player profile boundaries
 

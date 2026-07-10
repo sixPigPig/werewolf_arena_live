@@ -3,6 +3,12 @@ import { lazy, Suspense, type ReactNode } from "react";
 const ForbiddenPage = lazy(() => import("@/pages/ForbiddenPage"));
 const LoginPage = lazy(() => import("@/pages/LoginPage"));
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage"));
+const GameRecordsPage = lazy(
+  () => import("@/features/game-records/GameRecordsPage"),
+);
+const GameRecordDetailPage = lazy(
+  () => import("@/features/game-records/GameRecordDetailPage"),
+);
 const PlayerProfilesPage = lazy(
   () => import("@/features/player-profiles/PlayerProfilesPage"),
 );
@@ -43,6 +49,22 @@ export function PlayerProfilesRoute() {
   return (
     <LazyRoute>
       <PlayerProfilesPage />
+    </LazyRoute>
+  );
+}
+
+export function GameRecordsRoute() {
+  return (
+    <LazyRoute>
+      <GameRecordsPage />
+    </LazyRoute>
+  );
+}
+
+export function GameRecordDetailRoute() {
+  return (
+    <LazyRoute>
+      <GameRecordDetailPage />
     </LazyRoute>
   );
 }

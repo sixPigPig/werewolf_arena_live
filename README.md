@@ -53,6 +53,9 @@ Mobile 的设备级 Guest Session 与个人玩家收藏关系由
 `apps/api/alembic/versions/20260710_03_create_public_sessions_and_favorites.py` 创建。Public Session 与 Admin Session
 完全隔离，数据库只保存会话和 CSRF secret 的哈希；该迁移不会把无法确认归属的历史全局 `favorite` 回填给 Guest。
 
+Admin 对局分页检索使用的查询索引由
+`apps/api/alembic/versions/20260710_04_add_admin_game_query_indexes.py` 创建；`make api` 会随其他迁移一起应用。
+
 如果旧版本曾在 `apps/api/logs/player_profiles.json` 写入玩家档案，可在数据库迁移完成后执行一次幂等导入：
 
 ```bash
@@ -155,7 +158,7 @@ make admin-web
 http://127.0.0.1:5175
 ```
 
-`admin-web` 已接入 `/api/v1/admin/me`、服务端会话、权限路由、403、会话过期和安全登出，并完成玩家资料的服务端分页、草稿编辑、发布、归档、恢复和冲突处理。它只调用 `/api/v1/admin/*`，不调用旧匿名内容写接口。目前导航中仅开放已经接线的“虚拟玩家”，尚无 Admin API 的规划模块不会显示。
+`admin-web` 已接入 `/api/v1/admin/me`、服务端会话、权限路由、403、会话过期和安全登出，并完成玩家资料管理与真实 API 驱动的“对局记录”只读模块。对局列表使用 `/api/v1/admin/games` 做服务端分页、搜索、状态、规则、胜方、最新运行状态和日期筛选；详情 `/api/v1/admin/games/:id` 只显示终局玩家/角色结果、公开轮次摘要、运行和无 payload 的事件元数据白名单。partial/resumable 对局还会隐藏玩家及运行模型、死亡原因/来源、事件元数据和未完成轮次，避免反推出隐藏角色。错误摘要必须具备 `games.debug.read`，且由操作者显式点击后才请求独立 `/debug` 接口并写入审计。Admin 只调用 `/api/v1/admin/*`，不调用旧匿名内容写接口；尚无真实 Admin API 的规划模块不会进入导航。
 
 默认本地模式连接真实 Admin API；`make api` 和 `make admin-web` 会启用开发会话，打开 `http://127.0.0.1:5175` 后点击“使用开发身份登录”即可进入真实玩家数据。手动启动时，API 环境需要配置：
 
@@ -187,6 +190,7 @@ LEGACY_PLAYER_PROFILE_FAVORITE_WRITES_ENABLED=true
 
 production 会拒绝启用这两个开关。Mobile 已使用 `/api/v1/public/player-profiles*`、独立 Public Session 和
 `/api/v1/public/me/favorite-player-profiles*`，不会回退匿名 PATCH。Guest 收藏按当前浏览器 Cookie 隔离；清除 Cookie 或更换设备后无法找回，跨设备同步需要后续接入正式 C 端身份源。
+`mobile-web` 是唯一继续演进的 C 端页面；`apps/web` 仅作为迁移期兼容端保留，不向 Admin 搬运大厅、观战剧场或普通回放 UI。
 
 本地 HTTP 联调还需要：
 
