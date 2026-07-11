@@ -128,7 +128,12 @@ export default function JudgeVoiceAssetsPage() {
         <p className="game-inline-warning" role="alert">无法创建语音生成任务，请稍后重试。</p>
       ) : null}
       {jobQuery.data ? (
-        <section aria-label="语音生成任务" className="voice-assets-storage-note">
+        <section
+          aria-label="语音生成任务"
+          aria-live="polite"
+          className="voice-assets-storage-note"
+          role="status"
+        >
           <strong>生成任务：{jobStatusLabel(jobQuery.data.status)}</strong>
           <span>
             {jobQuery.data.processed_count} / {jobQuery.data.total_count} · 已生成 {jobQuery.data.generated_count} · 失败 {jobQuery.data.failed_count}

@@ -72,6 +72,7 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.ark_tts_sample_rate == 24000
     assert settings.ark_tts_judge_asset_audio_format == "mp3"
     assert settings.ark_tts_judge_asset_sample_rate == 24000
+    assert settings.judge_voice_worker_poll_seconds == 2.0
 
 
 def test_settings_reads_tts_env_values(monkeypatch) -> None:
@@ -183,3 +184,30 @@ def test_settings_reject_public_cors_wildcard_in_production(monkeypatch) -> None
 
     with pytest.raises(ValidationError, match="PUBLIC_CORS_ORIGINS cannot contain"):
         Settings(_env_file=None)
+
+
+def test_settings_require_distinct_session_cookie_names(monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_SESSION_COOKIE_NAME", "shared_session")
+    monkeypatch.setenv("PUBLIC_SESSION_COOKIE_NAME", "shared_session")
+
+    with pytest.raises(ValidationError, match="cookie names must be different"):
+        Settings(_env_file=None)
+
+
+def test_settings_require_https_cors_origins_in_production(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENVIRONMENT", "production")
+    monkeypatch.setenv("CORS_ORIGINS", "http://admin.example")
+    monkeypatch.setenv("PUBLIC_CORS_ORIGINS", "https://mobile.example")
+
+    with pytest.raises(ValidationError, match="CORS_ORIGINS must use HTTPS"):
+        Settings(_env_file=None)
+
+
+def test_settings_accept_safe_production_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENVIRONMENT", "production")
+    monkeypatch.setenv("CORS_ORIGINS", "https://admin.example,https://mobile.example")
+    monkeypatch.setenv("PUBLIC_CORS_ORIGINS", "https://mobile.example")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.app_environment == "production"

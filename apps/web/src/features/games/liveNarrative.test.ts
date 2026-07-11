@@ -345,7 +345,7 @@ describe("deriveLiveNarrativeState", () => {
       kind: "player-speaking",
       judgeLine: "请听 1号玩家 的发言。",
       performerLine: "1号玩家 完成发言。",
-      speechText: "我觉得今天应该先听 2号玩家 发言。",
+      speechText: "我觉得今天应该先听 Isaac 发言。",
     });
 
     expect(
@@ -375,7 +375,7 @@ describe("deriveLiveNarrativeState", () => {
     ).toMatchObject({
       kind: "player-speaking",
       judgeLine: "请听 2号玩家 的发言。",
-      speechText: "1号玩家 的票型需要重点复盘。",
+      speechText: "Isaac 的票型需要重点复盘。",
     });
   });
 

@@ -522,8 +522,18 @@ draft -> published -> archived
 
 - 迁移 `20260711_07` 新增持久任务表，保存模式、请求范围、状态、进度、分类错误、操作者和时间；
 - POST 排队强制 CSRF、模式对应权限及 `Idempotency-Key`，同请求复用、不同请求冲突，成功排队写入审计；
-- `run-judge-voice-worker --once` 独立领取 queued job，使用行锁避免重复领取，并可回收超过 15 分钟的 running job；
+- `run-judge-voice-worker` 作为独立持续进程领取 queued job，支持 SIGTERM/SIGINT 优雅停止、可配置轮询间隔、行锁防重，并可回收超过 15 分钟的 running job；`--once` 仅用于单次运维检查；
 - Admin 依据权限显示“生成缺失”或“重新生成全部”，轮询独立 job endpoint，终态后刷新资产覆盖率；
 - 任务错误只返回稳定分类，不向前端或审计写入 TTS 原始错误与凭据。
 
-阶段 4B2 已完成。生产部署需把 worker 命令交给进程管理器持续调度；当前 `--once` 适合 cron/作业调度器逐个领取。
+阶段 4B2 已完成。生产部署需由进程管理器守护持续 worker；`--once` 仅用于发布冒烟或人工排障。
+
+### 阶段 5A：部署与运行保障
+
+- `/api/v1/health/live` 只检查 API 进程存活，`/api/v1/health/ready` 同时检查 PostgreSQL 连接与 Alembic head，迁移落后时返回 503；
+- 生产配置拒绝开发登录、不安全 Cookie、通配符/HTTP CORS、同名 Admin/Public Session Cookie 和旧匿名写入；
+- `make release-check` 覆盖 API 与三个前端/共享包的 lint、测试、构建及 Alembic 模型漂移检查，CI 同步执行 `alembic check`；
+- 发布、持续 worker、健康探针、资产导入和前向兼容回滚步骤见 `docs/admin-deployment-runbook.md`；
+- 生成任务进度通过 `role=status` 和 `aria-live=polite` 播报，不依赖视觉变化。
+
+阶段 5A 的工程保障已完成。正式身份提供商仍未选择，因此 production 必须保持 Admin 外网入口关闭；选定 OIDC/SSO 后再完成身份映射、回调和真实账号验收。

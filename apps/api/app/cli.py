@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
 from pathlib import Path
+from threading import Event
 from typing import Sequence
 
 import uvicorn
 
 from app.core.config import settings
-from app.admin.voice_jobs import run_next_voice_generation_job
+from app.admin.voice_jobs import run_voice_generation_worker
 from app.db.session import SessionLocal
 from app.legacy_game_record_cleanup import purge_legacy_game_records
 from app.judge_voice_asset_import import (
@@ -84,7 +86,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "run-judge-voice-worker",
         help="Claim and run persistent judge voice generation jobs.",
     )
-    voice_worker_parser.add_argument("--once", action="store_true", required=True)
+    voice_worker_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Process at most one queued job, then exit.",
+    )
+    voice_worker_parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=settings.judge_voice_worker_poll_seconds,
+        help="Seconds to wait before polling an empty queue.",
+    )
     voice_worker_parser.set_defaults(func=_run_judge_voice_worker_command)
 
     purge_records_parser = subparsers.add_parser(
@@ -212,9 +224,34 @@ def _import_judge_voice_assets_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_judge_voice_worker_command(_args: argparse.Namespace) -> int:
-    job_id = run_next_voice_generation_job(SessionLocal)
-    print(f"job_id={job_id}" if job_id is not None else "job_id=none")
+def _run_judge_voice_worker_command(args: argparse.Namespace) -> int:
+    if not 0.25 <= args.poll_seconds <= 60:
+        print("--poll-seconds must be between 0.25 and 60", file=sys.stderr)
+        return 2
+
+    stop_event = Event()
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop_event.set()
+
+    previous_handlers = {
+        signal_number: signal.signal(signal_number, request_stop)
+        for signal_number in (signal.SIGINT, signal.SIGTERM)
+    }
+    try:
+        processed_count = run_voice_generation_worker(
+            SessionLocal,
+            stop_event=stop_event,
+            poll_seconds=args.poll_seconds,
+            once=args.once,
+            on_job=lambda job_id: print(f"job_id={job_id}", flush=True),
+        )
+    finally:
+        for signal_number, handler in previous_handlers.items():
+            signal.signal(signal_number, handler)
+
+    if args.once and processed_count == 0:
+        print("job_id=none")
     return 0
 
 

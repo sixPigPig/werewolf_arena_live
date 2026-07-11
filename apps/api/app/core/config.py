@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     ark_tts_sample_rate: int = 24000
     ark_tts_judge_asset_audio_format: str = "mp3"
     ark_tts_judge_asset_sample_rate: int = 24000
+    judge_voice_worker_poll_seconds: float = Field(default=2.0, ge=0.25, le=60.0)
 
     @field_validator("cors_origins", "public_cors_origins", mode="before")
     @classmethod
@@ -78,6 +79,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_admin_production_safety(self) -> "Settings":
+        if self.admin_session_cookie_name == self.public_session_cookie_name:
+            raise ValueError("admin and public session cookie names must be different")
         if self.app_environment == "production" and self.admin_dev_auth_enabled:
             raise ValueError("ADMIN_DEV_AUTH_ENABLED cannot be enabled in production")
         if self.app_environment == "production" and not self.admin_session_cookie_secure:
@@ -109,6 +112,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 "LEGACY_JUDGE_VOICE_GENERATION_ENABLED cannot be enabled in production"
             )
+        if self.app_environment == "production" and any(
+            not origin.startswith("https://") for origin in self.cors_origins
+        ):
+            raise ValueError("CORS_ORIGINS must use HTTPS in production")
+        if self.app_environment == "production" and any(
+            not origin.startswith("https://") for origin in self.public_cors_origins
+        ):
+            raise ValueError("PUBLIC_CORS_ORIGINS must use HTTPS in production")
         if self.admin_dev_auth_enabled and not self.admin_dev_auth_email.strip():
             raise ValueError("ADMIN_DEV_AUTH_EMAIL is required when development auth is enabled")
         if self.admin_dev_auth_enabled and not self.admin_dev_auth_display_name.strip():

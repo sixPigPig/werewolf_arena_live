@@ -10,7 +10,7 @@ VITE_ADMIN_DEV_LOGIN_ENABLED ?= true
 VITE_ADMIN_PREVIEW_MODE ?= false
 ADMIN_WEB_LOCAL_ENV = VITE_ADMIN_AUTH_ENABLED=$(VITE_ADMIN_AUTH_ENABLED) VITE_ADMIN_DEV_LOGIN_ENABLED=$(VITE_ADMIN_DEV_LOGIN_ENABLED) VITE_ADMIN_PREVIEW_MODE=$(VITE_ADMIN_PREVIEW_MODE)
 
-.PHONY: install dev api web mobile-web admin-web db-up db-down lint test format
+.PHONY: install dev api web mobile-web admin-web voice-worker db-up db-down lint test build format release-check
 
 install:
 	cd apps/api && uv sync
@@ -38,6 +38,9 @@ mobile-web:
 admin-web:
 	cd apps/admin-web && $(ADMIN_WEB_LOCAL_ENV) pnpm dev --host 0.0.0.0 --port 5175
 
+voice-worker:
+	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-judge-voice-worker
+
 db-up:
 	docker compose up -d db
 
@@ -47,6 +50,9 @@ db-down:
 lint:
 	cd apps/api && .venv/bin/ruff check .
 	cd apps/web && pnpm lint
+	pnpm --dir packages/game-client typecheck
+	pnpm --dir apps/mobile-web lint
+	pnpm --dir apps/admin-web lint
 
 format:
 	cd apps/api && .venv/bin/ruff format .
@@ -55,3 +61,14 @@ format:
 test:
 	cd apps/api && .venv/bin/python -m pytest
 	cd apps/web && pnpm test -- --run
+	pnpm --dir packages/game-client test -- --run
+	pnpm --dir apps/mobile-web test -- --run
+	pnpm --dir apps/admin-web test -- --run
+
+build:
+	pnpm --dir apps/web build
+	pnpm --dir apps/mobile-web build
+	pnpm --dir apps/admin-web build
+
+release-check: lint test build
+	cd apps/api && .venv/bin/alembic check

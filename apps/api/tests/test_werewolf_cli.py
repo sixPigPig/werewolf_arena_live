@@ -165,6 +165,32 @@ def test_serve_command_starts_uvicorn(monkeypatch) -> None:
     }
 
 
+def test_voice_worker_once_reports_claimed_job(capsys, monkeypatch) -> None:
+    calls = {}
+
+    def fake_worker(session_factory, **kwargs) -> int:
+        calls["session_factory"] = session_factory
+        calls.update(kwargs)
+        kwargs["on_job"]("voice-job-1")
+        return 1
+
+    monkeypatch.setattr(cli, "run_voice_generation_worker", fake_worker)
+
+    exit_code = main(["run-judge-voice-worker", "--once"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "job_id=voice-job-1"
+    assert calls["once"] is True
+    assert calls["poll_seconds"] == 2.0
+
+
+def test_voice_worker_rejects_unsafe_poll_interval(capsys) -> None:
+    exit_code = main(["run-judge-voice-worker", "--poll-seconds", "0"])
+
+    assert exit_code == 2
+    assert "between 0.25 and 60" in capsys.readouterr().err
+
+
 def test_evaluate_replay_command_prints_issue_codes(tmp_path, capsys) -> None:
     replay = {
         "session_id": "game_eval",

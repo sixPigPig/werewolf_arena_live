@@ -136,6 +136,53 @@ describe("admin voice asset flow", () => {
     expect(listCalls).toBe(2);
   });
 
+  it("announces persistent generation job progress to assistive technology", async () => {
+    const job = {
+      id: "voice-job-1",
+      mode: "missing",
+      status: "completed",
+      requested_line_ids: null,
+      total_count: 2,
+      processed_count: 2,
+      generated_count: 2,
+      skipped_count: 0,
+      failed_count: 0,
+      error_code: null,
+      created_at: "2026-07-11T10:00:00Z",
+      started_at: "2026-07-11T10:00:01Z",
+      completed_at: "2026-07-11T10:00:03Z",
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["voice.read", "voice.generate_missing"]));
+      }
+      if (url.includes("/api/v1/admin/judge-voice-lines?")) {
+        return jsonResponse(contractJudgeVoiceList);
+      }
+      if (url.endsWith("/api/v1/admin/judge-voice-generation-jobs")) {
+        expect(init?.method).toBe("POST");
+        expect(new Headers(init?.headers).get("X-CSRF-Token")).toBe("csrf-voice");
+        expect(new Headers(init?.headers).get("Idempotency-Key")).toBeTruthy();
+        return jsonResponse({ ...job, status: "queued", processed_count: 0 });
+      }
+      if (url.endsWith("/api/v1/admin/jobs/voice-job-1")) {
+        return jsonResponse(job);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/content/voice-assets");
+
+    await screen.findByRole("heading", { name: "法官语音资产" });
+    await user.click(screen.getByRole("button", { name: "生成缺失语音" }));
+
+    const status = await screen.findByRole("status", { name: "语音生成任务" });
+    expect(status).toHaveTextContent("生成任务：已完成");
+    expect(status).toHaveTextContent("2 / 2");
+  });
+
   it("enforces deep-link and navigation permission", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

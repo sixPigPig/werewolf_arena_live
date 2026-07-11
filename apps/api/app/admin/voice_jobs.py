@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -82,6 +84,29 @@ def run_next_voice_generation_job(session_factory: sessionmaker[Session]) -> str
 
     _execute_job(session_factory, job_id)
     return job_id
+
+
+def run_voice_generation_worker(
+    session_factory: sessionmaker[Session],
+    *,
+    stop_event: Event,
+    poll_seconds: float,
+    once: bool = False,
+    on_job: Callable[[str], None] | None = None,
+) -> int:
+    """Continuously drain queued jobs until signalled to stop."""
+    processed_count = 0
+    while not stop_event.is_set():
+        job_id = run_next_voice_generation_job(session_factory)
+        if job_id is not None:
+            processed_count += 1
+            if on_job is not None:
+                on_job(job_id)
+        if once:
+            break
+        if job_id is None:
+            stop_event.wait(poll_seconds)
+    return processed_count
 
 
 def _execute_job(session_factory: sessionmaker[Session], job_id: str) -> None:
