@@ -4,11 +4,11 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path as PathParameter, Query, Request, Response
+from sqlalchemy.orm import Session
 
 from app.admin.rbac import AdminPermission
 from app.admin.voice_assets import (
-    asset_file_path,
-    get_admin_judge_voice_asset,
+    get_admin_judge_voice_audio,
     list_admin_judge_voice_assets,
 )
 from app.api.admin.dependencies import AdminPrincipal, require_admin_permission
@@ -23,8 +23,8 @@ from app.api.schemas.admin_voice_assets import (
     AdminJudgeVoiceSort,
 )
 from app.core.config import settings
+from app.db.session import get_db
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
-from app.werewolf.volcengine_tts import mime_type_for_format
 
 
 router = APIRouter()
@@ -39,6 +39,7 @@ def get_admin_judge_voice_asset_dir() -> Path:
 def list_judge_voice_lines(
     request: Request,
     response: Response,
+    db: Annotated[Session, Depends(get_db)],
     asset_dir: Annotated[Path, Depends(get_admin_judge_voice_asset_dir)],
     _principal: Annotated[
         AdminPrincipal,
@@ -52,6 +53,7 @@ def list_judge_voice_lines(
     sort: AdminJudgeVoiceSort = "category",
 ) -> AdminJudgeVoiceLineListResponse:
     result = list_admin_judge_voice_assets(
+        db,
         asset_dir=asset_dir,
         audio_format=settings.ark_tts_judge_asset_audio_format,
         page=page,
@@ -65,7 +67,7 @@ def list_judge_voice_lines(
     return AdminJudgeVoiceLineListResponse(
         audio_format=settings.ark_tts_judge_asset_audio_format,
         sample_rate=settings.ark_tts_judge_asset_sample_rate,
-        storage_mode="legacy_static_directory",
+        storage_mode=result.storage_mode,
         coverage=AdminJudgeVoiceCoverage(
             total=result.asset_total,
             available=result.available_total,
@@ -90,24 +92,20 @@ def list_judge_voice_lines(
 def get_judge_voice_line_audio(
     line_id: Annotated[str, PathParameter(pattern=LINE_ID_RE)],
     request: Request,
+    db: Annotated[Session, Depends(get_db)],
     asset_dir: Annotated[Path, Depends(get_admin_judge_voice_asset_dir)],
     _principal: Annotated[
         AdminPrincipal,
         Depends(require_admin_permission(AdminPermission.VOICE_READ)),
     ],
 ) -> Response:
-    asset = get_admin_judge_voice_asset(
-        asset_dir=asset_dir,
-        audio_format=settings.ark_tts_judge_asset_audio_format,
-        line_id=line_id,
-    )
-    if asset is None or not asset.exists:
-        raise _not_found()
-    path = asset_file_path(asset_dir, asset)
-    if path is None or not path.is_file():
-        raise _not_found()
     try:
-        content = path.read_bytes()
+        audio = get_admin_judge_voice_audio(
+            db,
+            asset_dir=asset_dir,
+            audio_format=settings.ark_tts_judge_asset_audio_format,
+            line_id=line_id,
+        )
     except OSError as exc:
         raise AdminAPIProblem(
             status_code=503,
@@ -115,9 +113,11 @@ def get_judge_voice_line_audio(
             title="Voice asset unavailable",
             detail="The requested voice asset cannot be read right now.",
         ) from exc
+    if audio is None:
+        raise _not_found()
     return Response(
-        content=content,
-        media_type=mime_type_for_format(settings.ark_tts_judge_asset_audio_format),
+        content=audio.content,
+        media_type=audio.mime_type,
         headers=_private_headers(request),
     )
 
@@ -131,7 +131,7 @@ def _line_item(asset) -> AdminJudgeVoiceLineItem:
         byte_size=asset.byte_size if asset.exists else None,
         template_id=asset.template_id,
         seat_number=asset.seat_number,
-        subtitle_cue_count=len(asset.subtitle_timings),
+        subtitle_cue_count=asset.subtitle_cue_count,
         audio_url=(
             f"/api/v1/admin/judge-voice-lines/{asset.id}/audio"
             if asset.exists

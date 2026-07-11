@@ -72,7 +72,9 @@ export default function JudgeVoiceAssetsPage() {
       </header>
 
       <p className="voice-assets-storage-note">
-        当前读取旧静态目录中的已生成文件；本页不会自动生成、覆盖或删除语音。独立持久存储和异步生成任务将在后续写操作切片接入。
+        {data?.storage_mode === "database"
+          ? "当前读取 PostgreSQL 独立语音资产存储；旧静态文件仅作为回滚输入保留。本页不会自动生成、覆盖或删除语音。"
+          : "当前仍从旧静态目录双读；完成幂等导入后会自动切换 PostgreSQL。本页不会自动生成、覆盖或删除语音。"}
       </p>
 
       {data ? <VoiceCoverage data={data} /> : <VoiceCoverageLoading />}

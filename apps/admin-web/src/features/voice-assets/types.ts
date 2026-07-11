@@ -23,7 +23,7 @@ export type AdminJudgeVoiceCategory = {
 export type AdminJudgeVoiceList = {
   audio_format: string;
   sample_rate: number;
-  storage_mode: "legacy_static_directory";
+  storage_mode: "database" | "legacy_static_directory";
   coverage: {
     total: number;
     available: number;

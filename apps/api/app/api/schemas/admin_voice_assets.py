@@ -54,7 +54,7 @@ class AdminJudgeVoicePagination(BaseModel):
 class AdminJudgeVoiceLineListResponse(BaseModel):
     audio_format: str = Field(max_length=20)
     sample_rate: int = Field(gt=0)
-    storage_mode: Literal["legacy_static_directory"]
+    storage_mode: Literal["database", "legacy_static_directory"]
     coverage: AdminJudgeVoiceCoverage
     categories: list[AdminJudgeVoiceCategorySummary]
     items: list[AdminJudgeVoiceLineItem]

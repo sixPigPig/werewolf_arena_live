@@ -167,7 +167,7 @@ http://127.0.0.1:5175
 
 运行监控使用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要：列表第 1 页存在 queued/running 记录时每 5 秒轮询，无活跃运行时每 30 秒发现新记录，其他页仅手动刷新。`last_activity_at` 和 `is_stale` 仅描述数据库中最近持久化活动的新鲜度，不是进程心跳或健康检查。普通列表/详情严格使用字段白名单；只有 completed 且关联对局已安全终局时才显示胜方、模型和事件 actor/action。脱敏错误分类必须具备 `runs.debug.read` 并由操作者显式请求独立 `/debug`，读取会写入审计；当前页面没有停止、恢复或重试控制。Admin 只调用 `/api/v1/admin/*`，不调用旧匿名内容写接口；`mobile-web` 仍是唯一继续演进的 C 端。
 
-法官语音资产使用 `/api/v1/admin/judge-voice-lines*` 提供 `voice.read` 保护的覆盖率、分类筛选、缺失项和受认证试听；普通 DTO 不返回文件路径、旧 public URL、manifest、字幕内容或音频字节。当前只读页仍从旧静态目录读取，独立持久存储与异步生成任务留到后续写操作切片。旧 Web 匿名生成 POST 默认关闭，production 禁止重新开启。
+法官语音资产使用 `/api/v1/admin/judge-voice-lines*` 提供 `voice.read` 保护的覆盖率、分类筛选、缺失项和受认证试听；普通 DTO 不返回文件路径、旧 public URL、manifest、字幕内容或音频字节。迁移 `20260711_06` 建立 PostgreSQL 独立资产表，`.venv/bin/python -m app.cli import-judge-voice-assets` 可幂等导入旧静态文件；Admin、实时法官语音和回放均数据库优先、旧目录回退。旧文件暂留作回滚输入，异步生成任务留到后续写操作切片。旧 Web 匿名生成 POST 默认关闭，production 禁止重新开启。
 
 默认本地模式连接真实 Admin API；`make api` 和 `make admin-web` 会启用开发会话，打开 `http://127.0.0.1:5175` 后点击“使用开发身份登录”即可进入真实玩家数据。手动启动时，API 环境需要配置：
 

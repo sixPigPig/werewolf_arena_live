@@ -54,7 +54,7 @@ export function parseAdminJudgeVoiceList(value: unknown): AdminJudgeVoiceList {
     throw invalidContract("语音条目引用了未知分类");
   }
   const storageMode = requiredString(record.storage_mode, "storage_mode");
-  if (storageMode !== "legacy_static_directory") {
+  if (storageMode !== "database" && storageMode !== "legacy_static_directory") {
     throw invalidContract("未知的语音存储模式");
   }
   return {

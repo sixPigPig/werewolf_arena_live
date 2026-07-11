@@ -158,6 +158,10 @@ def list_judge_voice_assets(
     ]
 
 
+def list_judge_voice_line_definitions() -> list[JudgeVoiceLine]:
+    return _expanded_voice_lines()
+
+
 async def generate_judge_voice_assets(
     *,
     config: VolcengineTtsConfig,

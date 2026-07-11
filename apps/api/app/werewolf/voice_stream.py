@@ -126,12 +126,14 @@ class LiveVoiceStreamService:
         client_factory: Callable[[VolcengineTtsConfig], TtsClient] = VolcengineTtsClient,
         voice_store_factory: Callable[[str], VoiceStore | None] | None = None,
         judge_voice_asset_dir: Path = DEFAULT_JUDGE_VOICE_ASSET_DIR,
+        judge_voice_asset_loader: Callable[[str], StaticJudgeVoiceAsset | None] | None = None,
     ) -> None:
         self.registry = registry
         self.config = config
         self.client_factory = client_factory
         self.voice_store_factory = voice_store_factory
         self.judge_voice_asset_dir = judge_voice_asset_dir
+        self.judge_voice_asset_loader = judge_voice_asset_loader
 
     @property
     def available(self) -> bool:
@@ -279,10 +281,16 @@ class LiveVoiceStreamService:
     ) -> StaticJudgeVoiceAsset | None:
         if utterance.speaker_kind != "judge" or utterance.static_asset_id is None:
             return None
-        asset = _load_static_judge_voice_asset(
-            self.judge_voice_asset_dir,
-            utterance.static_asset_id,
+        asset = (
+            self.judge_voice_asset_loader(utterance.static_asset_id)
+            if self.judge_voice_asset_loader is not None
+            else None
         )
+        if asset is None:
+            asset = _load_static_judge_voice_asset(
+                self.judge_voice_asset_dir,
+                utterance.static_asset_id,
+            )
         if asset is None:
             return None
         return asset
@@ -806,6 +814,7 @@ def build_static_judge_playback_voices(
     *,
     asset_dir: Path = DEFAULT_JUDGE_VOICE_ASSET_DIR,
     speaker_config: VoiceSpeakerConfig | None = None,
+    asset_loader: Callable[[str], StaticJudgeVoiceAsset | None] | None = None,
 ) -> list[dict[str, Any]]:
     config = speaker_config or VoiceSpeakerConfig(
         player_speaker="",
@@ -826,7 +835,13 @@ def build_static_judge_playback_voices(
             peaceful_night=voice_context.peaceful_night,
         )
         if utterance is not None and utterance.static_asset_id is not None:
-            asset = _load_static_judge_voice_asset(asset_dir, utterance.static_asset_id)
+            asset = (
+                asset_loader(utterance.static_asset_id)
+                if asset_loader is not None
+                else None
+            )
+            if asset is None:
+                asset = _load_static_judge_voice_asset(asset_dir, utterance.static_asset_id)
             if asset is not None:
                 start_message, chunk_message, _end_message = build_voice_messages(
                     utterance_id=(

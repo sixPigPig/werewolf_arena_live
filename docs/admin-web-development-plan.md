@@ -1,6 +1,6 @@
 # Admin Web 规划、设计与开发方案
 
-状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流、Admin 对局记录只读切片、阶段 3B 运行监控只读切片和阶段 4A 法官语音资产只读切片已完成；正式身份源、其他 Public API、运行控制/恢复、独立语音存储与异步生成任务尚未接入。
+状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流、Admin 对局记录只读切片、阶段 3B 运行监控只读切片、阶段 4A 法官语音资产只读切片和阶段 4B1 独立语音存储已完成；正式身份源、其他 Public API、运行控制/恢复与异步生成任务尚未接入。
 
 ## 1. 决策摘要
 
@@ -503,7 +503,17 @@ draft -> published -> archived
 - `/content/voice-assets` 连接真实 `/api/v1/admin/judge-voice-lines`，提供覆盖率、文件体积、分类、缺失状态、搜索、排序、分页和手动刷新；
 - `voice.read` 同时保护列表与 `/judge-voice-lines/:id/audio`，试听音频不会回退旧匿名 public URL；
 - 普通 DTO 只返回台词 ID、展示文本、分类、文件存在状态、大小、模板/席位、安全试听 URL 和字幕计数，不返回服务器路径、filename、manifest、字幕内容或音频块；
-- 页面明确标记当前仍使用旧静态目录，且不提供生成、覆盖、删除按钮；独立持久存储和异步生成任务留到阶段 4B；
+- 页面显示当前数据库或旧目录双读状态，且不提供生成、覆盖、删除按钮；
 - 旧 Web 匿名语音生成 POST 默认关闭，production 配置校验禁止重新开启。
 
 阶段 4A 已完成。阶段 4B 需要先确定对象存储/持久卷与任务队列契约，再接入 `voice.generate_missing`、`voice.regenerate_all`、CSRF、幂等键、任务进度和操作审计。
+
+### 阶段 4B1：法官语音独立持久存储
+
+- 迁移 `20260711_06` 新增 `judge_voice_assets`，保存台词定义、格式、采样率、音频字节、SHA-256、大小和规范化字幕时间点；
+- `import-judge-voice-assets` 从旧静态目录幂等导入，重复执行复用 checksum/元数据一致的记录，文件变化时更新同一资产；
+- Admin 列表查询只投影元数据，不读取 LargeBinary；试听按 ID 单条读取数据库音频；
+- 实时静态法官语音和普通回放均数据库优先，记录缺失时回退旧目录，满足 expand/contract 回滚边界；
+- 旧文件至少保留两个发布周期，本阶段不删除 `apps/web/public/judge-voice`。
+
+阶段 4B1 已完成。4B2 的生成任务必须使用持久任务表或外部队列，不能以无恢复能力的进程内线程冒充可靠异步任务。

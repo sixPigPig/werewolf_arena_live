@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import SessionLocal, get_db
+from app.models.judge_voice_asset import JudgeVoiceAssetRecord
 from app.player_profiles.errors import PlayerProfileNotFound
 from app.player_profiles.service import (
     get_published_player_profile,
@@ -49,6 +50,7 @@ from app.werewolf.voice import VoiceUtterance
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.voice_stream import (
     LiveVoiceStreamService,
+    StaticJudgeVoiceAsset,
     build_static_judge_playback_voices,
 )
 from app.werewolf.voice_store import DatabaseVoiceStore
@@ -234,6 +236,42 @@ def get_voice_streamer(
         registry=registry,
         config=config,
         voice_store_factory=lambda session_id: SessionVoiceStore(session_id=session_id),
+        judge_voice_asset_loader=_persistent_judge_voice_loader(),
+    )
+
+
+def _persistent_judge_voice_loader() -> Callable[[str], StaticJudgeVoiceAsset | None]:
+    cache: dict[str, StaticJudgeVoiceAsset | None] = {}
+
+    def load(asset_id: str) -> StaticJudgeVoiceAsset | None:
+        if asset_id not in cache:
+            cache[asset_id] = _load_persistent_judge_voice_asset(asset_id)
+        return cache[asset_id]
+
+    return load
+
+
+def _load_persistent_judge_voice_asset(asset_id: str) -> StaticJudgeVoiceAsset | None:
+    db = SessionLocal()
+    try:
+        return _static_judge_voice_asset_from_record(db.get(JudgeVoiceAssetRecord, asset_id))
+    finally:
+        db.close()
+
+
+def _static_judge_voice_asset_from_record(
+    record: JudgeVoiceAssetRecord | None,
+) -> StaticJudgeVoiceAsset | None:
+    if record is None or not record.data:
+        return None
+    return StaticJudgeVoiceAsset(
+        audio=bytes(record.data),
+        audio_format=record.audio_format,
+        mime_type=record.mime_type,
+        sample_rate=record.sample_rate,
+        subtitle_timings=(
+            record.subtitle_timings if isinstance(record.subtitle_timings, list) else []
+        ),
     )
 
 
@@ -600,6 +638,9 @@ def get_game_playback(
     static_judge_voices = build_static_judge_playback_voices(
         playback["events"],
         asset_dir=DEFAULT_JUDGE_VOICE_ASSET_DIR,
+        asset_loader=lambda asset_id: _static_judge_voice_asset_from_record(
+            db.get(JudgeVoiceAssetRecord, asset_id)
+        ),
     )
     playback["voices"] = _merge_playback_voices(saved_voices, static_judge_voices)
     return playback

@@ -10,12 +10,17 @@ import uvicorn
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.legacy_game_record_cleanup import purge_legacy_game_records
+from app.judge_voice_asset_import import (
+    JudgeVoiceAssetImportError,
+    import_judge_voice_assets,
+)
 from app.player_avatar_asset_migration import (
     PlayerAvatarAssetMigrationError,
     migrate_player_avatar_assets,
 )
 from app.player_profile_import import PlayerProfileImportError, import_player_profiles
 from app.werewolf.evaluator import evaluate_replay
+from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.providers import default_model_name
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.runner import GameRunError, run_game
@@ -62,6 +67,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path(settings.werewolf_logs_dir),
     )
     migrate_avatar_parser.set_defaults(func=_migrate_player_avatar_assets_command)
+
+    import_voice_parser = subparsers.add_parser(
+        "import-judge-voice-assets",
+        help="Import legacy judge voice files into PostgreSQL.",
+    )
+    import_voice_parser.add_argument(
+        "--source",
+        type=Path,
+        default=DEFAULT_JUDGE_VOICE_ASSET_DIR,
+    )
+    import_voice_parser.set_defaults(func=_import_judge_voice_assets_command)
 
     purge_records_parser = subparsers.add_parser(
         "purge-legacy-game-records",
@@ -159,6 +175,31 @@ def _migrate_player_avatar_assets_command(args: argparse.Namespace) -> int:
         f"复用={result.reused_count} "
         f"缺失={result.missing_count} "
         f"回填={result.updated_count}"
+    )
+    return 0
+
+
+def _import_judge_voice_assets_command(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        result = import_judge_voice_assets(
+            asset_dir=args.source,
+            audio_format=settings.ark_tts_judge_asset_audio_format,
+            sample_rate=settings.ark_tts_judge_asset_sample_rate,
+            db=db,
+        )
+    except JudgeVoiceAssetImportError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+    print(
+        f"扫描={result.scanned_count} "
+        f"导入={result.imported_count} "
+        f"更新={result.updated_count} "
+        f"复用={result.reused_count} "
+        f"缺失={result.missing_count} "
+        f"字节={result.byte_count}"
     )
     return 0
 

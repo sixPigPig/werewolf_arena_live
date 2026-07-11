@@ -42,6 +42,7 @@
 - `last_activity_at` 来源于最近持久化事件，无事件时回退到运行创建时间；`is_stale` 只表示 queued/running 超过 60 秒没有数据库活动，不代表 API 进程、模型任务或 worker 在线/健康。
 - `runs.debug.read` 使用独立 `/debug` endpoint。前端只在用户显式点击后请求脱敏、限长限量的错误分类，并记录读取审计；基础详情不因 debug 失败而不可用。当前 Admin 不提供停止、恢复或重试运行操作。
 - Admin 法官语音 API 使用 `voice.read`，返回 `no-store` 且不暴露服务器文件路径、旧 public URL、manifest、字幕内容或音频块；试听 URL 仍由 API 再次鉴权。旧匿名生成 endpoint 默认关闭且 production 不能开启。
+- Migration `20260711_06` adds `judge_voice_assets`; the idempotent import command copies audio bytes, checksums and normalized subtitle timings into PostgreSQL. Admin inventory, live static-judge playback and replay use database-first/legacy-file fallback during the expand period.
 
 ## Player profile boundaries
 
