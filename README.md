@@ -165,7 +165,7 @@ http://127.0.0.1:5175
 
 `admin-web` 已接入 `/api/v1/admin/me`、服务端会话、权限路由、403、会话过期和安全登出，并完成玩家资料、后台账号、审计日志以及真实 API 驱动的“对局记录”“运行监控”和“法官语音资产”模块。对局列表使用 `/api/v1/admin/games` 做服务端分页筛选；详情只显示终局玩家/角色结果、公开轮次摘要、运行和无 payload 的事件元数据白名单。partial/resumable 对局还会隐藏胜方、玩家及运行模型、死亡原因/来源、事件元数据和未完成轮次。错误摘要必须具备 `games.debug.read`，且由操作者显式点击后才请求独立 `/debug` 接口并写入审计。
 
-运行监控使用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要：列表第 1 页存在 queued/running 记录时每 5 秒轮询，无活跃运行时每 30 秒发现新记录，其他页仅手动刷新。`last_activity_at` 和 `is_stale` 仅描述数据库中最近持久化活动的新鲜度，不是进程心跳或健康检查。普通列表/详情严格使用字段白名单；只有 completed 且关联对局已安全终局时才显示胜方、模型和事件 actor/action。脱敏错误分类必须具备 `runs.debug.read` 并由操作者显式请求独立 `/debug`，读取会写入审计；当前页面没有停止、恢复或重试控制。Admin 只调用 `/api/v1/admin/*`，不调用旧匿名内容写接口；`mobile-web` 仍是唯一继续演进的 C 端。
+运行监控使用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要：列表第 1 页存在 queued/running 记录时每 5 秒轮询，无活跃运行时每 30 秒发现新记录，其他页仅手动刷新。Worker 在线状态来自数据库租约心跳，`last_activity_at` 同时保留持久化事件的新鲜度。普通列表/详情严格使用字段白名单；只有 completed 且关联对局已安全终局时才显示胜方、模型和事件 actor/action。脱敏错误分类必须具备 `runs.debug.read` 并由操作者显式请求独立 `/debug`，读取会写入审计。具备 `runs.control` 的操作者可以提交幂等停止或检查点恢复；过期租约通过单调递增的 fencing token 接管，旧 Worker 的事件、checkpoint、回放和终态写入会被数据库拒绝。Admin 只调用 `/api/v1/admin/*`，不调用旧匿名内容写接口；`mobile-web` 仍是唯一继续演进的 C 端。
 
 法官语音资产使用 `/api/v1/admin/judge-voice-lines*` 提供 `voice.read` 保护的覆盖率、分类筛选、缺失项和受认证试听；普通 DTO 不返回文件路径、旧 public URL、manifest、字幕内容或音频字节。迁移 `20260711_06` 建立 PostgreSQL 独立资产表，`.venv/bin/python -m app.cli import-judge-voice-assets` 可幂等导入旧静态文件；Admin、实时法官语音和回放均数据库优先、旧目录回退。旧文件暂留作回滚输入。旧 Web 匿名生成 POST 默认关闭，production 禁止重新开启。
 

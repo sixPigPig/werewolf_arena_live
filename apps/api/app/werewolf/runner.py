@@ -18,7 +18,7 @@ from app.werewolf.live import GameRunCanceled, NullEventSink
 from app.werewolf.lm import ModelProvider
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.providers import create_model_provider, default_model_name
-from app.werewolf.replay import GameRecordStore
+from app.werewolf.replay import GameRecordStore, ReplayWriteFencedError
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set
 
 
@@ -88,6 +88,8 @@ def run_game(
             checkpoint_manager=checkpoint_manager,
         )
         logs = engine.run()
+    except ReplayWriteFencedError:
+        raise
     except GameRunCanceled:
         if engine is not None:
             logs = engine.logs
@@ -159,6 +161,8 @@ def resume_game(
             checkpoint_manager=checkpoint_manager,
         )
         logs_after_resume = engine.run()
+    except ReplayWriteFencedError:
+        raise
     except GameRunCanceled:
         if engine is not None:
             logs_after_resume = engine.logs

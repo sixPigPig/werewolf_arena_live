@@ -216,9 +216,15 @@ def stop_live_run(
             requested_at=requested_at.isoformat().replace("+00:00", "Z"),
             control_version=record.control_version,
         )
+        final_status = record.status
+        if stale_worker:
+            claimed = registry.try_claim_stale_run(run_id)
+            if claimed is not None:
+                registry.mark_canceled(run_id)
+                final_status = "canceled"
         result = _control_response(
             control,
-            record.status,
+            final_status,
             requested_at.isoformat().replace("+00:00", "Z"),
         )
     except AdminAPIProblem:
@@ -272,11 +278,21 @@ def resume_live_run(
                 detail="The requested live run does not exist.", status_code=404,
             )
         game = db.get(GameSessionRecord, record.session_id)
-        if record.status not in {"failed", "canceled"} or game is None or not game.resumable:
+        now = datetime.now(tz=UTC)
+        stale_active = (
+            record.status in {"queued", "running"}
+            and record.lease_expires_at is not None
+            and _as_utc(record.lease_expires_at) <= now
+        )
+        resumable_status = record.status in {"failed", "canceled"} or stale_active
+        if not resumable_status or game is None or not game.resumable:
             _control_rejection(
                 db, request=request, principal=principal, action="resume", run_id=run_id,
                 reason=request_body.reason, code="admin_live_run_not_resumable",
-                detail="Only failed or canceled runs with a persistent checkpoint can be resumed.",
+                detail=(
+                    "Only failed, canceled, or stale active runs with a persistent "
+                    "checkpoint can be resumed."
+                ),
                 status_code=409,
             )
         resumed, created = start_resume_game_run(

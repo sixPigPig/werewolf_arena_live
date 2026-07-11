@@ -28,6 +28,7 @@ from app.werewolf.live import (
     LiveGameRun,
     LiveRunRegistry,
     RunLeaseState,
+    RunLeaseUnavailable,
     format_sse,
 )
 from app.werewolf.live_store import DatabaseLiveStore
@@ -44,6 +45,7 @@ from app.werewolf.replay import (
     DatabaseReplayStore,
     GameRecordStore,
     ReplayNotFoundError,
+    ReplayWriteFencedError,
     SESSION_ID_RE,
 )
 from app.werewolf.replay_playback import build_replay_playback
@@ -108,10 +110,20 @@ class SessionLiveStore:
         finally:
             db.close()
 
-    def append_event(self, event: LiveEvent) -> None:
+    def append_event(
+        self,
+        event: LiveEvent,
+        *,
+        worker_id: str,
+        fence_token: int,
+    ) -> None:
         db = self.session_factory()
         try:
-            DatabaseLiveStore(db).append_event(event)
+            DatabaseLiveStore(db).append_event(
+                event,
+                worker_id=worker_id,
+                fence_token=fence_token,
+            )
         finally:
             db.close()
 
@@ -162,6 +174,7 @@ class SessionLiveStore:
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
+        fence_token: int,
     ) -> RunLeaseState | None:
         db = self.session_factory()
         try:
@@ -170,6 +183,7 @@ class SessionLiveStore:
                 worker_id=worker_id,
                 heartbeat_at=heartbeat_at,
                 lease_expires_at=lease_expires_at,
+                fence_token=fence_token,
             )
         finally:
             db.close()
@@ -640,12 +654,17 @@ def start_resume_game_run(
     registry: LiveRunRegistry,
 ) -> tuple[LiveGameRun, bool]:
     active_run = registry.try_get_active_run_for_session(session_id)
-    if active_run is not None:
-        return active_run, False
     try:
         checkpoint = store.load_resume_checkpoint(session_id)
     except ResumeCheckpointError as exc:
+        if active_run is not None:
+            return active_run, False
         raise HTTPException(status_code=404, detail="Resume checkpoint not found") from exc
+    if active_run is not None:
+        claimed_run = registry.try_claim_stale_run(active_run.run_id)
+        if claimed_run is None:
+            return active_run, False
+        active_run = claimed_run
     run_params = checkpoint.get("run_params", {})
     if not isinstance(run_params, dict):
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid")
@@ -660,18 +679,21 @@ def start_resume_game_run(
         checkpoint_player_configs = player_configs_from_serialized(run_params.get("player_configs"))
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
-    run, created = registry.get_or_create_active_run(
-        session_id=session_id,
-        villager_model=str(run_params.get("villager_model") or default_model_name()),
-        werewolf_model=str(run_params.get("werewolf_model") or default_model_name()),
-        seed=seed if isinstance(seed, int) else None,
-        max_rounds=max_rounds,
-        rule_set_id=rule_set.id,
-        rule_set=rule_set_snapshot(rule_set),
-        player_configs=checkpoint_player_configs,
-    )
-    if not created:
-        return run, False
+    if active_run is None:
+        run, created = registry.get_or_create_active_run(
+            session_id=session_id,
+            villager_model=str(run_params.get("villager_model") or default_model_name()),
+            werewolf_model=str(run_params.get("werewolf_model") or default_model_name()),
+            seed=seed if isinstance(seed, int) else None,
+            max_rounds=max_rounds,
+            rule_set_id=rule_set.id,
+            rule_set=rule_set_snapshot(rule_set),
+            player_configs=checkpoint_player_configs,
+        )
+        if not created:
+            return run, False
+    else:
+        run = active_run
     thread = threading.Thread(
         target=_resume_game_in_background,
         kwargs={"run_id": run.run_id, "registry": registry, "session_id": session_id},
@@ -777,22 +799,32 @@ def _run_game_in_background(
     except GameRunCanceled:
         registry.mark_canceled(run_id)
         return
+    except RunLeaseUnavailable:
+        return
     db = SessionLocal()
     try:
+        worker_id, fence_token = registry.write_fence(run_id)
         with registry.maintain_lease(run_id):
             result = run_game(
-                record_store=DatabaseReplayStore(db),
+                record_store=DatabaseReplayStore(
+                    db,
+                    run_id=run_id,
+                    worker_id=worker_id,
+                    fence_token=fence_token,
+                ),
                 villager_model=villager_model,
                 werewolf_model=werewolf_model,
                 seed=seed,
                 rule_set_id=rule_set_id,
                 max_rounds=max_rounds,
                 session_id=session_id,
-                event_sink=EventSink(registry, run_id),
+                event_sink=EventSink(registry, run_id, fence_token=fence_token),
                 player_configs=player_configs,
             )
     except GameRunCanceled:
         registry.mark_canceled(run_id)
+        return
+    except (RunLeaseUnavailable, ReplayWriteFencedError):
         return
     except GameRunError as exc:
         registry.mark_failed(run_id, error=str(exc))
@@ -817,16 +849,26 @@ def _resume_game_in_background(
     except GameRunCanceled:
         registry.mark_canceled(run_id)
         return
+    except RunLeaseUnavailable:
+        return
     db = SessionLocal()
     try:
+        worker_id, fence_token = registry.write_fence(run_id)
         with registry.maintain_lease(run_id):
             result = resume_game(
                 session_id=session_id,
-                record_store=DatabaseReplayStore(db),
-                event_sink=EventSink(registry, run_id),
+                record_store=DatabaseReplayStore(
+                    db,
+                    run_id=run_id,
+                    worker_id=worker_id,
+                    fence_token=fence_token,
+                ),
+                event_sink=EventSink(registry, run_id, fence_token=fence_token),
             )
     except GameRunCanceled:
         registry.mark_canceled(run_id)
+        return
+    except (RunLeaseUnavailable, ReplayWriteFencedError):
         return
     except GameRunError as exc:
         registry.mark_failed(run_id, error=str(exc))

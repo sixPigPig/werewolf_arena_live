@@ -1,6 +1,6 @@
 import json
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -256,9 +256,9 @@ class RecordingSessionLiveStore(SessionLiveStore):
         self.saved_runs.append((run.run_id, run.status))
         super().save_run(run)
 
-    def append_event(self, event) -> None:
+    def append_event(self, event, **fence) -> None:
         self.events.append((event.run_id, event.id, event.type))
-        super().append_event(event)
+        super().append_event(event, **fence)
 
 
 def test_session_voice_store_updates_subtitle_timings() -> None:
@@ -1065,6 +1065,62 @@ def test_resume_game_run_reuses_active_run_without_starting_another_task(
     assert second_response.status_code == 200
     assert second_response.json()["run_id"] == first_response.json()["run_id"]
     assert len(captured) == 1
+
+
+def test_resume_game_run_claims_a_stale_active_run_instead_of_creating_a_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    store_game_session(
+        session_id,
+        state=sample_state(session_id, winner="", error="Worker unavailable"),
+        checkpoint=sample_checkpoint(session_id),
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(TestingSessionLocal),
+        worker_id="worker-owner",
+    )
+    run = owner.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    with TestingSessionLocal() as db:
+        record = db.get(LiveRunRecord, run.run_id)
+        assert record is not None
+        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        db.commit()
+
+    recovery = LiveRunRegistry(
+        live_store=SessionLiveStore(TestingSessionLocal),
+        worker_id="worker-recovery",
+    )
+    override_replay_store()
+    override_live_registry(recovery)
+    captured: list[dict[str, object]] = []
+
+    def fake_resume_background(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._resume_game_in_background", fake_resume_background)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201, response.text
+    assert response.json()["run_id"] == run.run_id
+    assert captured[0]["run_id"] == run.run_id
+    with TestingSessionLocal() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        assert saved.worker_id == "worker-recovery"
+        assert saved.fence_token == run.fence_token + 1
 
 
 def test_resume_game_run_returns_404_without_checkpoint(

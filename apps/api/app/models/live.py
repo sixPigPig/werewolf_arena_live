@@ -47,6 +47,9 @@ class LiveRunRecord(Base):
     control_version: Mapped[int] = mapped_column(
         nullable=False, default=0, server_default="0"
     )
+    fence_token: Mapped[int] = mapped_column(
+        nullable=False, default=0, server_default="0"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

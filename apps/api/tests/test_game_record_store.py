@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -10,8 +11,13 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.game_session import GameReplayPayload, GameSessionRecord
+from app.models.live import LiveRunRecord
 from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION, ResumeCheckpointError
-from app.werewolf.replay import DatabaseReplayStore, ReplayNotFoundError
+from app.werewolf.replay import (
+    DatabaseReplayStore,
+    ReplayNotFoundError,
+    ReplayWriteFencedError,
+)
 
 _DEFAULT = object()
 
@@ -152,6 +158,61 @@ def test_checkpoint_makes_partial_session_resumable(db_session: Session) -> None
     assert loaded_session["resumable"] is True
     assert loaded_session["state"]["session_id"] == "game_1200abcd"
     assert loaded_session["logs"] == sample_logs()
+
+
+def test_replay_writes_require_the_current_live_run_fence_token(
+    db_session: Session,
+) -> None:
+    now = datetime.now(tz=UTC)
+    run = LiveRunRecord(
+        run_id="run_123456789abc",
+        session_id="game_1200abcd",
+        status="running",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id="starter_6",
+        worker_id="worker-owner",
+        worker_heartbeat_at=now,
+        lease_expires_at=now + timedelta(minutes=1),
+        fence_token=1,
+    )
+    db_session.add(run)
+    db_session.commit()
+    checkpoint = sample_checkpoint()
+    owner_store = DatabaseReplayStore(
+        db_session,
+        run_id=run.run_id,
+        worker_id="worker-owner",
+        fence_token=1,
+    )
+    owner_store.save_resume_checkpoint(run.session_id, checkpoint)
+
+    run.worker_id = "worker-recovery"
+    run.worker_heartbeat_at = now + timedelta(seconds=2)
+    run.lease_expires_at = now + timedelta(minutes=2)
+    run.fence_token = 2
+    db_session.commit()
+
+    stale_checkpoint = sample_checkpoint()
+    stale_checkpoint["last_error"] = "stale worker overwrite"
+    with pytest.raises(ReplayWriteFencedError):
+        owner_store.save_resume_checkpoint(run.session_id, stale_checkpoint)
+
+    recovered_checkpoint = sample_checkpoint()
+    recovered_checkpoint["last_error"] = "recovered worker checkpoint"
+    recovery_store = DatabaseReplayStore(
+        db_session,
+        run_id=run.run_id,
+        worker_id="worker-recovery",
+        fence_token=2,
+    )
+    recovery_store.save_resume_checkpoint(run.session_id, recovered_checkpoint)
+
+    assert recovery_store.load_resume_checkpoint(run.session_id)["last_error"] == (
+        "recovered worker checkpoint"
+    )
 
 
 def test_complete_game_clears_checkpoint(db_session: Session) -> None:

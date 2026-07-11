@@ -33,6 +33,7 @@ class RunLeaseState:
     stop_requested_at: str | None
     status: RunStatus
     control_version: int
+    fence_token: int
 
 
 def utc_now() -> str:
@@ -125,6 +126,7 @@ class LiveGameRun:
     worker_heartbeat_at: str | None = None
     lease_expires_at: str | None = None
     control_version: int = 0
+    fence_token: int = 0
     lease_lost: bool = field(default=False, repr=False)
     persisted_event_count: int = field(default=0, repr=False)
     events: list[LiveEvent] = field(default_factory=list)
@@ -162,7 +164,13 @@ class LiveStore(Protocol):
     def save_run(self, run: LiveGameRun) -> None:
         ...
 
-    def append_event(self, event: LiveEvent) -> None:
+    def append_event(
+        self,
+        event: LiveEvent,
+        *,
+        worker_id: str,
+        fence_token: int,
+    ) -> None:
         ...
 
     def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]:
@@ -191,6 +199,7 @@ class LiveStore(Protocol):
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
+        fence_token: int,
     ) -> RunLeaseState | None:
         ...
 
@@ -324,6 +333,53 @@ class LiveRunRegistry:
             return local_run
         return self._load_persisted_run(run_id)
 
+    def try_claim_stale_run(self, run_id: str) -> LiveGameRun | None:
+        """Atomically attach an active run whose worker lease has expired."""
+        with self._lock:
+            local_run = self._runs.get(run_id)
+        if local_run is not None:
+            persisted = self._load_persisted_run(run_id)
+            if (
+                persisted is None
+                or persisted.status not in {"queued", "running"}
+                or not _lease_is_expired(persisted.lease_expires_at)
+            ):
+                return None
+            lease_state = self._acquire_lease(run_id)
+            if lease_state is None:
+                return None
+            with self._lock:
+                self._apply_lease_state_locked(local_run, lease_state)
+                return local_run
+        persisted = self._load_persisted_run(run_id)
+        if persisted is None or persisted.status not in {"queued", "running"}:
+            return None
+        with self._lock:
+            if run_id in self._runs:
+                return None
+            self._runs[run_id] = persisted
+        try:
+            lease_state = self._acquire_lease(run_id)
+        except Exception:
+            with self._lock:
+                self._runs.pop(run_id, None)
+            raise
+        if lease_state is None:
+            with self._lock:
+                self._runs.pop(run_id, None)
+            return None
+        with self._lock:
+            run = self._runs[run_id]
+            self._apply_lease_state_locked(run, lease_state)
+            return run
+
+    def write_fence(self, run_id: str) -> tuple[str, int]:
+        with self._lock:
+            run = self._runs[run_id]
+            if run.worker_id != self.worker_id or run.fence_token <= 0:
+                raise RunLeaseUnavailable(f"Run {run_id} has no writable worker lease")
+            return self.worker_id, run.fence_token
+
     def set_live_store(self, live_store: LiveStore | None) -> None:
         with self._lock:
             self._live_store = live_store
@@ -339,18 +395,35 @@ class LiveRunRegistry:
         )
 
     def mark_running(self, run_id: str) -> LiveEvent:
-        lease_state = self._acquire_lease(run_id)
-        if lease_state is None and self._supports_store_method("acquire_lease"):
+        with self._lock:
+            run = self._runs[run_id]
+            has_claimed_lease = (
+                run.worker_id == self.worker_id
+                and run.fence_token > 0
+                and not run.lease_lost
+            )
+        lease_state = None if has_claimed_lease else self._acquire_lease(run_id)
+        if (
+            lease_state is None
+            and not has_claimed_lease
+            and self._supports_store_method("acquire_lease")
+        ):
             raise RunLeaseUnavailable(f"Run {run_id} is owned by another worker")
         with self._lock:
             run = self._runs[run_id]
             if lease_state is not None:
                 self._apply_lease_state_locked(run, lease_state)
             self._raise_if_stop_requested_locked(run)
+            recovered = run.started_at is not None
             run.status = "running"
-            run.started_at = utc_now()
+            if run.started_at is None:
+                run.started_at = utc_now()
             self._persist_run_locked(run)
-            return self._publish_locked(run, "run_started")
+            return self._publish_locked(
+                run,
+                "run_recovered" if recovered else "run_started",
+                payload={"fence_token": run.fence_token} if recovered else None,
+            )
 
     def mark_completed(self, run_id: str, *, winner: str) -> LiveEvent:
         with self._lock:
@@ -405,9 +478,16 @@ class LiveRunRegistry:
             run = self._runs[run_id]
             return run.stop_requested_at is not None
 
-    def raise_if_stop_requested(self, run_id: str) -> None:
+    def raise_if_stop_requested(
+        self,
+        run_id: str,
+        *,
+        expected_fence_token: int | None = None,
+    ) -> None:
         with self._lock:
-            self._raise_if_stop_requested_locked(self._runs[run_id])
+            run = self._runs[run_id]
+            self._raise_if_fence_changed_locked(run, expected_fence_token)
+            self._raise_if_stop_requested_locked(run)
 
     def mark_canceled(self, run_id: str) -> LiveEvent:
         with self._lock:
@@ -456,11 +536,14 @@ class LiveRunRegistry:
                 return False
             run.stop_requested_at = requested_at
             run.control_version = max(run.control_version, control_version)
-            self._publish_locked(
-                run,
-                "run_stop_requested",
-                payload={"requested_at": requested_at},
-            )
+            try:
+                self._publish_locked(
+                    run,
+                    "run_stop_requested",
+                    payload={"requested_at": requested_at},
+                )
+            except RunLeaseUnavailable:
+                return True
             return True
 
     @contextmanager
@@ -492,9 +575,11 @@ class LiveRunRegistry:
         actor: str | None = None,
         action: str | None = None,
         payload: dict[str, Any] | None = None,
+        expected_fence_token: int | None = None,
     ) -> LiveEvent:
         with self._lock:
             run = self._runs[run_id]
+            self._raise_if_fence_changed_locked(run, expected_fence_token)
             return self._publish_locked(
                 run,
                 event_type,
@@ -504,6 +589,14 @@ class LiveRunRegistry:
                 action=action,
                 payload=payload,
             )
+
+    @staticmethod
+    def _raise_if_fence_changed_locked(
+        run: LiveGameRun,
+        expected_fence_token: int | None,
+    ) -> None:
+        if expected_fence_token is not None and run.fence_token != expected_fence_token:
+            raise RunLeaseUnavailable("Live run fencing token was superseded")
 
     def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]:
         with self._lock:
@@ -591,7 +684,7 @@ class LiveRunRegistry:
         )
         run.next_event_id += 1
         run.events.append(event)
-        self._persist_event_locked(event)
+        self._persist_event_locked(run, event)
         for subscriber in run.subscribers:
             subscriber.put(event)
         return event
@@ -605,15 +698,25 @@ class LiveRunRegistry:
         if self._live_store is not None:
             try:
                 self._live_store.save_run(run)
+            except RunLeaseUnavailable:
+                run.lease_lost = True
+                raise
             except Exception:
                 logger.exception("Failed to persist live run %s", run.run_id)
                 if raise_on_error:
                     raise
 
-    def _persist_event_locked(self, event: LiveEvent) -> None:
+    def _persist_event_locked(self, run: LiveGameRun, event: LiveEvent) -> None:
         if self._live_store is not None:
             try:
-                self._live_store.append_event(event)
+                self._live_store.append_event(
+                    event,
+                    worker_id=run.worker_id or self.worker_id,
+                    fence_token=run.fence_token,
+                )
+            except RunLeaseUnavailable:
+                run.lease_lost = True
+                raise
             except Exception:
                 logger.exception(
                     "Failed to persist live event %s for run %s",
@@ -671,11 +774,14 @@ class LiveRunRegistry:
         if not callable(heartbeat):
             return None
         heartbeat_at, lease_expires_at = self._lease_window()
+        with self._lock:
+            fence_token = self._runs[run_id].fence_token
         state = heartbeat(
             run_id,
             worker_id=self.worker_id,
             heartbeat_at=heartbeat_at,
             lease_expires_at=lease_expires_at,
+            fence_token=fence_token,
         )
         with self._lock:
             run = self._runs.get(run_id)
@@ -710,6 +816,7 @@ class LiveRunRegistry:
         run.lease_expires_at = state.lease_expires_at
         run.stop_requested_at = state.stop_requested_at
         run.control_version = state.control_version
+        run.fence_token = state.fence_token
         run.lease_lost = False
 
     def _poll_persisted_subscription(
@@ -762,9 +869,16 @@ class LiveRunRegistry:
 
 
 class EventSink:
-    def __init__(self, registry: LiveRunRegistry, run_id: str) -> None:
+    def __init__(
+        self,
+        registry: LiveRunRegistry,
+        run_id: str,
+        *,
+        fence_token: int | None = None,
+    ) -> None:
         self.registry = registry
         self.run_id = run_id
+        self.fence_token = fence_token
 
     def publish(
         self,
@@ -776,7 +890,10 @@ class EventSink:
         action: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> LiveEvent:
-        self.registry.raise_if_stop_requested(self.run_id)
+        self.registry.raise_if_stop_requested(
+            self.run_id,
+            expected_fence_token=self.fence_token,
+        )
         return self.registry.publish(
             self.run_id,
             event_type,
@@ -785,6 +902,7 @@ class EventSink:
             actor=actor,
             action=action,
             payload=payload,
+            expected_fence_token=self.fence_token,
         )
 
 
@@ -809,3 +927,12 @@ def format_sse(event: LiveEvent) -> str:
 
 def _copy_json_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(payload, ensure_ascii=False))
+
+
+def _lease_is_expired(value: str | None) -> bool:
+    if value is None:
+        return True
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC) <= datetime.now(tz=UTC)

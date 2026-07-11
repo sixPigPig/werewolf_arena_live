@@ -327,6 +327,35 @@ describe("admin live run flow", () => {
     ).toBeInTheDocument();
   });
 
+  it("offers fenced checkpoint takeover for a stale active worker", async () => {
+    const staleDetail = {
+      ...contractActiveLiveRunDetail,
+      worker_state: "stale",
+      is_stale: true,
+    } as const;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["runs.read", "runs.control"]));
+      }
+      if (url.endsWith("/api/v1/admin/live-runs/run_active123")) {
+        return jsonResponse(staleDetail);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/operations/runs/run_active123");
+
+    await user.click(
+      await screen.findByRole("button", { name: "从检查点恢复" }),
+    );
+
+    expect(
+      screen.getByText(/旧 Worker 的后续写入会被拒绝/),
+    ).toBeInTheDocument();
+  });
+
   it("requests debug only after an authorized click and links to the game", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

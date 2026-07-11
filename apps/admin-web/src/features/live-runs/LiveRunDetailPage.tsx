@@ -87,7 +87,7 @@ export default function LiveRunDetailPage() {
         result.run_status === "canceled"
           ? "Worker 租约已过期，失联运行已安全终止。"
           : runQuery.data?.worker_state === "stale"
-            ? "停止请求已持久化；Worker 租约已过期，等待原 Worker 恢复并确认。"
+            ? "停止请求已持久化；若租约仍过期，当前 API Worker 会安全接管并终止运行。"
           : "停止请求已提交；运行会在下一个安全事件边界结束。",
       );
       await runQuery.refetch();
@@ -342,7 +342,9 @@ function RunControlPanel({
     (run.status === "queued" || run.status === "running") &&
     run.stop_requested_at === null;
   const canResume =
-    (run.status === "failed" || run.status === "canceled") &&
+    (run.status === "failed" ||
+      run.status === "canceled" ||
+      run.worker_state === "stale") &&
     run.game?.resumable === true;
 
   return (
@@ -350,7 +352,7 @@ function RunControlPanel({
       <div>
         <span>RUNTIME CONTROL</span>
         <strong>安全运行控制</strong>
-        <p>停止不会删除对局；恢复只会从已持久化检查点创建新运行。</p>
+        <p>停止不会删除对局；失联运行可通过 fencing token 安全接管检查点。</p>
         <small>
           {LIVE_RUN_WORKER_LABELS[run.worker_state]}
           {run.worker_heartbeat_at
@@ -408,7 +410,9 @@ function RunControlPanel({
           <p>
             {action === "stop"
               ? "确认后将发出协作取消信号，当前模型请求可能需要等待返回。"
-              : "确认后将创建新的运行，原运行及审计记录保持不变。"}
+              : run.worker_state === "stale"
+                ? "确认后将夺取过期租约并复用当前运行；旧 Worker 的后续写入会被拒绝。"
+                : "确认后将创建新的运行，原运行及审计记录保持不变。"}
           </p>
           {error ? <div role="alert">{error.message}</div> : null}
           <div>

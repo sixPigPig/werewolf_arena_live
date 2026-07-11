@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -12,7 +12,13 @@ from sqlalchemy.pool import StaticPool
 from app.api.routes.games import SessionLiveStore
 from app.db.base import Base
 from app.models.live import LiveRunRecord
-from app.werewolf.live import EventSink, GameRunCanceled, LiveEvent, LiveRunRegistry
+from app.werewolf.live import (
+    EventSink,
+    GameRunCanceled,
+    LiveEvent,
+    LiveRunRegistry,
+    RunLeaseUnavailable,
+)
 from app.werewolf.live_store import DatabaseLiveStore
 
 
@@ -50,7 +56,7 @@ def test_live_store_saves_run_and_events(db_session: Session) -> None:
     store = DatabaseLiveStore(db_session)
 
     store.save_run(run)
-    store.append_event(event)
+    store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
     loaded_events = store.events_after(run.run_id)
 
     saved_run = db_session.get(LiveRunRecord, run.run_id)
@@ -74,8 +80,8 @@ def test_live_store_events_after_filters_by_event_id(db_session: Session) -> Non
     store = DatabaseLiveStore(db_session)
 
     store.save_run(run)
-    store.append_event(first)
-    store.append_event(second)
+    store.append_event(first, worker_id=run.worker_id, fence_token=run.fence_token)
+    store.append_event(second, worker_id=run.worker_id, fence_token=run.fence_token)
 
     assert [event.id for event in store.events_after(run.run_id, after_id=first.id)] == [
         second.id
@@ -125,10 +131,18 @@ def test_live_store_returns_latest_eventful_playback_events_for_session(
     empty_run.status = "completed"
     latest_run.status = "completed"
     store.save_run(first_run)
-    store.append_event(first_event)
+    store.append_event(
+        first_event,
+        worker_id=first_run.worker_id,
+        fence_token=first_run.fence_token,
+    )
     store.save_run(empty_run)
     store.save_run(latest_run)
-    store.append_event(latest_event)
+    store.append_event(
+        latest_event,
+        worker_id=latest_run.worker_id,
+        fence_token=latest_run.fence_token,
+    )
 
     playback_events = store.playback_events_for_session("game_1200abcd")
 
@@ -164,9 +178,9 @@ def test_live_store_duplicate_event_raises_and_preserves_original(
     store = DatabaseLiveStore(db_session)
 
     store.save_run(run)
-    store.append_event(event)
+    store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
     with pytest.raises(IntegrityError):
-        store.append_event(duplicate)
+        store.append_event(duplicate, worker_id=run.worker_id, fence_token=run.fence_token)
 
     loaded_events = store.events_after(run.run_id)
     assert [item.id for item in loaded_events] == [event.id]
@@ -197,10 +211,10 @@ def test_live_store_rolls_back_duplicate_append_before_next_append(
     store = DatabaseLiveStore(db_session)
 
     store.save_run(run)
-    store.append_event(first)
+    store.append_event(first, worker_id=run.worker_id, fence_token=run.fence_token)
     with pytest.raises(IntegrityError):
-        store.append_event(duplicate)
-    store.append_event(second)
+        store.append_event(duplicate, worker_id=run.worker_id, fence_token=run.fence_token)
+    store.append_event(second, worker_id=run.worker_id, fence_token=run.fence_token)
 
     assert [event.id for event in store.events_after(run.run_id)] == [first.id, second.id]
 
@@ -366,3 +380,103 @@ def test_stale_worker_state_cannot_erase_newer_database_control_signal(
         assert saved.stop_requested_at is not None
     assert run.control_version == 1
     assert run.stop_requested_at is not None
+
+
+def test_stale_run_takeover_increments_fence_and_rejects_old_worker_writes(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-owner",
+    )
+    recovery = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-recovery",
+    )
+    run = owner.create_run(
+        session_id="game_4400abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=44,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    original_fence = run.fence_token
+    assert original_fence == 1
+
+    with session_factory() as db:
+        record = db.get(LiveRunRecord, run.run_id)
+        assert record is not None
+        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        db.commit()
+
+    claimed = recovery.try_claim_stale_run(run.run_id)
+    assert claimed is not None
+    assert claimed.run_id == run.run_id
+    assert claimed.worker_id == "worker-recovery"
+    assert claimed.fence_token == original_fence + 1
+
+    with pytest.raises(RunLeaseUnavailable):
+        owner.publish(run.run_id, "phase_started", phase="day")
+    with pytest.raises(RunLeaseUnavailable):
+        owner.mark_completed(run.run_id, winner="狼人阵营")
+
+    recovered = recovery.mark_running(run.run_id)
+    assert recovered.type == "run_recovered"
+    assert recovered.payload["fence_token"] == original_fence + 1
+    with session_factory() as db:
+        events = DatabaseLiveStore(db).events_after(run.run_id)
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert [event.type for event in events] == [
+            "run_created",
+            "run_started",
+            "run_recovered",
+        ]
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.worker_id == "worker-recovery"
+        assert saved.fence_token == original_fence + 1
+
+
+def test_same_registry_takeover_fences_the_old_engine_event_sink(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-same-process",
+    )
+    run = registry.create_run(
+        session_id="game_5500abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=55,
+        max_rounds=8,
+    )
+    registry.mark_running(run.run_id)
+    old_fence = run.fence_token
+    old_engine_sink = EventSink(registry, run.run_id, fence_token=old_fence)
+
+    with session_factory() as db:
+        record = db.get(LiveRunRecord, run.run_id)
+        assert record is not None
+        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        db.commit()
+
+    claimed = registry.try_claim_stale_run(run.run_id)
+    assert claimed is run
+    assert run.fence_token == old_fence + 1
+    with pytest.raises(RunLeaseUnavailable):
+        old_engine_sink.publish("phase_started", phase="day")
+
+    recovered = registry.mark_running(run.run_id)
+    assert recovered.type == "run_recovered"

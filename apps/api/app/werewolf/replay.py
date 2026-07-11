@@ -5,9 +5,11 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.models.game_session import GameReplayPayload, GameSessionRecord
+from app.models.live import LiveRunRecord
 from app.werewolf.checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     ResumeCheckpointError,
@@ -20,6 +22,10 @@ _SESSION_PATTERN = re.compile(SESSION_ID_RE)
 
 class ReplayNotFoundError(Exception):
     """Raised when a replay session cannot be loaded."""
+
+
+class ReplayWriteFencedError(RuntimeError):
+    """Raised when a superseded live worker attempts to write replay state."""
 
 
 class GameRecordStore(Protocol):
@@ -46,8 +52,18 @@ class GameRecordStore(Protocol):
 
 
 class DatabaseReplayStore:
-    def __init__(self, db: Session) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        run_id: str | None = None,
+        worker_id: str | None = None,
+        fence_token: int | None = None,
+    ) -> None:
         self.db = db
+        self.run_id = run_id
+        self.worker_id = worker_id
+        self.fence_token = fence_token
 
     def list_sessions(self) -> list[dict[str, Any]]:
         rows = (
@@ -119,6 +135,7 @@ class DatabaseReplayStore:
         )
         resumable = status == "partial" and checkpoint is not None
         try:
+            self._guard_write_fence(session_id)
             record = self._get_or_create_record(session_id)
             record.status = status
             record.winner = str(state.get("winner") or "") or None
@@ -141,6 +158,7 @@ class DatabaseReplayStore:
         self._validate_session_id(session_id)
         state, logs, _checkpoint, rounds = _validated_checkpoint_payload(session_id, checkpoint)
         try:
+            self._guard_write_fence(session_id)
             record = self._get_or_create_record(session_id)
             record.status = "partial"
             record.winner = str(state.get("winner") or "") or None
@@ -160,6 +178,7 @@ class DatabaseReplayStore:
     def clear_resume_checkpoint(self, session_id: str) -> None:
         self._validate_session_id(session_id)
         try:
+            self._guard_write_fence(session_id)
             record = self.db.get(GameSessionRecord, session_id)
             payload = self.db.get(GameReplayPayload, session_id)
             if record is None and payload is None:
@@ -192,6 +211,31 @@ class DatabaseReplayStore:
     def _validate_session_id(self, session_id: str) -> None:
         if not _SESSION_PATTERN.fullmatch(session_id):
             raise ReplayNotFoundError
+
+    def _guard_write_fence(self, session_id: str) -> None:
+        values = (self.run_id, self.worker_id, self.fence_token)
+        if all(value is None for value in values):
+            return
+        if self.run_id is None or self.worker_id is None or self.fence_token is None:
+            raise ValueError("Replay write fencing requires run_id, worker_id and fence_token")
+        result = self.db.execute(
+            update(LiveRunRecord)
+            .where(
+                LiveRunRecord.run_id == self.run_id,
+                LiveRunRecord.session_id == session_id,
+                LiveRunRecord.status.in_(("queued", "running")),
+                LiveRunRecord.worker_id == self.worker_id,
+                LiveRunRecord.fence_token == self.fence_token,
+                LiveRunRecord.lease_expires_at > datetime.now(tz=UTC),
+            )
+            .values(fence_token=LiveRunRecord.fence_token)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            self.db.rollback()
+            raise ReplayWriteFencedError(
+                f"Replay write for {self.run_id} was rejected by its fencing token"
+            )
 
 
 def _validated_game_payload(

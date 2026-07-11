@@ -9,7 +9,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.live import LiveEventRecord, LiveRunRecord
-from app.werewolf.live import LiveEvent, LiveGameRun, RunLeaseState
+from app.werewolf.live import (
+    LiveEvent,
+    LiveGameRun,
+    RunLeaseState,
+    RunLeaseUnavailable,
+)
 
 
 def parse_live_datetime(value: str | None) -> datetime | None:
@@ -47,6 +52,27 @@ class DatabaseLiveStore:
                 created_at=parse_live_datetime(run.created_at) or datetime.now(tz=UTC),
             )
             self.db.add(record)
+        elif record.fence_token > 0:
+            now = datetime.now(tz=UTC)
+            guard = self.db.execute(
+                update(LiveRunRecord)
+                .where(
+                    LiveRunRecord.run_id == run.run_id,
+                    LiveRunRecord.worker_id == run.worker_id,
+                    LiveRunRecord.fence_token == run.fence_token,
+                    or_(
+                        LiveRunRecord.status.in_(("completed", "failed", "canceled")),
+                        LiveRunRecord.lease_expires_at > now,
+                    ),
+                )
+                .values(fence_token=LiveRunRecord.fence_token)
+                .execution_options(synchronize_session=False)
+            )
+            if guard.rowcount != 1:
+                self.db.rollback()
+                raise RunLeaseUnavailable(
+                    f"Run {run.run_id} write was rejected by its fencing token"
+                )
         terminal_statuses = {"completed", "failed", "canceled"}
         fenced_by_terminal_state = (
             not is_new
@@ -74,6 +100,7 @@ class DatabaseLiveStore:
             run.stop_requested_at = _format_optional_datetime(record.stop_requested_at)
             run.control_version = record.control_version
         record.worker_id = run.worker_id
+        record.fence_token = run.fence_token
         record.worker_heartbeat_at = parse_live_datetime(run.worker_heartbeat_at)
         if not fenced_by_terminal_state:
             record.lease_expires_at = parse_live_datetime(run.lease_expires_at)
@@ -122,7 +149,9 @@ class DatabaseLiveStore:
                 worker_id=worker_id,
                 worker_heartbeat_at=heartbeat,
                 lease_expires_at=expires,
+                fence_token=LiveRunRecord.fence_token + 1,
             )
+            .execution_options(synchronize_session=False)
         )
         self._commit()
         if result.rowcount != 1:
@@ -136,18 +165,21 @@ class DatabaseLiveStore:
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
+        fence_token: int,
     ) -> RunLeaseState | None:
         result = self.db.execute(
             update(LiveRunRecord)
             .where(
                 LiveRunRecord.run_id == run_id,
                 LiveRunRecord.worker_id == worker_id,
+                LiveRunRecord.fence_token == fence_token,
                 LiveRunRecord.status.in_(("queued", "running")),
             )
             .values(
                 worker_heartbeat_at=parse_live_datetime(heartbeat_at),
                 lease_expires_at=parse_live_datetime(lease_expires_at),
             )
+            .execution_options(synchronize_session=False)
         )
         self._commit()
         if result.rowcount != 1:
@@ -165,6 +197,7 @@ class DatabaseLiveStore:
             stop_requested_at=_format_optional_datetime(record.stop_requested_at),
             status=record.status,
             control_version=record.control_version,
+            fence_token=record.fence_token,
         )
 
     def _run_from_record(self, record: LiveRunRecord) -> LiveGameRun:
@@ -198,10 +231,39 @@ class DatabaseLiveStore:
             worker_heartbeat_at=_format_optional_datetime(record.worker_heartbeat_at),
             lease_expires_at=_format_optional_datetime(record.lease_expires_at),
             control_version=record.control_version,
+            fence_token=record.fence_token,
             persisted_event_count=event_count,
+            next_event_id=event_count + 1,
         )
 
-    def append_event(self, event: LiveEvent) -> None:
+    def append_event(
+        self,
+        event: LiveEvent,
+        *,
+        worker_id: str,
+        fence_token: int,
+    ) -> None:
+        now = datetime.now(tz=UTC)
+        guard = self.db.execute(
+            update(LiveRunRecord)
+            .where(
+                LiveRunRecord.run_id == event.run_id,
+                LiveRunRecord.worker_id == worker_id,
+                LiveRunRecord.fence_token == fence_token,
+                or_(
+                    LiveRunRecord.fence_token == 0,
+                    LiveRunRecord.status.in_(("completed", "failed", "canceled")),
+                    LiveRunRecord.lease_expires_at > now,
+                ),
+            )
+            .values(fence_token=LiveRunRecord.fence_token)
+            .execution_options(synchronize_session=False)
+        )
+        if guard.rowcount != 1:
+            self.db.rollback()
+            raise RunLeaseUnavailable(
+                f"Run {event.run_id} event was rejected by its fencing token"
+            )
         record = LiveEventRecord(
             run_id=event.run_id,
             event_id=event.id,

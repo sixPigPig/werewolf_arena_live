@@ -486,6 +486,7 @@ def test_live_run_table_matches_expected_schema() -> None:
         "worker_heartbeat_at",
         "lease_expires_at",
         "control_version",
+        "fence_token",
         "updated_at",
     }
     assert table.c.run_id.primary_key is True
@@ -510,6 +511,7 @@ def test_live_run_table_matches_expected_schema() -> None:
     assert table.c.worker_heartbeat_at.nullable is True
     assert table.c.lease_expires_at.nullable is True
     assert table.c.control_version.nullable is False
+    assert table.c.fence_token.nullable is False
     assert table.c.updated_at.nullable is False
     _assert_index(table, "ix_live_runs_session_id", ["session_id"])
     _assert_index(table, "ix_live_runs_status", ["status"])

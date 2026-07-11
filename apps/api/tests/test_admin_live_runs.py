@@ -404,7 +404,57 @@ def test_resume_live_run_requires_persistent_resumable_state_and_returns_new_run
         assert audit.after["run_id"] == payload["run_id"]
 
 
-def test_stop_preserves_a_stale_run_until_its_worker_acknowledges_the_signal(
+def test_resume_live_run_allows_a_stale_active_checkpoint_takeover(
+    context: AdminLiveRunsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login = _login(context, monkeypatch, role="operator")
+    run_id = "run_000000000091"
+    _seed_run(
+        context,
+        run_id=run_id,
+        session_id="game_00000091",
+        created_at=datetime(2026, 7, 11, 15, tzinfo=UTC),
+        status="running",
+        game_status="partial",
+        resumable=True,
+        winner=None,
+    )
+    with context.session_factory() as db:
+        record = db.get(LiveRunRecord, run_id)
+        assert record is not None
+        record.worker_id = "worker-missing"
+        record.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+        record.fence_token = 1
+        db.commit()
+
+    def fake_start_resume_game_run(*, session_id, store, registry):
+        del session_id, store
+        resumed = registry.try_get_run(run_id)
+        assert resumed is not None
+        return resumed, True
+
+    monkeypatch.setattr(
+        live_run_routes,
+        "start_resume_game_run",
+        fake_start_resume_game_run,
+    )
+    response = context.client.post(
+        f"/api/v1/admin/live-runs/{run_id}/resume",
+        json={"reason": "Worker 已失联，从检查点安全接管"},
+        headers={
+            "X-CSRF-Token": login["csrf_token"],
+            "Idempotency-Key": "resume-stale-run-001",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["run_id"] == run_id
+    assert response.json()["run_status"] == "running"
+
+
+def test_stop_claims_and_cancels_a_stale_run_with_a_new_fence_token(
     context: AdminLiveRunsContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -417,18 +467,13 @@ def test_stop_preserves_a_stale_run_until_its_worker_acknowledges_the_signal(
         max_rounds=8,
     )
     context.registry.mark_running(run.run_id)
+    original_fence = run.fence_token
     with context.session_factory() as db:
         record = db.get(LiveRunRecord, run.run_id)
         assert record is not None
         record.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
         record.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
         db.commit()
-    foreign_registry = LiveRunRegistry(
-        live_store=SessionLiveStore(context.session_factory),
-        worker_id="worker-foreign-api",
-    )
-    context.client.app.dependency_overrides[get_live_registry] = lambda: foreign_registry
-
     detail = context.client.get(f"/api/v1/admin/live-runs/{run.run_id}")
     assert detail.status_code == 200
     assert detail.json()["worker_state"] == "stale"
@@ -444,13 +489,15 @@ def test_stop_preserves_a_stale_run_until_its_worker_acknowledges_the_signal(
     )
 
     assert response.status_code == 202, response.text
-    assert response.json()["run_status"] == "running"
+    assert response.json()["run_status"] == "canceled"
     with context.session_factory() as db:
         saved = db.get(LiveRunRecord, run.run_id)
         assert saved is not None
-        assert saved.status == "running"
+        assert saved.status == "canceled"
         assert saved.winner is None
         assert saved.stop_requested_at is not None
+        assert saved.worker_id == context.registry.worker_id
+        assert saved.fence_token == original_fence + 1
         audit = db.scalar(
             select(AuditEvent).where(
                 AuditEvent.action == "admin.live_run.stop",

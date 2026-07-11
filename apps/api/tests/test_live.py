@@ -31,7 +31,7 @@ class RecordingLiveStore:
     def save_run(self, run) -> None:
         self.saved_runs.append((run.run_id, run.status, run.winner, run.error))
 
-    def append_event(self, event) -> None:
+    def append_event(self, event, **_fence) -> None:
         self.events.append((event.run_id, event.id, event.type))
 
 
@@ -39,7 +39,7 @@ class FailingLiveStore:
     def save_run(self, run) -> None:
         raise RuntimeError(f"cannot save {run.run_id}")
 
-    def append_event(self, event) -> None:
+    def append_event(self, event, **_fence) -> None:
         raise RuntimeError(f"cannot append {event.id}")
 
 
@@ -70,7 +70,7 @@ class RacingActiveRunStore:
                 raise RuntimeError("unique active session conflict")
             self.active_run = run
 
-    def append_event(self, _event) -> None:
+    def append_event(self, _event, **_fence) -> None:
         return None
 
 
