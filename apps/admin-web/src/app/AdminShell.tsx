@@ -55,9 +55,19 @@ export function AdminShell() {
     }
   }
 
+  function focusMainContent() {
+    window.requestAnimationFrame(() => {
+      document.getElementById("admin-main-content")?.focus();
+    });
+  }
+
   return (
     <div className="admin-app-shell">
-      <a className="skip-link" href="#admin-main-content">
+      <a
+        className="skip-link"
+        href="#admin-main-content"
+        onClick={focusMainContent}
+      >
         跳到主要内容
       </a>
       <button
@@ -154,7 +164,11 @@ export function AdminShell() {
                 ? "LOCAL PREVIEW"
                 : (settings.data?.environment ?? "ADMIN").toUpperCase()}
             </span>
-            <span className="preview-principal" aria-label="当前后台身份">
+            <span
+              aria-label="当前后台身份"
+              className="preview-principal"
+              role="group"
+            >
               <span aria-hidden="true">超</span>
               <span>
                 <strong>{user ? roleLabels[user.role] : "后台用户"}</strong>
@@ -174,7 +188,7 @@ export function AdminShell() {
           </div>
         </header>
 
-        <main className="admin-main" id="admin-main-content">
+        <main className="admin-main" id="admin-main-content" tabIndex={-1}>
           <Outlet />
         </main>
       </div>

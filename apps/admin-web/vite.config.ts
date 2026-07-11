@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,6 +26,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    exclude: [...configDefaults.exclude, "e2e/**"],
     globals: true,
     setupFiles: "./src/tests/setup.ts",
   },

@@ -8,7 +8,10 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "build:e2e": "VITE_ADMIN_AUTH_ENABLED=false VITE_ADMIN_DEV_LOGIN_ENABLED=false VITE_ADMIN_PREVIEW_MODE=true pnpm exec tsc -b && VITE_ADMIN_AUTH_ENABLED=false VITE_ADMIN_DEV_LOGIN_ENABLED=false VITE_ADMIN_PREVIEW_MODE=true pnpm exec vite build --mode test",
+    "test:e2e": "pnpm run build:e2e && playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.99.2",
@@ -17,7 +20,9 @@
     "react-router-dom": "^7.14.2"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "^4.2.4",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

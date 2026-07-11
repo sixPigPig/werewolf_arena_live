@@ -56,6 +56,15 @@ pnpm test -- --run
 pnpm build
 ```
 
+浏览器级验收（会启动隔离的 test-mode 预览，不连接真实 Admin API）：
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:e2e
+```
+
+键盘跳过链接、axe 扫描、移动侧栏、AI 草稿人工保存边界和首屏性能基线说明见 [`docs/admin-web-browser-quality.md`](../../docs/admin-web-browser-quality.md)。
+
 ## 设计原则
 
 - 不调用当前匿名 `/api/v1/*` 管理写接口；

@@ -13,7 +13,7 @@ NODE_IMAGE ?= public.ecr.aws/docker/library/node:22-alpine
 NGINX_IMAGE ?= public.ecr.aws/docker/library/nginx:1.27-alpine
 PYTHON_IMAGE ?= public.ecr.aws/docker/library/python:3.12-slim
 
-.PHONY: install dev api web mobile-web admin-web voice-worker live-run-reaper db-up db-down stack-up stack-down container-build lint test build format release-check
+.PHONY: install dev api web mobile-web admin-web admin-e2e voice-worker live-run-reaper db-up db-down stack-up stack-down container-build lint test build format release-check
 
 install:
 	cd apps/api && uv sync
@@ -41,6 +41,9 @@ mobile-web:
 
 admin-web:
 	cd apps/admin-web && $(ADMIN_WEB_LOCAL_ENV) pnpm dev --host 0.0.0.0 --port 5175
+
+admin-e2e:
+	pnpm --dir apps/admin-web test:e2e
 
 voice-worker:
 	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-judge-voice-worker

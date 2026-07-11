@@ -157,6 +157,13 @@ http://<你的电脑局域网 IP>:5174
 make admin-web
 ```
 
+浏览器级 Admin 验收可在安装 Chromium 后执行：
+
+```bash
+pnpm --dir apps/admin-web exec playwright install chromium
+make admin-e2e
+```
+
 管理后台地址：
 
 ```text

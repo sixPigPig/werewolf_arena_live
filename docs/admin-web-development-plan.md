@@ -588,3 +588,14 @@ draft -> published -> archived
 - 旧匿名 AI 写入口继续保持兼容写开关关闭，Admin 不回退到旧接口。
 
 阶段 7A 已完成。下一阶段进入浏览器级 E2E、axe/键盘验收、大数据量性能基线和真实环境发布验收。
+
+### 阶段 7B：浏览器级质量门禁
+
+- 新增 Playwright Chromium 浏览器测试，以 Vite `test` 模式构建隔离预览；正式 production 构建继续 fail closed，不使用 fixture 绕过生产认证边界；
+- 桌面端验证运营总览、跳过链接到 `main` 的键盘焦点、全量 Admin Shell axe 扫描、5 秒内首屏可用和 AI 草稿只填表不保存的人工审核边界；
+- 移动端验证侧栏打开、导航和导航后自动收起；
+- 修复身份容器的非法 ARIA 标注，并提高总览更新时间文字对比度至 WCAG AA 基线；
+- CI 新增 `admin-web-browser` 门禁：安装 Chromium、运行浏览器测试，并保留 HTML/性能附件报告；本地入口为 `make admin-e2e`；
+- 本机基线中桌面运营总览首次可用为 514ms，阈值固定为 5 秒；该阈值用于防止明显回归，不等同于生产 SLO。
+
+阶段 7B 已完成。剩余的真实 OIDC、目标数据库/Worker、集群 Ingress、证书和回滚验收需要在获授权的 staging/production 环境执行。

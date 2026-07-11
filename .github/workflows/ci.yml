@@ -74,6 +74,31 @@ jobs:
       - run: pnpm --dir apps/admin-web test -- --run
       - run: pnpm --dir apps/admin-web build
 
+  admin-web-browser:
+    needs: admin-web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/admin-web exec playwright install --with-deps chromium
+      - run: pnpm --dir apps/admin-web test:e2e
+      - name: Upload Admin browser report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-web-browser-report
+          path: |
+            apps/admin-web/playwright-report
+            apps/admin-web/test-results
+          if-no-files-found: ignore
+
   mobile-client:
     runs-on: ubuntu-latest
     steps:
@@ -111,6 +136,7 @@ jobs:
       - api
       - web
       - admin-web
+      - admin-web-browser
       - mobile-client
       - deployment-manifests
     runs-on: ubuntu-latest
