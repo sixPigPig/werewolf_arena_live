@@ -15,6 +15,8 @@ import {
   NotFoundRoute,
   PlayerProfileEditorRoute,
   PlayerProfilesRoute,
+  AdminUsersRoute,
+  AuditEventsRoute,
 } from "@/routes/lazy-pages";
 
 export const routes: RouteObject[] = [
@@ -93,6 +95,22 @@ export const routes: RouteObject[] = [
                 element: (
                   <RequireAdminPermission permission="players.read">
                     <PlayerProfileEditorRoute />
+                  </RequireAdminPermission>
+                ),
+              },
+              {
+                path: "system/users",
+                element: (
+                  <RequireAdminPermission permission="users.manage">
+                    <AdminUsersRoute />
+                  </RequireAdminPermission>
+                ),
+              },
+              {
+                path: "system/audit",
+                element: (
+                  <RequireAdminPermission permission="audit.read">
+                    <AuditEventsRoute />
                   </RequireAdminPermission>
                 ),
               },

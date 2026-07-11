@@ -292,6 +292,7 @@ def resolve_oidc_user(db: Session, identity: OidcIdentity) -> tuple[User, bool]:
             raise AdminOidcError("admin_oidc_identity_mismatch")
         user.auth_provider = provider
         user.auth_subject = identity.subject
+        user.admin_version += 1
         newly_bound = True
     if not user.is_active or user.admin_role is None:
         raise AdminOidcError("admin_oidc_account_disabled")

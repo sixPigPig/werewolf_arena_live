@@ -1,6 +1,6 @@
 # Admin Web 规划、设计与开发方案
 
-状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流、Admin 对局记录只读切片、阶段 3B 运行监控只读切片、阶段 4A 法官语音资产只读切片、阶段 4B1 独立语音存储、阶段 4B2 持久生成任务、阶段 5A 运行保障和阶段 5B 通用 OIDC 接入已完成；真实身份租户验收、其他 Public API 与运行控制/恢复尚未接入。
+状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流、Admin 对局记录只读切片、阶段 3B 运行监控只读切片、阶段 4A 法官语音资产只读切片、阶段 4B1 独立语音存储、阶段 4B2 持久生成任务、阶段 5A 运行保障、阶段 5B 通用 OIDC 和阶段 5C 账号/审计管理已完成；真实身份租户验收、其他 Public API 与运行控制/恢复尚未接入。
 
 ## 1. 决策摘要
 
@@ -549,3 +549,16 @@ draft -> published -> archived
 - migration `20260711_08` 新增可回退的短期登录事务表，production 配置强制 OIDC 和 HTTPS issuer/callback/web base URL。
 
 阶段 5B 代码与本地签名/回调验收完成。正式开放前仍需拿实际 identity tenant 的 issuer、client、callback 和测试账号完成一次端到端验收；该步骤是外部配置门禁，不应以开发登录替代。
+
+### 阶段 5C：后台账号与审计管理闭环
+
+- migration `20260711_09` 为后台账号增加独立乐观锁版本，并新增按操作者 + Idempotency-Key 唯一的开通请求记录；
+- `/admin/users` 只列出后台账号，支持服务端分页、姓名/邮箱、角色、启用状态、OIDC 绑定状态和排序，不返回 provider、subject、session token、IP 或 User-Agent；
+- 创建账号强制 `users.manage`、`roles.manage`、CSRF 和 Idempotency-Key；同请求复用、不同请求冲突，并写入成功/失败审计；
+- 修改账号强制 expected version，禁止操作者停用或降级自己，禁止移除最后一个启用的超级管理员；停用会立即撤销目标账号全部活动会话；
+- 独立会话撤销接口幂等返回撤销数量，所有账号变更记录原因、前后安全摘要和请求编号；
+- `/admin/audit-events` 由 `audit.read` 保护，支持操作者/资源/请求搜索、动作、结果、资源类型、日期和排序，只返回最小审计 DTO；
+- Admin 新增 `/system/users`、`/system/audit`，导航和深链使用服务端同名权限，账号弹窗支持开通、角色/状态修改和会话撤销；
+- CLI 仅保留首位超级管理员引导和恢复用途，日常账号管理迁入受审计 Admin 页面。
+
+阶段 5C 已完成。下一阶段可进入运行停止、恢复与重试控制，但必须先为每类动作定义状态机、幂等语义和不可逆操作确认。

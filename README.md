@@ -163,7 +163,7 @@ make admin-web
 http://127.0.0.1:5175
 ```
 
-`admin-web` 已接入 `/api/v1/admin/me`、服务端会话、权限路由、403、会话过期和安全登出，并完成玩家资料管理以及真实 API 驱动的“对局记录”“运行监控”和“法官语音资产”只读模块。对局列表使用 `/api/v1/admin/games` 做服务端分页筛选；详情只显示终局玩家/角色结果、公开轮次摘要、运行和无 payload 的事件元数据白名单。partial/resumable 对局还会隐藏胜方、玩家及运行模型、死亡原因/来源、事件元数据和未完成轮次。错误摘要必须具备 `games.debug.read`，且由操作者显式点击后才请求独立 `/debug` 接口并写入审计。
+`admin-web` 已接入 `/api/v1/admin/me`、服务端会话、权限路由、403、会话过期和安全登出，并完成玩家资料、后台账号、审计日志以及真实 API 驱动的“对局记录”“运行监控”和“法官语音资产”模块。对局列表使用 `/api/v1/admin/games` 做服务端分页筛选；详情只显示终局玩家/角色结果、公开轮次摘要、运行和无 payload 的事件元数据白名单。partial/resumable 对局还会隐藏胜方、玩家及运行模型、死亡原因/来源、事件元数据和未完成轮次。错误摘要必须具备 `games.debug.read`，且由操作者显式点击后才请求独立 `/debug` 接口并写入审计。
 
 运行监控使用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要：列表第 1 页存在 queued/running 记录时每 5 秒轮询，无活跃运行时每 30 秒发现新记录，其他页仅手动刷新。`last_activity_at` 和 `is_stale` 仅描述数据库中最近持久化活动的新鲜度，不是进程心跳或健康检查。普通列表/详情严格使用字段白名单；只有 completed 且关联对局已安全终局时才显示胜方、模型和事件 actor/action。脱敏错误分类必须具备 `runs.debug.read` 并由操作者显式请求独立 `/debug`，读取会写入审计；当前页面没有停止、恢复或重试控制。Admin 只调用 `/api/v1/admin/*`，不调用旧匿名内容写接口；`mobile-web` 仍是唯一继续演进的 C 端。
 
@@ -201,6 +201,8 @@ cd apps/api
   --display-name "Arena Admin" \
   --role operator
 ```
+
+完成首位超级管理员引导后，可在 Admin 的“系统安全 → 后台账号”中继续开通账号、调整固定角色、停用账号或撤销其全部会话；写操作强制 CSRF、版本冲突检查、幂等键和审计。系统禁止当前操作者停用或降级自己，并确保至少保留一个启用的超级管理员。“审计日志”页面只返回操作者、动作、资源、结果、原因、请求编号和时间，不返回 before/after payload、IP、OIDC subject 或会话信息。
 
 再配置 `ADMIN_OIDC_ISSUER_URL`、`ADMIN_OIDC_CLIENT_ID`、`ADMIN_OIDC_CLIENT_SECRET`、`ADMIN_OIDC_REDIRECT_URI` 和 `ADMIN_OIDC_WEB_BASE_URL`。首次登录只接受提供商签名且 `email_verified=true` 的 ID Token，并把预配置账号永久绑定到 issuer/sub；后续不会按浏览器输入或 OIDC role claim 提权。登录事务、state、浏览器绑定、PKCE verifier 和 nonce 均在服务端校验，回调失败只返回稳定错误分类。
 

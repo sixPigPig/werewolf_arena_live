@@ -63,6 +63,7 @@ def test_user_table_matches_expected_schema() -> None:
         "auth_provider",
         "auth_subject",
         "admin_role",
+        "admin_version",
         "is_active",
         "created_at",
         "updated_at",
@@ -84,6 +85,8 @@ def test_user_table_matches_expected_schema() -> None:
         for constraint in table.constraints
     )
     assert table.c.admin_role.index is True
+    assert table.c.admin_version.nullable is False
+    assert table.c.admin_version.server_default is not None
     assert table.c.is_active.nullable is False
     assert table.c.is_active.server_default is not None
     assert table.c.updated_at.server_default is not None

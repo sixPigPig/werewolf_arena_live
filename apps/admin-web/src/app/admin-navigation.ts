@@ -8,7 +8,10 @@ export type AdminPermission =
   | "players.write"
   | "players.publish"
   | "players.archive"
-  | "players.ai_generate";
+  | "players.ai_generate"
+  | "users.manage"
+  | "roles.manage"
+  | "audit.read";
 
 export type AdminNavItem = {
   description: string;
@@ -67,6 +70,28 @@ export const adminNavigation: AdminNavSection[] = [
         href: "/content/voice-assets",
         marker: "声",
         permission: "voice.read",
+      },
+    ],
+  },
+  {
+    id: "system",
+    label: "系统安全",
+    items: [
+      {
+        id: "admin-users",
+        label: "后台账号",
+        description: "OIDC 预授权、角色与会话",
+        href: "/system/users",
+        marker: "账",
+        permission: "users.manage",
+      },
+      {
+        id: "audit-events",
+        label: "审计日志",
+        description: "操作、资源与结果追踪",
+        href: "/system/audit",
+        marker: "审",
+        permission: "audit.read",
       },
     ],
   },

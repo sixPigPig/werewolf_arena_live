@@ -24,6 +24,12 @@ const PlayerProfilesPage = lazy(
 const PlayerProfileEditorPage = lazy(
   () => import("@/features/player-profiles/PlayerProfileEditorPage"),
 );
+const AdminUsersPage = lazy(
+  () => import("@/features/admin-users/AdminUsersPage"),
+);
+const AuditEventsPage = lazy(
+  () => import("@/features/audit-events/AuditEventsPage"),
+);
 
 function LazyRoute({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteLoading />}>{children}</Suspense>;
@@ -108,6 +114,14 @@ export function PlayerProfileEditorRoute() {
       <PlayerProfileEditorPage />
     </LazyRoute>
   );
+}
+
+export function AdminUsersRoute() {
+  return <LazyRoute><AdminUsersPage /></LazyRoute>;
+}
+
+export function AuditEventsRoute() {
+  return <LazyRoute><AuditEventsPage /></LazyRoute>;
 }
 
 export function NotFoundRoute() {

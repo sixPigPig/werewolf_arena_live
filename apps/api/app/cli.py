@@ -287,6 +287,8 @@ def _provision_admin_user_command(args: argparse.Namespace) -> int:
         user.display_name = display_name
         user.admin_role = args.role
         user.is_active = True
+        if action == "updated":
+            user.admin_version += 1
         db.flush()
         user_id = user.id
         db.commit()

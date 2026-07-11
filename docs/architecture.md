@@ -44,6 +44,7 @@
 - Admin 法官语音 API 使用 `voice.read`，返回 `no-store` 且不暴露服务器文件路径、旧 public URL、manifest、字幕内容或音频块；试听 URL 仍由 API 再次鉴权。旧匿名生成 endpoint 默认关闭且 production 不能开启。
 - Migration `20260711_06` adds `judge_voice_assets`; the idempotent import command copies audio bytes, checksums and normalized subtitle timings into PostgreSQL. Admin inventory, live static-judge playback and replay use database-first/legacy-file fallback during the expand period.
 - Migration `20260711_07` adds persistent judge-voice generation jobs. Admin enqueue requires CSRF, mode-specific permission and an idempotency key; an independent CLI worker claims queued jobs with row locking, while stale running jobs are recoverable.
+- Migration `20260711_09` adds optimistic versions for Admin accounts and persistent provisioning idempotency. Account creation, role/status changes and session revocation use fixed RBAC, CSRF, conflict protection and audit records; audit list DTOs exclude payloads, network identity and authentication secrets.
 
 ## Player profile boundaries
 
