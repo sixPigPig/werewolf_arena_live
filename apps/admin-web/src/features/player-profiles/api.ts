@@ -1,6 +1,7 @@
 import { adminApiFetch } from "@/api/client";
 import {
   parseAdminPlayerProfile,
+  parseAdminPlayerProfileAiDraft,
   parseAdminPlayerProfileList,
   parsePlayerProfileOptions,
 } from "@/features/player-profiles/parsers";
@@ -16,6 +17,23 @@ import type {
 
 const PLAYER_PROFILES_PATH = "/api/v1/admin/player-profiles";
 const PLAYER_PROFILE_OPTIONS_PATH = "/api/v1/admin/player-profile-options";
+const PLAYER_PROFILE_AI_DRAFT_PATH =
+  "/api/v1/admin/player-profile-ai-drafts";
+
+export async function generateAdminPlayerProfileAiDraft(
+  mode: "name" | "template",
+  csrfToken: string,
+) {
+  const value = await adminApiFetch<unknown>(PLAYER_PROFILE_AI_DRAFT_PATH, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify({ mode }),
+  });
+  return parseAdminPlayerProfileAiDraft(value);
+}
 
 export async function listAdminPlayerProfiles(
   params: PlayerProfileListParams,

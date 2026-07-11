@@ -1,4 +1,5 @@
 export type AdminPermission =
+  | "overview.read"
   | "games.read"
   | "runs.read"
   | "voice.read"
@@ -11,7 +12,8 @@ export type AdminPermission =
   | "players.ai_generate"
   | "users.manage"
   | "roles.manage"
-  | "audit.read";
+  | "audit.read"
+  | "settings.read";
 
 export type AdminNavItem = {
   description: string;
@@ -29,6 +31,20 @@ export type AdminNavSection = {
 };
 
 export const adminNavigation: AdminNavSection[] = [
+  {
+    id: "overview",
+    label: "工作台",
+    items: [
+      {
+        id: "overview",
+        label: "运营总览",
+        description: "指标、告警与恢复健康",
+        href: "/overview",
+        marker: "总",
+        permission: "overview.read",
+      },
+    ],
+  },
   {
     id: "operations",
     label: "运营诊断",
@@ -78,6 +94,14 @@ export const adminNavigation: AdminNavSection[] = [
     label: "系统安全",
     items: [
       {
+        id: "jobs",
+        label: "任务中心",
+        description: "持久任务状态与失败诊断",
+        href: "/system/jobs",
+        marker: "任",
+        permission: "voice.read",
+      },
+      {
         id: "admin-users",
         label: "后台账号",
         description: "OIDC 预授权、角色与会话",
@@ -92,6 +116,14 @@ export const adminNavigation: AdminNavSection[] = [
         href: "/system/audit",
         marker: "审",
         permission: "audit.read",
+      },
+      {
+        id: "settings",
+        label: "系统设置",
+        description: "安全配置与运行参数",
+        href: "/system/settings",
+        marker: "设",
+        permission: "settings.read",
       },
     ],
   },

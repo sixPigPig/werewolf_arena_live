@@ -17,6 +17,9 @@ import {
   PlayerProfilesRoute,
   AdminUsersRoute,
   AuditEventsRoute,
+  JobsRoute,
+  OverviewRoute,
+  SettingsRoute,
 } from "@/routes/lazy-pages";
 
 export const routes: RouteObject[] = [
@@ -32,8 +35,15 @@ export const routes: RouteObject[] = [
           {
             element: <AdminShell />,
             children: [
-              { index: true, element: <Navigate replace to="/content/players" /> },
-              { path: "overview", element: <Navigate replace to="/content/players" /> },
+              { index: true, element: <Navigate replace to="/overview" /> },
+              {
+                path: "overview",
+                element: (
+                  <RequireAdminPermission permission="overview.read">
+                    <OverviewRoute />
+                  </RequireAdminPermission>
+                ),
+              },
               {
                 path: "operations/runs",
                 element: (
@@ -99,6 +109,14 @@ export const routes: RouteObject[] = [
                 ),
               },
               {
+                path: "system/jobs",
+                element: (
+                  <RequireAdminPermission permission="voice.read">
+                    <JobsRoute />
+                  </RequireAdminPermission>
+                ),
+              },
+              {
                 path: "system/users",
                 element: (
                   <RequireAdminPermission permission="users.manage">
@@ -111,6 +129,14 @@ export const routes: RouteObject[] = [
                 element: (
                   <RequireAdminPermission permission="audit.read">
                     <AuditEventsRoute />
+                  </RequireAdminPermission>
+                ),
+              },
+              {
+                path: "system/settings",
+                element: (
+                  <RequireAdminPermission permission="settings.read">
+                    <SettingsRoute />
                   </RequireAdminPermission>
                 ),
               },

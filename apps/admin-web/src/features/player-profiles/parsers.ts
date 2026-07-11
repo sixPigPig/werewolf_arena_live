@@ -1,6 +1,7 @@
 import { AdminApiError } from "@/api/problem-details";
 import type {
   AdminPlayerProfile,
+  AdminPlayerProfileAiDraft,
   AdminPlayerProfileList,
   PlayerProfileAppearanceOption,
   PlayerProfileConstraints,
@@ -14,6 +15,41 @@ const PROFILE_STATUSES: PlayerProfileStatus[] = [
   "published",
   "archived",
 ];
+
+export function parseAdminPlayerProfileAiDraft(
+  value: unknown,
+): AdminPlayerProfileAiDraft {
+  const record = recordValue(value);
+  return {
+    display_name: requiredString(record.display_name, "display_name"),
+    personality_id: requiredString(record.personality_id, "personality_id"),
+    personality_text: stringValue(record.personality_text),
+    short_description: stringValue(record.short_description),
+    background_story: stringValue(record.background_story),
+    speaking_style: stringValue(record.speaking_style),
+    catchphrases: stringArray(record.catchphrases, "catchphrases"),
+    strategy_profile: requiredString(
+      record.strategy_profile,
+      "strategy_profile",
+    ),
+    risk_tolerance: tendency(record.risk_tolerance, "risk_tolerance"),
+    bluffing_tendency: tendency(
+      record.bluffing_tendency,
+      "bluffing_tendency",
+    ),
+    trust_tendency: tendency(record.trust_tendency, "trust_tendency"),
+    leadership_tendency: tendency(
+      record.leadership_tendency,
+      "leadership_tendency",
+    ),
+    talkativeness: tendency(record.talkativeness, "talkativeness"),
+    example_messages: stringArray(
+      record.example_messages,
+      "example_messages",
+    ),
+    tags: stringArray(record.tags, "tags"),
+  };
+}
 
 export function parseAdminPlayerProfile(value: unknown): AdminPlayerProfile {
   const record = recordValue(value);

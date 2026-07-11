@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.admin.rbac import AdminPermission
 from app.api.admin.errors import admin_request_validation_handler
+from app.api.routes.player_profiles import get_player_profile_ai_provider
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
@@ -78,6 +79,18 @@ def _login(
 
 def _model_name() -> str:
     return configured_model_options()[0]["id"]
+
+
+class StubAiDraftProvider:
+    def __init__(self, response: str | Exception) -> None:
+        self.response = response
+        self.calls: list[dict[str, object]] = []
+
+    def complete_json(self, **kwargs: object) -> str:
+        self.calls.append(kwargs)
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
 
 
 def _create_draft(
@@ -744,6 +757,94 @@ def test_legacy_gate_blocks_content_and_favorite_writes_by_default(
     assert persisted.display_name == "兼容玩家"
     assert persisted.favorite is False
     assert persisted.version == 1
+
+
+def test_admin_ai_draft_requires_permission_csrf_and_audits_success(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = StubAiDraftProvider(
+        '{"display_name":"夜枭","personality_id":"analytical",'
+        '"short_description":"擅长追踪票型",'
+        '"strategy_profile":"logic_leader","tags":["票型","推理"]}'
+    )
+    context.client.app.dependency_overrides[get_player_profile_ai_provider] = lambda: provider
+    with context.session_factory() as db:
+        db.add(
+            VirtualPlayerProfile(
+                id="existing-ai-name",
+                display_name="夜枭",
+                model="legacy-model",
+                status="draft",
+                published_at=None,
+            )
+        )
+        db.commit()
+
+    _viewer, viewer_csrf = _login(context, monkeypatch, role="viewer")
+    forbidden = context.client.post(
+        "/api/v1/admin/player-profile-ai-drafts",
+        headers={"X-CSRF-Token": viewer_csrf},
+        json={"mode": "template"},
+    )
+    assert forbidden.status_code == 403
+    assert provider.calls == []
+
+    context.client.cookies.clear()
+    _editor, editor_csrf = _login(context, monkeypatch, role="content_editor")
+    missing_csrf = context.client.post(
+        "/api/v1/admin/player-profile-ai-drafts",
+        json={"mode": "template"},
+    )
+    response = context.client.post(
+        "/api/v1/admin/player-profile-ai-drafts",
+        headers={"X-CSRF-Token": editor_csrf},
+        json={"mode": "template"},
+    )
+
+    assert missing_csrf.status_code == 403
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["display_name"] == "夜枭 2"
+    assert response.json()["strategy_profile"] == "logic_leader"
+    assert len(provider.calls) == 1
+    with context.session_factory() as db:
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "admin.player_profile.ai_draft.generate",
+                AuditEvent.result == "success",
+            )
+        )
+    assert audit is not None
+    assert audit.after == {"mode": "template", "display_name": "夜枭 2"}
+
+
+def test_admin_ai_draft_hides_provider_failure_and_audits_stable_code(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = StubAiDraftProvider(RuntimeError("secret provider response"))
+    context.client.app.dependency_overrides[get_player_profile_ai_provider] = lambda: provider
+    _session, csrf_token = _login(context, monkeypatch, role="content_editor")
+
+    response = context.client.post(
+        "/api/v1/admin/player-profile-ai-drafts",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"mode": "name"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "admin_player_ai_provider_unavailable"
+    assert "secret" not in response.text
+    with context.session_factory() as db:
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "admin.player_profile.ai_draft.generate",
+                AuditEvent.result == "failure",
+            )
+        )
+    assert audit is not None
+    assert audit.reason == "provider_unavailable"
 
 
 def test_legacy_delete_soft_archives_when_explicitly_enabled(

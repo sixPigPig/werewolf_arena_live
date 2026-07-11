@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import {
   adminNavigation,
@@ -8,6 +8,11 @@ import {
 import { hasAdminPermission } from "@/features/auth/permissions";
 import { useAdminSession } from "@/features/auth/session-context";
 import type { AdminRole } from "@/features/auth/types";
+import { GlobalAdminSearch } from "@/features/dashboard/GlobalAdminSearch";
+import {
+  useOverviewQuery,
+  useSettingsQuery,
+} from "@/features/dashboard/queries";
 
 const roleLabels: Record<AdminRole, string> = {
   viewer: "只读观察员",
@@ -23,11 +28,20 @@ export function AdminShell() {
   const { logout, pendingAction, runtimeMode, session } = useAdminSession();
   const activeItem = findAdminNavItem(location.pathname);
   const user = session?.user;
+  const permissions = session?.permissions ?? [];
+  const canReadOverview = hasAdminPermission(permissions, "overview.read");
+  const canReadSettings = hasAdminPermission(permissions, "settings.read");
+  const overview = useOverviewQuery(runtimeMode, canReadOverview);
+  const settings = useSettingsQuery(runtimeMode, canReadSettings);
+  const alertCount = overview.data?.alerts.reduce(
+    (total, alert) => total + alert.count,
+    0,
+  ) ?? 0;
   const visibleNavigation = adminNavigation
     .map((section) => ({
       ...section,
       items: section.items.filter((item) =>
-        hasAdminPermission(session?.permissions ?? [], item.permission),
+        hasAdminPermission(permissions, item.permission),
       ),
     }))
     .filter((section) => section.items.length > 0);
@@ -121,14 +135,24 @@ export function AdminShell() {
             <span aria-hidden="true">/</span>
             <strong>{activeItem?.label ?? "页面"}</strong>
           </div>
+          {canReadOverview ? (
+            <GlobalAdminSearch runtimeMode={runtimeMode} />
+          ) : null}
           <div className="admin-topbar-actions">
             {logoutError ? (
               <span aria-live="assertive" className="topbar-error" role="alert">
                 {logoutError}
               </span>
             ) : null}
+            {alertCount > 0 ? (
+              <Link className="admin-alert-reminder" to="/overview">
+                {alertCount} 项异常
+              </Link>
+            ) : null}
             <span className="environment-badge">
-              {runtimeMode === "preview" ? "LOCAL PREVIEW" : "ADMIN SESSION"}
+              {runtimeMode === "preview"
+                ? "LOCAL PREVIEW"
+                : (settings.data?.environment ?? "ADMIN").toUpperCase()}
             </span>
             <span className="preview-principal" aria-label="当前后台身份">
               <span aria-hidden="true">超</span>

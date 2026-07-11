@@ -85,6 +85,11 @@ export type PlayerProfileEditableFields = {
   tags: string[];
 };
 
+export type AdminPlayerProfileAiDraft = Omit<
+  PlayerProfileEditableFields,
+  "appearance_id" | "avatar_asset_id" | "featured" | "model"
+>;
+
 export type CreatePlayerProfileRequest = PlayerProfileEditableFields;
 
 export type UpdatePlayerProfileRequest = Partial<PlayerProfileEditableFields> & {

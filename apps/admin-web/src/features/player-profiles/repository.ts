@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import {
   createAdminPlayerProfile,
+  generateAdminPlayerProfileAiDraft,
   getAdminPlayerProfile,
   getPlayerProfileOptions,
   listAdminPlayerProfiles,
@@ -10,6 +11,7 @@ import {
 } from "@/features/player-profiles/api";
 import {
   createPreviewPlayerProfile,
+  generatePreviewPlayerProfileAiDraft,
   getPreviewPlayerProfile,
   getPreviewPlayerProfileOptions,
   listPreviewPlayerProfiles,
@@ -43,6 +45,10 @@ export function usePlayerProfileRepository() {
         runtimeMode === "preview"
           ? getPreviewPlayerProfileOptions()
           : getPlayerProfileOptions(signal),
+      generateAiDraft: () =>
+        runtimeMode === "preview"
+          ? generatePreviewPlayerProfileAiDraft()
+          : generateAdminPlayerProfileAiDraft("template", csrfToken),
       create: (request: CreatePlayerProfileRequest) =>
         runtimeMode === "preview"
           ? createPreviewPlayerProfile(request)

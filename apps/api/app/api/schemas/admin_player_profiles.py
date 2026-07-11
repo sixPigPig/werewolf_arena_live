@@ -343,3 +343,25 @@ class AdminPlayerProfileOptionsResponse(BaseModel):
     appearances: list[PlayerAppearanceOption]
     strategies: list[PlayerProfileOption]
     constraints: PlayerProfileConstraints
+
+
+class AdminPlayerProfileAiDraftRequest(AdminRequestModel):
+    mode: Literal["name", "template"] = "template"
+
+
+class AdminPlayerProfileAiDraftResponse(BaseModel):
+    display_name: str = Field(default="", max_length=80)
+    personality_id: str = Field(default="balanced", max_length=40)
+    personality_text: str
+    short_description: str = Field(default="", max_length=160)
+    background_story: str = Field(default="", max_length=1200)
+    speaking_style: str = Field(default="", max_length=800)
+    catchphrases: list[str]
+    strategy_profile: str = Field(default="balanced", max_length=40)
+    risk_tolerance: int = Field(ge=1, le=5)
+    bluffing_tendency: int = Field(ge=1, le=5)
+    trust_tendency: int = Field(ge=1, le=5)
+    leadership_tendency: int = Field(ge=1, le=5)
+    talkativeness: int = Field(ge=1, le=5)
+    example_messages: list[str]
+    tags: list[str]

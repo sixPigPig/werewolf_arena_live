@@ -87,6 +87,23 @@ describe("admin player profile flow", () => {
     await waitFor(() => expect(nameInput).toHaveFocus());
   });
 
+  it("fills a new form with an AI draft but still requires manual save", async () => {
+    const user = userEvent.setup();
+    renderRoute("/content/players/new");
+    const nameInput = await screen.findByLabelText("玩家名称");
+    expect(nameInput).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: "AI 生成草稿" }));
+
+    expect(await screen.findByText("AI 草稿已填入，请审核后保存")).toBeInTheDocument();
+    expect(nameInput).toHaveValue("月影听风");
+    expect(document.querySelector('select[name="model"]')).toHaveValue(
+      "deepseek-v4-flash",
+    );
+    expect(screen.getByRole("button", { name: "保存草稿" })).toBeEnabled();
+    expect(screen.getByRole("heading", { level: 1, name: "新建玩家草稿" })).toBeInTheDocument();
+  });
+
   it("creates a draft and opens its independent detail route", async () => {
     const user = userEvent.setup();
     const { router } = renderRoute("/content/players/new");

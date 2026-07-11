@@ -30,6 +30,9 @@ const AdminUsersPage = lazy(
 const AuditEventsPage = lazy(
   () => import("@/features/audit-events/AuditEventsPage"),
 );
+const OverviewPage = lazy(() => import("@/features/dashboard/OverviewPage"));
+const JobsPage = lazy(() => import("@/features/dashboard/JobsPage"));
+const SettingsPage = lazy(() => import("@/features/dashboard/SettingsPage"));
 
 function LazyRoute({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteLoading />}>{children}</Suspense>;
@@ -122,6 +125,18 @@ export function AdminUsersRoute() {
 
 export function AuditEventsRoute() {
   return <LazyRoute><AuditEventsPage /></LazyRoute>;
+}
+
+export function OverviewRoute() {
+  return <LazyRoute><OverviewPage /></LazyRoute>;
+}
+
+export function JobsRoute() {
+  return <LazyRoute><JobsPage /></LazyRoute>;
+}
+
+export function SettingsRoute() {
+  return <LazyRoute><SettingsPage /></LazyRoute>;
 }
 
 export function NotFoundRoute() {

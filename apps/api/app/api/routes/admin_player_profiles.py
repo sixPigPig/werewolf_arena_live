@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,8 @@ from app.api.admin.dependencies import (
 )
 from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.api.schemas.admin_player_profiles import (
+    AdminPlayerProfileAiDraftRequest,
+    AdminPlayerProfileAiDraftResponse,
     AdminPlayerProfileCreate,
     AdminPlayerProfileListResponse,
     AdminPlayerProfileOptionsResponse,
@@ -24,6 +27,13 @@ from app.api.schemas.admin_player_profiles import (
     AdminPlayerProfileUpdate,
     PlayerProfileSort,
     PlayerProfileStatus,
+)
+from app.api.routes.player_profiles import (
+    PlayerProfileAiDraftRequest,
+    PlayerProfileAiInvalidResponse,
+    PlayerProfileAiProviderUnavailable,
+    generate_ai_player_draft,
+    get_player_profile_ai_provider,
 )
 from app.db.session import get_db
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -57,6 +67,83 @@ from app.werewolf.providers import configured_model_options
 
 router = APIRouter()
 RecoverableDatabaseError = (OperationalError, ProgrammingError)
+
+
+@router.post(
+    "/player-profile-ai-drafts",
+    response_model=AdminPlayerProfileAiDraftResponse,
+)
+def generate_admin_player_profile_ai_draft(
+    request_body: AdminPlayerProfileAiDraftRequest,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.PLAYERS_AI_GENERATE)),
+    ],
+    _csrf: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
+    provider: Annotated[object, Depends(get_player_profile_ai_provider)],
+) -> AdminPlayerProfileAiDraftResponse:
+    try:
+        existing_names = list(
+            db.scalars(
+                select(VirtualPlayerProfile.display_name)
+                .order_by(VirtualPlayerProfile.updated_at.desc())
+                .limit(200)
+            )
+        )
+        draft = generate_ai_player_draft(
+            PlayerProfileAiDraftRequest(
+                mode=request_body.mode,
+                existing_names=existing_names,
+            ),
+            provider,
+        )
+        record_audit_event(
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.player_profile.ai_draft.generate",
+            resource_type="player_profile_ai_draft",
+            resource_id=None,
+            result="success",
+            after={"mode": request_body.mode, "display_name": draft.display_name},
+        )
+        db.commit()
+    except PlayerProfileAiProviderUnavailable as exc:
+        _record_ai_draft_failure(
+            db,
+            request=request,
+            principal=principal,
+            mode=request_body.mode,
+            reason="provider_unavailable",
+        )
+        raise AdminAPIProblem(
+            status_code=503,
+            code="admin_player_ai_provider_unavailable",
+            title="AI draft provider unavailable",
+            detail="The AI draft provider is temporarily unavailable.",
+        ) from exc
+    except PlayerProfileAiInvalidResponse as exc:
+        _record_ai_draft_failure(
+            db,
+            request=request,
+            principal=principal,
+            mode=request_body.mode,
+            reason="invalid_provider_response",
+        )
+        raise AdminAPIProblem(
+            status_code=502,
+            code="admin_player_ai_response_invalid",
+            title="AI draft response invalid",
+            detail="The provider returned an invalid player draft.",
+        ) from exc
+    except RecoverableDatabaseError as exc:
+        db.rollback()
+        raise _database_unavailable() from exc
+    _set_private_headers(request, response)
+    return AdminPlayerProfileAiDraftResponse.model_validate(draft.model_dump())
 
 
 @router.get("/player-profiles", response_model=AdminPlayerProfileListResponse)
@@ -554,6 +641,33 @@ def _record_failed_create(
             "model": request_body.model,
             "target_status": "draft",
         },
+    )
+    try:
+        db.commit()
+    except RecoverableDatabaseError as exc:
+        db.rollback()
+        raise _database_unavailable() from exc
+
+
+def _record_ai_draft_failure(
+    db: Session,
+    *,
+    request: Request,
+    principal: AdminPrincipal,
+    mode: str,
+    reason: str,
+) -> None:
+    db.rollback()
+    record_audit_event(
+        db,
+        request=request,
+        actor_user_id=principal.user.id,
+        action="admin.player_profile.ai_draft.generate",
+        resource_type="player_profile_ai_draft",
+        resource_id=None,
+        result="failure",
+        reason=reason,
+        after={"mode": mode},
     )
     try:
         db.commit()

@@ -538,6 +538,29 @@ def generate_player_profile_ai_draft(
     provider: Annotated[object, Depends(get_player_profile_ai_provider)],
 ) -> PlayerProfileAiDraftResponse:
     _require_legacy_content_writes_enabled()
+    try:
+        return generate_ai_player_draft(request, provider)
+    except PlayerProfileAiProviderUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="AI player draft generation unavailable",
+        ) from exc
+    except PlayerProfileAiInvalidResponse as exc:
+        raise HTTPException(status_code=502, detail="AI player draft generation failed") from exc
+
+
+class PlayerProfileAiProviderUnavailable(Exception):
+    pass
+
+
+class PlayerProfileAiInvalidResponse(Exception):
+    pass
+
+
+def generate_ai_player_draft(
+    request: PlayerProfileAiDraftRequest,
+    provider: object,
+) -> PlayerProfileAiDraftResponse:
     prompt = _build_ai_player_draft_prompt(request)
     try:
         raw_response = provider.complete_json(
@@ -546,13 +569,13 @@ def generate_player_profile_ai_draft(
             temperature=0.8 if request.mode == "template" else 0.65,
         )
     except Exception as exc:
-        raise HTTPException(status_code=503, detail="AI player draft generation unavailable") from exc
+        raise PlayerProfileAiProviderUnavailable from exc
 
     try:
         payload = _parse_ai_player_draft_payload(raw_response)
         draft = PlayerProfileAiDraftResponse.model_validate(payload)
     except (ValueError, ValidationError) as exc:
-        raise HTTPException(status_code=502, detail="AI player draft generation failed") from exc
+        raise PlayerProfileAiInvalidResponse from exc
 
     draft.display_name = _next_available_generated_name(
         draft.display_name or "新玩家",

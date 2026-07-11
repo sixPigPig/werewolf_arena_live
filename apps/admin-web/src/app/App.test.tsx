@@ -27,17 +27,17 @@ describe("admin app routes", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
-  it("redirects the root to the only connected module", async () => {
+  it("redirects the root to the operational overview", async () => {
     const router = renderRoute("/");
 
     expect(
-      await screen.findByRole("heading", { name: "虚拟玩家" }),
+      await screen.findByRole("heading", { name: "运营总览" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("navigation", { name: "后台主导航" }),
     ).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe("/content/players");
-    expect(screen.queryByText("运营总览")).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/overview");
+    expect(screen.getByText("没有活动告警")).toBeInTheDocument();
   });
 
   it("navigates from the connected player list to its detail route", async () => {

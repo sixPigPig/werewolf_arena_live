@@ -151,6 +151,10 @@ function PlayerProfileEditor({
   const canWrite = hasAdminPermission(permissions, "players.write");
   const canPublish = hasAdminPermission(permissions, "players.publish");
   const canArchive = hasAdminPermission(permissions, "players.archive");
+  const canGenerateAi = hasAdminPermission(
+    permissions,
+    "players.ai_generate",
+  );
   const defaults = {
     model: options.models[0]?.id ?? "",
     personality_id: options.personalities[0]?.id ?? "balanced",
@@ -175,7 +179,7 @@ function PlayerProfileEditor({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [conflict, setConflict] = useState<AdminApiError | null>(null);
   const [pendingAction, setPendingAction] = useState<
-    "save" | TransitionAction | null
+    "ai-draft" | "save" | TransitionAction | null
   >(null);
   const [transitionAction, setTransitionAction] =
     useState<TransitionAction | null>(null);
@@ -229,6 +233,28 @@ function PlayerProfileEditor({
     setDraft((current) => ({ ...current, [field]: value }));
     setFormErrors((current) => ({ ...current, [field]: undefined, form: undefined }));
     setSuccessMessage(null);
+  }
+
+  async function generateAiDraft() {
+    if (!isNew || !canEdit || !canGenerateAi) {
+      return;
+    }
+    setPendingAction("ai-draft");
+    setRequestError(null);
+    setSuccessMessage(null);
+    try {
+      const generated = await repository.generateAiDraft();
+      setDraft((current) => ({ ...current, ...generated }));
+      setCatchphraseInput(formatCommaList(generated.catchphrases));
+      setTagInput(formatCommaList(generated.tags));
+      setExampleInput(formatMultilineList(generated.example_messages));
+      setFormErrors({});
+      setSuccessMessage("AI 草稿已填入，请审核后保存");
+    } catch (error) {
+      handleRequestError(error);
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
@@ -371,6 +397,16 @@ function PlayerProfileEditor({
           </p>
         </div>
         <div className="player-editor-status-actions">
+          {isNew && canEdit && canGenerateAi ? (
+            <button
+              className="player-ai-draft-button"
+              disabled={pendingAction !== null}
+              onClick={() => void generateAiDraft()}
+              type="button"
+            >
+              {pendingAction === "ai-draft" ? "AI 生成中..." : "AI 生成草稿"}
+            </button>
+          ) : null}
           {profile ? (
             <span className={`player-status-badge is-${profile.status}`}>
               {STATUS_LABELS[profile.status]}

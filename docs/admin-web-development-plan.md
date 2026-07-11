@@ -1,6 +1,6 @@
 # Admin Web 规划、设计与开发方案
 
-状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流、Admin 对局记录只读切片、阶段 3B 运行监控只读切片、阶段 4A 法官语音资产只读切片、阶段 4B1 独立语音存储、阶段 4B2 持久生成任务、阶段 5A 运行保障、阶段 5B 通用 OIDC 和阶段 5C 账号/审计管理已完成；真实身份租户验收、其他 Public API 与运行控制/恢复尚未接入。
+状态：独立 Admin、认证/RBAC/审计、玩家内容、对局诊断、运行监控与受控恢复、语音资产与持久任务、账号治理、运营总览/任务中心/只读设置/全局搜索、生产部署与分阶段发布自动化均已完成；剩余工作是实际 OIDC 租户与集群验收、浏览器级 E2E/可访问性加固，以及 Mobile 其余 Public API 切流和旧 Web 退役。
 
 ## 1. 决策摘要
 
@@ -196,6 +196,8 @@ Public DTO 使用字段白名单，不包含：
 GET  /api/v1/admin/me
 POST /api/v1/admin/logout
 GET  /api/v1/admin/overview
+GET  /api/v1/admin/search
+GET  /api/v1/admin/settings
 
 GET/POST  /api/v1/admin/player-profiles
 GET/PATCH /api/v1/admin/player-profiles/:id
@@ -203,6 +205,7 @@ POST      /api/v1/admin/player-profiles/:id/publish
 POST      /api/v1/admin/player-profiles/:id/archive
 POST      /api/v1/admin/player-profiles/:id/restore
 GET       /api/v1/admin/player-profile-options
+POST      /api/v1/admin/player-profile-ai-drafts
 POST      /api/v1/admin/player-avatar-assets
 
 GET  /api/v1/admin/games
@@ -212,10 +215,13 @@ GET  /api/v1/admin/games/:id/debug
 GET /api/v1/admin/live-runs
 GET /api/v1/admin/live-runs/:id
 GET /api/v1/admin/live-runs/:id/debug
+POST /api/v1/admin/live-runs/:id/stop
+POST /api/v1/admin/live-runs/:id/resume
 
 GET  /api/v1/admin/judge-voice-lines
 POST /api/v1/admin/judge-voice-generation-jobs
 GET  /api/v1/admin/jobs/:id
+GET  /api/v1/admin/jobs
 
 GET /api/v1/admin/users
 GET /api/v1/admin/roles
@@ -265,7 +271,7 @@ GET /api/v1/admin/audit-events
 - `games.debug.read` 使用独立 `/debug` endpoint，返回脱敏、限长限量的错误分类，读取行为进入审计；Admin 前端不会自动请求该接口；
 - 已实现 `/api/v1/admin/live-runs*` 的真实 PostgreSQL 服务端分页筛选、只读详情白名单、持久化活动新鲜度和活跃运行轮询；`last_activity_at/is_stale` 不作为进程心跳或健康检查；
 - 运行普通 DTO 不返回 payload、player configs、lineup warnings、原始错误、语音文本/音频或内部凭据；非安全终局运行隐藏胜方、模型和 actor/action；
-- `runs.debug.read` 使用独立 `/debug` endpoint，只有用户显式点击才读取脱敏、限量错误分类并记录审计；当前没有停止、恢复或重试控制；
+- `runs.debug.read` 使用独立 `/debug` endpoint，只有用户显式点击才读取脱敏、限量错误分类并记录审计；`runs.control` 另行保护带 CSRF、幂等键、原因和二次确认的停止/检查点恢复；
 - 旧匿名内容写默认关闭且 production 禁止开启，迁移期只保留 favorite-only PATCH。
 
 ## 7. RBAC
@@ -351,8 +357,8 @@ draft -> published -> archived
 |---|---|---|---:|
 | 0 | 决策、方案、独立 Admin 骨架 | 文档、路由壳、fail-closed、CI、lint/test/build | 2–4 人日 |
 | 1 | 认证、RBAC、审计、Admin/Public DTO | 通用 OIDC、认证基础与玩家 DTO/审计已完成；仍需实际租户验收和其他业务 DTO | 7–12 人日 |
-| 2 | 玩家管理纵向闭环 | 分页、编辑、发布/归档/恢复、409 已完成；AI 草稿与浏览器 E2E 待后续 | 5–8 人日 |
-| 3 | 对局与运行诊断 | 对局与运行分页、白名单详情和独立 debug 权限已完成；运行控制与恢复幂等待后续 | 6–10 人日 |
+| 2 | 玩家管理纵向闭环 | 分页、编辑、发布/归档/恢复、409 和受控 AI 草稿已完成；浏览器 E2E 待加固 | 5–8 人日 |
+| 3 | 对局与运行诊断 | 分页、白名单详情、独立 debug、停止、检查点恢复、fencing 和 orphan 自动恢复已完成 | 6–10 人日 |
 | 4 | 语音资产 | 独立持久存储、任务化生成、权限与审计 | 4–6 人日 |
 | 5 | 加固与切流 | 安全、性能、可访问性、部署和回滚演练 | 4–7 人日 |
 
@@ -424,7 +430,7 @@ draft -> published -> archived
 - 编辑冲突以 409 明确提示；
 - Mobile 已使用专用收藏接口；
 - 语音文件不再写入 `apps/web/public`；
-- 任务队列完成前，Live 运维只开放已验证的只读能力；控制、恢复和重试暂不开放；
+- Live 停止与检查点恢复只向 `runs.control` 开放，使用 CSRF、幂等、原因、确认、审计和 fencing token；
 - 键盘可完成核心操作，焦点始终可见；
 - Admin 不加载旧 Web 哥特资产；
 - CI、迁移演练、发布冒烟和回滚 runbook 全部通过。
@@ -494,7 +500,7 @@ draft -> published -> archived
 - `last_activity_at` 与 `is_stale` 表示数据库持久化活动新鲜度，不代表 worker、模型任务或 API 进程在线/健康；
 - 普通 DTO 和前端 parser 拒绝 payload、player configs、lineup warnings、原始错误、prompt、token、语音文本与音频；非终局事件只保留安全归类；
 - `runs.debug.read` 通过独立 `/debug` 显式读取脱敏、限长、最多 20 条错误分类并写入审计，debug 失败不影响基础详情；
-- 迁移 `20260711_05` 增加运行更新时间、运行创建时间、状态加更新时间及语音 run/status 四个查询索引；本阶段不提供停止、恢复或重试操作。
+- 迁移 `20260711_05` 增加运行更新时间、运行创建时间、状态加更新时间及语音 run/status 四个查询索引；后续阶段已补充受控停止、检查点恢复和 orphan 自动恢复。
 
 阶段 3B 已完成。`mobile-web` 仍是唯一继续演进的 C 端，普通回放和观战剧场不迁入 Admin。Admin OIDC 已在阶段 5B 接入，实际身份租户验收仍是生产开放后台的前置条件；正式 C 端身份源则是 Guest 收藏跨设备同步与账号合并的前置条件。
 
@@ -561,4 +567,24 @@ draft -> published -> archived
 - Admin 新增 `/system/users`、`/system/audit`，导航和深链使用服务端同名权限，账号弹窗支持开通、角色/状态修改和会话撤销；
 - CLI 仅保留首位超级管理员引导和恢复用途，日常账号管理迁入受审计 Admin 页面。
 
-阶段 5C 已完成。下一阶段可进入运行停止、恢复与重试控制，但必须先为每类动作定义状态机、幂等语义和不可逆操作确认。
+阶段 5C 已完成。后续阶段已完成运行停止、恢复、自动 reaper 与生产部署。
+
+### 阶段 6：运行控制、自动恢复与生产部署
+
+- `runs.control` 保护停止和检查点恢复，写操作强制 CSRF、原因、二次确认与 Idempotency-Key，成功和失败均审计；
+- 运行租约、心跳和单调递增 fencing token 保证多 API/Worker 协调，旧 Worker 的事件、checkpoint、回放与终态写入会被数据库拒绝；
+- 独立 live-run reaper 对过期租约执行停止收敛、checkpoint 恢复或稳定失败，带最大次数、指数退避、持久心跳和 Prometheus 告警；
+- API/Admin 正式容器、Compose、Kubernetes staging/production overlays、不可变 SHA 镜像、迁移 Job、探针、监控、分阶段发布、自动回滚和 runbook 已落地。
+
+阶段 6 已完成。真实集群、域名、证书、Secret 与 OIDC tenant 仍需在目标环境验收。
+
+### 阶段 7A：运营工作台与内容辅助
+
+- `/overview` 聚合真实玩家、对局、运行、语音任务与 reaper 健康数据，并生成可跳转的异常提醒；
+- `/system/jobs` 展示持久语音任务状态、进度与稳定错误码，支持状态 URL 筛选、分页、刷新与轮询；
+- `/system/settings` 只读展示安全开关和协调参数，不返回密钥、数据库地址、OIDC issuer/client 或内部凭据；
+- 顶栏提供按实际读权限裁剪的 Run、Session、玩家和任务全局搜索，只接受服务端返回的后台内部路径；
+- 玩家新建页提供 `players.ai_generate` 保护的 AI 草稿生成，服务端从数据库读取名称冲突集合，强制 CSRF 并审计；生成结果只填表，不保存、不发布且不覆盖模型与形象选择；
+- 旧匿名 AI 写入口继续保持兼容写开关关闭，Admin 不回退到旧接口。
+
+阶段 7A 已完成。下一阶段进入浏览器级 E2E、axe/键盘验收、大数据量性能基线和真实环境发布验收。

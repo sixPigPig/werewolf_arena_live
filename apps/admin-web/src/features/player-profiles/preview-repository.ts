@@ -1,6 +1,7 @@
 import { AdminApiError } from "@/api/problem-details";
 import type {
   AdminPlayerProfile,
+  AdminPlayerProfileAiDraft,
   AdminPlayerProfileList,
   CreatePlayerProfileRequest,
   PlayerProfileListParams,
@@ -96,6 +97,26 @@ const FIXTURE_PROFILES: AdminPlayerProfile[] = [
 
 let previewProfiles = FIXTURE_PROFILES.map(cloneProfile);
 let previewSequence = 1;
+
+export async function generatePreviewPlayerProfileAiDraft(): Promise<AdminPlayerProfileAiDraft> {
+  return Promise.resolve({
+    display_name: "月影听风",
+    personality_id: "analytical",
+    personality_text: "谨慎核对发言与票型，在关键轮次给出清晰结论。",
+    short_description: "擅长从票型变化中寻找矛盾的复盘型玩家。",
+    background_story: "长期记录圆桌对局，习惯用时间线还原每一次立场变化。",
+    speaking_style: "先复述事实，再指出矛盾，最后明确给出归票建议。",
+    catchphrases: ["先把时间线对齐", "这一票要解释"],
+    strategy_profile: "logic_leader",
+    risk_tolerance: 2,
+    bluffing_tendency: 2,
+    trust_tendency: 3,
+    leadership_tendency: 4,
+    talkativeness: 4,
+    example_messages: ["我先按发言顺序复盘，再看这轮票型有没有冲突。"],
+    tags: ["AI 草稿", "复盘"],
+  });
+}
 
 export async function listPreviewPlayerProfiles(
   params: PlayerProfileListParams,
