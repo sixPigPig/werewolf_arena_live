@@ -49,6 +49,22 @@ Index(
     LiveRunRecord.created_at.desc(),
     LiveRunRecord.run_id.desc(),
 )
+Index(
+    "ix_live_runs_updated_at_run_id_desc",
+    LiveRunRecord.updated_at.desc(),
+    LiveRunRecord.run_id.desc(),
+)
+Index(
+    "ix_live_runs_created_at_run_id_desc",
+    LiveRunRecord.created_at.desc(),
+    LiveRunRecord.run_id.desc(),
+)
+Index(
+    "ix_live_runs_status_updated_at_run_id_desc",
+    LiveRunRecord.status,
+    LiveRunRecord.updated_at.desc(),
+    LiveRunRecord.run_id.desc(),
+)
 
 
 class LiveEventRecord(Base):
@@ -75,7 +91,10 @@ class LiveEventRecord(Base):
 
 class VoiceUtteranceRecord(Base):
     __tablename__ = "voice_utterances"
-    __table_args__ = (Index("ix_voice_utterances_run_source_event", "run_id", "source_event_id"),)
+    __table_args__ = (
+        Index("ix_voice_utterances_run_source_event", "run_id", "source_event_id"),
+        Index("ix_voice_utterances_run_status", "run_id", "status"),
+    )
 
     utterance_id: Mapped[str] = mapped_column(String(40), primary_key=True)
     run_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)

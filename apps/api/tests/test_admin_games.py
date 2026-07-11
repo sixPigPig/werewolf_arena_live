@@ -393,7 +393,7 @@ def test_admin_games_list_paginates_sorts_and_filters_without_loading_replay_pay
     }
     assert all("game_replay_payloads" not in statement for statement in statements)
 
-    query_match = context.client.get("/api/v1/admin/games", params={"q": "model-beta"})
+    query_match = context.client.get("/api/v1/admin/games", params={"q": "model-alpha"})
     combined_filters = context.client.get(
         "/api/v1/admin/games",
         params={
@@ -409,7 +409,7 @@ def test_admin_games_list_paginates_sorts_and_filters_without_loading_replay_pay
     )
 
     assert [item["session_id"] for item in query_match.json()["items"]] == [
-        "game_00000002"
+        "game_00000001"
     ]
     assert [item["session_id"] for item in combined_filters.json()["items"]] == [
         "game_00000003"

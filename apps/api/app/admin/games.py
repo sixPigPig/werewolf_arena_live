@@ -76,6 +76,10 @@ def list_admin_games(
     sort: str,
 ) -> AdminGameListResult:
     query: Select[tuple[GameSessionRecord]] = select(GameSessionRecord)
+    terminal_game = and_(
+        GameSessionRecord.status == "complete",
+        GameSessionRecord.resumable.is_(False),
+    )
     normalized_query = _clean_filter(query_text)
     if normalized_query is not None:
         pattern = f"%{_escape_like(normalized_query)}%"
@@ -84,36 +88,37 @@ def list_admin_games(
                 LiveRunRecord.session_id == GameSessionRecord.session_id,
                 or_(
                     LiveRunRecord.run_id.ilike(pattern, escape="\\"),
-                    LiveRunRecord.villager_model.ilike(pattern, escape="\\"),
-                    LiveRunRecord.werewolf_model.ilike(pattern, escape="\\"),
-                    LiveRunRecord.rule_set_id.ilike(pattern, escape="\\"),
+                    and_(
+                        terminal_game,
+                        or_(
+                            LiveRunRecord.villager_model.ilike(pattern, escape="\\"),
+                            LiveRunRecord.werewolf_model.ilike(pattern, escape="\\"),
+                        ),
+                    ),
                 ),
             )
         )
         query = query.where(
             or_(
                 GameSessionRecord.session_id.ilike(pattern, escape="\\"),
-                GameSessionRecord.winner.ilike(pattern, escape="\\"),
+                and_(
+                    terminal_game,
+                    GameSessionRecord.winner.ilike(pattern, escape="\\"),
+                ),
                 matching_run,
             )
         )
     if status is not None:
         query = query.where(GameSessionRecord.status == status)
     if winner is not None:
-        query = query.where(GameSessionRecord.winner == winner.strip())
+        query = query.where(
+            terminal_game,
+            GameSessionRecord.winner == winner.strip(),
+        )
     if rule_set_id is not None:
         normalized_rule_set_id = rule_set_id.strip()
-        matching_rule_set_run = exists(
-            select(LiveRunRecord.run_id).where(
-                LiveRunRecord.session_id == GameSessionRecord.session_id,
-                LiveRunRecord.rule_set_id == normalized_rule_set_id,
-            )
-        )
         query = query.where(
-            or_(
-                GameSessionRecord.rule_set["id"].as_string() == normalized_rule_set_id,
-                matching_rule_set_run,
-            )
+            GameSessionRecord.rule_set["id"].as_string() == normalized_rule_set_id
         )
     if run_status is not None:
         latest_run_status = (

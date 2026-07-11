@@ -20,6 +20,8 @@ def test_fixed_roles_have_expected_permission_boundaries() -> None:
     assert AdminPermission.PLAYERS_WRITE in content_editor
     assert AdminPermission.RUNS_CONTROL not in content_editor
     assert AdminPermission.RUNS_CONTROL in operator
+    assert AdminPermission.RUNS_DEBUG_READ in operator
+    assert AdminPermission.RUNS_DEBUG_READ not in viewer
     assert AdminPermission.PLAYERS_WRITE not in operator
     assert super_admin == frozenset(AdminPermission)
 

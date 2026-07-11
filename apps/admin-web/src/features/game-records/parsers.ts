@@ -36,6 +36,12 @@ const SENSITIVE_RESPONSE_KEYS = new Set([
   "key",
   "token",
   "secret",
+  "api_key",
+  "authorization",
+  "cookie",
+  "credential",
+  "password",
+  "session_token",
 ]);
 
 export function parseAdminGameList(value: unknown): AdminGameList {
@@ -75,6 +81,9 @@ export function parseAdminGameDetail(value: unknown): AdminGameDetail {
   const diagnostics = parseDiagnostics(record.diagnostics);
   const runs = arrayValue(record.runs, "runs").map(parseRun);
   if (base.status !== "complete" || base.resumable) {
+    if (base.winner !== null) {
+      throw invalidContract("未完成或可恢复对局不得公开胜方");
+    }
     if (players.some((player) => player.role !== null || player.model !== null)) {
       throw invalidContract("未完成或可恢复对局不得公开玩家角色或模型");
     }
@@ -147,6 +156,12 @@ function parseGameListItemRecord(value: unknown): AdminGameListItem {
     latest_run:
       record.latest_run === null ? null : parseRun(record.latest_run),
   };
+  if (
+    (item.status !== "complete" || item.resumable) &&
+    item.winner !== null
+  ) {
+    throw invalidContract("未完成或可恢复对局不得公开胜方");
+  }
   if (
     (item.status !== "complete" || item.resumable) &&
     item.latest_run !== null &&

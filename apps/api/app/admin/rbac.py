@@ -13,6 +13,7 @@ class AdminRole(StrEnum):
 class AdminPermission(StrEnum):
     OVERVIEW_READ = "overview.read"
     RUNS_READ = "runs.read"
+    RUNS_DEBUG_READ = "runs.debug.read"
     RUNS_CONTROL = "runs.control"
     GAMES_READ = "games.read"
     GAMES_DEBUG_READ = "games.debug.read"
@@ -56,6 +57,7 @@ ROLE_PERMISSIONS: Final[Mapping[AdminRole, frozenset[AdminPermission]]] = Mappin
         AdminRole.OPERATOR: _VIEWER_PERMISSIONS
         | {
             AdminPermission.RUNS_CONTROL,
+            AdminPermission.RUNS_DEBUG_READ,
             AdminPermission.GAMES_DEBUG_READ,
         },
         AdminRole.SUPER_ADMIN: frozenset(AdminPermission),

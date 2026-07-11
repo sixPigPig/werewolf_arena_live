@@ -233,6 +233,7 @@ def test_me_returns_configured_identity_permissions_and_existing_csrf_token(
     assert set(response.json()["permissions"]) == {
         "overview.read",
         "runs.read",
+        "runs.debug.read",
         "runs.control",
         "games.read",
         "games.debug.read",

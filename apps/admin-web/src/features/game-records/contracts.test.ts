@@ -39,6 +39,7 @@ describe("admin game records contract", () => {
       parseAdminGameDetail({
         ...contractGameDetail,
         status: "partial",
+        winner: null,
         resumable: true,
         latest_run: {
           ...contractGameDetail.latest_run,
@@ -72,6 +73,7 @@ describe("admin game records contract", () => {
       }),
     ).toMatchObject({
       status: "partial",
+      winner: null,
       resumable: true,
       rule_set: { player_count: null },
       players: [{ role: null, model: null }],
@@ -106,16 +108,33 @@ describe("admin game records contract", () => {
     ).toThrow(/状态/);
     expect(() =>
       parseAdminGameList({
-        items: [{ ...contractGameItem, status: "partial" }],
+        items: [{ ...contractGameItem, status: "partial", winner: null }],
         pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
       }),
     ).toThrow(/最新运行模型/);
+    expect(() =>
+      parseAdminGameList({
+        items: [
+          {
+            ...contractGameItem,
+            status: "partial",
+            latest_run: {
+              ...contractGameItem.latest_run,
+              villager_model: null,
+              werewolf_model: null,
+            },
+          },
+        ],
+        pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
+      }),
+    ).toThrow(/胜方/);
   });
 
   it("rejects sensitive partial detail fields if the server regresses", () => {
     const redacted = {
       ...contractGameDetail,
       status: "partial",
+      winner: null,
       latest_run: {
         ...contractGameDetail.latest_run,
         villager_model: null,

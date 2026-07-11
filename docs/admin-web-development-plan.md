@@ -1,6 +1,6 @@
 # Admin Web 规划、设计与开发方案
 
-状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流和 Admin 对局记录只读切片已完成；正式身份源、其他 Public API 与运行管理模块尚未接入。
+状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流、Admin 对局记录只读切片和阶段 3B 运行监控只读切片已完成；正式身份源、其他 Public API、运行控制/恢复与语音资产模块尚未接入。
 
 ## 1. 决策摘要
 
@@ -211,7 +211,7 @@ GET  /api/v1/admin/games/:id/debug
 
 GET /api/v1/admin/live-runs
 GET /api/v1/admin/live-runs/:id
-GET /api/v1/admin/live-runs/:id/events
+GET /api/v1/admin/live-runs/:id/debug
 
 GET  /api/v1/admin/judge-voice-lines
 POST /api/v1/admin/judge-voice-generation-jobs
@@ -263,6 +263,9 @@ GET /api/v1/admin/audit-events
 - 已实现 `/api/v1/public/player-profiles*` 白名单只读投影，只暴露已发布且未归档档案；
 - 已实现 `/api/v1/admin/games*` 的真实服务端分页筛选、只读详情白名单和 `no-store`；普通详情不返回完整 replay/event payload 或模型原文；
 - `games.debug.read` 使用独立 `/debug` endpoint，返回脱敏、限长限量的错误分类，读取行为进入审计；Admin 前端不会自动请求该接口；
+- 已实现 `/api/v1/admin/live-runs*` 的真实 PostgreSQL 服务端分页筛选、只读详情白名单、持久化活动新鲜度和活跃运行轮询；`last_activity_at/is_stale` 不作为进程心跳或健康检查；
+- 运行普通 DTO 不返回 payload、player configs、lineup warnings、原始错误、语音文本/音频或内部凭据；非安全终局运行隐藏胜方、模型和 actor/action；
+- `runs.debug.read` 使用独立 `/debug` endpoint，只有用户显式点击才读取脱敏、限量错误分类并记录审计；当前没有停止、恢复或重试控制；
 - 旧匿名内容写默认关闭且 production 禁止开启，迁移期只保留 favorite-only PATCH。
 
 ## 7. RBAC
@@ -279,6 +282,7 @@ MVP 固定角色：
 ```text
 overview.read
 runs.read
+runs.debug.read
 runs.control
 games.read
 games.debug.read
@@ -322,6 +326,8 @@ draft -> published -> archived
 
 法官语音采用“复制、checksum 校验、双读、切换、保留旧文件”的方式迁出 `apps/web/public`，目标为持久卷或对象存储。Replay JSON 暂不重写，只补查询投影与必要索引。
 
+迁移 `20260711_05` 为只读运行监控增加四个索引：`live_runs(updated_at DESC, run_id DESC)`、`live_runs(created_at DESC, run_id DESC)`、`live_runs(status, updated_at DESC, run_id DESC)` 与 `voice_utterances(run_id, status)`。
+
 数据库迁移采用 expand/contract：新表、新列至少保留两个发布周期，首次发布不 drop 旧结构。回填脚本必须幂等并输出迁移前后统计。
 
 ## 9. 旧 Web 迁移策略
@@ -346,7 +352,7 @@ draft -> published -> archived
 | 0 | 决策、方案、独立 Admin 骨架 | 文档、路由壳、fail-closed、CI、lint/test/build | 2–4 人日 |
 | 1 | 认证、RBAC、审计、Admin/Public DTO | 认证基础与玩家 DTO/审计已完成；仍需正式身份源和其他业务 DTO | 7–12 人日 |
 | 2 | 玩家管理纵向闭环 | 分页、编辑、发布/归档/恢复、409 已完成；AI 草稿与浏览器 E2E 待后续 | 5–8 人日 |
-| 3 | 对局与运行诊断 | 对局分页、详情和独立 debug 权限已完成；只读运行监控、恢复幂等待后续 | 6–10 人日 |
+| 3 | 对局与运行诊断 | 对局与运行分页、白名单详情和独立 debug 权限已完成；运行控制与恢复幂等待后续 | 6–10 人日 |
 | 4 | 语音资产 | 独立持久存储、任务化生成、权限与审计 | 4–6 人日 |
 | 5 | 加固与切流 | 安全、性能、可访问性、部署和回滚演练 | 4–7 人日 |
 
@@ -360,7 +366,7 @@ draft -> published -> archived
 4. 玩家管理纵向闭环；（除 AI 草稿外已完成）
 5. 对局运营和独立 debug 权限；（只读对局记录已完成）
 6. 语音存储迁移和生成任务；
-7. Live run 只读监控；
+7. Live run 只读监控；（已完成）
 8. Mobile 切 Public API 与旧 URL 重定向；
 9. 稳定观察后停止旧 Web 流量。
 
@@ -418,7 +424,7 @@ draft -> published -> archived
 - 编辑冲突以 409 明确提示；
 - Mobile 已使用专用收藏接口；
 - 语音文件不再写入 `apps/web/public`；
-- 任务队列完成前，Live 运维只开放可靠的只读/恢复能力；
+- 任务队列完成前，Live 运维只开放已验证的只读能力；控制、恢复和重试暂不开放；
 - 键盘可完成核心操作，焦点始终可见；
 - Admin 不加载旧 Web 哥特资产；
 - CI、迁移演练、发布冒烟和回滚 runbook 全部通过。
@@ -479,6 +485,15 @@ draft -> published -> archived
 - `/operations/games/:sessionId` 展示玩家和完成局角色结果、公开轮次摘要、运行记录、诊断计数以及最多 50 条无 payload 事件元数据；partial/resumable 对局不公开角色、玩家/运行模型、死亡原因/来源、事件元数据或未完成轮次；
 - 普通详情严格排除 state、logs、checkpoint、event payload、prompt、raw response、私有摘要和内部凭据；
 - 受限错误摘要通过独立 `/debug` 请求，仅 `games.debug.read` 可访问，且必须由用户显式触发；读取成功写入审计，失败不影响基础详情；
-- Admin 前端覆盖真实 API 渲染、URL 筛选、loading/empty/error/404、权限导航和按需 debug 流程；未接入的运行管理仍不进入导航。
+- Admin 前端覆盖真实 API 渲染、URL 筛选、loading/empty/error/404、权限导航和按需 debug 流程。
 
-下一纵向切片进入实时运行只读诊断。`mobile-web` 仍是唯一继续演进的 C 端，普通回放和观战剧场不迁入 Admin。正式 Admin 身份源仍是生产开放后台的前置条件；正式 C 端身份源则是 Guest 收藏跨设备同步与账号合并的前置条件。
+### 阶段 3B：Admin 运行监控只读切片
+
+- `/operations/runs` 连接真实 Admin PostgreSQL API，支持服务端分页、Run/Session 前缀搜索、状态、规则、日期和排序 URL 状态以及手动刷新；第 1 页存在 queued/running 记录时每 5 秒轮询，否则每 30 秒发现新记录，其他页不自动轮询；
+- `/operations/runs/:runId` 展示安全模型配置、计数、关联对局和最多 50 条无 payload 事件元数据；只有 completed 且关联对局 complete、不可恢复时才公开胜方、模型和 actor/action；
+- `last_activity_at` 与 `is_stale` 表示数据库持久化活动新鲜度，不代表 worker、模型任务或 API 进程在线/健康；
+- 普通 DTO 和前端 parser 拒绝 payload、player configs、lineup warnings、原始错误、prompt、token、语音文本与音频；非终局事件只保留安全归类；
+- `runs.debug.read` 通过独立 `/debug` 显式读取脱敏、限长、最多 20 条错误分类并写入审计，debug 失败不影响基础详情；
+- 迁移 `20260711_05` 增加运行更新时间、运行创建时间、状态加更新时间及语音 run/status 四个查询索引；本阶段不提供停止、恢复或重试操作。
+
+阶段 3B 已完成。`mobile-web` 仍是唯一继续演进的 C 端，普通回放和观战剧场不迁入 Admin。正式 Admin 身份源仍是生产开放后台的前置条件；正式 C 端身份源则是 Guest 收藏跨设备同步与账号合并的前置条件。

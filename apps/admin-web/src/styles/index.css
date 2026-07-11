@@ -2692,6 +2692,207 @@ a {
   text-decoration: none;
 }
 
+.live-run-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.live-run-freshness-note {
+  margin: -7px 0 18px;
+  padding: 10px 13px;
+  border: 1px solid #d1e9ff;
+  border-radius: 10px;
+  color: #175cd3;
+  background: #eff8ff;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.live-run-admin-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.live-run-admin-row {
+  display: grid;
+  grid-template-columns:
+    minmax(170px, 1.1fr)
+    minmax(90px, 0.45fr)
+    minmax(170px, 1fr)
+    minmax(105px, 0.55fr)
+    minmax(140px, 0.75fr)
+    auto;
+  gap: 14px;
+  align-items: center;
+  min-height: 72px;
+  padding: 13px 20px;
+  border-bottom: 1px solid #f2f4f7;
+}
+
+.live-run-admin-row:last-child {
+  border-bottom: 0;
+}
+
+.live-run-admin-identity,
+.live-run-admin-status,
+.live-run-admin-models,
+.live-run-admin-progress,
+.live-run-admin-activity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.live-run-admin-identity strong,
+.live-run-admin-models strong,
+.live-run-admin-progress strong,
+.live-run-admin-activity strong {
+  overflow: hidden;
+  color: #344054;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-run-admin-progress strong,
+.live-run-admin-activity strong {
+  font-family: inherit;
+}
+
+.live-run-admin-identity small,
+.live-run-admin-status small,
+.live-run-admin-models small,
+.live-run-admin-progress small,
+.live-run-admin-activity small {
+  overflow: hidden;
+  color: #98a2b3;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-run-admin-status .live-run-stale {
+  width: fit-content;
+  color: #b42318;
+  font-weight: 750;
+}
+
+.live-run-stale-badge {
+  display: inline-flex;
+  min-height: 23px;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #b42318;
+  background: #fef3f2;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.live-run-definition-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.live-run-definition-list > div {
+  min-width: 0;
+  padding: 15px 20px;
+  border-right: 1px solid #f2f4f7;
+  border-bottom: 1px solid #f2f4f7;
+}
+
+.live-run-definition-list > div:nth-child(2n) {
+  border-right: 0;
+}
+
+.live-run-definition-list > div:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.live-run-definition-list dt,
+.live-run-voice-grid dt {
+  color: #98a2b3;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.live-run-definition-list dd {
+  overflow: hidden;
+  margin: 5px 0 0;
+  color: #344054;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-run-game-card {
+  display: flex;
+  min-height: 190px;
+  align-items: flex-start;
+  justify-content: center;
+  flex-direction: column;
+  padding: 20px;
+}
+
+.live-run-game-card > strong {
+  color: #101828;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+}
+
+.live-run-game-card > p {
+  margin: 7px 0 16px;
+  color: #667085;
+  font-size: 10px;
+}
+
+.live-run-voice-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin: 0;
+}
+
+.live-run-voice-grid > div {
+  padding: 18px 20px;
+  border-right: 1px solid #f2f4f7;
+  text-align: center;
+}
+
+.live-run-voice-grid > div:last-child {
+  border-right: 0;
+}
+
+.live-run-voice-grid dd {
+  margin: 6px 0 0;
+  color: #101828;
+  font-size: 20px;
+  font-weight: 750;
+}
+
+.live-run-detail-page .game-event-list > li {
+  grid-template-columns: 52px minmax(180px, 1fr) auto;
+}
+
+.game-run-link {
+  overflow: hidden;
+  margin-right: auto;
+  color: #175cd3;
+  text-decoration: none;
+}
+
+.game-run-link code {
+  color: inherit;
+}
+
+.game-run-link:hover {
+  text-decoration: underline;
+}
+
 .admin-sidebar-backdrop {
   display: none;
 }
@@ -2744,6 +2945,27 @@ a {
 
   .game-run-list dl {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .live-run-admin-row {
+    grid-template-columns: minmax(180px, 1.1fr) minmax(100px, 0.55fr) minmax(150px, 0.8fr) auto;
+  }
+
+  .live-run-admin-models,
+  .live-run-admin-activity {
+    display: none;
+  }
+
+  .live-run-voice-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .live-run-voice-grid > div:nth-child(3) {
+    border-right: 0;
+  }
+
+  .live-run-voice-grid > div:nth-child(-n + 3) {
+    border-bottom: 1px solid #f2f4f7;
   }
 }
 
@@ -2887,6 +3109,37 @@ a {
   .game-event-list code {
     display: none;
   }
+
+  .live-run-admin-list {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    background: #f9fafb;
+  }
+
+  .live-run-admin-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 11px;
+    padding: 15px;
+    border: 1px solid #eaecf0;
+    border-radius: 12px;
+    background: #ffffff;
+  }
+
+  .live-run-admin-identity,
+  .live-run-admin-progress {
+    grid-column: 1;
+  }
+
+  .live-run-admin-status,
+  .live-run-admin-row .game-admin-action-cell {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .live-run-admin-row .game-admin-action-cell {
+    grid-row: 2;
+  }
 }
 
 @media (max-width: 620px) {
@@ -2978,7 +3231,8 @@ a {
   }
 
   .game-records-heading,
-  .game-detail-heading {
+  .game-detail-heading,
+  .live-runs-heading {
     align-items: stretch;
     flex-direction: column;
   }
@@ -3002,7 +3256,8 @@ a {
 
   .game-list-heading,
   .game-pagination,
-  .game-detail-actions {
+  .game-detail-actions,
+  .live-run-heading-actions {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -3025,6 +3280,10 @@ a {
     grid-template-columns: 1fr 1fr;
   }
 
+  .live-run-detail-page .game-event-list > li {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .game-event-index,
   .game-event-list time {
     grid-column: auto;
@@ -3033,6 +3292,26 @@ a {
   .game-event-main {
     grid-column: 1 / -1;
     grid-row: 1;
+  }
+
+  .live-run-definition-list,
+  .live-run-voice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .live-run-definition-list > div,
+  .live-run-definition-list > div:nth-child(2n),
+  .live-run-definition-list > div:nth-last-child(-n + 2),
+  .live-run-voice-grid > div,
+  .live-run-voice-grid > div:nth-child(3),
+  .live-run-voice-grid > div:nth-child(-n + 3) {
+    border-right: 0;
+    border-bottom: 1px solid #f2f4f7;
+  }
+
+  .live-run-definition-list > div:last-child,
+  .live-run-voice-grid > div:last-child {
+    border-bottom: 0;
   }
 }
 

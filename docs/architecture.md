@@ -24,6 +24,7 @@
 4. The API resolves the server-side Admin session, active user and fixed-role permissions before returning the Admin shell.
 5. Mobile 玩家目录使用 `/api/v1/public/player-profiles*`，设备级收藏使用独立 Public Session 与 `/api/v1/public/me/favorite-player-profiles*`；其他游戏流量仍按后续切片迁移。
 6. Admin 对局列表与详情只调用 `/api/v1/admin/games*`；普通详情返回白名单诊断摘要，受限错误摘要必须在 `games.debug.read` 下由用户显式请求独立 `/debug`。
+7. Admin 运行监控只调用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要；第 1 页存在 queued/running 记录时每 5 秒轮询，否则每 30 秒发现新记录，其他页不自动轮询。
 
 ## Admin security boundary
 
@@ -35,6 +36,10 @@
 - `audit_events` provides a redacted, bounded audit foundation. 玩家创建、更新、发布、归档和恢复已经记录成功/失败事件，后续 Admin 业务写入必须复用同一入口。
 - Admin 对局 API 使用 `games.read` 强制只读访问并返回 `no-store`；列表服务端分页筛选，详情不返回 replay state/log/checkpoint、event payload、prompt、raw response 或私有角色知识。partial/resumable 对局进一步隐藏角色、玩家与运行模型、死亡原因/来源、事件元数据和未完成轮次。
 - `games.debug.read` 不扩展普通详情 DTO。前端只有在用户显式点击后才调用独立 debug endpoint；该读取返回分类脱敏、限长限量的错误摘要并记录审计。
+- Admin 运行 API 使用 `runs.read` 强制只读访问并返回 `no-store`。普通 DTO 仅投影运行、规则、计数、关联对局和最多 50 条无 payload 事件元数据，不读取或返回 seed、player configs、lineup warnings、prompt、raw error、语音文本或音频。
+- 只有 completed 且关联对局为 complete、不可恢复时，普通运行 DTO 才公开胜方、模型和事件 actor/action；其他状态只返回归类后的生命周期、活动和运行告警。
+- `last_activity_at` 来源于最近持久化事件，无事件时回退到运行创建时间；`is_stale` 只表示 queued/running 超过 60 秒没有数据库活动，不代表 API 进程、模型任务或 worker 在线/健康。
+- `runs.debug.read` 使用独立 `/debug` endpoint。前端只在用户显式点击后请求脱敏、限长限量的错误分类，并记录读取审计；基础详情不因 debug 失败而不可用。当前 Admin 不提供停止、恢复或重试运行操作。
 
 ## Player profile boundaries
 
@@ -53,6 +58,7 @@
 - Legacy `player_profiles.json` files are migration inputs only and can be imported with `python -m app.cli import-player-profiles --source <path>`.
 - Game checkpoints and completed replays are stored in PostgreSQL in `game_sessions` and `game_replay_payloads`.
 - Live runs, live SSE events, voice utterances, and voice audio chunks are persisted in PostgreSQL for replay/recovery support.
+- Migration `20260711_05` adds four Admin monitoring indexes: live-run updated pagination, created pagination, status plus updated pagination, and voice counts by run/status.
 - Admin sessions and redacted audit events are persisted in PostgreSQL; raw session and CSRF secrets are never stored in the database.
 - Public Guest sessions and per-user player favorites are persisted in PostgreSQL. Guest Cookie 丢失后不能跨设备恢复。
 - Avatar image assets and legacy avatar migration inputs may still use `WEREWOLF_LOGS_DIR`.

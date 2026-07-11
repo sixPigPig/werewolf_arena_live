@@ -9,6 +9,8 @@ import {
   GameRecordDetailRoute,
   GameRecordsRoute,
   LoginRoute,
+  LiveRunDetailRoute,
+  LiveRunsRoute,
   NotFoundRoute,
   PlayerProfileEditorRoute,
   PlayerProfilesRoute,
@@ -29,6 +31,22 @@ export const routes: RouteObject[] = [
             children: [
               { index: true, element: <Navigate replace to="/content/players" /> },
               { path: "overview", element: <Navigate replace to="/content/players" /> },
+              {
+                path: "operations/runs",
+                element: (
+                  <RequireAdminPermission permission="runs.read">
+                    <LiveRunsRoute />
+                  </RequireAdminPermission>
+                ),
+              },
+              {
+                path: "operations/runs/:runId",
+                element: (
+                  <RequireAdminPermission permission="runs.read">
+                    <LiveRunDetailRoute />
+                  </RequireAdminPermission>
+                ),
+              },
               {
                 path: "operations/games",
                 element: (

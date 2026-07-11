@@ -35,6 +35,10 @@ export default function GameRecordDetailPage() {
     session?.permissions.includes("*") ||
       session?.permissions.includes("games.debug.read"),
   );
+  const canReadRuns = Boolean(
+    session?.permissions.includes("*") ||
+      session?.permissions.includes("runs.read"),
+  );
   const gameQuery = useQuery({
     enabled: Boolean(sessionId),
     queryFn: ({ signal }) => getAdminGame(sessionId!, signal),
@@ -46,7 +50,10 @@ export default function GameRecordDetailPage() {
     ),
     queryFn: ({ signal }) => getAdminGameDebug(sessionId!, signal),
     queryKey: adminGameKeys.debug(sessionId ?? "missing"),
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
     retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
   });
 
   if (gameQuery.isPending) {
@@ -151,7 +158,7 @@ export default function GameRecordDetailPage() {
           {game.runs.length > 0 ? (
             <ul aria-label="运行记录" className="game-run-list">
               {game.runs.map((run) => (
-                <RunItem key={run.run_id} run={run} />
+                <RunItem canReadRuns={canReadRuns} key={run.run_id} run={run} />
               ))}
             </ul>
           ) : (
@@ -331,11 +338,26 @@ function DebugPanel({
   );
 }
 
-function RunItem({ run }: { run: AdminGameRun }) {
+function RunItem({
+  canReadRuns,
+  run,
+}: {
+  canReadRuns: boolean;
+  run: AdminGameRun;
+}) {
   return (
     <li>
       <div>
-        <code>{run.run_id}</code>
+        {canReadRuns ? (
+          <Link
+            className="game-run-link"
+            to={`/operations/runs/${encodeURIComponent(run.run_id)}`}
+          >
+            <code>{run.run_id}</code>
+          </Link>
+        ) : (
+          <code>{run.run_id}</code>
+        )}
         <span className={`run-status-badge is-${run.status}`}>
           {RUN_STATUS_LABELS[run.status]}
         </span>

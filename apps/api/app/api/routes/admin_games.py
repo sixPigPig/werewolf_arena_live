@@ -242,7 +242,11 @@ def _list_item(
     return AdminGameListItem(
         session_id=record.session_id,
         status=_safe_text(record.status, max_length=20),
-        winner=_optional_text(record.winner, max_length=80),
+        winner=(
+            _optional_text(record.winner, max_length=80)
+            if _is_terminal_game(record)
+            else None
+        ),
         round_count=max(0, int(record.round_count or 0)),
         resumable=bool(record.resumable),
         rule_set=rule_set,

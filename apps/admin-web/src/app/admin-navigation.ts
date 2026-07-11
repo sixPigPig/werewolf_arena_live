@@ -1,5 +1,6 @@
 export type AdminPermission =
   | "games.read"
+  | "runs.read"
   | "players.read"
   | "players.write"
   | "players.publish"
@@ -26,6 +27,14 @@ export const adminNavigation: AdminNavSection[] = [
     id: "operations",
     label: "运营诊断",
     items: [
+      {
+        id: "runs",
+        label: "运行监控",
+        description: "实时状态与安全诊断",
+        href: "/operations/runs",
+        marker: "运",
+        permission: "runs.read",
+      },
       {
         id: "games",
         label: "对局记录",
