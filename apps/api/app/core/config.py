@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     )
     legacy_player_profile_content_writes_enabled: bool = False
     legacy_player_profile_favorite_writes_enabled: bool = False
+    legacy_judge_voice_generation_enabled: bool = False
     werewolf_logs_dir: str = "logs"
     ark_tts_enabled: bool = False
     ark_tts_api_key: str = ""
@@ -100,6 +101,13 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "LEGACY_PLAYER_PROFILE_FAVORITE_WRITES_ENABLED cannot be enabled in production"
+            )
+        if (
+            self.app_environment == "production"
+            and self.legacy_judge_voice_generation_enabled
+        ):
+            raise ValueError(
+                "LEGACY_JUDGE_VOICE_GENERATION_ENABLED cannot be enabled in production"
             )
         if self.admin_dev_auth_enabled and not self.admin_dev_auth_email.strip():
             raise ValueError("ADMIN_DEV_AUTH_EMAIL is required when development auth is enabled")

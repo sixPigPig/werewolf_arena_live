@@ -1,6 +1,7 @@
 export type AdminPermission =
   | "games.read"
   | "runs.read"
+  | "voice.read"
   | "players.read"
   | "players.write"
   | "players.publish"
@@ -47,7 +48,7 @@ export const adminNavigation: AdminNavSection[] = [
   },
   {
     id: "content",
-    label: "已接入功能",
+    label: "内容资产",
     items: [
       {
         id: "players",
@@ -56,6 +57,14 @@ export const adminNavigation: AdminNavSection[] = [
         href: "/content/players",
         marker: "人",
         permission: "players.read",
+      },
+      {
+        id: "voice-assets",
+        label: "法官语音",
+        description: "覆盖率、缺失项与试听",
+        href: "/content/voice-assets",
+        marker: "声",
+        permission: "voice.read",
       },
     ],
   },

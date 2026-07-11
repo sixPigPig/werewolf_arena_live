@@ -25,6 +25,7 @@
 5. Mobile 玩家目录使用 `/api/v1/public/player-profiles*`，设备级收藏使用独立 Public Session 与 `/api/v1/public/me/favorite-player-profiles*`；其他游戏流量仍按后续切片迁移。
 6. Admin 对局列表与详情只调用 `/api/v1/admin/games*`；普通详情返回白名单诊断摘要，受限错误摘要必须在 `games.debug.read` 下由用户显式请求独立 `/debug`。
 7. Admin 运行监控只调用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要；第 1 页存在 queued/running 记录时每 5 秒轮询，否则每 30 秒发现新记录，其他页不自动轮询。
+8. Admin 法官语音资产只调用 `/api/v1/admin/judge-voice-lines*`；列表返回安全元数据，音频通过同权限的受认证 endpoint 按需读取。
 
 ## Admin security boundary
 
@@ -40,6 +41,7 @@
 - 只有 completed 且关联对局为 complete、不可恢复时，普通运行 DTO 才公开胜方、模型和事件 actor/action；其他状态只返回归类后的生命周期、活动和运行告警。
 - `last_activity_at` 来源于最近持久化事件，无事件时回退到运行创建时间；`is_stale` 只表示 queued/running 超过 60 秒没有数据库活动，不代表 API 进程、模型任务或 worker 在线/健康。
 - `runs.debug.read` 使用独立 `/debug` endpoint。前端只在用户显式点击后请求脱敏、限长限量的错误分类，并记录读取审计；基础详情不因 debug 失败而不可用。当前 Admin 不提供停止、恢复或重试运行操作。
+- Admin 法官语音 API 使用 `voice.read`，返回 `no-store` 且不暴露服务器文件路径、旧 public URL、manifest、字幕内容或音频块；试听 URL 仍由 API 再次鉴权。旧匿名生成 endpoint 默认关闭且 production 不能开启。
 
 ## Player profile boundaries
 

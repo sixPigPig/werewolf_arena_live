@@ -15,6 +15,9 @@ const LiveRunsPage = lazy(
 const LiveRunDetailPage = lazy(
   () => import("@/features/live-runs/LiveRunDetailPage"),
 );
+const JudgeVoiceAssetsPage = lazy(
+  () => import("@/features/voice-assets/JudgeVoiceAssetsPage"),
+);
 const PlayerProfilesPage = lazy(
   () => import("@/features/player-profiles/PlayerProfilesPage"),
 );
@@ -87,6 +90,14 @@ export function LiveRunDetailRoute() {
   return (
     <LazyRoute>
       <LiveRunDetailPage />
+    </LazyRoute>
+  );
+}
+
+export function JudgeVoiceAssetsRoute() {
+  return (
+    <LazyRoute>
+      <JudgeVoiceAssetsPage />
     </LazyRoute>
   );
 }

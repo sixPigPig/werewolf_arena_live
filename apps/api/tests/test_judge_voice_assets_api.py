@@ -9,6 +9,7 @@ from app.api.routes.judge_voice_assets import (
     get_judge_voice_client_factory,
     get_judge_voice_tts_config,
 )
+from app.core.config import settings
 from app.main import app
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
@@ -44,13 +45,25 @@ def client_with_judge_voice_overrides(
     *,
     config: VolcengineTtsConfig = BASE_CONFIG,
 ) -> Generator[TestClient, None, None]:
+    previous_legacy_generation = settings.legacy_judge_voice_generation_enabled
     try:
+        settings.legacy_judge_voice_generation_enabled = True
         app.dependency_overrides[get_judge_voice_asset_dir] = lambda: tmp_path / "judge-voice"
         app.dependency_overrides[get_judge_voice_tts_config] = lambda: config
         app.dependency_overrides[get_judge_voice_client_factory] = lambda: RecordingTtsClient
         yield TestClient(app)
     finally:
+        settings.legacy_judge_voice_generation_enabled = previous_legacy_generation
         app.dependency_overrides.clear()
+
+
+def test_legacy_anonymous_generation_is_disabled_by_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "legacy_judge_voice_generation_enabled", False)
+    with TestClient(app) as client:
+        response = client.post("/api/v1/judge-voice-lines/generate", json={})
+    assert response.status_code == 404
 
 
 def test_list_judge_voice_lines_reports_static_asset_status(tmp_path: Path) -> None:

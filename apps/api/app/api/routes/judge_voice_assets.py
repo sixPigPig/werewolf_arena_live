@@ -98,6 +98,8 @@ async def generate_judge_voice_lines(
         Depends(get_judge_voice_client_factory),
     ],
 ) -> GenerateJudgeVoiceLinesResponse:
+    if not settings.legacy_judge_voice_generation_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
     if not config.available:
         raise HTTPException(
             status_code=503,
