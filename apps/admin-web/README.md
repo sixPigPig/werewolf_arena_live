@@ -8,6 +8,8 @@
 
 生产构建只有显式设置 `VITE_ADMIN_AUTH_ENABLED=true` 才会连接认证链，否则 fail closed。固定角色、服务端权限依赖以及玩家创建、更新、发布、归档、恢复的成功/失败审计已经落地；正式身份源和部署安全验收完成前，不提供生产登录入口。
 
+正式容器由仓库根目录执行 `docker build -f apps/admin-web/Dockerfile --target runtime .` 构建。镜像内 Nginx 提供 SPA fallback、静态资源缓存和同源 `/api` 代理；运行时通过 `API_UPSTREAM` 指向 API Service，不把 API 地址或任何密钥烘焙进前端产物。
+
 ## 本地运行
 
 ```bash

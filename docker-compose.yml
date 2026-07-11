@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: app
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
       - "5432:5432"
     volumes:
@@ -15,5 +15,135 @@ services:
       timeout: 5s
       retries: 10
 
+  migrate:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-public.ecr.aws/docker/library/python:3.12-slim}
+    image: werewolf-api:local
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - path: ${API_ENV_FILE:-apps/api/.env}
+        required: false
+    environment: &api-environment
+      APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/app
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5174}
+      PUBLIC_CORS_ORIGINS: ${PUBLIC_CORS_ORIGINS:-http://localhost:5174}
+      ADMIN_DEV_AUTH_ENABLED: ${ADMIN_DEV_AUTH_ENABLED:-true}
+      ADMIN_SESSION_COOKIE_SECURE: ${ADMIN_SESSION_COOKIE_SECURE:-false}
+      PUBLIC_SESSION_COOKIE_SECURE: ${PUBLIC_SESSION_COOKIE_SECURE:-false}
+      ADMIN_OIDC_ENABLED: ${ADMIN_OIDC_ENABLED:-false}
+      ADMIN_OIDC_ISSUER_URL: ${ADMIN_OIDC_ISSUER_URL:-}
+      ADMIN_OIDC_CLIENT_ID: ${ADMIN_OIDC_CLIENT_ID:-}
+      ADMIN_OIDC_CLIENT_SECRET: ${ADMIN_OIDC_CLIENT_SECRET:-}
+      ADMIN_OIDC_REDIRECT_URI: ${ADMIN_OIDC_REDIRECT_URI:-http://localhost:8080/api/v1/admin/oidc/callback}
+      ADMIN_OIDC_WEB_BASE_URL: ${ADMIN_OIDC_WEB_BASE_URL:-http://localhost:8080}
+      ARK_TTS_ENABLED: ${ARK_TTS_ENABLED:-false}
+      ARK_TTS_API_KEY: ${ARK_TTS_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-public.ecr.aws/docker/library/python:3.12-slim}
+    image: werewolf-api:local
+    env_file:
+      - path: ${API_ENV_FILE:-apps/api/.env}
+        required: false
+    environment: *api-environment
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+
+  live-run-reaper:
+    profiles: ["app"]
+    image: werewolf-api:local
+    command: ["python", "-m", "app.cli", "run-live-run-reaper"]
+    env_file:
+      - path: ${API_ENV_FILE:-apps/api/.env}
+        required: false
+    environment: *api-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.cli", "check-live-run-reaper"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  judge-voice-worker:
+    profiles: ["voice"]
+    image: werewolf-api:local
+    command: ["python", "-m", "app.cli", "run-judge-voice-worker"]
+    env_file:
+      - path: ${API_ENV_FILE:-apps/api/.env}
+        required: false
+    environment: *api-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  admin:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: apps/admin-web/Dockerfile
+      target: development
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-public.ecr.aws/docker/library/node:22-alpine}
+    image: werewolf-admin-web-dev:local
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8000
+      VITE_ADMIN_AUTH_ENABLED: "true"
+      VITE_ADMIN_DEV_LOGIN_ENABLED: "true"
+      VITE_ADMIN_PREVIEW_MODE: "false"
+    ports:
+      - "${ADMIN_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["monitoring"]
+    image: quay.io/prometheus/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT:-19090}:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/live-run-alerts.yml:/etc/prometheus/rules/live-run-alerts.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres-data:
+  prometheus-data:

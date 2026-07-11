@@ -9,8 +9,11 @@ VITE_ADMIN_AUTH_ENABLED ?= true
 VITE_ADMIN_DEV_LOGIN_ENABLED ?= true
 VITE_ADMIN_PREVIEW_MODE ?= false
 ADMIN_WEB_LOCAL_ENV = VITE_ADMIN_AUTH_ENABLED=$(VITE_ADMIN_AUTH_ENABLED) VITE_ADMIN_DEV_LOGIN_ENABLED=$(VITE_ADMIN_DEV_LOGIN_ENABLED) VITE_ADMIN_PREVIEW_MODE=$(VITE_ADMIN_PREVIEW_MODE)
+NODE_IMAGE ?= public.ecr.aws/docker/library/node:22-alpine
+NGINX_IMAGE ?= public.ecr.aws/docker/library/nginx:1.27-alpine
+PYTHON_IMAGE ?= public.ecr.aws/docker/library/python:3.12-slim
 
-.PHONY: install dev api web mobile-web admin-web voice-worker live-run-reaper db-up db-down lint test build format release-check
+.PHONY: install dev api web mobile-web admin-web voice-worker live-run-reaper db-up db-down stack-up stack-down container-build lint test build format release-check
 
 install:
 	cd apps/api && uv sync
@@ -50,6 +53,16 @@ db-up:
 
 db-down:
 	docker compose down
+
+stack-up:
+	docker compose --profile app up --build -d
+
+stack-down:
+	docker compose --profile app --profile voice --profile monitoring down
+
+container-build:
+	docker build --file apps/api/Dockerfile --build-arg PYTHON_IMAGE=$(PYTHON_IMAGE) --tag werewolf-api:local .
+	docker build --file apps/admin-web/Dockerfile --target runtime --build-arg NODE_IMAGE=$(NODE_IMAGE) --build-arg NGINX_IMAGE=$(NGINX_IMAGE) --tag werewolf-admin-web:local .
 
 lint:
 	cd apps/api && .venv/bin/ruff check .

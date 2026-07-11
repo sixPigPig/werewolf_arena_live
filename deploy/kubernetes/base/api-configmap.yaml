@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: werewolf-api-config
+  namespace: werewolf
+data:
+  APP_ENVIRONMENT: production
+  CORS_ORIGINS: https://admin.example.com,https://m.example.com
+  PUBLIC_CORS_ORIGINS: https://m.example.com
+  ADMIN_DEV_AUTH_ENABLED: "false"
+  ADMIN_SESSION_COOKIE_SECURE: "true"
+  PUBLIC_SESSION_COOKIE_SECURE: "true"
+  ADMIN_OIDC_ENABLED: "true"
+  ADMIN_OIDC_ISSUER_URL: https://identity.example.com/realms/werewolf
+  ADMIN_OIDC_CLIENT_ID: werewolf-admin
+  ADMIN_OIDC_REDIRECT_URI: https://admin.example.com/api/v1/admin/oidc/callback
+  ADMIN_OIDC_WEB_BASE_URL: https://admin.example.com
+  ADMIN_OIDC_CLIENT_AUTH_METHOD: client_secret_basic
+  LIVE_RUN_REAPER_POLL_SECONDS: "5"
+  LIVE_RUN_REAPER_STALE_GRACE_SECONDS: "30"
+  LIVE_RUN_REAPER_BACKOFF_SECONDS: "30"
+  LIVE_RUN_REAPER_MAX_ATTEMPTS: "3"
+  LIVE_RUN_REAPER_HEARTBEAT_SECONDS: "10"
+  LIVE_RUN_REAPER_PROBE_MAX_AGE_SECONDS: "45"
+

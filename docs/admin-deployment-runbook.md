@@ -66,6 +66,58 @@ cd apps/api
 
 `current` 必须与 `heads` 一致。CI 会在全新 PostgreSQL 上执行 `upgrade head`、`alembic check`、全量测试和前端生产构建。
 
+## 容器制品
+
+API、迁移任务、语音 worker 和 live-run reaper 共用 `apps/api/Dockerfile`；Admin 使用 `apps/admin-web/Dockerfile` 的 `runtime` 阶段。镜像构建不会写入 `.env`、密钥、日志、虚拟环境或 `node_modules`：
+
+```bash
+docker build -f apps/api/Dockerfile -t registry.example.com/werewolf/api:<git-sha> .
+docker build -f apps/admin-web/Dockerfile --target runtime \
+  -t registry.example.com/werewolf/admin-web:<git-sha> .
+```
+
+Admin 正式镜像固定启用认证、关闭 fixture preview 和开发登录；浏览器使用同源 `/api`，Nginx 通过 `API_UPSTREAM` 连接 API。OIDC、数据库和 TTS 密钥只能在运行时注入 API 镜像，不可放入 Admin 构建参数。
+
+本地完整联调栈使用 Admin Dockerfile 的 `development` 阶段，提供开发身份登录，不代表生产认证验收：
+
+```bash
+make stack-up
+docker compose --profile app ps
+curl --fail http://127.0.0.1:8080/
+curl --fail http://127.0.0.1:8000/api/v1/health/ready
+```
+
+访问 `http://127.0.0.1:8080`。启动监控或语音 worker 时使用：
+
+```bash
+docker compose --profile app --profile monitoring up --build -d
+docker compose --profile app --profile voice up --build -d
+```
+
+Prometheus 位于 `http://127.0.0.1:19090`（可通过 `PROMETHEUS_PORT` 修改）。`API_ENV_FILE` 可指向额外的本地环境文件；Compose 中显式的数据库和本地认证设置会覆盖同名值。
+
+### Kubernetes 发布顺序
+
+`deploy/kubernetes/base` 包含双副本 API、单副本 reaper、双副本 Admin、Service、生产配置与探针。正式环境必须通过 overlay 或发布流水线替换 `werewolf-api:latest`、`werewolf-admin-web:latest`，并把 `api-configmap.yaml` 中的示例域名改成真实 HTTPS 域名。
+
+先创建命名空间、非密配置和外部 Secret，再单独执行迁移；迁移成功后才能展开应用：
+
+```bash
+kubectl apply -f deploy/kubernetes/base/namespace.yaml
+kubectl apply -f deploy/kubernetes/base/api-configmap.yaml
+# 使用 External Secrets / Sealed Secrets / 云密钥服务创建 werewolf-api-secrets；
+# deploy/kubernetes/secret.example.yaml 只描述字段，不可原样用于生产。
+kubectl apply -f deploy/kubernetes/migration-job.yaml
+kubectl wait --for=condition=complete job/werewolf-db-migrate \
+  --namespace werewolf --timeout=5m
+kubectl apply -k deploy/kubernetes/base
+kubectl rollout status deployment/werewolf-api -n werewolf
+kubectl rollout status deployment/werewolf-live-run-reaper -n werewolf
+kubectl rollout status deployment/werewolf-admin-web -n werewolf
+```
+
+迁移 Job 名称固定；再次发布前先归档日志并删除已完成的旧 Job。入口网关应只把 Admin 域名转发到 `werewolf-admin-web:8080`，它会同源代理 `/api`；Mobile 域名和 API 暴露策略由 C 端部署独立管理。
+
 ## 数据库与资产展开
 
 先备份，再执行可向前兼容迁移：
@@ -117,7 +169,7 @@ Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-we
 - Prometheus：抓取 `GET /api/v1/metrics`。该端点只有聚合计数，不含运行、会话或 Worker ID，但仍应仅在内部监控网络开放。
 - 旧 `/api/v1/health` 只为兼容保留，不能用于接流量判断。
 
-Prometheus 告警规则见 `deploy/prometheus/live-run-alerts.yml`，覆盖 reaper 无心跳、stale orphan 积压、自动恢复耗尽和扫描错误。发布后先运行 `python -m app.cli run-live-run-reaper --once`，再启动持续进程；持续进程启动后 `check-live-run-reaper` 必须返回 `reaper=ok`。
+Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告警规则见 `deploy/prometheus/live-run-alerts.yml`，覆盖 reaper 无心跳、stale orphan 积压、自动恢复耗尽和扫描错误。Kubernetes API Pod 已带标准 `prometheus.io` 注解；集群 Prometheus 必须启用对应的 Pod discovery，或在平台侧建立等价的 PodMonitor/ServiceMonitor。发布后先运行 `python -m app.cli run-live-run-reaper --once`，再启动持续进程；持续进程启动后 `check-live-run-reaper` 必须返回 `reaper=ok`。
 
 发布后检查：
 
