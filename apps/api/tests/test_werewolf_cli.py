@@ -1,6 +1,6 @@
 import json
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -9,6 +9,7 @@ import app.cli as cli
 from app.cli import main
 from app.db.base import Base
 from app.models.player_avatar_asset import PlayerAvatarAsset
+from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.runner import GameRunError, RunGameResult
 
@@ -189,6 +190,56 @@ def test_voice_worker_rejects_unsafe_poll_interval(capsys) -> None:
 
     assert exit_code == 2
     assert "between 0.25 and 60" in capsys.readouterr().err
+
+
+def test_provision_admin_user_creates_and_updates_authorized_account(
+    capsys,
+    monkeypatch,
+) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr(cli, "SessionLocal", testing_session, raising=False)
+
+    first = main(
+        [
+            "provision-admin-user",
+            "--email",
+            "Admin@Example.Test",
+            "--display-name",
+            "OIDC Admin",
+            "--role",
+            "viewer",
+        ]
+    )
+    first_output = capsys.readouterr().out
+    second = main(
+        [
+            "provision-admin-user",
+            "--email",
+            "admin@example.test",
+            "--display-name",
+            "Arena Operator",
+            "--role",
+            "operator",
+        ]
+    )
+    second_output = capsys.readouterr().out
+
+    with testing_session() as db:
+        users = list(db.scalars(select(User)))
+
+    assert first == second == 0
+    assert "action=created role=viewer" in first_output
+    assert "action=updated role=operator" in second_output
+    assert len(users) == 1
+    assert users[0].email == "admin@example.test"
+    assert users[0].display_name == "Arena Operator"
+    assert users[0].admin_role == "operator"
 
 
 def test_evaluate_replay_command_prints_issue_codes(tmp_path, capsys) -> None:

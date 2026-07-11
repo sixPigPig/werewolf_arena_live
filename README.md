@@ -190,7 +190,19 @@ VITE_ADMIN_DEV_LOGIN_ENABLED=true
 VITE_ADMIN_PREVIEW_MODE=false
 ```
 
-开发登录不接收浏览器提供的身份或角色，且在 production 环境会被后端拒绝。生产前端只有显式注入 `VITE_ADMIN_AUTH_ENABLED=true` 才进入真实认证边界，否则 fail closed；正式身份源仍需单独接入。
+开发登录不接收浏览器提供的身份或角色，且在 production 环境会被后端拒绝。生产前端只有显式注入 `VITE_ADMIN_AUTH_ENABLED=true` 才进入真实认证边界，否则 fail closed。正式后台登录使用通用 OIDC Authorization Code + PKCE；production 配置会拒绝在 OIDC 未启用或 issuer/callback 不是 HTTPS 时启动。
+
+正式账号不会从 OIDC claims 自动获得角色。先由受控运维环境预配置账号：
+
+```bash
+cd apps/api
+.venv/bin/python -m app.cli provision-admin-user \
+  --email admin@example.com \
+  --display-name "Arena Admin" \
+  --role operator
+```
+
+再配置 `ADMIN_OIDC_ISSUER_URL`、`ADMIN_OIDC_CLIENT_ID`、`ADMIN_OIDC_CLIENT_SECRET`、`ADMIN_OIDC_REDIRECT_URI` 和 `ADMIN_OIDC_WEB_BASE_URL`。首次登录只接受提供商签名且 `email_verified=true` 的 ID Token，并把预配置账号永久绑定到 issuer/sub；后续不会按浏览器输入或 OIDC role claim 提权。登录事务、state、浏览器绑定、PKCE verifier 和 nonce 均在服务端校验，回调失败只返回稳定错误分类。
 
 旧 `/api/v1/player-profiles` 内容和全局收藏写入均默认关闭；如旧 Web 仍需短期联调，可仅在非 production 环境分别显式设置：
 

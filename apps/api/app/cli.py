@@ -8,7 +8,9 @@ from threading import Event
 from typing import Sequence
 
 import uvicorn
+from sqlalchemy import func, select
 
+from app.admin.rbac import AdminRole
 from app.core.config import settings
 from app.admin.voice_jobs import run_voice_generation_worker
 from app.db.session import SessionLocal
@@ -22,6 +24,7 @@ from app.player_avatar_asset_migration import (
     migrate_player_avatar_assets,
 )
 from app.player_profile_import import PlayerProfileImportError, import_player_profiles
+from app.models.user import User
 from app.werewolf.evaluator import evaluate_replay
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.providers import default_model_name
@@ -98,6 +101,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Seconds to wait before polling an empty queue.",
     )
     voice_worker_parser.set_defaults(func=_run_judge_voice_worker_command)
+
+    provision_admin_parser = subparsers.add_parser(
+        "provision-admin-user",
+        help="Create or update a pre-authorized Admin user for OIDC binding.",
+    )
+    provision_admin_parser.add_argument("--email", required=True)
+    provision_admin_parser.add_argument("--display-name", required=True)
+    provision_admin_parser.add_argument(
+        "--role",
+        required=True,
+        choices=[role.value for role in AdminRole],
+    )
+    provision_admin_parser.set_defaults(func=_provision_admin_user_command)
 
     purge_records_parser = subparsers.add_parser(
         "purge-legacy-game-records",
@@ -252,6 +268,29 @@ def _run_judge_voice_worker_command(args: argparse.Namespace) -> int:
 
     if args.once and processed_count == 0:
         print("job_id=none")
+    return 0
+
+
+def _provision_admin_user_command(args: argparse.Namespace) -> int:
+    email = args.email.strip().lower()
+    display_name = args.display_name.strip()
+    if "@" not in email or len(email) > 255 or not display_name or len(display_name) > 120:
+        print("invalid admin email or display name", file=sys.stderr)
+        return 2
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(func.lower(User.email) == email))
+        action = "updated"
+        if user is None:
+            user = User(email=email, display_name=display_name)
+            db.add(user)
+            action = "created"
+        user.display_name = display_name
+        user.admin_role = args.role
+        user.is_active = True
+        db.flush()
+        user_id = user.id
+        db.commit()
+    print(f"user_id={user_id} action={action} role={args.role}")
     return 0
 
 

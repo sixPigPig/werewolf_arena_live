@@ -14,6 +14,35 @@ const ADMIN_ROLES: AdminRole[] = [
   "super_admin",
 ];
 
+export type AdminLoginOptions = {
+  oidc_enabled: boolean;
+  oidc_start_path: string | null;
+};
+
+export async function getAdminLoginOptions(): Promise<AdminLoginOptions> {
+  const value = await adminApiFetch<unknown>(
+    `${ADMIN_AUTH_BASE_PATH}/login-options`,
+    { notifyOnUnauthorized: false },
+  );
+  if (!isRecord(value) || typeof value.oidc_enabled !== "boolean") {
+    throw invalidSessionResponse();
+  }
+  if (
+    value.oidc_start_path !== null &&
+    (typeof value.oidc_start_path !== "string" ||
+      !value.oidc_start_path.startsWith("/api/v1/admin/"))
+  ) {
+    throw invalidSessionResponse();
+  }
+  if (value.oidc_enabled !== (value.oidc_start_path !== null)) {
+    throw invalidSessionResponse();
+  }
+  return {
+    oidc_enabled: value.oidc_enabled,
+    oidc_start_path: value.oidc_start_path,
+  };
+}
+
 export async function getAdminSession() {
   const value = await adminApiFetch<unknown>(`${ADMIN_AUTH_BASE_PATH}/me`, {
     notifyOnUnauthorized: false,

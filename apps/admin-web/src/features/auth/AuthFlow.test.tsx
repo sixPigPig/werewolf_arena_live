@@ -152,6 +152,57 @@ describe("admin session flow", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("discovers the enterprise login entry and preserves a safe return path", async () => {
+    vi.stubEnv("VITE_ADMIN_DEV_LOGIN_ENABLED", "false");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input) => {
+        const url = String(input);
+        if (url.endsWith("/me")) return jsonResponse(authProblem(401), 401);
+        if (url.endsWith("/login-options")) {
+          return jsonResponse({
+            oidc_enabled: true,
+            oidc_start_path: "/api/v1/admin/oidc/start",
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    renderAuthenticatedRoute("/operations/runs?status=running");
+
+    const link = await screen.findByRole("link", { name: "使用企业账号登录" });
+    expect(link).toHaveAttribute(
+      "href",
+      "/api/v1/admin/oidc/start?return_to=%2Foperations%2Fruns%3Fstatus%3Drunning",
+    );
+    expect(screen.queryByRole("button", { name: "使用开发身份登录" })).toBeNull();
+  });
+
+  it("shows a stable OIDC failure without rendering provider details", async () => {
+    vi.stubEnv("VITE_ADMIN_DEV_LOGIN_ENABLED", "false");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input) => {
+        const url = String(input);
+        if (url.endsWith("/me")) return jsonResponse(authProblem(401), 401);
+        if (url.endsWith("/login-options")) {
+          return jsonResponse({ oidc_enabled: true, oidc_start_path: "/api/v1/admin/oidc/start" });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    renderAuthenticatedRoute(
+      "/login?oidcError=admin_oidc_account_not_provisioned&returnTo=%2Foperations%2Fruns",
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "该企业账号尚未获得后台权限",
+    );
+    expect(screen.queryByText(/client_secret|id_token/i)).toBeNull();
+  });
+
   it("uses permissions, not roles, to protect deep links", async () => {
     vi.stubGlobal(
       "fetch",

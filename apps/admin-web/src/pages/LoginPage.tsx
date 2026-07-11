@@ -1,7 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 
 import { isAdminDevLoginEnabled } from "@/features/auth/runtime-config";
+import { getAdminLoginOptions } from "@/features/auth/auth-api";
 import { useAdminSession } from "@/features/auth/session-context";
 
 export default function LoginPage() {
@@ -18,6 +20,17 @@ export default function LoginPage() {
   } = useAdminSession();
   const devLoginEnabled = isAdminDevLoginEnabled();
   const returnTo = safeReturnTo(searchParams.get("returnTo"));
+  const oidcError = searchParams.get("oidcError");
+  const loginOptions = useQuery({
+    enabled: !devLoginEnabled,
+    queryFn: getAdminLoginOptions,
+    queryKey: ["admin", "login-options"],
+    retry: false,
+    staleTime: 60_000,
+  });
+  const oidcStartPath = loginOptions.data?.oidc_enabled
+    ? loginOptions.data.oidc_start_path
+    : null;
 
   if (status === "loading") {
     return (
@@ -67,6 +80,15 @@ export default function LoginPage() {
           </div>
         ) : null}
 
+        {oidcStartPath ? (
+          <a
+            className="auth-primary-button"
+            href={`${oidcStartPath}?return_to=${encodeURIComponent(returnTo)}`}
+          >
+            使用企业账号登录
+          </a>
+        ) : null}
+
         {devLoginEnabled ? (
           <form className="auth-form" onSubmit={handleDevLogin}>
             <div className="dev-login-description">
@@ -81,11 +103,18 @@ export default function LoginPage() {
               {pendingAction === "login" ? "正在建立会话..." : "使用开发身份登录"}
             </button>
           </form>
-        ) : (
+        ) : !oidcStartPath && !loginOptions.isPending ? (
           <div className="auth-notice" role="note">
             当前环境未提供登录入口。请通过已配置的企业身份入口访问，或联系系统管理员。
           </div>
-        )}
+        ) : null}
+
+        {oidcError ? (
+          <div aria-live="assertive" className="auth-error" role="alert">
+            <strong>企业账号登录失败</strong>
+            <span>{oidcErrorMessage(oidcError)}</span>
+          </div>
+        ) : null}
 
         {submitted && error ? (
           <div aria-live="assertive" className="auth-error" role="alert">
@@ -111,4 +140,17 @@ function safeReturnTo(value: string | null) {
     return "/content/players";
   }
   return value;
+}
+
+function oidcErrorMessage(code: string) {
+  if (code === "admin_oidc_account_not_provisioned") {
+    return "该企业账号尚未获得后台权限，请联系系统管理员。";
+  }
+  if (code === "admin_oidc_account_disabled") {
+    return "该后台账号已停用，请联系系统管理员。";
+  }
+  if (code === "admin_oidc_provider_denied") {
+    return "企业身份提供商未完成授权，请重新尝试。";
+  }
+  return "登录事务无效或身份验证失败，请重新尝试。";
 }

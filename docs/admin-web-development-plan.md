@@ -1,6 +1,6 @@
 # Admin Web 规划、设计与开发方案
 
-状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流、Admin 对局记录只读切片、阶段 3B 运行监控只读切片、阶段 4A 法官语音资产只读切片、阶段 4B1 独立语音存储和阶段 4B2 持久生成任务已完成；正式身份源、其他 Public API 与运行控制/恢复尚未接入。
+状态：阶段 0、阶段 1A 认证基础、玩家管理闭环、Mobile 玩家 Public API 切流、Admin 对局记录只读切片、阶段 3B 运行监控只读切片、阶段 4A 法官语音资产只读切片、阶段 4B1 独立语音存储、阶段 4B2 持久生成任务、阶段 5A 运行保障和阶段 5B 通用 OIDC 接入已完成；真实身份租户验收、其他 Public API 与运行控制/恢复尚未接入。
 
 ## 1. 决策摘要
 
@@ -257,7 +257,7 @@ GET /api/v1/admin/audit-events
 - 生产配置强制 Secure Cookie，认证响应使用 `no-store`；
 - 开发登录仅允许 development/test + 显式开关，请求体不能指定身份或角色；
 - production 前端默认 fail closed；只有部署显式注入
-  `VITE_ADMIN_AUTH_ENABLED=true` 才进入真实认证边界，且正式身份源与部署安全验收完成前不提供生产登录入口；
+  `VITE_ADMIN_AUTH_ENABLED=true` 才进入真实认证边界，且实际 OIDC 租户与部署安全验收完成前不提供生产登录入口；
 - 开发登录是联调工具，不是生产身份方案。
 - 已实现 `/api/v1/admin/player-profiles*` 的固定权限矩阵、CSRF、乐观锁、状态流转和操作审计；
 - 已实现 `/api/v1/public/player-profiles*` 白名单只读投影，只暴露已发布且未归档档案；
@@ -350,13 +350,13 @@ draft -> published -> archived
 | 阶段 | 工作 | 关键 DoD | 粗估 |
 |---|---|---|---:|
 | 0 | 决策、方案、独立 Admin 骨架 | 文档、路由壳、fail-closed、CI、lint/test/build | 2–4 人日 |
-| 1 | 认证、RBAC、审计、Admin/Public DTO | 认证基础与玩家 DTO/审计已完成；仍需正式身份源和其他业务 DTO | 7–12 人日 |
+| 1 | 认证、RBAC、审计、Admin/Public DTO | 通用 OIDC、认证基础与玩家 DTO/审计已完成；仍需实际租户验收和其他业务 DTO | 7–12 人日 |
 | 2 | 玩家管理纵向闭环 | 分页、编辑、发布/归档/恢复、409 已完成；AI 草稿与浏览器 E2E 待后续 | 5–8 人日 |
 | 3 | 对局与运行诊断 | 对局与运行分页、白名单详情和独立 debug 权限已完成；运行控制与恢复幂等待后续 | 6–10 人日 |
 | 4 | 语音资产 | 独立持久存储、任务化生成、权限与审计 | 4–6 人日 |
 | 5 | 加固与切流 | 安全、性能、可访问性、部署和回滚演练 | 4–7 人日 |
 
-按一名前端和一名后端并行，生产级 MVP 约 5–7 个自然周。企业 SSO、任务队列和对象存储未就绪会延长周期。
+按一名前端和一名后端并行，生产级 MVP 约 5–7 个自然周。实际身份租户配置、外部密钥和基础设施未就绪会延长周期。
 
 建议按可独立回滚的 PR 切片：
 
@@ -496,7 +496,7 @@ draft -> published -> archived
 - `runs.debug.read` 通过独立 `/debug` 显式读取脱敏、限长、最多 20 条错误分类并写入审计，debug 失败不影响基础详情；
 - 迁移 `20260711_05` 增加运行更新时间、运行创建时间、状态加更新时间及语音 run/status 四个查询索引；本阶段不提供停止、恢复或重试操作。
 
-阶段 3B 已完成。`mobile-web` 仍是唯一继续演进的 C 端，普通回放和观战剧场不迁入 Admin。正式 Admin 身份源仍是生产开放后台的前置条件；正式 C 端身份源则是 Guest 收藏跨设备同步与账号合并的前置条件。
+阶段 3B 已完成。`mobile-web` 仍是唯一继续演进的 C 端，普通回放和观战剧场不迁入 Admin。Admin OIDC 已在阶段 5B 接入，实际身份租户验收仍是生产开放后台的前置条件；正式 C 端身份源则是 Guest 收藏跨设备同步与账号合并的前置条件。
 
 ### 阶段 4A：Admin 法官语音资产只读切片
 
@@ -536,4 +536,16 @@ draft -> published -> archived
 - 发布、持续 worker、健康探针、资产导入和前向兼容回滚步骤见 `docs/admin-deployment-runbook.md`；
 - 生成任务进度通过 `role=status` 和 `aria-live=polite` 播报，不依赖视觉变化。
 
-阶段 5A 的工程保障已完成。正式身份提供商仍未选择，因此 production 必须保持 Admin 外网入口关闭；选定 OIDC/SSO 后再完成身份映射、回调和真实账号验收。
+阶段 5A 的工程保障已完成。通用 OIDC 在阶段 5B 接入；注入实际 issuer/client 并完成真实账号验收前，production 必须保持 Admin 外网入口关闭。
+
+### 阶段 5B：正式 Admin OIDC 身份接入
+
+- 通用 OIDC Authorization Code + PKCE S256，通过 discovery 获取 authorize/token/JWKS endpoint，只接受 RS/ES 非对称签名 ID Token；
+- 登录事务持久化保存 state hash、浏览器绑定 hash、nonce hash、PKCE verifier、return path、过期和消费状态，API/进程重启不丢失事务；
+- callback 校验 state、浏览器绑定、单次消费、issuer、audience、签名、时效、nonce 和 `email_verified=true`，未知 `kid` 会刷新 JWKS；
+- 后台账号必须先由 `provision-admin-user` 配置本地固定角色，首次登录按验证邮箱绑定 issuer/sub，拒绝未配置、停用或已绑定其他身份的账号；
+- OIDC claims 不参与角色授权，成功后复用现有 Admin Session、CSRF、RBAC 和审计，失败只记录稳定分类；
+- Admin 登录页从 `/admin/login-options` 动态发现企业登录入口，安全保留内部 return path，并展示不含提供商原始信息的失败提示；
+- migration `20260711_08` 新增可回退的短期登录事务表，production 配置强制 OIDC 和 HTTPS issuer/callback/web base URL。
+
+阶段 5B 代码与本地签名/回调验收完成。正式开放前仍需拿实际 identity tenant 的 issuer、client、callback 和测试账号完成一次端到端验收；该步骤是外部配置门禁，不应以开发登录替代。

@@ -194,6 +194,14 @@ def test_settings_require_distinct_session_cookie_names(monkeypatch) -> None:
         Settings(_env_file=None)
 
 
+def test_settings_reject_public_cookie_colliding_with_oidc_binding(monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_SESSION_COOKIE_NAME", "admin_session")
+    monkeypatch.setenv("PUBLIC_SESSION_COOKIE_NAME", "admin_session_oidc")
+
+    with pytest.raises(ValidationError, match="cookie names must be different"):
+        Settings(_env_file=None)
+
+
 def test_settings_require_https_cors_origins_in_production(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENVIRONMENT", "production")
     monkeypatch.setenv("CORS_ORIGINS", "http://admin.example")
@@ -207,7 +215,32 @@ def test_settings_accept_safe_production_configuration(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENVIRONMENT", "production")
     monkeypatch.setenv("CORS_ORIGINS", "https://admin.example,https://mobile.example")
     monkeypatch.setenv("PUBLIC_CORS_ORIGINS", "https://mobile.example")
+    monkeypatch.setenv("ADMIN_OIDC_ENABLED", "true")
+    monkeypatch.setenv("ADMIN_OIDC_ISSUER_URL", "https://identity.example")
+    monkeypatch.setenv("ADMIN_OIDC_CLIENT_ID", "admin-web")
+    monkeypatch.setenv("ADMIN_OIDC_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv(
+        "ADMIN_OIDC_REDIRECT_URI",
+        "https://api.example/api/v1/admin/oidc/callback",
+    )
+    monkeypatch.setenv("ADMIN_OIDC_WEB_BASE_URL", "https://admin.example")
 
     settings = Settings(_env_file=None)
 
     assert settings.app_environment == "production"
+
+
+def test_settings_require_oidc_in_production(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENVIRONMENT", "production")
+    monkeypatch.setenv("CORS_ORIGINS", "https://admin.example")
+    monkeypatch.setenv("PUBLIC_CORS_ORIGINS", "https://mobile.example")
+
+    with pytest.raises(ValidationError, match="ADMIN_OIDC_ENABLED"):
+        Settings(_env_file=None)
+
+
+def test_settings_require_complete_oidc_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_OIDC_ENABLED", "true")
+
+    with pytest.raises(ValidationError, match="ADMIN_OIDC_ISSUER_URL"):
+        Settings(_env_file=None)

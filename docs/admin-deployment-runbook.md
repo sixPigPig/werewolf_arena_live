@@ -4,7 +4,7 @@
 
 ## 发布前置条件
 
-1. 正式 Admin 身份提供商已接入并完成角色映射；在此之前不要开放 production Admin 入口。
+1. OIDC 提供商已注册 confidential client，允许 Authorization Code、PKCE S256，并精确登记 callback；在真实账号验收完成前不要开放 production Admin 入口。
 2. PostgreSQL 已创建独立数据库和最小权限账号，数据库与对象备份已验证可恢复。
 3. API、Admin 和 Mobile 使用 HTTPS 同源或明确的 HTTPS allowlist；反向代理保留 Cookie、Origin 和 WebSocket/SSE 语义。
 4. `apps/web/public/judge-voice` 至少保留两个发布周期，作为数据库语音资产的回滚输入。
@@ -19,10 +19,31 @@ PUBLIC_CORS_ORIGINS=https://m.example.com
 ADMIN_DEV_AUTH_ENABLED=false
 ADMIN_SESSION_COOKIE_SECURE=true
 PUBLIC_SESSION_COOKIE_SECURE=true
+ADMIN_OIDC_ENABLED=true
+ADMIN_OIDC_ISSUER_URL=https://identity.example.com/realms/werewolf
+ADMIN_OIDC_CLIENT_ID=werewolf-admin
+ADMIN_OIDC_CLIENT_SECRET=<secret-manager-reference>
+ADMIN_OIDC_REDIRECT_URI=https://api.example.com/api/v1/admin/oidc/callback
+ADMIN_OIDC_WEB_BASE_URL=https://admin.example.com
+ADMIN_OIDC_CLIENT_AUTH_METHOD=client_secret_basic
 JUDGE_VOICE_WORKER_POLL_SECONDS=2
 ```
 
 不要把密钥写入仓库、镜像或前端 `VITE_*` 变量。正式 TTS 密钥只注入 API 与 worker 运行环境。
+
+提供商必须在 ID Token 中返回 `iss`、`sub`、`aud`、`iat`、`exp`、`nonce`、`email` 和布尔值 `email_verified=true`。API 只接受 RS/ES 非对称签名算法，并在未知 `kid` 时刷新 JWKS。后台角色完全来自本地预配置，不读取 OIDC group/role claim。
+
+每个后台人员首次登录前执行：
+
+```bash
+cd apps/api
+.venv/bin/python -m app.cli provision-admin-user \
+  --email operator@example.com \
+  --display-name "Operations User" \
+  --role operator
+```
+
+邮箱必须与提供商验证后的 claim 一致。首次成功登录会绑定 issuer/sub；更换身份租户或 subject 时不得直接复用旧绑定，应先进行独立身份迁移评审。
 
 ## 发布门禁
 
@@ -79,8 +100,8 @@ Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-we
 
 发布后检查：
 
-1. 未登录访问 Admin 受保护路由会跳转登录或拒绝访问，不出现 fixture 数据。
-2. 使用正式低权限账号登录，导航和深链权限一致。
+1. 未登录访问 Admin 受保护路由会跳转登录，不出现 fixture 数据，并显示“使用企业账号登录”。
+2. 使用已预配置的正式低权限账号完成提供商跳转、callback 和 `/admin/me`，导航和深链权限一致；未预配置账号必须被拒绝。
 3. 玩家列表、对局记录、运行监控和语音资产均读取真实 API。
 4. 使用有权限账号排队一个“生成缺失”任务，确认 worker 日志出现 job ID、页面进入终态且审计只有一次。
 5. Mobile 大厅、玩家图鉴、收藏、开局和观战走 `mobile-web`；不要把旧 Web 暴露为新 C 端入口。

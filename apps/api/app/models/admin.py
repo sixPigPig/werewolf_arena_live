@@ -28,6 +28,22 @@ class AdminSession(Base):
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
+class AdminOidcLoginAttempt(Base):
+    __tablename__ = "admin_oidc_login_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    state_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    browser_nonce_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    oidc_nonce_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_verifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    return_to: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     __table_args__ = (

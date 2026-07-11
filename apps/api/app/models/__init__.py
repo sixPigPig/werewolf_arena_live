@@ -1,4 +1,4 @@
-from app.models.admin import AdminSession, AuditEvent
+from app.models.admin import AdminOidcLoginAttempt, AdminSession, AuditEvent
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord, JudgeVoiceGenerationJob
 from app.models.live import (
@@ -14,6 +14,7 @@ from app.models.virtual_player_profile import VirtualPlayerProfile
 
 __all__ = [
     "AdminSession",
+    "AdminOidcLoginAttempt",
     "AuditEvent",
     "GameReplayPayload",
     "GameSessionRecord",

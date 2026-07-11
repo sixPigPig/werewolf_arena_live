@@ -1,6 +1,7 @@
 import {
   createAdminDevSession,
   deleteAdminSession,
+  getAdminLoginOptions,
   parseAdminSession,
 } from "@/features/auth/auth-api";
 
@@ -62,5 +63,25 @@ describe("admin auth API contract", () => {
     expect(new Headers(options.headers).get("X-CSRF-Token")).toBe(
       "csrf-from-session",
     );
+  });
+
+  it("parses provider-neutral OIDC login options", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            oidc_enabled: true,
+            oidc_start_path: "/api/v1/admin/oidc/start",
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(getAdminLoginOptions()).resolves.toEqual({
+      oidc_enabled: true,
+      oidc_start_path: "/api/v1/admin/oidc/start",
+    });
   });
 });

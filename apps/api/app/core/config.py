@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     admin_session_cookie_name: str = "werewolf_admin_session"
     admin_session_cookie_secure: bool = True
     admin_session_ttl_seconds: int = Field(default=8 * 60 * 60, ge=300, le=7 * 24 * 60 * 60)
+    admin_oidc_enabled: bool = False
+    admin_oidc_issuer_url: str = ""
+    admin_oidc_client_id: str = ""
+    admin_oidc_client_secret: str = ""
+    admin_oidc_redirect_uri: str = "http://127.0.0.1:8000/api/v1/admin/oidc/callback"
+    admin_oidc_web_base_url: str = "http://127.0.0.1:5175"
+    admin_oidc_client_auth_method: Literal["client_secret_basic", "client_secret_post"] = (
+        "client_secret_basic"
+    )
+    admin_oidc_login_ttl_seconds: int = Field(default=600, ge=120, le=1800)
     public_session_cookie_name: str = "werewolf_public_session"
     public_session_cookie_secure: bool = True
     public_session_ttl_seconds: int = Field(
@@ -79,7 +89,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_admin_production_safety(self) -> "Settings":
-        if self.admin_session_cookie_name == self.public_session_cookie_name:
+        auth_cookie_names = {
+            self.admin_session_cookie_name,
+            f"{self.admin_session_cookie_name}_csrf",
+            f"{self.admin_session_cookie_name}_oidc",
+            self.public_session_cookie_name,
+            f"{self.public_session_cookie_name}_csrf",
+        }
+        if len(auth_cookie_names) != 5:
             raise ValueError("admin and public session cookie names must be different")
         if self.app_environment == "production" and self.admin_dev_auth_enabled:
             raise ValueError("ADMIN_DEV_AUTH_ENABLED cannot be enabled in production")
@@ -120,6 +137,28 @@ class Settings(BaseSettings):
             not origin.startswith("https://") for origin in self.public_cors_origins
         ):
             raise ValueError("PUBLIC_CORS_ORIGINS must use HTTPS in production")
+        if self.app_environment == "production" and not self.admin_oidc_enabled:
+            raise ValueError("ADMIN_OIDC_ENABLED must be enabled in production")
+        if self.admin_oidc_enabled:
+            required_values = {
+                "ADMIN_OIDC_ISSUER_URL": self.admin_oidc_issuer_url,
+                "ADMIN_OIDC_CLIENT_ID": self.admin_oidc_client_id,
+                "ADMIN_OIDC_CLIENT_SECRET": self.admin_oidc_client_secret,
+                "ADMIN_OIDC_REDIRECT_URI": self.admin_oidc_redirect_uri,
+                "ADMIN_OIDC_WEB_BASE_URL": self.admin_oidc_web_base_url,
+            }
+            missing = [name for name, value in required_values.items() if not value.strip()]
+            if missing:
+                raise ValueError(f"{', '.join(missing)} required when OIDC is enabled")
+        if self.app_environment == "production" and self.admin_oidc_enabled:
+            oidc_urls = {
+                "ADMIN_OIDC_ISSUER_URL": self.admin_oidc_issuer_url,
+                "ADMIN_OIDC_REDIRECT_URI": self.admin_oidc_redirect_uri,
+                "ADMIN_OIDC_WEB_BASE_URL": self.admin_oidc_web_base_url,
+            }
+            insecure = [name for name, value in oidc_urls.items() if not value.startswith("https://")]
+            if insecure:
+                raise ValueError(f"{', '.join(insecure)} must use HTTPS in production")
         if self.admin_dev_auth_enabled and not self.admin_dev_auth_email.strip():
             raise ValueError("ADMIN_DEV_AUTH_EMAIL is required when development auth is enabled")
         if self.admin_dev_auth_enabled and not self.admin_dev_auth_display_name.strip():
