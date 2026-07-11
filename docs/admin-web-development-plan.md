@@ -599,3 +599,11 @@ draft -> published -> archived
 - 本机基线中桌面运营总览首次可用为 514ms，阈值固定为 5 秒；该阈值用于防止明显回归，不等同于生产 SLO。
 
 阶段 7B 已完成。剩余的真实 OIDC、目标数据库/Worker、集群 Ingress、证书和回滚验收需要在获授权的 staging/production 环境执行。
+
+### 阶段 8A：生产拓扑发布预演
+
+- 部署预演发现 Kubernetes 清单原先遗漏持久法官语音 Worker；这会使 `voice.generate_missing` 和 `voice.regenerate_all` 创建的任务永久停留在 queued；
+- 已补充单副本 `werewolf-judge-voice-worker` Deployment，复用受限 API 运行身份、ConfigMap/Secret、资源限制和 90 秒优雅终止窗口；
+- 语音 Worker 现持久写入独立数据库心跳，Compose 与 Kubernetes 使用 `check-judge-voice-worker` 探针；这修复了复用 API 镜像默认 HTTP healthcheck、Worker 未监听 API 端口而持续误报 unhealthy 的问题；
+- 发布脚本现在会断言渲染清单包含该 Worker，并在迁移/API/Reaper 后等待它滚动就绪；CI 对 staging/production 渲染清单同样断言；
+- 本机生产 Admin runtime 冒烟、真实 OIDC、目标数据库、TLS、Ingress、外部 Secret、GHCR 拉取授权和回滚演练仍需在获授权目标环境完成。

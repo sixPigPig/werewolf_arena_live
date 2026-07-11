@@ -14,6 +14,7 @@ from app.werewolf.orphan_reaper import OrphanRecoveryResult
 
 logger = logging.getLogger(__name__)
 REAPER_WORKER_TYPE = "live_run_reaper"
+JUDGE_VOICE_WORKER_TYPE = "judge_voice_generation"
 
 
 class RuntimeWorkerTelemetry:
@@ -23,10 +24,12 @@ class RuntimeWorkerTelemetry:
         *,
         worker_id: str,
         heartbeat_seconds: float,
+        worker_type: str = REAPER_WORKER_TYPE,
     ) -> None:
         self.session_factory = session_factory
         self.worker_id = worker_id
         self.heartbeat_seconds = heartbeat_seconds
+        self.worker_type = worker_type
         self._stop_event = Event()
         self._thread: Thread | None = None
 
@@ -37,7 +40,7 @@ class RuntimeWorkerTelemetry:
             if record is None:
                 record = RuntimeWorkerRecord(
                     worker_id=self.worker_id,
-                    worker_type=REAPER_WORKER_TYPE,
+                    worker_type=self.worker_type,
                     status="running",
                     started_at=now,
                     heartbeat_at=now,
@@ -52,7 +55,7 @@ class RuntimeWorkerTelemetry:
         self._thread = Thread(
             target=self._heartbeat_loop,
             daemon=True,
-            name=f"reaper-heartbeat-{self.worker_id}",
+            name=f"runtime-worker-heartbeat-{self.worker_id}",
         )
         self._thread.start()
 
@@ -93,14 +96,14 @@ class RuntimeWorkerTelemetry:
                 )
                 db.commit()
         except Exception:
-            logger.exception("Failed to persist reaper worker shutdown")
+            logger.exception("Failed to persist runtime worker shutdown")
 
     def _heartbeat_loop(self) -> None:
         while not self._stop_event.wait(self.heartbeat_seconds):
             try:
                 self._update()
             except Exception:
-                logger.exception("Failed to persist reaper worker heartbeat")
+                logger.exception("Failed to persist runtime worker heartbeat")
 
     def _update(self, **values: object) -> None:
         values["heartbeat_at"] = datetime.now(tz=UTC)
@@ -122,13 +125,26 @@ def live_run_reaper_is_alive(
     *,
     max_age_seconds: float,
 ) -> bool:
+    return runtime_worker_is_alive(
+        db,
+        worker_type=REAPER_WORKER_TYPE,
+        max_age_seconds=max_age_seconds,
+    )
+
+
+def runtime_worker_is_alive(
+    db: Session,
+    *,
+    worker_type: str,
+    max_age_seconds: float,
+) -> bool:
     cutoff = datetime.now(tz=UTC) - timedelta(seconds=max_age_seconds)
     return bool(
         db.scalar(
             select(func.count())
             .select_from(RuntimeWorkerRecord)
             .where(
-                RuntimeWorkerRecord.worker_type == REAPER_WORKER_TYPE,
+                RuntimeWorkerRecord.worker_type == worker_type,
                 RuntimeWorkerRecord.status.in_(("running", "degraded")),
                 RuntimeWorkerRecord.heartbeat_at >= cutoff,
             )

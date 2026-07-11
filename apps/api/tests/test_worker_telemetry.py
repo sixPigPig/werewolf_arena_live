@@ -11,9 +11,11 @@ from app.models.live import LiveRunRecord
 from app.models.runtime_worker import RuntimeWorkerRecord
 from app.werewolf.orphan_reaper import OrphanRecoveryResult
 from app.werewolf.worker_telemetry import (
+    JUDGE_VOICE_WORKER_TYPE,
     RuntimeWorkerTelemetry,
     live_run_reaper_is_alive,
     render_live_run_metrics,
+    runtime_worker_is_alive,
 )
 
 
@@ -141,6 +143,34 @@ def test_probe_rejects_an_expired_heartbeat() -> None:
         )
         db.commit()
         assert live_run_reaper_is_alive(db, max_age_seconds=45) is False
+
+
+def test_runtime_worker_probe_is_scoped_to_the_requested_worker_type() -> None:
+    session_factory = _session_factory()
+    telemetry = RuntimeWorkerTelemetry(
+        session_factory,
+        worker_id="worker-voice-test",
+        worker_type=JUDGE_VOICE_WORKER_TYPE,
+        heartbeat_seconds=60,
+    )
+
+    telemetry.start()
+    try:
+        with session_factory() as db:
+            record = db.get(RuntimeWorkerRecord, "worker-voice-test")
+            assert record is not None
+            assert record.worker_type == JUDGE_VOICE_WORKER_TYPE
+            assert (
+                runtime_worker_is_alive(
+                    db,
+                    worker_type=JUDGE_VOICE_WORKER_TYPE,
+                    max_age_seconds=45,
+                )
+                is True
+            )
+            assert live_run_reaper_is_alive(db, max_age_seconds=45) is False
+    finally:
+        telemetry.stop()
 
 
 def _stale_run(

@@ -21,7 +21,7 @@ const PREVIEW_SETTINGS: AdminSettings = {
   tts_enabled: false,
   authentication: { oidc_enabled: false, development_login_enabled: false, secure_admin_cookie: false, secure_public_cookie: false, admin_session_ttl_seconds: 28800, public_session_ttl_seconds: 2592000 },
   compatibility: { legacy_content_writes_enabled: false, legacy_favorite_writes_enabled: false, legacy_voice_generation_enabled: false },
-  workers: { judge_voice_poll_seconds: 2, reaper_poll_seconds: 5, reaper_stale_grace_seconds: 30, reaper_max_attempts: 3, reaper_probe_max_age_seconds: 45 },
+  workers: { judge_voice_poll_seconds: 2, judge_voice_heartbeat_seconds: 10, judge_voice_probe_max_age_seconds: 45, reaper_poll_seconds: 5, reaper_stale_grace_seconds: 30, reaper_max_attempts: 3, reaper_probe_max_age_seconds: 45 },
   live_runs: { lease_seconds: 15, heartbeat_seconds: 3, event_poll_seconds: 0.25 },
 };
 

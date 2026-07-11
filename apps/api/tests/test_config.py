@@ -73,6 +73,8 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.ark_tts_judge_asset_audio_format == "mp3"
     assert settings.ark_tts_judge_asset_sample_rate == 24000
     assert settings.judge_voice_worker_poll_seconds == 2.0
+    assert settings.judge_voice_worker_heartbeat_seconds == 10.0
+    assert settings.judge_voice_worker_probe_max_age_seconds == 45.0
     assert settings.live_run_lease_seconds == 15.0
     assert settings.live_run_heartbeat_seconds == 3.0
     assert settings.live_run_event_poll_seconds == 0.25
@@ -101,6 +103,16 @@ def test_settings_rejects_reaper_heartbeat_not_shorter_than_probe_window(
     monkeypatch.setenv("LIVE_RUN_REAPER_PROBE_MAX_AGE_SECONDS", "45")
 
     with pytest.raises(ValidationError, match="REAPER_HEARTBEAT_SECONDS"):
+        Settings(_env_file=None)
+
+
+def test_settings_rejects_voice_worker_heartbeat_not_shorter_than_probe_window(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUDGE_VOICE_WORKER_HEARTBEAT_SECONDS", "45")
+    monkeypatch.setenv("JUDGE_VOICE_WORKER_PROBE_MAX_AGE_SECONDS", "45")
+
+    with pytest.raises(ValidationError, match="JUDGE_VOICE_WORKER_HEARTBEAT_SECONDS"):
         Settings(_env_file=None)
 
 

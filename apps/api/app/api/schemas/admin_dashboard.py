@@ -96,6 +96,8 @@ class AdminSettingsCompatibility(BaseModel):
 
 class AdminSettingsWorkers(BaseModel):
     judge_voice_poll_seconds: float = Field(gt=0)
+    judge_voice_heartbeat_seconds: float = Field(gt=0)
+    judge_voice_probe_max_age_seconds: float = Field(gt=0)
     reaper_poll_seconds: float = Field(gt=0)
     reaper_stale_grace_seconds: float = Field(ge=0)
     reaper_max_attempts: int = Field(ge=1)

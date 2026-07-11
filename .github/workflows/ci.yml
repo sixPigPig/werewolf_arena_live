@@ -130,6 +130,10 @@ jobs:
       - run: scripts/deploy-kubernetes.sh production sha-0000000000000000000000000000000000000000 --render-dir /tmp/werewolf-production
       - run: test -s /tmp/werewolf-staging/migration.yaml && test -s /tmp/werewolf-staging/application.yaml
       - run: test -s /tmp/werewolf-production/migration.yaml && test -s /tmp/werewolf-production/application.yaml
+      - run: grep -q 'name: werewolf-judge-voice-worker' /tmp/werewolf-staging/application.yaml
+      - run: grep -q 'name: werewolf-judge-voice-worker' /tmp/werewolf-production/application.yaml
+      - run: grep -q 'check-judge-voice-worker' /tmp/werewolf-staging/application.yaml
+      - run: grep -q 'check-judge-voice-worker' /tmp/werewolf-production/application.yaml
 
   container-images:
     needs:

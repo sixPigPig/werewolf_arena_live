@@ -223,6 +223,10 @@ def get_admin_settings(
         ),
         workers=AdminSettingsWorkers(
             judge_voice_poll_seconds=settings.judge_voice_worker_poll_seconds,
+            judge_voice_heartbeat_seconds=settings.judge_voice_worker_heartbeat_seconds,
+            judge_voice_probe_max_age_seconds=(
+                settings.judge_voice_worker_probe_max_age_seconds
+            ),
             reaper_poll_seconds=settings.live_run_reaper_poll_seconds,
             reaper_stale_grace_seconds=settings.live_run_reaper_stale_grace_seconds,
             reaper_max_attempts=settings.live_run_reaper_max_attempts,

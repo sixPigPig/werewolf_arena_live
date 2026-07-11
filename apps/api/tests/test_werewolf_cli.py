@@ -171,6 +171,19 @@ def test_serve_command_starts_uvicorn(monkeypatch) -> None:
 def test_voice_worker_once_reports_claimed_job(capsys, monkeypatch) -> None:
     calls = {}
 
+    class FakeTelemetry:
+        def __init__(self) -> None:
+            self.started = False
+            self.stopped = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    telemetry = FakeTelemetry()
+
     def fake_worker(session_factory, **kwargs) -> int:
         calls["session_factory"] = session_factory
         calls.update(kwargs)
@@ -178,6 +191,11 @@ def test_voice_worker_once_reports_claimed_job(capsys, monkeypatch) -> None:
         return 1
 
     monkeypatch.setattr(cli, "run_voice_generation_worker", fake_worker)
+    monkeypatch.setattr(
+        cli,
+        "RuntimeWorkerTelemetry",
+        lambda *_args, **_kwargs: telemetry,
+    )
 
     exit_code = main(["run-judge-voice-worker", "--once"])
 
@@ -185,6 +203,8 @@ def test_voice_worker_once_reports_claimed_job(capsys, monkeypatch) -> None:
     assert capsys.readouterr().out.strip() == "job_id=voice-job-1"
     assert calls["once"] is True
     assert calls["poll_seconds"] == 2.0
+    assert telemetry.started is True
+    assert telemetry.stopped is True
 
 
 def test_voice_worker_rejects_unsafe_poll_interval(capsys) -> None:
@@ -192,6 +212,20 @@ def test_voice_worker_rejects_unsafe_poll_interval(capsys) -> None:
 
     assert exit_code == 2
     assert "between 0.25 and 60" in capsys.readouterr().err
+
+
+def test_voice_worker_probe_reports_fresh_and_stale(capsys, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "SessionLocal", lambda: nullcontext(object()))
+    monkeypatch.setattr(cli, "runtime_worker_is_alive", lambda *_args, **_kwargs: True)
+
+    healthy = main(["check-judge-voice-worker"])
+    assert healthy == 0
+    assert capsys.readouterr().out.strip() == "judge_voice_worker=ok"
+
+    monkeypatch.setattr(cli, "runtime_worker_is_alive", lambda *_args, **_kwargs: False)
+    stale = main(["check-judge-voice-worker"])
+    assert stale == 1
+    assert capsys.readouterr().out.strip() == "judge_voice_worker=stale"
 
 
 def test_live_run_reaper_once_reports_recovery(capsys, monkeypatch) -> None:
@@ -240,9 +274,7 @@ def test_live_run_reaper_once_reports_recovery(capsys, monkeypatch) -> None:
     exit_code = main(["run-live-run-reaper", "--once"])
 
     assert exit_code == 0
-    assert capsys.readouterr().out.strip() == (
-        "run_id=run_123456789abc outcome=resumed attempt=2"
-    )
+    assert capsys.readouterr().out.strip() == ("run_id=run_123456789abc outcome=resumed attempt=2")
     assert calls["once"] is True
     assert calls["poll_seconds"] == 5.0
     assert calls["stale_grace_seconds"] == 30.0

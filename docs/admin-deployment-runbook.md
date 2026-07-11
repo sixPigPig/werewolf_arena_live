@@ -27,6 +27,8 @@ ADMIN_OIDC_REDIRECT_URI=https://admin.example.com/api/v1/admin/oidc/callback
 ADMIN_OIDC_WEB_BASE_URL=https://admin.example.com
 ADMIN_OIDC_CLIENT_AUTH_METHOD=client_secret_basic
 JUDGE_VOICE_WORKER_POLL_SECONDS=2
+JUDGE_VOICE_WORKER_HEARTBEAT_SECONDS=10
+JUDGE_VOICE_WORKER_PROBE_MAX_AGE_SECONDS=45
 LIVE_RUN_REAPER_POLL_SECONDS=5
 LIVE_RUN_REAPER_STALE_GRACE_SECONDS=30
 LIVE_RUN_REAPER_BACKOFF_SECONDS=30
@@ -108,7 +110,7 @@ Prometheus 位于 `http://127.0.0.1:19090`（可通过 `PROMETHEUS_PORT` 修改�
 
 ### Kubernetes 发布顺序
 
-`deploy/kubernetes/base` 包含 API、单副本 reaper、Admin、Service、生产配置与探针。`overlays/staging` 使用单副本，`overlays/production` 使用三副本并增加 PodDisruptionBudget；两个 overlay 都固定 GHCR 镜像 SHA，并提供 HTTPS Ingress。
+`deploy/kubernetes/base` 包含 API、单副本 reaper、单副本持久语音 Worker、Admin、Service、生产配置与探针。语音 Worker 复用 API 镜像，以 `run-judge-voice-worker` 持续领取任务；它不暴露网络端口，通过数据库心跳和 `check-judge-voice-worker` 健康探针确认实际可用，重启策略由 Deployment 管理。`overlays/staging` 使用单副本，`overlays/production` 使用三副本 API/Admin 并增加 PodDisruptionBudget；两个 overlay 都固定 GHCR 镜像 SHA，并提供 HTTPS Ingress。
 
 首次部署前必须完成：
 
@@ -170,7 +172,7 @@ cd apps/api
 
 systemd 模板见 `deploy/systemd/werewolf-live-run-reaper.service.example`。部署时把路径、用户和 `EnvironmentFile` 替换为实际值；进程收到 SIGTERM 后停止领取新 orphan，并等待当前恢复边界退出。
 
-发布停止时先从负载均衡摘除 API，再发送 SIGTERM；worker 收到 SIGTERM 后不会领取新任务，并在当前任务返回后退出。进程管理器应使用有限退避重启，避免数据库故障时形成快速重启循环。
+发布停止时先从负载均衡摘除 API，再发送 SIGTERM；语音 Worker 和 reaper 收到 SIGTERM 后不会领取新任务，并在当前任务/恢复边界返回后退出。Kubernetes 的语音 Worker 使用单副本 Recreate 与 90 秒优雅终止窗口，避免滚动更新期间重复消费。进程管理器应使用有限退避重启，避免数据库故障时形成快速重启循环。
 
 Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-web/dist`。Web 服务器必须把未知页面路由回退到 `index.html`，把 `/api` 反向代理至 API，并禁止缓存 Admin HTML；带哈希的静态资源可长期缓存。
 
@@ -179,10 +181,11 @@ Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-we
 - 存活探针：`GET /api/v1/health/live`，期望 200 `{"status":"ok"}`。
 - 就绪探针：`GET /api/v1/health/ready`，只在数据库可连接且位于 Alembic head 时返回 200；其他情况返回 503。
 - Reaper 存活探针：`python -m app.cli check-live-run-reaper`，数据库中存在新鲜心跳时退出 0，否则退出 1；数据库/参数错误退出 2。
+- 语音 Worker 存活探针：`python -m app.cli check-judge-voice-worker`，数据库中存在新鲜心跳时退出 0，否则退出 1；数据库/参数错误退出 2。
 - Prometheus：抓取 `GET /api/v1/metrics`。该端点只有聚合计数，不含运行、会话或 Worker ID，但仍应仅在内部监控网络开放。
 - 旧 `/api/v1/health` 只为兼容保留，不能用于接流量判断。
 
-Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告警规则见 `deploy/prometheus/live-run-alerts.yml`，覆盖 reaper 无心跳、stale orphan 积压、自动恢复耗尽和扫描错误。Kubernetes API Pod 已带标准 `prometheus.io` 注解；集群 Prometheus 必须启用对应的 Pod discovery，或在平台侧建立等价的 PodMonitor/ServiceMonitor。发布后先运行 `python -m app.cli run-live-run-reaper --once`，再启动持续进程；持续进程启动后 `check-live-run-reaper` 必须返回 `reaper=ok`。
+Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告警规则见 `deploy/prometheus/live-run-alerts.yml`，覆盖 reaper 无心跳、stale orphan 积压、自动恢复耗尽和扫描错误。Kubernetes API Pod 已带标准 `prometheus.io` 注解；集群 Prometheus 必须启用对应的 Pod discovery，或在平台侧建立等价的 PodMonitor/ServiceMonitor。发布后先运行 `python -m app.cli run-live-run-reaper --once`，再启动持续进程；持续进程启动后 `check-live-run-reaper` 必须返回 `reaper=ok`，语音 Worker 启动后 `check-judge-voice-worker` 必须返回 `judge_voice_worker=ok`。
 
 `scripts/smoke-admin-deployment.sh` 自动检查 Admin 健康、API live/ready、数据库迁移、未登录权限边界、metrics 外部阻断和 SPA 深链。它不代替真实 OIDC 账号验收；OIDC 登录、角色绑定和高风险后台操作仍按下方清单人工验收。
 

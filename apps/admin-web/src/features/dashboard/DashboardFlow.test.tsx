@@ -65,6 +65,8 @@ const settings = {
   },
   workers: {
     judge_voice_poll_seconds: 2,
+    judge_voice_heartbeat_seconds: 10,
+    judge_voice_probe_max_age_seconds: 45,
     reaper_poll_seconds: 5,
     reaper_stale_grace_seconds: 30,
     reaper_max_attempts: 3,

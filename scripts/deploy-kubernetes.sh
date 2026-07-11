@@ -82,6 +82,11 @@ kubectl create configmap werewolf-api-config \
 render_manifest "$migration_dir" "$output_dir/migration.yaml"
 render_manifest "$overlay_dir" "$output_dir/application.yaml"
 
+if ! grep -q 'name: werewolf-judge-voice-worker' "$output_dir/application.yaml"; then
+  echo "rendered manifest is missing the persistent judge voice worker" >&2
+  exit 1
+fi
+
 if [[ -n "$render_dir" ]]; then
   echo "rendered deployment manifests: ${output_dir}"
   exit 0
@@ -110,6 +115,8 @@ kubectl apply --server-side --field-manager=werewolf-release \
 kubectl rollout status deployment/werewolf-api --namespace "$namespace" \
   --timeout="${ROLLOUT_TIMEOUT:-5m}"
 kubectl rollout status deployment/werewolf-live-run-reaper --namespace "$namespace" \
+  --timeout="${ROLLOUT_TIMEOUT:-5m}"
+kubectl rollout status deployment/werewolf-judge-voice-worker --namespace "$namespace" \
   --timeout="${ROLLOUT_TIMEOUT:-5m}"
 kubectl rollout status deployment/werewolf-admin-web --namespace "$namespace" \
   --timeout="${ROLLOUT_TIMEOUT:-5m}"

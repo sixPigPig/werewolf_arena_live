@@ -84,6 +84,8 @@ export type AdminSettings = {
   };
   workers: {
     judge_voice_poll_seconds: number;
+    judge_voice_heartbeat_seconds: number;
+    judge_voice_probe_max_age_seconds: number;
     reaper_poll_seconds: number;
     reaper_stale_grace_seconds: number;
     reaper_max_attempts: number;

@@ -67,6 +67,8 @@ export function parseAdminSettings(value: unknown): AdminSettings {
     },
     workers: {
       judge_voice_poll_seconds: nonNegativeNumber(workers.judge_voice_poll_seconds, "judge_voice_poll_seconds"),
+      judge_voice_heartbeat_seconds: nonNegativeNumber(workers.judge_voice_heartbeat_seconds, "judge_voice_heartbeat_seconds"),
+      judge_voice_probe_max_age_seconds: nonNegativeNumber(workers.judge_voice_probe_max_age_seconds, "judge_voice_probe_max_age_seconds"),
       reaper_poll_seconds: nonNegativeNumber(workers.reaper_poll_seconds, "reaper_poll_seconds"),
       reaper_stale_grace_seconds: nonNegativeNumber(workers.reaper_stale_grace_seconds, "reaper_stale_grace_seconds"),
       reaper_max_attempts: positiveInteger(workers.reaper_max_attempts, "reaper_max_attempts"),

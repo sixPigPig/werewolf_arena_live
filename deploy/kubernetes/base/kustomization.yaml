@@ -4,6 +4,7 @@ namespace: werewolf
 resources:
   - api-deployment.yaml
   - reaper-deployment.yaml
+  - judge-voice-worker-deployment.yaml
   - admin-deployment.yaml
   - services.yaml
 configMapGenerator:

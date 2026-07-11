@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from threading import Event
 from typing import Sequence
+from uuid import uuid4
 
 import uvicorn
 from sqlalchemy import func, select
@@ -33,8 +34,10 @@ from app.werewolf.orphan_reaper import OrphanRecoveryResult, run_live_run_reaper
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.runner import GameRunError, run_game
 from app.werewolf.worker_telemetry import (
+    JUDGE_VOICE_WORKER_TYPE,
     RuntimeWorkerTelemetry,
     live_run_reaper_is_alive,
+    runtime_worker_is_alive,
 )
 
 
@@ -107,6 +110,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Seconds to wait before polling an empty queue.",
     )
     voice_worker_parser.set_defaults(func=_run_judge_voice_worker_command)
+
+    voice_worker_probe_parser = subparsers.add_parser(
+        "check-judge-voice-worker",
+        help="Exit successfully when a judge voice worker database heartbeat is fresh.",
+    )
+    voice_worker_probe_parser.add_argument(
+        "--max-age-seconds",
+        type=float,
+        default=settings.judge_voice_worker_probe_max_age_seconds,
+    )
+    voice_worker_probe_parser.set_defaults(func=_check_judge_voice_worker_command)
 
     live_reaper_parser = subparsers.add_parser(
         "run-live-run-reaper",
@@ -299,6 +313,12 @@ def _run_judge_voice_worker_command(args: argparse.Namespace) -> int:
         return 2
 
     stop_event = Event()
+    telemetry = RuntimeWorkerTelemetry(
+        SessionLocal,
+        worker_id=f"judge-voice-worker-{uuid4().hex}",
+        worker_type=JUDGE_VOICE_WORKER_TYPE,
+        heartbeat_seconds=settings.judge_voice_worker_heartbeat_seconds,
+    )
 
     def request_stop(_signum: int, _frame: object) -> None:
         stop_event.set()
@@ -307,7 +327,10 @@ def _run_judge_voice_worker_command(args: argparse.Namespace) -> int:
         signal_number: signal.signal(signal_number, request_stop)
         for signal_number in (signal.SIGINT, signal.SIGTERM)
     }
+    telemetry_started = False
     try:
+        telemetry.start()
+        telemetry_started = True
         processed_count = run_voice_generation_worker(
             SessionLocal,
             stop_event=stop_event,
@@ -315,13 +338,36 @@ def _run_judge_voice_worker_command(args: argparse.Namespace) -> int:
             once=args.once,
             on_job=lambda job_id: print(f"job_id={job_id}", flush=True),
         )
+    except Exception as exc:
+        print(f"judge voice worker failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
     finally:
+        if telemetry_started:
+            telemetry.stop()
         for signal_number, handler in previous_handlers.items():
             signal.signal(signal_number, handler)
 
     if args.once and processed_count == 0:
         print("job_id=none")
     return 0
+
+
+def _check_judge_voice_worker_command(args: argparse.Namespace) -> int:
+    if not 5 <= args.max_age_seconds <= 300:
+        print("--max-age-seconds must be between 5 and 300", file=sys.stderr)
+        return 2
+    try:
+        with SessionLocal() as db:
+            alive = runtime_worker_is_alive(
+                db,
+                worker_type=JUDGE_VOICE_WORKER_TYPE,
+                max_age_seconds=args.max_age_seconds,
+            )
+    except Exception as exc:
+        print(f"judge_voice_worker=unknown error={type(exc).__name__}", file=sys.stderr)
+        return 2
+    print("judge_voice_worker=ok" if alive else "judge_voice_worker=stale")
+    return 0 if alive else 1
 
 
 def _run_live_run_reaper_command(args: argparse.Namespace) -> int:
