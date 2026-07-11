@@ -1,0 +1,51 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: Immutable GHCR tag, for example sha-<40-character commit SHA>
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.ADMIN_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: azure/setup-kubectl@v5
+        with:
+          version: ${{ vars.KUBECTL_VERSION || 'v1.34.1' }}
+      - name: Configure Kubernetes credentials
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
+        run: |
+          test -n "$KUBE_CONFIG_B64"
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$KUBE_CONFIG_B64" | base64 --decode > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+      - name: Deploy migration and application
+        env:
+          ADMIN_BASE_URL: ${{ vars.ADMIN_BASE_URL }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          test -n "$ADMIN_BASE_URL"
+          scripts/deploy-kubernetes.sh "$DEPLOY_ENVIRONMENT" "$IMAGE_TAG"

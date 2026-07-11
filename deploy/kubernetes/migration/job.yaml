@@ -2,7 +2,6 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: werewolf-db-migrate
-  namespace: werewolf
 spec:
   backoffLimit: 3
   ttlSecondsAfterFinished: 86400

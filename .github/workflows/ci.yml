@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
 
 jobs:
   api:
@@ -86,3 +91,105 @@ jobs:
       - run: pnpm --dir apps/mobile-web lint
       - run: pnpm --dir apps/mobile-web test -- --run
       - run: pnpm --dir apps/mobile-web build
+
+  deployment-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: azure/setup-kubectl@v5
+        with:
+          version: v1.34.1
+      - run: bash -n scripts/deploy-kubernetes.sh scripts/smoke-admin-deployment.sh
+      - run: docker compose --profile app --profile voice --profile monitoring config --quiet
+      - run: scripts/deploy-kubernetes.sh staging sha-0000000000000000000000000000000000000000 --render-dir /tmp/werewolf-staging
+      - run: scripts/deploy-kubernetes.sh production sha-0000000000000000000000000000000000000000 --render-dir /tmp/werewolf-production
+      - run: test -s /tmp/werewolf-staging/migration.yaml && test -s /tmp/werewolf-staging/application.yaml
+      - run: test -s /tmp/werewolf-production/migration.yaml && test -s /tmp/werewolf-production/application.yaml
+
+  container-images:
+    needs:
+      - api
+      - web
+      - admin-web
+      - mobile-client
+      - deployment-manifests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: werewolf-api
+            dockerfile: apps/api/Dockerfile
+            target: runtime
+          - image: werewolf-admin-web
+            dockerfile: apps/admin-web/Dockerfile
+            target: runtime
+    steps:
+      - uses: actions/checkout@v6
+      - id: registry
+        name: Resolve lowercase GHCR image name
+        shell: bash
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.registry.outputs.image }}
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-,format=long
+            type=ref,event=tag
+            type=raw,value=main,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: mode=max
+          sbom: true
+
+  deploy-staging:
+    needs:
+      - container-images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AUTO_DEPLOY_STAGING == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ vars.ADMIN_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: azure/setup-kubectl@v5
+        with:
+          version: ${{ vars.KUBECTL_VERSION || 'v1.34.1' }}
+      - name: Configure Kubernetes credentials
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
+        run: |
+          test -n "$KUBE_CONFIG_B64"
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$KUBE_CONFIG_B64" | base64 --decode > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+      - name: Deploy immutable main image to staging
+        env:
+          ADMIN_BASE_URL: ${{ vars.ADMIN_BASE_URL }}
+          IMAGE_TAG: sha-${{ github.sha }}
+        run: |
+          test -n "$ADMIN_BASE_URL"
+          scripts/deploy-kubernetes.sh staging "$IMAGE_TAG"

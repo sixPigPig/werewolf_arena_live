@@ -23,7 +23,7 @@ ADMIN_OIDC_ENABLED=true
 ADMIN_OIDC_ISSUER_URL=https://identity.example.com/realms/werewolf
 ADMIN_OIDC_CLIENT_ID=werewolf-admin
 ADMIN_OIDC_CLIENT_SECRET=<secret-manager-reference>
-ADMIN_OIDC_REDIRECT_URI=https://api.example.com/api/v1/admin/oidc/callback
+ADMIN_OIDC_REDIRECT_URI=https://admin.example.com/api/v1/admin/oidc/callback
 ADMIN_OIDC_WEB_BASE_URL=https://admin.example.com
 ADMIN_OIDC_CLIENT_AUTH_METHOD=client_secret_basic
 JUDGE_VOICE_WORKER_POLL_SECONDS=2
@@ -71,9 +71,9 @@ cd apps/api
 API、迁移任务、语音 worker 和 live-run reaper 共用 `apps/api/Dockerfile`；Admin 使用 `apps/admin-web/Dockerfile` 的 `runtime` 阶段。镜像构建不会写入 `.env`、密钥、日志、虚拟环境或 `node_modules`：
 
 ```bash
-docker build -f apps/api/Dockerfile -t registry.example.com/werewolf/api:<git-sha> .
+docker build -f apps/api/Dockerfile -t ghcr.io/sixpigpig/werewolf-api:<git-sha> .
 docker build -f apps/admin-web/Dockerfile --target runtime \
-  -t registry.example.com/werewolf/admin-web:<git-sha> .
+  -t ghcr.io/sixpigpig/werewolf-admin-web:<git-sha> .
 ```
 
 Admin 正式镜像固定启用认证、关闭 fixture preview 和开发登录；浏览器使用同源 `/api`，Nginx 通过 `API_UPSTREAM` 连接 API。OIDC、数据库和 TTS 密钥只能在运行时注入 API 镜像，不可放入 Admin 构建参数。
@@ -96,27 +96,40 @@ docker compose --profile app --profile voice up --build -d
 
 Prometheus 位于 `http://127.0.0.1:19090`（可通过 `PROMETHEUS_PORT` 修改）。`API_ENV_FILE` 可指向额外的本地环境文件；Compose 中显式的数据库和本地认证设置会覆盖同名值。
 
+### CI 镜像发布
+
+`.github/workflows/ci.yml` 在 API、Admin、Mobile、旧 Web 和部署清单全部通过后构建两个正式镜像。Pull Request 只构建不推送；`main` 和 `v*` tag 会使用 `GITHUB_TOKEN` 推送到 GHCR，并生成 provenance 与 SBOM：
+
+- `ghcr.io/sixpigpig/werewolf-api:sha-<40位提交SHA>`
+- `ghcr.io/sixpigpig/werewolf-admin-web:sha-<40位提交SHA>`
+- `main` 是便于观察的移动标签，`v*` 是发布别名；部署脚本只接受完整提交 SHA 标签，拒绝 `main`、`latest` 和其他可变标签。
+
+若 GHCR package 不公开，集群必须通过 ServiceAccount 或 `imagePullSecrets` 获得只读拉取权限。不要把 GHCR PAT 写入应用 Secret。
+
 ### Kubernetes 发布顺序
 
-`deploy/kubernetes/base` 包含双副本 API、单副本 reaper、双副本 Admin、Service、生产配置与探针。正式环境必须通过 overlay 或发布流水线替换 `werewolf-api:latest`、`werewolf-admin-web:latest`，并把 `api-configmap.yaml` 中的示例域名改成真实 HTTPS 域名。
+`deploy/kubernetes/base` 包含 API、单副本 reaper、Admin、Service、生产配置与探针。`overlays/staging` 使用单副本，`overlays/production` 使用三副本并增加 PodDisruptionBudget；两个 overlay 都固定 GHCR 镜像 SHA，并提供 HTTPS Ingress。
 
-先创建命名空间、非密配置和外部 Secret，再单独执行迁移；迁移成功后才能展开应用：
+首次部署前必须完成：
+
+1. 把对应 overlay 的 `api.env`、`ingress.yaml` 中所有 `example.com` 替换为真实域名；脚本检测到示例域名会拒绝部署。
+2. 创建 Ingress 引用的 TLS Secret，或按集群证书控制器修改 Ingress 注解和 Secret 名。
+3. 通过 External Secrets、Sealed Secrets 或云密钥服务，在目标 Namespace 创建 `werewolf-api-secrets`；字段示例见 `deploy/kubernetes/secret.example.yaml`，不得原样应用。
+4. 确认 Nginx IngressClass 名为 `nginx`，不一致时修改 overlay。
+
+发布脚本先创建 Namespace 和非密 ConfigMap，确认外部 Secret 存在，然后执行并等待迁移；只有迁移成功才更新应用和执行冒烟：
 
 ```bash
-kubectl apply -f deploy/kubernetes/base/namespace.yaml
-kubectl apply -f deploy/kubernetes/base/api-configmap.yaml
-# 使用 External Secrets / Sealed Secrets / 云密钥服务创建 werewolf-api-secrets；
-# deploy/kubernetes/secret.example.yaml 只描述字段，不可原样用于生产。
-kubectl apply -f deploy/kubernetes/migration-job.yaml
-kubectl wait --for=condition=complete job/werewolf-db-migrate \
-  --namespace werewolf --timeout=5m
-kubectl apply -k deploy/kubernetes/base
-kubectl rollout status deployment/werewolf-api -n werewolf
-kubectl rollout status deployment/werewolf-live-run-reaper -n werewolf
-kubectl rollout status deployment/werewolf-admin-web -n werewolf
+scripts/deploy-kubernetes.sh staging sha-<40位提交SHA> \
+  --render-dir /tmp/werewolf-staging
+
+ADMIN_BASE_URL=https://admin.staging.example.com \
+  scripts/deploy-kubernetes.sh staging sha-<40位提交SHA>
 ```
 
-迁移 Job 名称固定；再次发布前先归档日志并删除已完成的旧 Job。入口网关应只把 Admin 域名转发到 `werewolf-admin-web:8080`，它会同源代理 `/api`；Mobile 域名和 API 暴露策略由 C 端部署独立管理。
+GitHub Actions 的 `deploy` workflow 提供相同流程。仓库管理员需要创建 `staging`、`production` Environments：各环境保存 Base64 编码的 `KUBE_CONFIG_B64` Secret 和 `ADMIN_BASE_URL` Variable；如集群需要其他客户端版本，可再设置 `KUBECTL_VERSION`，默认固定为 `v1.34.1`。production 应配置必需审核人和受保护分支。workflow 只接受 `sha-<40位提交SHA>`，不会修改数据库回退版本。若要在 `main` 全部门禁和镜像发布完成后自动部署 staging，再创建仓库级 Variable `AUTO_DEPLOY_STAGING=true`；未显式开启时不会连接任何集群。
+
+迁移 Job 名称固定；脚本会先删除上一份已完成 Job，再创建新 Job并等待。入口网关只把 Admin 域名转发到 `werewolf-admin-web:8080`，它会同源代理业务 `/api`，但明确阻断外部 `/api/v1/metrics`；Prometheus 仍从集群内部 API Service 抓取。Mobile 域名和 API 暴露策略由 C 端部署独立管理。
 
 ## 数据库与资产展开
 
@@ -170,6 +183,8 @@ Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-we
 - 旧 `/api/v1/health` 只为兼容保留，不能用于接流量判断。
 
 Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告警规则见 `deploy/prometheus/live-run-alerts.yml`，覆盖 reaper 无心跳、stale orphan 积压、自动恢复耗尽和扫描错误。Kubernetes API Pod 已带标准 `prometheus.io` 注解；集群 Prometheus 必须启用对应的 Pod discovery，或在平台侧建立等价的 PodMonitor/ServiceMonitor。发布后先运行 `python -m app.cli run-live-run-reaper --once`，再启动持续进程；持续进程启动后 `check-live-run-reaper` 必须返回 `reaper=ok`。
+
+`scripts/smoke-admin-deployment.sh` 自动检查 Admin 健康、API live/ready、数据库迁移、未登录权限边界、metrics 外部阻断和 SPA 深链。它不代替真实 OIDC 账号验收；OIDC 登录、角色绑定和高风险后台操作仍按下方清单人工验收。
 
 发布后检查：
 
