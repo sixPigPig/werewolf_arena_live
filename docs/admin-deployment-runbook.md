@@ -27,6 +27,12 @@ ADMIN_OIDC_REDIRECT_URI=https://api.example.com/api/v1/admin/oidc/callback
 ADMIN_OIDC_WEB_BASE_URL=https://admin.example.com
 ADMIN_OIDC_CLIENT_AUTH_METHOD=client_secret_basic
 JUDGE_VOICE_WORKER_POLL_SECONDS=2
+LIVE_RUN_REAPER_POLL_SECONDS=5
+LIVE_RUN_REAPER_STALE_GRACE_SECONDS=30
+LIVE_RUN_REAPER_BACKOFF_SECONDS=30
+LIVE_RUN_REAPER_MAX_ATTEMPTS=3
+LIVE_RUN_REAPER_HEARTBEAT_SECONDS=10
+LIVE_RUN_REAPER_PROBE_MAX_AGE_SECONDS=45
 ```
 
 不要把密钥写入仓库、镜像或前端 `VITE_*` 变量。正式 TTS 密钥只注入 API 与 worker 运行环境。
@@ -76,7 +82,7 @@ cd apps/api
 
 ## 进程拓扑
 
-当前实时对局注册表仍在 API 进程内，因此生产只运行一个 API worker：
+直播运行、事件、租约、控制版本和 fencing token 已持久化到 PostgreSQL，可运行多个 API 副本；每个副本只执行自己持有有效租约的模型任务：
 
 ```bash
 cd apps/api
@@ -90,6 +96,15 @@ cd apps/api
 .venv/bin/python -m app.cli run-judge-voice-worker
 ```
 
+直播 orphan 恢复同样使用独立持续进程，不要在每个 API 副本内重复启动：
+
+```bash
+cd apps/api
+.venv/bin/python -m app.cli run-live-run-reaper
+```
+
+systemd 模板见 `deploy/systemd/werewolf-live-run-reaper.service.example`。部署时把路径、用户和 `EnvironmentFile` 替换为实际值；进程收到 SIGTERM 后停止领取新 orphan，并等待当前恢复边界退出。
+
 发布停止时先从负载均衡摘除 API，再发送 SIGTERM；worker 收到 SIGTERM 后不会领取新任务，并在当前任务返回后退出。进程管理器应使用有限退避重启，避免数据库故障时形成快速重启循环。
 
 Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-web/dist`。Web 服务器必须把未知页面路由回退到 `index.html`，把 `/api` 反向代理至 API，并禁止缓存 Admin HTML；带哈希的静态资源可长期缓存。
@@ -98,7 +113,11 @@ Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-we
 
 - 存活探针：`GET /api/v1/health/live`，期望 200 `{"status":"ok"}`。
 - 就绪探针：`GET /api/v1/health/ready`，只在数据库可连接且位于 Alembic head 时返回 200；其他情况返回 503。
+- Reaper 存活探针：`python -m app.cli check-live-run-reaper`，数据库中存在新鲜心跳时退出 0，否则退出 1；数据库/参数错误退出 2。
+- Prometheus：抓取 `GET /api/v1/metrics`。该端点只有聚合计数，不含运行、会话或 Worker ID，但仍应仅在内部监控网络开放。
 - 旧 `/api/v1/health` 只为兼容保留，不能用于接流量判断。
+
+Prometheus 告警规则见 `deploy/prometheus/live-run-alerts.yml`，覆盖 reaper 无心跳、stale orphan 积压、自动恢复耗尽和扫描错误。发布后先运行 `python -m app.cli run-live-run-reaper --once`，再启动持续进程；持续进程启动后 `check-live-run-reaper` 必须返回 `reaper=ok`。
 
 发布后检查：
 
@@ -108,7 +127,8 @@ Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-we
 4. 在“审计日志”按 `admin.user.create` / `admin.user.update` 筛选，确认操作者、资源、结果和请求编号存在，且响应不包含 OIDC subject、IP、before/after 或凭据。
 5. 玩家列表、对局记录、运行监控和语音资产均读取真实 API。
 6. 使用有权限账号排队一个“生成缺失”任务，确认 worker 日志出现 job ID、页面进入终态且审计只有一次。
-7. Mobile 大厅、玩家图鉴、收藏、开局和观战走 `mobile-web`；不要把旧 Web 暴露为新 C 端入口。
+7. 检查 `/metrics` 中 `werewolf_live_run_reaper_up 1`，并确认 Admin 对 stale/退避/耗尽状态的展示与数据库一致。
+8. Mobile 大厅、玩家图鉴、收藏、开局和观战走 `mobile-web`；不要把旧 Web 暴露为新 C 端入口。
 
 ## 回滚
 

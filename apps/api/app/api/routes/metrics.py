@@ -1,0 +1,33 @@
+from fastapi import APIRouter, Depends, Response, status
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.db.session import get_db
+from app.werewolf.worker_telemetry import render_live_run_metrics
+
+
+router = APIRouter()
+
+
+@router.get("", include_in_schema=False)
+def read_metrics(db: Session = Depends(get_db)) -> Response:
+    try:
+        content = render_live_run_metrics(
+            db,
+            reaper_max_age_seconds=settings.live_run_reaper_probe_max_age_seconds,
+            stale_grace_seconds=settings.live_run_reaper_stale_grace_seconds,
+            max_attempts=settings.live_run_reaper_max_attempts,
+        )
+    except SQLAlchemyError:
+        return Response(
+            content="# metrics unavailable\n",
+            media_type="text/plain; version=0.0.4",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers={"Cache-Control": "no-store"},
+        )
+    return Response(
+        content=content,
+        media_type="text/plain; version=0.0.4",
+        headers={"Cache-Control": "no-store"},
+    )

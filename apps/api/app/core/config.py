@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     live_run_reaper_stale_grace_seconds: float = Field(default=30.0, ge=0.0, le=600.0)
     live_run_reaper_backoff_seconds: float = Field(default=30.0, ge=5.0, le=3600.0)
     live_run_reaper_max_attempts: int = Field(default=3, ge=1, le=10)
+    live_run_reaper_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
+    live_run_reaper_probe_max_age_seconds: float = Field(
+        default=45.0, ge=5.0, le=300.0
+    )
 
     @field_validator("cors_origins", "public_cors_origins", mode="before")
     @classmethod
@@ -99,6 +103,14 @@ class Settings(BaseSettings):
         if self.live_run_heartbeat_seconds >= self.live_run_lease_seconds:
             raise ValueError(
                 "LIVE_RUN_HEARTBEAT_SECONDS must be shorter than LIVE_RUN_LEASE_SECONDS"
+            )
+        if (
+            self.live_run_reaper_heartbeat_seconds
+            >= self.live_run_reaper_probe_max_age_seconds
+        ):
+            raise ValueError(
+                "LIVE_RUN_REAPER_HEARTBEAT_SECONDS must be shorter than "
+                "LIVE_RUN_REAPER_PROBE_MAX_AGE_SECONDS"
             )
         auth_cookie_names = {
             self.admin_session_cookie_name,

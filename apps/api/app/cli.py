@@ -32,6 +32,10 @@ from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.orphan_reaper import OrphanRecoveryResult, run_live_run_reaper
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.runner import GameRunError, run_game
+from app.werewolf.worker_telemetry import (
+    RuntimeWorkerTelemetry,
+    live_run_reaper_is_alive,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -133,7 +137,23 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=settings.live_run_reaper_max_attempts,
     )
+    live_reaper_parser.add_argument(
+        "--heartbeat-seconds",
+        type=float,
+        default=settings.live_run_reaper_heartbeat_seconds,
+    )
     live_reaper_parser.set_defaults(func=_run_live_run_reaper_command)
+
+    reaper_probe_parser = subparsers.add_parser(
+        "check-live-run-reaper",
+        help="Exit successfully when a reaper database heartbeat is fresh.",
+    )
+    reaper_probe_parser.add_argument(
+        "--max-age-seconds",
+        type=float,
+        default=settings.live_run_reaper_probe_max_age_seconds,
+    )
+    reaper_probe_parser.set_defaults(func=_check_live_run_reaper_command)
 
     provision_admin_parser = subparsers.add_parser(
         "provision-admin-user",
@@ -317,6 +337,9 @@ def _run_live_run_reaper_command(args: argparse.Namespace) -> int:
     if not 1 <= args.max_attempts <= 10:
         print("--max-attempts must be between 1 and 10", file=sys.stderr)
         return 2
+    if not 1 <= args.heartbeat_seconds <= 60:
+        print("--heartbeat-seconds must be between 1 and 60", file=sys.stderr)
+        return 2
 
     from app.api.routes.games import SessionLiveStore
 
@@ -327,6 +350,11 @@ def _run_live_run_reaper_command(args: argparse.Namespace) -> int:
         event_poll_seconds=settings.live_run_event_poll_seconds,
     )
     stop_event = Event()
+    telemetry = RuntimeWorkerTelemetry(
+        SessionLocal,
+        worker_id=registry.worker_id,
+        heartbeat_seconds=args.heartbeat_seconds,
+    )
 
     def request_stop(_signum: int, _frame: object) -> None:
         stop_event.set()
@@ -336,12 +364,16 @@ def _run_live_run_reaper_command(args: argparse.Namespace) -> int:
             f"run_id={result.run_id} outcome={result.outcome} attempt={result.attempt}",
             flush=True,
         )
+        telemetry.record_recovery(result)
 
     previous_handlers = {
         signal_number: signal.signal(signal_number, request_stop)
         for signal_number in (signal.SIGINT, signal.SIGTERM)
     }
+    telemetry_started = False
     try:
+        telemetry.start()
+        telemetry_started = True
         processed_count = run_live_run_reaper(
             SessionLocal,
             registry,
@@ -352,17 +384,38 @@ def _run_live_run_reaper_command(args: argparse.Namespace) -> int:
             max_attempts=args.max_attempts,
             once=args.once,
             on_recovery=report,
+            on_scan=telemetry.record_scan,
+            on_error=telemetry.record_error,
         )
     except Exception as exc:
         print(f"live run reaper failed: {type(exc).__name__}", file=sys.stderr)
         return 1
     finally:
+        if telemetry_started:
+            telemetry.stop()
         for signal_number, handler in previous_handlers.items():
             signal.signal(signal_number, handler)
 
     if args.once and processed_count == 0:
         print("run_id=none")
     return 0
+
+
+def _check_live_run_reaper_command(args: argparse.Namespace) -> int:
+    if not 5 <= args.max_age_seconds <= 300:
+        print("--max-age-seconds must be between 5 and 300", file=sys.stderr)
+        return 2
+    try:
+        with SessionLocal() as db:
+            alive = live_run_reaper_is_alive(
+                db,
+                max_age_seconds=args.max_age_seconds,
+            )
+    except Exception as exc:
+        print(f"reaper=unknown error={type(exc).__name__}", file=sys.stderr)
+        return 2
+    print("reaper=ok" if alive else "reaper=stale")
+    return 0 if alive else 1
 
 
 def _provision_admin_user_command(args: argparse.Namespace) -> int:

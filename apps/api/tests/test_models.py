@@ -14,6 +14,7 @@ from app.models.live import (
 )
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.public import PublicSession, UserFavoritePlayerProfile
+from app.models.runtime_worker import RuntimeWorkerRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 
@@ -530,6 +531,44 @@ def test_live_run_table_matches_expected_schema() -> None:
         index for index in table.indexes if index.name == "uq_live_runs_active_session"
     )
     assert active_session_index.unique is True
+
+
+def test_runtime_worker_table_matches_expected_schema() -> None:
+    table = RuntimeWorkerRecord.__table__
+
+    assert table.name == "runtime_workers"
+    assert set(table.columns.keys()) == {
+        "worker_id",
+        "worker_type",
+        "status",
+        "started_at",
+        "heartbeat_at",
+        "stopped_at",
+        "scans_total",
+        "recoveries_resumed_total",
+        "recoveries_canceled_total",
+        "recoveries_failed_total",
+        "errors_total",
+        "last_error_code",
+        "updated_at",
+    }
+    assert table.c.worker_id.primary_key is True
+    _assert_string_column(table.c.worker_id, length=64, nullable=False)
+    _assert_string_column(table.c.worker_type, length=40, nullable=False)
+    _assert_string_column(table.c.status, length=20, nullable=False)
+    assert table.c.started_at.nullable is False
+    assert table.c.heartbeat_at.nullable is False
+    assert table.c.stopped_at.nullable is True
+    assert table.c.scans_total.nullable is False
+    assert table.c.recoveries_resumed_total.nullable is False
+    assert table.c.errors_total.nullable is False
+    _assert_string_column(table.c.last_error_code, length=64, nullable=True)
+    assert table.c.updated_at.nullable is False
+    _assert_index(
+        table,
+        "ix_runtime_workers_type_heartbeat_desc",
+        ["worker_type", "heartbeat_at"],
+    )
 
 
 def test_live_event_table_matches_expected_schema() -> None:

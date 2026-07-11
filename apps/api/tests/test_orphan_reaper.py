@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from threading import Event
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -287,3 +288,29 @@ def test_continuous_reaper_reports_recoveries_until_stopped(monkeypatch) -> None
 
     assert processed == 2
     assert observed == ["run-1", "run-2"]
+
+
+def test_reaper_reports_scan_errors_without_exposing_exception_text(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.werewolf.orphan_reaper.run_next_orphan_recovery",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("secret")),
+    )
+    scans: list[str] = []
+    errors: list[str] = []
+
+    with pytest.raises(RuntimeError, match="secret"):
+        run_live_run_reaper(
+            object(),
+            object(),
+            stop_event=Event(),
+            poll_seconds=1,
+            stale_grace_seconds=30,
+            backoff_seconds=30,
+            max_attempts=3,
+            once=True,
+            on_scan=lambda: scans.append("scan"),
+            on_error=errors.append,
+        )
+
+    assert scans == ["scan"]
+    assert errors == ["scan_failed"]

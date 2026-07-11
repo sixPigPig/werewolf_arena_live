@@ -9,6 +9,7 @@ from app.api.routes.admin_voice_assets import router as admin_voice_assets_route
 from app.api.routes.games import router as games_router
 from app.api.routes.health import router as health_router
 from app.api.routes.judge_voice_assets import router as judge_voice_assets_router
+from app.api.routes.metrics import router as metrics_router
 from app.api.routes.player_profiles import router as player_profiles_router
 from app.api.routes.public_player_profiles import router as public_player_profiles_router
 from app.api.routes.public_session import router as public_session_router
@@ -31,6 +32,7 @@ api_router.include_router(
 )
 api_router.include_router(games_router, prefix="/games", tags=["games"])
 api_router.include_router(health_router, prefix="/health", tags=["health"])
+api_router.include_router(metrics_router, prefix="/metrics", tags=["metrics"])
 api_router.include_router(
     judge_voice_assets_router,
     prefix="/judge-voice-lines",

@@ -80,6 +80,8 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.live_run_reaper_stale_grace_seconds == 30.0
     assert settings.live_run_reaper_backoff_seconds == 30.0
     assert settings.live_run_reaper_max_attempts == 3
+    assert settings.live_run_reaper_heartbeat_seconds == 10.0
+    assert settings.live_run_reaper_probe_max_age_seconds == 45.0
 
 
 def test_settings_rejects_live_run_heartbeat_not_shorter_than_lease(
@@ -89,6 +91,16 @@ def test_settings_rejects_live_run_heartbeat_not_shorter_than_lease(
     monkeypatch.setenv("LIVE_RUN_HEARTBEAT_SECONDS", "10")
 
     with pytest.raises(ValidationError, match="must be shorter"):
+        Settings(_env_file=None)
+
+
+def test_settings_rejects_reaper_heartbeat_not_shorter_than_probe_window(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("LIVE_RUN_REAPER_HEARTBEAT_SECONDS", "45")
+    monkeypatch.setenv("LIVE_RUN_REAPER_PROBE_MAX_AGE_SECONDS", "45")
+
+    with pytest.raises(ValidationError, match="REAPER_HEARTBEAT_SECONDS"):
         Settings(_env_file=None)
 
 

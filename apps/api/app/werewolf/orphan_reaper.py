@@ -77,11 +77,15 @@ def run_live_run_reaper(
     max_attempts: int,
     once: bool = False,
     on_recovery: Callable[[OrphanRecoveryResult], None] | None = None,
+    on_scan: Callable[[], None] | None = None,
+    on_error: Callable[[str], None] | None = None,
     execute_recovery: RecoveryExecutor | None = None,
 ) -> int:
     processed_count = 0
     while not stop_event.is_set():
         try:
+            if on_scan is not None:
+                on_scan()
             result = run_next_orphan_recovery(
                 session_factory,
                 registry,
@@ -92,13 +96,21 @@ def run_live_run_reaper(
             )
         except Exception:
             logger.exception("Live run orphan reaper scan failed")
+            if on_error is not None:
+                try:
+                    on_error("scan_failed")
+                except Exception:
+                    logger.exception("Failed to persist live run reaper error telemetry")
             if once:
                 raise
             result = None
         if result is not None:
             processed_count += 1
             if on_recovery is not None:
-                on_recovery(result)
+                try:
+                    on_recovery(result)
+                except Exception:
+                    logger.exception("Failed to persist live run recovery telemetry")
         if once:
             break
         if result is None:

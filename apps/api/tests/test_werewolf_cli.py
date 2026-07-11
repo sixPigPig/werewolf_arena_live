@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
@@ -196,6 +197,29 @@ def test_voice_worker_rejects_unsafe_poll_interval(capsys) -> None:
 def test_live_run_reaper_once_reports_recovery(capsys, monkeypatch) -> None:
     calls = {}
 
+    class FakeTelemetry:
+        def __init__(self) -> None:
+            self.started = False
+            self.stopped = False
+            self.results = []
+
+        def start(self) -> None:
+            self.started = True
+
+        def stop(self) -> None:
+            self.stopped = True
+
+        def record_scan(self) -> None:
+            return None
+
+        def record_recovery(self, result) -> None:
+            self.results.append(result)
+
+        def record_error(self, _code: str) -> None:
+            return None
+
+    telemetry = FakeTelemetry()
+
     def fake_reaper(session_factory, registry, **kwargs) -> int:
         calls["session_factory"] = session_factory
         calls["registry"] = registry
@@ -211,6 +235,7 @@ def test_live_run_reaper_once_reports_recovery(capsys, monkeypatch) -> None:
         return 1
 
     monkeypatch.setattr(cli, "run_live_run_reaper", fake_reaper)
+    monkeypatch.setattr(cli, "RuntimeWorkerTelemetry", lambda *_args, **_kwargs: telemetry)
 
     exit_code = main(["run-live-run-reaper", "--once"])
 
@@ -223,6 +248,11 @@ def test_live_run_reaper_once_reports_recovery(capsys, monkeypatch) -> None:
     assert calls["stale_grace_seconds"] == 30.0
     assert calls["backoff_seconds"] == 30.0
     assert calls["max_attempts"] == 3
+    assert calls["on_scan"] == telemetry.record_scan
+    assert calls["on_error"] == telemetry.record_error
+    assert telemetry.started is True
+    assert telemetry.stopped is True
+    assert len(telemetry.results) == 1
 
 
 def test_live_run_reaper_rejects_unsafe_options(capsys) -> None:
@@ -230,6 +260,20 @@ def test_live_run_reaper_rejects_unsafe_options(capsys) -> None:
 
     assert exit_code == 2
     assert "between 5 and 3600" in capsys.readouterr().err
+
+
+def test_live_run_reaper_probe_reports_fresh_and_stale(capsys, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "SessionLocal", lambda: nullcontext(object()))
+    monkeypatch.setattr(cli, "live_run_reaper_is_alive", lambda *_args, **_kwargs: True)
+
+    healthy = main(["check-live-run-reaper"])
+    assert healthy == 0
+    assert capsys.readouterr().out.strip() == "reaper=ok"
+
+    monkeypatch.setattr(cli, "live_run_reaper_is_alive", lambda *_args, **_kwargs: False)
+    stale = main(["check-live-run-reaper"])
+    assert stale == 1
+    assert capsys.readouterr().out.strip() == "reaper=stale"
 
 
 def test_provision_admin_user_creates_and_updates_authorized_account(

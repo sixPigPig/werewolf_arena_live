@@ -14,6 +14,7 @@ from app.models.live import (
 )
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.public import PublicSession, UserFavoritePlayerProfile
+from app.models.runtime_worker import RuntimeWorkerRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 
@@ -30,6 +31,7 @@ __all__ = [
     "LiveRunRecord",
     "PlayerAvatarAsset",
     "PublicSession",
+    "RuntimeWorkerRecord",
     "User",
     "UserFavoritePlayerProfile",
     "VoiceAudioChunkRecord",
