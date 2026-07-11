@@ -1,6 +1,6 @@
 from app.models.admin import AdminSession, AuditEvent
 from app.models.game_session import GameReplayPayload, GameSessionRecord
-from app.models.judge_voice_asset import JudgeVoiceAssetRecord
+from app.models.judge_voice_asset import JudgeVoiceAssetRecord, JudgeVoiceGenerationJob
 from app.models.live import (
     LiveEventRecord,
     LiveRunRecord,
@@ -18,6 +18,7 @@ __all__ = [
     "GameReplayPayload",
     "GameSessionRecord",
     "JudgeVoiceAssetRecord",
+    "JudgeVoiceGenerationJob",
     "LiveEventRecord",
     "LiveRunRecord",
     "PlayerAvatarAsset",

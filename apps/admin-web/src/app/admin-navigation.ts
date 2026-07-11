@@ -2,6 +2,8 @@ export type AdminPermission =
   | "games.read"
   | "runs.read"
   | "voice.read"
+  | "voice.generate_missing"
+  | "voice.regenerate_all"
   | "players.read"
   | "players.write"
   | "players.publish"

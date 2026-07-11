@@ -15,13 +15,14 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_application
+from app.models.admin import AuditEvent
 
 
 @pytest.fixture
 def voice_client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> Generator[tuple[TestClient, Path], None, None]:
+) -> Generator[tuple[TestClient, Path, sessionmaker[Session]], None, None]:
     monkeypatch.setattr(settings, "app_environment", "test")
     monkeypatch.setattr(settings, "api_v1_prefix", "/api/v1")
     monkeypatch.setattr(settings, "admin_dev_auth_enabled", True)
@@ -52,19 +53,20 @@ def voice_client(
     application.dependency_overrides[get_db] = override_get_db
     application.dependency_overrides[get_admin_judge_voice_asset_dir] = lambda: asset_dir
     with TestClient(application) as client:
-        yield client, asset_dir
+        yield client, asset_dir, testing_session
     engine.dispose()
 
 
-def _login(client: TestClient) -> None:
+def _login(client: TestClient) -> dict:
     response = client.post("/api/v1/admin/dev-login")
     assert response.status_code == 200, response.text
+    return response.json()
 
 
 def test_admin_voice_assets_require_authenticated_voice_read(
-    voice_client: tuple[TestClient, Path],
+    voice_client,
 ) -> None:
-    client, _asset_dir = voice_client
+    client, _asset_dir, _session_factory = voice_client
     response = client.get("/api/v1/admin/judge-voice-lines")
     assert response.status_code == 401
     assert response.json()["code"] == "admin_auth_required"
@@ -77,9 +79,9 @@ def test_admin_voice_assets_require_authenticated_voice_read(
 
 
 def test_admin_voice_assets_return_safe_inventory_and_coverage(
-    voice_client: tuple[TestClient, Path],
+    voice_client,
 ) -> None:
-    client, asset_dir = voice_client
+    client, asset_dir, _session_factory = voice_client
     (asset_dir / "game_intro.mp3").write_bytes(b"intro-audio")
     (asset_dir / "night_start.mp3").write_bytes(b"night-audio")
     (asset_dir / "manifest.json").write_text(
@@ -143,9 +145,9 @@ def test_admin_voice_assets_return_safe_inventory_and_coverage(
 
 
 def test_admin_voice_assets_filter_missing_and_paginate(
-    voice_client: tuple[TestClient, Path],
+    voice_client,
 ) -> None:
-    client, asset_dir = voice_client
+    client, asset_dir, _session_factory = voice_client
     (asset_dir / "game_intro.mp3").write_bytes(b"audio")
     _login(client)
 
@@ -170,9 +172,9 @@ def test_admin_voice_assets_filter_missing_and_paginate(
 
 
 def test_admin_voice_asset_audio_is_authenticated_and_does_not_leak_path(
-    voice_client: tuple[TestClient, Path],
+    voice_client,
 ) -> None:
-    client, asset_dir = voice_client
+    client, asset_dir, _session_factory = voice_client
     audio = b"safe-admin-audio"
     (asset_dir / "night_start.mp3").write_bytes(audio)
 
@@ -191,10 +193,10 @@ def test_admin_voice_asset_audio_is_authenticated_and_does_not_leak_path(
 
 @pytest.mark.parametrize("line_id", ["night_start", "missing_line"])
 def test_admin_voice_asset_audio_returns_structured_404(
-    voice_client: tuple[TestClient, Path],
+    voice_client,
     line_id: str,
 ) -> None:
-    client, _asset_dir = voice_client
+    client, _asset_dir, _session_factory = voice_client
     _login(client)
     response = client.get(f"/api/v1/admin/judge-voice-lines/{line_id}/audio")
     assert response.status_code == 404
@@ -202,9 +204,9 @@ def test_admin_voice_asset_audio_returns_structured_404(
 
 
 def test_admin_voice_asset_filters_are_validated(
-    voice_client: tuple[TestClient, Path],
+    voice_client,
 ) -> None:
-    client, _asset_dir = voice_client
+    client, _asset_dir, _session_factory = voice_client
     _login(client)
     response = client.get(
         "/api/v1/admin/judge-voice-lines",
@@ -212,3 +214,67 @@ def test_admin_voice_asset_filters_are_validated(
     )
     assert response.status_code == 422
     assert response.json()["code"] == "admin_request_invalid"
+
+
+def test_admin_voice_generation_job_is_csrf_permission_idempotency_and_audit_protected(
+    voice_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _asset_dir, session_factory = voice_client
+    monkeypatch.setattr(settings, "admin_dev_auth_role", "content_editor")
+    login = _login(client)
+    headers = {
+        "X-CSRF-Token": login["csrf_token"],
+        "Idempotency-Key": "voice-missing-001",
+    }
+    first = client.post(
+        "/api/v1/admin/judge-voice-generation-jobs",
+        json={"mode": "missing"},
+        headers=headers,
+    )
+    assert first.status_code == 202, first.text
+    assert first.json()["status"] == "queued"
+    repeated = client.post(
+        "/api/v1/admin/judge-voice-generation-jobs",
+        json={"mode": "missing"},
+        headers=headers,
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["id"] == first.json()["id"]
+    conflict = client.post(
+        "/api/v1/admin/judge-voice-generation-jobs",
+        json={"mode": "missing", "line_ids": ["game_intro"]},
+        headers=headers,
+    )
+    assert conflict.status_code == 409
+    job = client.get(f"/api/v1/admin/jobs/{first.json()['id']}")
+    assert job.status_code == 200
+    with session_factory() as db:
+        audits = db.query(AuditEvent).filter(
+            AuditEvent.action == "admin.judge_voice_generation.enqueue"
+        ).all()
+    assert len(audits) == 1
+
+
+def test_admin_voice_generation_requires_csrf_and_mode_permission(
+    voice_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _asset_dir, _session_factory = voice_client
+    monkeypatch.setattr(settings, "admin_dev_auth_role", "viewer")
+    login = _login(client)
+    missing_csrf = client.post(
+        "/api/v1/admin/judge-voice-generation-jobs",
+        json={"mode": "missing"},
+        headers={"Idempotency-Key": "voice-missing-002"},
+    )
+    assert missing_csrf.status_code == 403
+    denied = client.post(
+        "/api/v1/admin/judge-voice-generation-jobs",
+        json={"mode": "missing"},
+        headers={
+            "Idempotency-Key": "voice-missing-003",
+            "X-CSRF-Token": login["csrf_token"],
+        },
+    )
+    assert denied.status_code == 403

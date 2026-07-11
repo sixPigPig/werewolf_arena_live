@@ -1,9 +1,11 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { type FormEvent } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type FormEvent, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { isAdminApiError } from "@/api/problem-details";
-import { listAdminJudgeVoiceLines } from "@/features/voice-assets/api";
+import { createAdminJudgeVoiceJob, getAdminJudgeVoiceJob, listAdminJudgeVoiceLines } from "@/features/voice-assets/api";
+import { hasAdminPermission } from "@/features/auth/permissions";
+import { useAdminSession } from "@/features/auth/session-context";
 import {
   judgeVoiceListParamsFromSearch,
   setJudgeVoiceSearchValues,
@@ -16,6 +18,9 @@ import type {
 
 export default function JudgeVoiceAssetsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
+  const { session } = useAdminSession();
+  const [jobId, setJobId] = useState<string | null>(null);
   const params = judgeVoiceListParamsFromSearch(searchParams);
   const voiceQuery = useQuery({
     placeholderData: keepPreviousData,
@@ -24,6 +29,28 @@ export default function JudgeVoiceAssetsPage() {
     staleTime: 30_000,
   });
   const data = voiceQuery.data;
+  const permissions = session?.permissions ?? [];
+  const canGenerateMissing = hasAdminPermission(permissions, "voice.generate_missing");
+  const canRegenerateAll = hasAdminPermission(permissions, "voice.regenerate_all");
+  const jobQuery = useQuery({
+    enabled: jobId !== null,
+    queryKey: ["admin", "judge-voice-job", jobId],
+    queryFn: ({ signal }) => getAdminJudgeVoiceJob(jobId!, signal),
+    refetchInterval: (query) =>
+      query.state.data?.status === "queued" || query.state.data?.status === "running"
+        ? 1500
+        : false,
+  });
+  const createJob = useMutation({
+    mutationFn: (mode: "missing" | "all") =>
+      createAdminJudgeVoiceJob(mode, session?.csrf_token ?? ""),
+    onSuccess: (job) => setJobId(job.id),
+  });
+  useEffect(() => {
+    if (jobQuery.data?.status === "completed") {
+      void queryClient.invalidateQueries({ queryKey: adminJudgeVoiceKeys.all });
+    }
+  }, [jobQuery.data?.status, queryClient]);
 
   function updateSearch(values: Record<string, string | undefined>) {
     setSearchParams(
@@ -68,6 +95,26 @@ export default function JudgeVoiceAssetsPage() {
           >
             {voiceQuery.isFetching ? "刷新中" : "手动刷新"}
           </button>
+          {canGenerateMissing ? (
+            <button
+              className="admin-primary-button"
+              disabled={createJob.isPending}
+              onClick={() => createJob.mutate("missing")}
+              type="button"
+            >
+              生成缺失语音
+            </button>
+          ) : null}
+          {canRegenerateAll ? (
+            <button
+              className="admin-secondary-button"
+              disabled={createJob.isPending}
+              onClick={() => createJob.mutate("all")}
+              type="button"
+            >
+              重新生成全部
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -76,6 +123,19 @@ export default function JudgeVoiceAssetsPage() {
           ? "当前读取 PostgreSQL 独立语音资产存储；旧静态文件仅作为回滚输入保留。本页不会自动生成、覆盖或删除语音。"
           : "当前仍从旧静态目录双读；完成幂等导入后会自动切换 PostgreSQL。本页不会自动生成、覆盖或删除语音。"}
       </p>
+
+      {createJob.isError ? (
+        <p className="game-inline-warning" role="alert">无法创建语音生成任务，请稍后重试。</p>
+      ) : null}
+      {jobQuery.data ? (
+        <section aria-label="语音生成任务" className="voice-assets-storage-note">
+          <strong>生成任务：{jobStatusLabel(jobQuery.data.status)}</strong>
+          <span>
+            {jobQuery.data.processed_count} / {jobQuery.data.total_count} · 已生成 {jobQuery.data.generated_count} · 失败 {jobQuery.data.failed_count}
+          </span>
+          {jobQuery.data.error_code ? <small>错误分类：{jobQuery.data.error_code}</small> : null}
+        </section>
+      ) : null}
 
       {data ? <VoiceCoverage data={data} /> : <VoiceCoverageLoading />}
 
@@ -329,4 +389,8 @@ function formatBytes(value: number) {
 function formValue(values: FormData, key: string) {
   const value = values.get(key);
   return typeof value === "string" ? value : undefined;
+}
+
+function jobStatusLabel(status: "queued" | "running" | "completed" | "failed") {
+  return { queued: "排队中", running: "执行中", completed: "已完成", failed: "失败" }[status];
 }

@@ -1,8 +1,9 @@
 import { adminApiFetch } from "@/api/client";
-import { parseAdminJudgeVoiceList } from "@/features/voice-assets/parsers";
+import { parseAdminJudgeVoiceJob, parseAdminJudgeVoiceList } from "@/features/voice-assets/parsers";
 import type {
   AdminJudgeVoiceList,
   AdminJudgeVoiceListParams,
+  AdminJudgeVoiceJob,
 } from "@/features/voice-assets/types";
 
 const ADMIN_JUDGE_VOICE_PATH = "/api/v1/admin/judge-voice-lines";
@@ -24,6 +25,36 @@ export async function listAdminJudgeVoiceLines(
     { signal },
   );
   return parseAdminJudgeVoiceList(value);
+}
+
+export async function createAdminJudgeVoiceJob(
+  mode: "missing" | "all",
+  csrfToken: string,
+): Promise<AdminJudgeVoiceJob> {
+  const value = await adminApiFetch<unknown>(
+    "/api/v1/admin/judge-voice-generation-jobs",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ mode }),
+    },
+  );
+  return parseAdminJudgeVoiceJob(value);
+}
+
+export async function getAdminJudgeVoiceJob(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<AdminJudgeVoiceJob> {
+  const value = await adminApiFetch<unknown>(
+    `/api/v1/admin/jobs/${encodeURIComponent(jobId)}`,
+    { signal },
+  );
+  return parseAdminJudgeVoiceJob(value);
 }
 
 function appendOptional(

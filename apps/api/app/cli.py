@@ -8,6 +8,7 @@ from typing import Sequence
 import uvicorn
 
 from app.core.config import settings
+from app.admin.voice_jobs import run_next_voice_generation_job
 from app.db.session import SessionLocal
 from app.legacy_game_record_cleanup import purge_legacy_game_records
 from app.judge_voice_asset_import import (
@@ -78,6 +79,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_JUDGE_VOICE_ASSET_DIR,
     )
     import_voice_parser.set_defaults(func=_import_judge_voice_assets_command)
+
+    voice_worker_parser = subparsers.add_parser(
+        "run-judge-voice-worker",
+        help="Claim and run persistent judge voice generation jobs.",
+    )
+    voice_worker_parser.add_argument("--once", action="store_true", required=True)
+    voice_worker_parser.set_defaults(func=_run_judge_voice_worker_command)
 
     purge_records_parser = subparsers.add_parser(
         "purge-legacy-game-records",
@@ -201,6 +209,12 @@ def _import_judge_voice_assets_command(args: argparse.Namespace) -> int:
         f"缺失={result.missing_count} "
         f"字节={result.byte_count}"
     )
+    return 0
+
+
+def _run_judge_voice_worker_command(_args: argparse.Namespace) -> int:
+    job_id = run_next_voice_generation_job(SessionLocal)
+    print(f"job_id={job_id}" if job_id is not None else "job_id=none")
     return 0
 
 

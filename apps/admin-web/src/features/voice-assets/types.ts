@@ -49,3 +49,19 @@ export type AdminJudgeVoiceListParams = {
   sort: AdminJudgeVoiceSortField;
   direction: "asc" | "desc";
 };
+
+export type AdminJudgeVoiceJob = {
+  id: string;
+  mode: "missing" | "all";
+  status: "queued" | "running" | "completed" | "failed";
+  requested_line_ids: string[] | null;
+  total_count: number;
+  processed_count: number;
+  generated_count: number;
+  skipped_count: number;
+  failed_count: number;
+  error_code: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};

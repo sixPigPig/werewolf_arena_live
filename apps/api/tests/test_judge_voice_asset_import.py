@@ -5,11 +5,16 @@ import json
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker
 
 from app.admin.voice_assets import get_admin_judge_voice_audio, list_admin_judge_voice_assets
 from app.db.base import Base
 from app.judge_voice_asset_import import import_judge_voice_assets
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord
+from app.models.judge_voice_asset import JudgeVoiceGenerationJob
+from app.admin.voice_jobs import create_voice_generation_job, run_next_voice_generation_job
+from app.werewolf.judge_voice_assets import list_judge_voice_line_definitions
+from app.core.config import settings
 
 
 def test_import_judge_voice_assets_is_idempotent_and_updates_changed_audio(tmp_path) -> None:
@@ -67,6 +72,45 @@ def test_import_judge_voice_assets_is_idempotent_and_updates_changed_audio(tmp_p
     assert record.size_bytes == len(b"second-audio")
     assert record.sha256 == hashlib.sha256(b"second-audio").hexdigest()
     assert record.subtitle_timings == [{"text": "本局", "start_ms": 0, "end_ms": 300}]
+    engine.dispose()
+
+
+def test_persistent_voice_worker_completes_empty_missing_job_and_fails_disabled_tts(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "ark_tts_enabled", False)
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with factory() as db:
+        for index, line in enumerate(list_judge_voice_line_definitions()):
+            db.add(JudgeVoiceAssetRecord(
+                id=line.id, text=line.text, category=line.category,
+                template_id=line.template_id, seat_number=line.seat_number,
+                audio_format="mp3", sample_rate=24000, mime_type="audio/mpeg",
+                data=f"audio-{index}".encode(), sha256=f"{index:064x}",
+                size_bytes=len(f"audio-{index}"), subtitle_timings=[], source="test",
+            ))
+        missing, _ = create_voice_generation_job(
+            db, actor_user_id=1, mode="missing", line_ids=None,
+            idempotency_key="worker-missing-001",
+        )
+        all_job, _ = create_voice_generation_job(
+            db, actor_user_id=1, mode="all", line_ids=["game_intro"],
+            idempotency_key="worker-all-001",
+        )
+        db.commit()
+        missing_id, all_id = missing.id, all_job.id
+    first_id = run_next_voice_generation_job(factory)
+    second_id = run_next_voice_generation_job(factory)
+    with factory() as db:
+        missing = db.get(JudgeVoiceGenerationJob, missing_id)
+        all_job = db.get(JudgeVoiceGenerationJob, all_id)
+    assert {first_id, second_id} == {missing_id, all_id}
+    assert missing is not None and missing.status == "completed"
+    assert missing.total_count == 0
+    assert all_job is not None and all_job.status == "failed"
+    assert all_job.error_code == "tts_disabled"
     engine.dispose()
 
 

@@ -59,3 +59,24 @@ class AdminJudgeVoiceLineListResponse(BaseModel):
     categories: list[AdminJudgeVoiceCategorySummary]
     items: list[AdminJudgeVoiceLineItem]
     pagination: AdminJudgeVoicePagination
+
+
+class AdminJudgeVoiceGenerationRequest(BaseModel):
+    mode: Literal["missing", "all"] = "missing"
+    line_ids: list[str] | None = Field(default=None, min_length=1, max_length=160)
+
+
+class AdminJudgeVoiceJobResponse(BaseModel):
+    id: str = Field(max_length=36)
+    mode: Literal["missing", "all"]
+    status: Literal["queued", "running", "completed", "failed"]
+    requested_line_ids: list[str] | None
+    total_count: int = Field(ge=0)
+    processed_count: int = Field(ge=0)
+    generated_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    error_code: str | None = Field(default=None, max_length=80)
+    created_at: str
+    started_at: str | None
+    completed_at: str | None

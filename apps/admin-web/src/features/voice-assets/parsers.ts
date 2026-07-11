@@ -3,6 +3,7 @@ import type {
   AdminJudgeVoiceCategory,
   AdminJudgeVoiceLine,
   AdminJudgeVoiceList,
+  AdminJudgeVoiceJob,
 } from "@/features/voice-assets/types";
 
 const FORBIDDEN_KEYS = new Set([
@@ -79,6 +80,35 @@ export function parseAdminJudgeVoiceList(value: unknown): AdminJudgeVoiceList {
         "pagination.pages",
       ),
     },
+  };
+}
+
+export function parseAdminJudgeVoiceJob(value: unknown): AdminJudgeVoiceJob {
+  const record = recordValue(value);
+  const mode = requiredString(record.mode, "job.mode");
+  const status = requiredString(record.status, "job.status");
+  if (mode !== "missing" && mode !== "all") throw invalidContract("job.mode 无效");
+  if (!["queued", "running", "completed", "failed"].includes(status)) {
+    throw invalidContract("job.status 无效");
+  }
+  const ids = record.requested_line_ids;
+  if (ids !== null && (!Array.isArray(ids) || !ids.every((id) => typeof id === "string"))) {
+    throw invalidContract("job.requested_line_ids 无效");
+  }
+  return {
+    id: requiredString(record.id, "job.id"),
+    mode,
+    status: status as AdminJudgeVoiceJob["status"],
+    requested_line_ids: ids as string[] | null,
+    total_count: nonNegativeInteger(record.total_count, "job.total_count"),
+    processed_count: nonNegativeInteger(record.processed_count, "job.processed_count"),
+    generated_count: nonNegativeInteger(record.generated_count, "job.generated_count"),
+    skipped_count: nonNegativeInteger(record.skipped_count, "job.skipped_count"),
+    failed_count: nonNegativeInteger(record.failed_count, "job.failed_count"),
+    error_code: nullableString(record.error_code, "job.error_code"),
+    created_at: requiredString(record.created_at, "job.created_at"),
+    started_at: nullableString(record.started_at, "job.started_at"),
+    completed_at: nullableString(record.completed_at, "job.completed_at"),
   };
 }
 
