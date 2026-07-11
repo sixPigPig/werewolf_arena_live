@@ -171,7 +171,10 @@ export function useLiveDirector(
       [...cues]
         .reverse()
         .find(
-          (cue) => cue.type === "game_completed" || cue.type === "game_failed",
+          (cue) =>
+            cue.type === "game_completed" ||
+            cue.type === "game_failed" ||
+            cue.type === "game_canceled",
         ),
     [cues],
   );

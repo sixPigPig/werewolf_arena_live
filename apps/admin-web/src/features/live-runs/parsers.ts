@@ -1,6 +1,7 @@
 import { AdminApiError } from "@/api/problem-details";
 import type {
   AdminLiveRunDebug,
+  AdminLiveRunControlResult,
   AdminLiveRunDetail,
   AdminLiveRunEvent,
   AdminLiveRunGame,
@@ -16,6 +17,7 @@ const RUN_STATUSES: AdminLiveRunStatus[] = [
   "running",
   "completed",
   "failed",
+  "canceled",
 ];
 const GAME_STATUSES = ["complete", "partial"] as const;
 const SENSITIVE_KEYS = new Set([
@@ -176,6 +178,10 @@ function parseListItem(value: unknown): AdminLiveRunListItem {
     created_at: dateString(record.created_at, "created_at"),
     started_at: nullableDateString(record.started_at, "started_at"),
     completed_at: nullableDateString(record.completed_at, "completed_at"),
+    stop_requested_at: nullableDateString(
+      record.stop_requested_at,
+      "stop_requested_at",
+    ),
     updated_at: dateString(record.updated_at, "updated_at"),
     event_count: nonNegativeInteger(record.event_count, "event_count"),
     last_activity_at: dateString(
@@ -204,6 +210,25 @@ function parseListItem(value: unknown): AdminLiveRunListItem {
     throw invalidContract("已终止运行不得标记为可能失联");
   }
   return item;
+}
+
+export function parseAdminLiveRunControl(
+  value: unknown,
+): AdminLiveRunControlResult {
+  rejectSensitiveFields(value, false);
+  const record = recordValue(value);
+  return {
+    action: enumValue(record.action, ["stop", "resume"] as const, "action"),
+    target_run_id: requiredString(record.target_run_id, "target_run_id"),
+    run_id: requiredString(record.run_id, "run_id"),
+    session_id: requiredString(record.session_id, "session_id"),
+    run_status: enumValue(record.run_status, RUN_STATUSES, "run_status"),
+    stop_requested_at: nullableDateString(
+      record.stop_requested_at,
+      "stop_requested_at",
+    ),
+    replayed: booleanValue(record.replayed, "replayed"),
+  };
 }
 
 function parseRuleSet(value: unknown): AdminLiveRunRuleSet {

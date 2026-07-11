@@ -142,6 +142,23 @@ describe("deriveLiveNavStatus", () => {
     });
   });
 
+  it("shows an operator-canceled run as a distinct terminal state", () => {
+    expect(
+      deriveLiveNavStatus({
+        backlogCount: 0,
+        connectionState: "closed",
+        isPaused: false,
+        runStatus: "canceled",
+        speed: 1,
+      }),
+    ).toMatchObject({
+      detailItems: ["已取消"],
+      kind: "interrupted",
+      label: "已取消",
+      tone: "warning",
+    });
+  });
+
   it("prioritizes failures and active closed streams as interrupted", () => {
     expect(
       deriveLiveNavStatus({

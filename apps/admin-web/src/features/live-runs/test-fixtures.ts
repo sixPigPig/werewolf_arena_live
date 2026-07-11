@@ -16,6 +16,7 @@ export const contractLiveRunItem: AdminLiveRunListItem = {
   created_at: "2026-07-10T01:00:00Z",
   started_at: "2026-07-10T01:00:01Z",
   completed_at: "2026-07-10T01:03:00Z",
+  stop_requested_at: null,
   updated_at: "2026-07-10T01:03:01Z",
   event_count: 5,
   last_activity_at: "2026-07-10T01:03:00Z",

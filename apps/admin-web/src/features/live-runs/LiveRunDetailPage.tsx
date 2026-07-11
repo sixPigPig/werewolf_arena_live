@@ -1,10 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { isAdminApiError } from "@/api/problem-details";
 import { useAdminSession } from "@/features/auth/session-context";
 import {
+  controlAdminLiveRun,
   getAdminLiveRun,
   getAdminLiveRunDebug,
 } from "@/features/live-runs/api";
@@ -16,13 +17,19 @@ import {
 import { adminLiveRunKeys } from "@/features/live-runs/query-keys";
 import type {
   AdminLiveRunEvent,
+  AdminLiveRunControlAction,
   AdminLiveRunVoiceCounts,
 } from "@/features/live-runs/types";
 
 export default function LiveRunDetailPage() {
   const { runId } = useParams();
   const { session } = useAdminSession();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [debugRequestedFor, setDebugRequestedFor] = useState<string | null>(null);
+  const [controlAction, setControlAction] =
+    useState<AdminLiveRunControlAction | null>(null);
+  const [controlNotice, setControlNotice] = useState<string | null>(null);
   const debugRequested = Boolean(runId && debugRequestedFor === runId);
   const canReadDebug = Boolean(
     session?.permissions.includes("*") ||
@@ -31,6 +38,10 @@ export default function LiveRunDetailPage() {
   const canReadGames = Boolean(
     session?.permissions.includes("*") ||
       session?.permissions.includes("games.read"),
+  );
+  const canControl = Boolean(
+    session?.permissions.includes("*") ||
+      session?.permissions.includes("runs.control"),
   );
   const runQuery = useQuery({
     enabled: Boolean(runId),
@@ -49,6 +60,31 @@ export default function LiveRunDetailPage() {
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
+  });
+  const controlMutation = useMutation({
+    mutationFn: ({
+      action,
+      reason,
+    }: {
+      action: AdminLiveRunControlAction;
+      reason: string;
+    }) =>
+      controlAdminLiveRun(
+        runId!,
+        action,
+        reason,
+        session?.csrf_token ?? "",
+      ),
+    onSuccess: async (result) => {
+      setControlAction(null);
+      await queryClient.invalidateQueries({ queryKey: adminLiveRunKeys.all });
+      if (result.action === "resume") {
+        void navigate(`/operations/runs/${encodeURIComponent(result.run_id)}`);
+        return;
+      }
+      setControlNotice("停止请求已提交；运行会在下一个安全事件边界结束。 ");
+      await runQuery.refetch();
+    },
   });
 
   if (runQuery.isPending) {
@@ -105,6 +141,30 @@ export default function LiveRunDetailPage() {
       <p className="live-run-freshness-note">
         活跃运行每 5 秒刷新；最近活动是数据库持久化时间，不是进程心跳或健康检查。
       </p>
+
+      {canControl ? (
+        <RunControlPanel
+          action={controlAction}
+          error={controlMutation.isError ? controlMutation.error : null}
+          notice={controlNotice}
+          onCancel={() => {
+            setControlAction(null);
+            controlMutation.reset();
+          }}
+          onOpen={(action) => {
+            setControlNotice(null);
+            controlMutation.reset();
+            setControlAction(action);
+          }}
+          onSubmit={(reason) => {
+            if (controlAction) {
+              controlMutation.mutate({ action: controlAction, reason });
+            }
+          }}
+          pending={controlMutation.isPending}
+          run={run}
+        />
+      ) : null}
 
       <section aria-label="运行概览" className="game-detail-metrics">
         <article>
@@ -248,6 +308,120 @@ export default function LiveRunDetailPage() {
         )}
       </section>
     </div>
+  );
+}
+
+function RunControlPanel({
+  action,
+  error,
+  notice,
+  onCancel,
+  onOpen,
+  onSubmit,
+  pending,
+  run,
+}: {
+  action: AdminLiveRunControlAction | null;
+  error: Error | null;
+  notice: string | null;
+  onCancel: () => void;
+  onOpen: (action: AdminLiveRunControlAction) => void;
+  onSubmit: (reason: string) => void;
+  pending: boolean;
+  run: import("@/features/live-runs/types").AdminLiveRunDetail;
+}) {
+  const [reason, setReason] = useState("");
+  const canStop =
+    (run.status === "queued" || run.status === "running") &&
+    run.stop_requested_at === null;
+  const canResume =
+    (run.status === "failed" || run.status === "canceled") &&
+    run.game?.resumable === true;
+
+  return (
+    <section aria-label="运行控制" className="live-run-control-panel">
+      <div>
+        <span>RUNTIME CONTROL</span>
+        <strong>安全运行控制</strong>
+        <p>停止不会删除对局；恢复只会从已持久化检查点创建新运行。</p>
+      </div>
+      <div className="live-run-control-actions">
+        {run.stop_requested_at ? (
+          <span className="live-run-stop-pending" role="status">
+            停止请求已提交
+          </span>
+        ) : null}
+        {canStop ? (
+          <button
+            className="admin-danger-button"
+            onClick={() => {
+              setReason("");
+              onOpen("stop");
+            }}
+            type="button"
+          >
+            停止运行
+          </button>
+        ) : null}
+        {canResume ? (
+          <button
+            className="admin-primary-button"
+            onClick={() => {
+              setReason("");
+              onOpen("resume");
+            }}
+            type="button"
+          >
+            从检查点恢复
+          </button>
+        ) : null}
+      </div>
+      {notice ? <p className="live-run-control-notice">{notice}</p> : null}
+      {action ? (
+        <div className="live-run-control-confirmation" role="group">
+          <label htmlFor="live-run-control-reason">操作原因</label>
+          <textarea
+            autoFocus
+            id="live-run-control-reason"
+            maxLength={500}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder={
+              action === "stop"
+                ? "说明停止原因（至少 3 个字符）"
+                : "说明恢复原因（至少 3 个字符）"
+            }
+            value={reason}
+          />
+          <p>
+            {action === "stop"
+              ? "确认后将发出协作取消信号，当前模型请求可能需要等待返回。"
+              : "确认后将创建新的运行，原运行及审计记录保持不变。"}
+          </p>
+          {error ? <div role="alert">{error.message}</div> : null}
+          <div>
+            <button disabled={pending} onClick={onCancel} type="button">
+              取消
+            </button>
+            <button
+              className={
+                action === "stop"
+                  ? "admin-danger-button"
+                  : "admin-primary-button"
+              }
+              disabled={pending || reason.trim().length < 3}
+              onClick={() => onSubmit(reason.trim())}
+              type="button"
+            >
+              {pending
+                ? "提交中..."
+                : action === "stop"
+                  ? "确认停止"
+                  : "确认恢复"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

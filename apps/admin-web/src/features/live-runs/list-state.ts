@@ -9,6 +9,7 @@ const RUN_STATUSES: AdminLiveRunStatus[] = [
   "running",
   "completed",
   "failed",
+  "canceled",
 ];
 const SORT_FIELDS: AdminLiveRunSortField[] = ["created_at", "updated_at"];
 

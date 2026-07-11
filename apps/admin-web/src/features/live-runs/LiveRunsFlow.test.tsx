@@ -210,6 +210,122 @@ describe("admin live run flow", () => {
     expect(screen.queryByRole("button", { name: /停止|恢复|重试运行/ })).toBeNull();
   });
 
+  it("stops an active run with reason, csrf and idempotency protection", async () => {
+    let stopRequested = false;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["runs.read", "runs.control"]));
+      }
+      if (url.endsWith("/api/v1/admin/live-runs/run_active123/stop")) {
+        const headers = new Headers(init?.headers);
+        expect(init?.method).toBe("POST");
+        expect(headers.get("X-CSRF-Token")).toBe("csrf-runs");
+        expect(headers.get("Idempotency-Key")).toBeTruthy();
+        expect(JSON.parse(String(init?.body))).toEqual({
+          reason: "模型持续超时，停止本次运行",
+        });
+        stopRequested = true;
+        return jsonResponse(
+          {
+            action: "stop",
+            target_run_id: "run_active123",
+            run_id: "run_active123",
+            session_id: "game_active123",
+            run_status: "running",
+            stop_requested_at: "2026-07-11T08:00:00Z",
+            replayed: false,
+          },
+          202,
+        );
+      }
+      if (url.endsWith("/api/v1/admin/live-runs/run_active123")) {
+        return jsonResponse({
+          ...contractActiveLiveRunDetail,
+          stop_requested_at: stopRequested
+            ? "2026-07-11T08:00:00Z"
+            : null,
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/operations/runs/run_active123");
+
+    await user.click(await screen.findByRole("button", { name: "停止运行" }));
+    const reason = screen.getByLabelText("操作原因");
+    await user.type(reason, "模型持续超时，停止本次运行");
+    await user.click(screen.getByRole("button", { name: "确认停止" }));
+
+    expect(await screen.findByText(/下一个安全事件边界结束/)).toBeInTheDocument();
+    expect(screen.getByText("停止请求已提交")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "停止运行" })).toBeNull();
+  });
+
+  it("resumes a canceled checkpoint into a new run and navigates to it", async () => {
+    const canceledDetail = {
+      ...contractActiveLiveRunDetail,
+      status: "canceled",
+      completed_at: "2026-07-11T08:01:00Z",
+      stop_requested_at: "2026-07-11T08:00:00Z",
+      is_stale: false,
+    } as const;
+    const resumedDetail = {
+      ...contractActiveLiveRunDetail,
+      run_id: "run_resumed123",
+      session_id: "game_active123",
+      status: "queued",
+      stop_requested_at: null,
+      is_stale: false,
+    } as const;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["runs.read", "runs.control"]));
+      }
+      if (url.endsWith("/api/v1/admin/live-runs/run_active123/resume")) {
+        return jsonResponse(
+          {
+            action: "resume",
+            target_run_id: "run_active123",
+            run_id: "run_resumed123",
+            session_id: "game_active123",
+            run_status: "queued",
+            stop_requested_at: null,
+            replayed: false,
+          },
+          201,
+        );
+      }
+      if (url.endsWith("/api/v1/admin/live-runs/run_active123")) {
+        return jsonResponse(canceledDetail);
+      }
+      if (url.endsWith("/api/v1/admin/live-runs/run_resumed123")) {
+        return jsonResponse(resumedDetail);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const { router } = renderRoute("/operations/runs/run_active123");
+
+    await user.click(
+      await screen.findByRole("button", { name: "从检查点恢复" }),
+    );
+    await user.type(screen.getByLabelText("操作原因"), "服务恢复，继续执行");
+    await user.click(screen.getByRole("button", { name: "确认恢复" }));
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        "/operations/runs/run_resumed123",
+      ),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "run_resumed123" }),
+    ).toBeInTheDocument();
+  });
+
   it("requests debug only after an authorized click and links to the game", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

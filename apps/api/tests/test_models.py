@@ -481,6 +481,7 @@ def test_live_run_table_matches_expected_schema() -> None:
         "created_at",
         "started_at",
         "completed_at",
+        "stop_requested_at",
         "updated_at",
     }
     assert table.c.run_id.primary_key is True

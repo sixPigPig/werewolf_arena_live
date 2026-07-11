@@ -54,6 +54,7 @@ const runStatusLabels = {
   running: "进行中",
   completed: "已完成",
   failed: "失败",
+  canceled: "已取消",
 } satisfies Record<GameRunStatus, string>;
 
 export function deriveLiveNavStatus(input: LiveNavStatusInput): LiveNavStatus {
@@ -67,11 +68,14 @@ export function deriveLiveNavStatus(input: LiveNavStatusInput): LiveNavStatus {
   const interruptedLabel =
     input.runStatus === "failed" || input.hasFailedTerminalEvent
       ? "失败"
+      : input.runStatus === "canceled"
+        ? "已取消"
       : connectionLabel;
   const isEnded =
     input.runStatus === "completed" || input.hasCompletedTerminalEvent === true;
   const isInterrupted =
     input.runStatus === "failed" ||
+    input.runStatus === "canceled" ||
     input.hasFailedTerminalEvent === true ||
     (!isEnded &&
       (input.connectionState === "error" || input.connectionState === "closed"));
@@ -80,8 +84,8 @@ export function deriveLiveNavStatus(input: LiveNavStatusInput): LiveNavStatus {
     return {
       detailItems: [interruptedLabel],
       kind: "interrupted",
-      label: "异常中断",
-      tone: "danger",
+      label: input.runStatus === "canceled" ? "已取消" : "异常中断",
+      tone: input.runStatus === "canceled" ? "warning" : "danger",
     };
   }
 

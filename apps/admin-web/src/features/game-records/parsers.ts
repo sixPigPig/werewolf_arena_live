@@ -20,6 +20,7 @@ const RUN_STATUSES: LiveRunStatus[] = [
   "running",
   "completed",
   "failed",
+  "canceled",
 ];
 const SENSITIVE_RESPONSE_KEYS = new Set([
   "state",

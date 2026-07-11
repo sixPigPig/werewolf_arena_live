@@ -351,6 +351,8 @@ export function LiveTheaterControls({
 }: LiveTheaterControlsProps) {
   const canToggleVoice = Boolean(onToggleVoice && voiceState);
   const voiceIssueMessage = voiceState?.errors?.at(-1) ?? null;
+  const failureTitle =
+    run.status === "canceled" ? "对局已停止" : "对局异常中断";
 
   return (
     <footer className="mobile-live-control-deck" aria-label="实时观战操作">
@@ -449,7 +451,7 @@ export function LiveTheaterControls({
       </div>
       {failureReason ? (
         <p className="mobile-live-failure-notice" role="alert">
-          <strong>对局异常中断</strong>
+          <strong>{failureTitle}</strong>
           <span>{failureReason}</span>
         </p>
       ) : null}
@@ -498,6 +500,9 @@ function getLiveFailureReason(
   terminalEvent: LiveGameEvent | undefined,
   run: MobileLiveTheaterRun,
 ) {
+  if (terminalEvent?.type === "game_canceled" || run.status === "canceled") {
+    return "本次运行已由管理员停止；如存在检查点，可稍后恢复。";
+  }
   if (terminalEvent?.type === "game_failed") {
     const eventError = stringField(terminalEvent.payload, "error");
     if (eventError) {

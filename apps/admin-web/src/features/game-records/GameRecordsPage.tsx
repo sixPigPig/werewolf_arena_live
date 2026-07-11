@@ -121,6 +121,7 @@ export default function GameRecordsPage() {
               <option value="running">运行中</option>
               <option value="completed">已完成</option>
               <option value="failed">失败</option>
+              <option value="canceled">已取消</option>
             </select>
           </label>
           <label>

@@ -14,7 +14,7 @@ from app.werewolf.checkpoint import (
 )
 from app.werewolf.config import DEFAULT_MAX_ROUNDS
 from app.werewolf.engine import GameEngine, initialize_game_state
-from app.werewolf.live import NullEventSink
+from app.werewolf.live import GameRunCanceled, NullEventSink
 from app.werewolf.lm import ModelProvider
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.providers import create_model_provider, default_model_name
@@ -88,6 +88,12 @@ def run_game(
             checkpoint_manager=checkpoint_manager,
         )
         logs = engine.run()
+    except GameRunCanceled:
+        if engine is not None:
+            logs = engine.logs
+        state.error_message = "Run canceled by administrator"
+        record_store.save_game(state, logs)
+        raise
     except Exception as exc:
         if engine is not None:
             logs = engine.logs
@@ -153,6 +159,12 @@ def resume_game(
             checkpoint_manager=checkpoint_manager,
         )
         logs_after_resume = engine.run()
+    except GameRunCanceled:
+        if engine is not None:
+            logs_after_resume = engine.logs
+        state.error_message = "Run canceled by administrator"
+        record_store.save_game(state, logs_before_round + logs_after_resume)
+        raise
     except Exception as exc:
         if engine is not None:
             logs_after_resume = engine.logs

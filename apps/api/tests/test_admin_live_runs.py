@@ -29,6 +29,8 @@ from app.models.live import (
     VoiceAudioChunkRecord,
     VoiceUtteranceRecord,
 )
+from app.api.routes.games import SessionLiveStore, get_live_registry
+from app.werewolf.live import LiveRunRegistry
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class AdminLiveRunsContext:
     client: TestClient
     session_factory: sessionmaker[Session]
     engine: Engine
+    registry: LiveRunRegistry
 
 
 @pytest.fixture
@@ -57,6 +60,7 @@ def context(monkeypatch: pytest.MonkeyPatch) -> Generator[AdminLiveRunsContext, 
     )
     Base.metadata.create_all(engine)
     testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    registry = LiveRunRegistry(live_store=SessionLiveStore(testing_session))
 
     def override_get_db() -> Generator[Session, None, None]:
         with testing_session() as db:
@@ -64,11 +68,13 @@ def context(monkeypatch: pytest.MonkeyPatch) -> Generator[AdminLiveRunsContext, 
 
     application = create_application()
     application.dependency_overrides[get_db] = override_get_db
+    application.dependency_overrides[get_live_registry] = lambda: registry
     with TestClient(application) as client:
         yield AdminLiveRunsContext(
             client=client,
             session_factory=testing_session,
             engine=engine,
+            registry=registry,
         )
     engine.dispose()
 
@@ -253,6 +259,142 @@ def test_admin_live_runs_requires_authentication_and_runs_read_permission(
     assert forbidden.status_code == 403
     assert forbidden.json()["code"] == "admin_permission_denied"
     assert "runs.read" in forbidden.json()["detail"]
+
+
+def test_stop_live_run_requires_csrf_is_idempotent_and_audited(
+    context: AdminLiveRunsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login = _login(context, monkeypatch, role="operator")
+    run = context.registry.create_run(
+        session_id="game_10000001",
+        villager_model="model-villager",
+        werewolf_model="model-werewolf",
+        seed=1,
+        max_rounds=8,
+    )
+    context.registry.mark_running(run.run_id)
+    path = f"/api/v1/admin/live-runs/{run.run_id}/stop"
+    request_body = {"reason": "上游模型持续超时，人工停止"}
+
+    missing_csrf = context.client.post(
+        path,
+        json=request_body,
+        headers={"Idempotency-Key": "stop-live-run-001"},
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["code"] == "admin_csrf_invalid"
+
+    headers = {
+        "X-CSRF-Token": login["csrf_token"],
+        "Idempotency-Key": "stop-live-run-001",
+    }
+    accepted = context.client.post(path, json=request_body, headers=headers)
+    assert accepted.status_code == 202, accepted.text
+    assert accepted.json() == {
+        "action": "stop",
+        "target_run_id": run.run_id,
+        "run_id": run.run_id,
+        "session_id": "game_10000001",
+        "run_status": "running",
+        "stop_requested_at": context.registry.get_run(run.run_id).stop_requested_at,
+        "replayed": False,
+    }
+    assert context.registry.stop_requested(run.run_id) is True
+
+    replay = context.client.post(path, json=request_body, headers=headers)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["replayed"] is True
+
+    conflict = context.client.post(
+        path,
+        json={"reason": "改用同一个键提交不同原因"},
+        headers=headers,
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "admin_idempotency_conflict"
+
+    with context.session_factory() as db:
+        audit = db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "admin.live_run.stop")
+        )
+        persisted = db.get(LiveRunRecord, run.run_id)
+        assert audit is not None
+        assert audit.reason == request_body["reason"]
+        assert persisted is not None
+        assert persisted.stop_requested_at is not None
+
+
+def test_resume_live_run_requires_persistent_resumable_state_and_returns_new_run(
+    context: AdminLiveRunsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login = _login(context, monkeypatch, role="operator")
+    created_at = datetime(2026, 7, 11, 15, tzinfo=UTC)
+    _seed_run(
+        context,
+        run_id="run_000000000090",
+        session_id="game_00000090",
+        created_at=created_at,
+        status="failed",
+        game_status="partial",
+        resumable=True,
+        winner=None,
+    )
+
+    def fake_start_resume_game_run(*, session_id, store, registry):
+        del store
+        return (
+            registry.create_run(
+                session_id=session_id,
+                villager_model="model-villager",
+                werewolf_model="model-werewolf",
+                seed=90,
+                max_rounds=8,
+            ),
+            True,
+        )
+
+    monkeypatch.setattr(
+        live_run_routes,
+        "start_resume_game_run",
+        fake_start_resume_game_run,
+    )
+    path = "/api/v1/admin/live-runs/run_000000000090/resume"
+    headers = {
+        "X-CSRF-Token": login["csrf_token"],
+        "Idempotency-Key": "resume-live-run-001",
+    }
+    response = context.client.post(
+        path,
+        json={"reason": "模型服务恢复，继续检查点"},
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["action"] == "resume"
+    assert payload["target_run_id"] == "run_000000000090"
+    assert payload["run_id"] != payload["target_run_id"]
+    assert payload["session_id"] == "game_00000090"
+    assert payload["run_status"] == "queued"
+    assert payload["replayed"] is False
+
+    replay = context.client.post(
+        path,
+        json={"reason": "模型服务恢复，继续检查点"},
+        headers=headers,
+    )
+    assert replay.status_code == 200
+    assert replay.json()["run_id"] == payload["run_id"]
+    assert replay.json()["replayed"] is True
+
+    with context.session_factory() as db:
+        audit = db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "admin.live_run.resume")
+        )
+        assert audit is not None
+        assert audit.after["run_id"] == payload["run_id"]
 
 
 def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelisted(

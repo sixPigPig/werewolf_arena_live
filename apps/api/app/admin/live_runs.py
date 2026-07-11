@@ -24,6 +24,7 @@ class AdminLiveRunRow:
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    stop_requested_at: datetime | None
     updated_at: datetime
     has_error: bool
     game_status: str | None
@@ -215,6 +216,7 @@ def _base_run_query() -> Select[Any]:
         LiveRunRecord.created_at,
         LiveRunRecord.started_at,
         LiveRunRecord.completed_at,
+        LiveRunRecord.stop_requested_at,
         LiveRunRecord.updated_at,
         case(
             (
@@ -326,6 +328,8 @@ _LIFECYCLE_EVENT_TYPES = {
     "phase_started",
     "game_completed",
     "game_failed",
+    "run_stop_requested",
+    "game_canceled",
 }
 _WARNING_EVENT_TYPES = {
     "model_request_failed",

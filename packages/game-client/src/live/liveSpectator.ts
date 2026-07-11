@@ -118,7 +118,11 @@ export function deriveLiveSpectatorState(
       applyStateUpdate(state, event);
     }
 
-    if (event.type === "game_completed" || event.type === "game_failed") {
+    if (
+      event.type === "game_completed" ||
+      event.type === "game_failed" ||
+      event.type === "game_canceled"
+    ) {
       clearPendingPlayerStates(state);
     }
   }

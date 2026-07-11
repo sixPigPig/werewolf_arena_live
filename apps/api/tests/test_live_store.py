@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.live import LiveRunRecord
-from app.werewolf.live import LiveEvent, LiveRunRegistry
+from app.werewolf.live import EventSink, GameRunCanceled, LiveEvent, LiveRunRegistry
 from app.werewolf.live_store import DatabaseLiveStore
 
 
@@ -221,3 +221,32 @@ def test_live_store_updates_run_status(db_session: Session) -> None:
     assert saved_run is not None
     assert saved_run.status == "completed"
     assert saved_run.winner == "好人阵营"
+
+
+def test_live_run_stop_is_cooperative_and_persists_canceled_terminal_state(
+    db_session: Session,
+) -> None:
+    registry = LiveRunRegistry(live_store=DatabaseLiveStore(db_session))
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    registry.mark_running(run.run_id)
+
+    requested = registry.request_stop(run.run_id)
+
+    assert requested.type == "run_stop_requested"
+    assert registry.get_run(run.run_id).stop_requested_at is not None
+    with pytest.raises(GameRunCanceled):
+        EventSink(registry, run.run_id).publish("phase_started", phase="day")
+
+    canceled = registry.mark_canceled(run.run_id)
+    saved = db_session.get(LiveRunRecord, run.run_id)
+    assert canceled.type == "game_canceled"
+    assert saved is not None
+    assert saved.status == "canceled"
+    assert saved.stop_requested_at is not None
+    assert saved.error is None

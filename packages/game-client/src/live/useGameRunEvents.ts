@@ -28,6 +28,8 @@ const EVENT_TYPES = [
   "state_updated",
   "game_completed",
   "game_failed",
+  "run_stop_requested",
+  "game_canceled",
 ];
 
 type EventStreamState = {
@@ -123,7 +125,9 @@ export function useGameRunEvents(runId: string | undefined) {
         return;
       }
       const isTerminalEvent =
-        event.type === "game_completed" || event.type === "game_failed";
+        event.type === "game_completed" ||
+        event.type === "game_failed" ||
+        event.type === "game_canceled";
       setStreamState((current) => {
         if (current.runId !== runId) {
           return current;

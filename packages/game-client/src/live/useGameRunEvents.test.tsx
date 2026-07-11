@@ -120,6 +120,32 @@ describe("useGameRunEvents", () => {
     expect(result.current.latestEvent?.type).toBe("game_completed");
   });
 
+  it("closes the source when an administrator cancels the run", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const { result } = renderHook(() => useGameRunEvents("run_1234abcd"));
+    const source = MockEventSource.instances[0];
+    act(() => {
+      source.onopen?.();
+      source.emit("game_canceled", {
+        id: 2,
+        type: "game_canceled",
+        run_id: "run_1234abcd",
+        session_id: "game_1200abcd",
+        created_at: "2026-04-24T12:01:00Z",
+        round: null,
+        phase: null,
+        actor: null,
+        action: null,
+        payload: {},
+      });
+    });
+
+    await waitFor(() => expect(result.current.connectionState).toBe("closed"));
+    expect(source.closed).toBe(true);
+    expect(result.current.latestEvent?.type).toBe("game_canceled");
+  });
+
   it("ignores late callbacks after a terminal event closes the source", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
 

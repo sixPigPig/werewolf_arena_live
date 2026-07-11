@@ -1,11 +1,14 @@
 import { adminApiFetch } from "@/api/client";
 import {
   parseAdminLiveRunDebug,
+  parseAdminLiveRunControl,
   parseAdminLiveRunDetail,
   parseAdminLiveRunList,
 } from "@/features/live-runs/parsers";
 import type {
   AdminLiveRunDebug,
+  AdminLiveRunControlAction,
+  AdminLiveRunControlResult,
   AdminLiveRunDetail,
   AdminLiveRunList,
   AdminLiveRunListParams,
@@ -62,6 +65,27 @@ export async function getAdminLiveRunDebug(
     { signal },
   );
   return parseAdminLiveRunDebug(value);
+}
+
+export async function controlAdminLiveRun(
+  runId: string,
+  action: AdminLiveRunControlAction,
+  reason: string,
+  csrfToken: string,
+): Promise<AdminLiveRunControlResult> {
+  const value = await adminApiFetch<unknown>(
+    `${ADMIN_LIVE_RUNS_PATH}/${encodeURIComponent(runId)}/${action}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+        "X-CSRF-Token": csrfToken,
+      },
+      body: JSON.stringify({ reason }),
+    },
+  );
+  return parseAdminLiveRunControl(value);
 }
 
 function appendOptional(

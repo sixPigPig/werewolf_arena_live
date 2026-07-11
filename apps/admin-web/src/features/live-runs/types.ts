@@ -2,7 +2,8 @@ export type AdminLiveRunStatus =
   | "queued"
   | "running"
   | "completed"
-  | "failed";
+  | "failed"
+  | "canceled";
 
 export type AdminLiveRunSortField = "created_at" | "updated_at";
 
@@ -59,6 +60,7 @@ export type AdminLiveRunListItem = {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  stop_requested_at: string | null;
   updated_at: string;
   event_count: number;
   last_activity_at: string;
@@ -96,4 +98,16 @@ export type AdminLiveRunDebug = {
     error: string;
   }>;
   truncated: boolean;
+};
+
+export type AdminLiveRunControlAction = "stop" | "resume";
+
+export type AdminLiveRunControlResult = {
+  action: AdminLiveRunControlAction;
+  target_run_id: string;
+  run_id: string;
+  session_id: string;
+  run_status: AdminLiveRunStatus;
+  stop_requested_at: string | null;
+  replayed: boolean;
 };

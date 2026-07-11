@@ -1,6 +1,11 @@
 export type GameSessionStatus = "complete" | "partial";
 
-export type LiveRunStatus = "queued" | "running" | "completed" | "failed";
+export type LiveRunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled";
 
 export type AdminGameSortField = "created_at" | "updated_at";
 

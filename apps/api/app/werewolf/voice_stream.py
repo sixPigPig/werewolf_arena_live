@@ -34,8 +34,8 @@ from app.werewolf.volcengine_tts import (
 
 logger = logging.getLogger(__name__)
 
-TERMINAL_EVENT_TYPES = {"game_completed", "game_failed"}
-TERMINAL_RUN_STATUSES = {"completed", "failed"}
+TERMINAL_EVENT_TYPES = {"game_completed", "game_failed", "game_canceled"}
+TERMINAL_RUN_STATUSES = {"completed", "failed", "canceled"}
 IDLE_POLL_SECONDS = 0.1
 REQUEST_DELTA_COALESCE_SECONDS = 0.16
 TERMINAL_UNAVAILABLE_MESSAGE = "语音只支持进行中的实时对局；该对局已结束或异常中断。"

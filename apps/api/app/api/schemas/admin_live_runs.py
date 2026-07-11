@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.schemas.common import PaginationResponse
 
 
-AdminLiveRunStatus = Literal["queued", "running", "completed", "failed"]
+AdminLiveRunStatus = Literal["queued", "running", "completed", "failed", "canceled"]
 AdminLiveRunSort = Literal[
     "created_at",
     "-created_at",
@@ -51,6 +51,7 @@ class AdminLiveRunListItem(BaseModel):
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    stop_requested_at: datetime | None
     updated_at: datetime
     event_count: int
     last_activity_at: datetime
@@ -77,6 +78,28 @@ class AdminLiveRunEventSummary(BaseModel):
 
 class AdminLiveRunDetailResponse(AdminLiveRunListItem):
     recent_events: list[AdminLiveRunEventSummary] = Field(max_length=50)
+
+
+class AdminLiveRunControlRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 3:
+            raise ValueError("reason must contain at least 3 non-whitespace characters")
+        return normalized
+
+
+class AdminLiveRunControlResponse(BaseModel):
+    action: Literal["stop", "resume"]
+    target_run_id: str
+    run_id: str
+    session_id: str
+    run_status: AdminLiveRunStatus
+    stop_requested_at: datetime | None
+    replayed: bool
 
 
 class AdminLiveRunVoiceErrorSummary(BaseModel):

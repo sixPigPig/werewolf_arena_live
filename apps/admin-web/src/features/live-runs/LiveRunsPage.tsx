@@ -81,7 +81,7 @@ export default function LiveRunsPage() {
           <p>查看持久化运行状态、事件进度与安全诊断摘要。</p>
         </div>
         <div className="live-run-heading-actions">
-          <span className="page-readiness-badge">只读监控</span>
+          <span className="page-readiness-badge">监控与控制</span>
           <button
             className="admin-secondary-button"
             disabled={invalidDateRange || runsQuery.isFetching}
@@ -120,6 +120,7 @@ export default function LiveRunsPage() {
               <option value="running">运行中</option>
               <option value="completed">已完成</option>
               <option value="failed">失败</option>
+              <option value="canceled">已取消</option>
             </select>
           </label>
           <label>

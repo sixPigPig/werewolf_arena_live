@@ -89,8 +89,9 @@ def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
         "started_at",
         "completed_at",
         "winner",
-        "error",
-        "event_count",
+            "error",
+            "stop_requested_at",
+            "event_count",
     }
     assert set(run.events[0].payload) == {
         "session_id",

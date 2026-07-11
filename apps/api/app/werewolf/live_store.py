@@ -52,6 +52,7 @@ class DatabaseLiveStore:
         record.lineup_quality_warnings = copy.deepcopy(run.lineup_quality_warnings)
         record.winner = run.winner
         record.error = run.error
+        record.stop_requested_at = parse_live_datetime(run.stop_requested_at)
         record.started_at = parse_live_datetime(run.started_at)
         record.completed_at = parse_live_datetime(run.completed_at)
         self._commit()

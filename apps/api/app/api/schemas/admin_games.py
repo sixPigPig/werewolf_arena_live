@@ -9,7 +9,7 @@ from app.api.schemas.common import PaginationResponse
 
 
 AdminGameStatus = Literal["complete", "partial"]
-AdminGameRunStatus = Literal["queued", "running", "completed", "failed"]
+AdminGameRunStatus = Literal["queued", "running", "completed", "failed", "canceled"]
 AdminGameSort = Literal[
     "created_at",
     "-created_at",

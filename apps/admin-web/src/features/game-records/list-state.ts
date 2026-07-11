@@ -11,6 +11,7 @@ const RUN_STATUSES: LiveRunStatus[] = [
   "running",
   "completed",
   "failed",
+  "canceled",
 ];
 const SORT_FIELDS: AdminGameSortField[] = ["created_at", "updated_at"];
 

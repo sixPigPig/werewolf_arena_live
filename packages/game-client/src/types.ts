@@ -350,7 +350,12 @@ export type GameReplay = {
   debugItems: DebugItem[];
 };
 
-export type GameRunStatus = "queued" | "running" | "completed" | "failed";
+export type GameRunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled";
 
 export type VirtualPlayerProfile = {
   id: string;

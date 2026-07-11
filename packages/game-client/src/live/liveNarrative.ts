@@ -231,6 +231,20 @@ function cueForEvent({
     });
   }
 
+  if (event.type === "game_canceled") {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "terminal",
+      tone: "danger",
+      judgeLine: "本次运行已停止。",
+      performerLine: "本局已由管理员结束。",
+      detailLine: "当前进度已保存；如有检查点，可稍后恢复。",
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
   return fallbackCue(cue, actorName, godViewState);
 }
 

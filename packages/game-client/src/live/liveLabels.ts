@@ -41,6 +41,8 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   state_updated: "状态更新",
   game_completed: "对局完成",
   game_failed: "对局失败",
+  run_stop_requested: "正在停止对局",
+  game_canceled: "对局已取消",
 };
 
 export function phaseLabel(phase: string | null) {
@@ -107,6 +109,9 @@ export function liveEventTitle(event: LiveGameEvent) {
   }
   if (event.type === "game_failed") {
     return "对局失败";
+  }
+  if (event.type === "game_canceled") {
+    return "对局已取消";
   }
   return eventTypeLabel(event.type);
 }

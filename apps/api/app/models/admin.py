@@ -71,6 +71,32 @@ class AdminUserProvisioningRequest(Base):
     )
 
 
+class AdminRunControlRequest(Base):
+    __tablename__ = "admin_run_control_requests"
+    __table_args__ = (
+        Index(
+            "uq_admin_run_control_actor_key",
+            "actor_user_id",
+            "idempotency_key",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    actor_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_run_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    result_run_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     __table_args__ = (

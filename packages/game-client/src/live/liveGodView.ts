@@ -1057,7 +1057,11 @@ function waitingStageFocus(): GodViewStageFocus {
 }
 
 function stageFocusForEvent(event: LiveGameEvent): GodViewStageFocus {
-  if (event.type === "game_completed" || event.type === "game_failed") {
+  if (
+    event.type === "game_completed" ||
+    event.type === "game_failed" ||
+    event.type === "game_canceled"
+  ) {
     return {
       ...waitingStageFocus(),
       kind: "terminal",

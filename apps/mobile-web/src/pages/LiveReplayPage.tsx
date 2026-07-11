@@ -206,7 +206,10 @@ export function LiveReplayPage() {
 
 function terminalEventFor(events: LiveGameEvent[]) {
   return events.find(
-    (event) => event.type === "game_completed" || event.type === "game_failed",
+    (event) =>
+      event.type === "game_completed" ||
+      event.type === "game_failed" ||
+      event.type === "game_canceled",
   );
 }
 
@@ -219,6 +222,10 @@ function statusForVisiblePlayback(
 
   if (terminalEvent?.type === "game_failed") {
     return "failed";
+  }
+
+  if (terminalEvent?.type === "game_canceled") {
+    return "canceled";
   }
 
   return "running";
@@ -248,6 +255,10 @@ function playbackStatusLabel({
 
   if (terminalEvent?.type === "game_failed") {
     return "对局失败";
+  }
+
+  if (terminalEvent?.type === "game_canceled") {
+    return "已取消";
   }
 
   if (isPaused) {

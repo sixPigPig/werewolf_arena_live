@@ -21,7 +21,14 @@ from app.player_profiles.service import (
 from app.werewolf.checkpoint import ResumeCheckpointError
 from app.werewolf.config import choose_player_names
 from app.werewolf.debate_realism import lineup_quality_warnings
-from app.werewolf.live import EventSink, LiveEvent, LiveGameRun, LiveRunRegistry, format_sse
+from app.werewolf.live import (
+    EventSink,
+    GameRunCanceled,
+    LiveEvent,
+    LiveGameRun,
+    LiveRunRegistry,
+    format_sse,
+)
 from app.werewolf.live_store import DatabaseLiveStore
 from app.werewolf.player_configs import (
     PlayerConfig,
@@ -550,29 +557,38 @@ def resume_game_run(
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
     response: Response,
 ) -> dict:
+    run, created = start_resume_game_run(
+        session_id=session_id,
+        store=store,
+        registry=registry,
+    )
+    if not created:
+        response.status_code = 200
+        return run.to_summary()
+    return registry.get_run(run.run_id).to_summary()
+
+
+def start_resume_game_run(
+    *,
+    session_id: str,
+    store: GameRecordStore,
+    registry: LiveRunRegistry,
+) -> tuple[LiveGameRun, bool]:
     active_run = registry.try_get_active_run_for_session(session_id)
     if active_run is not None:
-        response.status_code = 200
-        return active_run.to_summary()
-
+        return active_run, False
     try:
         checkpoint = store.load_resume_checkpoint(session_id)
     except ResumeCheckpointError as exc:
         raise HTTPException(status_code=404, detail="Resume checkpoint not found") from exc
-
     run_params = checkpoint.get("run_params", {})
     if not isinstance(run_params, dict):
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid")
-
     rule_set_id = str(run_params.get("rule_set_id") or DEFAULT_RULE_SET_ID)
     try:
         rule_set = get_rule_set(rule_set_id)
     except KeyError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unknown rule set: {rule_set_id}",
-        ) from exc
-
+        raise HTTPException(status_code=422, detail=f"Unknown rule set: {rule_set_id}") from exc
     max_rounds = int(run_params.get("max_rounds") or 8)
     seed = run_params.get("seed")
     try:
@@ -590,19 +606,14 @@ def resume_game_run(
         player_configs=checkpoint_player_configs,
     )
     if not created:
-        response.status_code = 200
-        return run.to_summary()
+        return run, False
     thread = threading.Thread(
         target=_resume_game_in_background,
-        kwargs={
-            "run_id": run.run_id,
-            "registry": registry,
-            "session_id": session_id,
-        },
+        kwargs={"run_id": run.run_id, "registry": registry, "session_id": session_id},
         daemon=True,
     )
     thread.start()
-    return registry.get_run(run.run_id).to_summary()
+    return run, True
 
 
 @router.get("/{session_id}/playback")
@@ -696,7 +707,11 @@ def _run_game_in_background(
     rule_set_id: str,
     player_configs: list[PlayerConfig] | None = None,
 ) -> None:
-    registry.mark_running(run_id)
+    try:
+        registry.mark_running(run_id)
+    except GameRunCanceled:
+        registry.mark_canceled(run_id)
+        return
     db = SessionLocal()
     try:
         result = run_game(
@@ -710,6 +725,9 @@ def _run_game_in_background(
             event_sink=EventSink(registry, run_id),
             player_configs=player_configs,
         )
+    except GameRunCanceled:
+        registry.mark_canceled(run_id)
+        return
     except GameRunError as exc:
         registry.mark_failed(run_id, error=str(exc))
         return
@@ -728,7 +746,11 @@ def _resume_game_in_background(
     registry: LiveRunRegistry,
     session_id: str,
 ) -> None:
-    registry.mark_running(run_id)
+    try:
+        registry.mark_running(run_id)
+    except GameRunCanceled:
+        registry.mark_canceled(run_id)
+        return
     db = SessionLocal()
     try:
         result = resume_game(
@@ -736,6 +758,9 @@ def _resume_game_in_background(
             record_store=DatabaseReplayStore(db),
             event_sink=EventSink(registry, run_id),
         )
+    except GameRunCanceled:
+        registry.mark_canceled(run_id)
+        return
     except GameRunError as exc:
         registry.mark_failed(run_id, error=str(exc))
         return
@@ -780,7 +805,7 @@ def _event_stream(
 
 
 def _is_terminal_event(event: LiveEvent) -> bool:
-    return event.type in {"game_completed", "game_failed"}
+    return event.type in {"game_completed", "game_failed", "game_canceled"}
 
 
 def _resolve_event_resume_id(

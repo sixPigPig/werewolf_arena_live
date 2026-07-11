@@ -40,7 +40,9 @@ export function LiveGamePage() {
     enabled: Boolean(runId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "completed" || status === "failed" ? false : 15000;
+      return status === "completed" || status === "failed" || status === "canceled"
+        ? false
+        : 15000;
     },
   });
   const resumeMutation = useMutation({
@@ -52,10 +54,16 @@ export function LiveGamePage() {
   });
 
   const terminalEvent = events.find(
-    (event) => event.type === "game_completed" || event.type === "game_failed",
+    (event) =>
+      event.type === "game_completed" ||
+      event.type === "game_failed" ||
+      event.type === "game_canceled",
   );
   const canResumeRun =
-    run?.status === "failed" || terminalEvent?.type === "game_failed";
+    run?.status === "failed" ||
+    run?.status === "canceled" ||
+    terminalEvent?.type === "game_failed" ||
+    terminalEvent?.type === "game_canceled";
   const director = useLiveDirector(events, {
     holdAdvance: voiceAdvanceHold,
     resetKey: runId,

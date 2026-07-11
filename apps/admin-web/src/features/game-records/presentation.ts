@@ -13,6 +13,7 @@ export const RUN_STATUS_LABELS: Record<LiveRunStatus, string> = {
   running: "运行中",
   completed: "已完成",
   failed: "失败",
+  canceled: "已取消",
 };
 
 export function formatDateTime(value: string | null) {

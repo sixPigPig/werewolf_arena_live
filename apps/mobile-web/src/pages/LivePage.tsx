@@ -34,7 +34,9 @@ export function LivePage() {
     enabled: Boolean(gameId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "completed" || status === "failed" ? false : 15000;
+      return status === "completed" || status === "failed" || status === "canceled"
+        ? false
+        : 15000;
     },
   });
   const resumeMutation = useMutation({
@@ -155,13 +157,18 @@ export function LivePage() {
     backlogCount: director.backlogCount,
     connectionState,
     hasCompletedTerminalEvent: terminalEvent?.type === "game_completed",
-    hasFailedTerminalEvent: terminalEvent?.type === "game_failed",
+    hasFailedTerminalEvent:
+      terminalEvent?.type === "game_failed" ||
+      terminalEvent?.type === "game_canceled",
     isPaused: director.isPaused,
     runStatus: run?.status ?? "queued",
     speed: director.speed,
   });
   const canResumeRun =
-    run?.status === "failed" || terminalEvent?.type === "game_failed";
+    run?.status === "failed" ||
+    run?.status === "canceled" ||
+    terminalEvent?.type === "game_failed" ||
+    terminalEvent?.type === "game_canceled";
 
   return (
     <main className="mobile-page mobile-live-page">
@@ -242,11 +249,15 @@ function navigateBackToGames(navigate: ReturnType<typeof useNavigate>) {
 }
 
 function isTerminalEvent(event: LiveGameEvent) {
-  return event.type === "game_completed" || event.type === "game_failed";
+  return (
+    event.type === "game_completed" ||
+    event.type === "game_failed" ||
+    event.type === "game_canceled"
+  );
 }
 
 function isTerminalRunStatus(status: string | undefined) {
-  return status === "completed" || status === "failed";
+  return status === "completed" || status === "failed" || status === "canceled";
 }
 
 function isVoicePlaybackBlocking(

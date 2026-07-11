@@ -57,6 +57,8 @@ const SYSTEM_EVENT_TYPES = new Set([
   "phase_started",
   "game_completed",
   "game_failed",
+  "run_stop_requested",
+  "game_canceled",
 ]);
 
 const NODE_ORDER: LiveDebugTraceNodeKind[] = [

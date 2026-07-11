@@ -9,6 +9,7 @@ const statusLabels = {
   running: "进行中",
   completed: "已完成",
   failed: "失败",
+  canceled: "已取消",
 } as const;
 
 const connectionLabels = {

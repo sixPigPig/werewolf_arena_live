@@ -12,8 +12,12 @@ from typing import Any, Literal, Protocol
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
 
-RunStatus = Literal["queued", "running", "completed", "failed"]
+RunStatus = Literal["queued", "running", "completed", "failed", "canceled"]
 logger = logging.getLogger(__name__)
+
+
+class GameRunCanceled(RuntimeError):
+    """Raised by a live event sink when an operator requested a safe stop."""
 
 
 def utc_now() -> str:
@@ -97,6 +101,7 @@ class LiveGameRun:
     completed_at: str | None = None
     winner: str | None = None
     error: str | None = None
+    stop_requested_at: str | None = None
     events: list[LiveEvent] = field(default_factory=list)
     subscribers: list[queue.Queue[LiveEvent]] = field(default_factory=list)
     next_event_id: int = 1
@@ -123,6 +128,7 @@ class LiveGameRun:
             "completed_at": self.completed_at,
             "winner": self.winner,
             "error": self.error,
+            "stop_requested_at": self.stop_requested_at,
             "event_count": self.event_count,
         }
 
@@ -252,6 +258,7 @@ class LiveRunRegistry:
     def mark_running(self, run_id: str) -> LiveEvent:
         with self._lock:
             run = self._runs[run_id]
+            self._raise_if_stop_requested_locked(run)
             run.status = "running"
             run.started_at = utc_now()
             self._persist_run_locked(run)
@@ -282,6 +289,44 @@ class LiveRunRegistry:
                 "game_failed",
                 payload={"error": error},
             )
+
+    def request_stop(self, run_id: str) -> LiveEvent:
+        with self._lock:
+            run = self._runs[run_id]
+            if run.status not in {"queued", "running"}:
+                raise ValueError(f"Run {run_id} is not active")
+            if run.stop_requested_at is not None:
+                raise ValueError(f"Run {run_id} already has a stop request")
+            run.stop_requested_at = utc_now()
+            self._persist_run_locked(run)
+            return self._publish_locked(
+                run,
+                "run_stop_requested",
+                payload={"requested_at": run.stop_requested_at},
+            )
+
+    def stop_requested(self, run_id: str) -> bool:
+        with self._lock:
+            run = self._runs[run_id]
+            return run.stop_requested_at is not None
+
+    def raise_if_stop_requested(self, run_id: str) -> None:
+        with self._lock:
+            self._raise_if_stop_requested_locked(self._runs[run_id])
+
+    def mark_canceled(self, run_id: str) -> LiveEvent:
+        with self._lock:
+            run = self._runs[run_id]
+            run.status = "canceled"
+            run.error = None
+            run.completed_at = utc_now()
+            self._persist_run_locked(run)
+            return self._publish_locked(run, "game_canceled")
+
+    @staticmethod
+    def _raise_if_stop_requested_locked(run: LiveGameRun) -> None:
+        if run.stop_requested_at is not None:
+            raise GameRunCanceled("Game run was canceled by an administrator")
 
     def publish(
         self,
@@ -401,6 +446,7 @@ class EventSink:
         action: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> LiveEvent:
+        self.registry.raise_if_stop_requested(self.run_id)
         return self.registry.publish(
             self.run_id,
             event_type,
