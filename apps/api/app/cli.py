@@ -29,6 +29,8 @@ from app.werewolf.evaluator import evaluate_replay
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.providers import default_model_name
 from app.werewolf.replay import DatabaseReplayStore
+from app.werewolf.orphan_reaper import OrphanRecoveryResult, run_live_run_reaper
+from app.werewolf.live import LiveRunRegistry
 from app.werewolf.runner import GameRunError, run_game
 
 
@@ -101,6 +103,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Seconds to wait before polling an empty queue.",
     )
     voice_worker_parser.set_defaults(func=_run_judge_voice_worker_command)
+
+    live_reaper_parser = subparsers.add_parser(
+        "run-live-run-reaper",
+        help="Recover or terminate live runs whose worker lease expired.",
+    )
+    live_reaper_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Process at most one orphaned run, then exit.",
+    )
+    live_reaper_parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=settings.live_run_reaper_poll_seconds,
+    )
+    live_reaper_parser.add_argument(
+        "--stale-grace-seconds",
+        type=float,
+        default=settings.live_run_reaper_stale_grace_seconds,
+    )
+    live_reaper_parser.add_argument(
+        "--backoff-seconds",
+        type=float,
+        default=settings.live_run_reaper_backoff_seconds,
+    )
+    live_reaper_parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=settings.live_run_reaper_max_attempts,
+    )
+    live_reaper_parser.set_defaults(func=_run_live_run_reaper_command)
 
     provision_admin_parser = subparsers.add_parser(
         "provision-admin-user",
@@ -268,6 +301,67 @@ def _run_judge_voice_worker_command(args: argparse.Namespace) -> int:
 
     if args.once and processed_count == 0:
         print("job_id=none")
+    return 0
+
+
+def _run_live_run_reaper_command(args: argparse.Namespace) -> int:
+    if not 1 <= args.poll_seconds <= 60:
+        print("--poll-seconds must be between 1 and 60", file=sys.stderr)
+        return 2
+    if not 0 <= args.stale_grace_seconds <= 600:
+        print("--stale-grace-seconds must be between 0 and 600", file=sys.stderr)
+        return 2
+    if not 5 <= args.backoff_seconds <= 3600:
+        print("--backoff-seconds must be between 5 and 3600", file=sys.stderr)
+        return 2
+    if not 1 <= args.max_attempts <= 10:
+        print("--max-attempts must be between 1 and 10", file=sys.stderr)
+        return 2
+
+    from app.api.routes.games import SessionLiveStore
+
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(SessionLocal),
+        lease_seconds=settings.live_run_lease_seconds,
+        heartbeat_seconds=settings.live_run_heartbeat_seconds,
+        event_poll_seconds=settings.live_run_event_poll_seconds,
+    )
+    stop_event = Event()
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop_event.set()
+
+    def report(result: OrphanRecoveryResult) -> None:
+        print(
+            f"run_id={result.run_id} outcome={result.outcome} attempt={result.attempt}",
+            flush=True,
+        )
+
+    previous_handlers = {
+        signal_number: signal.signal(signal_number, request_stop)
+        for signal_number in (signal.SIGINT, signal.SIGTERM)
+    }
+    try:
+        processed_count = run_live_run_reaper(
+            SessionLocal,
+            registry,
+            stop_event=stop_event,
+            poll_seconds=args.poll_seconds,
+            stale_grace_seconds=args.stale_grace_seconds,
+            backoff_seconds=args.backoff_seconds,
+            max_attempts=args.max_attempts,
+            once=args.once,
+            on_recovery=report,
+        )
+    except Exception as exc:
+        print(f"live run reaper failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    finally:
+        for signal_number, handler in previous_handlers.items():
+            signal.signal(signal_number, handler)
+
+    if args.once and processed_count == 0:
+        print("run_id=none")
     return 0
 
 

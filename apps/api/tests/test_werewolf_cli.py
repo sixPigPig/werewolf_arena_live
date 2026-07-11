@@ -11,6 +11,7 @@ from app.db.base import Base
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.werewolf.orphan_reaper import OrphanRecoveryResult
 from app.werewolf.runner import GameRunError, RunGameResult
 
 PNG_BYTES = (
@@ -190,6 +191,45 @@ def test_voice_worker_rejects_unsafe_poll_interval(capsys) -> None:
 
     assert exit_code == 2
     assert "between 0.25 and 60" in capsys.readouterr().err
+
+
+def test_live_run_reaper_once_reports_recovery(capsys, monkeypatch) -> None:
+    calls = {}
+
+    def fake_reaper(session_factory, registry, **kwargs) -> int:
+        calls["session_factory"] = session_factory
+        calls["registry"] = registry
+        calls.update(kwargs)
+        kwargs["on_recovery"](
+            OrphanRecoveryResult(
+                run_id="run_123456789abc",
+                session_id="game_1234abcd",
+                attempt=2,
+                outcome="resumed",
+            )
+        )
+        return 1
+
+    monkeypatch.setattr(cli, "run_live_run_reaper", fake_reaper)
+
+    exit_code = main(["run-live-run-reaper", "--once"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == (
+        "run_id=run_123456789abc outcome=resumed attempt=2"
+    )
+    assert calls["once"] is True
+    assert calls["poll_seconds"] == 5.0
+    assert calls["stale_grace_seconds"] == 30.0
+    assert calls["backoff_seconds"] == 30.0
+    assert calls["max_attempts"] == 3
+
+
+def test_live_run_reaper_rejects_unsafe_options(capsys) -> None:
+    exit_code = main(["run-live-run-reaper", "--backoff-seconds", "1"])
+
+    assert exit_code == 2
+    assert "between 5 and 3600" in capsys.readouterr().err
 
 
 def test_provision_admin_user_creates_and_updates_authorized_account(

@@ -167,6 +167,8 @@ http://127.0.0.1:5175
 
 运行监控使用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要：列表第 1 页存在 queued/running 记录时每 5 秒轮询，无活跃运行时每 30 秒发现新记录，其他页仅手动刷新。Worker 在线状态来自数据库租约心跳，`last_activity_at` 同时保留持久化事件的新鲜度。普通列表/详情严格使用字段白名单；只有 completed 且关联对局已安全终局时才显示胜方、模型和事件 actor/action。脱敏错误分类必须具备 `runs.debug.read` 并由操作者显式请求独立 `/debug`，读取会写入审计。具备 `runs.control` 的操作者可以提交幂等停止或检查点恢复；过期租约通过单调递增的 fencing token 接管，旧 Worker 的事件、checkpoint、回放和终态写入会被数据库拒绝。Admin 只调用 `/api/v1/admin/*`，不调用旧匿名内容写接口；`mobile-web` 仍是唯一继续演进的 C 端。
 
+直播 orphan 自动恢复由独立进程 `.venv/bin/python -m app.cli run-live-run-reaper`（本地可用 `make live-run-reaper`）执行，不随每个 API 副本重复启动。它在租约过期并超过宽限期后原子认领运行：有停止请求则取消，有有效 checkpoint 则恢复，否则标记失败；认领使用指数退避并受最大次数限制。`--once` 可做单次部署验收。恢复次数、最近认领时间、退避截止时间和“自动恢复已耗尽”告警会显示在 Admin 运行监控中。
+
 法官语音资产使用 `/api/v1/admin/judge-voice-lines*` 提供 `voice.read` 保护的覆盖率、分类筛选、缺失项和受认证试听；普通 DTO 不返回文件路径、旧 public URL、manifest、字幕内容或音频字节。迁移 `20260711_06` 建立 PostgreSQL 独立资产表，`.venv/bin/python -m app.cli import-judge-voice-assets` 可幂等导入旧静态文件；Admin、实时法官语音和回放均数据库优先、旧目录回退。旧文件暂留作回滚输入。旧 Web 匿名生成 POST 默认关闭，production 禁止重新开启。
 
 迁移 `20260711_07` 建立持久语音生成任务。Admin 使用 CSRF、`voice.generate_missing` / `voice.regenerate_all` 和 `Idempotency-Key` 排队，独立 worker 通过 `.venv/bin/python -m app.cli run-judge-voice-worker` 持续领取任务；`--once` 仅用于单次运维检查，API 或 worker 重启不会丢失 queued job。

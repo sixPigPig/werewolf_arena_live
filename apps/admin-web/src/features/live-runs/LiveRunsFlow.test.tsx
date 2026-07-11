@@ -332,6 +332,8 @@ describe("admin live run flow", () => {
       ...contractActiveLiveRunDetail,
       worker_state: "stale",
       is_stale: true,
+      recovery_attempts: 3,
+      recovery_exhausted: true,
     } as const;
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
@@ -351,6 +353,8 @@ describe("admin live run flow", () => {
       await screen.findByRole("button", { name: "从检查点恢复" }),
     );
 
+    expect(screen.getByText(/自动恢复已耗尽，需要人工处理/)).toBeInTheDocument();
+    expect(screen.queryByText(/下次自动认领不早于/)).toBeNull();
     expect(
       screen.getByText(/旧 Worker 的后续写入会被拒绝/),
     ).toBeInTheDocument();

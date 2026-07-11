@@ -194,6 +194,22 @@ function parseListItem(value: unknown): AdminLiveRunListItem {
       "worker_heartbeat_at",
     ),
     worker_state: enumValue(record.worker_state, WORKER_STATES, "worker_state"),
+    recovery_attempts: nonNegativeInteger(
+      record.recovery_attempts,
+      "recovery_attempts",
+    ),
+    recovery_last_attempt_at: nullableDateString(
+      record.recovery_last_attempt_at,
+      "recovery_last_attempt_at",
+    ),
+    recovery_not_before: nullableDateString(
+      record.recovery_not_before,
+      "recovery_not_before",
+    ),
+    recovery_exhausted: booleanValue(
+      record.recovery_exhausted,
+      "recovery_exhausted",
+    ),
     updated_at: dateString(record.updated_at, "updated_at"),
     event_count: nonNegativeInteger(record.event_count, "event_count"),
     last_activity_at: dateString(
@@ -226,6 +242,9 @@ function parseListItem(value: unknown): AdminLiveRunListItem {
   }
   if (!isActiveStatus(item.status) && item.worker_state !== "released") {
     throw invalidContract("已终止运行必须标记为 Worker 已释放");
+  }
+  if (item.recovery_exhausted && item.worker_state !== "stale") {
+    throw invalidContract("只有失联运行可以标记为自动恢复已耗尽");
   }
   return item;
 }

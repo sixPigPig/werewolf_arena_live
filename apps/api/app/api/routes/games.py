@@ -29,6 +29,7 @@ from app.werewolf.live import (
     LiveRunRegistry,
     RunLeaseState,
     RunLeaseUnavailable,
+    RunRecoveryCandidate,
     format_sse,
 )
 from app.werewolf.live_store import DatabaseLiveStore
@@ -184,6 +185,52 @@ class SessionLiveStore:
                 heartbeat_at=heartbeat_at,
                 lease_expires_at=lease_expires_at,
                 fence_token=fence_token,
+            )
+        finally:
+            db.close()
+
+    def recovery_candidates(
+        self,
+        *,
+        stale_before: str,
+        now: str,
+        max_attempts: int,
+        limit: int,
+    ) -> list[RunRecoveryCandidate]:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).recovery_candidates(
+                stale_before=stale_before,
+                now=now,
+                max_attempts=max_attempts,
+                limit=limit,
+            )
+        finally:
+            db.close()
+
+    def acquire_recovery_lease(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        expected_attempts: int,
+        max_attempts: int,
+        stale_before: str,
+        heartbeat_at: str,
+        lease_expires_at: str,
+        recovery_not_before: str,
+    ) -> RunLeaseState | None:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).acquire_recovery_lease(
+                run_id,
+                worker_id=worker_id,
+                expected_attempts=expected_attempts,
+                max_attempts=max_attempts,
+                stale_before=stale_before,
+                heartbeat_at=heartbeat_at,
+                lease_expires_at=lease_expires_at,
+                recovery_not_before=recovery_not_before,
             )
         finally:
             db.close()

@@ -487,6 +487,10 @@ def test_live_run_table_matches_expected_schema() -> None:
         "lease_expires_at",
         "control_version",
         "fence_token",
+        "recovery_attempts",
+        "recovery_last_attempt_at",
+        "recovery_not_before",
+        "recovery_last_error",
         "updated_at",
     }
     assert table.c.run_id.primary_key is True
@@ -512,10 +516,15 @@ def test_live_run_table_matches_expected_schema() -> None:
     assert table.c.lease_expires_at.nullable is True
     assert table.c.control_version.nullable is False
     assert table.c.fence_token.nullable is False
+    assert table.c.recovery_attempts.nullable is False
+    assert table.c.recovery_last_attempt_at.nullable is True
+    assert table.c.recovery_not_before.nullable is True
+    _assert_text_column(table.c.recovery_last_error, nullable=True)
     assert table.c.updated_at.nullable is False
     _assert_index(table, "ix_live_runs_session_id", ["session_id"])
     _assert_index(table, "ix_live_runs_status", ["status"])
     _assert_index(table, "ix_live_runs_updated_at", ["updated_at"])
+    _assert_index(table, "ix_live_runs_recovery_not_before", ["recovery_not_before"])
     _assert_index(table, "uq_live_runs_active_session", ["session_id"])
     active_session_index = next(
         index for index in table.indexes if index.name == "uq_live_runs_active_session"

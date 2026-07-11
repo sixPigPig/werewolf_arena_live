@@ -358,7 +358,18 @@ function RunControlPanel({
           {run.worker_heartbeat_at
             ? ` · 心跳 ${formatLiveRunDateTime(run.worker_heartbeat_at)}`
             : ""}
+          {run.recovery_attempts ? ` · 自动恢复 ${run.recovery_attempts} 次` : ""}
         </small>
+        {run.recovery_not_before &&
+        run.worker_state === "stale" &&
+        !run.recovery_exhausted ? (
+          <small>
+            下次自动认领不早于 {formatLiveRunDateTime(run.recovery_not_before)}
+          </small>
+        ) : null}
+        {run.recovery_exhausted ? (
+          <small className="live-run-stale">自动恢复已耗尽，需要人工处理</small>
+        ) : null}
       </div>
       <div className="live-run-control-actions">
         {run.stop_requested_at ? (

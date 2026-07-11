@@ -14,6 +14,7 @@ from app.werewolf.live import (
     LiveGameRun,
     RunLeaseState,
     RunLeaseUnavailable,
+    RunRecoveryCandidate,
 )
 
 
@@ -101,6 +102,10 @@ class DatabaseLiveStore:
             run.control_version = record.control_version
         record.worker_id = run.worker_id
         record.fence_token = run.fence_token
+        record.recovery_attempts = run.recovery_attempts
+        record.recovery_last_attempt_at = parse_live_datetime(run.recovery_last_attempt_at)
+        record.recovery_not_before = parse_live_datetime(run.recovery_not_before)
+        record.recovery_last_error = run.recovery_last_error
         record.worker_heartbeat_at = parse_live_datetime(run.worker_heartbeat_at)
         if not fenced_by_terminal_state:
             record.lease_expires_at = parse_live_datetime(run.lease_expires_at)
@@ -198,7 +203,106 @@ class DatabaseLiveStore:
             status=record.status,
             control_version=record.control_version,
             fence_token=record.fence_token,
+            recovery_attempts=record.recovery_attempts,
+            recovery_last_attempt_at=_format_optional_datetime(
+                record.recovery_last_attempt_at
+            ),
+            recovery_not_before=_format_optional_datetime(record.recovery_not_before),
+            recovery_last_error=record.recovery_last_error,
         )
+
+    def recovery_candidates(
+        self,
+        *,
+        stale_before: str,
+        now: str,
+        max_attempts: int,
+        limit: int,
+    ) -> list[RunRecoveryCandidate]:
+        stale = parse_live_datetime(stale_before)
+        current = parse_live_datetime(now)
+        rows = self.db.execute(
+            select(
+                LiveRunRecord.run_id,
+                LiveRunRecord.session_id,
+                LiveRunRecord.recovery_attempts,
+            )
+            .where(
+                LiveRunRecord.status.in_(("queued", "running")),
+                LiveRunRecord.recovery_attempts < max_attempts,
+                or_(
+                    LiveRunRecord.recovery_not_before.is_(None),
+                    LiveRunRecord.recovery_not_before <= current,
+                ),
+                or_(
+                    LiveRunRecord.lease_expires_at <= stale,
+                    (
+                        LiveRunRecord.lease_expires_at.is_(None)
+                        & (LiveRunRecord.created_at <= stale)
+                    ),
+                ),
+            )
+            .order_by(LiveRunRecord.created_at, LiveRunRecord.run_id)
+            .limit(limit)
+        )
+        return [
+            RunRecoveryCandidate(
+                run_id=run_id,
+                session_id=session_id,
+                recovery_attempts=recovery_attempts,
+            )
+            for run_id, session_id, recovery_attempts in rows
+        ]
+
+    def acquire_recovery_lease(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        expected_attempts: int,
+        max_attempts: int,
+        stale_before: str,
+        heartbeat_at: str,
+        lease_expires_at: str,
+        recovery_not_before: str,
+    ) -> RunLeaseState | None:
+        stale = parse_live_datetime(stale_before)
+        heartbeat = parse_live_datetime(heartbeat_at)
+        result = self.db.execute(
+            update(LiveRunRecord)
+            .where(
+                LiveRunRecord.run_id == run_id,
+                LiveRunRecord.status.in_(("queued", "running")),
+                LiveRunRecord.recovery_attempts == expected_attempts,
+                LiveRunRecord.recovery_attempts < max_attempts,
+                or_(
+                    LiveRunRecord.recovery_not_before.is_(None),
+                    LiveRunRecord.recovery_not_before <= heartbeat,
+                ),
+                or_(
+                    LiveRunRecord.lease_expires_at <= stale,
+                    (
+                        LiveRunRecord.lease_expires_at.is_(None)
+                        & (LiveRunRecord.created_at <= stale)
+                    ),
+                ),
+            )
+            .values(
+                worker_id=worker_id,
+                worker_heartbeat_at=heartbeat,
+                lease_expires_at=parse_live_datetime(lease_expires_at),
+                fence_token=LiveRunRecord.fence_token + 1,
+                recovery_attempts=LiveRunRecord.recovery_attempts + 1,
+                recovery_last_attempt_at=heartbeat,
+                recovery_not_before=parse_live_datetime(recovery_not_before),
+                recovery_last_error=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        self._commit()
+        if result.rowcount != 1:
+            return None
+        return self._lease_state(run_id)
 
     def _run_from_record(self, record: LiveRunRecord) -> LiveGameRun:
         event_count = int(
@@ -232,6 +336,12 @@ class DatabaseLiveStore:
             lease_expires_at=_format_optional_datetime(record.lease_expires_at),
             control_version=record.control_version,
             fence_token=record.fence_token,
+            recovery_attempts=record.recovery_attempts,
+            recovery_last_attempt_at=_format_optional_datetime(
+                record.recovery_last_attempt_at
+            ),
+            recovery_not_before=_format_optional_datetime(record.recovery_not_before),
+            recovery_last_error=record.recovery_last_error,
             persisted_event_count=event_count,
             next_event_id=event_count + 1,
         )

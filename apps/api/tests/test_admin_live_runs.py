@@ -473,11 +473,13 @@ def test_stop_claims_and_cancels_a_stale_run_with_a_new_fence_token(
         assert record is not None
         record.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
         record.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+        record.recovery_attempts = 3
         db.commit()
     detail = context.client.get(f"/api/v1/admin/live-runs/{run.run_id}")
     assert detail.status_code == 200
     assert detail.json()["worker_state"] == "stale"
     assert detail.json()["is_stale"] is True
+    assert detail.json()["recovery_exhausted"] is True
 
     response = context.client.post(
         f"/api/v1/admin/live-runs/{run.run_id}/stop",

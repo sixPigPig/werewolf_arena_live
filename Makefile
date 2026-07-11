@@ -10,7 +10,7 @@ VITE_ADMIN_DEV_LOGIN_ENABLED ?= true
 VITE_ADMIN_PREVIEW_MODE ?= false
 ADMIN_WEB_LOCAL_ENV = VITE_ADMIN_AUTH_ENABLED=$(VITE_ADMIN_AUTH_ENABLED) VITE_ADMIN_DEV_LOGIN_ENABLED=$(VITE_ADMIN_DEV_LOGIN_ENABLED) VITE_ADMIN_PREVIEW_MODE=$(VITE_ADMIN_PREVIEW_MODE)
 
-.PHONY: install dev api web mobile-web admin-web voice-worker db-up db-down lint test build format release-check
+.PHONY: install dev api web mobile-web admin-web voice-worker live-run-reaper db-up db-down lint test build format release-check
 
 install:
 	cd apps/api && uv sync
@@ -22,6 +22,7 @@ dev:
 	@printf "Web: http://127.0.0.1:5173\n"
 	@printf "Mobile Web: http://127.0.0.1:5174\n"
 	@printf "Admin Web: http://127.0.0.1:5175\n"
+	@printf "Workers: make voice-worker / make live-run-reaper\n"
 	@printf "LAN Web: http://$(LAN_HOST):5173\n"
 	@printf "LAN Mobile Web: http://$(LAN_HOST):5174\n"
 
@@ -40,6 +41,9 @@ admin-web:
 
 voice-worker:
 	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-judge-voice-worker
+
+live-run-reaper:
+	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-live-run-reaper
 
 db-up:
 	docker compose up -d db

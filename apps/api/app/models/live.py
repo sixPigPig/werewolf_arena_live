@@ -50,6 +50,16 @@ class LiveRunRecord(Base):
     fence_token: Mapped[int] = mapped_column(
         nullable=False, default=0, server_default="0"
     )
+    recovery_attempts: Mapped[int] = mapped_column(
+        nullable=False, default=0, server_default="0"
+    )
+    recovery_last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    recovery_not_before: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    recovery_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

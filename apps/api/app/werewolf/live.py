@@ -34,6 +34,17 @@ class RunLeaseState:
     status: RunStatus
     control_version: int
     fence_token: int
+    recovery_attempts: int
+    recovery_last_attempt_at: str | None
+    recovery_not_before: str | None
+    recovery_last_error: str | None
+
+
+@dataclass(frozen=True)
+class RunRecoveryCandidate:
+    run_id: str
+    session_id: str
+    recovery_attempts: int
 
 
 def utc_now() -> str:
@@ -127,6 +138,10 @@ class LiveGameRun:
     lease_expires_at: str | None = None
     control_version: int = 0
     fence_token: int = 0
+    recovery_attempts: int = 0
+    recovery_last_attempt_at: str | None = None
+    recovery_not_before: str | None = None
+    recovery_last_error: str | None = None
     lease_lost: bool = field(default=False, repr=False)
     persisted_event_count: int = field(default=0, repr=False)
     events: list[LiveEvent] = field(default_factory=list)
@@ -200,6 +215,30 @@ class LiveStore(Protocol):
         heartbeat_at: str,
         lease_expires_at: str,
         fence_token: int,
+    ) -> RunLeaseState | None:
+        ...
+
+    def recovery_candidates(
+        self,
+        *,
+        stale_before: str,
+        now: str,
+        max_attempts: int,
+        limit: int,
+    ) -> list[RunRecoveryCandidate]:
+        ...
+
+    def acquire_recovery_lease(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        expected_attempts: int,
+        max_attempts: int,
+        stale_before: str,
+        heartbeat_at: str,
+        lease_expires_at: str,
+        recovery_not_before: str,
     ) -> RunLeaseState | None:
         ...
 
@@ -373,6 +412,74 @@ class LiveRunRegistry:
             self._apply_lease_state_locked(run, lease_state)
             return run
 
+    def recovery_candidates(
+        self,
+        *,
+        stale_before: str,
+        now: str,
+        max_attempts: int,
+        limit: int = 20,
+    ) -> list[RunRecoveryCandidate]:
+        loader = getattr(self._live_store, "recovery_candidates", None)
+        if not callable(loader):
+            return []
+        return loader(
+            stale_before=stale_before,
+            now=now,
+            max_attempts=max_attempts,
+            limit=limit,
+        )
+
+    def try_claim_orphan(
+        self,
+        candidate: RunRecoveryCandidate,
+        *,
+        stale_before: str,
+        recovery_not_before: str,
+        max_attempts: int,
+    ) -> LiveGameRun | None:
+        acquire = getattr(self._live_store, "acquire_recovery_lease", None)
+        if not callable(acquire):
+            return None
+        with self._lock:
+            local_run = self._runs.get(candidate.run_id)
+        persisted = self._load_persisted_run(candidate.run_id)
+        if persisted is None or persisted.status not in {"queued", "running"}:
+            return None
+        added = False
+        if local_run is None:
+            with self._lock:
+                local_run = self._runs.get(candidate.run_id)
+                if local_run is None:
+                    local_run = persisted
+                    self._runs[candidate.run_id] = local_run
+                    added = True
+        heartbeat_at, lease_expires_at = self._lease_window()
+        try:
+            state = acquire(
+                candidate.run_id,
+                worker_id=self.worker_id,
+                expected_attempts=candidate.recovery_attempts,
+                max_attempts=max_attempts,
+                stale_before=stale_before,
+                heartbeat_at=heartbeat_at,
+                lease_expires_at=lease_expires_at,
+                recovery_not_before=recovery_not_before,
+            )
+        except Exception:
+            if added:
+                with self._lock:
+                    self._runs.pop(candidate.run_id, None)
+            raise
+        if state is None:
+            if added:
+                with self._lock:
+                    self._runs.pop(candidate.run_id, None)
+            return None
+        with self._lock:
+            self._apply_lease_state_locked(local_run, state)
+            return local_run
+
     def write_fence(self, run_id: str) -> tuple[str, int]:
         with self._lock:
             run = self._runs[run_id]
@@ -432,6 +539,7 @@ class LiveRunRegistry:
             run.winner = winner
             run.completed_at = utc_now()
             run.lease_expires_at = None
+            run.recovery_last_error = None
             self._persist_run_locked(run)
             if run.status != "completed":
                 return self._publish_terminal_state_locked(run)
@@ -448,6 +556,8 @@ class LiveRunRegistry:
             run.error = error
             run.completed_at = utc_now()
             run.lease_expires_at = None
+            if run.recovery_attempts > 0:
+                run.recovery_last_error = error
             self._persist_run_locked(run)
             if run.status != "failed":
                 return self._publish_terminal_state_locked(run)
@@ -817,6 +927,10 @@ class LiveRunRegistry:
         run.stop_requested_at = state.stop_requested_at
         run.control_version = state.control_version
         run.fence_token = state.fence_token
+        run.recovery_attempts = state.recovery_attempts
+        run.recovery_last_attempt_at = state.recovery_last_attempt_at
+        run.recovery_not_before = state.recovery_not_before
+        run.recovery_last_error = state.recovery_last_error
         run.lease_lost = False
 
     def _poll_persisted_subscription(

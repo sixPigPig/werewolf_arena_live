@@ -55,6 +55,10 @@ class AdminLiveRunListItem(BaseModel):
     stop_requested_at: datetime | None
     worker_heartbeat_at: datetime | None
     worker_state: AdminLiveRunWorkerState
+    recovery_attempts: int
+    recovery_last_attempt_at: datetime | None
+    recovery_not_before: datetime | None
+    recovery_exhausted: bool
     updated_at: datetime
     event_count: int
     last_activity_at: datetime

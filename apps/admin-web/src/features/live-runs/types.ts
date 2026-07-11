@@ -68,6 +68,10 @@ export type AdminLiveRunListItem = {
   stop_requested_at: string | null;
   worker_heartbeat_at: string | null;
   worker_state: AdminLiveRunWorkerState;
+  recovery_attempts: number;
+  recovery_last_attempt_at: string | null;
+  recovery_not_before: string | null;
+  recovery_exhausted: boolean;
   updated_at: string;
   event_count: number;
   last_activity_at: string;

@@ -76,6 +76,10 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.live_run_lease_seconds == 15.0
     assert settings.live_run_heartbeat_seconds == 3.0
     assert settings.live_run_event_poll_seconds == 0.25
+    assert settings.live_run_reaper_poll_seconds == 5.0
+    assert settings.live_run_reaper_stale_grace_seconds == 30.0
+    assert settings.live_run_reaper_backoff_seconds == 30.0
+    assert settings.live_run_reaper_max_attempts == 3
 
 
 def test_settings_rejects_live_run_heartbeat_not_shorter_than_lease(

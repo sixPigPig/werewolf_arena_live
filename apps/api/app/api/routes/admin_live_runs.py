@@ -42,6 +42,7 @@ from app.api.schemas.admin_live_runs import (
     AdminLiveRunVoiceCounts,
 )
 from app.db.session import get_db
+from app.core.config import settings
 from app.models.admin import AdminRunControlRequest
 from app.models.game_session import GameSessionRecord
 from app.models.live import LiveRunRecord, VoiceUtteranceRecord
@@ -446,6 +447,8 @@ def _list_item(
     voice_counts: AdminVoiceCounts,
 ) -> AdminLiveRunListItem:
     game = _game_summary(record)
+    worker_state = _worker_state(record)
+    recovery_attempts = max(0, int(record.recovery_attempts or 0))
     return AdminLiveRunListItem(
         run_id=_safe_text(record.run_id, max_length=32),
         session_id=_safe_text(record.session_id, max_length=32),
@@ -464,7 +467,14 @@ def _list_item(
         completed_at=_optional_utc(record.completed_at),
         stop_requested_at=_optional_utc(record.stop_requested_at),
         worker_heartbeat_at=_optional_utc(record.worker_heartbeat_at),
-        worker_state=_worker_state(record),
+        worker_state=worker_state,
+        recovery_attempts=recovery_attempts,
+        recovery_last_attempt_at=_optional_utc(record.recovery_last_attempt_at),
+        recovery_not_before=_optional_utc(record.recovery_not_before),
+        recovery_exhausted=(
+            worker_state == "stale"
+            and recovery_attempts >= settings.live_run_reaper_max_attempts
+        ),
         updated_at=_as_utc(record.updated_at),
         event_count=max(0, event_count),
         last_activity_at=_activity_at(record, last_event_at),

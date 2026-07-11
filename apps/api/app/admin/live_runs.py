@@ -27,6 +27,9 @@ class AdminLiveRunRow:
     stop_requested_at: datetime | None
     worker_heartbeat_at: datetime | None
     lease_expires_at: datetime | None
+    recovery_attempts: int
+    recovery_last_attempt_at: datetime | None
+    recovery_not_before: datetime | None
     updated_at: datetime
     has_error: bool
     game_status: str | None
@@ -221,6 +224,9 @@ def _base_run_query() -> Select[Any]:
         LiveRunRecord.stop_requested_at,
         LiveRunRecord.worker_heartbeat_at,
         LiveRunRecord.lease_expires_at,
+        LiveRunRecord.recovery_attempts,
+        LiveRunRecord.recovery_last_attempt_at,
+        LiveRunRecord.recovery_not_before,
         LiveRunRecord.updated_at,
         case(
             (

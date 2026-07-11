@@ -268,6 +268,9 @@ function RunListItem({ run }: { run: AdminLiveRunListItem }) {
           {LIVE_RUN_STATUS_LABELS[run.status]}
         </span>
         {run.is_stale ? <small className="live-run-stale">可能失联</small> : null}
+        {run.recovery_exhausted ? (
+          <small className="live-run-stale">自动恢复已耗尽</small>
+        ) : null}
         {!run.is_stale ? <small>{LIVE_RUN_WORKER_LABELS[run.worker_state]}</small> : null}
       </div>
       <div className="live-run-admin-models">
@@ -283,6 +286,7 @@ function RunListItem({ run }: { run: AdminLiveRunListItem }) {
         <small>
           语音 {run.voice_counts.complete}/{run.voice_counts.total}
           {run.voice_counts.failed ? ` · 失败 ${run.voice_counts.failed}` : ""}
+          {run.recovery_attempts ? ` · 自动恢复 ${run.recovery_attempts} 次` : ""}
         </small>
       </div>
       <div className="live-run-admin-activity">
