@@ -11,6 +11,13 @@ export const LIVE_RUN_STATUS_LABELS: Record<AdminLiveRunStatus, string> = {
   canceled: "已取消",
 };
 
+export const LIVE_RUN_WORKER_LABELS = {
+  active: "Worker 在线",
+  stale: "Worker 租约过期",
+  unassigned: "等待 Worker",
+  released: "Worker 已释放",
+} as const;
+
 export function formatLiveRunDateTime(value: string | null) {
   if (!value) {
     return "—";

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 from app.werewolf.live import LiveRunRegistry, format_sse
 
@@ -38,6 +41,37 @@ class FailingLiveStore:
 
     def append_event(self, event) -> None:
         raise RuntimeError(f"cannot append {event.id}")
+
+
+class RacingActiveRunStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._initial_reads = threading.Barrier(2)
+        self.active_run = None
+
+    def active_run_for_session(self, _session_id):
+        with self._lock:
+            observed = self.active_run
+        if observed is None:
+            self._initial_reads.wait(timeout=1)
+        return observed
+
+    def load_run(self, run_id):
+        with self._lock:
+            return (
+                self.active_run
+                if self.active_run is not None and self.active_run.run_id == run_id
+                else None
+            )
+
+    def save_run(self, run) -> None:
+        with self._lock:
+            if self.active_run is not None:
+                raise RuntimeError("unique active session conflict")
+            self.active_run = run
+
+    def append_event(self, _event) -> None:
+        return None
 
 
 def test_registry_creates_run_with_initial_event() -> None:
@@ -272,23 +306,21 @@ def test_live_registry_persists_created_run_and_events() -> None:
     ]
 
 
-def test_live_registry_keeps_created_run_when_persistence_fails(caplog) -> None:
+def test_live_registry_rejects_created_run_when_initial_persistence_fails(caplog) -> None:
     registry = LiveRunRegistry(live_store=FailingLiveStore())
 
     with caplog.at_level(logging.ERROR, logger="app.werewolf.live"):
-        run = registry.create_run(
-            session_id="game_1200abcd",
-            villager_model="deepseek-chat",
-            werewolf_model="deepseek-chat",
-            seed=7,
-            max_rounds=8,
-        )
+        with pytest.raises(RuntimeError, match="cannot save"):
+            registry.create_run(
+                session_id="game_1200abcd",
+                villager_model="deepseek-chat",
+                werewolf_model="deepseek-chat",
+                seed=7,
+                max_rounds=8,
+            )
 
-    assert run.status == "queued"
-    assert [event.type for event in run.events] == ["run_created"]
-    assert registry.get_run(run.run_id) is run
+    assert registry.try_get_active_run_for_session("game_1200abcd") is None
     assert any("Failed to persist live run" in record.message for record in caplog.records)
-    assert any("Failed to persist live event" in record.message for record in caplog.records)
 
 
 def test_live_registry_publishes_to_subscriber_when_event_persistence_fails() -> None:
@@ -307,6 +339,29 @@ def test_live_registry_publishes_to_subscriber_when_event_persistence_fails() ->
 
     assert [item.type for item in run.events] == ["run_created", "phase_started"]
     assert subscriber.get_nowait() is event
+
+
+def test_two_registries_converge_on_one_active_run_during_create_race() -> None:
+    store = RacingActiveRunStore()
+    registries = [
+        LiveRunRegistry(live_store=store, worker_id="worker-a"),
+        LiveRunRegistry(live_store=store, worker_id="worker-b"),
+    ]
+
+    def create_or_get(registry: LiveRunRegistry):
+        return registry.get_or_create_active_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(create_or_get, registries))
+
+    assert len({run.run_id for run, _created in results}) == 1
+    assert sorted(created for _run, created in results) == [False, True]
 
 
 def test_live_registry_marks_completed_when_persistence_fails() -> None:

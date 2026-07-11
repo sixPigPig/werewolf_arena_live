@@ -12,6 +12,7 @@ import {
 import {
   formatLiveRunDateTime,
   LIVE_RUN_STATUS_LABELS,
+  LIVE_RUN_WORKER_LABELS,
   liveRunDetailRefreshInterval,
 } from "@/features/live-runs/presentation";
 import { adminLiveRunKeys } from "@/features/live-runs/query-keys";
@@ -82,7 +83,13 @@ export default function LiveRunDetailPage() {
         void navigate(`/operations/runs/${encodeURIComponent(result.run_id)}`);
         return;
       }
-      setControlNotice("停止请求已提交；运行会在下一个安全事件边界结束。 ");
+      setControlNotice(
+        result.run_status === "canceled"
+          ? "Worker 租约已过期，失联运行已安全终止。"
+          : runQuery.data?.worker_state === "stale"
+            ? "停止请求已持久化；Worker 租约已过期，等待原 Worker 恢复并确认。"
+          : "停止请求已提交；运行会在下一个安全事件边界结束。",
+      );
       await runQuery.refetch();
     },
   });
@@ -139,7 +146,7 @@ export default function LiveRunDetailPage() {
       </header>
 
       <p className="live-run-freshness-note">
-        活跃运行每 5 秒刷新；最近活动是数据库持久化时间，不是进程心跳或健康检查。
+        活跃运行每 5 秒刷新；Worker 状态来自数据库租约心跳，最近活动来自持久化事件。
       </p>
 
       {canControl ? (
@@ -344,6 +351,12 @@ function RunControlPanel({
         <span>RUNTIME CONTROL</span>
         <strong>安全运行控制</strong>
         <p>停止不会删除对局；恢复只会从已持久化检查点创建新运行。</p>
+        <small>
+          {LIVE_RUN_WORKER_LABELS[run.worker_state]}
+          {run.worker_heartbeat_at
+            ? ` · 心跳 ${formatLiveRunDateTime(run.worker_heartbeat_at)}`
+            : ""}
+        </small>
       </div>
       <div className="live-run-control-actions">
         {run.stop_requested_at ? (

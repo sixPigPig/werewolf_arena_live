@@ -177,27 +177,25 @@ def stop_live_run(
                 reason=request_body.reason, code="admin_live_run_not_active",
                 detail="Only queued or running live runs can be stopped.", status_code=409,
             )
-        attached = registry.try_get_run(run_id)
-        if attached is None:
-            _control_rejection(
-                db, request=request, principal=principal, action="stop", run_id=run_id,
-                reason=request_body.reason, code="admin_live_run_not_attached",
-                detail="This run is not attached to the current worker and cannot be stopped safely.",
-                status_code=409,
-            )
-        if attached.stop_requested_at is not None:
+        if record.stop_requested_at is not None:
             _control_rejection(
                 db, request=request, principal=principal, action="stop", run_id=run_id,
                 reason=request_body.reason, code="admin_live_run_stop_already_requested",
                 detail="A stop request is already pending for this run.", status_code=409,
             )
-        registry.request_stop(run_id)
-        current = registry.get_run(run_id)
+        requested_at = datetime.now(tz=UTC)
+        record.stop_requested_at = requested_at
+        record.control_version += 1
+        stale_worker = (
+            record.worker_heartbeat_at is not None
+            and record.lease_expires_at is not None
+            and _as_utc(record.lease_expires_at) <= requested_at
+        )
         control = AdminRunControlRequest(
             id=str(uuid4()), actor_user_id=principal.user.id,
             idempotency_key=idempotency_key, request_hash=request_hash,
             action="stop", target_run_id=run_id, result_run_id=run_id,
-            session_id=current.session_id,
+            session_id=record.session_id,
         )
         db.add(control)
         record_audit_event(
@@ -205,10 +203,24 @@ def stop_live_run(
             action="admin.live_run.stop", resource_type="live_run", resource_id=run_id,
             result="success", reason=request_body.reason,
             before={"status": record.status},
-            after={"status": current.status, "stop_requested": True},
+            after={
+                "status": record.status,
+                "stop_requested": True,
+                "control_version": record.control_version,
+                "stale_worker": stale_worker,
+            },
         )
         db.commit()
-        result = _control_response(control, current.status, current.stop_requested_at)
+        registry.adopt_stop_request(
+            run_id,
+            requested_at=requested_at.isoformat().replace("+00:00", "Z"),
+            control_version=record.control_version,
+        )
+        result = _control_response(
+            control,
+            record.status,
+            requested_at.isoformat().replace("+00:00", "Z"),
+        )
     except AdminAPIProblem:
         raise
     except IntegrityError as exc:
@@ -435,6 +447,8 @@ def _list_item(
         started_at=_optional_utc(record.started_at),
         completed_at=_optional_utc(record.completed_at),
         stop_requested_at=_optional_utc(record.stop_requested_at),
+        worker_heartbeat_at=_optional_utc(record.worker_heartbeat_at),
+        worker_state=_worker_state(record),
         updated_at=_as_utc(record.updated_at),
         event_count=max(0, event_count),
         last_activity_at=_activity_at(record, last_event_at),
@@ -493,8 +507,20 @@ def _activity_at(record: AdminLiveRunRow, last_event_at: datetime | None) -> dat
 def _is_stale(record: AdminLiveRunRow, last_event_at: datetime | None) -> bool:
     if record.status not in {"queued", "running"}:
         return False
+    if _worker_state(record) == "stale":
+        return True
     activity_at = _activity_at(record, last_event_at)
     return (_utc_now() - activity_at).total_seconds() > 60
+
+
+def _worker_state(record: AdminLiveRunRow) -> str:
+    if record.status not in {"queued", "running"}:
+        return "released"
+    if record.worker_heartbeat_at is None or record.lease_expires_at is None:
+        return "unassigned"
+    if _as_utc(record.lease_expires_at) <= _utc_now():
+        return "stale"
+    return "active"
 
 
 def _utc_now() -> datetime:

@@ -11,6 +11,7 @@ import {
 import {
   formatLiveRunDateTime,
   LIVE_RUN_STATUS_LABELS,
+  LIVE_RUN_WORKER_LABELS,
   liveRunListRefreshInterval,
 } from "@/features/live-runs/presentation";
 import { adminLiveRunKeys } from "@/features/live-runs/query-keys";
@@ -94,7 +95,7 @@ export default function LiveRunsPage() {
       </header>
 
       <p className="live-run-freshness-note">
-        第 1 页活跃运行每 5 秒刷新，无活跃运行时每 30 秒发现新记录；其他页仅手动刷新。“最近活动”来自数据库持久化事件，不代表进程在线或健康。
+        第 1 页活跃运行每 5 秒刷新，无活跃运行时每 30 秒发现新记录；Worker 状态来自数据库租约，“最近活动”来自持久化事件。
       </p>
 
       <section aria-label="运行筛选" className="game-filter-panel">
@@ -267,6 +268,7 @@ function RunListItem({ run }: { run: AdminLiveRunListItem }) {
           {LIVE_RUN_STATUS_LABELS[run.status]}
         </span>
         {run.is_stale ? <small className="live-run-stale">可能失联</small> : null}
+        {!run.is_stale ? <small>{LIVE_RUN_WORKER_LABELS[run.worker_state]}</small> : null}
       </div>
       <div className="live-run-admin-models">
         <strong title={run.villager_model ?? undefined}>

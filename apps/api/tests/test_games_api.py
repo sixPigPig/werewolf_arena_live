@@ -1193,6 +1193,42 @@ def test_get_game_run_returns_404_for_missing_run() -> None:
     assert response.json()["detail"] == "Game run not found"
 
 
+def test_get_and_stream_game_run_from_a_different_registry_instance() -> None:
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(TestingSessionLocal),
+        worker_id="worker-owner",
+    )
+    run = owner.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=12,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    owner.publish(run.run_id, "phase_started", phase="night")
+    owner.mark_completed(run.run_id, winner="好人阵营")
+    observer = LiveRunRegistry(
+        live_store=SessionLiveStore(TestingSessionLocal),
+        worker_id="worker-observer",
+        event_poll_seconds=0.01,
+    )
+    override_live_registry(observer)
+
+    try:
+        summary_response = client.get(f"/api/v1/games/runs/{run.run_id}")
+        events_response = client.get(f"/api/v1/games/runs/{run.run_id}/events")
+    finally:
+        clear_overrides()
+
+    assert summary_response.status_code == 200
+    assert summary_response.json()["status"] == "completed"
+    assert summary_response.json()["event_count"] == 4
+    assert events_response.status_code == 200
+    assert "event: phase_started" in events_response.text
+    assert "event: game_completed" in events_response.text
+
+
 def test_run_game_in_background_publishes_registry_and_engine_events_directly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

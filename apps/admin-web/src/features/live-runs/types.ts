@@ -6,6 +6,11 @@ export type AdminLiveRunStatus =
   | "canceled";
 
 export type AdminLiveRunSortField = "created_at" | "updated_at";
+export type AdminLiveRunWorkerState =
+  | "active"
+  | "stale"
+  | "unassigned"
+  | "released";
 
 export type AdminLiveRunListParams = {
   page: number;
@@ -61,6 +66,8 @@ export type AdminLiveRunListItem = {
   started_at: string | null;
   completed_at: string | null;
   stop_requested_at: string | null;
+  worker_heartbeat_at: string | null;
+  worker_state: AdminLiveRunWorkerState;
   updated_at: string;
   event_count: number;
   last_activity_at: string;

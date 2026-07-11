@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     ark_tts_judge_asset_audio_format: str = "mp3"
     ark_tts_judge_asset_sample_rate: int = 24000
     judge_voice_worker_poll_seconds: float = Field(default=2.0, ge=0.25, le=60.0)
+    live_run_lease_seconds: float = Field(default=15.0, ge=5.0, le=120.0)
+    live_run_heartbeat_seconds: float = Field(default=3.0, ge=0.5, le=30.0)
+    live_run_event_poll_seconds: float = Field(default=0.25, ge=0.05, le=5.0)
 
     @field_validator("cors_origins", "public_cors_origins", mode="before")
     @classmethod
@@ -89,6 +92,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_admin_production_safety(self) -> "Settings":
+        if self.live_run_heartbeat_seconds >= self.live_run_lease_seconds:
+            raise ValueError(
+                "LIVE_RUN_HEARTBEAT_SECONDS must be shorter than LIVE_RUN_LEASE_SECONDS"
+            )
         auth_cookie_names = {
             self.admin_session_cookie_name,
             f"{self.admin_session_cookie_name}_csrf",

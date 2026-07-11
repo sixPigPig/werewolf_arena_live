@@ -73,6 +73,19 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.ark_tts_judge_asset_audio_format == "mp3"
     assert settings.ark_tts_judge_asset_sample_rate == 24000
     assert settings.judge_voice_worker_poll_seconds == 2.0
+    assert settings.live_run_lease_seconds == 15.0
+    assert settings.live_run_heartbeat_seconds == 3.0
+    assert settings.live_run_event_poll_seconds == 0.25
+
+
+def test_settings_rejects_live_run_heartbeat_not_shorter_than_lease(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("LIVE_RUN_LEASE_SECONDS", "10")
+    monkeypatch.setenv("LIVE_RUN_HEARTBEAT_SECONDS", "10")
+
+    with pytest.raises(ValidationError, match="must be shorter"):
+        Settings(_env_file=None)
 
 
 def test_settings_reads_tts_env_values(monkeypatch) -> None:

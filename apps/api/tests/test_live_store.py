@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import create_engine
@@ -8,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.routes.games import SessionLiveStore
 from app.db.base import Base
 from app.models.live import LiveRunRecord
 from app.werewolf.live import EventSink, GameRunCanceled, LiveEvent, LiveRunRegistry
@@ -119,6 +121,9 @@ def test_live_store_returns_latest_eventful_playback_events_for_session(
     )
     store = DatabaseLiveStore(db_session)
 
+    first_run.status = "completed"
+    empty_run.status = "completed"
+    latest_run.status = "completed"
     store.save_run(first_run)
     store.append_event(first_event)
     store.save_run(empty_run)
@@ -250,3 +255,114 @@ def test_live_run_stop_is_cooperative_and_persists_canceled_terminal_state(
     assert saved.status == "canceled"
     assert saved.stop_requested_at is not None
     assert saved.error is None
+
+
+def test_two_registries_share_run_events_lease_and_stop_signal(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-owner",
+        lease_seconds=5,
+        event_poll_seconds=0.01,
+    )
+    observer = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-observer",
+        lease_seconds=5,
+        event_poll_seconds=0.01,
+    )
+    run = owner.create_run(
+        session_id="game_2200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=22,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+
+    persisted = observer.try_get_run(run.run_id)
+    active, created = observer.get_or_create_active_run(
+        session_id=run.session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=22,
+        max_rounds=8,
+    )
+    assert persisted is not None
+    assert persisted.run_id == run.run_id
+    assert active.run_id == run.run_id
+    assert created is False
+
+    subscriber = observer.subscribe(run.run_id, after_id=run.events[-1].id)
+    owner.publish(run.run_id, "phase_started", phase="night")
+    observed = subscriber.get(timeout=1)
+    observer.unsubscribe(run.run_id, subscriber)
+    assert observed.type == "phase_started"
+
+    with session_factory() as db:
+        record = db.get(LiveRunRecord, run.run_id)
+        assert record is not None
+        record.stop_requested_at = datetime.now(tz=UTC)
+        record.control_version += 1
+        db.commit()
+        competing_lease = DatabaseLiveStore(db).acquire_lease(
+            run.run_id,
+            worker_id="worker-observer",
+            heartbeat_at="2026-07-11T08:00:00Z",
+            lease_expires_at="2026-07-11T08:00:05Z",
+        )
+    assert competing_lease is None
+
+    lease_state = owner.refresh_lease(run.run_id)
+    assert lease_state is not None
+    assert owner.stop_requested(run.run_id) is True
+    assert owner.events_after(run.run_id)[-1].type == "run_stop_requested"
+    with pytest.raises(GameRunCanceled):
+        EventSink(owner, run.run_id).publish("phase_started", phase="day")
+    owner.mark_canceled(run.run_id)
+
+
+def test_stale_worker_state_cannot_erase_newer_database_control_signal(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-owner",
+    )
+    run = owner.create_run(
+        session_id="game_3300abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=33,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    requested_at = datetime.now(tz=UTC)
+    with session_factory() as db:
+        record = db.get(LiveRunRecord, run.run_id)
+        assert record is not None
+        record.stop_requested_at = requested_at
+        record.control_version = 1
+        db.commit()
+
+    owner.mark_completed(run.run_id, winner="好人阵营")
+
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        assert saved.status == "completed"
+        assert saved.control_version == 1
+        assert saved.stop_requested_at is not None
+    assert run.control_version == 1
+    assert run.stop_requested_at is not None

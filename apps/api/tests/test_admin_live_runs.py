@@ -289,6 +289,11 @@ def test_stop_live_run_requires_csrf_is_idempotent_and_audited(
         "X-CSRF-Token": login["csrf_token"],
         "Idempotency-Key": "stop-live-run-001",
     }
+    foreign_registry = LiveRunRegistry(
+        live_store=SessionLiveStore(context.session_factory),
+        worker_id="worker-foreign-api",
+    )
+    context.client.app.dependency_overrides[get_live_registry] = lambda: foreign_registry
     accepted = context.client.post(path, json=request_body, headers=headers)
     assert accepted.status_code == 202, accepted.text
     assert accepted.json() == {
@@ -297,9 +302,11 @@ def test_stop_live_run_requires_csrf_is_idempotent_and_audited(
         "run_id": run.run_id,
         "session_id": "game_10000001",
         "run_status": "running",
-        "stop_requested_at": context.registry.get_run(run.run_id).stop_requested_at,
+        "stop_requested_at": accepted.json()["stop_requested_at"],
         "replayed": False,
     }
+    assert context.registry.stop_requested(run.run_id) is False
+    context.registry.refresh_lease(run.run_id)
     assert context.registry.stop_requested(run.run_id) is True
 
     replay = context.client.post(path, json=request_body, headers=headers)
@@ -395,6 +402,63 @@ def test_resume_live_run_requires_persistent_resumable_state_and_returns_new_run
         )
         assert audit is not None
         assert audit.after["run_id"] == payload["run_id"]
+
+
+def test_stop_preserves_a_stale_run_until_its_worker_acknowledges_the_signal(
+    context: AdminLiveRunsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login = _login(context, monkeypatch, role="operator")
+    run = context.registry.create_run(
+        session_id="game_10000002",
+        villager_model="model-villager",
+        werewolf_model="model-werewolf",
+        seed=2,
+        max_rounds=8,
+    )
+    context.registry.mark_running(run.run_id)
+    with context.session_factory() as db:
+        record = db.get(LiveRunRecord, run.run_id)
+        assert record is not None
+        record.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+        db.commit()
+    foreign_registry = LiveRunRegistry(
+        live_store=SessionLiveStore(context.session_factory),
+        worker_id="worker-foreign-api",
+    )
+    context.client.app.dependency_overrides[get_live_registry] = lambda: foreign_registry
+
+    detail = context.client.get(f"/api/v1/admin/live-runs/{run.run_id}")
+    assert detail.status_code == 200
+    assert detail.json()["worker_state"] == "stale"
+    assert detail.json()["is_stale"] is True
+
+    response = context.client.post(
+        f"/api/v1/admin/live-runs/{run.run_id}/stop",
+        json={"reason": "Worker 租约过期，终止失联运行"},
+        headers={
+            "X-CSRF-Token": login["csrf_token"],
+            "Idempotency-Key": "stop-stale-run-001",
+        },
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["run_status"] == "running"
+    with context.session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.winner is None
+        assert saved.stop_requested_at is not None
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "admin.live_run.stop",
+                AuditEvent.resource_id == run.run_id,
+            )
+        )
+        assert audit is not None
+        assert audit.after["stale_worker"] is True
 
 
 def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelisted(
@@ -497,6 +561,8 @@ def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelist
     assert running_item["event_count"] == 1
     assert running_item["last_activity_at"] == "2026-07-11T09:00:01Z"
     assert running_item["is_stale"] is True
+    assert running_item["worker_state"] == "unassigned"
+    assert running_item["worker_heartbeat_at"] is None
 
     data_statements = [
         sql
@@ -523,6 +589,7 @@ def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelist
     assert first["run_id"] == "run_000000000001"
     assert first["villager_model"] == "model-villager"
     assert first["winner"] == "好人阵营"
+    assert first["worker_state"] == "released"
     assert first["voice_counts"] == {
         "total": 6,
         "pending": 1,

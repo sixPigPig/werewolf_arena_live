@@ -37,6 +37,16 @@ class LiveRunRecord(Base):
     stop_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    worker_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    control_version: Mapped[int] = mapped_column(
+        nullable=False, default=0, server_default="0"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -51,6 +61,13 @@ Index(
     LiveRunRecord.session_id,
     LiveRunRecord.created_at.desc(),
     LiveRunRecord.run_id.desc(),
+)
+Index(
+    "uq_live_runs_active_session",
+    LiveRunRecord.session_id,
+    unique=True,
+    postgresql_where=LiveRunRecord.status.in_(("queued", "running")),
+    sqlite_where=LiveRunRecord.status.in_(("queued", "running")),
 )
 Index(
     "ix_live_runs_updated_at_run_id_desc",

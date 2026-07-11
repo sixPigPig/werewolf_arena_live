@@ -270,6 +270,7 @@ describe("admin live run flow", () => {
       completed_at: "2026-07-11T08:01:00Z",
       stop_requested_at: "2026-07-11T08:00:00Z",
       is_stale: false,
+      worker_state: "released",
     } as const;
     const resumedDetail = {
       ...contractActiveLiveRunDetail,

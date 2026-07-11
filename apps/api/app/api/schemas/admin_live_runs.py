@@ -9,6 +9,7 @@ from app.api.schemas.common import PaginationResponse
 
 
 AdminLiveRunStatus = Literal["queued", "running", "completed", "failed", "canceled"]
+AdminLiveRunWorkerState = Literal["active", "stale", "unassigned", "released"]
 AdminLiveRunSort = Literal[
     "created_at",
     "-created_at",
@@ -52,6 +53,8 @@ class AdminLiveRunListItem(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     stop_requested_at: datetime | None
+    worker_heartbeat_at: datetime | None
+    worker_state: AdminLiveRunWorkerState
     updated_at: datetime
     event_count: int
     last_activity_at: datetime

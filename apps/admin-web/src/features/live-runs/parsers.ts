@@ -10,6 +10,7 @@ import type {
   AdminLiveRunRuleSet,
   AdminLiveRunStatus,
   AdminLiveRunVoiceCounts,
+  AdminLiveRunWorkerState,
 } from "@/features/live-runs/types";
 
 const RUN_STATUSES: AdminLiveRunStatus[] = [
@@ -20,6 +21,12 @@ const RUN_STATUSES: AdminLiveRunStatus[] = [
   "canceled",
 ];
 const GAME_STATUSES = ["complete", "partial"] as const;
+const WORKER_STATES: AdminLiveRunWorkerState[] = [
+  "active",
+  "stale",
+  "unassigned",
+  "released",
+];
 const SENSITIVE_KEYS = new Set([
   "payload",
   "player_configs",
@@ -182,6 +189,11 @@ function parseListItem(value: unknown): AdminLiveRunListItem {
       record.stop_requested_at,
       "stop_requested_at",
     ),
+    worker_heartbeat_at: nullableDateString(
+      record.worker_heartbeat_at,
+      "worker_heartbeat_at",
+    ),
+    worker_state: enumValue(record.worker_state, WORKER_STATES, "worker_state"),
     updated_at: dateString(record.updated_at, "updated_at"),
     event_count: nonNegativeInteger(record.event_count, "event_count"),
     last_activity_at: dateString(
@@ -208,6 +220,12 @@ function parseListItem(value: unknown): AdminLiveRunListItem {
   }
   if (!isActiveStatus(item.status) && item.is_stale) {
     throw invalidContract("已终止运行不得标记为可能失联");
+  }
+  if (isActiveStatus(item.status) && item.worker_state === "released") {
+    throw invalidContract("活跃运行不得标记为 Worker 已释放");
+  }
+  if (!isActiveStatus(item.status) && item.worker_state !== "released") {
+    throw invalidContract("已终止运行必须标记为 Worker 已释放");
   }
   return item;
 }

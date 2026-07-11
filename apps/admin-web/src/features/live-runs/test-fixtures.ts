@@ -17,6 +17,8 @@ export const contractLiveRunItem: AdminLiveRunListItem = {
   started_at: "2026-07-10T01:00:01Z",
   completed_at: "2026-07-10T01:03:00Z",
   stop_requested_at: null,
+  worker_heartbeat_at: "2026-07-10T01:02:58Z",
+  worker_state: "released",
   updated_at: "2026-07-10T01:03:01Z",
   event_count: 5,
   last_activity_at: "2026-07-10T01:03:00Z",
@@ -43,6 +45,7 @@ export const contractActiveLiveRunItem: AdminLiveRunListItem = {
   villager_model: null,
   werewolf_model: null,
   completed_at: null,
+  worker_state: "active",
   event_count: 2,
   is_stale: true,
   voice_counts: {

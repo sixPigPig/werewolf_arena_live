@@ -27,6 +27,7 @@ from app.werewolf.live import (
     LiveEvent,
     LiveGameRun,
     LiveRunRegistry,
+    RunLeaseState,
     format_sse,
 )
 from app.werewolf.live_store import DatabaseLiveStore
@@ -111,6 +112,65 @@ class SessionLiveStore:
         db = self.session_factory()
         try:
             DatabaseLiveStore(db).append_event(event)
+        finally:
+            db.close()
+
+    def load_run(self, run_id: str) -> LiveGameRun | None:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).load_run(run_id)
+        finally:
+            db.close()
+
+    def active_run_for_session(self, session_id: str) -> LiveGameRun | None:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).active_run_for_session(session_id)
+        finally:
+            db.close()
+
+    def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).events_after(run_id, after_id=after_id)
+        finally:
+            db.close()
+
+    def acquire_lease(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        heartbeat_at: str,
+        lease_expires_at: str,
+    ) -> RunLeaseState | None:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).acquire_lease(
+                run_id,
+                worker_id=worker_id,
+                heartbeat_at=heartbeat_at,
+                lease_expires_at=lease_expires_at,
+            )
+        finally:
+            db.close()
+
+    def heartbeat_lease(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        heartbeat_at: str,
+        lease_expires_at: str,
+    ) -> RunLeaseState | None:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).heartbeat_lease(
+                run_id,
+                worker_id=worker_id,
+                heartbeat_at=heartbeat_at,
+                lease_expires_at=lease_expires_at,
+            )
         finally:
             db.close()
 
@@ -215,7 +275,12 @@ class SessionVoiceStore:
             db.close()
 
 
-live_registry = LiveRunRegistry(live_store=SessionLiveStore())
+live_registry = LiveRunRegistry(
+    live_store=SessionLiveStore(),
+    lease_seconds=settings.live_run_lease_seconds,
+    heartbeat_seconds=settings.live_run_heartbeat_seconds,
+    event_poll_seconds=settings.live_run_event_poll_seconds,
+)
 
 
 def get_live_registry() -> LiveRunRegistry:
@@ -714,17 +779,18 @@ def _run_game_in_background(
         return
     db = SessionLocal()
     try:
-        result = run_game(
-            record_store=DatabaseReplayStore(db),
-            villager_model=villager_model,
-            werewolf_model=werewolf_model,
-            seed=seed,
-            rule_set_id=rule_set_id,
-            max_rounds=max_rounds,
-            session_id=session_id,
-            event_sink=EventSink(registry, run_id),
-            player_configs=player_configs,
-        )
+        with registry.maintain_lease(run_id):
+            result = run_game(
+                record_store=DatabaseReplayStore(db),
+                villager_model=villager_model,
+                werewolf_model=werewolf_model,
+                seed=seed,
+                rule_set_id=rule_set_id,
+                max_rounds=max_rounds,
+                session_id=session_id,
+                event_sink=EventSink(registry, run_id),
+                player_configs=player_configs,
+            )
     except GameRunCanceled:
         registry.mark_canceled(run_id)
         return
@@ -753,11 +819,12 @@ def _resume_game_in_background(
         return
     db = SessionLocal()
     try:
-        result = resume_game(
-            session_id=session_id,
-            record_store=DatabaseReplayStore(db),
-            event_sink=EventSink(registry, run_id),
-        )
+        with registry.maintain_lease(run_id):
+            result = resume_game(
+                session_id=session_id,
+                record_store=DatabaseReplayStore(db),
+                event_sink=EventSink(registry, run_id),
+            )
     except GameRunCanceled:
         registry.mark_canceled(run_id)
         return
