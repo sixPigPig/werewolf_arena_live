@@ -246,52 +246,6 @@ function getAlphaAt(
   return image.pixels[(y * image.width + x) * 4 + 3];
 }
 
-function countPixelsAboveAlpha(
-  image: ReturnType<typeof readPngRgbaImage>,
-  left: number,
-  top: number,
-  right: number,
-  bottom: number,
-  alpha: number,
-) {
-  let count = 0;
-
-  for (let y = top; y < bottom; y += 1) {
-    for (let x = left; x < right; x += 1) {
-      if (getAlphaAt(image, x, y) > alpha) {
-        count += 1;
-      }
-    }
-  }
-
-  return count;
-}
-
-function getAlphaBounds(
-  image: ReturnType<typeof readPngRgbaImage>,
-  minAlpha = 0,
-) {
-  let left = image.width;
-  let top = image.height;
-  let right = -1;
-  let bottom = -1;
-
-  for (let y = 0; y < image.height; y += 1) {
-    for (let x = 0; x < image.width; x += 1) {
-      if (getAlphaAt(image, x, y) <= minAlpha) {
-        continue;
-      }
-
-      left = Math.min(left, x);
-      top = Math.min(top, y);
-      right = Math.max(right, x);
-      bottom = Math.max(bottom, y);
-    }
-  }
-
-  return { bottom, left, right, top };
-}
-
 describe("GamesPage", () => {
   beforeEach(() => {
     gameClientMocks.listRuleSets.mockResolvedValue({
@@ -342,7 +296,7 @@ describe("GamesPage", () => {
       "src",
       expect.stringContaining("mobile-lobby-hero"),
     );
-    expect(heroWrapperRule).toContain("width: min(54%, 230px)");
+    expect(heroWrapperRule).toContain("width: min(44%, 180px)");
     expect(heroWrapperRule).toContain("justify-self: start");
     expect(heroRule).toContain("width: 100%");
     expect(heroRule).toContain("height: auto");
@@ -400,7 +354,8 @@ describe("GamesPage", () => {
     await user.click(
       screen.getByRole("button", { name: "为 7 号座位候选 阿青" }),
     );
-    await user.click(screen.getByRole("button", { name: "确认选择" }));
+    await user.click(screen.getByRole("button", { name: "确认并下一位" }));
+    await user.keyboard("{Escape}");
     expect(
       await screen.findByRole("button", {
         name: "选择 7 号座位，当前为 阿青",
@@ -596,7 +551,7 @@ describe("GamesPage", () => {
     );
   });
 
-  it("adds gothic board backgrounds behind the lineup and settings headings", async () => {
+  it("uses a lower-contrast panel for the lineup", async () => {
     renderGamesPage();
 
     const headingNames = ["组建阵容"];
@@ -615,26 +570,14 @@ describe("GamesPage", () => {
       styles.match(
         /\.mobile-lobby-board-section\s+\.mobile-lobby-section-heading\s+h2\s*{[^}]+}/,
       )?.[0] ?? "";
+    const lineupRule =
+      styles.match(/\.mobile-lobby-lineup-section\s*{[^}]+}/)?.[0] ?? "";
 
-    expect(boardTitleRule).toContain("lobby-section-title-board.png");
-    expect(boardTitleRule).toContain("background-size: 100% 100%");
-    expect(boardTitleRule).toContain("min-height: 42px");
-    expect(readPngMetadata("src/assets/lobby-section-title-board.png")).toEqual({
-      width: 512,
-      height: 156,
-      colorType: 6,
-    });
-
-    const boardImage = readPngRgbaImage(
-      "src/assets/lobby-section-title-board.png",
-    );
-    const alphaBounds = getAlphaBounds(boardImage);
-    expect(getAlphaAt(boardImage, 4, 4)).toBe(0);
-    expect(getAlphaAt(boardImage, 256, Math.floor(boardImage.height / 2))).toBe(
-      255,
-    );
-    expect(alphaBounds.top).toBe(10);
-    expect(boardImage.height - 1 - alphaBounds.bottom).toBe(10);
+    expect(boardTitleRule).not.toContain("background-image");
+    expect(boardTitleRule).toContain("font-size: 14px");
+    expect(lineupRule).toContain("padding: 12px");
+    expect(lineupRule).toContain("border-radius: 12px");
+    expect(lineupRule).toContain("background: rgb(5 10 16 / 78%)");
   });
 
   it("keeps lobby settings labels and inputs on the same row", async () => {
@@ -650,32 +593,15 @@ describe("GamesPage", () => {
       styles.match(/\.mobile-lobby-field\s*{[^}]+}/)?.[0] ?? "";
     const fieldInputRule =
       styles.match(/\.mobile-lobby-field\s+input\s*{[^}]+}/)?.[0] ?? "";
-    const fieldBackground = readPngRgbaImage(
-      "src/assets/lobby-settings-field-bg.png",
-    );
-
     expect(fieldRule).toContain("grid-template-columns: max-content minmax(0, 1fr)");
     expect(fieldRule).toContain("align-items: center");
     expect(fieldRule).toContain("gap: 8px");
-    expect(fieldRule).toContain("lobby-settings-field-bg.png");
-    expect(fieldRule).toContain("background-size: 100% 100%");
-    expect(fieldRule).toContain("border: 0");
+    expect(fieldRule).not.toContain("background-image");
+    expect(fieldRule).toContain("border: 1px solid");
+    expect(fieldRule).toContain("background: rgb(8 15 23 / 88%)");
     expect(fieldRule).toContain("min-height: 44px");
     expect(fieldInputRule).toContain("width: 100%");
     expect(fieldInputRule).toContain("min-height: 28px");
-    expect(readPngMetadata("src/assets/lobby-settings-field-bg.png")).toEqual({
-      width: 336,
-      height: 88,
-      colorType: 6,
-    });
-    expect(getAlphaAt(fieldBackground, 0, 0)).toBe(0);
-    expect(
-      getAlphaAt(
-        fieldBackground,
-        Math.floor(fieldBackground.width / 2),
-        Math.floor(fieldBackground.height / 2),
-      ),
-    ).toBe(255);
   });
 
   it("shows launch progress beside the numbered lineup", async () => {
@@ -701,18 +627,12 @@ describe("GamesPage", () => {
         /\.mobile-lobby-board-section\s+\.mobile-lobby-section-heading\s+h2\s*{[^}]+}/,
       )?.[0] ?? "";
 
-    expect(seatSummaryRule).toContain("lobby-wide-title-board.png");
-    expect(seatSummaryRule).toContain("background-size: 100% 100%");
+    expect(seatSummaryRule).not.toContain("background-image");
+    expect(seatSummaryRule).toContain("border-radius: 999px");
     expect(seatSummaryRule).toContain("flex: 0 1 160px");
     expect(seatSummaryRule).toContain("min-height: 28px");
     expect(seatSummaryRule).toContain("font-size: 12px");
-    expect(boardTitleRule).toContain("min-height: 42px");
-    expect(boardTitleRule).toContain("font-size: 12px");
-    expect(readPngMetadata("src/assets/lobby-wide-title-board.png")).toEqual({
-      width: 1685,
-      height: 294,
-      colorType: 6,
-    });
+    expect(boardTitleRule).toContain("font-size: 14px");
   });
 
   it("shows visible two-digit numbers and empty-state copy in seat cards", async () => {
@@ -756,7 +676,6 @@ describe("GamesPage", () => {
 
     await user.click(within(lineup).getByRole("button", { name: "智能补齐" }));
     const fillMenu = within(lineup).getByRole("menu", { name: "智能补齐方式" });
-    expect(fillMenu.closest(".mobile-lobby-action-bar")).toBeNull();
 
     await user.click(within(fillMenu).getByRole("menuitem", { name: "随机补齐" }));
 
@@ -801,13 +720,8 @@ describe("GamesPage", () => {
     await user.click(
       screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
     );
-    await user.click(screen.getByRole("button", { name: "确认选择" }));
-
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("dialog", { name: "玩家卡牌库" }),
-      ).not.toBeInTheDocument();
-    });
+    await user.click(screen.getByRole("button", { name: "确认并下一位" }));
+    await user.keyboard("{Escape}");
     expect(
       screen.getByRole("button", {
         name: "选择 1 号座位，当前为 阿青",
@@ -1219,7 +1133,7 @@ describe("GamesPage", () => {
 
     expect(seatGridRule).toContain("grid-template-columns: repeat(4");
     expect(seatGridRule).toContain("grid-template-rows: repeat(2");
-    expect(seatCardRule).toContain("aspect-ratio: 935 / 983");
+    expect(seatCardRule).toContain("aspect-ratio: 1");
     expect(seatCardRule).toContain("min-height: 0");
     expect(actionBarRule).toContain("grid-template-columns: minmax(0, 1fr) minmax(132px, 42%)");
     expect(actionBarRule).toContain("lobby-action-bar-bg.png");
@@ -1262,7 +1176,7 @@ describe("GamesPage", () => {
     ).toBeVisible();
   });
 
-  it("confirms a player card into the active seat", async () => {
+  it("confirms through empty seats and closes only after completing the lineup", async () => {
     const user = userEvent.setup();
     renderGamesPage();
 
@@ -1274,110 +1188,90 @@ describe("GamesPage", () => {
     await user.click(
       screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
     );
-    await user.click(screen.getByRole("button", { name: "确认选择" }));
+    await user.click(screen.getByRole("button", { name: "确认并下一位" }));
 
+    const picker = screen.getByRole("dialog", { name: "玩家卡牌库" });
+    expect(within(picker).getByText(/当前选择：2号座位/)).toBeVisible();
     await waitFor(() => {
-      expect(
-        screen.queryByRole("dialog", { name: "玩家卡牌库" }),
-      ).not.toBeInTheDocument();
+      expect(screen.getByRole("searchbox", { name: "搜索玩家" })).toHaveFocus();
     });
+
+    await user.click(
+      within(picker).getByRole("button", { name: "为 2 号座位候选 白石" }),
+    );
+    await user.click(within(picker).getByRole("button", { name: "完成阵容" }));
+
     expect(
-      screen.getByRole("button", {
-        name: "选择 1 号座位，当前为 阿青",
+      screen.queryByRole("dialog", { name: "玩家卡牌库" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "选择 1 号座位，当前为 阿青" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "选择 2 号座位，当前为 白石" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "开始对局" })).toBeEnabled();
+  });
+
+  it("moves an occupied profile and continues with the next empty seat", async () => {
+    const user = userEvent.setup();
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 1 号座位，当前为 待选择",
       }),
-    ).toHaveClass("mobile-lobby-seat-card-filled");
-    expect(screen.getByText("高级设置 · 随机种子 / 8轮")).toBeVisible();
+    );
+    await user.click(
+      screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
+    );
+    await user.click(screen.getByRole("button", { name: "确认并下一位" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: "为 2 号座位候选 阿青，已在 1 号座位",
+      }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "移动到 2 号座位" }),
+    ).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "移动到 2 号座位" }));
+    await user.keyboard("{Escape}");
+
+    expect(
+      screen.getByRole("button", { name: "选择 1 号座位，当前为 待选择" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "选择 2 号座位，当前为 阿青" }),
+    ).toBeVisible();
+  });
+
+  it("renders a confirmed player in the active seat", async () => {
+    const user = userEvent.setup();
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 1 号座位，当前为 待选择",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
+    );
+    await user.click(screen.getByRole("button", { name: "确认并下一位" }));
+    await user.keyboard("{Escape}");
+
+    const filledSeat = screen.getByRole("button", {
+      name: "选择 1 号座位，当前为 阿青",
+    });
+    expect(filledSeat).toHaveClass("mobile-lobby-seat-card-filled");
+    expect(filledSeat.querySelector(".mobile-lobby-seat-avatar")).not.toBeNull();
 
     const styles = readFileSync("src/styles/index.css", "utf8");
     const seatCardRule =
       styles.match(/\.mobile-lobby-seat-card\s*{[^}]+}/)?.[0] ?? "";
-    const filledSeatRule =
-      styles.match(/\.mobile-lobby-seat-card-filled\s*{[^}]+}/)?.[0] ?? "";
-    const filledSeatFrameRule =
-      [...styles.matchAll(/\.mobile-lobby-seat-card-filled::after\s*{[^}]+}/g)]
-        .map((match) => match[0])
-        .find((rule) => rule.includes("background-image")) ?? "";
-    const filledSeatAvatarRule =
-      styles.match(
-        /\.mobile-lobby-seat-card-filled\s+\.mobile-lobby-seat-avatar\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const filledSeatAvatarImageRule =
-      styles.match(
-        /\.mobile-lobby-seat-card-filled\s+\.mobile-lobby-seat-avatar\s+img\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const filledSeatNameRule =
-      styles.match(
-        /\.mobile-lobby-seat-card-filled\s+strong\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const stoneSeatBackground = readPngRgbaImage(
-      "src/assets/lobby-seat-card-stone-bg.png",
-    );
-    const selectedSeatFrame = readPngRgbaImage(
-      "src/assets/lobby-seat-card-frame-alpha.png",
-    );
-
-    expect(seatCardRule).toContain("lobby-seat-card-frame-alpha.png");
-    expect(seatCardRule).toContain("lobby-seat-card-stone-bg.png");
-    expect(filledSeatRule).toContain("background-image: none");
-    expect(filledSeatFrameRule).toContain("lobby-seat-card-frame-alpha.png");
-    expect(filledSeatAvatarRule).toContain("position: absolute");
-    expect(filledSeatAvatarRule).toContain("inset: 0");
-    expect(filledSeatAvatarRule).toContain("width: 100%");
-    expect(filledSeatAvatarRule).toContain("height: 100%");
-    expect(filledSeatAvatarImageRule).toContain("object-position: center top");
-    expect(filledSeatNameRule).toContain("position: absolute");
-    expect(filledSeatNameRule).toContain("bottom: 7px");
-    expect(
-      getAlphaAt(
-        stoneSeatBackground,
-        Math.floor(stoneSeatBackground.width / 2),
-        Math.floor(stoneSeatBackground.height / 2),
-      ),
-    ).toBe(255);
-    expect(getAlphaAt(stoneSeatBackground, 0, 0)).toBe(0);
-    expect(
-      getAlphaAt(
-        stoneSeatBackground,
-        Math.floor(stoneSeatBackground.width / 2),
-        40,
-      ),
-    ).toBe(0);
-    expect(
-      getAlphaAt(
-        selectedSeatFrame,
-        Math.floor(selectedSeatFrame.width / 2),
-        Math.floor(selectedSeatFrame.height / 2),
-      ),
-    ).toBe(0);
-    expect(getAlphaAt(selectedSeatFrame, 300, 300)).toBe(0);
-
-    const decorativeRegions = [
-      [0, 330, 150, 650],
-      [selectedSeatFrame.width - 150, 330, selectedSeatFrame.width, 650],
-      [330, 0, 605, 150],
-      [330, selectedSeatFrame.height - 150, 605, selectedSeatFrame.height],
-      [0, 0, 220, 220],
-      [selectedSeatFrame.width - 220, 0, selectedSeatFrame.width, 220],
-      [0, selectedSeatFrame.height - 220, 220, selectedSeatFrame.height],
-      [
-        selectedSeatFrame.width - 220,
-        selectedSeatFrame.height - 220,
-        selectedSeatFrame.width,
-        selectedSeatFrame.height,
-      ],
-    ];
-    for (const [left, top, right, bottom] of decorativeRegions) {
-      expect(
-        countPixelsAboveAlpha(
-          selectedSeatFrame,
-          left,
-          top,
-          right,
-          bottom,
-          200,
-        ),
-      ).toBeGreaterThan(1_000);
-    }
+    expect(seatCardRule).not.toContain("background-image");
+    expect(seatCardRule).toContain("background: linear-gradient");
   });
 
   it("labels player cards that are already assigned and confirms moves explicitly", async () => {
@@ -1392,13 +1286,7 @@ describe("GamesPage", () => {
     await user.click(
       screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
     );
-    await user.click(screen.getByRole("button", { name: "确认选择" }));
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 2 号座位，当前为 待选择",
-      }),
-    );
+    await user.click(screen.getByRole("button", { name: "确认并下一位" }));
 
     expect(screen.getByText("已在 1 号座位")).toBeVisible();
     await user.click(
@@ -1408,11 +1296,7 @@ describe("GamesPage", () => {
 
     await user.click(screen.getByRole("button", { name: "移动到 2 号座位" }));
 
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("dialog", { name: "玩家卡牌库" }),
-      ).not.toBeInTheDocument();
-    });
+    await user.keyboard("{Escape}");
     expect(
       screen.getByRole("button", {
         name: "选择 1 号座位，当前为 待选择",
@@ -1513,7 +1397,8 @@ describe("GamesPage", () => {
     await user.click(
       screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
     );
-    await user.click(screen.getByRole("button", { name: "确认选择" }));
+    await user.click(screen.getByRole("button", { name: "确认并下一位" }));
+    await user.keyboard("{Escape}");
 
     await user.click(
       await screen.findByRole("button", {
@@ -1544,7 +1429,7 @@ describe("GamesPage", () => {
     expect(
       within(screen.getByRole("dialog", { name: "玩家卡牌库" })).getByRole(
         "button",
-        { name: "确认选择" },
+        { name: "确认并下一位" },
       ),
     ).toBeEnabled();
 
@@ -1565,10 +1450,12 @@ describe("GamesPage", () => {
 
     const drawer = screen.getByRole("dialog", { name: "玩家卡牌库" });
     await waitFor(() => {
-      expect(within(drawer).getByText("请选择玩家")).toBeVisible();
+      expect(
+        within(drawer).getByText("候选已失效，请重新选择"),
+      ).toBeVisible();
     });
     expect(
-      within(drawer).getByRole("button", { name: "确认选择" }),
+      within(drawer).getByRole("button", { name: "请选择玩家" }),
     ).toBeDisabled();
   });
 

@@ -145,20 +145,20 @@ describe("mobile app scaffold", () => {
       styles.match(/(?:^|\n)\.mobile-button\s*{[^}]+}/)?.[0] ?? "";
     const liveStageTitleRule =
       styles.match(/(?:^|\n)\.mobile-live-center-stage strong\s*{[^}]+}/)?.[0] ?? "";
-    const drawerTitleRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer-heading h2\s*{[^}]+}/)
-        ?.[0] ?? "";
-    const drawerSubtitleRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer-heading p\s*{[^}]+}/)
-        ?.[0] ?? "";
+    const modalTitleRule =
+      styles.match(/(?:^|\n)\.mobile-lobby-modal-header h2\s*{[^}]+}/)?.[0] ??
+      "";
+    const modalSubtitleRule =
+      [...styles.matchAll(/(?:^|\n)\.mobile-lobby-modal-header p\s*{[^}]+}/g)]
+        .map((match) => match[0])
+        .find((rule) => rule.includes("font-size")) ?? "";
 
     expect(bodyRule).toContain("font-size: 14px");
     expect(pageTitleRule).toContain("font-size: 20px");
     expect(buttonRule).toContain("font-size: 13px");
     expect(liveStageTitleRule).toContain("font-size: 18px");
-    expect(drawerTitleRule).toContain("font-size: 18px");
-    expect(drawerTitleRule).toContain("line-height: 18px");
-    expect(drawerSubtitleRule).toContain("font-size: 11px");
+    expect(modalTitleRule).toContain("font-size: 16px");
+    expect(modalSubtitleRule).toContain("font-size: 12px");
   });
 
   it("uses the shared 16px mobile page inline padding standard", () => {

@@ -59,22 +59,6 @@ export function getProfileChoiceAriaLabel(
     .join("，");
 }
 
-export function getConfirmProfileButtonLabel(
-  pendingProfile: PublicPlayerProfileWithFavorite | null,
-  assignedSeat: number | undefined,
-  activeSeat: number,
-) {
-  if (!pendingProfile) {
-    return "确认选择";
-  }
-
-  if (assignedSeat && assignedSeat !== activeSeat) {
-    return `移动到 ${activeSeat} 号座位`;
-  }
-
-  return "确认选择";
-}
-
 export function normalizePlayerConfigs(
   configs: PlayerConfig[],
   playerCount: number,
@@ -271,59 +255,4 @@ export function formatStrategyLabel(strategy: string) {
   };
 
   return strategyLabels[strategy] ?? strategy;
-}
-
-export function getProfileDescription(
-  profile: PublicPlayerProfileWithFavorite,
-) {
-  return (
-    profile.short_description ||
-    profile.personality_text ||
-    profile.model ||
-    "暗夜牌局候选人"
-  );
-}
-
-export function getProfileCardDescriptionLines(
-  profile: PublicPlayerProfileWithFavorite,
-) {
-  return splitProfileCardDescription(getProfileDescription(profile));
-}
-
-export function splitProfileCardDescription(description: string) {
-  const trimmedDescription = description.trim();
-
-  if (trimmedDescription.length <= 12) {
-    return [trimmedDescription];
-  }
-
-  const maxFirstLineLength = Math.max(
-    4,
-    Math.floor(trimmedDescription.length * 0.4),
-  );
-  const punctuation = "，,、；;。.!！?？";
-  let splitIndex = 0;
-
-  for (
-    let index = 0;
-    index < Math.min(trimmedDescription.length - 1, maxFirstLineLength);
-    index += 1
-  ) {
-    if (punctuation.includes(trimmedDescription[index]) && index >= 3) {
-      splitIndex = index + 1;
-    }
-  }
-
-  if (splitIndex === 0) {
-    splitIndex = Math.max(4, Math.floor(trimmedDescription.length * 0.35));
-  }
-
-  if (splitIndex >= trimmedDescription.length - splitIndex) {
-    splitIndex = Math.max(4, Math.floor(trimmedDescription.length * 0.35));
-  }
-
-  return [
-    trimmedDescription.slice(0, splitIndex),
-    trimmedDescription.slice(splitIndex),
-  ];
 }

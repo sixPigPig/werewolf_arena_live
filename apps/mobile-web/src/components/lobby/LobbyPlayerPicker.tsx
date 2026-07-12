@@ -3,7 +3,7 @@ import {
   type PublicPlayerProfileWithFavorite,
 } from "@werewolf-arena/game-client";
 import { LoaderCircle, Star, StarCheck } from "lucide-react";
-import { type RefObject, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { MobileBottomSelect } from "../MobileBottomSelect";
 import {
@@ -83,6 +83,15 @@ export function LobbyPlayerPicker({
     () => getStrategyFilterOptions(profiles),
     [profiles],
   );
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setSearch("");
+      searchRef.current?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeSeat]);
 
   function setPull(distance: number) {
     pullDistanceRef.current = distance;
@@ -300,7 +309,7 @@ export function LobbyPlayerPicker({
 
       <footer className="mobile-profile-picker-footer">
         {pendingProfileId && !canConfirm ? (
-          <span role="status">请选择玩家</span>
+          <span role="status">候选已失效，请重新选择</span>
         ) : null}
         <button disabled={!canConfirm} onClick={onConfirm} type="button">
           {confirmLabel}

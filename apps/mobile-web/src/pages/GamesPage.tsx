@@ -21,7 +21,7 @@ import { LobbyPlayerPicker } from "../components/lobby/LobbyPlayerPicker";
 import {
   buildLineupLaunchStatus,
   clampSeat,
-  getConfirmProfileButtonLabel,
+  findNextEmptySeat,
   normalizePlayerConfigs,
   updateFavoriteProfileIds,
   upsertSeatProfile,
@@ -217,6 +217,27 @@ export function GamesPage() {
   const pendingAssignedSeat = pendingProfile
     ? assignedSeatByProfileId.get(pendingProfile.id)
     : undefined;
+  const pendingNextConfigs = pendingProfile
+    ? upsertSeatProfile(
+        visiblePlayerConfigs,
+        safeActiveSeat,
+        pendingProfile.id,
+      )
+    : null;
+  const nextEmptySeatAfterConfirm = pendingNextConfigs
+    ? findNextEmptySeat(
+        pendingNextConfigs,
+        playerCount,
+        safeActiveSeat,
+      )
+    : undefined;
+  const playerPickerConfirmLabel = !pendingProfile
+    ? "请选择玩家"
+    : pendingAssignedSeat && pendingAssignedSeat !== safeActiveSeat
+      ? `移动到 ${safeActiveSeat} 号座位`
+      : nextEmptySeatAfterConfirm
+        ? "确认并下一位"
+        : "完成阵容";
   const isLoading = ruleSetsQuery.isPending || playerProfilesQuery.isPending;
   const isSubmitDisabled =
     isLoading ||
@@ -288,8 +309,19 @@ export function GamesPage() {
     setValidationError(null);
     setShortage(false);
     setPlayerConfigs(nextConfigs);
-    setIsPlayerPickerOpen(false);
     setPendingProfileId(null);
+
+    const nextEmptySeat = findNextEmptySeat(
+      nextConfigs,
+      playerCount,
+      safeActiveSeat,
+    );
+    if (nextEmptySeat) {
+      setActiveSeat(nextEmptySeat);
+      return;
+    }
+
+    setIsPlayerPickerOpen(false);
   }
 
   function fillEmptySeats(options?: { favoritesOnly?: boolean }) {
@@ -470,11 +502,7 @@ export function GamesPage() {
           assignedSeatByProfileId={assignedSeatByProfileId}
           backgroundRef={lobbyContentRef}
           canConfirm={pendingProfile !== null}
-          confirmLabel={getConfirmProfileButtonLabel(
-            pendingProfile,
-            pendingAssignedSeat,
-            safeActiveSeat,
-          )}
+          confirmLabel={playerPickerConfirmLabel}
           favoriteUpdateError={favoriteUpdateError}
           favoritesAvailable={favoritesAvailable}
           isRefreshing={isProfileDataFetching}
