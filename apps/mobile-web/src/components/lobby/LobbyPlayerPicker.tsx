@@ -66,6 +66,7 @@ export function LobbyPlayerPicker({
   const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const filterPortalRef = useRef<HTMLDivElement | null>(null);
   const pullStartRef = useRef<number | null>(null);
   const pullDistanceRef = useRef(0);
   const [pullDistance, setPullDistance] = useState(0);
@@ -173,6 +174,7 @@ export function LobbyPlayerPicker({
         >
           <MobileBottomSelect
             disabled={!favoritesAvailable}
+            getContainer={() => filterPortalRef.current ?? document.body}
             label="收藏"
             onChange={setFavoriteFilter}
             options={[
@@ -182,6 +184,7 @@ export function LobbyPlayerPicker({
             value={appliedFavoriteFilter}
           />
           <MobileBottomSelect
+            getContainer={() => filterPortalRef.current ?? document.body}
             label="策略"
             onChange={setStrategyFilter}
             options={[
@@ -195,6 +198,7 @@ export function LobbyPlayerPicker({
           />
         </div>
       ) : null}
+      <div className="mobile-profile-filter-portal" ref={filterPortalRef} />
 
       {!favoritesAvailable ? (
         <p role="status">收藏状态暂不可用，仍可正常选择玩家。</p>

@@ -1,5 +1,6 @@
 import {
   type MouseEvent,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -15,6 +16,7 @@ export type MobileBottomSelectOption<TValue extends string = string> = {
 type MobileBottomSelectProps<TValue extends string = string> = {
   className?: string;
   disabled?: boolean;
+  getContainer?: () => HTMLElement;
   label: string;
   onChange: (value: TValue) => void;
   options: MobileBottomSelectOption<TValue>[];
@@ -24,6 +26,7 @@ type MobileBottomSelectProps<TValue extends string = string> = {
 export function MobileBottomSelect<TValue extends string = string>({
   className,
   disabled = false,
+  getContainer,
   label,
   onChange,
   options,
@@ -32,12 +35,49 @@ export function MobileBottomSelect<TValue extends string = string>({
   const [isOpen, setIsOpen] = useState(false);
   const [draftValue, setDraftValue] = useState<TValue>(value);
   const draftValueRef = useRef<TValue>(value);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const selectedOption = useMemo(
     () => options.find((option) => option.value === value) ?? options[0],
     [options, value],
   );
   const selectedLabel = selectedOption?.label ?? "";
   const pickerTitle = `选择${label}筛选`;
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const container = getContainer?.() ?? document.body;
+    const makePickerButtonsFocusable = () => {
+      container
+        .querySelectorAll<HTMLElement>(
+          '.mobile-bottom-select-picker-popup [role="button"]',
+        )
+        .forEach((button) => {
+          button.tabIndex = 0;
+        });
+    };
+    const frame = window.requestAnimationFrame(makePickerButtonsFocusable);
+    const observer = new MutationObserver(makePickerButtonsFocusable);
+    observer.observe(container, { childList: true, subtree: true });
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      if (!(event.target instanceof HTMLElement)) return;
+
+      const pickerButton = event.target.closest<HTMLElement>('[role="button"]');
+      if (!pickerButton || !container.contains(pickerButton)) return;
+
+      event.preventDefault();
+      pickerButton.click();
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [getContainer, isOpen]);
 
   const openPicker = () => {
     if (disabled) return;
@@ -84,8 +124,10 @@ export function MobileBottomSelect<TValue extends string = string>({
 
   return (
     <Picker
+      afterClose={() => triggerRef.current?.focus()}
       cancelText="取消"
       closeOnMaskClick
+      destroyOnClose
       columns={[
         options.map((option) => ({
           label: option.label,
@@ -93,6 +135,7 @@ export function MobileBottomSelect<TValue extends string = string>({
         })),
       ]}
       confirmText="确定"
+      getContainer={getContainer}
       onClick={syncAccessiblePickerClick}
       onCancel={() => setIsOpen(false)}
       onClose={() => setIsOpen(false)}
@@ -116,6 +159,7 @@ export function MobileBottomSelect<TValue extends string = string>({
             className="mobile-profile-select-trigger"
             disabled={disabled}
             onClick={openPicker}
+            ref={triggerRef}
             type="button"
           >
             <span>{selectedLabel}</span>

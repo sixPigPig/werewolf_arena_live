@@ -346,9 +346,6 @@ export function GamesPage() {
     }
     setValidationError(null);
     setShortage(false);
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
     updateProfileFavoriteMutation.mutate({
       isFavorite: !profile.is_favorite,
       profileId: profile.id,

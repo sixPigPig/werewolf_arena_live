@@ -86,7 +86,7 @@ export function LobbyLineupSection({
         <div
           aria-label="智能补齐方式"
           className="mobile-lobby-lineup-menu"
-          role="menu"
+          role="group"
         >
           <button
             disabled={!favoritesAvailable}
@@ -94,7 +94,6 @@ export function LobbyLineupSection({
               onFill({ favoritesOnly: true });
               setOpenMenu(null);
             }}
-            role="menuitem"
             type="button"
           >
             收藏补齐
@@ -104,7 +103,6 @@ export function LobbyLineupSection({
               onFill();
               setOpenMenu(null);
             }}
-            role="menuitem"
             type="button"
           >
             随机补齐
@@ -116,7 +114,7 @@ export function LobbyLineupSection({
         <div
           aria-label="阵容操作"
           className="mobile-lobby-lineup-menu"
-          role="menu"
+          role="group"
         >
           <button
             onClick={() => {
@@ -128,7 +126,6 @@ export function LobbyLineupSection({
               setIsClearConfirming(false);
               setOpenMenu(null);
             }}
-            role="menuitem"
             type="button"
           >
             {isClearConfirming ? "确认清空阵容" : "清空阵容"}

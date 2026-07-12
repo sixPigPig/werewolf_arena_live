@@ -47,6 +47,70 @@ test("player confirmation advances inside the same modal", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("combined filters stay inside the modal and support keyboard activation", async ({
+  page,
+}) => {
+  await installMobileApiFixtures(page);
+  await page.goto("/games");
+  await page
+    .getByRole("button", { name: "选择 1 号座位，当前为 待选择" })
+    .click();
+
+  const dialog = page.getByRole("dialog", { name: "玩家卡牌库" });
+  await dialog
+    .getByRole("button", { name: "筛选玩家，当前 全部玩家、全部策略" })
+    .click();
+
+  const favoriteTrigger = dialog.getByRole("button", {
+    name: "收藏筛选，当前 全部玩家",
+  });
+  await favoriteTrigger.click();
+  const favoritePopup = dialog
+    .locator(".mobile-bottom-select-picker-popup")
+    .filter({ hasText: "选择收藏筛选" });
+  await expect(favoritePopup.getByText("选择收藏筛选")).toBeVisible();
+  const favoriteNext = favoritePopup.getByRole("button", {
+    name: "选择下一项：只看收藏",
+  });
+  await expect(favoriteNext).toHaveAttribute("tabindex", "0");
+  await favoriteNext.focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    favoritePopup.getByRole("button", { name: "当前选择的是：只看收藏" }),
+  ).toBeVisible();
+  const favoriteConfirm = favoritePopup.getByRole("button", { name: "确定" });
+  await favoriteConfirm.focus();
+  await page.keyboard.press("Enter");
+  await expect(favoritePopup).toHaveCount(0);
+  await expect(
+    dialog.getByRole("button", { name: "收藏筛选，当前 只看收藏" }),
+  ).toBeVisible();
+
+  const strategyTrigger = dialog.getByRole("button", {
+    name: "策略筛选，当前 全部策略",
+  });
+  await strategyTrigger.click();
+  const strategyPopup = dialog
+    .locator(".mobile-bottom-select-picker-popup")
+    .filter({ hasText: "选择策略筛选" });
+  await expect(strategyPopup.getByText("选择策略筛选")).toBeVisible();
+  const strategyNext = strategyPopup.getByRole("button", {
+    name: "选择下一项：分析型",
+  });
+  await strategyNext.focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    strategyPopup.getByRole("button", { name: "当前选择的是：分析型" }),
+  ).toBeVisible();
+  const strategyConfirm = strategyPopup.getByRole("button", { name: "确定" });
+  await strategyConfirm.focus();
+  await page.keyboard.press("Enter");
+  await expect(strategyPopup).toHaveCount(0);
+  await expect(
+    dialog.getByRole("button", { name: "策略筛选，当前 分析型" }),
+  ).toBeVisible();
+});
+
 test("small lobby has readable non-overlapping content and an isolated picker", async ({
   page,
 }, testInfo) => {
@@ -56,18 +120,40 @@ test("small lobby has readable non-overlapping content and an isolated picker", 
 
   const secondRowSeat = page.locator(".mobile-lobby-seat-card").nth(4);
   const launchBar = page.locator(".mobile-lobby-launch-region");
+  const launchBarContent = page.locator(".mobile-lobby-launch-bar");
+  const launchButton = page.locator(".mobile-lobby-launch-button");
+  const tabBar = page.getByRole("navigation", { name: "移动端主导航" });
   const advanced = page.locator(".mobile-lobby-advanced");
-  const [seatBox, launchBox] = await Promise.all([
+  const [seatBox, launchBox, tabBox] = await Promise.all([
     secondRowSeat.boundingBox(),
     launchBar.boundingBox(),
+    tabBar.boundingBox(),
   ]);
   expect(seatBox).not.toBeNull();
   expect(launchBox).not.toBeNull();
+  expect(tabBox).not.toBeNull();
   expect((seatBox?.y ?? 0) + (seatBox?.height ?? 0)).toBeLessThanOrEqual(
     launchBox?.y ?? 0,
   );
+  expect((launchBox?.y ?? 0) + (launchBox?.height ?? 0)).toBeLessThanOrEqual(
+    tabBox?.y ?? 0,
+  );
+  const launchWidths = await launchBarContent.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const contentWidth =
+      element.getBoundingClientRect().width -
+      Number.parseFloat(style.paddingLeft) -
+      Number.parseFloat(style.paddingRight);
+    const buttonWidth =
+      element.querySelector("button")?.getBoundingClientRect().width ?? 0;
+    return { buttonWidth, contentWidth };
+  });
+  expect(launchWidths.buttonWidth).toBeCloseTo(launchWidths.contentWidth, 0);
+  await expect(launchButton).toBeVisible();
 
-  await advanced.scrollIntoViewIfNeeded();
+  await page.locator(".mobile-content-region").evaluate((element) => {
+    element.scrollTo({ top: element.scrollHeight });
+  });
   const [advancedBox, launchBoxAfterScroll] = await Promise.all([
     advanced.boundingBox(),
     launchBar.boundingBox(),
@@ -118,6 +204,13 @@ test("small lobby has readable non-overlapping content and an isolated picker", 
   });
   await firstSeat.click();
   const dialog = page.getByRole("dialog", { name: "玩家卡牌库" });
+  const modalLayerBox = await page.locator(".mobile-lobby-modal-layer").boundingBox();
+  const viewport = page.viewportSize();
+  expect(modalLayerBox).not.toBeNull();
+  expect(modalLayerBox?.x).toBe(0);
+  expect(modalLayerBox?.y).toBe(0);
+  expect(modalLayerBox?.width).toBe(viewport?.width);
+  expect(modalLayerBox?.height).toBe(viewport?.height);
   await expect(dialog).toHaveAttribute("aria-modal", "true");
   await expect(page.locator(".mobile-lobby-content")).toHaveAttribute("inert", "");
   await expect(page.getByRole("navigation", { name: "移动端主导航" })).toBeHidden();
@@ -167,7 +260,7 @@ test("smart fill and advanced settings produce the preserved create payload", as
   await page.goto("/games");
 
   await page.getByRole("button", { name: "智能补齐" }).click();
-  await page.getByRole("menuitem", { name: "随机补齐" }).click();
+  await page.getByRole("button", { name: "随机补齐" }).click();
   const launch = page.locator(".mobile-lobby-launch-bar").getByRole("button");
   await expect(launch).toHaveAccessibleName("开始对局");
 

@@ -61,17 +61,17 @@ describe("LobbyLineupSection", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "智能补齐" }));
-    const fillMenu = screen.getByRole("menu", { name: "智能补齐方式" });
+    const fillMenu = screen.getByRole("group", { name: "智能补齐方式" });
     await user.click(
-      within(fillMenu).getByRole("menuitem", { name: "收藏补齐" }),
+      within(fillMenu).getByRole("button", { name: "收藏补齐" }),
     );
     expect(onFill).toHaveBeenCalledWith({ favoritesOnly: true });
 
     await user.click(screen.getByRole("button", { name: "阵容更多操作" }));
-    await user.click(screen.getByRole("menuitem", { name: "清空阵容" }));
+    await user.click(screen.getByRole("button", { name: "清空阵容" }));
     expect(onClear).not.toHaveBeenCalled();
     await user.click(
-      screen.getByRole("menuitem", { name: "确认清空阵容" }),
+      screen.getByRole("button", { name: "确认清空阵容" }),
     );
     expect(onClear).toHaveBeenCalledTimes(1);
   });
