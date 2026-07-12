@@ -22,8 +22,10 @@ from app.werewolf.live import (
     LiveEvent,
     LiveRunRegistry,
     RunLeaseUnavailable,
+    RunRecoveryCandidate,
 )
 from app.werewolf.live_store import DatabaseLiveStore
+from app.werewolf.orphan_reaper import run_next_orphan_recovery
 
 
 @pytest.fixture
@@ -50,6 +52,133 @@ def pinned_rule_snapshot() -> dict[str, object]:
         "content_hash": "a" * 64,
         "storage_marker": {"preserve": ["exact", 2]},
     }
+
+
+def seed_incomplete_live_run(
+    db_session: Session,
+    *,
+    run_id: str = "run_incomplete",
+    session_id: str = "game_incomplete",
+    fence_token: int = 4,
+    control_version: int = 2,
+    recovery_attempts: int = 0,
+) -> LiveRunRecord:
+    stale_at = datetime.now(tz=UTC) - timedelta(minutes=5)
+    record = LiveRunRecord(
+        run_id=run_id,
+        session_id=session_id,
+        status="queued",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id="classic_8",
+        rule_set={"id": "classic_8"},
+        created_at=stale_at,
+        worker_id="worker-incomplete-owner",
+        worker_heartbeat_at=stale_at,
+        lease_expires_at=stale_at,
+        fence_token=fence_token,
+        control_version=control_version,
+        recovery_attempts=recovery_attempts,
+        recovery_not_before=stale_at,
+    )
+    db_session.add(record)
+    db_session.commit()
+    return record
+
+
+def test_session_store_read_boundaries_reject_a_zero_event_active_run(
+    db_session: Session,
+) -> None:
+    record = seed_incomplete_live_run(db_session)
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(live_store=SessionLiveStore(session_factory))
+
+    assert registry.try_get_active_run_for_session(record.session_id) is None
+    assert registry.try_get_run(record.run_id) is None
+    assert registry._runs == {}
+
+
+def test_stale_claim_rejects_a_zero_event_run_without_mutating_ownership(
+    db_session: Session,
+) -> None:
+    record = seed_incomplete_live_run(db_session)
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-recovery",
+    )
+
+    claimed = registry.try_claim_stale_run(record.run_id)
+
+    assert claimed is None
+    assert registry._runs == {}
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, record.run_id)
+    assert saved is not None
+    assert saved.worker_id == "worker-incomplete-owner"
+    assert saved.fence_token == 4
+    assert saved.control_version == 2
+    assert saved.recovery_attempts == 0
+
+
+def test_orphan_claim_rejects_a_zero_event_run_without_mutating_recovery_state(
+    db_session: Session,
+) -> None:
+    record = seed_incomplete_live_run(db_session, recovery_attempts=1)
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-reaper",
+    )
+    now = datetime.now(tz=UTC)
+
+    claimed = registry.try_claim_orphan(
+        RunRecoveryCandidate(
+            run_id=record.run_id,
+            session_id=record.session_id,
+            recovery_attempts=1,
+        ),
+        stale_before=(now - timedelta(seconds=1)).isoformat(),
+        recovery_not_before=(now + timedelta(seconds=30)).isoformat(),
+        max_attempts=3,
+    )
+
+    assert claimed is None
+    assert registry._runs == {}
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, record.run_id)
+    assert saved is not None
+    assert saved.worker_id == "worker-incomplete-owner"
+    assert saved.fence_token == 4
+    assert saved.control_version == 2
+    assert saved.recovery_attempts == 1
+    assert saved.recovery_last_attempt_at is None
+
+    background_starts: list[str] = []
+    result = run_next_orphan_recovery(
+        session_factory,
+        registry,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=lambda run, _registry: background_starts.append(run.run_id),
+    )
+    assert result is None
+    assert background_starts == []
 
 
 def test_live_store_round_trips_pinned_rule_metadata_exactly(db_session: Session) -> None:

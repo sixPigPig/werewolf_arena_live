@@ -481,10 +481,10 @@ class LiveRunRegistry:
 
     def try_get_active_run_for_session(self, session_id: str) -> LiveGameRun | None:
         with self._lock:
-            local_run = self._active_run_for_session_locked(session_id)
+            local_run = self._complete_local_active_run_locked(session_id)
         if local_run is not None:
             return local_run
-        return self._load_persisted_active_run(session_id)
+        return self._load_complete_persisted_active_run(session_id)
 
     def get_or_create_active_run(
         self,
@@ -507,12 +507,7 @@ class LiveRunRegistry:
             rule_set_content_hash=rule_set_content_hash,
             rule_set=rule_set if rule_set is not None else {},
         )
-        with self._lock:
-            active_run = self._complete_local_active_run_locked(session_id)
-        if active_run is not None:
-            return active_run, False
-        active_run = self._load_persisted_active_run(session_id)
-        active_run = self._hydrate_complete_persisted_run(active_run)
+        active_run = self.try_get_active_run_for_session(session_id)
         if active_run is not None:
             return active_run, False
         candidate = self.prepare_run(
@@ -541,10 +536,9 @@ class LiveRunRegistry:
             if local_raced_run is not None and local_raced_run.run_id != candidate.run_id:
                 return local_raced_run, False
             try:
-                raced_run = self._load_persisted_active_run(session_id)
+                raced_run = self.try_get_active_run_for_session(session_id)
             except Exception:
                 raced_run = None
-            raced_run = self._hydrate_complete_persisted_run(raced_run)
             if raced_run is not None and raced_run.run_id != candidate.run_id:
                 return raced_run, False
             raise
@@ -555,22 +549,28 @@ class LiveRunRegistry:
 
     def try_get_run(self, run_id: str) -> LiveGameRun | None:
         with self._lock:
-            local_run = self._runs.get(run_id)
+            local_run = self._complete_local_run_locked(
+                self._runs.get(run_id),
+                require_active=False,
+            )
         if local_run is not None:
             return local_run
-        return self._load_persisted_run(run_id)
+        return self._load_complete_persisted_run(run_id, require_active=False)
 
     def try_claim_stale_run(self, run_id: str) -> LiveGameRun | None:
         """Atomically attach an active run whose worker lease has expired."""
         with self._lock:
             local_run = self._runs.get(run_id)
         if local_run is not None:
-            persisted = self._load_persisted_run(run_id)
-            if (
-                persisted is None
-                or persisted.status not in {"queued", "running"}
-                or not _lease_is_expired(persisted.lease_expires_at)
-            ):
+            persisted = self._load_complete_persisted_run(run_id)
+            if persisted is None or not _lease_is_expired(persisted.lease_expires_at):
+                return None
+            with self._lock:
+                local_run = self._complete_local_run_locked(
+                    self._runs.get(run_id),
+                    require_active=True,
+                )
+            if local_run is None:
                 return None
             lease_state = self._acquire_lease(run_id)
             if lease_state is None:
@@ -578,8 +578,8 @@ class LiveRunRegistry:
             with self._lock:
                 self._apply_lease_state_locked(local_run, lease_state)
                 return local_run
-        persisted = self._load_persisted_run(run_id)
-        if persisted is None or persisted.status not in {"queued", "running"}:
+        persisted = self._load_complete_persisted_run(run_id)
+        if persisted is None:
             return None
         with self._lock:
             if run_id in self._runs:
@@ -631,8 +631,8 @@ class LiveRunRegistry:
             return None
         with self._lock:
             local_run = self._runs.get(candidate.run_id)
-        persisted = self._load_persisted_run(candidate.run_id)
-        if persisted is None or persisted.status not in {"queued", "running"}:
+        persisted = self._load_complete_persisted_run(candidate.run_id)
+        if persisted is None:
             return None
         added = False
         if local_run is None:
@@ -642,6 +642,14 @@ class LiveRunRegistry:
                     local_run = persisted
                     self._runs[candidate.run_id] = local_run
                     added = True
+        if not added:
+            with self._lock:
+                local_run = self._complete_local_run_locked(
+                    self._runs.get(candidate.run_id),
+                    require_active=True,
+                )
+            if local_run is None:
+                return None
         heartbeat_at, lease_expires_at = self._lease_window()
         try:
             state = acquire(
@@ -1058,6 +1066,20 @@ class LiveRunRegistry:
         loader = getattr(self._live_store, "active_run_for_session", None)
         return loader(session_id) if callable(loader) else None
 
+    def _load_complete_persisted_run(
+        self,
+        run_id: str,
+        *,
+        require_active: bool = True,
+    ) -> LiveGameRun | None:
+        return self._hydrate_complete_persisted_run(
+            self._load_persisted_run(run_id),
+            require_active=require_active,
+        )
+
+    def _load_complete_persisted_active_run(self, session_id: str) -> LiveGameRun | None:
+        return self._hydrate_complete_persisted_run(self._load_persisted_active_run(session_id))
+
     def _recover_committed_prepared_run(
         self,
         candidate: LiveGameRun,
@@ -1081,16 +1103,34 @@ class LiveRunRegistry:
         return "recovered", persisted
 
     def _complete_local_active_run_locked(self, session_id: str) -> LiveGameRun | None:
-        run = self._active_run_for_session_locked(session_id)
-        if run is None or run.events:
+        return self._complete_local_run_locked(
+            self._active_run_for_session_locked(session_id),
+            require_active=True,
+        )
+
+    def _complete_local_run_locked(
+        self,
+        run: LiveGameRun | None,
+        *,
+        require_active: bool,
+    ) -> LiveGameRun | None:
+        if run is None:
+            return None
+        if require_active and run.status not in {"queued", "running"}:
+            return None
+        if run.events:
             return run
-        return self._hydrate_complete_persisted_run(run)
+        return self._hydrate_complete_persisted_run(
+            run,
+            require_active=require_active,
+        )
 
     def _hydrate_complete_persisted_run(
         self,
         run: LiveGameRun | None,
         *,
         require_prepared: bool = False,
+        require_active: bool = True,
     ) -> LiveGameRun | None:
         if run is None:
             return None
@@ -1116,7 +1156,7 @@ class LiveRunRegistry:
                 return None
             if require_prepared:
                 validate_prepared_run(run)
-            elif run.status not in {"queued", "running"}:
+            elif require_active and run.status not in {"queued", "running"}:
                 return None
         except Exception:
             return None

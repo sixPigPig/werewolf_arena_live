@@ -419,6 +419,8 @@ def test_resume_live_run_allows_a_stale_active_checkpoint_takeover(
         game_status="partial",
         resumable=True,
         winner=None,
+        event_types=["run_created", "run_started"],
+        event_phases=[None, None],
     )
     with context.session_factory() as db:
         record = db.get(LiveRunRecord, run_id)

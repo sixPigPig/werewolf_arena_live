@@ -260,6 +260,35 @@ def add_virtual_profiles(count: int, *, prefix: str = "profile") -> list[str]:
     return profile_ids
 
 
+def store_incomplete_live_run(
+    *,
+    session_id: str,
+    run_id: str = "run_incomplete",
+) -> None:
+    stale_at = datetime.now(tz=UTC) - timedelta(minutes=5)
+    with TestingSessionLocal() as session:
+        session.add(
+            LiveRunRecord(
+                run_id=run_id,
+                session_id=session_id,
+                status="queued",
+                villager_model="deepseek-chat",
+                werewolf_model="deepseek-chat",
+                seed=21,
+                max_rounds=8,
+                rule_set_id="starter_6",
+                rule_set={"id": "starter_6"},
+                created_at=stale_at,
+                worker_id="worker-incomplete-owner",
+                worker_heartbeat_at=stale_at,
+                lease_expires_at=stale_at,
+                fence_token=4,
+                control_version=2,
+            )
+        )
+        session.commit()
+
+
 class ImmediateThread:
     def __init__(self, *, target, kwargs, daemon):
         self.target = target
@@ -2294,6 +2323,84 @@ def test_resume_game_run_recovers_commit_ack_loss_and_starts_one_worker(
     assert saved_events[0].run_id == saved_runs[0].run_id == payload["run_id"]
     assert saved_events[0].event_id == 1
     assert saved_events[0].type == "run_created"
+
+
+def test_resume_without_checkpoint_does_not_return_an_incomplete_persisted_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    run_id = "run_incomplete_missing"
+    store_incomplete_live_run(session_id=session_id, run_id=run_id)
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(TestingSessionLocal),
+        worker_id="worker-resume",
+    )
+    override_replay_store()
+    override_live_registry(registry)
+    background_starts: list[dict[str, object]] = []
+
+    def fake_resume_background(**kwargs: object) -> None:
+        background_starts.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._resume_game_in_background", fake_resume_background)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 404
+    assert background_starts == []
+    assert registry._runs == {}
+    with TestingSessionLocal() as db:
+        saved = db.get(LiveRunRecord, run_id)
+    assert saved is not None
+    assert saved.worker_id == "worker-incomplete-owner"
+    assert saved.fence_token == 4
+    assert saved.control_version == 2
+
+
+def test_resume_with_checkpoint_does_not_claim_or_start_an_incomplete_persisted_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    run_id = "run_incomplete_checkpoint"
+    store_game_session(
+        session_id,
+        state=sample_state(session_id, winner="", error="Maximum rounds exceeded"),
+        checkpoint=sample_checkpoint(session_id),
+    )
+    store_incomplete_live_run(session_id=session_id, run_id=run_id)
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(TestingSessionLocal),
+        worker_id="worker-resume",
+    )
+    override_replay_store()
+    override_live_registry(registry)
+    background_starts: list[dict[str, object]] = []
+
+    def fake_resume_background(**kwargs: object) -> None:
+        background_starts.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._resume_game_in_background", fake_resume_background)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+    non_raising_client = TestClient(app, raise_server_exceptions=False)
+
+    try:
+        response = non_raising_client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code not in {200, 201}
+    assert background_starts == []
+    assert registry._runs == {}
+    with TestingSessionLocal() as db:
+        saved = db.get(LiveRunRecord, run_id)
+    assert saved is not None
+    assert saved.worker_id == "worker-incomplete-owner"
+    assert saved.fence_token == 4
+    assert saved.control_version == 2
 
 
 def test_resume_game_run_reuses_active_run_without_starting_another_task(
