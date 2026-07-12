@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import re
 import threading
 import uuid
 from contextlib import contextmanager
@@ -15,6 +16,10 @@ from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snaps
 
 RunStatus = Literal["queued", "running", "completed", "failed", "canceled"]
 logger = logging.getLogger(__name__)
+_RULE_SET_REVISION_FIELDS = frozenset(
+    {"revision_id", "revision_no", "schema_version", "content_hash"}
+)
+_CONTENT_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 class GameRunCanceled(RuntimeError):
@@ -53,6 +58,73 @@ def utc_now() -> str:
 
 def _format_datetime(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def validate_rule_set_revision_metadata(
+    *,
+    rule_set_revision_id: object | None,
+    rule_set_revision_no: object | None,
+    rule_set_content_hash: object | None,
+    rule_set: object,
+) -> None:
+    scalar_values = (
+        rule_set_revision_id,
+        rule_set_revision_no,
+        rule_set_content_hash,
+    )
+    scalar_fields_present = tuple(value is not None for value in scalar_values)
+    if any(scalar_fields_present) and not all(scalar_fields_present):
+        raise ValueError("rule set revision metadata must be all present or all absent")
+    scalars_are_managed = all(scalar_fields_present)
+    if scalars_are_managed:
+        _validate_managed_rule_metadata_values(
+            rule_set_revision_id,
+            rule_set_revision_no,
+            rule_set_content_hash,
+        )
+
+    if not isinstance(rule_set, dict):
+        raise ValueError("rule_set must be a dictionary")
+    present_snapshot_fields = set(rule_set) & _RULE_SET_REVISION_FIELDS
+    if present_snapshot_fields and present_snapshot_fields != _RULE_SET_REVISION_FIELDS:
+        raise ValueError("snapshot revision metadata must be all present or all absent")
+    if not present_snapshot_fields:
+        return
+    if not scalars_are_managed:
+        raise ValueError("managed rule set snapshots require pinned revision metadata")
+
+    snapshot_revision_id = rule_set["revision_id"]
+    snapshot_revision_no = rule_set["revision_no"]
+    snapshot_content_hash = rule_set["content_hash"]
+    _validate_managed_rule_metadata_values(
+        snapshot_revision_id,
+        snapshot_revision_no,
+        snapshot_content_hash,
+    )
+    schema_version = rule_set["schema_version"]
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        raise ValueError("rule set schema_version must be an integer")
+    if schema_version != 1:
+        raise ValueError("rule set schema_version must be 1")
+    if (
+        snapshot_revision_id != rule_set_revision_id
+        or snapshot_revision_no != rule_set_revision_no
+        or snapshot_content_hash != rule_set_content_hash
+    ):
+        raise ValueError("pinned revision metadata must match the rule set snapshot")
+
+
+def _validate_managed_rule_metadata_values(
+    revision_id: object,
+    revision_no: object,
+    content_hash: object,
+) -> None:
+    if not isinstance(revision_id, str) or not revision_id or revision_id.strip() != revision_id:
+        raise ValueError("rule set revision_id must be non-empty untrimmed text")
+    if isinstance(revision_no, bool) or not isinstance(revision_no, int) or revision_no <= 0:
+        raise ValueError("rule set revision_no must be a positive integer")
+    if not isinstance(content_hash, str) or _CONTENT_HASH_PATTERN.fullmatch(content_hash) is None:
+        raise ValueError("rule set content_hash must be 64 lowercase hexadecimal characters")
 
 
 @dataclass(frozen=True, init=False)
@@ -121,6 +193,9 @@ class LiveGameRun:
     seed: int | None
     max_rounds: int
     rule_set_id: str = DEFAULT_RULE_SET_ID
+    rule_set_revision_id: str | None = None
+    rule_set_revision_no: int | None = None
+    rule_set_content_hash: str | None = None
     rule_set: dict[str, Any] = field(
         default_factory=lambda: rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
     )
@@ -148,6 +223,14 @@ class LiveGameRun:
     subscribers: list[queue.Queue[LiveEvent]] = field(default_factory=list)
     next_event_id: int = 1
 
+    def __post_init__(self) -> None:
+        validate_rule_set_revision_metadata(
+            rule_set_revision_id=self.rule_set_revision_id,
+            rule_set_revision_no=self.rule_set_revision_no,
+            rule_set_content_hash=self.rule_set_content_hash,
+            rule_set=self.rule_set,
+        )
+
     @property
     def event_count(self) -> int:
         return max(len(self.events), self.persisted_event_count)
@@ -161,6 +244,9 @@ class LiveGameRun:
             "seed": self.seed,
             "max_rounds": self.max_rounds,
             "rule_set_id": self.rule_set_id,
+            "rule_set_revision_id": self.rule_set_revision_id,
+            "rule_set_revision_no": self.rule_set_revision_no,
+            "rule_set_content_hash": self.rule_set_content_hash,
             "rule_set": _copy_json_payload(self.rule_set),
             "player_configs": _copy_json_payload(self.player_configs),
             "lineup_quality_warnings": _copy_json_payload(self.lineup_quality_warnings),
@@ -176,8 +262,7 @@ class LiveGameRun:
 
 
 class LiveStore(Protocol):
-    def save_run(self, run: LiveGameRun) -> None:
-        ...
+    def save_run(self, run: LiveGameRun) -> None: ...
 
     def append_event(
         self,
@@ -185,17 +270,13 @@ class LiveStore(Protocol):
         *,
         worker_id: str,
         fence_token: int,
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]:
-        ...
+    def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]: ...
 
-    def load_run(self, run_id: str) -> LiveGameRun | None:
-        ...
+    def load_run(self, run_id: str) -> LiveGameRun | None: ...
 
-    def active_run_for_session(self, session_id: str) -> LiveGameRun | None:
-        ...
+    def active_run_for_session(self, session_id: str) -> LiveGameRun | None: ...
 
     def acquire_lease(
         self,
@@ -204,8 +285,7 @@ class LiveStore(Protocol):
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
-    ) -> RunLeaseState | None:
-        ...
+    ) -> RunLeaseState | None: ...
 
     def heartbeat_lease(
         self,
@@ -215,8 +295,7 @@ class LiveStore(Protocol):
         heartbeat_at: str,
         lease_expires_at: str,
         fence_token: int,
-    ) -> RunLeaseState | None:
-        ...
+    ) -> RunLeaseState | None: ...
 
     def recovery_candidates(
         self,
@@ -225,8 +304,7 @@ class LiveStore(Protocol):
         now: str,
         max_attempts: int,
         limit: int,
-    ) -> list[RunRecoveryCandidate]:
-        ...
+    ) -> list[RunRecoveryCandidate]: ...
 
     def acquire_recovery_lease(
         self,
@@ -239,8 +317,7 @@ class LiveStore(Protocol):
         heartbeat_at: str,
         lease_expires_at: str,
         recovery_not_before: str,
-    ) -> RunLeaseState | None:
-        ...
+    ) -> RunLeaseState | None: ...
 
 
 class LiveRunRegistry:
@@ -271,6 +348,9 @@ class LiveRunRegistry:
         seed: int | None,
         max_rounds: int,
         rule_set_id: str = DEFAULT_RULE_SET_ID,
+        rule_set_revision_id: str | None = None,
+        rule_set_revision_no: int | None = None,
+        rule_set_content_hash: str | None = None,
         rule_set: dict[str, Any] | None = None,
         player_configs: list[PlayerConfig] | None = None,
         lineup_quality_warnings: list[dict[str, str]] | None = None,
@@ -279,6 +359,12 @@ class LiveRunRegistry:
             _copy_json_payload(rule_set)
             if rule_set is not None
             else rule_set_snapshot(get_rule_set(rule_set_id))
+        )
+        validate_rule_set_revision_metadata(
+            rule_set_revision_id=rule_set_revision_id,
+            rule_set_revision_no=rule_set_revision_no,
+            rule_set_content_hash=rule_set_content_hash,
+            rule_set=rule_set_data,
         )
         player_config_data = [config.to_dict() for config in player_configs or []]
         lineup_warning_data = _copy_json_payload(lineup_quality_warnings or [])
@@ -291,6 +377,9 @@ class LiveRunRegistry:
                 seed=seed,
                 max_rounds=max_rounds,
                 rule_set_id=rule_set_id,
+                rule_set_revision_id=rule_set_revision_id,
+                rule_set_revision_no=rule_set_revision_no,
+                rule_set_content_hash=rule_set_content_hash,
                 rule_set=rule_set_data,
                 player_configs=player_config_data,
                 lineup_quality_warnings=lineup_warning_data,
@@ -312,6 +401,9 @@ class LiveRunRegistry:
                     "seed": seed,
                     "max_rounds": max_rounds,
                     "rule_set_id": rule_set_id,
+                    "rule_set_revision_id": rule_set_revision_id,
+                    "rule_set_revision_no": rule_set_revision_no,
+                    "rule_set_content_hash": rule_set_content_hash,
                     "rule_set": rule_set_data,
                     "player_configs": player_config_data,
                     "lineup_quality_warnings": lineup_warning_data,
@@ -335,9 +427,18 @@ class LiveRunRegistry:
         seed: int | None,
         max_rounds: int,
         rule_set_id: str = DEFAULT_RULE_SET_ID,
+        rule_set_revision_id: str | None = None,
+        rule_set_revision_no: int | None = None,
+        rule_set_content_hash: str | None = None,
         rule_set: dict[str, Any] | None = None,
         player_configs: list[PlayerConfig] | None = None,
     ) -> tuple[LiveGameRun, bool]:
+        validate_rule_set_revision_metadata(
+            rule_set_revision_id=rule_set_revision_id,
+            rule_set_revision_no=rule_set_revision_no,
+            rule_set_content_hash=rule_set_content_hash,
+            rule_set=rule_set if rule_set is not None else {},
+        )
         active_run = self.try_get_active_run_for_session(session_id)
         if active_run is not None:
             return active_run, False
@@ -350,6 +451,9 @@ class LiveRunRegistry:
                     seed=seed,
                     max_rounds=max_rounds,
                     rule_set_id=rule_set_id,
+                    rule_set_revision_id=rule_set_revision_id,
+                    rule_set_revision_no=rule_set_revision_no,
+                    rule_set_content_hash=rule_set_content_hash,
                     rule_set=rule_set,
                     player_configs=player_configs,
                 ),
@@ -505,9 +609,7 @@ class LiveRunRegistry:
         with self._lock:
             run = self._runs[run_id]
             has_claimed_lease = (
-                run.worker_id == self.worker_id
-                and run.fence_token > 0
-                and not run.lease_lost
+                run.worker_id == self.worker_id and run.fence_token > 0 and not run.lease_lost
             )
         lease_state = None if has_claimed_lease else self._acquire_lease(run_id)
         if (
@@ -900,10 +1002,7 @@ class LiveRunRegistry:
             if state is None:
                 run.lease_lost = True
                 return None
-            if (
-                state.status in {"queued", "running"}
-                and state.worker_id != self.worker_id
-            ):
+            if state.status in {"queued", "running"} and state.worker_id != self.worker_id:
                 run.lease_lost = True
                 return None
             if state.status in {"completed", "failed"}:
@@ -970,9 +1069,7 @@ class LiveRunRegistry:
                                 session_id=run.session_id,
                                 created_at=run.completed_at or utc_now(),
                                 payload=(
-                                    {"winner": run.winner}
-                                    if run.status == "completed"
-                                    else {}
+                                    {"winner": run.winner} if run.status == "completed" else {}
                                 ),
                             )
                         )

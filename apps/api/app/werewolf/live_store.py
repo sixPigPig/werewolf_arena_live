@@ -15,6 +15,7 @@ from app.werewolf.live import (
     RunLeaseState,
     RunLeaseUnavailable,
     RunRecoveryCandidate,
+    validate_rule_set_revision_metadata,
 )
 
 
@@ -38,6 +39,12 @@ class DatabaseLiveStore:
         self.db = db
 
     def save_run(self, run: LiveGameRun) -> None:
+        validate_rule_set_revision_metadata(
+            rule_set_revision_id=run.rule_set_revision_id,
+            rule_set_revision_no=run.rule_set_revision_no,
+            rule_set_content_hash=run.rule_set_content_hash,
+            rule_set=run.rule_set,
+        )
         record = self.db.get(LiveRunRecord, run.run_id)
         is_new = record is None
         if record is None:
@@ -76,9 +83,7 @@ class DatabaseLiveStore:
                 )
         terminal_statuses = {"completed", "failed", "canceled"}
         fenced_by_terminal_state = (
-            not is_new
-            and record.status in terminal_statuses
-            and record.status != run.status
+            not is_new and record.status in terminal_statuses and record.status != run.status
         )
         if fenced_by_terminal_state:
             run.status = record.status
@@ -91,6 +96,9 @@ class DatabaseLiveStore:
             record.winner = run.winner
             record.error = run.error
             record.completed_at = parse_live_datetime(run.completed_at)
+        record.rule_set_revision_id = run.rule_set_revision_id
+        record.rule_set_revision_no = run.rule_set_revision_no
+        record.rule_set_content_hash = run.rule_set_content_hash
         record.rule_set = copy.deepcopy(run.rule_set)
         record.player_configs = copy.deepcopy(run.player_configs)
         record.lineup_quality_warnings = copy.deepcopy(run.lineup_quality_warnings)
@@ -204,9 +212,7 @@ class DatabaseLiveStore:
             control_version=record.control_version,
             fence_token=record.fence_token,
             recovery_attempts=record.recovery_attempts,
-            recovery_last_attempt_at=_format_optional_datetime(
-                record.recovery_last_attempt_at
-            ),
+            recovery_last_attempt_at=_format_optional_datetime(record.recovery_last_attempt_at),
             recovery_not_before=_format_optional_datetime(record.recovery_not_before),
             recovery_last_error=record.recovery_last_error,
         )
@@ -321,6 +327,9 @@ class DatabaseLiveStore:
             seed=record.seed,
             max_rounds=record.max_rounds,
             rule_set_id=record.rule_set_id,
+            rule_set_revision_id=record.rule_set_revision_id,
+            rule_set_revision_no=record.rule_set_revision_no,
+            rule_set_content_hash=record.rule_set_content_hash,
             rule_set=copy.deepcopy(record.rule_set or {}),
             player_configs=copy.deepcopy(record.player_configs or []),
             lineup_quality_warnings=copy.deepcopy(record.lineup_quality_warnings or []),
@@ -337,9 +346,7 @@ class DatabaseLiveStore:
             control_version=record.control_version,
             fence_token=record.fence_token,
             recovery_attempts=record.recovery_attempts,
-            recovery_last_attempt_at=_format_optional_datetime(
-                record.recovery_last_attempt_at
-            ),
+            recovery_last_attempt_at=_format_optional_datetime(record.recovery_last_attempt_at),
             recovery_not_before=_format_optional_datetime(record.recovery_not_before),
             recovery_last_error=record.recovery_last_error,
             persisted_event_count=event_count,
@@ -371,9 +378,7 @@ class DatabaseLiveStore:
         )
         if guard.rowcount != 1:
             self.db.rollback()
-            raise RunLeaseUnavailable(
-                f"Run {event.run_id} event was rejected by its fencing token"
-            )
+            raise RunLeaseUnavailable(f"Run {event.run_id} event was rejected by its fencing token")
         record = LiveEventRecord(
             run_id=event.run_id,
             event_id=event.id,

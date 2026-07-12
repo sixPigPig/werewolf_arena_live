@@ -14,6 +14,7 @@ from app.werewolf.checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     ResumeCheckpointError,
 )
+from app.werewolf.live import validate_rule_set_revision_metadata
 from app.werewolf.models import GameState, RoundLog
 
 SESSION_ID_RE = r"^game_[0-9a-f]{8}$"
@@ -29,26 +30,19 @@ class ReplayWriteFencedError(RuntimeError):
 
 
 class GameRecordStore(Protocol):
-    def list_sessions(self) -> list[dict[str, Any]]:
-        ...
+    def list_sessions(self) -> list[dict[str, Any]]: ...
 
-    def load_session(self, session_id: str) -> dict[str, Any]:
-        ...
+    def load_session(self, session_id: str) -> dict[str, Any]: ...
 
-    def load_resume_checkpoint(self, session_id: str) -> dict[str, Any]:
-        ...
+    def load_resume_checkpoint(self, session_id: str) -> dict[str, Any]: ...
 
-    def save_game(self, state: GameState, logs: list[RoundLog]) -> None:
-        ...
+    def save_game(self, state: GameState, logs: list[RoundLog]) -> None: ...
 
-    def save_game_payload(self, *, state: dict[str, Any], logs: list[Any]) -> None:
-        ...
+    def save_game_payload(self, *, state: dict[str, Any], logs: list[Any]) -> None: ...
 
-    def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, Any]) -> None:
-        ...
+    def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, Any]) -> None: ...
 
-    def clear_resume_checkpoint(self, session_id: str) -> None:
-        ...
+    def clear_resume_checkpoint(self, session_id: str) -> None: ...
 
 
 class DatabaseReplayStore:
@@ -127,6 +121,7 @@ class DatabaseReplayStore:
 
     def save_game_payload(self, *, state: dict[str, Any], logs: list[Any]) -> None:
         session_id, state, logs, rounds = _validated_game_payload(state=state, logs=logs)
+        rule_set_projection = _validated_rule_set_projection(state)
         status = "partial" if state.get("error_message") else "complete"
         existing_payload = self.db.get(GameReplayPayload, session_id)
         checkpoint = _valid_checkpoint_or_none(
@@ -140,7 +135,7 @@ class DatabaseReplayStore:
             record.status = status
             record.winner = str(state.get("winner") or "") or None
             record.round_count = len(rounds)
-            record.rule_set = copy.deepcopy(state.get("rule_set"))
+            _apply_rule_set_projection(record, rule_set_projection)
             record.resumable = resumable
 
             payload = self._get_or_create_payload(session_id)
@@ -157,13 +152,14 @@ class DatabaseReplayStore:
     def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, Any]) -> None:
         self._validate_session_id(session_id)
         state, logs, _checkpoint, rounds = _validated_checkpoint_payload(session_id, checkpoint)
+        rule_set_projection = _validated_rule_set_projection(state)
         try:
             self._guard_write_fence(session_id)
             record = self._get_or_create_record(session_id)
             record.status = "partial"
             record.winner = str(state.get("winner") or "") or None
             record.round_count = len(rounds)
-            record.rule_set = copy.deepcopy(state.get("rule_set"))
+            _apply_rule_set_projection(record, rule_set_projection)
             record.resumable = True
 
             payload = self._get_or_create_payload(session_id)
@@ -250,6 +246,61 @@ def _validated_game_payload(
         raise ReplayNotFoundError
     rounds = _list_payload(state.get("rounds", []))
     return session_id, state, logs, rounds
+
+
+def _validated_rule_set_projection(
+    state: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None, str | None, int | None, str | None]:
+    if "rule_set" not in state:
+        return None, None, None, None, None
+    rule_set = state.get("rule_set")
+    if not isinstance(rule_set, dict):
+        raise ReplayNotFoundError
+    rule_set_id = rule_set.get("id")
+    if not isinstance(rule_set_id, str) or not rule_set_id or rule_set_id.strip() != rule_set_id:
+        raise ReplayNotFoundError
+
+    revision_id = rule_set.get("revision_id")
+    revision_no = rule_set.get("revision_no")
+    content_hash = rule_set.get("content_hash")
+    try:
+        validate_rule_set_revision_metadata(
+            rule_set_revision_id=revision_id,
+            rule_set_revision_no=revision_no,
+            rule_set_content_hash=content_hash,
+            rule_set=rule_set,
+        )
+        if set(rule_set) & {
+            "revision_id",
+            "revision_no",
+            "schema_version",
+            "content_hash",
+        }:
+            from app.rule_sets import resolve_rule_set_snapshot
+
+            resolve_rule_set_snapshot(rule_set)
+    except ValueError as error:
+        raise ReplayNotFoundError from error
+
+    return rule_set, rule_set_id, revision_id, revision_no, content_hash
+
+
+def _apply_rule_set_projection(
+    record: GameSessionRecord,
+    projection: tuple[
+        dict[str, Any] | None,
+        str | None,
+        str | None,
+        int | None,
+        str | None,
+    ],
+) -> None:
+    rule_set, rule_set_id, revision_id, revision_no, content_hash = projection
+    record.rule_set_id = rule_set_id
+    record.rule_set_revision_id = revision_id
+    record.rule_set_revision_no = revision_no
+    record.rule_set_content_hash = content_hash
+    record.rule_set = copy.deepcopy(rule_set)
 
 
 def _validated_checkpoint_payload(

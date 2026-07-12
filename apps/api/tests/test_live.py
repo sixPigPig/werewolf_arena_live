@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app.werewolf.live import LiveRunRegistry, format_sse
+from app.werewolf.live import LiveGameRun, LiveRunRegistry, format_sse
 
 
 def classic_rule_kwargs() -> dict:
@@ -21,6 +21,26 @@ def classic_rule_kwargs() -> dict:
             "roles": [],
         },
     }
+
+
+def managed_rule_kwargs() -> dict:
+    kwargs = classic_rule_kwargs()
+    kwargs["rule_set"].update(
+        {
+            "revision_id": "revision-2",
+            "revision_no": 2,
+            "schema_version": 1,
+            "content_hash": "a" * 64,
+        }
+    )
+    kwargs.update(
+        {
+            "rule_set_revision_id": "revision-2",
+            "rule_set_revision_no": 2,
+            "rule_set_content_hash": "a" * 64,
+        }
+    )
+    return kwargs
 
 
 class RecordingLiveStore:
@@ -91,6 +111,12 @@ def test_registry_creates_run_with_initial_event() -> None:
     assert run.status == "queued"
     assert run.event_count == 1
     assert run.events[0].type == "run_created"
+    assert run.to_summary()["rule_set_revision_id"] is None
+    assert run.to_summary()["rule_set_revision_no"] is None
+    assert run.to_summary()["rule_set_content_hash"] is None
+    assert run.events[0].payload["rule_set_revision_id"] is None
+    assert run.events[0].payload["rule_set_revision_no"] is None
+    assert run.events[0].payload["rule_set_content_hash"] is None
 
 
 def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
@@ -102,7 +128,7 @@ def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
         werewolf_model="deepseek-chat",
         seed=21,
         max_rounds=8,
-        **classic_rule_kwargs(),
+        **managed_rule_kwargs(),
     )
 
     summary = run.to_summary()
@@ -116,6 +142,9 @@ def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
         "seed",
         "max_rounds",
         "rule_set_id",
+        "rule_set_revision_id",
+        "rule_set_revision_no",
+        "rule_set_content_hash",
         "rule_set",
         "player_configs",
         "lineup_quality_warnings",
@@ -123,9 +152,9 @@ def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
         "started_at",
         "completed_at",
         "winner",
-            "error",
-            "stop_requested_at",
-            "event_count",
+        "error",
+        "stop_requested_at",
+        "event_count",
     }
     assert set(run.events[0].payload) == {
         "session_id",
@@ -134,12 +163,197 @@ def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
         "seed",
         "max_rounds",
         "rule_set_id",
+        "rule_set_revision_id",
+        "rule_set_revision_no",
+        "rule_set_content_hash",
         "rule_set",
         "player_configs",
         "lineup_quality_warnings",
     }
     assert summary["lineup_quality_warnings"] == []
     assert run.events[0].payload["lineup_quality_warnings"] == []
+    assert summary["rule_set_revision_id"] == "revision-2"
+    assert summary["rule_set_revision_no"] == 2
+    assert summary["rule_set_content_hash"] == "a" * 64
+    assert run.events[0].payload["rule_set_revision_id"] == "revision-2"
+    assert run.events[0].payload["rule_set_revision_no"] == 2
+    assert run.events[0].payload["rule_set_content_hash"] == "a" * 64
+
+
+def test_registry_get_or_create_forwards_pinned_rule_metadata() -> None:
+    registry = LiveRunRegistry()
+
+    run, created = registry.get_or_create_active_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+        **managed_rule_kwargs(),
+    )
+
+    assert created is True
+    assert run.rule_set_revision_id == "revision-2"
+    assert run.rule_set_revision_no == 2
+    assert run.rule_set_content_hash == "a" * 64
+
+
+def test_live_game_run_rejects_partial_pinned_rule_metadata() -> None:
+    with pytest.raises(ValueError, match="all present or all absent"):
+        LiveGameRun(
+            run_id="run_123456789abc",
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+            rule_set_revision_id="revision-2",
+        )
+
+
+def test_registry_accepts_backfilled_pinned_scalars_with_a_legacy_snapshot() -> None:
+    registry = LiveRunRegistry()
+
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+        **classic_rule_kwargs(),
+        rule_set_revision_id="revision-2",
+        rule_set_revision_no=2,
+        rule_set_content_hash="a" * 64,
+    )
+
+    assert run.rule_set_revision_id == "revision-2"
+    assert run.rule_set_revision_no == 2
+    assert run.rule_set_content_hash == "a" * 64
+    assert "revision_id" not in run.rule_set
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {
+            "rule_set_revision_id": None,
+            "rule_set_revision_no": None,
+            "rule_set_content_hash": None,
+        },
+        {"rule_set_revision_id": "revision-other"},
+        {"rule_set_revision_no": 3},
+        {"rule_set_content_hash": "b" * 64},
+        {"rule_set": {"schema_version": True}},
+        {"rule_set": {"schema_version": 2}},
+    ],
+    ids=(
+        "missing-scalars",
+        "revision-id-mismatch",
+        "revision-no-mismatch",
+        "content-hash-mismatch",
+        "boolean-schema-version",
+        "wrong-schema-version",
+    ),
+)
+def test_registry_rejects_managed_snapshot_without_matching_pinned_scalars(
+    changes: dict[str, object],
+) -> None:
+    kwargs = managed_rule_kwargs()
+    snapshot_changes = changes.get("rule_set")
+    if isinstance(snapshot_changes, dict):
+        kwargs["rule_set"].update(snapshot_changes)
+    else:
+        kwargs.update(changes)
+
+    with pytest.raises(ValueError):
+        LiveRunRegistry().create_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {
+            "rule_set_revision_id": "revision-2",
+            "rule_set_revision_no": None,
+            "rule_set_content_hash": None,
+        },
+        {
+            "rule_set_revision_id": " revision-2",
+            "rule_set_revision_no": 2,
+            "rule_set_content_hash": "a" * 64,
+        },
+        {
+            "rule_set_revision_id": "revision-2",
+            "rule_set_revision_no": True,
+            "rule_set_content_hash": "a" * 64,
+        },
+        {
+            "rule_set_revision_id": "revision-2",
+            "rule_set_revision_no": 2,
+            "rule_set_content_hash": "A" * 64,
+        },
+    ],
+    ids=("partial", "untrimmed-id", "boolean-revision", "uppercase-hash"),
+)
+def test_registry_rejects_invalid_pinned_rule_metadata(metadata: dict[str, object]) -> None:
+    registry = LiveRunRegistry()
+
+    with pytest.raises(ValueError):
+        registry.create_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+            **metadata,
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"rule_set_revision_id": "revision-2"},
+        {
+            "rule_set_revision_id": "revision-2",
+            "rule_set_revision_no": True,
+            "rule_set_content_hash": "a" * 64,
+        },
+        {
+            "rule_set_revision_id": "revision-2",
+            "rule_set_revision_no": 2,
+            "rule_set_content_hash": "A" * 64,
+        },
+    ],
+    ids=("partial", "boolean-revision", "uppercase-hash"),
+)
+def test_get_or_create_validates_pinned_metadata_before_returning_an_active_run(
+    metadata: dict[str, object],
+) -> None:
+    registry = LiveRunRegistry()
+    registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+
+    with pytest.raises(ValueError):
+        registry.get_or_create_active_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+            **metadata,
+        )
 
 
 def test_registry_appends_ordered_events_and_replays_after_id() -> None:

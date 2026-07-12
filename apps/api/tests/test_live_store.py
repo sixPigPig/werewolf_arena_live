@@ -35,6 +35,188 @@ def db_session() -> Generator[Session, None, None]:
         yield session
 
 
+def pinned_rule_snapshot() -> dict[str, object]:
+    return {
+        "id": "classic_8",
+        "version": "2",
+        "name": " 经典 8 人局 ",
+        "revision_id": "revision-2",
+        "revision_no": 2,
+        "schema_version": 1,
+        "content_hash": "a" * 64,
+        "storage_marker": {"preserve": ["exact", 2]},
+    }
+
+
+def test_live_store_round_trips_pinned_rule_metadata_exactly(db_session: Session) -> None:
+    snapshot = pinned_rule_snapshot()
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id="classic_8",
+        rule_set_revision_id="revision-2",
+        rule_set_revision_no=2,
+        rule_set_content_hash="a" * 64,
+        rule_set=snapshot,
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    loaded = store.load_run(run.run_id)
+
+    assert loaded is not None
+    assert loaded.rule_set_revision_id == "revision-2"
+    assert loaded.rule_set_revision_no == 2
+    assert loaded.rule_set_content_hash == "a" * 64
+    assert loaded.rule_set == snapshot
+    assert loaded.rule_set is not run.rule_set
+
+
+def test_live_store_loads_backfilled_pinned_scalars_with_legacy_snapshot(
+    db_session: Session,
+) -> None:
+    legacy_snapshot = {"id": "classic_8", "name": "legacy"}
+    run = LiveRunRegistry().create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id="classic_8",
+        rule_set_revision_id="revision-2",
+        rule_set_revision_no=2,
+        rule_set_content_hash="a" * 64,
+        rule_set=legacy_snapshot,
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    loaded = store.load_run(run.run_id)
+
+    assert loaded is not None
+    assert loaded.rule_set_revision_id == "revision-2"
+    assert loaded.rule_set_revision_no == 2
+    assert loaded.rule_set_content_hash == "a" * 64
+    assert loaded.rule_set == legacy_snapshot
+
+
+def test_live_store_loads_legacy_null_rule_snapshot_as_an_empty_snapshot(
+    db_session: Session,
+) -> None:
+    db_session.add(
+        LiveRunRecord(
+            run_id="run_123456789abc",
+            session_id="game_1200abcd",
+            status="completed",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+            rule_set_id="classic_8",
+            rule_set=None,
+        )
+    )
+    db_session.commit()
+
+    loaded = DatabaseLiveStore(db_session).load_run("run_123456789abc")
+
+    assert loaded is not None
+    assert loaded.rule_set_revision_id is None
+    assert loaded.rule_set_revision_no is None
+    assert loaded.rule_set_content_hash is None
+    assert loaded.rule_set == {}
+
+
+def test_live_store_replaces_and_clears_pinned_rule_metadata_on_update(
+    db_session: Session,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id="classic_8",
+        rule_set={"id": "classic_8", "name": "legacy"},
+    )
+    store = DatabaseLiveStore(db_session)
+    store.save_run(run)
+
+    run.rule_set_revision_id = "revision-2"
+    run.rule_set_revision_no = 2
+    run.rule_set_content_hash = "a" * 64
+    run.rule_set = pinned_rule_snapshot()
+    store.save_run(run)
+
+    managed = db_session.get(LiveRunRecord, run.run_id)
+    assert managed is not None
+    assert managed.rule_set_revision_id == "revision-2"
+    assert managed.rule_set_revision_no == 2
+    assert managed.rule_set_content_hash == "a" * 64
+    assert managed.rule_set == pinned_rule_snapshot()
+
+    run.rule_set_revision_id = None
+    run.rule_set_revision_no = None
+    run.rule_set_content_hash = None
+    run.rule_set = {"id": "classic_8", "name": "legacy again"}
+    store.save_run(run)
+
+    db_session.expire_all()
+    legacy = db_session.get(LiveRunRecord, run.run_id)
+    assert legacy is not None
+    assert legacy.rule_set_revision_id is None
+    assert legacy.rule_set_revision_no is None
+    assert legacy.rule_set_content_hash is None
+    assert legacy.rule_set == {"id": "classic_8", "name": "legacy again"}
+
+
+def test_live_store_rejects_partial_pinned_rule_metadata_before_insert(
+    db_session: Session,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    run.rule_set_revision_id = "revision-2"
+
+    with pytest.raises(ValueError, match="all present or all absent"):
+        DatabaseLiveStore(db_session).save_run(run)
+
+    assert db_session.get(LiveRunRecord, run.run_id) is None
+
+
+def test_live_store_rejects_loading_a_partial_pinned_rule_metadata_row(
+    db_session: Session,
+) -> None:
+    db_session.add(
+        LiveRunRecord(
+            run_id="run_123456789abc",
+            session_id="game_1200abcd",
+            status="queued",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+            rule_set_id="classic_8",
+            rule_set_revision_id="revision-2",
+            rule_set={"id": "classic_8", "name": "legacy"},
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="all present or all absent"):
+        DatabaseLiveStore(db_session).load_run("run_123456789abc")
+
+
 def test_live_store_saves_run_and_events(db_session: Session) -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
@@ -83,9 +265,7 @@ def test_live_store_events_after_filters_by_event_id(db_session: Session) -> Non
     store.append_event(first, worker_id=run.worker_id, fence_token=run.fence_token)
     store.append_event(second, worker_id=run.worker_id, fence_token=run.fence_token)
 
-    assert [event.id for event in store.events_after(run.run_id, after_id=first.id)] == [
-        second.id
-    ]
+    assert [event.id for event in store.events_after(run.run_id, after_id=first.id)] == [second.id]
 
 
 def test_live_store_returns_latest_eventful_playback_events_for_session(

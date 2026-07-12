@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -12,12 +13,14 @@ from sqlalchemy.pool import StaticPool
 from app.db.base import Base
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import LiveRunRecord
+from app.rule_sets import compile_rule_set_config, rule_set_config_from_snapshot
 from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION, ResumeCheckpointError
 from app.werewolf.replay import (
     DatabaseReplayStore,
     ReplayNotFoundError,
     ReplayWriteFencedError,
 )
+from app.werewolf.rules import get_rule_set, rule_set_snapshot
 
 _DEFAULT = object()
 
@@ -48,6 +51,19 @@ def sample_state(session_id: str, *, winner: str = "狼人阵营", error: str = 
 
 def sample_logs() -> list[dict]:
     return [{"number": 1, "debate": [], "summaries": []}]
+
+
+def managed_rule_snapshot(
+    *, revision_id: str = "revision-2", revision_no: int = 2
+) -> dict[str, Any]:
+    legacy = rule_set_snapshot(get_rule_set("starter_6"))
+    config = rule_set_config_from_snapshot(legacy)
+    return compile_rule_set_config(
+        "starter_6",
+        config,
+        revision_id=revision_id,
+        revision_no=revision_no,
+    ).snapshot
 
 
 def sample_checkpoint(
@@ -116,6 +132,149 @@ def test_save_complete_game_lists_and_loads_session(db_session: Session) -> None
     assert loaded["state"]["winner"] == "狼人阵营"
     assert loaded["logs"] == sample_logs()
     assert loaded["resumable"] is False
+    record = db_session.get(GameSessionRecord, "game_1200abcd")
+    assert record is not None
+    assert record.rule_set_id == "starter_6"
+    assert record.rule_set_revision_id is None
+    assert record.rule_set_revision_no is None
+    assert record.rule_set_content_hash is None
+
+
+def test_replay_store_saves_pre_rule_set_legacy_state_without_projection(
+    db_session: Session,
+) -> None:
+    store = DatabaseReplayStore(db_session)
+    state = sample_state("game_1200abcd")
+    del state["rule_set"]
+
+    store.save_game_payload(state=state, logs=sample_logs())
+
+    record = db_session.get(GameSessionRecord, "game_1200abcd")
+    payload = db_session.get(GameReplayPayload, "game_1200abcd")
+    assert record is not None
+    assert payload is not None
+    assert record.rule_set_id is None
+    assert record.rule_set_revision_id is None
+    assert record.rule_set_revision_no is None
+    assert record.rule_set_content_hash is None
+    assert record.rule_set is None
+    assert payload.state == state
+
+
+def test_replay_store_projects_pinned_rule_metadata_without_rewriting_snapshot(
+    db_session: Session,
+) -> None:
+    store = DatabaseReplayStore(db_session)
+    state = sample_state("game_1200abcd")
+    state["rule_set"] = managed_rule_snapshot()
+    original_state = copy.deepcopy(state)
+
+    store.save_game_payload(state=state, logs=sample_logs())
+
+    record = db_session.get(GameSessionRecord, "game_1200abcd")
+    payload = db_session.get(GameReplayPayload, "game_1200abcd")
+    assert record is not None
+    assert payload is not None
+    assert record.rule_set_id == state["rule_set"]["id"]
+    assert record.rule_set_revision_id == state["rule_set"]["revision_id"]
+    assert record.rule_set_revision_no == state["rule_set"]["revision_no"]
+    assert record.rule_set_content_hash == state["rule_set"]["content_hash"]
+    assert record.rule_set == original_state["rule_set"]
+    assert payload.state == original_state
+    assert state == original_state
+
+
+def test_replay_store_replaces_and_clears_pinned_rule_metadata_on_update(
+    db_session: Session,
+) -> None:
+    store = DatabaseReplayStore(db_session)
+    legacy_state = sample_state("game_1200abcd")
+    store.save_game_payload(state=legacy_state, logs=sample_logs())
+
+    managed_state = sample_state("game_1200abcd")
+    managed_state["rule_set"] = managed_rule_snapshot()
+    store.save_game_payload(state=managed_state, logs=sample_logs())
+
+    managed = db_session.get(GameSessionRecord, "game_1200abcd")
+    assert managed is not None
+    assert managed.rule_set_revision_id == managed_state["rule_set"]["revision_id"]
+    assert managed.rule_set_revision_no == managed_state["rule_set"]["revision_no"]
+    assert managed.rule_set_content_hash == managed_state["rule_set"]["content_hash"]
+
+    legacy_again = sample_state("game_1200abcd")
+    legacy_again["rule_set"] = {"id": "classic_8", "name": "legacy again"}
+    store.save_game_payload(state=legacy_again, logs=sample_logs())
+
+    db_session.expire_all()
+    cleared = db_session.get(GameSessionRecord, "game_1200abcd")
+    assert cleared is not None
+    assert cleared.rule_set_id == "classic_8"
+    assert cleared.rule_set_revision_id is None
+    assert cleared.rule_set_revision_no is None
+    assert cleared.rule_set_content_hash is None
+    assert cleared.rule_set == legacy_again["rule_set"]
+
+
+@pytest.mark.parametrize(
+    "metadata_change",
+    [
+        {"missing": "revision_id"},
+        {"missing": "revision_no"},
+        {"missing": "schema_version"},
+        {"missing": "content_hash"},
+        {"field": "revision_id", "value": " revision-2"},
+        {"field": "revision_no", "value": True},
+        {"field": "schema_version", "value": True},
+        {"field": "schema_version", "value": 2},
+        {"field": "content_hash", "value": "A" * 64},
+        {"field": "content_hash", "value": "0" * 64},
+    ],
+    ids=(
+        "missing-revision-id",
+        "missing-revision-no",
+        "missing-schema-version",
+        "missing-content-hash",
+        "untrimmed-revision-id",
+        "boolean-revision-no",
+        "boolean-schema-version",
+        "wrong-schema-version",
+        "uppercase-content-hash",
+        "content-hash-mismatch",
+    ),
+)
+def test_replay_store_rejects_partial_or_malformed_pinned_rule_metadata(
+    db_session: Session,
+    metadata_change: dict[str, Any],
+) -> None:
+    snapshot = managed_rule_snapshot()
+    missing = metadata_change.get("missing")
+    if missing is not None:
+        del snapshot[missing]
+    else:
+        snapshot[metadata_change["field"]] = metadata_change["value"]
+    state = sample_state("game_1200abcd")
+    state["rule_set"] = snapshot
+
+    with pytest.raises(ReplayNotFoundError):
+        DatabaseReplayStore(db_session).save_game_payload(state=state, logs=sample_logs())
+
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+    assert db_session.get(GameReplayPayload, "game_1200abcd") is None
+
+
+@pytest.mark.parametrize("rule_set", [None, [], {"id": 7}, {"id": " starter_6"}])
+def test_replay_store_rejects_invalid_legacy_rule_snapshot_shape(
+    db_session: Session,
+    rule_set: object,
+) -> None:
+    state = sample_state("game_1200abcd")
+    state["rule_set"] = rule_set
+
+    with pytest.raises(ReplayNotFoundError):
+        DatabaseReplayStore(db_session).save_game_payload(state=state, logs=sample_logs())
+
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+    assert db_session.get(GameReplayPayload, "game_1200abcd") is None
 
 
 def test_list_sessions_skips_records_without_payload(db_session: Session) -> None:
@@ -158,6 +317,58 @@ def test_checkpoint_makes_partial_session_resumable(db_session: Session) -> None
     assert loaded_session["resumable"] is True
     assert loaded_session["state"]["session_id"] == "game_1200abcd"
     assert loaded_session["logs"] == sample_logs()
+
+
+def test_checkpoint_write_projects_and_clears_pinned_rule_metadata(
+    db_session: Session,
+) -> None:
+    store = DatabaseReplayStore(db_session)
+    managed_state = sample_state("game_1200abcd", winner="", error="")
+    managed_state["rule_set"] = managed_rule_snapshot()
+    managed_checkpoint = sample_checkpoint(state_at_round_start=managed_state)
+
+    store.save_resume_checkpoint("game_1200abcd", managed_checkpoint)
+
+    managed = db_session.get(GameSessionRecord, "game_1200abcd")
+    assert managed is not None
+    assert managed.rule_set_id == managed_state["rule_set"]["id"]
+    assert managed.rule_set_revision_id == managed_state["rule_set"]["revision_id"]
+    assert managed.rule_set_revision_no == managed_state["rule_set"]["revision_no"]
+    assert managed.rule_set_content_hash == managed_state["rule_set"]["content_hash"]
+    assert managed.rule_set == managed_state["rule_set"]
+
+    legacy_checkpoint = sample_checkpoint()
+    store.save_resume_checkpoint("game_1200abcd", legacy_checkpoint)
+
+    db_session.expire_all()
+    cleared = db_session.get(GameSessionRecord, "game_1200abcd")
+    payload = db_session.get(GameReplayPayload, "game_1200abcd")
+    assert cleared is not None
+    assert payload is not None
+    assert cleared.rule_set_id == "starter_6"
+    assert cleared.rule_set_revision_id is None
+    assert cleared.rule_set_revision_no is None
+    assert cleared.rule_set_content_hash is None
+    assert cleared.rule_set == legacy_checkpoint["state_at_round_start"]["rule_set"]
+    assert payload.checkpoint == legacy_checkpoint
+
+
+def test_checkpoint_write_rejects_partial_pinned_rule_metadata(
+    db_session: Session,
+) -> None:
+    state = sample_state("game_1200abcd", winner="", error="")
+    state["rule_set"] = managed_rule_snapshot()
+    del state["rule_set"]["content_hash"]
+    checkpoint = sample_checkpoint(state_at_round_start=state)
+
+    with pytest.raises(ReplayNotFoundError):
+        DatabaseReplayStore(db_session).save_resume_checkpoint(
+            "game_1200abcd",
+            checkpoint,
+        )
+
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+    assert db_session.get(GameReplayPayload, "game_1200abcd") is None
 
 
 def test_replay_writes_require_the_current_live_run_fence_token(
