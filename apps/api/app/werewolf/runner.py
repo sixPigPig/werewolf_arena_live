@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import random
 import uuid
 from dataclasses import dataclass
 
+from app.rule_sets.types import CompiledRuleSet
 from app.werewolf.checkpoint import (
     ReplayThenLiveProvider,
     ResumeCheckpointError,
@@ -19,7 +21,7 @@ from app.werewolf.lm import ModelProvider
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.providers import create_model_provider, default_model_name
 from app.werewolf.replay import GameRecordStore, ReplayWriteFencedError
-from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set
+from app.werewolf.rules import DEFAULT_RULE_SET_ID
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class GameRunError(RuntimeError):
 def run_game(
     *,
     record_store: GameRecordStore,
+    compiled_rule_set: CompiledRuleSet,
     villager_model: str | None = None,
     werewolf_model: str | None = None,
     seed: int | None = None,
@@ -44,11 +47,10 @@ def run_game(
     provider: ModelProvider | None = None,
     session_id: str | None = None,
     event_sink: object | None = None,
-    rule_set_id: str = DEFAULT_RULE_SET_ID,
     player_configs: list[PlayerConfig] | None = None,
 ) -> RunGameResult:
     session_id = session_id or new_session_id()
-    rule_set = get_rule_set(rule_set_id)
+    rule_set = compiled_rule_set.rule_set
     default_model = default_model_name()
     selected_villager_model = villager_model or default_model
     selected_werewolf_model = werewolf_model or default_model
@@ -58,6 +60,10 @@ def run_game(
         "seed": seed,
         "max_rounds": max_rounds,
         "rule_set_id": rule_set.id,
+        "revision_id": compiled_rule_set.revision_id,
+        "revision_no": compiled_rule_set.revision_no,
+        "content_hash": compiled_rule_set.content_hash,
+        "rule_set_snapshot": copy.deepcopy(compiled_rule_set.snapshot),
         "player_configs": [config.to_dict() for config in player_configs or []],
     }
     state = initialize_game_state(
@@ -68,6 +74,7 @@ def run_game(
         rule_set=rule_set,
         player_configs=player_configs,
     )
+    state.rule_set = copy.deepcopy(compiled_rule_set.snapshot)
     logs = []
     checkpoint_manager = ResumeCheckpointManager(
         record_store=record_store,
@@ -126,6 +133,8 @@ def resume_game(
     run_params = checkpoint.get("run_params", {})
     if not isinstance(run_params, dict):
         raise GameRunError("Resume checkpoint is invalid", session_id)
+
+    from app.werewolf.rules import get_rule_set
 
     rule_set_id = str(run_params.get("rule_set_id") or DEFAULT_RULE_SET_ID)
     rule_set = get_rule_set(rule_set_id)

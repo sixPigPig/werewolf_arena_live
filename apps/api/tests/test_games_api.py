@@ -59,7 +59,11 @@ from app.werewolf.player_presets import default_personality_text
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.voice import VoiceUtterance
 from app.werewolf.voice_store import DatabaseVoiceStore
-from tests.rule_set_fixtures import OFFICIAL_RULE_SET_SEEDS, seed_official_rule_sets
+from tests.rule_set_fixtures import (
+    OFFICIAL_RULE_SET_SEEDS,
+    managed_official_compiled_rule_set,
+    seed_official_rule_sets,
+)
 
 
 engine = create_engine(
@@ -754,7 +758,10 @@ def test_create_game_run_accepts_rule_set_id(
     assert response.status_code == 201
     payload = response.json()
     assert payload["rule_set"]["id"] == "starter_6"
-    assert captured[0]["rule_set_id"] == "starter_6"
+    assert "rule_set_id" not in captured[0]
+    compiled = captured[0]["compiled"]
+    assert isinstance(compiled, CompiledRuleSet)
+    assert compiled.rule_set.id == "starter_6"
 
 
 def test_create_game_run_pins_expected_revision_and_snapshot(
@@ -765,6 +772,7 @@ def test_create_game_run_pins_expected_revision_and_snapshot(
     override_live_registry(registry)
     captured: list[dict[str, object]] = []
     lock_flags: list[bool] = []
+    resolved: list[CompiledRuleSet] = []
     real_resolver = games_routes.resolve_published_rule_set
 
     def capturing_resolver(
@@ -775,12 +783,14 @@ def test_create_game_run_pins_expected_revision_and_snapshot(
         for_update: bool = False,
     ) -> CompiledRuleSet:
         lock_flags.append(for_update)
-        return real_resolver(
+        compiled = real_resolver(
             db,
             rule_set_id,
             expected_revision_id=expected_revision_id,
             for_update=for_update,
         )
+        resolved.append(compiled)
+        return compiled
 
     def fake_background_run(**kwargs: object) -> None:
         captured.append(kwargs)
@@ -812,9 +822,11 @@ def test_create_game_run_pins_expected_revision_and_snapshot(
     assert len(captured) == 1
     compiled = captured[0]["compiled"]
     assert isinstance(compiled, CompiledRuleSet)
+    assert compiled is resolved[0]
     assert compiled.snapshot == payload["rule_set"]
     assert compiled.content_hash == payload["rule_set_content_hash"]
     assert captured[0]["run_id"] == payload["run_id"]
+    assert "rule_set_id" not in captured[0]
     assert lock_flags == [True]
 
     with TestingSessionLocal() as session:
@@ -2715,6 +2727,7 @@ def test_get_and_stream_game_run_from_a_different_registry_instance() -> None:
 def test_run_game_in_background_publishes_registry_and_engine_events_directly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    compiled = managed_official_compiled_rule_set("classic_8")
     registry = LiveRunRegistry(live_store=SessionLiveStore(TestingSessionLocal))
     run = registry.create_run(
         session_id="game_1200abcd",
@@ -2722,15 +2735,36 @@ def test_run_game_in_background_publishes_registry_and_engine_events_directly(
         werewolf_model="deepseek-chat",
         seed=None,
         max_rounds=8,
+        rule_set_id=compiled.rule_set.id,
+        rule_set_revision_id=compiled.revision_id,
+        rule_set_revision_no=compiled.revision_no,
+        rule_set_content_hash=compiled.content_hash,
+        rule_set=compiled.snapshot,
     )
 
-    def fake_run_game(*, event_sink, record_store, **kwargs: object) -> SimpleNamespace:
+    def reject_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("background new-game execution must not query a rule catalog")
+
+    def fake_run_game(
+        *,
+        event_sink,
+        record_store,
+        compiled_rule_set,
+        **kwargs: object,
+    ) -> SimpleNamespace:
         assert isinstance(record_store, DatabaseReplayStore)
+        assert record_store.run_id == run.run_id
+        assert record_store.worker_id == registry.worker_id
+        assert record_store.fence_token == 1
+        assert compiled_rule_set is compiled
+        assert "rule_set_id" not in kwargs
         event_sink.publish("phase_started", phase="night")
         return SimpleNamespace(winner="狼人阵营")
 
     monkeypatch.setattr("app.api.routes.games.run_game", fake_run_game)
     monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(games_routes, "get_rule_set", reject_lookup)
+    monkeypatch.setattr(games_routes, "resolve_published_rule_set", reject_lookup)
 
     _run_game_in_background(
         run_id=run.run_id,
@@ -2740,9 +2774,12 @@ def test_run_game_in_background_publishes_registry_and_engine_events_directly(
         werewolf_model="deepseek-chat",
         seed=None,
         max_rounds=8,
-        rule_set_id="classic_8",
+        compiled=compiled,
     )
 
+    activated = registry.get_run(run.run_id)
+    assert activated.worker_id == registry.worker_id
+    assert activated.fence_token == 1
     assert [event.type for event in registry.events_after(run.run_id)] == [
         "run_created",
         "run_started",

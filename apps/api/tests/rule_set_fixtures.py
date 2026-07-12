@@ -6,8 +6,14 @@ from typing import Final
 from sqlalchemy.orm import Session
 
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
-from app.rule_sets.snapshots import rule_set_content_hash
+from app.rule_sets.snapshots import (
+    compile_rule_set_config,
+    resolve_rule_set_snapshot,
+    rule_set_content_hash,
+)
+from app.rule_sets.types import CompiledRuleSet
 from app.rule_sets.validation import normalize_rule_set_config
+from app.werewolf.rules import get_rule_set, rule_set_snapshot
 
 
 PUBLISHED_AT: Final = datetime(2026, 7, 12, tzinfo=UTC)
@@ -181,3 +187,20 @@ def seed_official_rule_sets(db: Session) -> None:
             )
         )
     db.flush()
+
+
+def managed_official_compiled_rule_set(rule_set_id: str = "classic_8") -> CompiledRuleSet:
+    seed = next(seed for seed in OFFICIAL_RULE_SET_SEEDS if seed["id"] == rule_set_id)
+    config = normalize_rule_set_config(seed["config"])
+    compiled = compile_rule_set_config(
+        rule_set_id,
+        config,
+        revision_id=str(seed["revision_id"]),
+        revision_no=1,
+    )
+    assert compiled.content_hash == seed["content_hash"]
+    return compiled
+
+
+def legacy_official_compiled_rule_set(rule_set_id: str = "classic_8") -> CompiledRuleSet:
+    return resolve_rule_set_snapshot(rule_set_snapshot(get_rule_set(rule_set_id)))

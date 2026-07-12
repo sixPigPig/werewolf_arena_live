@@ -1219,7 +1219,6 @@ def _start_game_thread(
             "werewolf_model": run.werewolf_model,
             "seed": run.seed,
             "max_rounds": run.max_rounds,
-            "rule_set_id": compiled.rule_set.id,
             "compiled": compiled,
             "player_configs": player_configs_from_serialized(run.player_configs),
         },
@@ -1237,13 +1236,9 @@ def _run_game_in_background(
     werewolf_model: str,
     seed: int | None,
     max_rounds: int,
-    rule_set_id: str | None = None,
-    compiled: CompiledRuleSet | None = None,
+    compiled: CompiledRuleSet,
     player_configs: list[PlayerConfig] | None = None,
 ) -> None:
-    selected_rule_set_id = compiled.rule_set.id if compiled is not None else rule_set_id
-    if selected_rule_set_id is None:
-        raise ValueError("A compiled rule set or rule_set_id is required")
     try:
         registry.mark_running(run_id)
     except GameRunCanceled:
@@ -1265,7 +1260,7 @@ def _run_game_in_background(
                 villager_model=villager_model,
                 werewolf_model=werewolf_model,
                 seed=seed,
-                rule_set_id=selected_rule_set_id,
+                compiled_rule_set=compiled,
                 max_rounds=max_rounds,
                 session_id=session_id,
                 event_sink=EventSink(registry, run_id, fence_token=fence_token),

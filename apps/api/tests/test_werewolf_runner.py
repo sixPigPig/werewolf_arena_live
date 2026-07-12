@@ -1,3 +1,4 @@
+import copy
 import json
 import multiprocessing
 import queue
@@ -39,6 +40,10 @@ from app.werewolf.rules import (
     get_rule_set,
 )
 from app.werewolf.runner import GameRunError, run_game
+from tests.rule_set_fixtures import (
+    legacy_official_compiled_rule_set,
+    managed_official_compiled_rule_set,
+)
 
 
 @pytest.fixture
@@ -74,7 +79,10 @@ class ScriptedChineseProvider:
         choice = options[0] if options else "1"
         if '"say"' in prompt:
             return json.dumps(
-                {"reasoning": "我要给出明确怀疑。", "say": "我认为现在最可疑的人需要解释自己的发言。"},
+                {
+                    "reasoning": "我要给出明确怀疑。",
+                    "say": "我认为现在最可疑的人需要解释自己的发言。",
+                },
                 ensure_ascii=False,
             )
         if '"vote"' in prompt:
@@ -92,9 +100,13 @@ class ScriptedChineseProvider:
         if '"target"' in prompt:
             return json.dumps({"reasoning": "狼人统一刀口。", "target": choice}, ensure_ascii=False)
         if '"remove"' in prompt:
-            return json.dumps({"reasoning": "他对狼人阵营威胁最大。", "remove": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "他对狼人阵营威胁最大。", "remove": choice}, ensure_ascii=False
+            )
         if '"protect"' in prompt:
-            return json.dumps({"reasoning": "他可能是关键好人。", "protect": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "他可能是关键好人。", "protect": choice}, ensure_ascii=False
+            )
         if '"save"' in prompt:
             return json.dumps(
                 {"reasoning": "测试中默认不使用解药。", "save": "不使用解药"},
@@ -112,7 +124,10 @@ class ScriptedChineseProvider:
             )
         if '"summary"' in prompt:
             return json.dumps(
-                {"reasoning": "我需要记录本轮线索。", "summary": "我会继续关注发言矛盾最大的玩家。"},
+                {
+                    "reasoning": "我需要记录本轮线索。",
+                    "summary": "我会继续关注发言矛盾最大的玩家。",
+                },
                 ensure_ascii=False,
             )
         if '"self_explode"' in prompt:
@@ -121,7 +136,9 @@ class ScriptedChineseProvider:
                 ensure_ascii=False,
             )
         if '"run"' in prompt:
-            return json.dumps({"reasoning": "测试中默认参与警长竞选。", "run": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "测试中默认参与警长竞选。", "run": choice}, ensure_ascii=False
+            )
         if '"withdraw"' in prompt:
             return json.dumps(
                 {"reasoning": "测试中默认不退水。", "withdraw": "不退水"},
@@ -149,7 +166,7 @@ class StreamingSpeechProvider(ScriptedChineseProvider):
     def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
         del model, temperature
         if '"say"' in prompt:
-            return ['{"reasoning":"公开发言",', '"say":"我', '不是', '狼"}']
+            return ['{"reasoning":"公开发言",', '"say":"我', "不是", '狼"}']
         return [self.complete_json(model="deepseek-chat", prompt=prompt, temperature=0.4)]
 
 
@@ -244,25 +261,37 @@ class SheriffFlowProvider(ScriptedChineseProvider):
         if '"run"' in prompt:
             self.actions.append(("sheriff_run", name))
             choice = "上警" if name in self.candidates else "不上警"
-            return json.dumps({"reasoning": "根据身份争取警徽。", "run": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "根据身份争取警徽。", "run": choice}, ensure_ascii=False
+            )
         if '"withdraw"' in prompt:
             self.actions.append(("sheriff_withdraw", name))
             choice = "退水" if name in self.withdraw else "不退水"
-            return json.dumps({"reasoning": "根据警上形势决定是否退水。", "withdraw": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "根据警上形势决定是否退水。", "withdraw": choice}, ensure_ascii=False
+            )
         if '"say"' in prompt and "警上竞选发言" in prompt:
             self.actions.append(("sheriff_speech", name))
-            return json.dumps({"reasoning": "争取警徽。", "say": f"{name} 警上发言。"}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "争取警徽。", "say": f"{name} 警上发言。"}, ensure_ascii=False
+            )
         if '"say"' in prompt and "PK 发言" in prompt:
             self.actions.append(("sheriff_pk_speech", name))
-            return json.dumps({"reasoning": "争取二轮票。", "say": f"{name} PK 发言。"}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "争取二轮票。", "say": f"{name} PK 发言。"}, ensure_ascii=False
+            )
         if '"sheriff_vote"' in prompt and "行动：二轮警下投票" in prompt:
             self.actions.append(("sheriff_runoff_vote", name))
             choice = self.runoff_vote_targets[name]
-            return json.dumps({"reasoning": "二轮选择。", "sheriff_vote": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "二轮选择。", "sheriff_vote": choice}, ensure_ascii=False
+            )
         if '"sheriff_vote"' in prompt:
             self.actions.append(("sheriff_vote", name))
             choice = self.sheriff_vote_targets[name]
-            return json.dumps({"reasoning": "选择最适合带队的人。", "sheriff_vote": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "选择最适合带队的人。", "sheriff_vote": choice}, ensure_ascii=False
+            )
         if '"speech_order"' in prompt:
             self.actions.append(("speech_order", name))
             return json.dumps(
@@ -647,7 +676,9 @@ class SelfExplosionProvider(SheriffFlowProvider):
             choice = "自爆" if name in self.self_exploders else "不自爆"
             if choice == "自爆":
                 self.self_exploders.remove(name)
-            return json.dumps({"reasoning": "测试自爆判断。", "self_explode": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "测试自爆判断。", "self_explode": choice}, ensure_ascii=False
+            )
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
@@ -970,7 +1001,9 @@ class NoWinnerRoundProvider(ScriptedChineseProvider):
             if name in living_players:
                 choice = living_players[(living_players.index(name) + 1) % len(living_players)]
                 if choice in options:
-                    return json.dumps({"reasoning": "测试分散投票。", "vote": choice}, ensure_ascii=False)
+                    return json.dumps(
+                        {"reasoning": "测试分散投票。", "vote": choice}, ensure_ascii=False
+                    )
             choice = options[0] if options else "1"
             return json.dumps({"reasoning": "测试分散投票。", "vote": choice}, ensure_ascii=False)
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
@@ -1568,7 +1601,9 @@ def test_debate_action_quality_warning_uses_prior_round_context() -> None:
         personality=player.personality,
     )
 
-    warning_event = next(event for event in sink.events if event["type"] == "action_quality_warning")
+    warning_event = next(
+        event for event in sink.events if event["type"] == "action_quality_warning"
+    )
     assert "catchphrase_overuse" in warning_event["payload"]["warnings"]
     assert "repeated_debate_phrase" in warning_event["payload"]["warnings"]
 
@@ -1665,14 +1700,14 @@ def test_werewolf_kill_vote_requests_active_wolves_concurrently() -> None:
     assert [
         actor for action, actor in provider.actions if action == "werewolf_kill_vote"
     ] == active_wolves
-    assert round_state.werewolf_vote_rounds[0]["votes"] == {
-        wolf: target for wolf in active_wolves
-    }
+    assert round_state.werewolf_vote_rounds[0]["votes"] == {wolf: target for wolf in active_wolves}
     assert [log.actor for log in round_log.werewolf_votes[0]] == active_wolves
 
 
 def _extract_options(prompt: str) -> list[str]:
-    marker = next((candidate for candidate in ("候选人：", "候选选项：") if candidate in prompt), "")
+    marker = next(
+        (candidate for candidate in ("候选人：", "候选选项：") if candidate in prompt), ""
+    )
     if not marker:
         return []
     tail = prompt.split(marker, 1)[1].split("。", 1)[0]
@@ -1933,6 +1968,7 @@ def test_run_game_with_deepseek_models_writes_complete_chinese_logs(
 ) -> None:
     result = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=7,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
@@ -1949,11 +1985,148 @@ def test_run_game_with_deepseek_models_writes_complete_chinese_logs(
     assert len(state["players"]) == 8
     assert state["error_message"] == ""
     assert {player["role"] for player in state["players"]} == {"狼人", "预言家", "守卫", "村民"}
-    assert any("第" in observation for player in state["players"] for observation in player["observations"])
+    assert any(
+        "第" in observation for player in state["players"] for observation in player["observations"]
+    )
     assert logs[0]["debate"]
     assert logs[0]["summaries"]
     assert "狼人杀" in logs[0]["debate"][0]["lm_log"]["prompt"]
     assert "我认为" in state["rounds"][0]["debate"][0]["message"]
+
+
+def test_run_game_executes_and_saves_the_supplied_managed_snapshot_without_catalog_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    record_store: DatabaseReplayStore,
+) -> None:
+    compiled = managed_official_compiled_rule_set("starter_6")
+    expected_snapshot = copy.deepcopy(compiled.snapshot)
+
+    def reject_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("new-game execution must not query a rule catalog")
+
+    def capturing_initializer(**kwargs: object):
+        assert kwargs["rule_set"] is compiled.rule_set
+        return initialize_game_state(**kwargs)
+
+    def capturing_engine(**kwargs: object):
+        assert kwargs["rule_set"] is compiled.rule_set
+        return GameEngine(**kwargs)
+
+    monkeypatch.setattr("app.werewolf.runner.get_rule_set", reject_lookup, raising=False)
+    monkeypatch.setattr("app.werewolf.rules.get_rule_set", reject_lookup)
+    monkeypatch.setattr(
+        "app.rule_sets.service.resolve_published_rule_set",
+        reject_lookup,
+    )
+    monkeypatch.setattr("app.werewolf.runner.initialize_game_state", capturing_initializer)
+    monkeypatch.setattr("app.werewolf.runner.GameEngine", capturing_engine)
+
+    result = run_game(
+        record_store=record_store,
+        compiled_rule_set=compiled,
+        seed=31,
+        max_rounds=8,
+        provider=ScriptedChineseProvider(),
+    )
+
+    state = record_store.load_session(result.session_id)["state"]
+    assert state["rule_set"] == expected_snapshot
+    assert state["rule_set"]["revision_id"] == compiled.revision_id
+    assert state["rule_set"]["revision_no"] == compiled.revision_no
+    assert state["rule_set"]["schema_version"] == compiled.schema_version
+    assert state["rule_set"]["content_hash"] == compiled.content_hash
+    assert len(state["players"]) == compiled.rule_set.player_count
+    assert compiled.snapshot == expected_snapshot
+
+
+def test_run_game_checkpoint_uses_independent_exact_compiled_snapshot_copies() -> None:
+    compiled = managed_official_compiled_rule_set("starter_6")
+    caller_snapshot = copy.deepcopy(compiled.snapshot)
+
+    class CapturingRecordStore:
+        def __init__(self) -> None:
+            self.checkpoints: list[dict[str, object]] = []
+            self.saved_state = None
+
+        def save_resume_checkpoint(
+            self,
+            _session_id: str,
+            checkpoint: dict[str, object],
+        ) -> None:
+            self.checkpoints.append(checkpoint)
+
+        def save_game(self, state, _logs) -> None:
+            self.saved_state = state
+
+        def clear_resume_checkpoint(self, _session_id: str) -> None:
+            raise AssertionError("a failed run must retain its checkpoint")
+
+    class FailingProvider:
+        def complete_json(self, **_request: object) -> str:
+            raise RuntimeError("model provider offline")
+
+    store = CapturingRecordStore()
+    with pytest.raises(GameRunError, match="model provider offline"):
+        run_game(
+            record_store=store,
+            compiled_rule_set=compiled,
+            villager_model="villager-model",
+            werewolf_model="werewolf-model",
+            seed=23,
+            max_rounds=8,
+            provider=FailingProvider(),
+            session_id="game_1200abcd",
+        )
+
+    assert store.saved_state is not None
+    assert store.checkpoints
+    checkpoint = store.checkpoints[-1]
+    run_params = checkpoint["run_params"]
+    assert isinstance(run_params, dict)
+    assert set(run_params) == {
+        "villager_model",
+        "werewolf_model",
+        "seed",
+        "max_rounds",
+        "player_configs",
+        "rule_set_id",
+        "revision_id",
+        "revision_no",
+        "content_hash",
+        "rule_set_snapshot",
+    }
+    assert run_params["rule_set_id"] == compiled.rule_set.id
+    assert run_params["revision_id"] == compiled.revision_id
+    assert run_params["revision_no"] == compiled.revision_no
+    assert run_params["content_hash"] == compiled.content_hash
+    assert run_params["rule_set_snapshot"] == caller_snapshot
+    assert store.saved_state.rule_set == caller_snapshot
+    checkpoint_state = checkpoint["state_at_round_start"]
+    assert isinstance(checkpoint_state, dict)
+    assert checkpoint_state["rule_set"] == run_params["rule_set_snapshot"]
+    assert checkpoint_state["rule_set"] is not run_params["rule_set_snapshot"]
+    assert store.saved_state.rule_set is not compiled.snapshot
+    assert run_params["rule_set_snapshot"] is not compiled.snapshot
+    assert run_params["rule_set_snapshot"] is not store.saved_state.rule_set
+
+    compiled.snapshot["name"] = "caller-only mutation"
+    assert store.saved_state.rule_set == caller_snapshot
+    assert run_params["rule_set_snapshot"] == caller_snapshot
+    store.saved_state.rule_set["name"] = "state-only mutation"
+    assert run_params["rule_set_snapshot"] == caller_snapshot
+
+
+def test_run_game_rejects_the_removed_rule_set_id_only_contract(
+    record_store: DatabaseReplayStore,
+) -> None:
+    with pytest.raises(TypeError):
+        run_game(
+            record_store=record_store,
+            rule_set_id="starter_6",
+            seed=3,
+            max_rounds=0,
+            provider=ScriptedChineseProvider(),
+        )
 
 
 def test_run_game_defaults_to_minimax_when_only_minimax_key_is_configured(
@@ -1975,6 +2148,7 @@ def test_run_game_defaults_to_minimax_when_only_minimax_key_is_configured(
 
     result = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=7,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
@@ -1991,12 +2165,14 @@ def test_run_game_is_reproducible_for_same_seed(
 ) -> None:
     first = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=11,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
     )
     second = run_game(
         record_store=second_record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=11,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
@@ -2013,7 +2189,13 @@ def test_run_game_records_partial_state_when_max_rounds_is_exceeded(
     record_store: DatabaseReplayStore,
 ) -> None:
     with pytest.raises(GameRunError) as error:
-        run_game(record_store=record_store, seed=3, max_rounds=0, provider=ScriptedChineseProvider())
+        run_game(
+            record_store=record_store,
+            compiled_rule_set=legacy_official_compiled_rule_set(),
+            seed=3,
+            max_rounds=0,
+            provider=ScriptedChineseProvider(),
+        )
 
     assert error.value.session_id is not None
     replay = record_store.load_session(error.value.session_id)
@@ -2048,6 +2230,7 @@ def test_engine_raises_max_rounds_after_positive_limit_without_winner() -> None:
 def test_run_game_accepts_custom_session_id(record_store: DatabaseReplayStore) -> None:
     result = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -2072,6 +2255,7 @@ def test_run_game_publishes_live_events(record_store: DatabaseReplayStore) -> No
 
     run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -2095,6 +2279,7 @@ def test_run_game_publishes_streaming_model_events(record_store: DatabaseReplayS
     with pytest.raises(GameRunError, match="Maximum rounds exceeded"):
         run_game(
             record_store=record_store,
+            compiled_rule_set=legacy_official_compiled_rule_set(),
             seed=21,
             max_rounds=1,
             provider=StreamingSpeechProvider(),
@@ -2110,7 +2295,9 @@ def test_run_game_publishes_streaming_model_events(record_store: DatabaseReplayS
 
     started_event = next(event for event in sink.events if event["type"] == "model_request_started")
     delta_event = next(event for event in sink.events if event["type"] == "model_response_delta")
-    response_event = next(event for event in sink.events if event["type"] == "model_response_received")
+    response_event = next(
+        event for event in sink.events if event["type"] == "model_response_received"
+    )
     assert started_event["payload"]["request_id"].startswith("req_")
     assert "world_state" not in started_event["payload"]
     assert "prompt" not in started_event["payload"]
@@ -2165,6 +2352,7 @@ def test_run_game_event_sink_does_not_change_final_logs(
 ) -> None:
     baseline = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -2172,6 +2360,7 @@ def test_run_game_event_sink_does_not_change_final_logs(
     )
     with_sink = run_game(
         record_store=second_record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -2191,6 +2380,7 @@ def test_live_model_events_do_not_publish_internal_model_payloads(
     sink = CapturingEventSink()
     run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=21,
         max_rounds=4,
         provider=ScriptedChineseProvider(),
@@ -2201,8 +2391,7 @@ def test_live_model_events_do_not_publish_internal_model_payloads(
     model_events = [
         event
         for event in sink.events
-        if event["type"]
-        in {"model_request_started", "model_response_received", "action_parsed"}
+        if event["type"] in {"model_request_started", "model_response_received", "action_parsed"}
     ]
     assert model_events
     for event in model_events:
@@ -2219,10 +2408,10 @@ def test_live_model_events_do_not_publish_internal_model_payloads(
 def test_run_game_uses_starter_6_rule_set(record_store: DatabaseReplayStore) -> None:
     result = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set("starter_6"),
         seed=31,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
-        rule_set_id="starter_6",
     )
 
     state = record_store.load_session(result.session_id)["state"]
@@ -2238,10 +2427,10 @@ def test_run_game_uses_social_8_rule_set_without_divine_actions(
 ) -> None:
     result = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set("social_8"),
         seed=37,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
-        rule_set_id="social_8",
     )
 
     replay = record_store.load_session(result.session_id)
@@ -2254,9 +2443,12 @@ def test_run_game_uses_social_8_rule_set_without_divine_actions(
     assert logs[0]["investigate"] is None
 
 
-def test_run_game_defaults_to_classic_8_rule_set(record_store: DatabaseReplayStore) -> None:
+def test_run_game_uses_explicit_legacy_classic_8_rule_set(
+    record_store: DatabaseReplayStore,
+) -> None:
     result = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=41,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
@@ -2273,10 +2465,10 @@ def test_run_game_uses_12_player_seer_witch_hunter_idiot_rule_set(
 ) -> None:
     result = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set("classic_12_seer_witch_hunter_idiot"),
         seed=54,
         max_rounds=8,
         provider=ScriptedChineseProvider(),
-        rule_set_id="classic_12_seer_witch_hunter_idiot",
     )
 
     replay = record_store.load_session(result.session_id)
@@ -2343,11 +2535,7 @@ def test_12_player_initialization_shuffles_roles_across_seats() -> None:
         seed=42,
         rule_set=rule_set,
     )
-    rule_order = [
-        role_spec.role
-        for role_spec in rule_set.roles
-        for _ in range(role_spec.count)
-    ]
+    rule_order = [role_spec.role for role_spec in rule_set.roles for _ in range(role_spec.count)]
     roles_by_seat = [player.role for player in state.players]
     non_wolf_roles_by_seat = [role for role in roles_by_seat if role != WEREWOLF]
 
@@ -2372,9 +2560,7 @@ def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
     round_state = RoundState(number=1, players=[player.name for player in state.players])
     round_state.sheriff = state.sheriff
     round_state.sheriff_candidates = [state.players[0].name, state.players[1].name]
-    round_state.sheriff_speeches = [
-        {"speaker": state.players[0].name, "message": "我上警争警徽。"}
-    ]
+    round_state.sheriff_speeches = [{"speaker": state.players[0].name, "message": "我上警争警徽。"}]
     round_state.sheriff_speech_order = [state.players[1].name, state.players[0].name]
     round_state.sheriff_speech_direction = "逆时针"
     round_state.sheriff_withdrawn = [state.players[1].name]
@@ -2382,9 +2568,7 @@ def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
     round_state.sheriff_voters = [state.players[2].name]
     round_state.sheriff_votes = {state.players[2].name: state.players[0].name}
     round_state.sheriff_pk_candidates = [state.players[0].name, state.players[3].name]
-    round_state.sheriff_pk_speeches = [
-        {"speaker": state.players[3].name, "message": "我进入 PK。"}
-    ]
+    round_state.sheriff_pk_speeches = [{"speaker": state.players[3].name, "message": "我进入 PK。"}]
     round_state.sheriff_runoff_votes = {state.players[2].name: state.players[3].name}
     round_state.sheriff_elected = state.players[0].name
     round_state.speech_order = [player.name for player in state.players]
@@ -2417,9 +2601,7 @@ def test_sheriff_state_serializes_to_game_and_round_payloads() -> None:
     assert round_payload["sheriff_pk_speeches"] == [
         {"speaker": state.players[3].name, "message": "我进入 PK。"}
     ]
-    assert round_payload["sheriff_runoff_votes"] == {
-        state.players[2].name: state.players[3].name
-    }
+    assert round_payload["sheriff_runoff_votes"] == {state.players[2].name: state.players[3].name}
     assert round_payload["sheriff_elected"] == state.players[0].name
     assert round_payload["speech_order"] == [player.name for player in state.players]
     assert round_payload["vote_weights"] == {state.players[0].name: 1.5}
@@ -2551,8 +2733,7 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
         action_key="werewolf_self_explosion",
         result_key="self_explode",
         response_value_by_actor={
-            wolf: "自爆" if wolf != active_wolves[0] else "不自爆"
-            for wolf in active_wolves
+            wolf: "自爆" if wolf != active_wolves[0] else "不自爆" for wolf in active_wolves
         },
         expected_calls=len(active_wolves),
     )
@@ -2603,8 +2784,7 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     public_updates = [
         event
         for event in sink.events
-        if event["action"] == "werewolf_self_explosion"
-        and event["type"] == "state_updated"
+        if event["action"] == "werewolf_self_explosion" and event["type"] == "state_updated"
     ]
     assert public_updates
     assert public_updates[-1]["actor"] == exploding_wolf
@@ -2659,7 +2839,9 @@ def test_second_pre_sheriff_self_explosion_loses_badge() -> None:
     state.sheriff_election_pending = True
     active_players = [player.name for player in state.players]
     exploding_wolf = next(player.name for player in state.players if player.role == "狼人")
-    provider = SelfExplosionProvider(self_exploders=[exploding_wolf], candidates={active_players[0]})
+    provider = SelfExplosionProvider(
+        self_exploders=[exploding_wolf], candidates={active_players[0]}
+    )
     round_state = RoundState(number=2, players=active_players.copy())
     round_log = RoundLog(number=2)
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
@@ -2887,15 +3069,11 @@ def test_sheriff_vote_prompt_includes_public_election_context() -> None:
     round_state = RoundState(number=1, players=active_players.copy())
     round_state.sheriff_candidates = [active_players[0], active_players[1]]
     round_state.sheriff_voters = [active_players[2]]
-    round_state.sheriff_speeches = [
-        {"speaker": active_players[0], "message": "我上警争警徽。"}
-    ]
+    round_state.sheriff_speeches = [{"speaker": active_players[0], "message": "我上警争警徽。"}]
     round_state.sheriff_withdrawn = [active_players[1]]
     round_state.sheriff_final_candidates = [active_players[0]]
     round_state.sheriff_pk_candidates = [active_players[0], active_players[3]]
-    round_state.sheriff_pk_speeches = [
-        {"speaker": active_players[3], "message": "我进入 PK。"}
-    ]
+    round_state.sheriff_pk_speeches = [{"speaker": active_players[3], "message": "我进入 PK。"}]
     engine = GameEngine(
         state=state,
         provider=ScriptedChineseProvider(),
@@ -2938,7 +3116,11 @@ def test_12_player_wolf_world_state_lists_all_living_teammates() -> None:
         rule_set=rule_set,
     )
     wolf = next(player for player in state.players if player.role == "狼人")
-    teammates = [player.name for player in state.players if player.role == "狼人" and player.name != wolf.name]
+    teammates = [
+        player.name
+        for player in state.players
+        if player.role == "狼人" and player.name != wolf.name
+    ]
 
     world_state = engine._world_state(wolf, [], round_state)
 
@@ -3001,7 +3183,9 @@ def test_slaughter_side_wolves_win_when_all_civilians_are_dead() -> None:
         rule_set=rule_set,
     )
     wolf = next(player.name for player in state.players if player.role == "狼人")
-    gods = [player.name for player in state.players if player.role in {"预言家", "女巫", "猎人", "白痴"}]
+    gods = [
+        player.name for player in state.players if player.role in {"预言家", "女巫", "猎人", "白痴"}
+    ]
     active_players = [wolf, *gods]
 
     assert engine._get_winner(active_players) == "狼人阵营"
@@ -3335,8 +3519,7 @@ def test_day_exile_vote_requests_eligible_voters_concurrently() -> None:
     active_players = [player.name for player in state.players]
     eligible_voters = active_players.copy()
     response_value_by_actor = {
-        voter: next(name for name in active_players if name != voter)
-        for voter in eligible_voters
+        voter: next(name for name in active_players if name != voter) for voter in eligible_voters
     }
     provider = BarrierActionProvider(
         action_key="vote",
@@ -3608,9 +3791,7 @@ def test_sheriff_vote_requests_off_sheriff_voters_concurrently() -> None:
 
     engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
 
-    assert [
-        actor for action, actor in provider.actions if action == "sheriff_vote"
-    ] == voters
+    assert [actor for action, actor in provider.actions if action == "sheriff_vote"] == voters
     assert round_state.sheriff_votes == {name: candidates[0] for name in voters}
     assert [log.actor for log in round_log.sheriff_votes] == voters
 
@@ -3627,10 +3808,7 @@ def test_sheriff_runoff_vote_requests_off_sheriff_voters_concurrently() -> None:
     active_players = [player.name for player in state.players]
     candidates = active_players[:2]
     voters = active_players[2:]
-    first_round_votes = {
-        name: candidates[index % 2]
-        for index, name in enumerate(voters)
-    }
+    first_round_votes = {name: candidates[index % 2] for index, name in enumerate(voters)}
     provider = BarrierSheriffProvider(
         action_key="sheriff_runoff_vote",
         result_key="sheriff_vote",
@@ -3802,8 +3980,7 @@ def test_batched_invalid_action_checkpoints_all_responses_and_failure() -> None:
 
     assert provider.first_actions == active_players
     assert provider.attempts_by_actor == {
-        actor: 3 if actor == invalid_actor else 1
-        for actor in active_players
+        actor: 3 if actor == invalid_actor else 1 for actor in active_players
     }
     assert [success["actor"] for success in checkpoint_manager.successes] == active_players
     assert {success["action"] for success in checkpoint_manager.successes} == {"sheriff_run"}
@@ -4051,7 +4228,9 @@ def test_sheriff_vote_counts_as_one_and_half_votes() -> None:
     )
     active_players = [player.name for player in state.players[:4]]
     state.sheriff = active_players[0]
-    engine = GameEngine(state=state, provider=ScriptedChineseProvider(), max_rounds=8, rule_set=rule_set)
+    engine = GameEngine(
+        state=state, provider=ScriptedChineseProvider(), max_rounds=8, rule_set=rule_set
+    )
     votes = {
         active_players[0]: active_players[1],
         active_players[2]: active_players[1],
@@ -4076,7 +4255,9 @@ def test_majority_vote_requires_majority_of_active_vote_weight() -> None:
         rule_set=rule_set,
     )
     active_players = [player.name for player in state.players[:4]]
-    engine = GameEngine(state=state, provider=ScriptedChineseProvider(), max_rounds=8, rule_set=rule_set)
+    engine = GameEngine(
+        state=state, provider=ScriptedChineseProvider(), max_rounds=8, rule_set=rule_set
+    )
     votes = {active_players[0]: active_players[1]}
     weights = {name: 1.0 for name in active_players}
 
@@ -4097,7 +4278,9 @@ def test_majority_vote_threshold_uses_eligible_voters_not_revealed_idiot() -> No
     active_players = [*eligible_players, idiot.name]
     idiot.can_vote = False
     idiot.revealed_role = True
-    engine = GameEngine(state=state, provider=ScriptedChineseProvider(), max_rounds=8, rule_set=rule_set)
+    engine = GameEngine(
+        state=state, provider=ScriptedChineseProvider(), max_rounds=8, rule_set=rule_set
+    )
     votes = {
         eligible_players[0]: eligible_players[2],
         eligible_players[1]: eligible_players[2],
@@ -4201,9 +4384,7 @@ def test_hunter_shot_target_sheriff_transfers_badge() -> None:
     hunter = next(player for player in state.players if player.role == "猎人")
     old_sheriff = next(player.name for player in state.players if player.name != hunter.name)
     new_sheriff = next(
-        player.name
-        for player in state.players
-        if player.name not in {hunter.name, old_sheriff}
+        player.name for player in state.players if player.name not in {hunter.name, old_sheriff}
     )
     state.sheriff = old_sheriff
     players_by_name[old_sheriff].is_sheriff = True
@@ -4248,7 +4429,9 @@ def test_first_night_dead_elected_sheriff_transfers_badge_after_death_announceme
     players_by_name = state.player_by_name()
     dead_sheriff = next(name for name in active_players if players_by_name[name].role != "狼人")
     new_sheriff = next(
-        name for name in active_players if name != dead_sheriff and players_by_name[name].role != "狼人"
+        name
+        for name in active_players
+        if name != dead_sheriff and players_by_name[name].role != "狼人"
     )
     provider = FirstNightSheriffDeathProvider(
         remove_target=dead_sheriff,
@@ -4319,9 +4502,7 @@ def test_werewolf_consensus_first_vote_sets_attacked() -> None:
     assert round_state.werewolf_vote_rounds == [
         {
             "round": 1,
-            "candidates": [
-                player.name for player in state.players if player.role != "狼人"
-            ],
+            "candidates": [player.name for player in state.players if player.role != "狼人"],
             "votes": {wolf: target for wolf in wolves},
             "tally": {target: len(wolves)},
             "unanimous": True,
@@ -4396,8 +4577,18 @@ def test_werewolf_consensus_can_converge_on_third_vote() -> None:
     round_log = RoundLog(number=1)
     provider = WerewolfConsensusProvider(
         vote_rounds=[
-            {wolves[0]: targets[0], wolves[1]: targets[1], wolves[2]: targets[0], wolves[3]: targets[1]},
-            {wolves[0]: targets[0], wolves[1]: targets[1], wolves[2]: targets[1], wolves[3]: targets[0]},
+            {
+                wolves[0]: targets[0],
+                wolves[1]: targets[1],
+                wolves[2]: targets[0],
+                wolves[3]: targets[1],
+            },
+            {
+                wolves[0]: targets[0],
+                wolves[1]: targets[1],
+                wolves[2]: targets[1],
+                wolves[3]: targets[0],
+            },
             {wolf: targets[1] for wolf in wolves},
         ],
         discussion_targets={wolf: targets[0] for wolf in wolves},
@@ -4715,9 +4906,7 @@ def test_night_hunter_shot_sheriff_cannot_badge_pending_night_death() -> None:
     hunter = next(player for player in state.players if player.role == "猎人")
     old_sheriff = next(player.name for player in state.players if player.name != hunter.name)
     poisoned_player = next(
-        player.name
-        for player in state.players
-        if player.name not in {hunter.name, old_sheriff}
+        player.name for player in state.players if player.name not in {hunter.name, old_sheriff}
     )
     state.sheriff = old_sheriff
     players_by_name[old_sheriff].is_sheriff = True
@@ -4867,9 +5056,7 @@ def _read_db_outputs(
 def _without_request_ids(value):
     if isinstance(value, dict):
         return {
-            key: _without_request_ids(child)
-            for key, child in value.items()
-            if key != "request_id"
+            key: _without_request_ids(child) for key, child in value.items() if key != "request_id"
         }
     if isinstance(value, list):
         return [_without_request_ids(child) for child in value]
@@ -4932,8 +5119,7 @@ def test_witch_poison_invalid_choice_falls_back_to_no_poison() -> None:
     warning_event = next(
         event
         for event in sink.events
-        if event["type"] == "action_quality_warning"
-        and event["action"] == ACTION_WITCH_POISON
+        if event["type"] == "action_quality_warning" and event["action"] == ACTION_WITCH_POISON
     )
     assert warning_event["payload"]["warnings"] == ["off_option_fallback"]
     assert warning_event["payload"]["invalid_value"] == "10号玩家"
@@ -5047,8 +5233,7 @@ def test_secret_self_explosion_invalid_choice_falls_back_without_public_leak() -
         for event in sink.events
         if event["type"] in {"action_quality_warning", "action_parsed"}
         and (
-            event.get("actor") == wolf.name
-            or event.get("action") == ACTION_WEREWOLF_SELF_EXPLOSION
+            event.get("actor") == wolf.name or event.get("action") == ACTION_WEREWOLF_SELF_EXPLOSION
         )
     ]
     assert leaking_events == []
@@ -5068,13 +5253,13 @@ def test_run_game_saves_in_progress_logs_when_required_action_fails(
     with pytest.raises(GameRunError) as error:
         run_game(
             record_store=record_store,
+            compiled_rule_set=legacy_official_compiled_rule_set("starter_6"),
             villager_model="deepseek-v4-flash",
             werewolf_model="deepseek-v4-flash",
             seed=2026061503,
             max_rounds=1,
             provider=provider,
             session_id="game_1200abcd",
-            rule_set_id="starter_6",
         )
 
     assert error.value.session_id == "game_1200abcd"
@@ -5094,6 +5279,7 @@ def test_run_game_does_not_write_legacy_game_json_files(
 
     result = run_game(
         record_store=record_store,
+        compiled_rule_set=legacy_official_compiled_rule_set(),
         seed=7,
         max_rounds=8,
         provider=ScriptedChineseProvider(),

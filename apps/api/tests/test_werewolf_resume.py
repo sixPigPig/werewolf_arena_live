@@ -25,6 +25,7 @@ from app.werewolf.models import ActionLog, GameState, Player, RoundLog, RoundSta
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.rules import get_rule_set
 from app.werewolf.runner import GameRunError, resume_game, run_game
+from tests.rule_set_fixtures import legacy_official_compiled_rule_set
 
 
 @pytest.fixture
@@ -59,31 +60,49 @@ class ScriptedProvider:
         if '"remove"' in prompt:
             return json.dumps({"reasoning": "优先击杀。", "remove": choice}, ensure_ascii=False)
         if '"protect"' in prompt:
-            return json.dumps({"reasoning": "保护关键玩家。", "protect": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "保护关键玩家。", "protect": choice}, ensure_ascii=False
+            )
         if '"investigate"' in prompt:
-            return json.dumps({"reasoning": "查验身份。", "investigate": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "查验身份。", "investigate": choice}, ensure_ascii=False
+            )
         if '"save"' in prompt:
-            return json.dumps({"reasoning": "暂不使用解药。", "save": "不使用解药"}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "暂不使用解药。", "save": "不使用解药"}, ensure_ascii=False
+            )
         if '"poison"' in prompt:
-            return json.dumps({"reasoning": "暂不使用毒药。", "poison": "不使用毒药"}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "暂不使用毒药。", "poison": "不使用毒药"}, ensure_ascii=False
+            )
         if '"shoot"' in prompt:
-            return json.dumps({"reasoning": "暂不开枪。", "shoot": "不发动技能"}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "暂不开枪。", "shoot": "不发动技能"}, ensure_ascii=False
+            )
         if '"run"' in prompt:
             return json.dumps({"reasoning": "不上警。", "run": "不上警"}, ensure_ascii=False)
         if '"withdraw"' in prompt:
             return json.dumps({"reasoning": "不退水。", "withdraw": "不退水"}, ensure_ascii=False)
         if '"speech_order"' in prompt:
-            return json.dumps({"reasoning": "默认警左。", "speech_order": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "默认警左。", "speech_order": choice}, ensure_ascii=False
+            )
         if '"badge"' in prompt:
             return json.dumps({"reasoning": "撕毁警徽。", "badge": choice}, ensure_ascii=False)
         if '"say"' in prompt:
-            return json.dumps({"reasoning": "发表观点。", "say": "我会继续观察。"}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "发表观点。", "say": "我会继续观察。"}, ensure_ascii=False
+            )
         if '"vote"' in prompt:
             return json.dumps({"reasoning": "投给最可疑的人。", "vote": choice}, ensure_ascii=False)
         if '"sheriff_vote"' in prompt:
-            return json.dumps({"reasoning": "投给首位候选人。", "sheriff_vote": choice}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "投给首位候选人。", "sheriff_vote": choice}, ensure_ascii=False
+            )
         if '"summary"' in prompt:
-            return json.dumps({"reasoning": "记录线索。", "summary": "继续关注发言。"}, ensure_ascii=False)
+            return json.dumps(
+                {"reasoning": "记录线索。", "summary": "继续关注发言。"}, ensure_ascii=False
+            )
         raise AssertionError(f"Unexpected prompt: {prompt}")
 
 
@@ -151,10 +170,10 @@ def test_failed_run_writes_resume_checkpoint(record_store: DatabaseReplayStore) 
     with pytest.raises(GameRunError) as error:
         run_game(
             record_store=record_store,
+            compiled_rule_set=legacy_official_compiled_rule_set("starter_6"),
             provider=provider,
             seed=21,
             max_rounds=8,
-            rule_set_id="starter_6",
         )
 
     assert error.value.session_id is not None
@@ -177,10 +196,10 @@ def test_resume_game_replays_cached_model_responses_before_live_requests(
     with pytest.raises(GameRunError) as error:
         run_game(
             record_store=record_store,
+            compiled_rule_set=legacy_official_compiled_rule_set("starter_6"),
             provider=failing_provider,
             seed=21,
             max_rounds=8,
-            rule_set_id="starter_6",
         )
 
     assert error.value.session_id is not None
@@ -367,10 +386,10 @@ def test_replay_store_lists_checkpoint_only_session_as_resumable(
     with pytest.raises(GameRunError) as error:
         run_game(
             record_store=record_store,
+            compiled_rule_set=legacy_official_compiled_rule_set("starter_6"),
             provider=provider,
             seed=21,
             max_rounds=8,
-            rule_set_id="starter_6",
         )
 
     assert error.value.session_id is not None
@@ -404,7 +423,9 @@ def test_resume_checkpoint_preserves_self_explosion_state() -> None:
         action="werewolf_self_explosion",
         options=["自爆", "不自爆"],
         choice="自爆",
-        lm_log=LmLog(prompt="prompt", raw_response='{"self_explode":"自爆"}', result={"self_explode": "自爆"}),
+        lm_log=LmLog(
+            prompt="prompt", raw_response='{"self_explode":"自爆"}', result={"self_explode": "自爆"}
+        ),
     )
     round_log = RoundLog(number=1, werewolf_self_explosion=action)
 
@@ -520,7 +541,9 @@ def test_action_log_from_dict_restores_invalid_attempts_with_deep_copy() -> None
 
 
 def _extract_options(prompt: str) -> list[str]:
-    marker = next((candidate for candidate in ("候选人：", "候选选项：") if candidate in prompt), "")
+    marker = next(
+        (candidate for candidate in ("候选人：", "候选选项：") if candidate in prompt), ""
+    )
     if not marker:
         return []
     tail = prompt.split(marker, 1)[1].split("。", 1)[0]

@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.orphan_reaper import OrphanRecoveryResult
 from app.werewolf.runner import GameRunError, RunGameResult
+from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
@@ -56,6 +57,15 @@ def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
     assert "record_store" in calls
     assert calls["villager_model"] == "deepseek-v4-flash"
     assert calls["werewolf_model"] == "deepseek-v4-flash"
+    assert "rule_set_id" not in calls
+    compiled = calls["compiled_rule_set"]
+    assert compiled.rule_set.id == DEFAULT_RULE_SET_ID
+    assert compiled.snapshot == rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
+    assert compiled.revision_id is None
+    assert compiled.revision_no is None
+    assert compiled.content_hash == (
+        "00095728147a022c48eab88faf21a14567ad0afa13ab9418306e84ff85b10131"
+    )
 
 
 def test_run_game_command_defaults_to_minimax_when_only_minimax_key_is_configured(

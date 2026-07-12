@@ -26,6 +26,7 @@ from app.player_avatar_asset_migration import (
 )
 from app.player_profile_import import PlayerProfileImportError, import_player_profiles
 from app.models.user import User
+from app.rule_sets.snapshots import resolve_rule_set_snapshot
 from app.werewolf.evaluator import evaluate_replay
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.providers import default_model_name
@@ -33,6 +34,7 @@ from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.orphan_reaper import OrphanRecoveryResult, run_live_run_reaper
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.runner import GameRunError, run_game
+from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
 from app.werewolf.worker_telemetry import (
     JUDGE_VOICE_WORKER_TYPE,
     RuntimeWorkerTelemetry,
@@ -207,8 +209,10 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run_game_command(args: argparse.Namespace) -> int:
     db = SessionLocal()
     try:
+        compiled = resolve_rule_set_snapshot(rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID)))
         result = run_game(
             record_store=DatabaseReplayStore(db),
+            compiled_rule_set=compiled,
             villager_model=args.villager_model,
             werewolf_model=args.werewolf_model,
             seed=args.seed,
@@ -229,11 +233,7 @@ def _run_game_command(args: argparse.Namespace) -> int:
 
 def _purge_legacy_game_records_command(args: argparse.Namespace) -> int:
     result = purge_legacy_game_records(args.logs_dir, confirm=args.yes)
-    print(
-        f"匹配={result.matched_count} "
-        f"删除={result.deleted_count} "
-        f"跳过={result.skipped_count}"
-    )
+    print(f"匹配={result.matched_count} 删除={result.deleted_count} 跳过={result.skipped_count}")
     if not args.yes and result.matched_count:
         print("未传入 --yes，未删除旧对局目录。")
     return 0
@@ -254,11 +254,7 @@ def _import_player_profiles_command(args: argparse.Namespace) -> int:
     finally:
         db.close()
 
-    print(
-        f"读取={result.read_count} "
-        f"导入={result.imported_count} "
-        f"跳过={result.skipped_count}"
-    )
+    print(f"读取={result.read_count} 导入={result.imported_count} 跳过={result.skipped_count}")
     return 0
 
 
