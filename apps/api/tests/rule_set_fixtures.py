@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from datetime import UTC, datetime
 from typing import Final
 
@@ -204,3 +205,51 @@ def managed_official_compiled_rule_set(rule_set_id: str = "classic_8") -> Compil
 
 def legacy_official_compiled_rule_set(rule_set_id: str = "classic_8") -> CompiledRuleSet:
     return resolve_rule_set_snapshot(rule_set_snapshot(get_rule_set(rule_set_id)))
+
+
+def complete_resume_checkpoint(
+    session_id: str,
+    compiled: CompiledRuleSet,
+    *,
+    checkpoint_schema_version: int = 2,
+    include_rule_metadata: bool | None = None,
+) -> dict[str, object]:
+    if include_rule_metadata is None:
+        include_rule_metadata = checkpoint_schema_version == 2
+    run_params: dict[str, object] = {
+        "villager_model": "deepseek-chat",
+        "werewolf_model": "deepseek-chat",
+        "seed": 7,
+        "max_rounds": 8,
+        "rule_set_id": compiled.rule_set.id,
+        "player_configs": [],
+    }
+    if include_rule_metadata:
+        run_params.update(
+            {
+                "revision_id": compiled.revision_id,
+                "revision_no": compiled.revision_no,
+                "content_hash": compiled.content_hash,
+                "rule_set_snapshot": copy.deepcopy(compiled.snapshot),
+            }
+        )
+    return {
+        "schema_version": checkpoint_schema_version,
+        "session_id": session_id,
+        "state_at_round_start": {
+            "session_id": session_id,
+            "players": [],
+            "rounds": [],
+            "winner": "",
+            "error_message": "",
+            "rule_set": copy.deepcopy(compiled.snapshot),
+        },
+        "logs_before_round": [],
+        "run_params": run_params,
+        "round_number": 1,
+        "active_players": [],
+        "rng_state": None,
+        "cached_model_responses": [],
+        "failed_request": None,
+        "last_error": None,
+    }

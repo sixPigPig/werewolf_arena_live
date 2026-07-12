@@ -11,17 +11,17 @@ from app.werewolf.checkpoint import (
     ResumeCheckpointError,
     ResumeCheckpointManager,
     game_state_from_dict,
+    resolved_rule_set_from_checkpoint,
     rng_from_json_state,
     round_logs_from_dict,
 )
 from app.werewolf.config import DEFAULT_MAX_ROUNDS
 from app.werewolf.engine import GameEngine, initialize_game_state
-from app.werewolf.live import GameRunCanceled, NullEventSink
+from app.werewolf.live import GameRunCanceled, NullEventSink, strict_json_equal
 from app.werewolf.lm import ModelProvider
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.providers import create_model_provider, default_model_name
 from app.werewolf.replay import GameRecordStore, ReplayWriteFencedError
-from app.werewolf.rules import DEFAULT_RULE_SET_ID
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,7 @@ def run_game(
     checkpoint_manager = ResumeCheckpointManager(
         record_store=record_store,
         session_id=session_id,
+        compiled_rule_set=compiled_rule_set,
         run_params=run_params,
     )
     engine_rng = random.Random(f"{seed}:engine") if seed is not None else random.Random()
@@ -124,22 +125,40 @@ def resume_game(
     record_store: GameRecordStore,
     provider: ModelProvider | None = None,
     event_sink: object | None = None,
+    expected_compiled_rule_set: CompiledRuleSet | None = None,
 ) -> RunGameResult:
     try:
         checkpoint = record_store.load_resume_checkpoint(session_id)
     except ResumeCheckpointError as exc:
-        raise GameRunError("Resume checkpoint not found", session_id) from exc
+        message = (
+            "Resume checkpoint not found"
+            if exc.reason == "missing"
+            else "Resume checkpoint is invalid"
+        )
+        raise GameRunError(message, session_id) from exc
+
+    try:
+        compiled = resolved_rule_set_from_checkpoint(checkpoint)
+    except ResumeCheckpointError as exc:
+        raise GameRunError("Resume checkpoint is invalid", session_id) from exc
+    if expected_compiled_rule_set is not None and not _compiled_rule_sets_match(
+        compiled,
+        expected_compiled_rule_set,
+    ):
+        raise GameRunError("Resume checkpoint rule snapshot changed", session_id)
 
     run_params = checkpoint.get("run_params", {})
     if not isinstance(run_params, dict):
         raise GameRunError("Resume checkpoint is invalid", session_id)
-
-    from app.werewolf.rules import get_rule_set
-
-    rule_set_id = str(run_params.get("rule_set_id") or DEFAULT_RULE_SET_ID)
-    rule_set = get_rule_set(rule_set_id)
-    max_rounds = int(run_params.get("max_rounds") or DEFAULT_MAX_ROUNDS)
-    state = game_state_from_dict(checkpoint["state_at_round_start"])
+    max_rounds_value = run_params.get("max_rounds")
+    if type(max_rounds_value) is not int or max_rounds_value <= 0:
+        raise GameRunError("Resume checkpoint is invalid", session_id)
+    max_rounds = max_rounds_value
+    try:
+        state = game_state_from_dict(checkpoint["state_at_round_start"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GameRunError("Resume checkpoint is invalid", session_id) from exc
+    state.rule_set = copy.deepcopy(compiled.snapshot)
     state.error_message = ""
     logs_before_round = round_logs_from_dict(checkpoint.get("logs_before_round", []))
     active_players = [str(player) for player in checkpoint.get("active_players", [])]
@@ -152,6 +171,7 @@ def resume_game(
     checkpoint_manager = ResumeCheckpointManager(
         record_store=record_store,
         session_id=session_id,
+        compiled_rule_set=compiled,
         run_params=run_params,
     )
     rng = rng_from_json_state(checkpoint.get("rng_state"))
@@ -163,7 +183,7 @@ def resume_game(
             state=state,
             provider=replay_provider,
             max_rounds=max_rounds,
-            rule_set=rule_set,
+            rule_set=compiled.rule_set,
             event_sink=event_sink or NullEventSink(),
             rng=rng,
             starting_active_players=active_players,
@@ -191,6 +211,19 @@ def resume_game(
     return RunGameResult(
         winner=state.winner,
         session_id=session_id,
+    )
+
+
+def _compiled_rule_sets_match(
+    first: CompiledRuleSet,
+    second: CompiledRuleSet,
+) -> bool:
+    return (
+        first.rule_set.id == second.rule_set.id
+        and first.revision_id == second.revision_id
+        and first.revision_no == second.revision_no
+        and first.content_hash == second.content_hash
+        and strict_json_equal(first.snapshot, second.snapshot)
     )
 
 

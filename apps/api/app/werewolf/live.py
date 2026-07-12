@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Iterator, Literal, Protocol
 
+from app.rule_sets.types import CompiledRuleSet
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
 
@@ -112,7 +113,8 @@ def validate_rule_set_revision_metadata(
         rule_set_content_hash,
     )
     scalar_fields_present = tuple(value is not None for value in scalar_values)
-    if any(scalar_fields_present) and not all(scalar_fields_present):
+    legacy_hash_only = scalar_fields_present == (False, False, True)
+    if any(scalar_fields_present) and not all(scalar_fields_present) and not legacy_hash_only:
         raise ValueError("rule set revision metadata must be all present or all absent")
     scalars_are_managed = all(scalar_fields_present)
     if scalars_are_managed:
@@ -128,6 +130,26 @@ def validate_rule_set_revision_metadata(
     if present_snapshot_fields and present_snapshot_fields != _RULE_SET_REVISION_FIELDS:
         raise ValueError("snapshot revision metadata must be all present or all absent")
     if not present_snapshot_fields:
+        if legacy_hash_only:
+            from app.rule_sets.snapshots import resolve_rule_set_snapshot
+
+            if (
+                not isinstance(rule_set_content_hash, str)
+                or _CONTENT_HASH_PATTERN.fullmatch(rule_set_content_hash) is None
+            ):
+                raise ValueError(
+                    "rule set content_hash must be 64 lowercase hexadecimal characters"
+                )
+            try:
+                compiled = resolve_rule_set_snapshot(rule_set)
+            except (AttributeError, KeyError, OverflowError, TypeError, ValueError):
+                raise ValueError("legacy hash-only snapshot must be complete") from None
+            if (
+                compiled.revision_id is not None
+                or compiled.revision_no is not None
+                or compiled.content_hash != rule_set_content_hash
+            ):
+                raise ValueError("legacy hash-only metadata must match its snapshot")
         return
     if not scalars_are_managed:
         raise ValueError("managed rule set snapshots require pinned revision metadata")
@@ -298,6 +320,23 @@ class LiveGameRun:
             "stop_requested_at": self.stop_requested_at,
             "event_count": self.event_count,
         }
+
+
+def live_run_matches_compiled_rule_set(
+    run: LiveGameRun,
+    compiled: CompiledRuleSet,
+) -> bool:
+    return (
+        type(run.rule_set_id) is str
+        and run.rule_set_id == compiled.rule_set.id
+        and type(run.rule_set_revision_id) is type(compiled.revision_id)
+        and run.rule_set_revision_id == compiled.revision_id
+        and type(run.rule_set_revision_no) is type(compiled.revision_no)
+        and run.rule_set_revision_no == compiled.revision_no
+        and type(run.rule_set_content_hash) is str
+        and run.rule_set_content_hash == compiled.content_hash
+        and strict_json_equal(run.rule_set, compiled.snapshot)
+    )
 
 
 @dataclass(frozen=True)

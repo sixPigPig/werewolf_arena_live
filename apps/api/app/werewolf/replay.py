@@ -11,11 +11,12 @@ from sqlalchemy.orm import Session
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import LiveRunRecord
 from app.werewolf.checkpoint import (
-    CHECKPOINT_SCHEMA_VERSION,
     ResumeCheckpointError,
+    resolved_rule_set_from_checkpoint,
 )
 from app.werewolf.live import validate_rule_set_revision_metadata
 from app.werewolf.models import GameState, RoundLog
+from app.rule_sets.types import CompiledRuleSet
 
 SESSION_ID_RE = r"^game_[0-9a-f]{8}$"
 _SESSION_PATTERN = re.compile(SESSION_ID_RE)
@@ -108,8 +109,8 @@ class DatabaseReplayStore:
     def load_resume_checkpoint(self, session_id: str) -> dict[str, Any]:
         self._validate_session_id(session_id)
         payload = self.db.get(GameReplayPayload, session_id)
-        if payload is None:
-            raise ResumeCheckpointError
+        if payload is None or payload.checkpoint is None:
+            raise ResumeCheckpointError("missing")
         _validated_checkpoint_payload(session_id, payload.checkpoint)
         return copy.deepcopy(payload.checkpoint)
 
@@ -151,8 +152,11 @@ class DatabaseReplayStore:
 
     def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, Any]) -> None:
         self._validate_session_id(session_id)
-        state, logs, _checkpoint, rounds = _validated_checkpoint_payload(session_id, checkpoint)
-        rule_set_projection = _validated_rule_set_projection(state)
+        state, logs, _checkpoint, rounds, compiled = _validated_checkpoint_payload(
+            session_id,
+            checkpoint,
+        )
+        rule_set_projection = _checkpoint_rule_set_projection(state, compiled)
         try:
             self._guard_write_fence(session_id)
             record = self._get_or_create_record(session_id)
@@ -303,38 +307,53 @@ def _apply_rule_set_projection(
     record.rule_set = copy.deepcopy(rule_set)
 
 
+def _checkpoint_rule_set_projection(
+    state: dict[str, Any],
+    compiled: CompiledRuleSet,
+) -> tuple[dict[str, Any], str, str | None, int | None, str]:
+    rule_set = state["rule_set"]
+    if not isinstance(rule_set, dict):
+        raise ResumeCheckpointError("invalid_structure")
+    return (
+        copy.deepcopy(rule_set),
+        compiled.rule_set.id,
+        compiled.revision_id,
+        compiled.revision_no,
+        compiled.content_hash,
+    )
+
+
 def _validated_checkpoint_payload(
     session_id: str,
     checkpoint: Any,
-) -> tuple[dict[str, Any], list[Any], dict[str, Any], list[Any]]:
+) -> tuple[dict[str, Any], list[Any], dict[str, Any], list[Any], CompiledRuleSet]:
     if not _SESSION_PATTERN.fullmatch(session_id):
-        raise ResumeCheckpointError
+        raise ResumeCheckpointError("invalid_structure")
     if not isinstance(checkpoint, dict):
-        raise ResumeCheckpointError
-    if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
-        raise ResumeCheckpointError
+        raise ResumeCheckpointError("invalid_structure")
     if checkpoint.get("session_id") != session_id:
-        raise ResumeCheckpointError
+        raise ResumeCheckpointError("invalid_structure")
 
     state = checkpoint.get("state_at_round_start")
     if not isinstance(state, dict):
-        raise ResumeCheckpointError
+        raise ResumeCheckpointError("invalid_structure")
     if state.get("session_id") != session_id:
-        raise ResumeCheckpointError
+        raise ResumeCheckpointError("invalid_structure")
     rounds = state.get("rounds", [])
     if not isinstance(rounds, list):
-        raise ResumeCheckpointError
+        raise ResumeCheckpointError("invalid_structure")
 
     logs = checkpoint.get("logs_before_round")
     if not isinstance(logs, list):
-        raise ResumeCheckpointError
+        raise ResumeCheckpointError("invalid_structure")
 
-    return state, logs, checkpoint, rounds
+    compiled = resolved_rule_set_from_checkpoint(checkpoint)
+    return state, logs, checkpoint, rounds, compiled
 
 
 def _valid_checkpoint_or_none(session_id: str, checkpoint: Any) -> dict[str, Any] | None:
     try:
-        _state, _logs, validated_checkpoint, _rounds = _validated_checkpoint_payload(
+        _state, _logs, validated_checkpoint, _rounds, _compiled = _validated_checkpoint_payload(
             session_id,
             checkpoint,
         )

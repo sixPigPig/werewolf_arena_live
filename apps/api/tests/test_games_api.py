@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import os
@@ -47,13 +48,13 @@ from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.rule_sets.service import (
+    archive_rule_set,
     publish_rule_set,
     resolve_published_rule_set,
     update_rule_set_draft,
 )
 from app.rule_sets.types import CompiledRuleSet
 from app.rule_sets.validation import normalize_rule_set_config
-from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.player_presets import default_personality_text
 from app.werewolf.replay import DatabaseReplayStore
@@ -61,6 +62,7 @@ from app.werewolf.voice import VoiceUtterance
 from app.werewolf.voice_store import DatabaseVoiceStore
 from tests.rule_set_fixtures import (
     OFFICIAL_RULE_SET_SEEDS,
+    complete_resume_checkpoint,
     managed_official_compiled_rule_set,
     seed_official_rule_sets,
 )
@@ -421,27 +423,33 @@ def sample_checkpoint(
     state: dict | None = None,
     logs_before_round: list[dict] | None = None,
 ) -> dict:
-    return {
-        "schema_version": CHECKPOINT_SCHEMA_VERSION,
-        "session_id": session_id,
-        "run_params": run_params
-        or {
-            "villager_model": "deepseek-chat",
-            "werewolf_model": "deepseek-chat",
-            "seed": 21,
-            "max_rounds": 8,
-            "rule_set_id": "starter_6",
-            "player_configs": [],
-        },
-        "round_number": 1,
-        "active_players": ["张三", "李四"],
-        "rng_state": None,
-        "state_at_round_start": state or sample_state(session_id, winner="", error=""),
-        "logs_before_round": logs_before_round if logs_before_round is not None else [],
-        "cached_model_responses": [],
-        "failed_request": None,
-        "last_error": None,
+    source_run_params = run_params or {
+        "villager_model": "deepseek-chat",
+        "werewolf_model": "deepseek-chat",
+        "seed": 21,
+        "max_rounds": 8,
+        "rule_set_id": "starter_6",
+        "player_configs": [],
     }
+    rule_set_id = source_run_params.get("rule_set_id", "starter_6")
+    compiled = managed_official_compiled_rule_set(str(rule_set_id))
+    checkpoint = complete_resume_checkpoint(session_id, compiled)
+    for name in (
+        "villager_model",
+        "werewolf_model",
+        "seed",
+        "max_rounds",
+        "player_configs",
+    ):
+        checkpoint["run_params"][name] = copy.deepcopy(source_run_params.get(name))
+    checkpoint_state = copy.deepcopy(state or sample_state(session_id, winner="", error=""))
+    checkpoint_state["rule_set"] = copy.deepcopy(compiled.snapshot)
+    checkpoint["state_at_round_start"] = checkpoint_state
+    checkpoint["logs_before_round"] = copy.deepcopy(
+        logs_before_round if logs_before_round is not None else []
+    )
+    checkpoint["active_players"] = ["张三", "李四"]
+    return checkpoint
 
 
 def store_game_session(
@@ -2301,6 +2309,15 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     monkeypatch.setattr("app.api.routes.games._resume_game_in_background", fake_resume_background)
     monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
 
+    def reject_catalog_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("resume must use the checkpoint rule snapshot")
+
+    monkeypatch.setattr("app.werewolf.rules.get_rule_set", reject_catalog_lookup)
+    monkeypatch.setattr(
+        "app.api.routes.games.resolve_published_rule_set",
+        reject_catalog_lookup,
+    )
+
     try:
         response = client.post(f"/api/v1/games/{session_id}/resume")
     finally:
@@ -2312,6 +2329,11 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     assert payload["villager_model"] == "Qwen3.6-Plus"
     assert payload["werewolf_model"] == "MiniMax-M2.7"
     assert payload["rule_set"]["id"] == "starter_6"
+    compiled = managed_official_compiled_rule_set("starter_6")
+    assert payload["rule_set"] == compiled.snapshot
+    assert payload["rule_set_revision_id"] == compiled.revision_id
+    assert payload["rule_set_revision_no"] == compiled.revision_no
+    assert payload["rule_set_content_hash"] == compiled.content_hash
     assert payload["player_configs"] == [
         {
             "seat": 2,
@@ -2327,7 +2349,281 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
         }
     ]
     assert captured[0]["session_id"] == session_id
-    assert set(captured[0]) == {"run_id", "registry", "session_id"}
+    assert captured[0]["expected_compiled_rule_set"].snapshot == compiled.snapshot
+    assert set(captured[0]) == {
+        "run_id",
+        "registry",
+        "session_id",
+        "expected_compiled_rule_set",
+    }
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["content-hash", "missing-schema", "untrimmed-revision-id"],
+)
+def test_invalid_resume_checkpoint_does_not_return_or_claim_active_run(
+    monkeypatch: pytest.MonkeyPatch,
+    corruption: str,
+) -> None:
+    session_id = "game_1200abcd"
+    store_game_session(
+        session_id,
+        state=sample_state(session_id, winner="", error="Worker unavailable"),
+        checkpoint=sample_checkpoint(session_id),
+    )
+    with TestingSessionLocal() as db:
+        payload = db.get(GameReplayPayload, session_id)
+        assert payload is not None
+        checkpoint = copy.deepcopy(payload.checkpoint)
+        if corruption == "content-hash":
+            checkpoint["run_params"]["content_hash"] = "0" * 64
+        elif corruption == "missing-schema":
+            checkpoint.pop("schema_version")
+        else:
+            untrimmed = f" {checkpoint['run_params']['revision_id']} "
+            checkpoint["run_params"]["revision_id"] = untrimmed
+            checkpoint["run_params"]["rule_set_snapshot"]["revision_id"] = untrimmed
+            checkpoint["state_at_round_start"]["rule_set"]["revision_id"] = untrimmed
+        payload.checkpoint = checkpoint
+        flag_modified(payload, "checkpoint")
+        db.commit()
+
+    compiled = managed_official_compiled_rule_set("starter_6")
+    registry = LiveRunRegistry()
+    active = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id=compiled.rule_set.id,
+        rule_set_revision_id=compiled.revision_id,
+        rule_set_revision_no=compiled.revision_no,
+        rule_set_content_hash=compiled.content_hash,
+        rule_set=compiled.snapshot,
+    )
+    claims: list[str] = []
+    starts: list[dict[str, object]] = []
+
+    def fail_claim(run_id: str):
+        claims.append(run_id)
+        raise AssertionError("invalid checkpoint must not claim an active run")
+
+    monkeypatch.setattr(registry, "try_claim_stale_run", fail_claim)
+    monkeypatch.setattr(
+        "app.api.routes.games._resume_game_in_background",
+        lambda **kwargs: starts.append(kwargs),
+    )
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+    override_replay_store()
+    override_live_registry(registry)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Resume checkpoint is invalid"
+    assert claims == []
+    assert starts == []
+    assert registry.get_run(active.run_id).fence_token == active.fence_token
+
+
+def test_resume_rejects_active_live_snapshot_mismatch_without_starting_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    store_game_session(
+        session_id,
+        state=sample_state(session_id, winner="", error="Worker unavailable"),
+        checkpoint=sample_checkpoint(session_id),
+    )
+    other = managed_official_compiled_rule_set("classic_8")
+    registry = LiveRunRegistry()
+    active = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id=other.rule_set.id,
+        rule_set_revision_id=other.revision_id,
+        rule_set_revision_no=other.revision_no,
+        rule_set_content_hash=other.content_hash,
+        rule_set=other.snapshot,
+    )
+    claims: list[str] = []
+    starts: list[dict[str, object]] = []
+    original_claim = registry.try_claim_stale_run
+
+    def recording_claim(run_id: str):
+        claims.append(run_id)
+        return original_claim(run_id)
+
+    monkeypatch.setattr(registry, "try_claim_stale_run", recording_claim)
+    monkeypatch.setattr(
+        "app.api.routes.games._resume_game_in_background",
+        lambda **kwargs: starts.append(kwargs),
+    )
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+    override_replay_store()
+    override_live_registry(registry)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Resume checkpoint is invalid"
+    assert claims == []
+    assert starts == []
+    assert registry.get_run(active.run_id).rule_set == other.snapshot
+
+
+@pytest.mark.parametrize("catalog_change", ["publish-newer", "archive"])
+def test_resume_uses_exact_checkpoint_revision_after_catalog_change(
+    monkeypatch: pytest.MonkeyPatch,
+    catalog_change: str,
+) -> None:
+    session_id = "game_1200abcd"
+    old_compiled = managed_official_compiled_rule_set("starter_6")
+    store_game_session(
+        session_id,
+        state=sample_state(session_id, winner="", error="Worker unavailable"),
+        checkpoint=sample_checkpoint(session_id),
+    )
+    with TestingSessionLocal() as db:
+        db.add(
+            User(
+                id=101,
+                email=f"resume-{catalog_change}@example.test",
+                display_name="Resume lifecycle",
+                admin_role="super_admin",
+            )
+        )
+        if catalog_change == "publish-newer":
+            seed = next(item for item in OFFICIAL_RULE_SET_SEEDS if item["id"] == "starter_6")
+            config = normalize_rule_set_config({**seed["config"], "name": "新手 6 人快局 第二版"})
+            aggregate = update_rule_set_draft(
+                db,
+                "starter_6",
+                config=config,
+                display_order=int(seed["display_order"]),
+                expected_rule_set_lock_version=1,
+                expected_revision_lock_version=None,
+                actor_user_id=101,
+            )
+            assert aggregate.draft is not None
+            parent_lock = aggregate.record.lock_version
+            revision_lock = aggregate.draft.lock_version
+            db.commit()
+            published = publish_rule_set(
+                db,
+                "starter_6",
+                expected_rule_set_lock_version=parent_lock,
+                expected_revision_lock_version=revision_lock,
+                reason="Verify resume remains pinned",
+                actor_user_id=101,
+            )
+            assert published.published is not None
+            assert published.published.id != old_compiled.revision_id
+        else:
+            archived = archive_rule_set(
+                db,
+                "starter_6",
+                expected_rule_set_lock_version=1,
+                replacement_default_rule_set_id=None,
+                replacement_expected_lock_version=None,
+                reason="Verify archived resume remains pinned",
+                actor_user_id=101,
+            )
+            assert archived.record.status == "archived"
+        db.commit()
+
+    registry = LiveRunRegistry()
+    captured: list[dict[str, object]] = []
+
+    def reject_catalog_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("resume must not query current, static, or published catalogs")
+
+    monkeypatch.setattr("app.werewolf.rules.get_rule_set", reject_catalog_lookup)
+    monkeypatch.setattr(games_routes, "_resolve_selected_rule_set", reject_catalog_lookup)
+    monkeypatch.setattr(games_routes, "_resolve_static_rule_set", reject_catalog_lookup)
+    monkeypatch.setattr(games_routes, "resolve_published_rule_set", reject_catalog_lookup)
+    monkeypatch.setattr(
+        "app.api.routes.games._resume_game_in_background",
+        lambda **kwargs: captured.append(kwargs),
+    )
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+    override_replay_store()
+    override_live_registry(registry)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["rule_set_revision_id"] == old_compiled.revision_id
+    assert payload["rule_set_revision_no"] == old_compiled.revision_no
+    assert payload["rule_set_content_hash"] == old_compiled.content_hash
+    assert payload["rule_set"] == old_compiled.snapshot
+    assert len(captured) == 1
+    expected = captured[0]["expected_compiled_rule_set"]
+    assert isinstance(expected, CompiledRuleSet)
+    assert expected.snapshot == old_compiled.snapshot
+
+
+def test_resume_rejects_mismatched_concurrent_winner_from_get_or_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    store_game_session(
+        session_id,
+        state=sample_state(session_id, winner="", error="Worker unavailable"),
+        checkpoint=sample_checkpoint(session_id),
+    )
+    other = managed_official_compiled_rule_set("classic_8")
+    registry = LiveRunRegistry()
+    mismatched = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id=other.rule_set.id,
+        rule_set_revision_id=other.revision_id,
+        rule_set_revision_no=other.revision_no,
+        rule_set_content_hash=other.content_hash,
+        rule_set=other.snapshot,
+    )
+    monkeypatch.setattr(registry, "try_get_active_run_for_session", lambda _session_id: None)
+    monkeypatch.setattr(
+        registry,
+        "get_or_create_active_run",
+        lambda **_kwargs: (mismatched, False),
+    )
+    starts: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "app.api.routes.games._resume_game_in_background",
+        lambda **kwargs: starts.append(kwargs),
+    )
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+    override_replay_store()
+    override_live_registry(registry)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Resume checkpoint is invalid"
+    assert starts == []
 
 
 def test_resume_game_run_recovers_commit_ack_loss_and_starts_one_worker(
@@ -2518,12 +2814,18 @@ def test_resume_game_run_claims_a_stale_active_run_instead_of_creating_a_duplica
         live_store=SessionLiveStore(TestingSessionLocal),
         worker_id="worker-owner",
     )
+    compiled = managed_official_compiled_rule_set("starter_6")
     run = owner.create_run(
         session_id=session_id,
         villager_model="deepseek-chat",
         werewolf_model="deepseek-chat",
         seed=7,
         max_rounds=8,
+        rule_set_id=compiled.rule_set.id,
+        rule_set_revision_id=compiled.revision_id,
+        rule_set_revision_no=compiled.revision_no,
+        rule_set_content_hash=compiled.content_hash,
+        rule_set=compiled.snapshot,
     )
     owner.mark_running(run.run_id)
     with TestingSessionLocal() as db:
@@ -2763,7 +3065,7 @@ def test_run_game_in_background_publishes_registry_and_engine_events_directly(
 
     monkeypatch.setattr("app.api.routes.games.run_game", fake_run_game)
     monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
-    monkeypatch.setattr(games_routes, "get_rule_set", reject_lookup)
+    monkeypatch.setattr("app.werewolf.rules.get_rule_set", reject_lookup)
     monkeypatch.setattr(games_routes, "resolve_published_rule_set", reject_lookup)
 
     _run_game_in_background(

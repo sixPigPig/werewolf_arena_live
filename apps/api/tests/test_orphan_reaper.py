@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from datetime import UTC, datetime, timedelta
 from threading import Event
 
@@ -10,13 +11,19 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.routes.games import SessionLiveStore
 from app.db.base import Base
+from app.models.game_session import GameReplayPayload
 from app.models.live import LiveRunRecord
+from app.rule_sets.types import CompiledRuleSet
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.orphan_reaper import (
     run_live_run_reaper,
     run_next_orphan_recovery,
 )
 from app.werewolf.replay import DatabaseReplayStore
+from tests.rule_set_fixtures import (
+    complete_resume_checkpoint,
+    managed_official_compiled_rule_set,
+)
 
 
 def _session_factory() -> sessionmaker[Session]:
@@ -35,7 +42,11 @@ def _seed_orphan(
     session_id: str,
     with_checkpoint: bool = True,
     stop_requested: bool = False,
+    live_compiled: CompiledRuleSet | None = None,
+    checkpoint_compiled: CompiledRuleSet | None = None,
 ) -> tuple[LiveRunRegistry, str]:
+    live_compiled = live_compiled or managed_official_compiled_rule_set("starter_6")
+    checkpoint_compiled = checkpoint_compiled or live_compiled
     owner = LiveRunRegistry(
         live_store=SessionLiveStore(session_factory),
         worker_id="worker-lost",
@@ -46,13 +57,18 @@ def _seed_orphan(
         werewolf_model="deepseek-chat",
         seed=7,
         max_rounds=8,
+        rule_set_id=live_compiled.rule_set.id,
+        rule_set_revision_id=live_compiled.revision_id,
+        rule_set_revision_no=live_compiled.revision_no,
+        rule_set_content_hash=live_compiled.content_hash,
+        rule_set=live_compiled.snapshot,
     )
     owner.mark_running(run.run_id)
     if with_checkpoint:
         with session_factory() as db:
             DatabaseReplayStore(db).save_resume_checkpoint(
                 session_id,
-                _checkpoint(session_id),
+                _checkpoint(session_id, checkpoint_compiled),
             )
     with session_factory() as db:
         record = db.get(LiveRunRecord, run.run_id)
@@ -66,36 +82,20 @@ def _seed_orphan(
     return owner, run.run_id
 
 
-def _checkpoint(session_id: str) -> dict[str, object]:
-    return {
-        "schema_version": 1,
-        "session_id": session_id,
-        "state_at_round_start": {
-            "session_id": session_id,
-            "players": [],
-            "rounds": [],
-            "winner": "",
-            "error_message": "",
-            "rule_set": {"id": "starter_6"},
-        },
-        "logs_before_round": [],
-        "run_params": {
-            "villager_model": "deepseek-chat",
-            "werewolf_model": "deepseek-chat",
-            "seed": 7,
-            "max_rounds": 8,
-            "rule_set_id": "starter_6",
-            "player_configs": [],
-        },
-        "round_number": 1,
-        "active_players": [],
-        "cached_model_responses": [],
-        "failed_request": None,
-        "last_error": None,
-    }
+def _checkpoint(
+    session_id: str,
+    compiled: CompiledRuleSet | None = None,
+) -> dict[str, object]:
+    return complete_resume_checkpoint(
+        session_id,
+        compiled or managed_official_compiled_rule_set("starter_6"),
+        checkpoint_schema_version=2,
+    )
 
 
-def test_reaper_claims_checkpoint_with_new_fence_and_schedules_backoff() -> None:
+def test_reaper_claims_exact_snapshot_without_catalog_lookup_and_schedules_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session_factory = _session_factory()
     owner, run_id = _seed_orphan(
         session_factory,
@@ -105,6 +105,17 @@ def test_reaper_claims_checkpoint_with_new_fence_and_schedules_backoff() -> None
     reaper = LiveRunRegistry(
         live_store=SessionLiveStore(session_factory),
         worker_id="worker-reaper",
+    )
+    catalog_calls: list[str] = []
+
+    def reject_catalog_lookup(*_args, **_kwargs):
+        catalog_calls.append("called")
+        raise AssertionError("resume must not resolve a current catalog rule")
+
+    monkeypatch.setattr("app.werewolf.rules.get_rule_set", reject_catalog_lookup)
+    monkeypatch.setattr(
+        "app.rule_sets.service.resolve_published_rule_set",
+        reject_catalog_lookup,
     )
 
     result = run_next_orphan_recovery(
@@ -120,6 +131,7 @@ def test_reaper_claims_checkpoint_with_new_fence_and_schedules_backoff() -> None
     assert result.run_id == run_id
     assert result.outcome == "resumed"
     assert result.attempt == 1
+    assert catalog_calls == []
     with session_factory() as db:
         saved = db.get(LiveRunRecord, run_id)
         assert saved is not None
@@ -129,6 +141,84 @@ def test_reaper_claims_checkpoint_with_new_fence_and_schedules_backoff() -> None
         assert saved.recovery_attempts == 1
         assert saved.recovery_last_attempt_at is not None
         assert saved.recovery_not_before is not None
+
+
+def test_reaper_rejects_tampered_checkpoint_before_executor() -> None:
+    session_factory = _session_factory()
+    _owner, run_id = _seed_orphan(
+        session_factory,
+        session_id="game_6700abcd",
+    )
+    with session_factory() as db:
+        payload = db.get(GameReplayPayload, "game_6700abcd")
+        assert payload is not None
+        assert payload.checkpoint is not None
+        tampered = copy.deepcopy(payload.checkpoint)
+        tampered["run_params"]["content_hash"] = "0" * 64
+        payload.checkpoint = tampered
+        db.commit()
+    reaper = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-reaper",
+    )
+    executor_calls: list[str] = []
+
+    result = run_next_orphan_recovery(
+        session_factory,
+        reaper,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=lambda run, _registry: executor_calls.append(run.run_id),
+    )
+
+    assert result is not None
+    assert result.run_id == run_id
+    assert result.outcome == "failed"
+    assert executor_calls == []
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run_id)
+        assert saved is not None
+        assert saved.status == "failed"
+        assert saved.recovery_last_error == ("Orphaned live run has no valid resume checkpoint")
+
+
+def test_reaper_rejects_live_checkpoint_rule_mismatch_before_executor() -> None:
+    session_factory = _session_factory()
+    live_compiled = managed_official_compiled_rule_set("starter_6")
+    checkpoint_compiled = managed_official_compiled_rule_set("classic_8")
+    _owner, run_id = _seed_orphan(
+        session_factory,
+        session_id="game_6800abcd",
+        live_compiled=live_compiled,
+        checkpoint_compiled=checkpoint_compiled,
+    )
+    reaper = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-reaper",
+    )
+    executor_calls: list[str] = []
+
+    result = run_next_orphan_recovery(
+        session_factory,
+        reaper,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=lambda run, _registry: executor_calls.append(run.run_id),
+    )
+
+    assert result is not None
+    assert result.run_id == run_id
+    assert result.outcome == "failed"
+    assert executor_calls == []
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run_id)
+        assert saved is not None
+        assert saved.status == "failed"
+        assert saved.recovery_last_error == (
+            "Orphaned live run rule snapshot does not match resume checkpoint"
+        )
 
 
 def test_incomplete_rows_cannot_starve_a_valid_recovery_candidate_page() -> None:

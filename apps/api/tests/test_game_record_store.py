@@ -14,6 +14,7 @@ from app.db.base import Base
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import LiveRunRecord
 from app.rule_sets import compile_rule_set_config, rule_set_config_from_snapshot
+from app.rule_sets.types import CompiledRuleSet
 from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION, ResumeCheckpointError
 from app.werewolf.replay import (
     DatabaseReplayStore,
@@ -21,6 +22,11 @@ from app.werewolf.replay import (
     ReplayWriteFencedError,
 )
 from app.werewolf.rules import get_rule_set, rule_set_snapshot
+from tests.rule_set_fixtures import (
+    complete_resume_checkpoint,
+    legacy_official_compiled_rule_set,
+    managed_official_compiled_rule_set,
+)
 
 _DEFAULT = object()
 
@@ -74,36 +80,51 @@ def sample_checkpoint(
     state_at_round_start: Any = _DEFAULT,
     logs_before_round: Any = _DEFAULT,
     schema_version: Any = _DEFAULT,
+    compiled_rule_set: CompiledRuleSet | None = None,
 ) -> dict[str, Any]:
+    compiled = compiled_rule_set or managed_official_compiled_rule_set("starter_6")
+    if schema_version is _DEFAULT:
+        schema_version = CHECKPOINT_SCHEMA_VERSION
+    checkpoint = complete_resume_checkpoint(
+        session_id,
+        compiled,
+        checkpoint_schema_version=schema_version,
+    )
     if state_at_round_start is _DEFAULT:
         state_at_round_start = sample_state(
             state_session_id or session_id,
             winner="",
             error="",
         )
+        state_at_round_start["rule_set"] = copy.deepcopy(compiled.snapshot)
     if logs_before_round is _DEFAULT:
         logs_before_round = sample_logs()
-    if schema_version is _DEFAULT:
-        schema_version = CHECKPOINT_SCHEMA_VERSION
-    return {
-        "schema_version": schema_version,
-        "session_id": checkpoint_session_id or session_id,
-        "state_at_round_start": state_at_round_start,
-        "logs_before_round": logs_before_round,
-        "run_params": {
-            "villager_model": "deepseek-chat",
-            "werewolf_model": "deepseek-chat",
-            "seed": 7,
-            "max_rounds": 8,
-            "rule_set_id": "starter_6",
-            "player_configs": [],
-        },
-        "round_number": 1,
-        "active_players": ["张三"],
-        "cached_model_responses": [],
-        "failed_request": None,
-        "last_error": None,
-    }
+    checkpoint["session_id"] = checkpoint_session_id or session_id
+    checkpoint["state_at_round_start"] = state_at_round_start
+    checkpoint["logs_before_round"] = logs_before_round
+    checkpoint["active_players"] = ["张三"]
+    return checkpoint
+
+
+def invalid_resume_checkpoint(case: str) -> tuple[dict[str, Any], str]:
+    if case == "incomplete-v1-state-snapshot":
+        checkpoint = sample_checkpoint(
+            schema_version=1,
+            compiled_rule_set=legacy_official_compiled_rule_set("starter_6"),
+        )
+        checkpoint["state_at_round_start"]["rule_set"] = {"id": "starter_6"}
+        return checkpoint, "invalid_rule_snapshot"
+    if case == "tampered-v2-content-hash":
+        checkpoint = sample_checkpoint()
+        checkpoint["run_params"]["content_hash"] = "0" * 64
+        return checkpoint, "rule_metadata_mismatch"
+    if case == "v2-state-run-snapshot-disagreement":
+        checkpoint = sample_checkpoint()
+        checkpoint["state_at_round_start"]["rule_set"] = copy.deepcopy(
+            managed_official_compiled_rule_set("classic_8").snapshot
+        )
+        return checkpoint, "rule_snapshot_mismatch"
+    raise AssertionError(f"unknown invalid checkpoint case: {case}")
 
 
 def test_save_complete_game_lists_and_loads_session(db_session: Session) -> None:
@@ -287,25 +308,7 @@ def test_list_sessions_skips_records_without_payload(db_session: Session) -> Non
 
 def test_checkpoint_makes_partial_session_resumable(db_session: Session) -> None:
     store = DatabaseReplayStore(db_session)
-    checkpoint = {
-        "schema_version": CHECKPOINT_SCHEMA_VERSION,
-        "session_id": "game_1200abcd",
-        "state_at_round_start": sample_state("game_1200abcd", winner="", error=""),
-        "logs_before_round": sample_logs(),
-        "run_params": {
-            "villager_model": "deepseek-chat",
-            "werewolf_model": "deepseek-chat",
-            "seed": 7,
-            "max_rounds": 8,
-            "rule_set_id": "starter_6",
-            "player_configs": [],
-        },
-        "round_number": 1,
-        "active_players": ["张三"],
-        "cached_model_responses": [],
-        "failed_request": None,
-        "last_error": None,
-    }
+    checkpoint = sample_checkpoint()
 
     store.save_resume_checkpoint("game_1200abcd", checkpoint)
     loaded_checkpoint = store.load_resume_checkpoint("game_1200abcd")
@@ -319,13 +322,129 @@ def test_checkpoint_makes_partial_session_resumable(db_session: Session) -> None
     assert loaded_session["logs"] == sample_logs()
 
 
+def test_replay_store_accepts_complete_legacy_v1_and_projects_its_hash(
+    db_session: Session,
+) -> None:
+    store = DatabaseReplayStore(db_session)
+    compiled = legacy_official_compiled_rule_set("starter_6")
+    checkpoint = sample_checkpoint(
+        schema_version=1,
+        compiled_rule_set=compiled,
+    )
+
+    store.save_resume_checkpoint("game_1200abcd", checkpoint)
+
+    assert store.load_resume_checkpoint("game_1200abcd") == checkpoint
+    assert store.list_sessions()[0]["resumable"] is True
+    assert store.load_session("game_1200abcd")["resumable"] is True
+    record = db_session.get(GameSessionRecord, "game_1200abcd")
+    assert record is not None
+    assert record.rule_set_id == compiled.rule_set.id
+    assert record.rule_set_revision_id is None
+    assert record.rule_set_revision_no is None
+    assert record.rule_set_content_hash == compiled.content_hash
+    assert record.rule_set == compiled.snapshot
+
+
+def test_replay_store_detaches_valid_v2_checkpoint_and_exact_projection(
+    db_session: Session,
+) -> None:
+    store = DatabaseReplayStore(db_session)
+    compiled = managed_official_compiled_rule_set("starter_6")
+    checkpoint = sample_checkpoint(compiled_rule_set=compiled)
+    state_snapshot = checkpoint["state_at_round_start"]["rule_set"]
+    run_snapshot = checkpoint["run_params"]["rule_set_snapshot"]
+    assert state_snapshot is not run_snapshot
+    original = copy.deepcopy(checkpoint)
+
+    store.save_resume_checkpoint("game_1200abcd", checkpoint)
+    checkpoint["state_at_round_start"]["rule_set"]["name"] = "mutated caller state"
+    checkpoint["run_params"]["rule_set_snapshot"]["name"] = "mutated caller params"
+
+    loaded = store.load_resume_checkpoint("game_1200abcd")
+    assert loaded == original
+    loaded["state_at_round_start"]["rule_set"]["name"] = "mutated loaded copy"
+    assert store.load_resume_checkpoint("game_1200abcd") == original
+    record = db_session.get(GameSessionRecord, "game_1200abcd")
+    assert record is not None
+    assert record.rule_set_id == compiled.rule_set.id
+    assert record.rule_set_revision_id == compiled.revision_id
+    assert record.rule_set_revision_no == compiled.revision_no
+    assert record.rule_set_content_hash == compiled.content_hash
+    assert record.rule_set == compiled.snapshot
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "incomplete-v1-state-snapshot",
+        "tampered-v2-content-hash",
+        "v2-state-run-snapshot-disagreement",
+    ),
+)
+def test_save_resume_checkpoint_rejects_invalid_versioned_rule_snapshot(
+    db_session: Session,
+    case: str,
+) -> None:
+    checkpoint, expected_reason = invalid_resume_checkpoint(case)
+
+    with pytest.raises(ResumeCheckpointError) as error:
+        DatabaseReplayStore(db_session).save_resume_checkpoint(
+            "game_1200abcd",
+            checkpoint,
+        )
+
+    assert error.value.reason == expected_reason
+    assert db_session.get(GameSessionRecord, "game_1200abcd") is None
+    assert db_session.get(GameReplayPayload, "game_1200abcd") is None
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "incomplete-v1-state-snapshot",
+        "tampered-v2-content-hash",
+        "v2-state-run-snapshot-disagreement",
+    ),
+)
+def test_load_and_list_reject_invalid_versioned_rule_snapshot(
+    db_session: Session,
+    case: str,
+) -> None:
+    checkpoint, expected_reason = invalid_resume_checkpoint(case)
+    db_session.add(
+        GameSessionRecord(
+            session_id="game_1200abcd",
+            status="partial",
+            resumable=True,
+        )
+    )
+    db_session.add(
+        GameReplayPayload(
+            session_id="game_1200abcd",
+            state=sample_state("game_1200abcd", winner="", error="failed"),
+            logs=sample_logs(),
+            checkpoint=checkpoint,
+        )
+    )
+    db_session.commit()
+    store = DatabaseReplayStore(db_session)
+
+    with pytest.raises(ResumeCheckpointError) as error:
+        store.load_resume_checkpoint("game_1200abcd")
+
+    assert error.value.reason == expected_reason
+    assert store.list_sessions()[0]["resumable"] is False
+    assert store.load_session("game_1200abcd")["resumable"] is False
+
+
 def test_checkpoint_write_projects_and_clears_pinned_rule_metadata(
     db_session: Session,
 ) -> None:
     store = DatabaseReplayStore(db_session)
-    managed_state = sample_state("game_1200abcd", winner="", error="")
-    managed_state["rule_set"] = managed_rule_snapshot()
-    managed_checkpoint = sample_checkpoint(state_at_round_start=managed_state)
+    managed_compiled = managed_official_compiled_rule_set("starter_6")
+    managed_checkpoint = sample_checkpoint(compiled_rule_set=managed_compiled)
+    managed_state = managed_checkpoint["state_at_round_start"]
 
     store.save_resume_checkpoint("game_1200abcd", managed_checkpoint)
 
@@ -337,7 +456,8 @@ def test_checkpoint_write_projects_and_clears_pinned_rule_metadata(
     assert managed.rule_set_content_hash == managed_state["rule_set"]["content_hash"]
     assert managed.rule_set == managed_state["rule_set"]
 
-    legacy_checkpoint = sample_checkpoint()
+    legacy_compiled = legacy_official_compiled_rule_set("starter_6")
+    legacy_checkpoint = sample_checkpoint(compiled_rule_set=legacy_compiled)
     store.save_resume_checkpoint("game_1200abcd", legacy_checkpoint)
 
     db_session.expire_all()
@@ -348,7 +468,7 @@ def test_checkpoint_write_projects_and_clears_pinned_rule_metadata(
     assert cleared.rule_set_id == "starter_6"
     assert cleared.rule_set_revision_id is None
     assert cleared.rule_set_revision_no is None
-    assert cleared.rule_set_content_hash is None
+    assert cleared.rule_set_content_hash == legacy_compiled.content_hash
     assert cleared.rule_set == legacy_checkpoint["state_at_round_start"]["rule_set"]
     assert payload.checkpoint == legacy_checkpoint
 
@@ -356,17 +476,16 @@ def test_checkpoint_write_projects_and_clears_pinned_rule_metadata(
 def test_checkpoint_write_rejects_partial_pinned_rule_metadata(
     db_session: Session,
 ) -> None:
-    state = sample_state("game_1200abcd", winner="", error="")
-    state["rule_set"] = managed_rule_snapshot()
-    del state["rule_set"]["content_hash"]
-    checkpoint = sample_checkpoint(state_at_round_start=state)
+    checkpoint = sample_checkpoint()
+    del checkpoint["state_at_round_start"]["rule_set"]["content_hash"]
 
-    with pytest.raises(ReplayNotFoundError):
+    with pytest.raises(ResumeCheckpointError) as error:
         DatabaseReplayStore(db_session).save_resume_checkpoint(
             "game_1200abcd",
             checkpoint,
         )
 
+    assert error.value.reason == "invalid_rule_snapshot"
     assert db_session.get(GameSessionRecord, "game_1200abcd") is None
     assert db_session.get(GameReplayPayload, "game_1200abcd") is None
 
@@ -428,14 +547,7 @@ def test_replay_writes_require_the_current_live_run_fence_token(
 
 def test_complete_game_clears_checkpoint(db_session: Session) -> None:
     store = DatabaseReplayStore(db_session)
-    checkpoint = {
-        "schema_version": CHECKPOINT_SCHEMA_VERSION,
-        "session_id": "game_1200abcd",
-        "state_at_round_start": sample_state("game_1200abcd", winner="", error=""),
-        "logs_before_round": [],
-        "run_params": {},
-        "cached_model_responses": [],
-    }
+    checkpoint = sample_checkpoint(logs_before_round=[])
 
     store.save_resume_checkpoint("game_1200abcd", checkpoint)
     store.save_game_payload(state=sample_state("game_1200abcd"), logs=sample_logs())
@@ -443,8 +555,9 @@ def test_complete_game_clears_checkpoint(db_session: Session) -> None:
     loaded_session = store.load_session("game_1200abcd")
     assert loaded_session["status"] == "complete"
     assert loaded_session["resumable"] is False
-    with pytest.raises(ResumeCheckpointError):
+    with pytest.raises(ResumeCheckpointError) as error:
         store.load_resume_checkpoint("game_1200abcd")
+    assert error.value.reason == "missing"
 
 
 def test_missing_and_invalid_sessions_raise_not_found(db_session: Session) -> None:
@@ -454,8 +567,9 @@ def test_missing_and_invalid_sessions_raise_not_found(db_session: Session) -> No
         store.load_session("game_1200abcd")
     with pytest.raises(ReplayNotFoundError):
         store.load_session("../bad")
-    with pytest.raises(ResumeCheckpointError):
+    with pytest.raises(ResumeCheckpointError) as error:
         store.load_resume_checkpoint("game_1200abcd")
+    assert error.value.reason == "missing"
 
 
 def test_save_resume_checkpoint_rejects_checkpoint_session_mismatch(db_session: Session) -> None:

@@ -34,6 +34,7 @@ from app.werewolf.live_store import (
     activation_ack_schema_inventory_complete,
 )
 from app.werewolf.orphan_reaper import run_next_orphan_recovery
+from tests.rule_set_fixtures import legacy_official_compiled_rule_set
 
 
 @pytest.fixture
@@ -472,6 +473,35 @@ def test_live_store_round_trips_pinned_rule_metadata_exactly(db_session: Session
     assert loaded.rule_set_revision_no == 2
     assert loaded.rule_set_content_hash == "a" * 64
     assert loaded.rule_set == snapshot
+    assert loaded.rule_set is not run.rule_set
+
+
+def test_live_store_round_trips_exact_legacy_hash_only_snapshot(
+    db_session: Session,
+) -> None:
+    compiled = legacy_official_compiled_rule_set("starter_6")
+    run = LiveRunRegistry().create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id=compiled.rule_set.id,
+        rule_set_revision_id=None,
+        rule_set_revision_no=None,
+        rule_set_content_hash=compiled.content_hash,
+        rule_set=compiled.snapshot,
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    loaded = store.load_run(run.run_id)
+
+    assert loaded is not None
+    assert loaded.rule_set_revision_id is None
+    assert loaded.rule_set_revision_no is None
+    assert loaded.rule_set_content_hash == compiled.content_hash
+    assert loaded.rule_set == compiled.snapshot
     assert loaded.rule_set is not run.rule_set
 
 

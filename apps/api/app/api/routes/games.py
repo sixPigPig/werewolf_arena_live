@@ -50,7 +50,10 @@ from app.rule_sets.snapshots import (
     resolve_rule_set_snapshot,
 )
 from app.rule_sets.types import CompiledRuleSet
-from app.werewolf.checkpoint import ResumeCheckpointError
+from app.werewolf.checkpoint import (
+    ResumeCheckpointError,
+    resolved_rule_set_from_checkpoint,
+)
 from app.werewolf.config import choose_player_names
 from app.werewolf.debate_realism import lineup_quality_warnings
 from app.werewolf.live import (
@@ -65,6 +68,7 @@ from app.werewolf.live import (
     RunLeaseUnavailable,
     RunRecoveryCandidate,
     format_sse,
+    live_run_matches_compiled_rule_set,
 )
 from app.werewolf.live_store import (
     DatabaseLiveStore,
@@ -90,7 +94,6 @@ from app.werewolf.replay_playback import build_replay_playback
 from app.werewolf.rules import (
     DEFAULT_RULE_SET_ID,
     OFFICIAL_RULE_SETS,
-    get_rule_set,
     role_summary,
     rule_set_snapshot,
 )
@@ -1075,54 +1078,86 @@ def start_resume_game_run(
     store: GameRecordStore,
     registry: LiveRunRegistry,
 ) -> tuple[LiveGameRun, bool]:
-    active_run = registry.try_get_active_run_for_session(session_id)
     try:
         checkpoint = store.load_resume_checkpoint(session_id)
     except ResumeCheckpointError as exc:
-        if active_run is not None:
-            return active_run, False
-        raise HTTPException(status_code=404, detail="Resume checkpoint not found") from exc
-    if active_run is not None:
-        claimed_run = registry.try_claim_stale_run(active_run.run_id)
-        if claimed_run is None:
-            return active_run, False
-        active_run = claimed_run
-    run_params = checkpoint.get("run_params", {})
+        if exc.reason == "missing":
+            raise HTTPException(status_code=404, detail="Resume checkpoint not found") from exc
+        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
+    try:
+        compiled = resolved_rule_set_from_checkpoint(checkpoint)
+    except ResumeCheckpointError as exc:
+        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
+
+    run_params = checkpoint.get("run_params")
     if not isinstance(run_params, dict):
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid")
-    rule_set_id = str(run_params.get("rule_set_id") or DEFAULT_RULE_SET_ID)
-    try:
-        rule_set = get_rule_set(rule_set_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=422, detail=f"Unknown rule set: {rule_set_id}") from exc
-    max_rounds = int(run_params.get("max_rounds") or 8)
+    max_rounds = run_params.get("max_rounds")
     seed = run_params.get("seed")
+    villager_model = run_params.get("villager_model")
+    werewolf_model = run_params.get("werewolf_model")
+    if (
+        type(max_rounds) is not int
+        or max_rounds <= 0
+        or (seed is not None and type(seed) is not int)
+        or type(villager_model) is not str
+        or not villager_model
+        or type(werewolf_model) is not str
+        or not werewolf_model
+    ):
+        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid")
     try:
         checkpoint_player_configs = player_configs_from_serialized(run_params.get("player_configs"))
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
+
+    active_run = registry.try_get_active_run_for_session(session_id)
+    if active_run is not None:
+        _require_live_run_matches_checkpoint(active_run, compiled)
+        claimed_run = registry.try_claim_stale_run(active_run.run_id)
+        if claimed_run is None:
+            return active_run, False
+        active_run = claimed_run
+        _require_live_run_matches_checkpoint(active_run, compiled)
     if active_run is None:
         run, created = registry.get_or_create_active_run(
             session_id=session_id,
-            villager_model=str(run_params.get("villager_model") or default_model_name()),
-            werewolf_model=str(run_params.get("werewolf_model") or default_model_name()),
-            seed=seed if isinstance(seed, int) else None,
+            villager_model=villager_model,
+            werewolf_model=werewolf_model,
+            seed=seed,
             max_rounds=max_rounds,
-            rule_set_id=rule_set.id,
-            rule_set=rule_set_snapshot(rule_set),
+            rule_set_id=compiled.rule_set.id,
+            rule_set_revision_id=compiled.revision_id,
+            rule_set_revision_no=compiled.revision_no,
+            rule_set_content_hash=compiled.content_hash,
+            rule_set=compiled.snapshot,
             player_configs=checkpoint_player_configs,
         )
+        _require_live_run_matches_checkpoint(run, compiled)
         if not created:
             return run, False
     else:
         run = active_run
     thread = threading.Thread(
         target=_resume_game_in_background,
-        kwargs={"run_id": run.run_id, "registry": registry, "session_id": session_id},
+        kwargs={
+            "run_id": run.run_id,
+            "registry": registry,
+            "session_id": session_id,
+            "expected_compiled_rule_set": compiled,
+        },
         daemon=True,
     )
     thread.start()
     return run, True
+
+
+def _require_live_run_matches_checkpoint(
+    run: LiveGameRun,
+    compiled: CompiledRuleSet,
+) -> None:
+    if not live_run_matches_compiled_rule_set(run, compiled):
+        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid")
 
 
 @router.get("/{session_id}/playback")
@@ -1288,6 +1323,7 @@ def _resume_game_in_background(
     run_id: str,
     registry: LiveRunRegistry,
     session_id: str,
+    expected_compiled_rule_set: CompiledRuleSet,
 ) -> None:
     try:
         registry.mark_running(run_id)
@@ -1309,6 +1345,7 @@ def _resume_game_in_background(
                     fence_token=fence_token,
                 ),
                 event_sink=EventSink(registry, run_id, fence_token=fence_token),
+                expected_compiled_rule_set=expected_compiled_rule_set,
             )
     except GameRunCanceled:
         registry.mark_canceled(run_id)

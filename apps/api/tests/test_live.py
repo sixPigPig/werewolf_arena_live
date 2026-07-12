@@ -21,6 +21,7 @@ from app.werewolf.live import (
     strict_json_equal,
 )
 from app.werewolf.player_configs import PlayerConfig
+from tests.rule_set_fixtures import legacy_official_compiled_rule_set
 
 
 def classic_rule_kwargs() -> dict:
@@ -1110,6 +1111,56 @@ def test_live_game_run_rejects_partial_pinned_rule_metadata() -> None:
             seed=21,
             max_rounds=8,
             rule_set_revision_id="revision-2",
+        )
+
+
+def test_registry_accepts_exact_legacy_hash_only_snapshot_metadata() -> None:
+    compiled = legacy_official_compiled_rule_set("starter_6")
+
+    run = LiveRunRegistry().create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+        rule_set_id=compiled.rule_set.id,
+        rule_set_revision_id=None,
+        rule_set_revision_no=None,
+        rule_set_content_hash=compiled.content_hash,
+        rule_set=compiled.snapshot,
+    )
+
+    assert run.rule_set_revision_id is None
+    assert run.rule_set_revision_no is None
+    assert run.rule_set_content_hash == compiled.content_hash
+    assert run.rule_set == compiled.snapshot
+
+
+@pytest.mark.parametrize("tamper", ["wrong_hash", "partial_snapshot", "mixed_revision"])
+def test_registry_rejects_noncanonical_legacy_hash_only_metadata(tamper: str) -> None:
+    compiled = legacy_official_compiled_rule_set("starter_6")
+    kwargs = {
+        "rule_set_id": compiled.rule_set.id,
+        "rule_set_revision_id": None,
+        "rule_set_revision_no": None,
+        "rule_set_content_hash": compiled.content_hash,
+        "rule_set": copy.deepcopy(compiled.snapshot),
+    }
+    if tamper == "wrong_hash":
+        kwargs["rule_set_content_hash"] = "b" * 64
+    elif tamper == "partial_snapshot":
+        kwargs["rule_set"] = {"id": compiled.rule_set.id}
+    else:
+        kwargs["rule_set_revision_id"] = "revision-only"
+
+    with pytest.raises(ValueError):
+        LiveRunRegistry().create_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+            **kwargs,
         )
 
 

@@ -3,9 +3,12 @@ from __future__ import annotations
 import copy
 import json
 import random
+import re
 import threading
+from collections.abc import Mapping
 from typing import Any
 
+from app.rule_sets.types import CompiledRuleSet
 from app.werewolf.lm import LmLog, ModelProvider
 from app.werewolf.models import (
     ActionLog,
@@ -19,11 +22,145 @@ from app.werewolf.models import (
 )
 
 RESUME_CHECKPOINT_FILE = "resume_checkpoint.json"
-CHECKPOINT_SCHEMA_VERSION = 1
+CHECKPOINT_SCHEMA_VERSION = 2
+SUPPORTED_CHECKPOINT_SCHEMA_VERSIONS = frozenset({1, 2})
+_CONTENT_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+_EXECUTION_RUN_PARAM_NAMES = (
+    "villager_model",
+    "werewolf_model",
+    "seed",
+    "max_rounds",
+    "player_configs",
+)
+_DUPLICATE_RULE_PARAM_NAMES = (
+    "revision_id",
+    "revision_no",
+    "content_hash",
+    "rule_set_snapshot",
+)
+_CHECKPOINT_ERROR_MESSAGES = {
+    "missing": "Resume checkpoint is missing",
+    "unsupported_schema": "Resume checkpoint schema is unsupported",
+    "invalid_structure": "Resume checkpoint structure is invalid",
+    "invalid_rule_snapshot": "Resume checkpoint rule snapshot is invalid",
+    "rule_snapshot_mismatch": "Resume checkpoint rule snapshots disagree",
+    "rule_metadata_mismatch": "Resume checkpoint rule metadata disagrees",
+}
 
 
 class ResumeCheckpointError(Exception):
     """Raised when a resume checkpoint cannot be read."""
+
+    def __init__(self, reason: str = "invalid_structure") -> None:
+        bounded_reason = reason if reason in _CHECKPOINT_ERROR_MESSAGES else "invalid_structure"
+        super().__init__(_CHECKPOINT_ERROR_MESSAGES[bounded_reason])
+        self.reason = bounded_reason
+
+
+def resolved_rule_set_from_checkpoint(
+    checkpoint: Mapping[str, object],
+) -> CompiledRuleSet:
+    if not isinstance(checkpoint, Mapping):
+        raise ResumeCheckpointError("invalid_structure")
+    if "schema_version" not in checkpoint:
+        raise ResumeCheckpointError("invalid_structure")
+    schema_version = checkpoint.get("schema_version")
+    if type(schema_version) is not int:
+        raise ResumeCheckpointError("invalid_structure")
+    if schema_version not in SUPPORTED_CHECKPOINT_SCHEMA_VERSIONS:
+        raise ResumeCheckpointError("unsupported_schema")
+    state = checkpoint.get("state_at_round_start")
+    run_params = checkpoint.get("run_params")
+    if not isinstance(state, Mapping) or not isinstance(run_params, Mapping):
+        raise ResumeCheckpointError("invalid_structure")
+    state_snapshot = state.get("rule_set")
+    if not isinstance(state_snapshot, Mapping):
+        raise ResumeCheckpointError("invalid_structure")
+    state_compiled = _resolve_checkpoint_rule_snapshot(state_snapshot)
+
+    rule_set_id = run_params.get("rule_set_id")
+    if type(rule_set_id) is not str or not rule_set_id or rule_set_id.strip() != rule_set_id:
+        raise ResumeCheckpointError("rule_metadata_mismatch")
+
+    present_duplicate_fields = {name for name in _DUPLICATE_RULE_PARAM_NAMES if name in run_params}
+    if schema_version == 1:
+        if present_duplicate_fields and present_duplicate_fields != set(
+            _DUPLICATE_RULE_PARAM_NAMES
+        ):
+            raise ResumeCheckpointError("rule_metadata_mismatch")
+        compiled = state_compiled
+        if present_duplicate_fields:
+            run_compiled = _resolve_checkpoint_rule_snapshot(
+                _mapping_value(run_params, "rule_set_snapshot")
+            )
+            if run_compiled.snapshot != state_compiled.snapshot:
+                raise ResumeCheckpointError("rule_snapshot_mismatch")
+            _require_checkpoint_rule_metadata(run_params, state_compiled)
+    else:
+        if present_duplicate_fields != set(_DUPLICATE_RULE_PARAM_NAMES):
+            raise ResumeCheckpointError("rule_metadata_mismatch")
+        compiled = _resolve_checkpoint_rule_snapshot(
+            _mapping_value(run_params, "rule_set_snapshot")
+        )
+        if compiled.snapshot != state_compiled.snapshot:
+            raise ResumeCheckpointError("rule_snapshot_mismatch")
+        _require_checkpoint_rule_metadata(run_params, compiled)
+
+    if rule_set_id != compiled.rule_set.id:
+        raise ResumeCheckpointError("rule_metadata_mismatch")
+    return compiled
+
+
+def _mapping_value(mapping: Mapping[str, object], name: str) -> Mapping[str, object]:
+    value = mapping.get(name)
+    if not isinstance(value, Mapping):
+        raise ResumeCheckpointError("invalid_rule_snapshot")
+    return value
+
+
+def _resolve_checkpoint_rule_snapshot(
+    snapshot: Mapping[str, object],
+) -> CompiledRuleSet:
+    from app.rule_sets.snapshots import resolve_rule_set_snapshot
+
+    try:
+        compiled = resolve_rule_set_snapshot(snapshot)
+    except ResumeCheckpointError:
+        raise
+    except Exception:
+        raise ResumeCheckpointError("invalid_rule_snapshot") from None
+    if compiled.revision_id is not None and compiled.revision_id.strip() != compiled.revision_id:
+        raise ResumeCheckpointError("rule_metadata_mismatch")
+    return compiled
+
+
+def _require_checkpoint_rule_metadata(
+    run_params: Mapping[str, object],
+    compiled: CompiledRuleSet,
+) -> None:
+    revision_id = run_params.get("revision_id")
+    revision_no = run_params.get("revision_no")
+    content_hash = run_params.get("content_hash")
+    if (
+        type(content_hash) is not str
+        or _CONTENT_HASH_PATTERN.fullmatch(content_hash) is None
+        or content_hash != compiled.content_hash
+    ):
+        raise ResumeCheckpointError("rule_metadata_mismatch")
+    if compiled.revision_id is None and compiled.revision_no is None:
+        if revision_id is not None or revision_no is not None:
+            raise ResumeCheckpointError("rule_metadata_mismatch")
+        return
+    if (
+        type(revision_id) is not str
+        or not revision_id
+        or revision_id.strip() != revision_id
+        or revision_id != compiled.revision_id
+        or type(revision_no) is not int
+        or revision_no <= 0
+        or revision_no != compiled.revision_no
+    ):
+        raise ResumeCheckpointError("rule_metadata_mismatch")
 
 
 class ReplayThenLiveProvider:
@@ -69,11 +206,24 @@ class ResumeCheckpointManager:
         *,
         record_store: object,
         session_id: str,
+        compiled_rule_set: CompiledRuleSet,
         run_params: dict[str, Any],
     ) -> None:
         self.record_store = record_store
         self.session_id = session_id
-        self.run_params = copy.deepcopy(run_params)
+        self.rule_set_snapshot = copy.deepcopy(compiled_rule_set.snapshot)
+        self.run_params = {
+            name: copy.deepcopy(run_params.get(name)) for name in _EXECUTION_RUN_PARAM_NAMES
+        }
+        self.run_params.update(
+            {
+                "rule_set_id": compiled_rule_set.rule_set.id,
+                "revision_id": compiled_rule_set.revision_id,
+                "revision_no": compiled_rule_set.revision_no,
+                "content_hash": compiled_rule_set.content_hash,
+                "rule_set_snapshot": copy.deepcopy(self.rule_set_snapshot),
+            }
+        )
         self._checkpoint: dict[str, Any] | None = None
 
     def start_round(
@@ -85,6 +235,8 @@ class ResumeCheckpointManager:
         active_players: list[str],
         rng_state: object,
     ) -> None:
+        state_payload = state.to_dict()
+        state_payload["rule_set"] = copy.deepcopy(self.rule_set_snapshot)
         self._checkpoint = {
             "schema_version": CHECKPOINT_SCHEMA_VERSION,
             "session_id": self.session_id,
@@ -92,7 +244,7 @@ class ResumeCheckpointManager:
             "round_number": round_number,
             "active_players": active_players.copy(),
             "rng_state": _json_safe_rng_state(rng_state),
-            "state_at_round_start": state.to_dict(),
+            "state_at_round_start": state_payload,
             "logs_before_round": [log.to_dict() for log in logs],
             "cached_model_responses": [],
             "failed_request": None,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Generator
 
@@ -18,6 +19,7 @@ from app.werewolf.checkpoint import (
     game_state_from_dict,
     round_log_from_dict,
     round_state_from_dict,
+    resolved_rule_set_from_checkpoint,
 )
 from app.werewolf.engine import initialize_game_state
 from app.werewolf.lm import LmLog
@@ -25,7 +27,11 @@ from app.werewolf.models import ActionLog, GameState, Player, RoundLog, RoundSta
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.rules import get_rule_set
 from app.werewolf.runner import GameRunError, resume_game, run_game
-from tests.rule_set_fixtures import legacy_official_compiled_rule_set
+from tests.rule_set_fixtures import (
+    complete_resume_checkpoint,
+    legacy_official_compiled_rule_set,
+    managed_official_compiled_rule_set,
+)
 
 
 @pytest.fixture
@@ -127,10 +133,24 @@ class RecordingRecordStore:
 
 def test_resume_checkpoint_manager_persists_checkpoint_to_record_store() -> None:
     store = RecordingRecordStore()
+    compiled = managed_official_compiled_rule_set("starter_6")
     manager = ResumeCheckpointManager(
         record_store=store,
         session_id="game_1200abcd",
-        run_params={"rule_set_id": "starter_6"},
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+            "rule_set_id": "caller-poisoned",
+            "revision_id": "caller-poisoned",
+            "revision_no": 999,
+            "content_hash": "f" * 64,
+            "rule_set_snapshot": {"id": "caller-poisoned"},
+            "unexpected": "drop-me",
+        },
     )
     state = initialize_game_state(
         session_id="game_1200abcd",
@@ -159,9 +179,234 @@ def test_resume_checkpoint_manager_persists_checkpoint_to_record_store() -> None
     latest = store.checkpoints[-1]
     assert latest["session_id"] == "game_1200abcd"
     checkpoint = latest["checkpoint"]
-    assert checkpoint["schema_version"] == CHECKPOINT_SCHEMA_VERSION
+    assert checkpoint["schema_version"] == 2 == CHECKPOINT_SCHEMA_VERSION
     assert checkpoint["session_id"] == "game_1200abcd"
     assert checkpoint["last_error"] == "model provider offline"
+    run_params = checkpoint["run_params"]
+    assert set(run_params) == {
+        "villager_model",
+        "werewolf_model",
+        "seed",
+        "max_rounds",
+        "player_configs",
+        "rule_set_id",
+        "revision_id",
+        "revision_no",
+        "content_hash",
+        "rule_set_snapshot",
+    }
+    assert run_params["rule_set_id"] == compiled.rule_set.id
+    assert run_params["revision_id"] == compiled.revision_id
+    assert run_params["revision_no"] == compiled.revision_no
+    assert run_params["content_hash"] == compiled.content_hash
+    assert run_params["rule_set_snapshot"] == compiled.snapshot
+    state_snapshot = checkpoint["state_at_round_start"]["rule_set"]
+    assert state_snapshot == run_params["rule_set_snapshot"]
+    assert state_snapshot is not run_params["rule_set_snapshot"]
+    assert state_snapshot is not compiled.snapshot
+    assert run_params["rule_set_snapshot"] is not compiled.snapshot
+
+
+@pytest.mark.parametrize(
+    ("compiled_kind", "include_rule_metadata"),
+    [("legacy", False), ("managed", True)],
+)
+def test_checkpoint_reader_accepts_complete_legacy_and_task4_managed_v1(
+    compiled_kind: str,
+    include_rule_metadata: bool,
+) -> None:
+    compiled = (
+        legacy_official_compiled_rule_set("starter_6")
+        if compiled_kind == "legacy"
+        else managed_official_compiled_rule_set("starter_6")
+    )
+    checkpoint = complete_resume_checkpoint(
+        "game_1200abcd",
+        compiled,
+        checkpoint_schema_version=1,
+        include_rule_metadata=include_rule_metadata,
+    )
+
+    resolved = resolved_rule_set_from_checkpoint(checkpoint)
+
+    assert resolved.snapshot == compiled.snapshot
+    assert resolved.revision_id == compiled.revision_id
+    assert resolved.revision_no == compiled.revision_no
+    assert resolved.content_hash == compiled.content_hash
+    assert resolved.snapshot is not checkpoint["state_at_round_start"]["rule_set"]
+
+
+@pytest.mark.parametrize("compiled_kind", ["legacy", "managed"])
+def test_checkpoint_reader_accepts_strict_legacy_and_managed_v2(
+    compiled_kind: str,
+) -> None:
+    compiled = (
+        legacy_official_compiled_rule_set("starter_6")
+        if compiled_kind == "legacy"
+        else managed_official_compiled_rule_set("starter_6")
+    )
+    checkpoint = complete_resume_checkpoint(
+        "game_1200abcd",
+        compiled,
+        checkpoint_schema_version=2,
+    )
+
+    resolved = resolved_rule_set_from_checkpoint(checkpoint)
+
+    assert resolved.snapshot == compiled.snapshot
+    assert resolved.revision_id == compiled.revision_id
+    assert resolved.revision_no == compiled.revision_no
+    assert resolved.content_hash == compiled.content_hash
+    assert resolved.snapshot is not checkpoint["run_params"]["rule_set_snapshot"]
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "expected_reason", "expected_message"),
+    [
+        (None, "invalid_structure", "Resume checkpoint structure is invalid"),
+        (True, "invalid_structure", "Resume checkpoint structure is invalid"),
+        (0, "unsupported_schema", "Resume checkpoint schema is unsupported"),
+        ("2", "invalid_structure", "Resume checkpoint structure is invalid"),
+        (3, "unsupported_schema", "Resume checkpoint schema is unsupported"),
+    ],
+)
+def test_checkpoint_reader_rejects_malformed_and_unsupported_schema(
+    schema_version: object,
+    expected_reason: str,
+    expected_message: str,
+) -> None:
+    checkpoint = complete_resume_checkpoint(
+        "game_1200abcd",
+        legacy_official_compiled_rule_set("starter_6"),
+        checkpoint_schema_version=1,
+    )
+    checkpoint["schema_version"] = schema_version
+
+    with pytest.raises(ResumeCheckpointError) as error:
+        resolved_rule_set_from_checkpoint(checkpoint)
+
+    assert error.value.reason == expected_reason
+    assert str(error.value) == expected_message
+
+
+def test_checkpoint_reader_rejects_missing_schema_as_present_corrupt_data() -> None:
+    checkpoint = complete_resume_checkpoint(
+        "game_1200abcd",
+        legacy_official_compiled_rule_set("starter_6"),
+    )
+    checkpoint.pop("schema_version")
+
+    with pytest.raises(ResumeCheckpointError) as error:
+        resolved_rule_set_from_checkpoint(checkpoint)
+
+    assert error.value.reason == "invalid_structure"
+    assert str(error.value) == "Resume checkpoint structure is invalid"
+
+
+def test_checkpoint_reader_rejects_incomplete_v1_without_catalog_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = complete_resume_checkpoint(
+        "game_1200abcd",
+        legacy_official_compiled_rule_set("starter_6"),
+        checkpoint_schema_version=1,
+    )
+    checkpoint["state_at_round_start"]["rule_set"] = {"id": "starter_6"}
+
+    def reject_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("checkpoint parsing must not query a rule catalog")
+
+    monkeypatch.setattr("app.werewolf.rules.get_rule_set", reject_lookup)
+    monkeypatch.setattr("app.rule_sets.service.resolve_published_rule_set", reject_lookup)
+
+    with pytest.raises(ResumeCheckpointError) as error:
+        resolved_rule_set_from_checkpoint(checkpoint)
+
+    assert error.value.reason == "invalid_rule_snapshot"
+
+
+def test_checkpoint_reader_rejects_partial_v1_duplicate_rule_metadata() -> None:
+    checkpoint = complete_resume_checkpoint(
+        "game_1200abcd",
+        managed_official_compiled_rule_set("starter_6"),
+        checkpoint_schema_version=1,
+        include_rule_metadata=False,
+    )
+    checkpoint["run_params"]["revision_id"] = "revision-only"
+
+    with pytest.raises(ResumeCheckpointError) as error:
+        resolved_rule_set_from_checkpoint(checkpoint)
+
+    assert error.value.reason == "rule_metadata_mismatch"
+
+
+@pytest.mark.parametrize("checkpoint_schema_version", [1, 2])
+def test_checkpoint_reader_rejects_consistently_untrimmed_managed_revision_id(
+    checkpoint_schema_version: int,
+) -> None:
+    checkpoint = complete_resume_checkpoint(
+        "game_1200abcd",
+        managed_official_compiled_rule_set("starter_6"),
+        checkpoint_schema_version=checkpoint_schema_version,
+        include_rule_metadata=checkpoint_schema_version == 2,
+    )
+    original_revision_id = checkpoint["state_at_round_start"]["rule_set"]["revision_id"]
+    untrimmed = f" {original_revision_id} "
+    checkpoint["state_at_round_start"]["rule_set"]["revision_id"] = untrimmed
+    if checkpoint_schema_version == 2:
+        checkpoint["run_params"]["revision_id"] = untrimmed
+        checkpoint["run_params"]["rule_set_snapshot"]["revision_id"] = untrimmed
+
+    with pytest.raises(ResumeCheckpointError) as error:
+        resolved_rule_set_from_checkpoint(checkpoint)
+
+    assert error.value.reason == "rule_metadata_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("tamper", "expected_reason"),
+    [
+        ("rule_id", "rule_metadata_mismatch"),
+        ("revision_id", "rule_metadata_mismatch"),
+        ("revision_no", "rule_metadata_mismatch"),
+        ("content_hash", "rule_metadata_mismatch"),
+        ("run_snapshot", "rule_snapshot_mismatch"),
+        ("state_snapshot", "rule_snapshot_mismatch"),
+    ],
+)
+def test_checkpoint_reader_rejects_every_v2_rule_tamper_without_mutation(
+    tamper: str,
+    expected_reason: str,
+) -> None:
+    compiled = managed_official_compiled_rule_set("starter_6")
+    checkpoint = complete_resume_checkpoint(
+        "game_1200abcd",
+        compiled,
+        checkpoint_schema_version=2,
+    )
+    if tamper == "rule_id":
+        checkpoint["run_params"]["rule_set_id"] = "classic_8"
+    elif tamper == "revision_id":
+        checkpoint["run_params"]["revision_id"] = "wrong-revision"
+    elif tamper == "revision_no":
+        checkpoint["run_params"]["revision_no"] = True
+    elif tamper == "content_hash":
+        checkpoint["run_params"]["content_hash"] = "F" * 64
+    elif tamper == "run_snapshot":
+        checkpoint["run_params"]["rule_set_snapshot"] = copy.deepcopy(
+            managed_official_compiled_rule_set("classic_8").snapshot
+        )
+    else:
+        checkpoint["state_at_round_start"]["rule_set"] = copy.deepcopy(
+            managed_official_compiled_rule_set("classic_8").snapshot
+        )
+    before = copy.deepcopy(checkpoint)
+
+    with pytest.raises(ResumeCheckpointError) as error:
+        resolved_rule_set_from_checkpoint(checkpoint)
+
+    assert error.value.reason == expected_reason
+    assert checkpoint == before
 
 
 def test_failed_run_writes_resume_checkpoint(record_store: DatabaseReplayStore) -> None:
@@ -179,17 +424,25 @@ def test_failed_run_writes_resume_checkpoint(record_store: DatabaseReplayStore) 
     assert error.value.session_id is not None
     checkpoint = record_store.load_resume_checkpoint(error.value.session_id)
 
-    assert checkpoint["schema_version"] == 1
+    assert checkpoint["schema_version"] == CHECKPOINT_SCHEMA_VERSION == 2
     assert checkpoint["session_id"] == error.value.session_id
     assert checkpoint["round_number"] == 1
     assert checkpoint["active_players"]
     assert checkpoint["run_params"]["rule_set_id"] == "starter_6"
+    assert checkpoint["run_params"]["revision_id"] is None
+    assert checkpoint["run_params"]["revision_no"] is None
+    assert checkpoint["run_params"]["content_hash"]
+    assert (
+        checkpoint["run_params"]["rule_set_snapshot"]
+        == checkpoint["state_at_round_start"]["rule_set"]
+    )
     assert checkpoint["cached_model_responses"] == []
     assert checkpoint["failed_request"]["error"] == "model provider offline"
 
 
-def test_resume_game_replays_cached_model_responses_before_live_requests(
+def test_resume_game_replays_cached_model_responses_without_catalog_lookup(
     record_store: DatabaseReplayStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     failing_provider = FailingAfterProvider(fail_after_successes=1)
 
@@ -208,6 +461,15 @@ def test_resume_game_replays_cached_model_responses_before_live_requests(
     assert "prompt" in checkpoint["cached_model_responses"][0]
     assert checkpoint["cached_model_responses"][0]["prompt"]
 
+    def reject_catalog_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("resume must use the checkpoint rule snapshot")
+
+    monkeypatch.setattr("app.werewolf.rules.get_rule_set", reject_catalog_lookup)
+    monkeypatch.setattr(
+        "app.rule_sets.service.resolve_published_rule_set",
+        reject_catalog_lookup,
+    )
+
     resume_provider = ScriptedProvider()
     result = resume_game(
         record_store=record_store,
@@ -221,6 +483,84 @@ def test_resume_game_replays_cached_model_responses_before_live_requests(
     with pytest.raises(ResumeCheckpointError):
         record_store.load_resume_checkpoint(result.session_id)
     assert record_store.load_session(result.session_id)["status"] == "complete"
+
+
+def test_complete_v1_resume_normalizes_only_when_next_round_is_written(
+    record_store: DatabaseReplayStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(GameRunError) as initial_error:
+        run_game(
+            record_store=record_store,
+            compiled_rule_set=legacy_official_compiled_rule_set("starter_6"),
+            provider=FailingAfterProvider(fail_after_successes=0),
+            seed=21,
+            max_rounds=8,
+        )
+    assert initial_error.value.session_id is not None
+    session_id = initial_error.value.session_id
+    checkpoint = record_store.load_resume_checkpoint(session_id)
+    checkpoint["schema_version"] = 1
+    for name in ("revision_id", "revision_no", "content_hash", "rule_set_snapshot"):
+        checkpoint["run_params"].pop(name)
+    original_v1 = copy.deepcopy(checkpoint)
+    record_store.save_resume_checkpoint(session_id, checkpoint)
+
+    assert record_store.load_resume_checkpoint(session_id) == original_v1
+
+    def reject_catalog_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("resume must use the checkpoint rule snapshot")
+
+    monkeypatch.setattr("app.werewolf.rules.get_rule_set", reject_catalog_lookup)
+    monkeypatch.setattr(
+        "app.rule_sets.service.resolve_published_rule_set",
+        reject_catalog_lookup,
+    )
+
+    with pytest.raises(GameRunError):
+        resume_game(
+            record_store=record_store,
+            session_id=session_id,
+            provider=FailingAfterProvider(fail_after_successes=0),
+        )
+
+    rewritten = record_store.load_resume_checkpoint(session_id)
+    assert rewritten["schema_version"] == 2
+    assert set(rewritten["run_params"]) == {
+        "villager_model",
+        "werewolf_model",
+        "seed",
+        "max_rounds",
+        "player_configs",
+        "rule_set_id",
+        "revision_id",
+        "revision_no",
+        "content_hash",
+        "rule_set_snapshot",
+    }
+    assert checkpoint == original_v1
+
+
+def test_resume_rejects_worker_checkpoint_snapshot_divergence(
+    record_store: DatabaseReplayStore,
+) -> None:
+    with pytest.raises(GameRunError) as initial_error:
+        run_game(
+            record_store=record_store,
+            compiled_rule_set=legacy_official_compiled_rule_set("starter_6"),
+            provider=FailingAfterProvider(fail_after_successes=0),
+            seed=21,
+            max_rounds=8,
+        )
+    assert initial_error.value.session_id is not None
+
+    with pytest.raises(GameRunError, match="rule snapshot changed"):
+        resume_game(
+            record_store=record_store,
+            session_id=initial_error.value.session_id,
+            provider=ScriptedProvider(),
+            expected_compiled_rule_set=legacy_official_compiled_rule_set("classic_8"),
+        )
 
 
 def test_replay_then_live_provider_uses_cached_response_first() -> None:

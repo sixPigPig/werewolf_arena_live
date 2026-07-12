@@ -9,8 +9,17 @@ from typing import Literal
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.werewolf.checkpoint import ResumeCheckpointError
-from app.werewolf.live import LiveGameRun, LiveRunRegistry, RunRecoveryCandidate
+from app.rule_sets.types import CompiledRuleSet
+from app.werewolf.checkpoint import (
+    ResumeCheckpointError,
+    resolved_rule_set_from_checkpoint,
+)
+from app.werewolf.live import (
+    LiveGameRun,
+    LiveRunRegistry,
+    RunRecoveryCandidate,
+    live_run_matches_compiled_rule_set,
+)
 from app.werewolf.replay import DatabaseReplayStore, ReplayNotFoundError
 
 
@@ -150,7 +159,8 @@ def _claim_and_recover(
 
     with session_factory() as db:
         try:
-            DatabaseReplayStore(db).load_resume_checkpoint(run.session_id)
+            checkpoint = DatabaseReplayStore(db).load_resume_checkpoint(run.session_id)
+            compiled = resolved_rule_set_from_checkpoint(checkpoint)
         except (ReplayNotFoundError, ResumeCheckpointError):
             registry.mark_failed(
                 run.run_id,
@@ -163,8 +173,26 @@ def _claim_and_recover(
                 outcome="failed",
             )
 
-    executor = execute_recovery or _execute_recovery
-    executor(run, registry)
+    if not live_run_matches_compiled_rule_set(run, compiled):
+        registry.mark_failed(
+            run.run_id,
+            error="Orphaned live run rule snapshot does not match resume checkpoint",
+        )
+        return OrphanRecoveryResult(
+            run_id=run.run_id,
+            session_id=run.session_id,
+            attempt=attempt,
+            outcome="failed",
+        )
+
+    if execute_recovery is None:
+        _execute_recovery(
+            run,
+            registry,
+            expected_compiled_rule_set=compiled,
+        )
+    else:
+        execute_recovery(run, registry)
     final_status = registry.get_run(run.run_id).status
     outcome: RecoveryOutcome = (
         "canceled"
@@ -181,13 +209,19 @@ def _claim_and_recover(
     )
 
 
-def _execute_recovery(run: LiveGameRun, registry: LiveRunRegistry) -> None:
+def _execute_recovery(
+    run: LiveGameRun,
+    registry: LiveRunRegistry,
+    *,
+    expected_compiled_rule_set: CompiledRuleSet,
+) -> None:
     from app.api.routes.games import _resume_game_in_background
 
     _resume_game_in_background(
         run_id=run.run_id,
         registry=registry,
         session_id=run.session_id,
+        expected_compiled_rule_set=expected_compiled_rule_set,
     )
 
 
