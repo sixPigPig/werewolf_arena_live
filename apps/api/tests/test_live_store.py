@@ -131,6 +131,34 @@ def test_live_store_loads_legacy_null_rule_snapshot_as_an_empty_snapshot(
     assert loaded.rule_set == {}
 
 
+@pytest.mark.parametrize(
+    "stored_rule_set",
+    [[], "", False, 0],
+    ids=("empty-list", "empty-string", "false", "zero"),
+)
+def test_live_store_rejects_non_null_falsy_rule_snapshots(
+    db_session: Session,
+    stored_rule_set: object,
+) -> None:
+    db_session.add(
+        LiveRunRecord(
+            run_id="run_123456789abc",
+            session_id="game_1200abcd",
+            status="completed",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+            rule_set_id="classic_8",
+            rule_set=stored_rule_set,
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="rule_set must be a dictionary"):
+        DatabaseLiveStore(db_session).load_run("run_123456789abc")
+
+
 def test_live_store_replaces_and_clears_pinned_rule_metadata_on_update(
     db_session: Session,
 ) -> None:

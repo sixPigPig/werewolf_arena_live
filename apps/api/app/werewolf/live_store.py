@@ -330,7 +330,7 @@ class DatabaseLiveStore:
             rule_set_revision_id=record.rule_set_revision_id,
             rule_set_revision_no=record.rule_set_revision_no,
             rule_set_content_hash=record.rule_set_content_hash,
-            rule_set=copy.deepcopy(record.rule_set or {}),
+            rule_set=copy.deepcopy({} if record.rule_set is None else record.rule_set),
             player_configs=copy.deepcopy(record.player_configs or []),
             lineup_quality_warnings=copy.deepcopy(record.lineup_quality_warnings or []),
             status=record.status,
