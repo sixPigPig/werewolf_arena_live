@@ -242,6 +242,7 @@ class RuleSetRevisionRecord(Base):
     published_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+        active_history=True,
     )
 
     __mapper_args__ = {"version_id_col": lock_version}
@@ -268,14 +269,23 @@ _PUBLISHED_IMMUTABLE_FIELDS = (
 )
 
 
+def _original_attribute_value(
+    target: RuleSetRevisionRecord,
+    attribute_name: str,
+) -> object:
+    attribute = inspect(target).attrs[attribute_name]
+    if attribute.history.deleted:
+        return attribute.history.deleted[0]
+    return getattr(target, attribute_name)
+
+
 @event.listens_for(RuleSetRevisionRecord, "before_update")
 def _protect_published_revision_content(
     _mapper: object,
     _connection: object,
     target: RuleSetRevisionRecord,
 ) -> None:
-    state_history = inspect(target).attrs.state.history
-    original_state = state_history.deleted[0] if state_history.deleted else target.state
+    original_state = _original_attribute_value(target, "state")
 
     if original_state == "superseded":
         raise ValueError("superseded rule revision is immutable")
@@ -297,5 +307,7 @@ def _protect_published_revision_deletion(
     _connection: object,
     target: RuleSetRevisionRecord,
 ) -> None:
-    if target.state != "draft" or target.published_at is not None:
+    original_state = _original_attribute_value(target, "state")
+    original_published_at = _original_attribute_value(target, "published_at")
+    if original_state != "draft" or original_published_at is not None:
         raise ValueError("only draft rule revisions can be deleted")

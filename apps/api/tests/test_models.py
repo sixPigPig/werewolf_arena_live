@@ -663,14 +663,24 @@ def test_rule_set_catalog_tables_match_expected_schema() -> None:
     } <= constraint_names
 
     indexes = {index.name: index for table in (rule_sets, revisions) for index in table.indexes}
-    for name in (
-        "uq_rule_sets_one_default",
-        "uq_rule_set_revisions_one_draft",
-        "uq_rule_set_revisions_one_published",
-    ):
+    expected_predicates = {
+        "uq_rule_sets_one_default": {
+            "postgresql": "is_default = true",
+            "sqlite": "is_default = 1",
+        },
+        "uq_rule_set_revisions_one_draft": {
+            "postgresql": "state = 'draft'",
+            "sqlite": "state = 'draft'",
+        },
+        "uq_rule_set_revisions_one_published": {
+            "postgresql": "state = 'published'",
+            "sqlite": "state = 'published'",
+        },
+    }
+    for name, predicates in expected_predicates.items():
         assert indexes[name].unique is True
-        assert indexes[name].dialect_options["postgresql"]["where"] is not None
-        assert indexes[name].dialect_options["sqlite"]["where"] is not None
+        for dialect_name, predicate in predicates.items():
+            assert str(indexes[name].dialect_options[dialect_name]["where"]) == predicate
 
     assert RuleSetRecord.__mapper__.version_id_col is rule_sets.c.lock_version
     assert RuleSetRevisionRecord.__mapper__.version_id_col is revisions.c.lock_version
@@ -740,6 +750,90 @@ def test_published_and_superseded_rule_revisions_cannot_be_deleted_or_rewritten(
         published.description = "被篡改"
         with pytest.raises(ValueError, match="superseded rule revision is immutable"):
             session.flush()
+
+
+def test_published_rule_revision_cannot_disguise_as_draft_for_deletion() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        revision = _published_rule_revision(revision_id="00000000-0000-0000-0000-000000000004")
+        session.add(revision)
+        session.commit()
+        revision_id = revision.id
+
+        revision.state = "draft"
+        revision.published_at = None
+        session.delete(revision)
+        with pytest.raises(ValueError, match="only draft rule revisions can be deleted"):
+            session.flush()
+        session.rollback()
+
+        saved = session.get(RuleSetRevisionRecord, revision_id)
+        assert saved is not None
+        assert saved.state == "published"
+        assert saved.published_at is not None
+
+
+def test_superseded_rule_revision_cannot_disguise_as_draft_for_deletion() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        revision = _published_rule_revision(revision_id="00000000-0000-0000-0000-000000000005")
+        revision.state = "superseded"
+        session.add(revision)
+        session.commit()
+        revision_id = revision.id
+
+        revision.state = "draft"
+        revision.published_at = None
+        session.delete(revision)
+        with pytest.raises(ValueError, match="only draft rule revisions can be deleted"):
+            session.flush()
+        session.rollback()
+
+        saved = session.get(RuleSetRevisionRecord, revision_id)
+        assert saved is not None
+        assert saved.state == "superseded"
+        assert saved.published_at is not None
+
+
+def test_draft_with_persisted_publication_marker_cannot_be_deleted() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        draft = RuleSetRevisionRecord(
+            id="00000000-0000-0000-0000-000000000006",
+            rule_set_id="starter_6",
+            revision_no=1,
+            state="draft",
+            schema_version=1,
+            content_hash=None,
+            name="新手 6 人快局",
+            description="带历史发布标记的草稿",
+            player_count=6,
+            role_summary="1 狼人 / 5 好人",
+            complexity="入门",
+            estimated_duration="短",
+            config={"name": "新手 6 人快局"},
+            published_at=datetime.now(UTC),
+        )
+        session.add(draft)
+        session.commit()
+        draft_id = draft.id
+
+        draft.published_at = None
+        session.delete(draft)
+        with pytest.raises(ValueError, match="only draft rule revisions can be deleted"):
+            session.flush()
+        session.rollback()
+
+        saved = session.get(RuleSetRevisionRecord, draft_id)
+        assert saved is not None
+        assert saved.state == "draft"
+        assert saved.published_at is not None
 
 
 def test_never_published_draft_revision_can_be_deleted() -> None:
