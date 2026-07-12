@@ -246,190 +246,6 @@ function getAlphaAt(
   return image.pixels[(y * image.width + x) * 4 + 3];
 }
 
-function getRgbaAt(
-  image: ReturnType<typeof readPngRgbaImage>,
-  x: number,
-  y: number,
-) {
-  const offset = (y * image.width + x) * 4;
-
-  return {
-    alpha: image.pixels[offset + 3],
-    blue: image.pixels[offset + 2],
-    green: image.pixels[offset + 1],
-    red: image.pixels[offset],
-  };
-}
-
-function getAlphaRunWidthAtRow(
-  image: ReturnType<typeof readPngRgbaImage>,
-  y: number,
-  x: number,
-  minAlpha: number,
-) {
-  let left = x;
-  while (left > 0 && getAlphaAt(image, left - 1, y) > minAlpha) {
-    left -= 1;
-  }
-
-  let right = x;
-  while (right < image.width - 1 && getAlphaAt(image, right + 1, y) > minAlpha) {
-    right += 1;
-  }
-
-  return right - left + 1;
-}
-
-function getOpaqueLuminancePercentile(
-  image: ReturnType<typeof readPngRgbaImage>,
-  percentile: number,
-) {
-  const luminanceValues: number[] = [];
-
-  for (let offset = 0; offset < image.pixels.length; offset += 4) {
-    if (image.pixels[offset + 3] <= 200) continue;
-
-    luminanceValues.push(
-      0.2126 * image.pixels[offset] +
-        0.7152 * image.pixels[offset + 1] +
-        0.0722 * image.pixels[offset + 2],
-    );
-  }
-
-  luminanceValues.sort((left, right) => left - right);
-
-  return luminanceValues[
-    Math.min(
-      luminanceValues.length - 1,
-      Math.max(0, Math.floor(luminanceValues.length * percentile)),
-    )
-  ];
-}
-
-function countOpaquePixelsAboveLuminance(
-  image: ReturnType<typeof readPngRgbaImage>,
-  minLuminance: number,
-) {
-  let count = 0;
-
-  for (let offset = 0; offset < image.pixels.length; offset += 4) {
-    if (image.pixels[offset + 3] <= 200) continue;
-
-    const luminance =
-      0.2126 * image.pixels[offset] +
-      0.7152 * image.pixels[offset + 1] +
-      0.0722 * image.pixels[offset + 2];
-
-    if (luminance >= minLuminance) count += 1;
-  }
-
-  return count;
-}
-
-function getLargestCentralGoldComponentBounds(
-  image: ReturnType<typeof readPngRgbaImage>,
-) {
-  const left = 45;
-  const top = 45;
-  const right = image.width - 45;
-  const bottom = image.height - 45;
-  const width = right - left;
-  const height = bottom - top;
-  const mask = new Uint8Array(width * height);
-  const seen = new Uint8Array(width * height);
-
-  for (let y = top; y < bottom; y += 1) {
-    for (let x = left; x < right; x += 1) {
-      const { alpha, blue, green, red } = getRgbaAt(image, x, y);
-      const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-
-      if (
-        alpha > 200 &&
-        red > 115 &&
-        green > 65 &&
-        blue < 95 &&
-        red > green * 1.08 &&
-        luminance > 90
-      ) {
-        mask[(y - top) * width + (x - left)] = 1;
-      }
-    }
-  }
-
-  let largest = {
-    bottom: -1,
-    left: width,
-    pixelCount: 0,
-    right: -1,
-    top: height,
-  };
-  const queue: number[] = [];
-
-  for (let startIndex = 0; startIndex < mask.length; startIndex += 1) {
-    if (mask[startIndex] === 0 || seen[startIndex] === 1) continue;
-
-    let head = 0;
-    let componentLeft = width;
-    let componentTop = height;
-    let componentRight = -1;
-    let componentBottom = -1;
-    let pixelCount = 0;
-    queue.length = 0;
-    queue.push(startIndex);
-    seen[startIndex] = 1;
-
-    while (head < queue.length) {
-      const index = queue[head];
-      head += 1;
-      const localX = index % width;
-      const localY = Math.floor(index / width);
-
-      componentLeft = Math.min(componentLeft, localX);
-      componentTop = Math.min(componentTop, localY);
-      componentRight = Math.max(componentRight, localX);
-      componentBottom = Math.max(componentBottom, localY);
-      pixelCount += 1;
-
-      for (let neighborY = localY - 1; neighborY <= localY + 1; neighborY += 1) {
-        for (
-          let neighborX = localX - 1;
-          neighborX <= localX + 1;
-          neighborX += 1
-        ) {
-          if (
-            neighborX < 0 ||
-            neighborX >= width ||
-            neighborY < 0 ||
-            neighborY >= height
-          ) {
-            continue;
-          }
-
-          const neighborIndex = neighborY * width + neighborX;
-          if (mask[neighborIndex] === 0 || seen[neighborIndex] === 1) {
-            continue;
-          }
-
-          seen[neighborIndex] = 1;
-          queue.push(neighborIndex);
-        }
-      }
-    }
-
-    if (pixelCount > largest.pixelCount) {
-      largest = {
-        bottom: componentBottom + top,
-        left: componentLeft + left,
-        pixelCount,
-        right: componentRight + left,
-        top: componentTop + top,
-      };
-    }
-  }
-
-  return largest;
-}
-
 function countPixelsAboveAlpha(
   image: ReturnType<typeof readPngRgbaImage>,
   left: number,
@@ -1095,7 +911,7 @@ describe("GamesPage", () => {
     expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
   });
 
-  it("opens the player card drawer from a selected seat", async () => {
+  it("opens the full-screen modal player picker from a selected seat", async () => {
     const user = userEvent.setup();
     renderGamesPage();
 
@@ -1105,54 +921,19 @@ describe("GamesPage", () => {
       }),
     );
 
-    expect(screen.getByRole("dialog", { name: "玩家卡牌库" })).toBeVisible();
-    expect(screen.getByText("当前选择：1号座位")).toBeVisible();
+    const dialog = screen.getByRole("dialog", { name: "玩家卡牌库" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveTextContent("当前选择：1号座位");
+    expect(document.querySelector(".mobile-lobby-content")).toHaveAttribute("inert");
+    await waitFor(() => {
+      expect(screen.getByRole("searchbox", { name: "搜索玩家" })).toHaveFocus();
+    });
     expect(
       screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
     ).toBeVisible();
-    expect(screen.getByText("雾夜里的分析者")).toHaveClass(
-      "mobile-profile-card-description-line",
-    );
-    expect(
-      screen.getByText("雾夜里的分析者"),
-    ).not.toHaveClass("mobile-profile-card-description-text");
-
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const cardTextLayerRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-card-name-row,\s*\n\.mobile-profile-card-strategy,\s*\n\.mobile-profile-card-choice small\s*{[^}]+}/,
-      )?.[0] ?? "";
-    expect(cardTextLayerRule).toContain("z-index: 3");
-    expect(styles).not.toContain(
-      ".mobile-profile-card-select-button > :not(.mobile-profile-card-image)",
-    );
+    expect(dialog).toHaveClass("mobile-profile-picker");
   });
 
-  it("renders the selected player check above the card artwork and frame", async () => {
-    const user = userEvent.setup();
-    renderGamesPage();
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
-      }),
-    );
-    const playerCard = screen.getByRole("button", {
-      name: "为 1 号座位候选 阿青",
-    });
-    await user.click(playerCard);
-
-    const check = playerCard.querySelector(".mobile-profile-card-check");
-
-    expect(check).toBeInTheDocument();
-    expect(check?.parentElement).toBe(playerCard);
-    expect(check).toBeEmptyDOMElement();
-    expect(
-      playerCard.querySelector(
-        ".mobile-profile-card-image .mobile-profile-card-check",
-      ),
-    ).not.toBeInTheDocument();
-  });
 
   it("toggles a player favorite from a compact card-corner button without selecting the card", async () => {
     const user = userEvent.setup();
@@ -1173,64 +954,33 @@ describe("GamesPage", () => {
     );
 
     const favoriteButton = screen.getByRole("button", { name: "收藏 白石" });
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const favoriteButtonRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-card-favorite-button\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const activeFavoriteButtonRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-card-favorite-button-active\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const favoriteIconRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-card-favorite-icon\s*{[^}]+}/,
-      )?.[0] ?? "";
     const inactiveFavoriteIcon = favoriteButton.querySelector(
-      ".mobile-profile-card-favorite-icon",
+      ".mobile-profile-row-favorite-icon",
     );
 
     expect(inactiveFavoriteIcon?.tagName.toLowerCase()).toBe("svg");
     expect(inactiveFavoriteIcon).toHaveClass("lucide");
     expect(inactiveFavoriteIcon).toHaveClass("lucide-star");
     expect(inactiveFavoriteIcon).toHaveAttribute("aria-hidden", "true");
-    expect(favoriteButton).not.toHaveTextContent("☆");
-    expect(favoriteButton).not.toHaveTextContent("★");
-    expect(favoriteButtonRule).toContain("top: 14px");
-    expect(favoriteButtonRule).toContain("width: 24px");
-    expect(favoriteButtonRule).toContain("height: 24px");
-    expect(favoriteButtonRule).toContain("border: 0");
-    expect(favoriteButtonRule).toContain("background: transparent");
-    expect(favoriteButtonRule).not.toContain("min-width");
-    expect(favoriteButtonRule).not.toContain("box-shadow");
-    expect(favoriteIconRule).toContain("width: 24px");
-    expect(favoriteIconRule).toContain("height: 24px");
-    expect(favoriteIconRule).toContain("fill: transparent");
-    expect(activeFavoriteButtonRule).toContain("color: #b88a36");
-    expect(styles).not.toContain(
-      ".mobile-profile-card-favorite-button-active .mobile-profile-card-favorite-icon",
-    );
-    expect(styles).not.toContain("fill: currentColor");
-    expect(styles).not.toContain("mobile-profile-card-frame");
+    expect(favoriteButton).toHaveAttribute("aria-pressed", "false");
     await user.click(favoriteButton);
 
     await waitFor(() => {
       expect(gameClientMocks.favoritePlayerProfile).toHaveBeenCalledWith("profile-2");
     });
-    expect(screen.getByText("请选择玩家")).toBeVisible();
     expect(
       screen.getByRole("button", { name: "为 1 号座位候选 白石" }),
-    ).not.toHaveClass("mobile-profile-card-choice-active");
+    ).toHaveAttribute("aria-pressed", "false");
     const activeFavoriteButton = await screen.findByRole("button", {
       name: "取消收藏 白石",
     });
     const activeFavoriteIcon = activeFavoriteButton.querySelector(
-      ".mobile-profile-card-favorite-icon",
+      ".mobile-profile-row-favorite-icon",
     );
     expect(activeFavoriteIcon?.tagName.toLowerCase()).toBe("svg");
     expect(activeFavoriteIcon).toHaveClass("lucide");
     expect(activeFavoriteIcon).toHaveClass("lucide-star-check");
-    expect(activeFavoriteButton).not.toHaveTextContent("★");
+    expect(activeFavoriteButton).toHaveAttribute("aria-pressed", "true");
     expect(
       screen.getByRole("button", { name: "取消收藏 白石" }),
     ).not.toHaveFocus();
@@ -1292,6 +1042,11 @@ describe("GamesPage", () => {
     ).toBeEnabled();
     expect(screen.getByRole("status")).toHaveTextContent("收藏状态暂不可用");
     expect(screen.getByRole("button", { name: "收藏 阿青" })).toBeDisabled();
+    await user.click(
+      screen.getByRole("button", {
+        name: "筛选玩家，当前 全部玩家、全部策略",
+      }),
+    );
     expect(
       screen.getByRole("button", { name: "收藏筛选，当前 全部玩家" }),
     ).toBeDisabled();
@@ -1379,48 +1134,18 @@ describe("GamesPage", () => {
 
     serverProfiles = [whiteStone, alpha];
     serverFavoriteIds = ["profile-2"];
-    const scrollRegion = drawer.querySelector(".mobile-profile-card-scroll");
-    const refreshIndicator = drawer.querySelector(
-      ".mobile-profile-refresh-indicator",
-    );
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const refreshIndicatorRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-refresh-indicator\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const refreshSpinnerRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-refresh-spinner\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const refreshSpinner = refreshIndicator?.querySelector(
-      ".mobile-profile-refresh-spinner",
-    );
+    const scrollRegion = drawer.querySelector(".mobile-profile-picker-list");
+    const refreshStatus = drawer.querySelector(".mobile-profile-refresh-status");
 
     expect(scrollRegion).toBeInstanceOf(HTMLElement);
-    expect(refreshIndicator).toBeInTheDocument();
-    expect(refreshIndicator).toHaveClass("mobile-profile-refresh-indicator-idle");
-    expect(refreshSpinner?.tagName.toLowerCase()).toBe("svg");
-    expect(refreshSpinner).toHaveClass("lucide");
-    expect(refreshSpinner).toHaveClass("lucide-loader-circle");
-    expect(refreshSpinner).toHaveAttribute("aria-hidden", "true");
-    expect(refreshIndicatorRule).toContain("position: sticky");
-    expect(refreshSpinnerRule).toContain(
-      "animation: mobile-profile-refresh-spin",
-    );
-    expect(refreshSpinnerRule).toContain("width: 22px");
-    expect(refreshSpinnerRule).toContain("height: 22px");
-    expect(refreshSpinnerRule).toContain("color: #ffe6a4");
-    expect(refreshSpinnerRule).not.toContain("background-image");
-    expect(styles).not.toContain("lobby-profile-loading-spinner-alpha.png");
-    expect(refreshSpinnerRule).not.toContain("border-top-color");
-    expect(styles).toContain("@keyframes mobile-profile-refresh-spin");
+    expect(refreshStatus).toBeInTheDocument();
     fireEvent.touchStart(scrollRegion as HTMLElement, {
       touches: [{ clientY: 12 }],
     });
     fireEvent.touchMove(scrollRegion as HTMLElement, {
       touches: [{ clientY: 92 }],
     });
-    expect(refreshIndicator).toHaveClass("mobile-profile-refresh-indicator-ready");
+    expect(refreshStatus).toHaveTextContent("松开刷新玩家");
     fireEvent.touchEnd(scrollRegion as HTMLElement);
 
     await waitFor(() => {
@@ -1439,40 +1164,6 @@ describe("GamesPage", () => {
     expect(screen.getByRole("button", { name: "收藏 阿青" })).toBeEnabled();
   });
 
-  it("splits long player card descriptions into a shorter top line and longer bottom line", async () => {
-    const user = userEvent.setup();
-    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
-      buildProfile({
-        id: "profile-long-description",
-        display_name: "长描述玩家",
-        short_description: "沉稳控场，喜欢先盘逻辑再给站边。",
-      }),
-    ]);
-    renderGamesPage();
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
-      }),
-    );
-
-    const card = screen.getByRole("button", {
-      name: "为 1 号座位候选 长描述玩家",
-    });
-    const descriptionLines = Array.from(
-      card.querySelectorAll(".mobile-profile-card-description-line"),
-    );
-
-    expect(descriptionLines).toHaveLength(2);
-    expect(descriptionLines[0]).toHaveTextContent("沉稳控场，");
-    expect(descriptionLines[1]).toHaveTextContent("喜欢先盘逻辑再给站边。");
-    expect(descriptionLines[0].textContent?.length ?? 0).toBeLessThan(
-      descriptionLines[1].textContent?.length ?? 0,
-    );
-    expect(
-      card.querySelector(".mobile-profile-card-description-text"),
-    ).not.toBeInTheDocument();
-  });
 
   it("renders player card drawer avatars through API asset URLs", async () => {
     const user = userEvent.setup();
@@ -1497,285 +1188,15 @@ describe("GamesPage", () => {
     );
 
     const drawer = await screen.findByRole("dialog", { name: "玩家卡牌库" });
-    const avatar = drawer.querySelector(".mobile-profile-card-image img");
+    const avatar = drawer.querySelector(".mobile-profile-row-select img");
     expect(avatar).toHaveAttribute(
       "src",
       "/api/v1/player-profiles/avatar-assets/system-gothic-male-1",
     );
   });
 
-  it("keeps the player card drawer non-modal with a transparent click-through backdrop", async () => {
-    const user = userEvent.setup();
-    renderGamesPage();
 
-    await user.click(await screen.findByRole("button", {
-      name: "选择 1 号座位，当前为 待选择",
-    }));
 
-    const dialog = screen.getByRole("dialog", { name: "玩家卡牌库" });
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const drawerRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer\s*{[^}]+}/)?.[0] ?? "";
-    const backdropRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer-backdrop\s*{[^}]+}/)?.[0] ??
-      "";
-
-    expect(dialog).toHaveAttribute("aria-modal", "false");
-    expect(document.querySelector(".mobile-lobby-content")).not.toHaveAttribute(
-      "inert",
-    );
-    expect(drawerRule).toContain("height: 78svh");
-    expect(backdropRule).toContain("background: transparent");
-    expect(backdropRule).toContain("pointer-events: none");
-
-    const secondSeat = screen.getByRole("button", {
-      name: "选择 2 号座位，当前为 待选择",
-    });
-    await user.click(secondSeat);
-
-    expect(screen.getByRole("dialog", { name: "玩家卡牌库" })).toBeVisible();
-    expect(screen.getByText("当前选择：2号座位")).toBeVisible();
-    expect(secondSeat).toHaveFocus();
-  });
-
-  it("extends lobby scroll space while the player card drawer is open and restores it on close", async () => {
-    const user = userEvent.setup();
-    renderGamesPage();
-
-    const page = await screen.findByTestId("mobile-games-page");
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const baseLobbyPageRule =
-      styles.match(/(?:^|\n)\.mobile-lobby-page\s*{[^}]+}/)?.[0] ?? "";
-    const drawerOpenLobbyPageRule =
-      styles.match(/(?:^|\n)\.mobile-lobby-page-drawer-open\s*{[^}]+}/)?.[0] ??
-      "";
-
-    expect(baseLobbyPageRule).toContain(
-      "calc(var(--mobile-tab-frame-height) + 112px + env(safe-area-inset-bottom))",
-    );
-    expect(drawerOpenLobbyPageRule).toContain(
-      "calc(78svh + var(--mobile-tab-frame-height) + 128px + env(safe-area-inset-bottom))",
-    );
-    expect(page).not.toHaveClass("mobile-lobby-page-drawer-open");
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
-      }),
-    );
-
-    expect(page).toHaveClass("mobile-lobby-page-drawer-open");
-
-    await user.click(screen.getByRole("button", { name: "关闭玩家卡牌库" }));
-
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("dialog", { name: "玩家卡牌库" }),
-      ).not.toBeInTheDocument();
-    });
-    expect(page).not.toHaveClass("mobile-lobby-page-drawer-open");
-  });
-
-  it("lays out player drawer filters with bottom-sheet select triggers", async () => {
-    const user = userEvent.setup();
-    renderGamesPage();
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
-      }),
-    );
-
-    expect(screen.getByRole("searchbox", { name: "搜索玩家" })).toBeVisible();
-    const favoriteFilterTrigger = screen.getByRole("button", {
-      name: "收藏筛选，当前 全部玩家",
-    });
-    const strategyFilterTrigger = screen.getByRole("button", {
-      name: "策略筛选，当前 全部策略",
-    });
-    expect(favoriteFilterTrigger).toBeVisible();
-    expect(strategyFilterTrigger).toBeVisible();
-    expect(favoriteFilterTrigger).toHaveAttribute("aria-haspopup", "dialog");
-    expect(favoriteFilterTrigger).toHaveAttribute("aria-expanded", "false");
-    expect(strategyFilterTrigger).toHaveAttribute("aria-haspopup", "dialog");
-    expect(screen.queryByRole("combobox", { name: "收藏筛选" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "策略筛选" })).not.toBeInTheDocument();
-    const favoriteChevron = favoriteFilterTrigger
-      .closest(".mobile-profile-select")
-      ?.querySelector(".mobile-profile-select-chevron");
-    const strategyChevron = strategyFilterTrigger
-      .closest(".mobile-profile-select")
-      ?.querySelector(".mobile-profile-select-chevron");
-    expect(favoriteChevron?.tagName.toLowerCase()).toBe("svg");
-    expect(favoriteChevron).toHaveClass("lucide");
-    expect(favoriteChevron).toHaveClass("lucide-chevron-down");
-    expect(favoriteChevron).toHaveAttribute("aria-hidden", "true");
-    expect(strategyChevron?.tagName.toLowerCase()).toBe("svg");
-    expect(strategyChevron).toHaveClass("lucide");
-    expect(strategyChevron).toHaveClass("lucide-chevron-down");
-    expect(strategyChevron).toHaveAttribute("aria-hidden", "true");
-
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const filtersRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer-filters\s*{[^}]+}/)?.[0] ??
-      "";
-    const searchRule =
-      styles.match(/(?:^|\n)\.mobile-profile-search\s*{[^}]+}/)?.[0] ?? "";
-    const selectRule =
-      styles.match(/(?:^|\n)\.mobile-profile-select\s*{[^}]+}/)?.[0] ?? "";
-    const searchInputRule =
-      styles.match(/(?:^|\n)\.mobile-profile-search input\s*{[^}]+}/)?.[0] ??
-      "";
-    const selectTriggerRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-select-trigger\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const selectLabelRule =
-      styles.match(
-        /(?:^|\n)\.mobile-lobby-field span,\s*\n\.mobile-profile-search span,\s*\n\.mobile-profile-select span\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const selectTriggerTextRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-select-trigger span\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const selectChevronRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-select-chevron\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const bottomSelectPopupRule =
-      styles.match(
-        /(?:^|\n)\.mobile-bottom-select-picker-popup\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const bottomSelectMaskRule =
-      styles.match(
-        /(?:^|\n)\.mobile-bottom-select-picker-popup \.adm-mask\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const bottomSelectPopupBodyRule =
-      styles.match(
-        /(?:^|\n)\.mobile-bottom-select-picker-popup \.adm-popup-body\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const bottomSelectPickerRule =
-      styles.match(
-        /(?:^|\n)\.mobile-bottom-select-picker-popup \.adm-picker\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const bottomSelectPickerViewRule =
-      styles.match(
-        /(?:^|\n)\.mobile-bottom-select-picker-popup \.adm-picker-view\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const bottomSelectPickerColumnRule =
-      styles.match(
-        /(?:^|\n)\.mobile-bottom-select-picker-popup \.adm-picker-view-column\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const bottomSelectPickerMaskTopRule =
-      styles.match(
-        /(?:^|\n)\.mobile-bottom-select-picker-popup \.adm-picker-view-mask-top\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const bottomSelectPickerMaskBottomRule =
-      styles.match(
-        /(?:^|\n)\.mobile-bottom-select-picker-popup \.adm-picker-view-mask-bottom\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const bottomSelectPickerHeaderRule =
-      styles.match(
-        /(?:^|\n)\.mobile-bottom-select-picker-popup \.adm-picker-header\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const inlineFilterRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-search,\s*\n\.mobile-profile-select\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const searchBackground = readPngRgbaImage(
-      "src/assets/lobby-profile-search-field-bg.png",
-    );
-    const favoriteBackground = readPngRgbaImage(
-      "src/assets/lobby-profile-favorite-filter-bg.png",
-    );
-    const strategyBackground = readPngRgbaImage(
-      "src/assets/lobby-profile-strategy-filter-bg.png",
-    );
-
-    expect(filtersRule).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
-    expect(searchRule).toContain("grid-column: 1 / -1");
-    expect(searchRule).toContain("lobby-profile-search-field-bg.png");
-    expect(searchRule).toContain("min-height: 44px");
-    expect(selectRule).toContain("min-height: 44px");
-    expect(selectRule).toContain("lobby-profile-favorite-filter-bg.png");
-    expect(styles).toContain(
-      ".mobile-profile-select-strategy {\n  background-image: url(\"../assets/lobby-profile-strategy-filter-bg.png\");\n}",
-    );
-    expect(inlineFilterRule).toContain("grid-template-columns: max-content minmax(0, 1fr)");
-    expect(inlineFilterRule).toContain("align-items: center");
-    expect(selectRule).not.toContain("grid-column: 1 / -1");
-    expect(searchInputRule).toContain("background: transparent");
-    expect(searchInputRule).toContain("border: 0");
-    expect(selectTriggerRule).toContain("background: transparent");
-    expect(selectTriggerRule).toContain("border: 0");
-    expect(selectTriggerRule).toContain("text-align: left");
-    expect(selectLabelRule).toContain("font-size: 12px");
-    expect(selectTriggerRule).toContain("font-size: 12px");
-    expect(selectTriggerTextRule).toContain("font-size: 12px");
-    expect(searchInputRule).toContain("min-height: 28px");
-    expect(selectTriggerRule).toContain("min-height: 28px");
-    expect(selectChevronRule).toContain("pointer-events: none");
-    expect(selectChevronRule).toContain("width: 18px");
-    expect(selectChevronRule).toContain("height: 18px");
-    expect(bottomSelectPopupRule).toContain("z-index: 60");
-    expect(bottomSelectMaskRule).toContain(
-      "background: rgb(0 0 0 / 12%) !important",
-    );
-    expect(bottomSelectPopupBodyRule).toContain("bottom: 0");
-    expect(bottomSelectPopupBodyRule).toContain("max-height: min(72svh, 420px)");
-    expect(bottomSelectPopupBodyRule).toContain("border-radius: 0");
-    expect(bottomSelectPopupBodyRule).not.toContain("12px 12px 0 0");
-    expect(bottomSelectPopupBodyRule).toContain("rgb(12 20 28 / 62%)");
-    expect(bottomSelectPopupBodyRule).toContain("rgb(5 9 15 / 68%)");
-    expect(bottomSelectPopupBodyRule).toContain("backdrop-filter: blur(5px)");
-    expect(bottomSelectPickerRule).toContain("--item-height: 44px");
-    expect(bottomSelectPickerViewRule).toContain("background: rgb(5 9 16 / 42%)");
-    expect(bottomSelectPickerColumnRule).toContain("background: transparent");
-    expect(bottomSelectPickerMaskTopRule).toContain("linear-gradient");
-    expect(bottomSelectPickerMaskTopRule).toContain("rgb(5 9 16 / 54%)");
-    expect(bottomSelectPickerMaskTopRule).toContain("rgb(5 9 16 / 28%)");
-    expect(bottomSelectPickerMaskBottomRule).toContain("linear-gradient");
-    expect(bottomSelectPickerMaskBottomRule).toContain("rgb(5 9 16 / 54%)");
-    expect(bottomSelectPickerMaskBottomRule).toContain("rgb(5 9 16 / 28%)");
-    expect(bottomSelectPickerHeaderRule).toContain(
-      "background: rgb(5 9 15 / 58%)",
-    );
-    expect(readPngMetadata("src/assets/lobby-profile-search-field-bg.png")).toEqual({
-      width: 856,
-      height: 88,
-      colorType: 6,
-    });
-    expect(
-      readPngMetadata("src/assets/lobby-profile-favorite-filter-bg.png"),
-    ).toEqual({
-      width: 420,
-      height: 88,
-      colorType: 6,
-    });
-    expect(
-      readPngMetadata("src/assets/lobby-profile-strategy-filter-bg.png"),
-    ).toEqual({
-      width: 420,
-      height: 88,
-      colorType: 6,
-    });
-    for (const background of [
-      searchBackground,
-      favoriteBackground,
-      strategyBackground,
-    ]) {
-      expect(getAlphaAt(background, 0, 0)).toBe(0);
-      expect(getAlphaAt(background, background.width - 1, 0)).toBe(0);
-      expect(getAlphaAt(background, 0, background.height - 1)).toBe(0);
-      expect(
-        getAlphaAt(
-          background,
-          Math.floor(background.width / 2),
-          Math.floor(background.height / 2),
-        ),
-      ).toBe(255);
-    }
-  });
 
   it("lays out eight seats as two horizontal rows on mobile", async () => {
     gameClientMocks.listRuleSets.mockResolvedValue({
@@ -2004,7 +1425,9 @@ describe("GamesPage", () => {
     ).toBeVisible();
   });
 
-  it("can confirm a player and advance to the next empty seat without closing the drawer", async () => {
+
+
+  it("opens player picker filters in a bottom sheet and applies the selected option", async () => {
     const user = userEvent.setup();
     renderGamesPage();
 
@@ -2013,82 +1436,10 @@ describe("GamesPage", () => {
         name: "选择 1 号座位，当前为 待选择",
       }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
-    );
-    await user.click(screen.getByRole("button", { name: "确认并下一位" }));
 
-    expect(screen.getByRole("dialog", { name: "玩家卡牌库" })).toBeVisible();
-    expect(screen.getByText("当前选择：2号座位")).toBeVisible();
-    expect(
+    await user.click(
       screen.getByRole("button", {
-        name: "选择 1 号座位，当前为 阿青",
-      }),
-    ).toBeVisible();
-    expect(screen.getByText("请选择玩家")).toBeVisible();
-  });
-
-  it("focuses and scrolls the active outside seat row when opening and advancing", async () => {
-    const user = userEvent.setup();
-    const scrollIntoView = vi.fn();
-    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-      configurable: true,
-      value: scrollIntoView,
-    });
-
-    try {
-      renderGamesPage();
-
-      const firstSeat = await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
-      });
-      await user.click(firstSeat);
-
-      expect(firstSeat).toHaveFocus();
-      await waitFor(() => {
-        expect(scrollIntoView).toHaveBeenLastCalledWith({
-          behavior: "smooth",
-          block: "start",
-          inline: "nearest",
-        });
-      });
-
-      await user.click(
-        screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
-      );
-      await user.click(screen.getByRole("button", { name: "确认并下一位" }));
-
-      const secondSeat = screen.getByRole("button", {
-        name: "选择 2 号座位，当前为 待选择",
-      });
-      expect(secondSeat).toHaveFocus();
-      await waitFor(() => {
-        expect(scrollIntoView).toHaveBeenLastCalledWith({
-          behavior: "smooth",
-          block: "start",
-          inline: "nearest",
-        });
-      });
-    } finally {
-      if (originalScrollIntoView) {
-        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-          configurable: true,
-          value: originalScrollIntoView,
-        });
-      } else {
-        Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
-      }
-    }
-  });
-
-  it("opens player drawer filters in a bottom sheet and applies the selected option", async () => {
-    const user = userEvent.setup();
-    renderGamesPage();
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
+        name: "筛选玩家，当前 全部玩家、全部策略",
       }),
     );
 
@@ -2148,425 +1499,7 @@ describe("GamesPage", () => {
     });
   });
 
-  it("keeps the player card drawer chrome fixed while snapping one row of cards", async () => {
-    const user = userEvent.setup();
-    renderGamesPage();
 
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
-      }),
-    );
-
-    expect(screen.getByRole("dialog", { name: "玩家卡牌库" })).toBeVisible();
-
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const drawerRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer\s*{[^}]+}/)?.[0] ?? "";
-    const titleRowRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer-title-row\s*{[^}]+}/)
-        ?.[0] ?? "";
-    const headingTitleRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer-heading h2\s*{[^}]+}/)
-        ?.[0] ?? "";
-    const cardScrollRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-scroll\s*{[^}]+}/)?.[0] ??
-      "";
-    const cardGridRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-grid\s*{[^}]+}/)?.[0] ?? "";
-    const cardChoiceRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-choice\s*{[^}]+}/)?.[0] ?? "";
-    const footerRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer-footer\s*{[^}]+}/)?.[0] ??
-      "";
-    const footerDividerRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-drawer-footer::before\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const closeButtonRule =
-      styles.match(/(?:^|\n)\.mobile-profile-drawer-close\s*{[^}]+}/)?.[0] ??
-      "";
-    const footerButtonRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-drawer-footer\s+\.mobile-button\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const footerPrimaryButtonRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-drawer-footer\s+\.mobile-button-primary\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const footerButtonBackground = readPngRgbaImage(
-      "src/assets/lobby-buttons/button-favorite-fill.png",
-    );
-    const footerPrimaryButtonBackground = readPngRgbaImage(
-      "src/assets/lobby-buttons/button-launch-autofill.png",
-    );
-    const footerDividerBackground = readPngRgbaImage(
-      "src/assets/lobby-profile-drawer-divider-alpha.png",
-    );
-    const closeButtonBackground = readPngRgbaImage(
-      "src/assets/lobby-close-button-bg.png",
-    );
-
-    expect(drawerRule).toContain("height: 78svh");
-    expect(drawerRule).toContain(
-      "grid-template-rows: auto minmax(0, 1fr) auto",
-    );
-    expect(drawerRule).toContain("overflow: hidden");
-    expect(drawerRule).toContain("padding: 20px 26px 0");
-    expect(drawerRule).not.toContain("overflow-y: auto");
-    expect(drawerRule).toContain("lobby-profile-drawer-bg.png");
-    expect(drawerRule).toContain("background-size: 100% 100%");
-    const titleRow = screen
-      .getByRole("heading", { name: "玩家卡牌库" })
-      .closest(".mobile-profile-drawer-title-row");
-    expect(titleRow).toContainElement(
-      screen.getByRole("button", { name: "关闭玩家卡牌库" }),
-    );
-    expect(titleRowRule).toContain("display: flex");
-    expect(titleRowRule).toContain("align-items: center");
-    expect(titleRowRule).toContain("justify-content: space-between");
-    expect(headingTitleRule).toContain("font-size: 18px");
-    expect(headingTitleRule).toContain("line-height: 18px");
-    expect(headingTitleRule).toContain("font-weight: 900");
-    expect(headingTitleRule).toContain(
-      "background-image: linear-gradient(180deg, #fff7d6 0%, #f8ebc8 100%)",
-    );
-    expect(headingTitleRule).toContain("background-clip: text");
-    expect(headingTitleRule).toContain("-webkit-text-fill-color: transparent");
-    expect(headingTitleRule).toContain("text-shadow:");
-    expect(cardScrollRule).toContain("height: 100%");
-    expect(cardScrollRule).toContain("overflow-y: auto");
-    expect(cardScrollRule).toContain("scroll-snap-type: y mandatory");
-    expect(cardGridRule).toContain("grid-auto-rows: 100%");
-    expect(cardChoiceRule).toContain("height: 100%");
-    expect(cardChoiceRule).toContain("scroll-snap-align: start");
-    expect(footerRule).toContain("position: relative");
-    expect(footerRule).toContain("align-self: end");
-    expect(footerRule).toContain("margin: 2px 0 0");
-    expect(footerRule).toContain("padding: 24px 0 16px");
-    expect(footerRule).toContain("border-top: 0");
-    expect(footerRule).not.toContain("position: sticky");
-    expect(footerRule).not.toContain("-26px");
-    expect(footerDividerRule).toContain("lobby-profile-drawer-divider-alpha.png");
-    expect(footerDividerRule).toContain("height: 34px");
-    expect(footerDividerRule).toContain("background-size: 100% auto");
-    expect(closeButtonRule).toContain("width: 30px");
-    expect(closeButtonRule).toContain("height: 30px");
-    expect(closeButtonRule).toContain("border: 0");
-    expect(closeButtonRule).toContain("lobby-close-button-bg.png");
-    expect(closeButtonRule).toContain("background-size: contain");
-    expect(closeButtonRule).toContain("font-size: 0");
-    expect(footerButtonRule).toContain("width: 120px");
-    expect(footerButtonRule).toContain("height: 45px");
-    expect(footerButtonRule).toContain("aspect-ratio: 8 / 3");
-    expect(footerButtonRule).toContain("border: 0");
-    expect(footerButtonRule).toContain("lobby-buttons/button-favorite-fill.png");
-    expect(footerButtonRule).toContain("background-size: contain");
-    expect(footerPrimaryButtonRule).toContain(
-      "lobby-buttons/button-launch-autofill.png",
-    );
-    expect(
-      readPngMetadata("src/assets/lobby-buttons/button-favorite-fill.png"),
-    ).toEqual({
-      width: 480,
-      height: 180,
-      colorType: 6,
-    });
-    expect(
-      readPngMetadata("src/assets/lobby-buttons/button-launch-autofill.png"),
-    ).toEqual({
-      width: 480,
-      height: 180,
-      colorType: 6,
-    });
-    expect(readPngMetadata("src/assets/lobby-profile-drawer-bg.png")).toEqual({
-      width: 942,
-      height: 1434,
-      colorType: 2,
-    });
-    expect(readPngMetadata("src/assets/lobby-close-button-bg.png")).toEqual({
-      width: 216,
-      height: 216,
-      colorType: 6,
-    });
-    expect(
-      readPngMetadata("src/assets/lobby-profile-drawer-divider-alpha.png"),
-    ).toEqual({
-      width: 2134,
-      height: 196,
-      colorType: 6,
-    });
-    expect(getAlphaAt(closeButtonBackground, 0, 0)).toBe(0);
-    expect(
-      getAlphaAt(
-        closeButtonBackground,
-        Math.floor(closeButtonBackground.width / 2),
-        Math.floor(closeButtonBackground.height / 2),
-      ),
-    ).toBeGreaterThan(240);
-    expect(getAlphaAt(footerButtonBackground, 0, 0)).toBe(0);
-    expect(
-      getAlphaAt(
-        footerButtonBackground,
-        Math.floor(footerButtonBackground.width / 2),
-        Math.floor(footerButtonBackground.height / 2),
-      ),
-    ).toBe(255);
-    expect(getAlphaAt(footerPrimaryButtonBackground, 0, 0)).toBe(0);
-    expect(
-      getAlphaAt(
-        footerPrimaryButtonBackground,
-        Math.floor(footerPrimaryButtonBackground.width / 2),
-        Math.floor(footerPrimaryButtonBackground.height / 2),
-      ),
-    ).toBe(255);
-    expect(getAlphaAt(footerDividerBackground, 0, 0)).toBe(0);
-    expect(
-      getAlphaAt(
-        footerDividerBackground,
-        Math.floor(footerDividerBackground.width / 2),
-        Math.floor(footerDividerBackground.height / 2),
-      ),
-    ).toBeGreaterThan(240);
-  });
-
-  it("overlays the generated dark thin border on player cards without card padding", () => {
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const cardChoiceRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-choice\s*{[^}]+}/)?.[0] ?? "";
-    const cardChoiceDirectChildRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-choice > \*\s*{[^}]+}/)
-        ?.[0] ?? "";
-    const cardSelectButtonRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-card-select-button\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const cardFrameRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-choice::after\s*{[^}]+}/)
-        ?.[0] ?? "";
-    const cardShadeRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-choice::before\s*{[^}]+}/)
-        ?.[0] ?? "";
-    const cardImageRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-image\s*{[^}]+}/)?.[0] ??
-      "";
-    const cardCheckRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-check\s*{[^}]+}/)?.[0] ??
-      "";
-    const cardTextInsetRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-card-name-row,\s*\n\.mobile-profile-card-strategy,\s*\n\.mobile-profile-card-choice small\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const cardNameRowRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-name-row\s*{[^}]+}/)?.[0] ??
-      "";
-    const cardActiveRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-choice-active\s*{[^}]+}/)
-        ?.[0] ?? "";
-    const cardActiveFrameRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-card-choice-active::after\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const cardDescriptionRule =
-      Array.from(
-        styles.matchAll(
-          /(?:^|\n)\.mobile-profile-card-choice small\s*{[^}]+}/g,
-        ),
-      )
-        .map((match) => match[0])
-        .find((rule) => rule.includes("margin-bottom")) ?? "";
-    const cardDescriptionLineRule =
-      styles.match(
-        /(?:^|\n)\.mobile-profile-card-description-line\s*{[^}]+}/,
-      )?.[0] ?? "";
-    const frameImage = readPngRgbaImage(
-      "src/assets/lobby-profile-card-light-frame-alpha.png",
-    );
-    const selectedMarkImage = readPngRgbaImage(
-      "src/assets/lobby-profile-card-selected-mark-alpha.png",
-    );
-    const frameBounds = getAlphaBounds(frameImage);
-    const selectedMarkCheckBounds =
-      getLargestCentralGoldComponentBounds(selectedMarkImage);
-
-    expect(cardChoiceRule).toContain("padding: 0");
-    expect(cardChoiceRule).toContain("border: 0");
-    expect(cardChoiceRule).toContain("border-radius: 8px");
-    expect(cardChoiceRule).toContain("display: flex");
-    expect(cardChoiceRule).toContain("flex-direction: column");
-    expect(cardChoiceRule).toContain("justify-content: flex-end");
-    expect(cardChoiceRule).toContain("text-align: center");
-    expect(cardChoiceRule).toContain("isolation: isolate");
-    expect(cardChoiceDirectChildRule).toContain("position: relative");
-    expect(cardChoiceDirectChildRule).toContain("z-index: auto");
-    expect(cardChoiceDirectChildRule).not.toContain("z-index: 1");
-    expect(cardSelectButtonRule).toContain("z-index: auto");
-    expect(cardShadeRule).toContain("content: \"\"");
-    expect(cardShadeRule).toContain("position: absolute");
-    expect(cardShadeRule).toContain("inset: 0");
-    expect(cardShadeRule).toContain("z-index: 1");
-    expect(cardShadeRule).toContain("linear-gradient");
-    expect(cardFrameRule).toContain("content: \"\"");
-    expect(cardFrameRule).toContain("position: absolute");
-    expect(cardFrameRule).toContain("inset: 0");
-    expect(cardFrameRule).toContain("pointer-events: none");
-    expect(cardFrameRule).toContain("z-index: 2");
-    expect(cardFrameRule).toContain("border-radius: inherit");
-    expect(cardFrameRule).toContain("lobby-profile-card-light-frame-alpha.png");
-    expect(cardFrameRule).toContain("background-size: 100% 100%");
-    expect(cardActiveRule).toContain("z-index: 1");
-    expect(cardActiveRule).toContain("rgb(177 135 61 / 16%)");
-    expect(cardActiveRule).toContain("rgb(133 93 39 / 34%)");
-    expect(cardActiveFrameRule).toContain("box-shadow:");
-    expect(cardActiveFrameRule).toContain("inset 0 0 0 2px");
-    expect(cardActiveFrameRule).toContain("rgb(172 128 54 / 58%)");
-    expect(cardActiveFrameRule).toContain("rgb(128 89 36 / 24%)");
-    expect(cardActiveFrameRule).toContain("filter:");
-    expect(cardActiveFrameRule).toContain(
-      "drop-shadow(0 0 5px rgb(145 103 41 / 34%))",
-    );
-    expect(cardActiveFrameRule).toContain(
-      "drop-shadow(0 0 1px rgb(196 151 73 / 32%))",
-    );
-    expect(`${cardActiveRule}\n${cardActiveFrameRule}`).not.toContain(
-      "rgb(255 229 161",
-    );
-    expect(`${cardActiveRule}\n${cardActiveFrameRule}`).not.toContain(
-      "rgb(247 215 144",
-    );
-    expect(`${cardActiveRule}\n${cardActiveFrameRule}`).not.toContain(
-      "rgb(255 241 204",
-    );
-    expect(cardImageRule).toContain("position: absolute");
-    expect(cardImageRule).toContain("inset: 0");
-    expect(cardImageRule).toContain("width: 100%");
-    expect(cardImageRule).toContain("height: 100%");
-    expect(cardImageRule).toContain("margin: 0");
-    expect(cardImageRule).toContain("z-index: 0");
-    expect(cardCheckRule).toContain("z-index: 3");
-    expect(cardCheckRule).toContain("top: 10px");
-    expect(cardCheckRule).toContain("left: 10px");
-    expect(cardCheckRule).not.toContain("right:");
-    expect(cardCheckRule).not.toContain("bottom:");
-    expect(cardCheckRule).toContain("width: 32px");
-    expect(cardCheckRule).toContain("height: 32px");
-    expect(cardCheckRule).toContain("border: 0");
-    expect(cardCheckRule).toContain(
-      "background-image: url(\"../assets/lobby-profile-card-selected-mark-alpha.png\")",
-    );
-    expect(cardCheckRule).toContain("background-size: contain");
-    expect(cardCheckRule).toContain("color: transparent");
-    expect(cardCheckRule).toContain("font-size: 0");
-    expect(cardCheckRule).not.toContain("✓");
-    expect(cardTextInsetRule).toContain("margin-inline: 24px");
-    expect(cardTextInsetRule).toContain("z-index: 3");
-    expect(cardNameRowRule).toContain("justify-content: center");
-    expect(cardDescriptionRule).toContain("display: flex");
-    expect(cardDescriptionRule).toContain("flex-direction: column");
-    expect(cardDescriptionRule).toContain("align-items: center");
-    expect(cardDescriptionRule).toContain("max-height: 2.7em");
-    expect(cardDescriptionRule).toContain("overflow: hidden");
-    expect(cardDescriptionLineRule).toContain("display: block");
-    expect(cardDescriptionLineRule).toContain("max-width: 100%");
-    expect(cardDescriptionLineRule).toContain("white-space: nowrap");
-    expect(styles).not.toContain("mobile-profile-card-description-text");
-    expect(styles).not.toContain("background: rgb(2 5 10 / 68%)");
-    expect(styles).not.toContain("box-decoration-break: clone");
-    expect(styles).not.toContain("lobby-profile-card-thin-bg.png");
-    expect(styles).not.toContain("lobby-profile-card-frame-alpha.png");
-    expect(readPngMetadata("src/assets/lobby-profile-card-light-frame-alpha.png")).toEqual({
-      width: 817,
-      height: 1683,
-      colorType: 6,
-    });
-    expect(readPngMetadata("src/assets/lobby-profile-card-selected-mark-alpha.png")).toEqual({
-      width: 256,
-      height: 256,
-      colorType: 6,
-    });
-    expect(getAlphaAt(selectedMarkImage, 0, 0)).toBe(0);
-    expect(getAlphaAt(selectedMarkImage, 32, 32)).toBeLessThan(32);
-    expect(getAlphaAt(selectedMarkImage, 224, 32)).toBeLessThan(32);
-    expect(getAlphaAt(selectedMarkImage, 32, 224)).toBeLessThan(32);
-    expect(getAlphaAt(selectedMarkImage, 224, 224)).toBeLessThan(32);
-    expect(getAlphaAt(selectedMarkImage, 128, 22)).toBeGreaterThan(120);
-    expect(getAlphaAt(selectedMarkImage, 22, 128)).toBeGreaterThan(120);
-    expect(getAlphaAt(selectedMarkImage, 234, 128)).toBeGreaterThan(120);
-    expect(getAlphaAt(selectedMarkImage, 128, 234)).toBeGreaterThan(120);
-    expect(
-      getAlphaAt(
-        selectedMarkImage,
-        Math.floor(selectedMarkImage.width / 2),
-        Math.floor(selectedMarkImage.height / 2),
-      ),
-    ).toBeGreaterThan(240);
-    expect(getOpaqueLuminancePercentile(selectedMarkImage, 0.99)).toBeGreaterThan(
-      200,
-    );
-    expect(countOpaquePixelsAboveLuminance(selectedMarkImage, 170)).toBeGreaterThan(
-      900,
-    );
-    expect(countOpaquePixelsAboveLuminance(selectedMarkImage, 160)).toBeGreaterThan(
-      900,
-    );
-    expect(selectedMarkCheckBounds.right - selectedMarkCheckBounds.left + 1).toBeLessThanOrEqual(
-      125,
-    );
-    expect(selectedMarkCheckBounds.bottom - selectedMarkCheckBounds.top + 1).toBeLessThanOrEqual(
-      125,
-    );
-    expect(selectedMarkCheckBounds.right - selectedMarkCheckBounds.left + 1).toBeGreaterThanOrEqual(
-      90,
-    );
-    expect(selectedMarkCheckBounds.bottom - selectedMarkCheckBounds.top + 1).toBeGreaterThanOrEqual(
-      90,
-    );
-    expect(selectedMarkCheckBounds.pixelCount).toBeGreaterThan(900);
-    expect(frameBounds.left).toBeLessThanOrEqual(1);
-    expect(frameBounds.top).toBeLessThanOrEqual(1);
-    expect(frameBounds.right).toBeGreaterThanOrEqual(
-      frameImage.width - 2,
-    );
-    expect(frameBounds.bottom).toBeGreaterThanOrEqual(
-      frameImage.height - 2,
-    );
-    expect(getAlphaAt(frameImage, 0, 0)).toBe(0);
-    expect(
-      getAlphaAt(
-        frameImage,
-        Math.floor(frameImage.width / 2),
-        Math.floor(frameImage.height / 2),
-      ),
-    ).toBe(0);
-    expect(
-      getAlphaAt(frameImage, 18, Math.floor(frameImage.height / 2)),
-    ).toBeGreaterThan(240);
-    expect(
-      getAlphaAt(frameImage, Math.floor(frameImage.width / 2), 20),
-    ).toBeGreaterThan(120);
-    expect(
-      getAlphaRunWidthAtRow(
-        frameImage,
-        Math.floor(frameImage.height / 2),
-        8,
-        128,
-      ),
-    ).toBeLessThanOrEqual(36);
-    expect(
-      Math.max(
-        getRgbaAt(frameImage, 18, Math.floor(frameImage.height / 2)).red,
-        getRgbaAt(frameImage, 18, Math.floor(frameImage.height / 2)).green,
-        getRgbaAt(frameImage, 18, Math.floor(frameImage.height / 2)).blue,
-      ),
-    ).toBeLessThanOrEqual(180);
-    expect(
-      Math.max(
-        getRgbaAt(frameImage, Math.floor(frameImage.width / 2), 20).red,
-        getRgbaAt(frameImage, Math.floor(frameImage.width / 2), 20).green,
-        getRgbaAt(frameImage, Math.floor(frameImage.width / 2), 20).blue,
-      ),
-    ).toBeLessThanOrEqual(180);
-  });
 
   it("includes the current-seat status in assigned player card names", async () => {
     const user = userEvent.setup();
@@ -2595,62 +1528,6 @@ describe("GamesPage", () => {
     expect(within(currentSeatCard).getByText("当前座位")).toBeVisible();
   });
 
-  it("shows occupied-seat status above the player name without reserving an empty row", async () => {
-    const user = userEvent.setup();
-    renderGamesPage();
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 待选择",
-      }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
-    );
-    await user.click(screen.getByRole("button", { name: "确认选择" }));
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 2 号座位，当前为 待选择",
-      }),
-    );
-
-    const assignedCard = screen.getByRole("button", {
-      name: "为 2 号座位候选 阿青，已在 1 号座位",
-    });
-    const unassignedCard = screen.getByRole("button", {
-      name: "为 2 号座位候选 白石",
-    });
-    const assignedStatus = assignedCard.querySelector(
-      ".mobile-profile-card-seat-status",
-    );
-    const emptyStatus = unassignedCard.querySelector(
-      ".mobile-profile-card-seat-status",
-    );
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const statusRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-seat-status\s*{[^}]+}/)?.[0] ??
-      "";
-    const nameRowRule =
-      styles.match(/(?:^|\n)\.mobile-profile-card-name-row\s*{[^}]+}/)?.[0] ??
-      "";
-    const emptyStatusRule = styles.match(
-      /(?:^|\n)\.mobile-profile-card-seat-status-empty\s*{[^}]+}/,
-    );
-
-    expect(assignedStatus).toHaveTextContent("已在 1 号座位");
-    expect(
-      assignedStatus?.closest(".mobile-profile-card-name-row"),
-    ).not.toBeNull();
-    const assignedName = within(assignedCard).getByText("阿青");
-    expect(assignedName).toBeVisible();
-    expect(assignedStatus?.nextElementSibling).toBe(assignedName);
-    expect(emptyStatus).toBeNull();
-    expect(nameRowRule).toContain("display: flex");
-    expect(nameRowRule).toContain("flex-direction: column");
-    expect(statusRule).not.toContain("min-height");
-    expect(emptyStatusRule).toBeNull();
-  });
 
   it("disables confirmation when the pending player is removed by refresh", async () => {
     const user = userEvent.setup();

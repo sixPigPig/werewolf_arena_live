@@ -3459,6 +3459,202 @@ textarea {
   color: #f4e8d2;
 }
 
+.mobile-profile-picker {
+  display: flex;
+  height: 100svh;
+  max-height: 100svh;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
+  background: #050a10;
+}
+
+.mobile-lobby-modal-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-lobby-modal-header h2,
+.mobile-lobby-modal-header p {
+  margin: 0;
+}
+
+.mobile-lobby-modal-header h2 {
+  color: #fff1cc;
+  font-size: 16px;
+}
+
+.mobile-lobby-modal-header p {
+  color: #c8d4de;
+  font-size: 12px;
+}
+
+.mobile-lobby-modal-header button,
+.mobile-profile-filter-trigger,
+.mobile-profile-picker-footer button,
+.mobile-profile-row > button:last-child,
+.mobile-profile-empty button,
+.mobile-profile-picker-list > button {
+  min-width: 44px;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+.mobile-profile-picker .mobile-profile-search {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+}
+
+.mobile-profile-picker .mobile-profile-search input {
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid rgb(218 179 96 / 28%);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #08111a;
+  color: #f4e8d2;
+  font-size: 12px;
+}
+
+.mobile-profile-filter-trigger,
+.mobile-profile-filter-panel,
+.mobile-profile-row,
+.mobile-profile-picker-footer {
+  border: 1px solid rgb(218 179 96 / 24%);
+  border-radius: 8px;
+  background: rgb(8 15 23 / 94%);
+  color: #f4e8d2;
+}
+
+.mobile-profile-filter-trigger {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mobile-profile-filter-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+}
+
+.mobile-profile-picker-list {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  align-content: start;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.mobile-profile-refresh-status {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #d4b977;
+  font-size: 12px;
+}
+
+.mobile-profile-refresh-status svg {
+  width: 18px;
+  height: 18px;
+  animation: mobile-profile-refresh-spin 0.9s linear infinite;
+}
+
+.mobile-profile-row {
+  display: grid;
+  min-height: 64px;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  overflow: hidden;
+}
+
+.mobile-profile-row-select {
+  display: grid;
+  min-width: 0;
+  min-height: 64px;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  padding: 6px 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.mobile-profile-row-select[aria-pressed="true"] {
+  background: rgb(145 103 41 / 20%);
+  box-shadow: inset 3px 0 #d4b977;
+}
+
+.mobile-profile-row-select > img,
+.mobile-profile-row-avatar-fallback {
+  display: block;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #162636, #2b1f0d);
+  object-fit: cover;
+}
+
+.mobile-profile-row-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.mobile-profile-row-copy strong,
+.mobile-profile-row-copy small,
+.mobile-profile-row-copy em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-profile-row-copy strong,
+.mobile-profile-row-copy small,
+.mobile-profile-row-copy em,
+.mobile-profile-row > button:last-child {
+  font-size: 12px;
+}
+
+.mobile-profile-row-copy em {
+  color: #efd08b;
+  font-style: normal;
+}
+
+.mobile-profile-row > button:last-child {
+  border: 0;
+  border-left: 1px solid rgb(218 179 96 / 18%);
+  background: transparent;
+  color: #d4b977;
+}
+
+.mobile-profile-picker-footer {
+  padding: 8px;
+}
+
+.mobile-profile-picker-footer button {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: #d4b977;
+  color: #171109;
+  font-size: 13px;
+  font-weight: 900;
+}
+
 .mobile-app-shell:has(.mobile-lobby-modal-layer) .mobile-tab-bar {
   display: none;
 }
