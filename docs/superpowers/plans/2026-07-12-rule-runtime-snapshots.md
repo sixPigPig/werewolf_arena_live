@@ -145,11 +145,13 @@ Embed this exact mapping:
 | Legacy full-snapshot hash | Stable ID | Revision ID | New config hash |
 |---|---|---|---|
 | e63a962b73bb85d4d75f35c3c9fc7834b991ce39d41e4f892f66c3b68e4c4804 | classic_8 | e9fa678e-9b18-5079-91d2-f74835364fb6 | 00095728147a022c48eab88faf21a14567ad0afa13ab9418306e84ff85b10131 |
-| ace7fb0d1e33de641fa5394d2253b2de6cf2489e38394ad36047a47bb590ca73 | starter_6 | b607e17e-b86f-5eb0-9dc2-b8df09aa71ab | ecf10b12dfd87fe3b41d5db61e67b0897acf78a97510c23377272bfd7719df02 |
+| 02f31f4aa42e54f83836bf2d9b68c25291181c91a722136ed6a0a9a0e40ea4fc | starter_6 | b607e17e-b86f-5eb0-9dc2-b8df09aa71ab | f2c52827ff3eea2725fbf2f1a01436f69c7e6465a64dec9a92bd7a07a9368f4c |
 | 17ceee957477643a7d97fd31dd181c6ad126676ba1af0bc1fc144d4b4a411e6d | social_8 | 2b4a993f-e4e6-5312-b11d-92874851a70a | 21e1bd2bb495e4479a346724c85a9722477f840afc2c99c389558a52427a0fbc |
 | 688244c09a67521c10610875af305bafcadbcf16e164e5203cf7add4bd48aa00 | classic_12_seer_witch_hunter_idiot | 0489f6ac-16fd-5323-96ce-ee256c98cf32 | bcae38e48a7791fa0f7ae236c90f1852056938ea60f5447532e5d879260d6da2 |
 
 For game_sessions, set rule_set_id from a non-empty snapshot ID even when unmatched. Set revision fields only on full hash match. For live_runs, preserve current rule_set_id and use the same match rule. Never update rule_set JSON.
+
+The `starter_6` row is the exact current ASCII-comma snapshot (`description="更短的官方入门局,适合快速观察模型策略。"`). Schema/canonical consistency deliberately wins over compatibility with the obsolete fullwidth-comma variant: that old config and full snapshot are not migration/backfill candidates and must remain unmatched. This exception removes only that obsolete variant; general schema-v1 parsing and exact-current legacy snapshot support remain required.
 
 - [ ] **Step 5: Verify upgrade/downgrade and commit**
 

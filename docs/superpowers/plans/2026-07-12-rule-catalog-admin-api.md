@@ -196,7 +196,7 @@ class RuleSetValidationResult:
 
 - [ ] **Step 4: Implement strict normalization**
 
-Use NFKC plus trim; reject Unicode control characters. Require the exact seven role keys and non-negative integer values, explicitly rejecting bool. Normalize tags by order-preserving deduplication, maximum 8 items and maximum 20 characters each. Require name 1–120, description 0–1000, complexity/duration 1–40.
+Use NFKC plus trim for every managed text field, including description; reject Unicode control characters. Require the exact seven role keys and non-negative integer values, explicitly rejecting bool. Normalize tags by order-preserving deduplication, maximum 8 items and maximum 20 characters each. Require name 1–120, description 0–1000, complexity/duration 1–40.
 
 ~~~python
 RULE_ROLE_IDS = ("werewolf", "villager", "seer", "guard", "witch", "hunter", "idiot")
@@ -220,7 +220,11 @@ def normalize_rule_set_config(value: Mapping[str, object]) -> RuleSetConfig:
     weight = value.get("sheriff_vote_weight")
     if isinstance(weight, bool) or not isinstance(weight, (int, float)):
         raise ValueError("sheriff_vote_weight must be numeric")
-    if not math.isfinite(float(weight)):
+    try:
+        normalized_weight = float(weight)
+    except OverflowError as error:
+        raise ValueError("sheriff_vote_weight must be finite") from error
+    if not math.isfinite(normalized_weight):
         raise ValueError("sheriff_vote_weight must be finite")
     return RuleSetConfig(
         name=_text(value.get("name"), 1, 120, "name"),
@@ -237,7 +241,7 @@ def normalize_rule_set_config(value: Mapping[str, object]) -> RuleSetConfig:
             "win_condition",
         ),
         sheriff_enabled=_bool(value.get("sheriff_enabled"), "sheriff_enabled"),
-        sheriff_vote_weight=float(weight),
+        sheriff_vote_weight=normalized_weight,
         speech_policy=_literal(
             value.get("speech_policy"),
             {"sequential", "sheriff_directed"},
@@ -288,28 +292,42 @@ Expected: tests PASS and Ruff is clean.
 
 - [ ] **Step 1: Write failing compiler and round-trip tests**
 
-Repeat the complete valid_config() helper from Task 1 at the top of test_rule_set_snapshots.py so this test module has no cross-test import dependency.
+Define complete literal `OFFICIAL_CONFIG_GOLDENS` and `OFFICIAL_RUNTIME_GOLDENS` dictionaries for all four official rules at the top of `test_rule_set_snapshots.py`; do not derive expected data from `get_rule_set()` or `rule_set_snapshot()`. The literal `starter_6` description uses the ASCII comma. Hardcode this exact schema-v1 hash mapping:
 
 ~~~python
-def test_official_config_compiles_to_current_classic_behavior() -> None:
+OFFICIAL_CONFIG_HASHES = {
+    "classic_8": "00095728147a022c48eab88faf21a14567ad0afa13ab9418306e84ff85b10131",
+    "starter_6": "f2c52827ff3eea2725fbf2f1a01436f69c7e6465a64dec9a92bd7a07a9368f4c",
+    "social_8": "21e1bd2bb495e4479a346724c85a9722477f840afc2c99c389558a52427a0fbc",
+    "classic_12_seer_witch_hunter_idiot":
+        "bcae38e48a7791fa0f7ae236c90f1852056938ea60f5447532e5d879260d6da2",
+}
+~~~
+
+~~~python
+@pytest.mark.parametrize("rule_set_id", tuple(OFFICIAL_CONFIG_GOLDENS))
+def test_all_official_configs_match_literal_runtime_and_hash_goldens(
+    rule_set_id: str,
+) -> None:
+    raw_config = copy.deepcopy(OFFICIAL_CONFIG_GOLDENS[rule_set_id])
+    config = normalize_rule_set_config(raw_config)
     compiled = compile_rule_set_config(
-        "classic_8",
-        normalize_rule_set_config(valid_config()),
-        revision_id="e9fa678e-9b18-5079-91d2-f74835364fb6",
+        rule_set_id,
+        config,
+        revision_id="revision-1",
         revision_no=1,
     )
-    expected = rule_set_snapshot(get_rule_set("classic_8"))
+    expected = copy.deepcopy(OFFICIAL_RUNTIME_GOLDENS[rule_set_id])
     expected["version"] = "1"
-    expected.update({
-        "revision_id": compiled.revision_id,
-        "revision_no": 1,
-        "schema_version": 1,
-        "content_hash": compiled.content_hash,
-    })
-    assert compiled.snapshot == expected
-    assert compiled.content_hash == (
-        "00095728147a022c48eab88faf21a14567ad0afa13ab9418306e84ff85b10131"
+    expected.update(
+        revision_id="revision-1",
+        revision_no=1,
+        schema_version=1,
+        content_hash=OFFICIAL_CONFIG_HASHES[rule_set_id],
     )
+    assert canonical_rule_set_config(config) == raw_config
+    assert compiled.snapshot == expected
+    assert compiled.content_hash == OFFICIAL_CONFIG_HASHES[rule_set_id]
 
 
 def test_managed_snapshot_round_trips_without_catalog_access() -> None:
@@ -322,15 +340,14 @@ def test_managed_snapshot_round_trips_without_catalog_access() -> None:
     assert restored.snapshot == compiled.snapshot
 
 
-def test_legacy_snapshot_keeps_legacy_version() -> None:
-    restored = resolve_rule_set_snapshot(
-        rule_set_snapshot(get_rule_set("starter_6"))
-    )
-    assert restored.revision_id is None
-    assert restored.rule_set.version == "2026.04"
+def test_obsolete_fullwidth_comma_starter_legacy_snapshot_is_rejected() -> None:
+    snapshot = copy.deepcopy(OFFICIAL_RUNTIME_GOLDENS["starter_6"])
+    snapshot["description"] = "更短的官方入门局，适合快速观察模型策略。"
+    with pytest.raises(ValueError, match="snapshot field description does not match"):
+        resolve_rule_set_snapshot(snapshot)
 ~~~
 
-Add missing-field, unknown-field, bool-as-number, NaN/Infinity, derived-action mismatch and hash-mismatch cases.
+Also cover exact ASCII-comma legacy resolution and its full-runtime-snapshot hash `02f31f4aa42e54f83836bf2d9b68c25291181c91a722136ed6a0a9a0e40ea4fc`; compiler/canonical/hash rejection of normalized objects mutated with bool role counts, extra/missing role keys, bool vote weight, and an integer too large for finite float conversion; caller-alias detachment; non-string/unhashable role metadata; missing fields; unknown fields; bool-as-number; NaN/Infinity; derived-action mismatch; and hash mismatch. Every invalid public boundary must raise `ValueError`, never `KeyError`, `TypeError`, or `OverflowError`.
 
 - [ ] **Step 2: Verify the missing module failure**
 
@@ -381,6 +398,8 @@ Map each stable role ID to the current exact Chinese role, team, model_group and
 
 The compiler always derives reveal_policy="hidden" and speech_rounds=1. These fields are runtime snapshot output, never management input.
 
+Before compiler code indexes or sums roles, converts vote weight, builds runtime objects, or hashes content, reconstruct all `RuleSetConfig` fields through `normalize_rule_set_config()` and full cross-field validation. Use only that detached normalized result. Apply the same boundary in `canonical_rule_set_config()` (and therefore hashing), so a previously normalized object whose mutable `role_counts` or frozen fields were later mutated is rejected with `ValueError`; compiled runtime and snapshot output must retain no caller-owned mutable alias.
+
 - [ ] **Step 4: Implement the exact hash boundary**
 
 ~~~python
@@ -388,6 +407,7 @@ RULE_SCHEMA_VERSION = 1
 
 
 def canonical_rule_set_config(config: RuleSetConfig) -> dict[str, object]:
+    config = _normalize_config_boundary(config)
     return {
         "name": config.name,
         "description": config.description,
@@ -420,7 +440,7 @@ The hash excludes stable ID, revision metadata, compatibility version, display_o
 
 - [ ] **Step 5: Implement strict snapshot parsing**
 
-The parser accepts exactly the current legacy runtime fields plus optional revision_id、revision_no、schema_version、content_hash. It maps roles back to stable IDs, recompiles, compares every ordered runtime field, and verifies hash when present. A managed snapshot additionally requires schema_version=1 and version=str(revision_no). Unknown or incomplete snapshots fail explicitly; there is no fallback to a current rule ID.
+The parser accepts exactly the current legacy runtime fields plus optional revision_id、revision_no、schema_version、content_hash. Before tuple lookup, every role metadata field (`role`、`team`、`model_group`、`category`) must be a string. It maps roles back to stable IDs, recompiles, compares every ordered runtime field, and verifies hash when present. A managed snapshot additionally requires schema_version=1 and version=str(revision_no). Unknown or incomplete snapshots fail explicitly; there is no fallback to a current rule ID. Preserve general schema-v1 and exact-current legacy support, but reject the obsolete fullwidth-comma `starter_6` snapshot rather than rewriting or mapping it.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -511,7 +531,7 @@ ck_rule_sets_pointer_state requires a draft pointer for draft status, a current 
 | Stable ID | Revision ID | Content hash | Order | Default |
 |---|---|---|---:|---:|
 | classic_8 | e9fa678e-9b18-5079-91d2-f74835364fb6 | 00095728147a022c48eab88faf21a14567ad0afa13ab9418306e84ff85b10131 | 1 | true |
-| starter_6 | b607e17e-b86f-5eb0-9dc2-b8df09aa71ab | ecf10b12dfd87fe3b41d5db61e67b0897acf78a97510c23377272bfd7719df02 | 2 | false |
+| starter_6 | b607e17e-b86f-5eb0-9dc2-b8df09aa71ab | f2c52827ff3eea2725fbf2f1a01436f69c7e6465a64dec9a92bd7a07a9368f4c | 2 | false |
 | social_8 | 2b4a993f-e4e6-5312-b11d-92874851a70a | 21e1bd2bb495e4479a346724c85a9722477f840afc2c99c389558a52427a0fbc | 3 | false |
 | classic_12_seer_witch_hunter_idiot | 0489f6ac-16fd-5323-96ce-ee256c98cf32 | bcae38e48a7791fa0f7ae236c90f1852056938ea60f5447532e5d879260d6da2 | 4 | false |
 
@@ -520,8 +540,10 @@ Embed all normalized config fields from the four current rules. Each parent is p
 The frozen configs are exactly:
 
 ~~~json
-{"classic_8":{"name":"经典 8 人局","description":"包含狼人、预言家、守卫与村民的官方标准局。","complexity":"标准","estimated_duration":"中","rule_tags":["无警长","顺序发言","标准"],"role_counts":{"werewolf":2,"villager":4,"seer":1,"guard":1,"witch":0,"hunter":0,"idiot":0},"win_condition":"wolves_gte_others","sheriff_enabled":false,"sheriff_vote_weight":1.0,"speech_policy":"sequential","werewolf_self_explosion_enabled":false,"sheriff_badge_bomb_policy":"none"},"starter_6":{"name":"新手 6 人快局","description":"更短的官方入门局，适合快速观察模型策略。","complexity":"入门","estimated_duration":"短","rule_tags":["无警长","顺序发言","新手"],"role_counts":{"werewolf":1,"villager":3,"seer":1,"guard":1,"witch":0,"hunter":0,"idiot":0},"win_condition":"wolves_gte_others","sheriff_enabled":false,"sheriff_vote_weight":1.0,"speech_policy":"sequential","werewolf_self_explosion_enabled":false,"sheriff_badge_bomb_policy":"none"},"social_8":{"name":"社交 8 人局","description":"仅保留狼人夜晚行动的官方心理博弈局。","complexity":"心理","estimated_duration":"中","rule_tags":["无警长","顺序发言","心理"],"role_counts":{"werewolf":2,"villager":6,"seer":0,"guard":0,"witch":0,"hunter":0,"idiot":0},"win_condition":"wolves_gte_others","sheriff_enabled":false,"sheriff_vote_weight":1.0,"speech_policy":"sequential","werewolf_self_explosion_enabled":false,"sheriff_badge_bomb_policy":"none"},"classic_12_seer_witch_hunter_idiot":{"name":"12 人预女猎白局","description":"4 狼、预言家、女巫、猎人、白痴与 4 民的标准屠边局。","complexity":"进阶","estimated_duration":"长","rule_tags":["有警长","警徽 1.5 票","屠边","预女猎白"],"role_counts":{"werewolf":4,"villager":4,"seer":1,"guard":0,"witch":1,"hunter":1,"idiot":1},"win_condition":"slaughter_side","sheriff_enabled":true,"sheriff_vote_weight":1.5,"speech_policy":"sheriff_directed","werewolf_self_explosion_enabled":true,"sheriff_badge_bomb_policy":"double"}}
+{"classic_8":{"name":"经典 8 人局","description":"包含狼人、预言家、守卫与村民的官方标准局。","complexity":"标准","estimated_duration":"中","rule_tags":["无警长","顺序发言","标准"],"role_counts":{"werewolf":2,"villager":4,"seer":1,"guard":1,"witch":0,"hunter":0,"idiot":0},"win_condition":"wolves_gte_others","sheriff_enabled":false,"sheriff_vote_weight":1.0,"speech_policy":"sequential","werewolf_self_explosion_enabled":false,"sheriff_badge_bomb_policy":"none"},"starter_6":{"name":"新手 6 人快局","description":"更短的官方入门局,适合快速观察模型策略。","complexity":"入门","estimated_duration":"短","rule_tags":["无警长","顺序发言","新手"],"role_counts":{"werewolf":1,"villager":3,"seer":1,"guard":1,"witch":0,"hunter":0,"idiot":0},"win_condition":"wolves_gte_others","sheriff_enabled":false,"sheriff_vote_weight":1.0,"speech_policy":"sequential","werewolf_self_explosion_enabled":false,"sheriff_badge_bomb_policy":"none"},"social_8":{"name":"社交 8 人局","description":"仅保留狼人夜晚行动的官方心理博弈局。","complexity":"心理","estimated_duration":"中","rule_tags":["无警长","顺序发言","心理"],"role_counts":{"werewolf":2,"villager":6,"seer":0,"guard":0,"witch":0,"hunter":0,"idiot":0},"win_condition":"wolves_gte_others","sheriff_enabled":false,"sheriff_vote_weight":1.0,"speech_policy":"sequential","werewolf_self_explosion_enabled":false,"sheriff_badge_bomb_policy":"none"},"classic_12_seer_witch_hunter_idiot":{"name":"12 人预女猎白局","description":"4 狼、预言家、女巫、猎人、白痴与 4 民的标准屠边局。","complexity":"进阶","estimated_duration":"长","rule_tags":["有警长","警徽 1.5 票","屠边","预女猎白"],"role_counts":{"werewolf":4,"villager":4,"seer":1,"guard":0,"witch":1,"hunter":1,"idiot":1},"win_condition":"slaughter_side","sheriff_enabled":true,"sheriff_vote_weight":1.5,"speech_policy":"sheriff_directed","werewolf_self_explosion_enabled":true,"sheriff_badge_bomb_policy":"double"}}
 ~~~
+
+`starter_6` 的 ASCII 逗号配置和上述新 hash 是唯一冻结 seed。旧全角逗号 canonical config/legacy snapshot 与 schema-v1 规范不一致，明确不兼容，也不是迁移或历史回填候选。
 
 - [ ] **Step 5: Protect immutable revisions**
 

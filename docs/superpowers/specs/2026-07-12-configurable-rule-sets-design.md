@@ -125,6 +125,10 @@
 
 `display_order` 和 `is_default` 属于稳定规则实体元数据，不进入 revision 内容哈希；其余基础字段属于修订内容。
 
+所有受管理文本字段（包括 `description`）必须先执行 NFKC 规范化，再执行 trim，规范化后的配置才是 schema-v1 canonical JSON、内容哈希和运行快照的唯一真源。官方 `starter_6.description` 固定为 `更短的官方入门局,适合快速观察模型策略。`，其 schema-v1 配置哈希固定为 `f2c52827ff3eea2725fbf2f1a01436f69c7e6465a64dec9a92bd7a07a9368f4c`，当前 legacy 完整运行快照哈希固定为 `02f31f4aa42e54f83836bf2d9b68c25291181c91a722136ed6a0a9a0e40ea4fc`。
+
+这是有意的破坏性规范化决定：schema/canonical 一致性优先。使用全角逗号的旧 `starter_6` 配置和 legacy 快照不受支持，parser 必须拒绝，迁移和历史回填也不得将其映射到当前官方修订；通用 schema-v1 parser 和其余精确匹配的 current legacy parser 继续永久保留。
+
 ### 5.2 角色字段
 
 管理配置使用稳定角色 ID：
@@ -572,6 +576,7 @@ Mobile 行为：
 - 仅在 canonical hash 与某个种子修订完全一致时回填 revision FK；
 - 未匹配快照保留原 JSON，revision 字段保持 NULL；
 - 不重写历史 snapshot 的名称、版本或内容。
+- `starter_6` 仅接受上述 ASCII 逗号版本参与精确回填；旧全角逗号版本保持未匹配，不是 migration/backfill candidate。
 
 ### 13.4 Switch 与 Contract
 

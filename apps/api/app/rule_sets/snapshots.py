@@ -111,6 +111,7 @@ _ROLE_IDS_BY_DEFINITION = {
 
 
 def canonical_rule_set_config(config: RuleSetConfig) -> dict[str, object]:
+    config = _normalize_config_boundary(config)
     return {
         "name": config.name,
         "description": config.description,
@@ -153,7 +154,7 @@ def compile_rule_set_config(
 ) -> CompiledRuleSet:
     _validate_rule_set_id(rule_set_id)
     _validate_revision_metadata(revision_id, revision_no, RULE_SCHEMA_VERSION, None)
-    _raise_for_invalid_config(config)
+    config = _normalize_config_boundary(config)
     return _compile_rule_set(
         rule_set_id,
         config,
@@ -349,10 +350,10 @@ def _validate_runtime_types(snapshot: Mapping[str, object]) -> None:
     vote_weight = snapshot["sheriff_vote_weight"]
     if isinstance(vote_weight, bool) or not isinstance(vote_weight, (int, float)):
         raise ValueError("snapshot field sheriff_vote_weight must be numeric")
-    if not math.isfinite(float(vote_weight)):
-        raise ValueError("snapshot field sheriff_vote_weight must be finite")
     if not isinstance(vote_weight, float):
         raise ValueError("snapshot field sheriff_vote_weight must be a float")
+    if not math.isfinite(vote_weight):
+        raise ValueError("snapshot field sheriff_vote_weight must be finite")
 
     _validate_string_list(snapshot["night_actions"], "night_actions")
     _validate_string_list(snapshot["day_actions"], "day_actions")
@@ -382,11 +383,19 @@ def _role_counts_from_snapshot(value: object) -> dict[RuleRoleId, int]:
         count = raw_role["count"]
         if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
             raise ValueError(f"snapshot role {index} count must be a positive integer")
-        definition = (
+        metadata = (
             raw_role["role"],
             raw_role["team"],
             raw_role["model_group"],
             raw_role["category"],
+        )
+        if any(not isinstance(field, str) for field in metadata):
+            raise ValueError(f"snapshot role metadata must be text (index {index})")
+        definition = (
+            cast(str, metadata[0]),
+            cast(str, metadata[1]),
+            cast(str, metadata[2]),
+            cast(str, metadata[3]),
         )
         role_id = _ROLE_IDS_BY_DEFINITION.get(definition)
         if role_id is None:
@@ -414,6 +423,36 @@ def _raise_for_invalid_config(config: RuleSetConfig) -> None:
         return
     issues = ", ".join(f"{issue.code} ({issue.path})" for issue in result.errors)
     raise ValueError(f"rule configuration is invalid: {issues}")
+
+
+def _normalize_config_boundary(config: RuleSetConfig) -> RuleSetConfig:
+    if not isinstance(config, RuleSetConfig):
+        raise ValueError("config must be a normalized RuleSetConfig")
+    try:
+        normalized = normalize_rule_set_config(
+            {
+                "name": config.name,
+                "description": config.description,
+                "complexity": config.complexity,
+                "estimated_duration": config.estimated_duration,
+                "rule_tags": config.rule_tags,
+                "role_counts": config.role_counts,
+                "win_condition": config.win_condition,
+                "sheriff_enabled": config.sheriff_enabled,
+                "sheriff_vote_weight": config.sheriff_vote_weight,
+                "speech_policy": config.speech_policy,
+                "werewolf_self_explosion_enabled": (
+                    config.werewolf_self_explosion_enabled
+                ),
+                "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
+            }
+        )
+    except ValueError:
+        raise
+    except (AttributeError, KeyError, OverflowError, TypeError) as error:
+        raise ValueError("config must be a valid normalized RuleSetConfig") from error
+    _raise_for_invalid_config(normalized)
+    return normalized
 
 
 def _validate_rule_set_id(rule_set_id: str) -> None:
