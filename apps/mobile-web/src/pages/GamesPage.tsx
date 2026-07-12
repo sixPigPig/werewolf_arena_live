@@ -6,7 +6,6 @@ import {
 import {
   type CSSProperties,
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -25,6 +24,7 @@ import {
 } from "../components/MobileBottomSelect";
 import { LobbyRulePicker } from "../components/lobby/LobbyRulePicker";
 import { LobbyRuleSummary } from "../components/lobby/LobbyRuleSummary";
+import { LobbyLineupSection } from "../components/lobby/LobbyLineupSection";
 import {
   buildLineupLaunchStatus,
   clampSeat,
@@ -44,7 +44,6 @@ import {
 import {
   createGameRun,
   favoritePlayerProfile,
-  hasPlayerConfig,
   listPlayerProfileFavorites,
   listPublicPlayerProfiles,
   listRuleSets,
@@ -80,8 +79,6 @@ export function GamesPage() {
   const [activeSeat, setActiveSeat] = useState(1);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
   const [isRulePickerOpen, setIsRulePickerOpen] = useState(false);
-  const [isClearConfirming, setIsClearConfirming] = useState(false);
-  const [isFillOptionsOpen, setIsFillOptionsOpen] = useState(false);
   const [pendingProfileId, setPendingProfileId] = useState<string | null>(null);
   const [profileSearch, setProfileSearch] = useState("");
   const [favoriteFilter, setFavoriteFilter] = useState<"all" | "favorite">("all");
@@ -274,7 +271,6 @@ export function GamesPage() {
     !isSubmitDisabled &&
     launchStatus.emptySeatCount > 0 &&
     launchStatus.profileShortageCount === 0;
-  const showFillOptions = isFillOptionsOpen && canFillSeats;
   const launchButtonStateClass = createGameRunMutation.isPending
     ? "mobile-lobby-launch-pending"
     : "mobile-lobby-launch-ready";
@@ -305,18 +301,6 @@ export function GamesPage() {
     )}px`,
   } as CSSProperties;
 
-  useEffect(() => {
-    if (!isClearConfirming) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setIsClearConfirming(false);
-    }, 3000);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [isClearConfirming]);
-
   const openRulePicker = useCallback(() => {
     setIsRulePickerOpen(true);
   }, []);
@@ -330,8 +314,6 @@ export function GamesPage() {
     setSelectedRuleSetId(ruleSetId);
     setValidationError(null);
     setShortage(false);
-    setIsClearConfirming(false);
-    setIsFillOptionsOpen(false);
 
     if (nextRuleSet) {
       setActiveSeat((currentSeat) =>
@@ -355,8 +337,6 @@ export function GamesPage() {
     setProfileStrategyFilter("all");
     setValidationError(null);
     setShortage(false);
-    setIsClearConfirming(false);
-    setIsFillOptionsOpen(false);
     setIsProfileDrawerOpen(true);
     focusSeatAndScrollRowToTop(seat, trigger);
   }
@@ -386,8 +366,6 @@ export function GamesPage() {
 
     setValidationError(null);
     setShortage(false);
-    setIsClearConfirming(false);
-    setIsFillOptionsOpen(false);
     setPlayerConfigs(nextConfigs);
 
     if (options.advanceToNextEmpty && nextEmptySeat) {
@@ -407,8 +385,6 @@ export function GamesPage() {
     }
     setValidationError(null);
     setShortage(false);
-    setIsClearConfirming(false);
-    setIsFillOptionsOpen(false);
     setPlayerConfigs(
       randomFillEmptySeats(
         visiblePlayerConfigs,
@@ -425,8 +401,6 @@ export function GamesPage() {
     }
     setValidationError(null);
     setShortage(false);
-    setIsClearConfirming(false);
-    setIsFillOptionsOpen(false);
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
@@ -504,35 +478,12 @@ export function GamesPage() {
   }
 
   function handleClearSeats() {
-    const hasAssignedSeats = visiblePlayerConfigs.some((config) =>
-      hasPlayerConfig(config),
-    );
-
-    if (!hasAssignedSeats) {
-      setPlayerConfigs([]);
-      setShortage(false);
-      setValidationError(null);
-      setIsClearConfirming(false);
-      setIsFillOptionsOpen(false);
-      return;
-    }
-
-    if (!isClearConfirming) {
-      setIsClearConfirming(true);
-      return;
-    }
-
     setPlayerConfigs([]);
     setShortage(false);
     setValidationError(null);
-    setIsClearConfirming(false);
-    setIsFillOptionsOpen(false);
   }
 
   function handleSubmit() {
-    setIsClearConfirming(false);
-    setIsFillOptionsOpen(false);
-
     if (!selectedRuleSet) {
       return;
     }
@@ -582,7 +533,12 @@ export function GamesPage() {
     seat: number,
     fallbackButton?: HTMLButtonElement,
   ) {
-    const seatButton = seatButtonRefs.current.get(seat) ?? fallbackButton;
+    const seatButton =
+      seatButtonRefs.current.get(seat) ??
+      document.querySelector<HTMLButtonElement>(
+        `.mobile-lobby-seat-card[aria-label^="选择 ${seat} 号座位"]`,
+      ) ??
+      fallbackButton;
 
     if (!seatButton) {
       return;
@@ -653,74 +609,22 @@ export function GamesPage() {
       />
 
       {selectedRuleSet ? (
-        <section
-          aria-labelledby="mobile-seat-title"
-          className="mobile-lobby-section mobile-lobby-board-section"
-        >
-          <div className="mobile-lobby-section-heading">
-            <h2 id="mobile-seat-title">组建阵容</h2>
-            <span className="mobile-lobby-seat-summary">
-              {selectedRuleSet.name} · {playerCount} 个座位
-            </span>
-          </div>
-          <div className="mobile-lobby-seat-grid">
-            {Array.from({ length: playerCount }, (_, index) => index + 1).map(
-              (seat) => {
-                const profile = selectedProfilesBySeat.get(seat);
-                const avatarImageUrl = profile
-                  ? resolveAvatarImageUrl(profile)
-                  : "";
-                const isActive = safeActiveSeat === seat;
-                const seatDisplayName = profile?.display_name ?? "请选择";
+        <LobbyLineupSection
+          activeSeat={safeActiveSeat}
+          canFillSeats={canFillSeats}
+          favoritesAvailable={favoritesAvailable}
+          isBusy={createGameRunMutation.isPending}
+          launchStatus={launchStatus}
+          onClear={handleClearSeats}
+          onFill={fillEmptySeats}
+          onSelectSeat={openProfileDrawer}
+          playerCount={playerCount}
+          profilesBySeat={selectedProfilesBySeat}
+        />
+      ) : null}
 
-                return (
-                  <button
-                    aria-label={`选择 ${seat} 号座位，当前为 ${
-                      seatDisplayName
-                    }`}
-                    aria-pressed={isActive}
-                    className={[
-                      "mobile-lobby-seat-card",
-                      isActive ? "mobile-lobby-seat-card-active" : "",
-                      profile ? "mobile-lobby-seat-card-filled" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    key={seat}
-                    onClick={(event) => openProfileDrawer(seat, event.currentTarget)}
-                    ref={(element) => {
-                      if (element) {
-                        seatButtonRefs.current.set(seat, element);
-                      } else {
-                        seatButtonRefs.current.delete(seat);
-                      }
-                    }}
-                    type="button"
-                  >
-                    {profile ? (
-                      <span className="mobile-lobby-seat-avatar">
-                        <span aria-hidden="true" />
-                        {avatarImageUrl ? (
-                          <img
-                            alt=""
-                            onError={(event) => {
-                              event.currentTarget.hidden = true;
-                            }}
-                            src={avatarImageUrl}
-                          />
-                        ) : null}
-                      </span>
-                    ) : null}
-                    <strong>{seatDisplayName}</strong>
-                  </button>
-                );
-              },
-            )}
-          </div>
-          {playerProfilesQuery.isError ? (
-            <p className="mobile-lobby-inline-error">玩家库加载失败</p>
-          ) : null}
-        </section>
+      {playerProfilesQuery.isError ? (
+        <p className="mobile-lobby-inline-error">玩家库加载失败</p>
       ) : null}
 
       <section
@@ -762,53 +666,6 @@ export function GamesPage() {
           <span className="mobile-lobby-launch-status">
             {launchStatus.summaryText}
           </span>
-          {showFillOptions ? (
-            <div className="mobile-lobby-fill-options">
-              <button
-                className="mobile-button mobile-lobby-favorite-fill"
-                disabled={!favoritesAvailable}
-                onClick={() => fillEmptySeats({ favoritesOnly: true })}
-                type="button"
-              >
-                <span>收藏补齐</span>
-              </button>
-              <button
-                className="mobile-button mobile-lobby-random-fill"
-                onClick={() => fillEmptySeats()}
-                type="button"
-              >
-                <span>随机补齐</span>
-              </button>
-            </div>
-          ) : null}
-          <button
-            aria-expanded={showFillOptions}
-            className="mobile-button mobile-lobby-fill-toggle"
-            disabled={!canFillSeats}
-            onClick={() => {
-              setValidationError(null);
-              setShortage(false);
-              setIsClearConfirming(false);
-              setIsFillOptionsOpen((currentIsOpen) => !currentIsOpen);
-            }}
-            type="button"
-          >
-            <span>补齐席位</span>
-          </button>
-          <button
-            className={[
-              "mobile-button",
-              "mobile-lobby-clear-seats",
-              isClearConfirming ? "mobile-lobby-clear-confirming" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            disabled={createGameRunMutation.isPending}
-            onClick={handleClearSeats}
-            type="button"
-          >
-            <span>{isClearConfirming ? "确认清空" : "清空席位"}</span>
-          </button>
           <button
             className={[
               "mobile-button",

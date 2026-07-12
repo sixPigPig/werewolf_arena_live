@@ -487,15 +487,6 @@ function expectLobbyButtonBackgroundAssets() {
       /\.mobile-lobby-action-bar\s+\.mobile-button\s+>\s+span\s*{[^}]+}/,
     )?.[0] ?? "";
   const buttonAssets = [
-    [".mobile-lobby-favorite-fill", "button-favorite-fill.png"],
-    [
-      ".mobile-lobby-favorite-fill:disabled",
-      "button-favorite-fill-disabled.png",
-    ],
-    [".mobile-lobby-clear-seats", "button-clear-seats.png"],
-    [".mobile-lobby-clear-seats:disabled", "button-clear-disabled.png"],
-    [".mobile-lobby-clear-confirming", "button-clear-confirm.png"],
-    [".mobile-lobby-random-fill", "button-launch-autofill.png"],
     [".mobile-lobby-launch-ready", "button-launch-ready.png"],
     [".mobile-lobby-launch-shortage", "button-launch-shortage.png"],
     [".mobile-lobby-launch-pending", "button-launch-pending.png"],
@@ -541,13 +532,6 @@ function expectLobbyButtonBackgroundAssets() {
       countPixelsAboveAlpha(image, 210, 134, 270, image.height - 12, 200),
     ).toBeGreaterThan(240);
   }
-
-  const randomFillRule =
-    styles.match(
-      /\.mobile-lobby-action-bar\s+\.mobile-lobby-random-fill\s*{[^}]+}/,
-    )?.[0] ?? "";
-  expect(randomFillRule).toContain("color: #fff7d6");
-  expect(randomFillRule).toContain("0 2px 2px rgb(0 0 0 / 92%)");
 }
 
 describe("GamesPage", () => {
@@ -637,7 +621,7 @@ describe("GamesPage", () => {
     ).not.toBeInTheDocument();
     expect(within(summary).getByText("新手 6 人快局")).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "选择 6 号座位，当前为 请选择" }),
+      screen.getByRole("button", { name: "选择 6 号座位，当前为 待选择" }),
     ).toBeVisible();
     expect(changeRuleButton).toHaveFocus();
   });
@@ -652,7 +636,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 7 号座位，当前为 请选择",
+        name: "选择 7 号座位，当前为 待选择",
       }),
     );
     await user.click(
@@ -674,7 +658,7 @@ describe("GamesPage", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "选择 6 号座位，当前为 请选择" }),
+      screen.getByRole("button", { name: "选择 6 号座位，当前为 待选择" }),
     ).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /选择 7 号座位/ }),
@@ -688,7 +672,7 @@ describe("GamesPage", () => {
     );
     expect(
       screen.getByRole("button", {
-        name: "选择 7 号座位，当前为 请选择",
+        name: "选择 7 号座位，当前为 待选择",
       }),
     ).toBeVisible();
   });
@@ -831,7 +815,7 @@ describe("GamesPage", () => {
 
     expect(
       await screen.findByRole("button", {
-        name: "选择 12 号座位，当前为 请选择",
+        name: "选择 12 号座位，当前为 待选择",
       }),
     ).toBeInTheDocument();
     expect(
@@ -936,7 +920,7 @@ describe("GamesPage", () => {
     ).toBe(255);
   });
 
-  it("removes the rule count badge and frames the seat summary with the wide board", async () => {
+  it("shows launch progress beside the numbered lineup", async () => {
     gameClientMocks.listRuleSets.mockResolvedValue({
       rule_sets: [classic12RuleSet],
     });
@@ -945,7 +929,8 @@ describe("GamesPage", () => {
     const ruleSummary = await screen.findByRole("region", { name: "当前规则" });
     expect(within(ruleSummary).queryByText("12 人局")).not.toBeInTheDocument();
 
-    const seatSummary = await screen.findByText("12 人预女猎白局 · 12 个座位");
+    const lineup = await screen.findByRole("region", { name: "组建阵容" });
+    const seatSummary = await within(lineup).findByText(/已选 0\/12/);
     expect(seatSummary).toHaveClass("mobile-lobby-seat-summary");
 
     const styles = readFileSync("src/styles/index.css", "utf8");
@@ -962,7 +947,7 @@ describe("GamesPage", () => {
     expect(seatSummaryRule).toContain("background-size: 100% 100%");
     expect(seatSummaryRule).toContain("flex: 0 1 160px");
     expect(seatSummaryRule).toContain("min-height: 28px");
-    expect(seatSummaryRule).toContain("font-size: 9px");
+    expect(seatSummaryRule).toContain("font-size: 12px");
     expect(boardTitleRule).toContain("min-height: 42px");
     expect(boardTitleRule).toContain("font-size: 12px");
     expect(readPngMetadata("src/assets/lobby-wide-title-board.png")).toEqual({
@@ -972,23 +957,23 @@ describe("GamesPage", () => {
     });
   });
 
-  it("shows only bold choose copy inside empty lobby seat cards", async () => {
+  it("shows visible two-digit numbers and empty-state copy in seat cards", async () => {
     renderGamesPage();
 
     const seatButton = await screen.findByRole("button", {
-      name: "选择 1 号座位，当前为 请选择",
+      name: "选择 1 号座位，当前为 待选择",
     });
     const styles = readFileSync("src/styles/index.css", "utf8");
     const seatCardTextRule =
       styles.match(/\.mobile-lobby-seat-card\s+strong\s*{[^}]+}/)?.[0] ?? "";
 
-    expect(within(seatButton).queryByText("1号座位")).not.toBeInTheDocument();
-    expect(within(seatButton).getByText("请选择")).toBeVisible();
+    expect(within(seatButton).getByText("01")).toBeVisible();
+    expect(within(seatButton).getByText("待选择")).toBeVisible();
     expect(seatButton.querySelector(".mobile-lobby-seat-avatar")).toBeNull();
     expect(seatCardTextRule).toContain("font-weight: 800");
   });
 
-  it("opens fill choices before creating from a completed lineup", async () => {
+  it("fills from the lineup section before creating", async () => {
     const user = userEvent.setup();
     const { router } = renderGamesPage();
 
@@ -998,14 +983,13 @@ describe("GamesPage", () => {
     expect(
       screen.queryByRole("button", { name: "收藏补齐" }),
     ).not.toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "补齐席位" })).toHaveClass(
-      "mobile-lobby-fill-toggle",
-    );
-    expect(screen.getByRole("button", { name: "清空席位" })).toHaveClass(
-      "mobile-lobby-clear-seats",
-    );
+    const lineup = await screen.findByRole("region", { name: "组建阵容" });
+    expect(within(lineup).getByRole("button", { name: "智能补齐" })).toBeVisible();
+    expect(
+      within(lineup).getByRole("button", { name: "阵容更多操作" }),
+    ).toBeVisible();
 
-    await screen.findByText("已选 0/2 · 可自动补齐");
+    await within(lineup).findByText("已选 0/2 · 可自动补齐");
     const disabledLaunchButton = screen.getByRole("button", {
       name: "还差 2 位",
     });
@@ -1013,30 +997,15 @@ describe("GamesPage", () => {
     expect(disabledLaunchButton).toHaveClass("mobile-lobby-launch-ready");
     expect(disabledLaunchButton).not.toHaveClass("mobile-lobby-launch-auto-fill");
 
-    await user.click(screen.getByRole("button", { name: "补齐席位" }));
+    await user.click(within(lineup).getByRole("button", { name: "智能补齐" }));
+    const fillMenu = within(lineup).getByRole("menu", { name: "智能补齐方式" });
+    expect(fillMenu.closest(".mobile-lobby-action-bar")).toBeNull();
 
-    expect(screen.getByRole("button", { name: "收藏补齐" })).toHaveClass(
-      "mobile-lobby-favorite-fill",
-    );
-    expect(screen.getByRole("button", { name: "随机补齐" })).toHaveClass(
-      "mobile-lobby-random-fill",
-    );
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const fillOptionsRule =
-      styles.match(/\.mobile-lobby-fill-options\s*{[^}]+}/)?.[0] ?? "";
-    const fillOptionsArrowRule =
-      styles.match(/\.mobile-lobby-fill-options::after\s*{[^}]+}/)?.[0] ?? "";
-    expect(fillOptionsRule).toContain("position: absolute");
-    expect(fillOptionsRule).not.toContain("grid-column");
-    expect(fillOptionsRule).toContain("border:");
-    expect(fillOptionsRule).toContain("padding:");
-    expect(fillOptionsRule).toContain("background:");
-    expect(fillOptionsArrowRule).toContain("position: absolute");
-    expect(fillOptionsArrowRule).toContain("transform:");
+    await user.click(within(fillMenu).getByRole("menuitem", { name: "随机补齐" }));
 
-    await user.click(screen.getByRole("button", { name: "随机补齐" }));
-
-    expect(await screen.findByText("已选 2/2 · 阵容已就绪")).toBeVisible();
+    expect(
+      await within(lineup).findByText("已选 2/2 · 阵容已就绪"),
+    ).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "随机补齐" }),
     ).not.toBeInTheDocument();
@@ -1070,7 +1039,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(
@@ -1089,70 +1058,41 @@ describe("GamesPage", () => {
       }),
     ).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "清空席位" }));
-    expect(screen.getByRole("button", { name: "确认清空" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "阵容更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "清空阵容" }));
+    expect(screen.getByRole("menuitem", { name: "确认清空阵容" })).toBeVisible();
     expect(
       screen.getByRole("button", {
         name: "选择 1 号座位，当前为 阿青",
       }),
     ).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "确认清空" }));
+    await user.click(screen.getByRole("menuitem", { name: "确认清空阵容" }));
     expect(
       screen.getByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     ).toBeVisible();
   });
 
-  it("resets clear confirmation when submit validation fails", async () => {
-    const user = userEvent.setup();
-    renderGamesPage();
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
-      }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: "为 1 号座位候选 阿青" }),
-    );
-    await user.click(screen.getByRole("button", { name: "确认选择" }));
-
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("dialog", { name: "玩家卡牌库" }),
-      ).not.toBeInTheDocument();
-    });
-    await user.clear(screen.getByRole("spinbutton", { name: "最大轮数" }));
-    await user.type(screen.getByRole("spinbutton", { name: "最大轮数" }), "0");
-    await user.click(screen.getByRole("button", { name: "清空席位" }));
-    expect(screen.getByRole("button", { name: "确认清空" })).toBeVisible();
-
-    await user.click(screen.getByRole("button", { name: "补齐席位" }));
-    await user.click(screen.getByRole("button", { name: "随机补齐" }));
-    await user.click(screen.getByRole("button", { name: "开始对局" }));
-
-    expect(screen.getByText("最大轮数必须是 1 到 20 的整数")).toBeVisible();
-    expect(screen.getByRole("button", { name: "清空席位" })).toBeVisible();
-  });
-
-  it("disables clear while game creation is pending", async () => {
+  it("disables lineup actions while game creation is pending", async () => {
     const user = userEvent.setup();
     gameClientMocks.createGameRun.mockReturnValue(
       new Promise(() => undefined),
     );
     renderGamesPage();
 
-    await user.click(await screen.findByRole("button", { name: "补齐席位" }));
-    await user.click(screen.getByRole("button", { name: "随机补齐" }));
+    await user.click(await screen.findByRole("button", { name: "智能补齐" }));
+    await user.click(screen.getByRole("menuitem", { name: "随机补齐" }));
     await user.click(screen.getByRole("button", { name: "开始对局" }));
 
     expect(screen.getByRole("button", { name: "发起中" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "发起中" })).toHaveClass(
       "mobile-lobby-launch-pending",
     );
-    expect(screen.getByRole("button", { name: "清空席位" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "阵容更多操作" }),
+    ).toBeDisabled();
   });
 
   it("blocks creation when the player library cannot fill the selected rule set", async () => {
@@ -1160,19 +1100,25 @@ describe("GamesPage", () => {
       buildProfile({ id: "profile-1", display_name: "阿青" }),
     ]);
     renderGamesPage();
+    const lineup = await screen.findByRole("region", { name: "组建阵容" });
 
     expect(
       screen.queryByRole("button", { name: "随机补齐" }),
     ).not.toBeInTheDocument();
-    expect(await screen.findByText("已选 0/2 · 还差 1 名玩家")).toBeVisible();
+    expect(
+      await within(lineup).findByText("已选 0/2 · 还差 1 名玩家"),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
     expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
   });
 
   it("disables launch until empty seats are completed from the library", async () => {
     renderGamesPage();
+    const lineup = await screen.findByRole("region", { name: "组建阵容" });
 
-    expect(await screen.findByText("已选 0/2 · 可自动补齐")).toBeVisible();
+    expect(
+      await within(lineup).findByText("已选 0/2 · 可自动补齐"),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "还差 2 位" })).toHaveClass(
       "mobile-lobby-launch-ready",
@@ -1184,11 +1130,14 @@ describe("GamesPage", () => {
   it("shows a confirm launch state when every seat has a player", async () => {
     const user = userEvent.setup();
     renderGamesPage();
+    const lineup = await screen.findByRole("region", { name: "组建阵容" });
 
-    await user.click(await screen.findByRole("button", { name: "补齐席位" }));
-    await user.click(screen.getByRole("button", { name: "随机补齐" }));
+    await user.click(await screen.findByRole("button", { name: "智能补齐" }));
+    await user.click(screen.getByRole("menuitem", { name: "随机补齐" }));
 
-    expect(await screen.findByText("已选 2/2 · 阵容已就绪")).toBeVisible();
+    expect(
+      await within(lineup).findByText("已选 2/2 · 阵容已就绪"),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "开始对局" })).toHaveClass(
       "mobile-lobby-launch-ready",
     );
@@ -1199,8 +1148,11 @@ describe("GamesPage", () => {
       buildProfile({ id: "profile-1", display_name: "阿青" }),
     ]);
     renderGamesPage();
+    const lineup = await screen.findByRole("region", { name: "组建阵容" });
 
-    expect(await screen.findByText("已选 0/2 · 还差 1 名玩家")).toBeVisible();
+    expect(
+      await within(lineup).findByText("已选 0/2 · 还差 1 名玩家"),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
     expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
   });
@@ -1211,7 +1163,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -1244,7 +1196,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     const playerCard = screen.getByRole("button", {
@@ -1278,7 +1230,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -1370,7 +1322,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -1393,7 +1345,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -1415,7 +1367,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(screen.getByRole("button", { name: "收藏 白石" }));
@@ -1439,7 +1391,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(screen.getByRole("button", { name: "收藏 白石" }));
@@ -1474,7 +1426,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     const drawer = screen.getByRole("dialog", { name: "玩家卡牌库" });
@@ -1562,7 +1514,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -1602,7 +1554,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -1619,7 +1571,7 @@ describe("GamesPage", () => {
     renderGamesPage();
 
     await user.click(await screen.findByRole("button", {
-      name: "选择 1 号座位，当前为 请选择",
+      name: "选择 1 号座位，当前为 待选择",
     }));
 
     const dialog = screen.getByRole("dialog", { name: "玩家卡牌库" });
@@ -1639,7 +1591,7 @@ describe("GamesPage", () => {
     expect(backdropRule).toContain("pointer-events: none");
 
     const secondSeat = screen.getByRole("button", {
-      name: "选择 2 号座位，当前为 请选择",
+      name: "选择 2 号座位，当前为 待选择",
     });
     await user.click(secondSeat);
 
@@ -1670,7 +1622,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -1692,7 +1644,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -1894,7 +1846,7 @@ describe("GamesPage", () => {
     renderGamesPage();
 
     await screen.findByRole("button", {
-      name: "选择 8 号座位，当前为 请选择",
+      name: "选择 8 号座位，当前为 待选择",
     });
 
     const styles = readFileSync("src/styles/index.css", "utf8");
@@ -1910,7 +1862,7 @@ describe("GamesPage", () => {
     expect(seatGridRule).toContain("grid-template-rows: repeat(2");
     expect(seatCardRule).toContain("aspect-ratio: 935 / 983");
     expect(seatCardRule).toContain("min-height: 0");
-    expect(actionBarRule).toContain("grid-template-columns: repeat(3");
+    expect(actionBarRule).toContain("grid-template-columns: minmax(0, 1fr)");
     expect(actionBarRule).toContain("bottom: calc(var(--mobile-tab-frame-height) + 6px");
     expect(actionBarRule).toContain("lobby-action-bar-bg.png");
     expect(actionBarRule).toContain("background-size: 100% 100%");
@@ -1944,7 +1896,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.type(screen.getByLabelText("搜索玩家"), "tagless");
@@ -1960,7 +1912,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(
@@ -2088,7 +2040,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(
@@ -2098,7 +2050,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 2 号座位，当前为 请选择",
+        name: "选择 2 号座位，当前为 待选择",
       }),
     );
 
@@ -2117,7 +2069,7 @@ describe("GamesPage", () => {
     });
     expect(
       screen.getByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     ).toBeVisible();
     expect(
@@ -2133,7 +2085,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(
@@ -2164,7 +2116,7 @@ describe("GamesPage", () => {
       renderGamesPage();
 
       const firstSeat = await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       });
       await user.click(firstSeat);
 
@@ -2183,7 +2135,7 @@ describe("GamesPage", () => {
       await user.click(screen.getByRole("button", { name: "确认并下一位" }));
 
       const secondSeat = screen.getByRole("button", {
-        name: "选择 2 号座位，当前为 请选择",
+        name: "选择 2 号座位，当前为 待选择",
       });
       expect(secondSeat).toHaveFocus();
       await waitFor(() => {
@@ -2211,7 +2163,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -2277,7 +2229,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
 
@@ -2697,7 +2649,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(
@@ -2724,7 +2676,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(
@@ -2734,7 +2686,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 2 号座位，当前为 请选择",
+        name: "选择 2 号座位，当前为 待选择",
       }),
     );
 
@@ -2781,7 +2733,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(
@@ -2824,7 +2776,7 @@ describe("GamesPage", () => {
 
     await user.click(
       await screen.findByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     );
     await user.click(
@@ -2847,7 +2799,7 @@ describe("GamesPage", () => {
     });
     expect(
       screen.getByRole("button", {
-        name: "选择 1 号座位，当前为 请选择",
+        name: "选择 1 号座位，当前为 待选择",
       }),
     ).toBeVisible();
   });
