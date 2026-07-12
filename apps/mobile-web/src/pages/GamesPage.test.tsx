@@ -642,6 +642,57 @@ describe("GamesPage", () => {
     expect(changeRuleButton).toHaveFocus();
   });
 
+  it("shrinks to exactly six seats and drops assignments outside the new rule", async () => {
+    const user = userEvent.setup();
+    const eightPlayerRuleSet = { ...classicRuleSet, player_count: 8 };
+    gameClientMocks.listRuleSets.mockResolvedValue({
+      rule_sets: [eightPlayerRuleSet, starterRuleSet],
+    });
+    renderGamesPage();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "选择 7 号座位，当前为 请选择",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "为 7 号座位候选 阿青" }),
+    );
+    await user.click(screen.getByRole("button", { name: "确认选择" }));
+    expect(
+      await screen.findByRole("button", {
+        name: "选择 7 号座位，当前为 阿青",
+      }),
+    ).toBeVisible();
+
+    const summary = screen.getByRole("region", { name: "当前规则" });
+    await user.click(
+      within(summary).getByRole("button", { name: "更换规则" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "选择规则 新手 6 人快局" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "选择 6 号座位，当前为 请选择" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /选择 7 号座位/ }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(summary).getByRole("button", { name: "更换规则" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "选择规则 经典 8 人" }),
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "选择 7 号座位，当前为 请选择",
+      }),
+    ).toBeVisible();
+  });
+
   it("presents known artwork and an unknown-rule fallback with modal focus behavior", async () => {
     const user = userEvent.setup();
     const unknownRuleSet: RuleSetSummary = {
