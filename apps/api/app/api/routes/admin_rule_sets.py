@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import unicodedata
 from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import func, select
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.admin.audit import record_audit_event
@@ -31,6 +32,7 @@ from app.api.schemas.admin_rule_sets import (
     AdminRuleSetDuplicate,
     AdminRuleSetListResponse,
     AdminRuleSetOptionsResponse,
+    AdminRuleSetPublish,
     AdminRuleSetResponse,
     AdminRuleSetUsage,
     AdminRuleSetValidate,
@@ -76,13 +78,13 @@ from app.rule_sets.snapshots import (
     admin_rule_set_snapshot,
     audit_rule_set_snapshot,
 )
-from app.rule_sets.types import RuleValidationIssue
+from app.rule_sets.types import RuleSetConfig, RuleValidationIssue
 from app.rule_sets.validation import normalize_rule_set_config
 from app.werewolf.rules import render_rule_text
 
 
 router = APIRouter()
-RecoverableDatabaseError = (OperationalError, ProgrammingError)
+PersistenceError = (SQLAlchemyError,)
 MutationFailure = (
     DefaultRuleRequired,
     RuleRevisionChanged,
@@ -94,7 +96,7 @@ MutationFailure = (
     RuleSetValidationFailed,
     RuleSetVersionConflict,
     ValueError,
-    *RecoverableDatabaseError,
+    *PersistenceError,
 )
 _MAX_PAGE = 2_147_483_647
 
@@ -202,7 +204,7 @@ def list_admin_rule_sets(
             AdminRuleSetResponse.model_validate(admin_rule_set_snapshot(aggregate))
             for aggregate in result.items
         ]
-    except (RuleSetCatalogCorrupt, *RecoverableDatabaseError) as exc:
+    except (RuleSetCatalogCorrupt, *PersistenceError) as exc:
         raise _store_unavailable() from exc
     _set_private_headers(request, response)
     return AdminRuleSetListResponse(
@@ -236,7 +238,7 @@ def get_admin_rule_set(
         warnings = _operational_warnings(db, aggregate)
     except AdminAPIProblem:
         raise
-    except (RuleSetCatalogCorrupt, *RecoverableDatabaseError) as exc:
+    except (RuleSetCatalogCorrupt, *PersistenceError) as exc:
         raise _store_unavailable() from exc
     _set_private_headers(request, response)
     return AdminRuleSetDetailResponse.model_validate(
@@ -265,7 +267,10 @@ def create_admin_rule_set(
         aggregate = create_rule_set(
             db,
             rule_set_id=request_body.id,
-            config=normalize_rule_set_config(request_body.config.model_dump()),
+            config=_normalize_request_rule_config(
+                request_body.id,
+                request_body.config.model_dump(),
+            ),
             display_order=request_body.display_order,
             actor_user_id=principal.user.id,
         )
@@ -316,7 +321,10 @@ def update_admin_rule_set_draft(
         aggregate = update_rule_set_draft(
             db,
             rule_set_id,
-            config=normalize_rule_set_config(request_body.config.model_dump()),
+            config=_normalize_request_rule_config(
+                rule_set_id,
+                request_body.config.model_dump(),
+            ),
             display_order=request_body.display_order,
             expected_rule_set_lock_version=request_body.expected_rule_set_lock_version,
             expected_revision_lock_version=request_body.expected_revision_lock_version,
@@ -433,7 +441,7 @@ def validate_admin_rule_set_draft(
 )
 def publish_admin_rule_set(
     rule_set_id: Annotated[str, Path(pattern=RULE_SET_ID_PATTERN)],
-    request_body: AdminRuleSetTransition,
+    request_body: AdminRuleSetPublish,
     request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
@@ -543,7 +551,6 @@ def archive_admin_rule_set(
             reason=request_body.reason,
             expected={
                 "expected_rule_set_lock_version": (request_body.expected_rule_set_lock_version),
-                "expected_revision_lock_version": (request_body.expected_revision_lock_version),
                 "replacement_default_rule_set_id": (request_body.replacement_default_rule_set_id),
                 "replacement_expected_lock_version": (
                     request_body.replacement_expected_lock_version
@@ -604,7 +611,6 @@ def restore_admin_rule_set(
             reason=request_body.reason,
             expected={
                 "expected_rule_set_lock_version": (request_body.expected_rule_set_lock_version),
-                "expected_revision_lock_version": (request_body.expected_revision_lock_version),
             },
         )
     _set_private_headers(request, response)
@@ -695,11 +701,15 @@ def duplicate_admin_rule_set(
     try:
         source = get_rule_set_aggregate(db, rule_set_id, revision_limit=1)
         before = audit_rule_set_snapshot(source) if source is not None else None
+        new_name = _normalize_duplicate_name(
+            request_body.new_rule_set_id,
+            request_body.new_name,
+        )
         aggregate = duplicate_rule_set(
             db,
             rule_set_id,
             new_rule_set_id=request_body.new_rule_set_id,
-            new_name=request_body.new_name,
+            new_name=new_name,
             expected_source_lock_version=request_body.expected_source_lock_version,
             actor_user_id=principal.user.id,
         )
@@ -806,6 +816,44 @@ def _operational_warnings(
     return warnings[:10]
 
 
+def _normalize_request_rule_config(
+    rule_set_id: str,
+    value: dict[str, object],
+) -> RuleSetConfig:
+    try:
+        return normalize_rule_set_config(value)
+    except ValueError:
+        raise _request_validation_failure(rule_set_id, path="config") from None
+
+
+def _normalize_duplicate_name(rule_set_id: str, value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    if any(unicodedata.category(character).startswith("C") for character in normalized):
+        raise _request_validation_failure(rule_set_id, path="new_name")
+    normalized = normalized.strip()
+    if not 1 <= len(normalized) <= 120:
+        raise _request_validation_failure(rule_set_id, path="new_name")
+    return normalized
+
+
+def _request_validation_failure(
+    rule_set_id: str,
+    *,
+    path: str,
+) -> RuleSetValidationFailed:
+    return RuleSetValidationFailed(
+        rule_set_id,
+        revision_id=None,
+        issues=(
+            RuleValidationIssue(
+                code="rule_configuration_invalid",
+                path=path,
+                message="Rule configuration is invalid.",
+            ),
+        ),
+    )
+
+
 def _raise_mutation_problem(
     db: Session,
     *,
@@ -820,11 +868,15 @@ def _raise_mutation_problem(
 ) -> NoReturn:
     db.rollback()
     failure_rule_set_id = _bounded_identifier(getattr(exc, "rule_set_id", None), 80)
-    current = _current_rule_set_versions(
-        db,
-        failure_rule_set_id or current_rule_set_id,
-    )
-    problem = _mutation_problem(exc, current=current)
+    version_rule_set_id = failure_rule_set_id or current_rule_set_id
+    reread_failed = False
+    try:
+        current = _current_rule_set_versions(db, version_rule_set_id)
+    except SQLAlchemyError:
+        db.rollback()
+        current = _empty_current_rule_set_versions(version_rule_set_id)
+        reread_failed = True
+    problem = _store_unavailable() if reread_failed else _mutation_problem(exc, current=current)
     attempt = _bounded_attempt(expected)
     attempt.update(current)
     try:
@@ -835,53 +887,52 @@ def _raise_mutation_problem(
             action=action,
             resource_type="rule_set",
             resource_id=resource_id,
-            result=_failure_result(exc),
+            result="failure" if reread_failed else _failure_result(exc),
             reason=reason or problem.code,
             after=attempt,
         )
         db.commit()
-    except RecoverableDatabaseError:
+    except (SQLAlchemyError, ValueError):
         db.rollback()
         raise _store_unavailable() from None
     raise problem from None
 
 
 def _current_rule_set_versions(db: Session, rule_set_id: str) -> dict[str, object]:
-    empty = {
-        "current_rule_set_id": _bounded_identifier(rule_set_id, 80),
-        "current_status": None,
-        "current_rule_set_lock_version": None,
-        "current_revision_id": None,
-        "current_revision_lock_version": None,
-    }
-    try:
-        row = db.execute(
-            select(
-                RuleSetRecord.status.label("current_status"),
-                RuleSetRecord.lock_version.label("rule_set_lock_version"),
-                RuleSetRecord.draft_revision_id,
-                RuleSetRecord.current_published_revision_id,
-            ).where(RuleSetRecord.id == rule_set_id)
-        ).one_or_none()
-        if row is None:
-            return empty
-        current_revision_id = row.draft_revision_id or row.current_published_revision_id
-        current_revision_lock_version: int | None = None
-        if current_revision_id is not None:
-            current_revision_lock_version = db.scalar(
-                select(RuleSetRevisionRecord.lock_version).where(
-                    RuleSetRevisionRecord.id == current_revision_id
-                )
+    row = db.execute(
+        select(
+            RuleSetRecord.status.label("current_status"),
+            RuleSetRecord.lock_version.label("rule_set_lock_version"),
+            RuleSetRecord.draft_revision_id,
+            RuleSetRecord.current_published_revision_id,
+        ).where(RuleSetRecord.id == rule_set_id)
+    ).one_or_none()
+    if row is None:
+        return _empty_current_rule_set_versions(rule_set_id)
+    current_revision_id = row.draft_revision_id or row.current_published_revision_id
+    current_revision_lock_version: int | None = None
+    if current_revision_id is not None:
+        current_revision_lock_version = db.scalar(
+            select(RuleSetRevisionRecord.lock_version).where(
+                RuleSetRevisionRecord.id == current_revision_id
             )
-    except RecoverableDatabaseError:
-        db.rollback()
-        return empty
+        )
     return {
         "current_rule_set_id": _bounded_identifier(rule_set_id, 80),
         "current_status": _bounded_status(row.current_status),
         "current_rule_set_lock_version": _bounded_lock_version(row.rule_set_lock_version),
         "current_revision_id": _bounded_identifier(current_revision_id, 36),
         "current_revision_lock_version": _bounded_lock_version(current_revision_lock_version),
+    }
+
+
+def _empty_current_rule_set_versions(rule_set_id: str) -> dict[str, object]:
+    return {
+        "current_rule_set_id": _bounded_identifier(rule_set_id, 80),
+        "current_status": None,
+        "current_rule_set_lock_version": None,
+        "current_revision_id": None,
+        "current_revision_lock_version": None,
     }
 
 
@@ -904,22 +955,6 @@ def _mutation_problem(
                         "message": issue.message,
                     }
                     for issue in exc.issues
-                ]
-            },
-        )
-    if isinstance(exc, ValueError):
-        return AdminAPIProblem(
-            status_code=422,
-            code="rule_set_validation_failed",
-            title="Rule set validation failed",
-            detail="The rule set has validation errors.",
-            extensions={
-                "errors": [
-                    {
-                        "code": "rule_configuration_invalid",
-                        "path": "config",
-                        "message": "Rule configuration is invalid.",
-                    }
                 ]
             },
         )
@@ -979,7 +1014,7 @@ def _mutation_problem(
 
 
 def _failure_result(exc: Exception) -> str:
-    if isinstance(exc, (RuleSetValidationFailed, ValueError)):
+    if isinstance(exc, RuleSetValidationFailed):
         return "rejected"
     if isinstance(
         exc,

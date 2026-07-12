@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DataError, IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -408,7 +408,6 @@ def test_content_editor_creates_revision_one_draft_with_one_bounded_audit(
             "/api/v1/admin/rule-sets/csrf_target/archive",
             {
                 "expected_rule_set_lock_version": 1,
-                "expected_revision_lock_version": 1,
                 "reason": "archive safely",
             },
         ),
@@ -417,7 +416,6 @@ def test_content_editor_creates_revision_one_draft_with_one_bounded_audit(
             "/api/v1/admin/rule-sets/csrf_target/restore",
             {
                 "expected_rule_set_lock_version": 1,
-                "expected_revision_lock_version": 1,
                 "reason": "restore safely",
             },
         ),
@@ -485,7 +483,6 @@ def test_every_existing_rule_set_mutation_requires_csrf(
             "archive",
             {
                 "expected_rule_set_lock_version": 1,
-                "expected_revision_lock_version": 1,
                 "reason": "archive denied",
             },
             "rules.archive",
@@ -494,7 +491,6 @@ def test_every_existing_rule_set_mutation_requires_csrf(
             "restore",
             {
                 "expected_rule_set_lock_version": 1,
-                "expected_revision_lock_version": 1,
                 "reason": "restore denied",
             },
             "rules.archive",
@@ -540,6 +536,79 @@ def test_content_editor_cannot_execute_high_risk_rule_transitions(
     assert permission in response.json()["detail"]
     with context.session_factory() as db:
         assert db.scalar(select(AuditEvent).where(AuditEvent.resource_type == "rule_set")) is None
+
+
+def test_publish_requires_revision_precondition_before_service_or_audit(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    login = _login(context, monkeypatch, role="super_admin")
+    service_calls: list[dict[str, object]] = []
+
+    def service_sentinel(*_args: object, **kwargs: object) -> None:
+        service_calls.append(kwargs)
+
+    monkeypatch.setattr(route_module, "publish_rule_set", service_sentinel)
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets/publish_precondition/publish",
+        json={
+            "expected_rule_set_lock_version": 1,
+            "reason": "missing revision precondition",
+        },
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "admin_request_invalid"
+    assert service_calls == []
+    with context.session_factory() as db:
+        assert (
+            db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.rule_set.publish"))
+            is None
+        )
+
+
+@pytest.mark.parametrize(
+    ("suffix", "service_name"),
+    [("archive", "archive_rule_set"), ("restore", "restore_rule_set")],
+)
+def test_parent_only_transition_rejects_revision_precondition_before_service_or_audit(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+    service_name: str,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    login = _login(context, monkeypatch, role="super_admin")
+    service_calls: list[dict[str, object]] = []
+
+    def service_sentinel(*_args: object, **kwargs: object) -> None:
+        service_calls.append(kwargs)
+
+    monkeypatch.setattr(route_module, service_name, service_sentinel)
+
+    response = context.client.post(
+        f"/api/v1/admin/rule-sets/parent_only/{suffix}",
+        json={
+            "expected_rule_set_lock_version": 1,
+            "expected_revision_lock_version": 1,
+            "reason": f"reject revision on {suffix}",
+        },
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "admin_request_invalid"
+    assert service_calls == []
+    with context.session_factory() as db:
+        assert (
+            db.scalar(select(AuditEvent).where(AuditEvent.action == f"admin.rule_set.{suffix}"))
+            is None
+        )
 
 
 def test_draft_update_clones_published_revision_before_editing(
@@ -824,7 +893,6 @@ def test_super_admin_archives_and_restores_without_changing_published_revision(
         "/api/v1/admin/rule-sets/lifecycle_rule/archive",
         json={
             "expected_rule_set_lock_version": 1,
-            "expected_revision_lock_version": 1,
             "reason": "temporarily retire",
         },
         headers={"X-CSRF-Token": login["csrf_token"]},
@@ -838,7 +906,6 @@ def test_super_admin_archives_and_restores_without_changing_published_revision(
         "/api/v1/admin/rule-sets/lifecycle_rule/restore",
         json={
             "expected_rule_set_lock_version": archived_payload["lock_version"],
-            "expected_revision_lock_version": None,
             "reason": "return to catalog",
         },
         headers={"X-CSRF-Token": login["csrf_token"]},
@@ -892,7 +959,6 @@ def test_archiving_default_switches_replacement_in_same_successful_transaction(
         "/api/v1/admin/rule-sets/z_current_default/archive",
         json={
             "expected_rule_set_lock_version": 1,
-            "expected_revision_lock_version": None,
             "reason": "replace default safely",
             "replacement_default_rule_set_id": "a_replacement",
             "replacement_expected_lock_version": 1,
@@ -968,6 +1034,62 @@ def test_super_admin_sets_published_default_atomically(
     assert event is not None
     assert event.result == "success"
     assert event.reason == "promote new default"
+
+
+def test_stale_previous_default_reports_its_versions_without_changing_default_flags(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="stale_old_default",
+            name="Stale Old Default",
+            status="published",
+            display_order=10,
+            player_count=8,
+            is_default=True,
+        )
+        _seed_rule(
+            db,
+            rule_set_id="next_default",
+            name="Next Default",
+            status="published",
+            display_order=20,
+            player_count=8,
+        )
+        db.flush()
+        previous = db.get(RuleSetRecord, "stale_old_default")
+        assert previous is not None
+        previous.lock_version = 7
+        db.commit()
+    login = _login(context, monkeypatch, role="super_admin")
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets/next_default/set-default",
+        json={
+            "expected_rule_set_lock_version": 1,
+            "previous_default_expected_lock_version": 2,
+            "reason": "stale previous default attempt",
+        },
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "rule_set_version_conflict"
+    assert response.json()["current_rule_set_lock_version"] == 7
+    with context.session_factory() as db:
+        previous = db.get(RuleSetRecord, "stale_old_default")
+        target = db.get(RuleSetRecord, "next_default")
+        event = db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "admin.rule_set.set_default")
+        )
+    assert previous is not None and previous.is_default is True
+    assert target is not None and target.is_default is False
+    assert event is not None and event.result == "conflict"
+    assert event.after["current_rule_set_id"] == "stale_old_default"
+    assert event.after["current_rule_set_lock_version"] == 7
+    assert event.after["previous_default_expected_lock_version"] == 2
 
 
 def test_stale_draft_update_returns_bounded_conflict_and_persists_one_attempt(
@@ -1116,7 +1238,6 @@ def test_archiving_only_default_requires_replacement_and_records_conflict(
         "/api/v1/admin/rule-sets/required_default/archive",
         json={
             "expected_rule_set_lock_version": 1,
-            "expected_revision_lock_version": None,
             "reason": "archive without replacement",
         },
         headers={"X-CSRF-Token": login["csrf_token"]},
@@ -1165,7 +1286,6 @@ def test_stale_archive_replacement_reports_and_audits_replacement_versions(
         "/api/v1/admin/rule-sets/archive_primary/archive",
         json={
             "expected_rule_set_lock_version": 1,
-            "expected_revision_lock_version": None,
             "reason": "stale replacement attempt",
             "replacement_default_rule_set_id": "stale_replacement",
             "replacement_expected_lock_version": 2,
@@ -1231,6 +1351,260 @@ def test_storage_failure_returns_sanitized_problem_and_bounded_failure_audit(
     assert "description" not in persisted
 
 
+def test_business_integrity_error_rolls_back_and_persists_one_sanitized_failure_attempt(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    login = _login(context, monkeypatch, role="content_editor")
+    raw_storage_text = "INSERT SECRET business integrity detail"
+
+    def fail_create(*_args: object, **_kwargs: object) -> None:
+        raise IntegrityError(
+            raw_storage_text,
+            {"description": "integrity params must not leak"},
+            RuntimeError("integrity driver cause"),
+        )
+
+    monkeypatch.setattr(route_module, "create_rule_set", fail_create)
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets",
+        json=_create_payload(rule_set_id="integrity_failure", name="Integrity Failure"),
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "rule_set_store_unavailable"
+    assert raw_storage_text not in response.text
+    assert "integrity params" not in response.text
+    assert "integrity driver" not in response.text
+    with context.session_factory() as db:
+        assert db.get(RuleSetRecord, "integrity_failure") is None
+        events = db.scalars(
+            select(AuditEvent).where(AuditEvent.action == "admin.rule_set.create")
+        ).all()
+    assert len(events) == 1
+    assert events[0].result == "failure"
+    persisted = f"{events[0].reason} {events[0].before} {events[0].after}"
+    assert raw_storage_text not in persisted
+    assert "integrity params" not in persisted
+    assert "integrity driver" not in persisted
+
+
+def test_success_commit_data_error_rolls_back_business_then_commits_one_failure_attempt(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login = _login(context, monkeypatch, role="content_editor")
+    real_commit = Session.commit
+    commit_calls = 0
+    raw_storage_text = "COMMIT SECRET data detail"
+
+    def fail_first_commit(db: Session) -> None:
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 1:
+            raise DataError(
+                raw_storage_text,
+                {"description": "commit params must not leak"},
+                RuntimeError("commit driver cause"),
+            )
+        real_commit(db)
+
+    monkeypatch.setattr(Session, "commit", fail_first_commit)
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets",
+        json=_create_payload(rule_set_id="commit_failure", name="Commit Failure"),
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "rule_set_store_unavailable"
+    assert raw_storage_text not in response.text
+    assert "commit params" not in response.text
+    assert "commit driver" not in response.text
+    with context.session_factory() as db:
+        assert db.get(RuleSetRecord, "commit_failure") is None
+        events = db.scalars(
+            select(AuditEvent).where(AuditEvent.action == "admin.rule_set.create")
+        ).all()
+    assert commit_calls == 2
+    assert len(events) == 1
+    assert events[0].result == "failure"
+    assert raw_storage_text not in str(events[0].after)
+
+
+def test_scalar_reread_data_error_becomes_503_and_one_sanitized_failure_attempt(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+    from app.rule_sets.errors import RuleSetVersionConflict
+
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="reread_failure",
+            name="Reread Failure",
+            status="draft",
+            display_order=10,
+            player_count=8,
+        )
+        db.commit()
+    login = _login(context, monkeypatch, role="content_editor")
+    fail_next_execute = False
+    real_execute = Session.execute
+    raw_storage_text = "SELECT SECRET scalar reread detail"
+
+    def fail_update(*_args: object, **_kwargs: object) -> None:
+        nonlocal fail_next_execute
+        fail_next_execute = True
+        raise RuleSetVersionConflict(
+            "reread_failure",
+            expected_rule_set_lock_version=99,
+            current_rule_set_lock_version=1,
+            expected_revision_lock_version=99,
+            current_revision_lock_version=1,
+        )
+
+    def fail_reread_execute(db: Session, *args: object, **kwargs: object) -> object:
+        nonlocal fail_next_execute
+        if fail_next_execute:
+            fail_next_execute = False
+            raise DataError(
+                raw_storage_text,
+                {"description": "reread params must not leak"},
+                RuntimeError("reread driver cause"),
+            )
+        return real_execute(db, *args, **kwargs)
+
+    monkeypatch.setattr(route_module, "update_rule_set_draft", fail_update)
+    monkeypatch.setattr(Session, "execute", fail_reread_execute)
+
+    response = context.client.patch(
+        "/api/v1/admin/rule-sets/reread_failure/draft",
+        json={
+            "expected_rule_set_lock_version": 99,
+            "expected_revision_lock_version": 99,
+            "display_order": 20,
+            "config": _config(name="Reread Client Draft"),
+        },
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "rule_set_store_unavailable"
+    assert raw_storage_text not in response.text
+    assert "reread params" not in response.text
+    assert "reread driver" not in response.text
+    with context.session_factory() as db:
+        record = db.get(RuleSetRecord, "reread_failure")
+        events = db.scalars(
+            select(AuditEvent).where(AuditEvent.action == "admin.rule_set.update")
+        ).all()
+    assert record is not None and record.display_order == 10
+    assert len(events) == 1
+    assert events[0].result == "failure"
+    assert events[0].after["current_rule_set_lock_version"] is None
+    assert raw_storage_text not in str(events[0].after)
+
+
+def test_failure_audit_data_error_rolls_back_and_returns_sanitized_503_without_event(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    login = _login(context, monkeypatch, role="content_editor")
+    raw_initial_text = "SELECT SECRET initial business failure"
+    raw_audit_text = "INSERT SECRET fallback audit failure"
+    audit_calls = 0
+
+    def fail_create(*_args: object, **_kwargs: object) -> None:
+        raise OperationalError(raw_initial_text, {}, RuntimeError("initial driver cause"))
+
+    def fail_audit(*_args: object, **kwargs: object) -> None:
+        nonlocal audit_calls
+        audit_calls += 1
+        assert kwargs["result"] == "failure"
+        raise DataError(
+            raw_audit_text,
+            {"description": "audit params must not leak"},
+            RuntimeError("audit driver cause"),
+        )
+
+    monkeypatch.setattr(route_module, "create_rule_set", fail_create)
+    monkeypatch.setattr(route_module, "record_audit_event", fail_audit)
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets",
+        json=_create_payload(rule_set_id="fallback_audit_failure", name="Audit Failure"),
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "rule_set_store_unavailable"
+    for raw in (
+        raw_initial_text,
+        raw_audit_text,
+        "initial driver",
+        "audit params",
+        "audit driver",
+    ):
+        assert raw not in response.text
+    with context.session_factory() as db:
+        assert db.get(RuleSetRecord, "fallback_audit_failure") is None
+        events = db.scalars(
+            select(AuditEvent).where(AuditEvent.action == "admin.rule_set.create")
+        ).all()
+    assert audit_calls == 1
+    assert events == []
+
+
+def test_failure_audit_internal_value_error_rolls_back_and_returns_sanitized_503(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    login = _login(context, monkeypatch, role="content_editor")
+    initial_secret = "SECRET initial internal invariant"
+    audit_secret = "SECRET fallback audit invariant"
+    audit_calls = 0
+
+    def fail_create(*_args: object, **_kwargs: object) -> None:
+        raise ValueError(initial_secret)
+
+    def fail_audit(*_args: object, **_kwargs: object) -> None:
+        nonlocal audit_calls
+        audit_calls += 1
+        raise ValueError(audit_secret)
+
+    monkeypatch.setattr(route_module, "create_rule_set", fail_create)
+    monkeypatch.setattr(route_module, "record_audit_event", fail_audit)
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets",
+        json=_create_payload(rule_set_id="internal_audit_failure", name="Audit Failure"),
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "rule_set_store_unavailable"
+    assert initial_secret not in response.text
+    assert audit_secret not in response.text
+    with context.session_factory() as db:
+        assert db.get(RuleSetRecord, "internal_audit_failure") is None
+        events = db.scalars(
+            select(AuditEvent).where(AuditEvent.action == "admin.rule_set.create")
+        ).all()
+    assert audit_calls == 1
+    assert events == []
+
+
 def test_success_audit_failure_rolls_back_business_then_commits_one_failure_attempt(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
@@ -1274,11 +1648,37 @@ def test_success_audit_failure_rolls_back_business_then_commits_one_failure_atte
     assert "backend detail" not in str(events[0].after)
 
 
-def test_successful_mutation_uses_exactly_one_route_level_commit(
+@pytest.mark.parametrize(
+    "mutation",
+    ["create", "draft", "validate", "publish", "archive", "restore", "default", "duplicate"],
+)
+def test_each_successful_mutation_uses_exactly_one_route_level_commit(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
 ) -> None:
-    login = _login(context, monkeypatch, role="content_editor")
+    rule_set_id = f"commit_{mutation}"
+    status_by_mutation = {
+        "draft": "draft",
+        "validate": "draft",
+        "publish": "draft",
+        "archive": "published",
+        "restore": "archived",
+        "default": "published",
+        "duplicate": "draft",
+    }
+    if mutation != "create":
+        with context.session_factory() as db:
+            _seed_rule(
+                db,
+                rule_set_id=rule_set_id,
+                name=f"Commit {mutation.title()}",
+                status=status_by_mutation[mutation],
+                display_order=10,
+                player_count=8,
+            )
+            db.commit()
+    login = _login(context, monkeypatch, role="super_admin")
     real_commit = Session.commit
     commit_calls: list[Session] = []
 
@@ -1288,17 +1688,92 @@ def test_successful_mutation_uses_exactly_one_route_level_commit(
 
     monkeypatch.setattr(Session, "commit", tracked_commit)
 
-    response = context.client.post(
-        "/api/v1/admin/rule-sets",
-        json=_create_payload(rule_set_id="one_commit", name="One Commit"),
+    requests = {
+        "create": (
+            "POST",
+            "/api/v1/admin/rule-sets",
+            _create_payload(rule_set_id=rule_set_id, name="Commit Create"),
+            "admin.rule_set.create",
+        ),
+        "draft": (
+            "PATCH",
+            f"/api/v1/admin/rule-sets/{rule_set_id}/draft",
+            {
+                "expected_rule_set_lock_version": 1,
+                "expected_revision_lock_version": 1,
+                "display_order": 20,
+                "config": _config(name="Commit Draft Updated"),
+            },
+            "admin.rule_set.update",
+        ),
+        "validate": (
+            "POST",
+            f"/api/v1/admin/rule-sets/{rule_set_id}/validate",
+            {"expected_revision_lock_version": 1},
+            "admin.rule_set.validate",
+        ),
+        "publish": (
+            "POST",
+            f"/api/v1/admin/rule-sets/{rule_set_id}/publish",
+            {
+                "expected_rule_set_lock_version": 1,
+                "expected_revision_lock_version": 1,
+                "reason": "commit publish",
+            },
+            "admin.rule_set.publish",
+        ),
+        "archive": (
+            "POST",
+            f"/api/v1/admin/rule-sets/{rule_set_id}/archive",
+            {
+                "expected_rule_set_lock_version": 1,
+                "reason": "commit archive",
+            },
+            "admin.rule_set.archive",
+        ),
+        "restore": (
+            "POST",
+            f"/api/v1/admin/rule-sets/{rule_set_id}/restore",
+            {
+                "expected_rule_set_lock_version": 1,
+                "reason": "commit restore",
+            },
+            "admin.rule_set.restore",
+        ),
+        "default": (
+            "POST",
+            f"/api/v1/admin/rule-sets/{rule_set_id}/set-default",
+            {
+                "expected_rule_set_lock_version": 1,
+                "previous_default_expected_lock_version": None,
+                "reason": "commit default",
+            },
+            "admin.rule_set.set_default",
+        ),
+        "duplicate": (
+            "POST",
+            f"/api/v1/admin/rule-sets/{rule_set_id}/duplicate",
+            {
+                "expected_source_lock_version": 1,
+                "new_rule_set_id": "commit_duplicate_copy",
+                "new_name": "Commit Duplicate Copy",
+            },
+            "admin.rule_set.duplicate",
+        ),
+    }
+    method, path, body, action = requests[mutation]
+    response = context.client.request(
+        method,
+        path,
+        json=body,
         headers={"X-CSRF-Token": login["csrf_token"]},
     )
 
-    assert response.status_code == 201, response.text
+    expected_status = 201 if mutation in {"create", "duplicate"} else 200
+    assert response.status_code == expected_status, response.text
     assert len(commit_calls) == 1
     with context.session_factory() as db:
-        assert db.get(RuleSetRecord, "one_commit") is not None
-        event = db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.rule_set.create"))
+        event = db.scalar(select(AuditEvent).where(AuditEvent.action == action))
     assert event is not None and event.result == "success"
 
 
@@ -1335,9 +1810,139 @@ def test_domain_text_validation_is_a_bounded_rejected_create_attempt(
     assert "description" not in str(event.after)
 
 
+def test_domain_text_validation_is_a_bounded_rejected_update_attempt(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="unsafe_update",
+            name="Stored Safe Draft",
+            status="draft",
+            display_order=10,
+            player_count=8,
+        )
+        db.commit()
+    login = _login(context, monkeypatch, role="content_editor")
+    config = _config(name="Unsafe\u0000Update")
+
+    response = context.client.patch(
+        "/api/v1/admin/rule-sets/unsafe_update/draft",
+        json={
+            "expected_rule_set_lock_version": 1,
+            "expected_revision_lock_version": 1,
+            "display_order": 20,
+            "config": config,
+        },
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "rule_set_validation_failed"
+    assert response.json()["errors"] == [
+        {
+            "code": "rule_configuration_invalid",
+            "path": "config",
+            "message": "Rule configuration is invalid.",
+        }
+    ]
+    assert "Unsafe" not in response.text
+    with context.session_factory() as db:
+        record = db.get(RuleSetRecord, "unsafe_update")
+        revision = db.scalar(
+            select(RuleSetRevisionRecord).where(
+                RuleSetRevisionRecord.rule_set_id == "unsafe_update"
+            )
+        )
+        event = db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.rule_set.update"))
+    assert record is not None and record.display_order == 10
+    assert revision is not None and revision.name == "Stored Safe Draft"
+    assert event is not None and event.result == "rejected"
+    assert "Unsafe" not in str(event.after)
+
+
+def test_internal_service_value_error_is_sanitized_503_and_failure_audit(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    login = _login(context, monkeypatch, role="content_editor")
+    secret = "SECRET internal service invariant and description"
+
+    def fail_create(*_args: object, **_kwargs: object) -> None:
+        raise ValueError(secret)
+
+    monkeypatch.setattr(route_module, "create_rule_set", fail_create)
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets",
+        json=_create_payload(rule_set_id="internal_value", name="Internal Value"),
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "rule_set_store_unavailable"
+    assert secret not in response.text
+    with context.session_factory() as db:
+        assert db.get(RuleSetRecord, "internal_value") is None
+        events = db.scalars(
+            select(AuditEvent).where(AuditEvent.action == "admin.rule_set.create")
+        ).all()
+    assert len(events) == 1
+    assert events[0].result == "failure"
+    assert events[0].reason == "rule_set_store_unavailable"
+    assert secret not in f"{events[0].before} {events[0].after}"
+
+
+def test_internal_projection_value_error_rolls_back_business_and_is_sanitized_503(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    login = _login(context, monkeypatch, role="content_editor")
+    secret = "SECRET projection compiler snapshot description"
+
+    def fail_projection(*_args: object, **_kwargs: object) -> None:
+        raise ValueError(secret)
+
+    monkeypatch.setattr(route_module, "admin_rule_set_snapshot", fail_projection)
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets",
+        json=_create_payload(rule_set_id="projection_value", name="Projection Value"),
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "rule_set_store_unavailable"
+    assert secret not in response.text
+    with context.session_factory() as db:
+        assert db.get(RuleSetRecord, "projection_value") is None
+        events = db.scalars(
+            select(AuditEvent).where(AuditEvent.action == "admin.rule_set.create")
+        ).all()
+    assert len(events) == 1
+    assert events[0].result == "failure"
+    assert events[0].reason == "rule_set_store_unavailable"
+    assert secret not in f"{events[0].before} {events[0].after}"
+
+
+@pytest.mark.parametrize(
+    ("unsafe_name", "unsafe_marker"),
+    [
+        ("Unsafe\u0000Copy", "Unsafe"),
+        ("\u3000\u3000", "\u3000"),
+    ],
+    ids=("control-character", "nfkc-space"),
+)
 def test_duplicate_invalid_normalized_name_is_rejected_without_copying(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
+    unsafe_name: str,
+    unsafe_marker: str,
 ) -> None:
     with context.session_factory() as db:
         _seed_rule(
@@ -1356,18 +1961,20 @@ def test_duplicate_invalid_normalized_name_is_rejected_without_copying(
         json={
             "expected_source_lock_version": 1,
             "new_rule_set_id": "unsafe_copy",
-            "new_name": "   ",
+            "new_name": unsafe_name,
         },
         headers={"X-CSRF-Token": login["csrf_token"]},
     )
 
     assert response.status_code == 422
     assert response.json()["code"] == "rule_set_validation_failed"
+    assert unsafe_marker not in response.text
     with context.session_factory() as db:
         assert db.get(RuleSetRecord, "unsafe_copy") is None
         event = db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.rule_set.duplicate"))
     assert event is not None and event.result == "rejected"
     assert "Safe Source description" not in str(event.after)
+    assert unsafe_marker not in str(event.after)
 
 
 def test_viewer_can_read_rule_set_options_without_csrf(
@@ -1647,8 +2254,13 @@ def test_rule_set_request_contracts_are_strict_and_bounded() -> None:
     from app.api.schemas.admin_rule_sets import (
         AdminRuleRoleCounts,
         AdminRuleSetArchive,
+        AdminRuleSetArchiveRequest,
         AdminRuleSetDraftUpdate,
+        AdminRuleSetPublish,
+        AdminRuleSetPublishRequest,
+        AdminRuleSetRestoreRequest,
         AdminRuleSetTransition,
+        AdminRuleSetTransitionRequest,
     )
 
     assert tuple(AdminRuleRoleCounts.model_fields) == (
@@ -1675,6 +2287,25 @@ def test_rule_set_request_contracts_are_strict_and_bounded() -> None:
         "display_order",
         "config",
     )
+    assert tuple(AdminRuleSetPublish.model_fields) == (
+        "expected_rule_set_lock_version",
+        "expected_revision_lock_version",
+        "reason",
+    )
+    assert tuple(AdminRuleSetTransition.model_fields) == (
+        "expected_rule_set_lock_version",
+        "reason",
+    )
+    assert tuple(AdminRuleSetArchive.model_fields) == (
+        "expected_rule_set_lock_version",
+        "reason",
+        "replacement_default_rule_set_id",
+        "replacement_expected_lock_version",
+    )
+    assert AdminRuleSetPublishRequest is AdminRuleSetPublish
+    assert AdminRuleSetArchiveRequest is AdminRuleSetArchive
+    assert AdminRuleSetRestoreRequest is AdminRuleSetTransition
+    assert AdminRuleSetTransitionRequest is AdminRuleSetTransition
 
     for model, payload in (
         (
@@ -1704,7 +2335,6 @@ def test_rule_set_request_contracts_are_strict_and_bounded() -> None:
         AdminRuleSetTransition.model_validate(
             {
                 "expected_rule_set_lock_version": 1,
-                "expected_revision_lock_version": 1,
                 "reason": "no",
             }
         )
@@ -1712,7 +2342,6 @@ def test_rule_set_request_contracts_are_strict_and_bounded() -> None:
         AdminRuleSetTransition.model_validate(
             {
                 "expected_rule_set_lock_version": 1,
-                "expected_revision_lock_version": 1,
                 "reason": "x" * 501,
             }
         )
@@ -1720,7 +2349,6 @@ def test_rule_set_request_contracts_are_strict_and_bounded() -> None:
         AdminRuleSetArchive.model_validate(
             {
                 "expected_rule_set_lock_version": 1,
-                "expected_revision_lock_version": None,
                 "reason": "archive rule",
                 "replacement_default_rule_set_id": "UPPERCASE",
                 "replacement_expected_lock_version": 1,
@@ -1729,7 +2357,6 @@ def test_rule_set_request_contracts_are_strict_and_bounded() -> None:
     archive = AdminRuleSetArchive.model_validate(
         {
             "expected_rule_set_lock_version": 1,
-            "expected_revision_lock_version": None,
             "reason": "archive rule",
             "replacement_default_rule_set_id": "replacement_rule",
             "replacement_expected_lock_version": 2,
@@ -1798,7 +2425,7 @@ def test_each_rule_role_count_rejects_coerced_scalars(
     [
         ("validate", "expected_revision_lock_version", "1"),
         ("transition", "expected_rule_set_lock_version", True),
-        ("transition", "expected_revision_lock_version", 1.0),
+        ("publish", "expected_revision_lock_version", 1.0),
         ("archive", "replacement_expected_lock_version", "2"),
         ("default", "expected_rule_set_lock_version", 1.0),
         ("default", "previous_default_expected_lock_version", "1"),
@@ -1814,6 +2441,7 @@ def test_every_rule_request_lock_version_layer_is_strict(
         AdminRuleSetArchive,
         AdminRuleSetDefaultTransition,
         AdminRuleSetDuplicate,
+        AdminRuleSetPublish,
         AdminRuleSetTransition,
         AdminRuleSetValidate,
     )
@@ -1827,6 +2455,13 @@ def test_every_rule_request_lock_version_layer_is_strict(
             AdminRuleSetTransition,
             {
                 "expected_rule_set_lock_version": 1,
+                "reason": "restore rule",
+            },
+        ),
+        "publish": (
+            AdminRuleSetPublish,
+            {
+                "expected_rule_set_lock_version": 1,
                 "expected_revision_lock_version": 1,
                 "reason": "publish rule",
             },
@@ -1835,7 +2470,6 @@ def test_every_rule_request_lock_version_layer_is_strict(
             AdminRuleSetArchive,
             {
                 "expected_rule_set_lock_version": 1,
-                "expected_revision_lock_version": None,
                 "reason": "archive rule",
                 "replacement_default_rule_set_id": "replacement_rule",
                 "replacement_expected_lock_version": 2,

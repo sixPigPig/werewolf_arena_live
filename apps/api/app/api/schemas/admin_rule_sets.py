@@ -79,7 +79,17 @@ class AdminRuleSetValidate(AdminRuleSetRequest):
 
 class AdminRuleSetTransition(AdminRuleSetRequest):
     expected_rule_set_lock_version: int = Field(ge=1)
-    expected_revision_lock_version: int | None = Field(default=None, ge=1)
+    reason: str = Field(min_length=REASON_MIN_LENGTH, max_length=REASON_MAX_LENGTH)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def trim_reason(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class AdminRuleSetPublish(AdminRuleSetRequest):
+    expected_rule_set_lock_version: int = Field(ge=1)
+    expected_revision_lock_version: int = Field(ge=1)
     reason: str = Field(min_length=REASON_MIN_LENGTH, max_length=REASON_MAX_LENGTH)
 
     @field_validator("reason", mode="before")
@@ -123,7 +133,9 @@ class AdminRuleSetDuplicate(AdminRuleSetRequest):
 
 AdminRuleSetValidateRequest = AdminRuleSetValidate
 AdminRuleSetTransitionRequest = AdminRuleSetTransition
+AdminRuleSetPublishRequest = AdminRuleSetPublish
 AdminRuleSetArchiveRequest = AdminRuleSetArchive
+AdminRuleSetRestoreRequest = AdminRuleSetTransition
 AdminRuleSetSetDefaultRequest = AdminRuleSetDefaultTransition
 AdminRuleSetDuplicateRequest = AdminRuleSetDuplicate
 
