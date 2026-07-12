@@ -174,6 +174,15 @@ class AdminRuleSetWarning(BaseModel):
     message: str = Field(min_length=1, max_length=500)
 
 
+class AdminRuleSetValidationResponse(BaseModel):
+    valid: bool
+    errors: list[AdminRuleSetWarning] = Field(max_length=50)
+    warnings: list[AdminRuleSetWarning] = Field(max_length=50)
+    compiled_snapshot: dict[str, object] | None = None
+    content_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    rule_text_preview: str | None = Field(default=None, max_length=10_000)
+
+
 class AdminRuleSetDetailResponse(AdminRuleSetResponse):
     usage: AdminRuleSetUsage
     warnings: list[AdminRuleSetWarning] = Field(max_length=10)
