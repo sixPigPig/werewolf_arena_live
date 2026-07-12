@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.werewolf import live as live_module
 from app.werewolf.live import (
     LiveEvent,
     LiveGameRun,
@@ -68,6 +69,11 @@ def test_strict_json_equal_accepts_valid_type_exact_nested_json() -> None:
 
 def test_strict_json_equal_rejects_non_json_and_non_finite_values() -> None:
     non_json = object()
+    cycle: list[object] = []
+    cycle.append(cycle)
+    deeply_nested: object = "leaf"
+    for _ in range(2_000):
+        deeply_nested = [deeply_nested]
 
     assert strict_json_equal(float("nan"), float("nan")) is False
     assert strict_json_equal(float("inf"), float("inf")) is False
@@ -75,6 +81,33 @@ def test_strict_json_equal_rejects_non_json_and_non_finite_values() -> None:
     assert strict_json_equal((1,), (1,)) is False
     assert strict_json_equal({1: "value"}, {1: "value"}) is False
     assert strict_json_equal(non_json, non_json) is False
+    assert strict_json_equal(cycle, cycle) is False
+    assert strict_json_equal(deeply_nested, deeply_nested) is False
+
+
+def test_prepared_run_matching_does_not_normalize_raw_fields_or_event_payloads() -> None:
+    candidate = LiveRunRegistry(worker_id="worker-candidate").prepare_run(
+        session_id="game_raw_match",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set={
+            "id": "classic_8",
+            "list_marker": [1],
+            "key_marker": {"1": "value"},
+        },
+    )
+    tuple_run = copy.deepcopy(candidate)
+    tuple_run.rule_set["list_marker"] = (1,)
+    numeric_key_run = copy.deepcopy(candidate)
+    numeric_key_run.rule_set["key_marker"] = {1: "value"}
+    raw_event_run = copy.deepcopy(candidate)
+    raw_event_run.events[0]._payload["rule_set"]["list_marker"] = (1,)
+
+    assert live_module._prepared_runs_match(tuple_run, candidate) is False
+    assert live_module._prepared_runs_match(numeric_key_run, candidate) is False
+    assert live_module._prepared_runs_match(raw_event_run, candidate) is False
 
 
 class RecordingLiveStore:
@@ -1090,6 +1123,7 @@ def test_concurrent_same_registry_stale_claims_advance_the_fence_once() -> None:
             worker_id,
             heartbeat_at,
             lease_expires_at,
+            **_expected,
         ):
             assert run_id == durable.run_id
             with self.state_lock:
@@ -1118,6 +1152,128 @@ def test_concurrent_same_registry_stale_claims_advance_the_fence_once() -> None:
     assert sum(result is not None for result in results) == 1
     assert store.acquire_calls == 1
     assert registry.get_run(durable.run_id).fence_token == 2
+
+
+def test_concurrent_fresh_mark_running_claims_once_and_returns_one_activation() -> None:
+    class BlockingStartStore:
+        def __init__(self) -> None:
+            self.state_lock = threading.Lock()
+            self.first_acquire_entered = threading.Event()
+            self.second_acquire_entered = threading.Event()
+            self.release_first_acquire = threading.Event()
+            self.acquire_calls = 0
+            self.fence_token = 0
+
+        def save_run(self, _run) -> None:
+            return None
+
+        def append_event(self, _event, **_fence) -> None:
+            return None
+
+        def acquire_lease(
+            self,
+            _run_id,
+            *,
+            worker_id,
+            heartbeat_at,
+            lease_expires_at,
+            **_expected,
+        ):
+            with self.state_lock:
+                self.acquire_calls += 1
+                call_number = self.acquire_calls
+                self.fence_token += 1
+                fence_token = self.fence_token
+            if call_number == 1:
+                self.first_acquire_entered.set()
+                assert self.release_first_acquire.wait(timeout=5)
+            else:
+                self.second_acquire_entered.set()
+            return RunLeaseState(
+                worker_id=worker_id,
+                worker_heartbeat_at=heartbeat_at,
+                lease_expires_at=lease_expires_at,
+                stop_requested_at=None,
+                status="queued",
+                control_version=0,
+                fence_token=fence_token,
+                recovery_attempts=0,
+                recovery_last_attempt_at=None,
+                recovery_not_before=None,
+                recovery_last_error=None,
+            )
+
+    store = BlockingStartStore()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-start")
+    run = registry.prepare_run(
+        session_id="game_start_race",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    registry.attach_prepared_run(run)
+    results: list[LiveEvent] = []
+
+    first = threading.Thread(target=lambda: results.append(registry.mark_running(run.run_id)))
+    second = threading.Thread(target=lambda: results.append(registry.mark_running(run.run_id)))
+    first.start()
+    assert store.first_acquire_entered.wait(timeout=5)
+    second.start()
+    store.second_acquire_entered.wait(timeout=0.2)
+    store.release_first_acquire.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert store.acquire_calls == 1
+    assert run.fence_token == 1
+    assert [event.type for event in run.events] == ["run_created", "run_started"]
+    assert [event.id for event in run.events] == [1, 2]
+    assert len(results) == 2
+    assert results[0] is results[1] is run.events[1]
+
+
+def test_preclaimed_recovery_mark_running_is_idempotent_for_the_current_fence() -> None:
+    registry = LiveRunRegistry(worker_id="worker-recovery")
+    run = registry.prepare_run(
+        session_id="game_recovery_activation",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    registry.attach_prepared_run(run)
+    run.status = "running"
+    run.started_at = "2026-07-12T10:00:00Z"
+    run.worker_id = registry.worker_id
+    run.worker_heartbeat_at = "2026-07-12T10:05:00Z"
+    run.lease_expires_at = "2099-07-12T10:05:15Z"
+    run.fence_token = 2
+    run.events.append(
+        LiveEvent(
+            id=2,
+            type="run_started",
+            run_id=run.run_id,
+            session_id=run.session_id,
+            created_at=run.started_at,
+        )
+    )
+    run.next_event_id = 3
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(registry.mark_running, [run.run_id] * 2))
+    repeated = registry.mark_running(run.run_id)
+
+    assert [event.type for event in run.events] == [
+        "run_created",
+        "run_started",
+        "run_recovered",
+    ]
+    assert [event.id for event in run.events] == [1, 2, 3]
+    assert run.events[2].payload == {"fence_token": 2}
+    assert results[0] is results[1] is repeated is run.events[2]
 
 
 def test_unique_conflict_returns_the_other_complete_winner_after_it_starts_running() -> None:
@@ -1255,6 +1411,78 @@ def test_get_or_create_rejects_type_coercive_ack_candidate_changes(
                 "id": "classic_8",
                 "strict_comparison_marker": {"value": expected_value},
             },
+        )
+
+    assert raised.value is failure
+    assert registry._runs == {}
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    ["tuple", "numeric-key", "object", "cycle", "deep"],
+)
+def test_get_or_create_rethrows_ack_error_for_raw_malformed_persisted_state(
+    malformation: str,
+) -> None:
+    failure = RuntimeError("commit acknowledgement lost")
+
+    class RawMalformedAckLostStore(AckLostLiveStore):
+        def save_new_run(self, run) -> None:
+            self.committed_run = copy.deepcopy(run)
+            if malformation == "tuple":
+                self.committed_run.rule_set["raw_marker"] = [1]
+                self.committed_run.rule_set["raw_marker"] = (1,)
+            elif malformation == "numeric-key":
+                self.committed_run.rule_set["raw_marker"] = {1: "value"}
+            elif malformation == "object":
+                self.committed_run.rule_set["raw_marker"] = object()
+            elif malformation == "cycle":
+                cycle: list[object] = []
+                cycle.append(cycle)
+                self.committed_run.rule_set["raw_marker"] = cycle
+            else:
+                deeply_nested: object = "leaf"
+                for _ in range(2_000):
+                    deeply_nested = [deeply_nested]
+                self.committed_run.rule_set["raw_marker"] = deeply_nested
+            raise self.failure
+
+        def load_run(self, run_id):
+            if self.committed_run is None or self.committed_run.run_id != run_id:
+                return None
+            loaded = copy.copy(self.committed_run)
+            loaded.events = []
+            loaded.persisted_event_count = 1
+            loaded.next_event_id = 2
+            return loaded
+
+        def events_after(self, run_id, *, after_id=None):
+            if self.committed_run is None or self.committed_run.run_id != run_id:
+                return []
+            return [
+                event
+                for event in self.committed_run.events
+                if after_id is None or event.id > after_id
+            ]
+
+    candidate_marker: object
+    if malformation == "tuple":
+        candidate_marker = [1]
+    elif malformation == "numeric-key":
+        candidate_marker = {"1": "value"}
+    else:
+        candidate_marker = "candidate"
+    store = RawMalformedAckLostStore(failure)
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-candidate")
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.get_or_create_active_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+            rule_set={"id": "classic_8", "raw_marker": candidate_marker},
         )
 
     assert raised.value is failure

@@ -21,6 +21,7 @@ _RULE_SET_REVISION_FIELDS = frozenset(
     {"revision_id", "revision_no", "schema_version", "content_hash"}
 )
 _CONTENT_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+_STRICT_JSON_MAX_DEPTH = 128
 
 
 class GameRunCanceled(RuntimeError):
@@ -285,6 +286,7 @@ class LiveStore(Protocol):
         self,
         run_id: str,
         *,
+        expected_events: tuple[LiveEvent, ...],
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
@@ -313,6 +315,7 @@ class LiveStore(Protocol):
         self,
         run_id: str,
         *,
+        expected_events: tuple[LiveEvent, ...],
         worker_id: str,
         expected_attempts: int,
         max_attempts: int,
@@ -341,6 +344,7 @@ class LiveRunRegistry:
         self.heartbeat_seconds = heartbeat_seconds
         self.event_poll_seconds = event_poll_seconds
         self._persistent_subscriptions: dict[int, threading.Event] = {}
+        self._activation_events: dict[tuple[str, int], LiveEvent] = {}
 
     def create_run(
         self,
@@ -579,7 +583,11 @@ class LiveRunRegistry:
                 run = self._complete_local_run_locked(run, require_active=True)
                 if run is None:
                     return None
-            lease_state = self._acquire_lease(run_id)
+            expected_run = run if run is not None else persisted
+            lease_state = self._acquire_lease(
+                run_id,
+                expected_events=tuple(expected_run.events),
+            )
             if lease_state is None:
                 return None
             if run is None:
@@ -642,6 +650,7 @@ class LiveRunRegistry:
                     return None
             state = acquire(
                 candidate.run_id,
+                expected_events=tuple((local_run if local_run is not None else persisted).events),
                 worker_id=self.worker_id,
                 expected_attempts=candidate.recovery_attempts,
                 max_attempts=max_attempts,
@@ -682,31 +691,43 @@ class LiveRunRegistry:
     def mark_running(self, run_id: str) -> LiveEvent:
         with self._lock:
             run = self._runs[run_id]
+            activation_key = (run_id, run.fence_token)
+            existing_activation = self._activation_events.get(activation_key)
+            if run.status == "running" and existing_activation is not None:
+                return existing_activation
             has_claimed_lease = (
                 run.worker_id == self.worker_id and run.fence_token > 0 and not run.lease_lost
             )
-        lease_state = None if has_claimed_lease else self._acquire_lease(run_id)
-        if (
-            lease_state is None
-            and not has_claimed_lease
-            and self._supports_store_method("acquire_lease")
-        ):
-            raise RunLeaseUnavailable(f"Run {run_id} is owned by another worker")
-        with self._lock:
-            run = self._runs[run_id]
+            lease_state = (
+                None
+                if has_claimed_lease
+                else self._acquire_lease(run_id, expected_events=tuple(run.events))
+            )
+            if (
+                lease_state is None
+                and not has_claimed_lease
+                and self._supports_store_method("acquire_lease")
+            ):
+                raise RunLeaseUnavailable(f"Run {run_id} is owned by another worker")
             if lease_state is not None:
                 self._apply_lease_state_locked(run, lease_state)
+            activation_key = (run_id, run.fence_token)
+            existing_activation = self._activation_events.get(activation_key)
+            if run.status == "running" and existing_activation is not None:
+                return existing_activation
             self._raise_if_stop_requested_locked(run)
             recovered = run.started_at is not None
             run.status = "running"
             if run.started_at is None:
                 run.started_at = utc_now()
             self._persist_run_locked(run)
-            return self._publish_locked(
+            activation = self._publish_locked(
                 run,
                 "run_recovered" if recovered else "run_started",
                 payload={"fence_token": run.fence_token} if recovered else None,
             )
+            self._activation_events[activation_key] = activation
+            return activation
 
     def mark_completed(self, run_id: str, *, winner: str) -> LiveEvent:
         with self._lock:
@@ -822,6 +843,8 @@ class LiveRunRegistry:
                 return False
             run.stop_requested_at = requested_at
             run.control_version = max(run.control_version, control_version)
+            event_count = len(run.events)
+            next_event_id = run.next_event_id
             try:
                 self._publish_locked(
                     run,
@@ -829,6 +852,8 @@ class LiveRunRegistry:
                     payload={"requested_at": requested_at},
                 )
             except RunLeaseUnavailable:
+                del run.events[event_count:]
+                run.next_event_id = next_event_id
                 return True
             return True
 
@@ -1149,13 +1174,19 @@ class LiveRunRegistry:
         lease_expires_at = heartbeat_at + timedelta(seconds=self.lease_seconds)
         return _format_datetime(heartbeat_at), _format_datetime(lease_expires_at)
 
-    def _acquire_lease(self, run_id: str) -> RunLeaseState | None:
+    def _acquire_lease(
+        self,
+        run_id: str,
+        *,
+        expected_events: tuple[LiveEvent, ...],
+    ) -> RunLeaseState | None:
         acquire = getattr(self._live_store, "acquire_lease", None)
         if not callable(acquire):
             return None
         heartbeat_at, lease_expires_at = self._lease_window()
         return acquire(
             run_id,
+            expected_events=expected_events,
             worker_id=self.worker_id,
             heartbeat_at=heartbeat_at,
             lease_expires_at=lease_expires_at,
@@ -1279,39 +1310,49 @@ class LiveRunRegistry:
 def _prepared_runs_match(persisted: LiveGameRun, candidate: LiveGameRun) -> bool:
     try:
         validate_prepared_run(candidate)
-    except ValueError:
+        return strict_json_equal(
+            _raw_prepared_run_state(persisted),
+            _raw_prepared_run_state(candidate),
+        ) and _live_events_match(persisted.events[0], candidate.events[0])
+    except Exception:
         return False
-    persisted_state = {
-        "summary": persisted.to_summary(),
-        "worker_id": persisted.worker_id,
-        "worker_heartbeat_at": persisted.worker_heartbeat_at,
-        "lease_expires_at": persisted.lease_expires_at,
-        "control_version": persisted.control_version,
-        "fence_token": persisted.fence_token,
-        "recovery_attempts": persisted.recovery_attempts,
-        "recovery_last_attempt_at": persisted.recovery_last_attempt_at,
-        "recovery_not_before": persisted.recovery_not_before,
-        "recovery_last_error": persisted.recovery_last_error,
-        "lease_lost": persisted.lease_lost,
-        "next_event_id": persisted.next_event_id,
+
+
+def _raw_prepared_run_state(run: LiveGameRun) -> dict[str, object]:
+    return {
+        "run_id": run.run_id,
+        "session_id": run.session_id,
+        "villager_model": run.villager_model,
+        "werewolf_model": run.werewolf_model,
+        "seed": run.seed,
+        "max_rounds": run.max_rounds,
+        "rule_set_id": run.rule_set_id,
+        "rule_set_revision_id": run.rule_set_revision_id,
+        "rule_set_revision_no": run.rule_set_revision_no,
+        "rule_set_content_hash": run.rule_set_content_hash,
+        "rule_set": run.rule_set,
+        "player_configs": run.player_configs,
+        "lineup_quality_warnings": run.lineup_quality_warnings,
+        "status": run.status,
+        "created_at": run.created_at,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "winner": run.winner,
+        "error": run.error,
+        "stop_requested_at": run.stop_requested_at,
+        "event_count": run.event_count,
+        "worker_id": run.worker_id,
+        "worker_heartbeat_at": run.worker_heartbeat_at,
+        "lease_expires_at": run.lease_expires_at,
+        "control_version": run.control_version,
+        "fence_token": run.fence_token,
+        "recovery_attempts": run.recovery_attempts,
+        "recovery_last_attempt_at": run.recovery_last_attempt_at,
+        "recovery_not_before": run.recovery_not_before,
+        "recovery_last_error": run.recovery_last_error,
+        "lease_lost": run.lease_lost,
+        "next_event_id": run.next_event_id,
     }
-    candidate_state = {
-        "summary": candidate.to_summary(),
-        "worker_id": candidate.worker_id,
-        "worker_heartbeat_at": candidate.worker_heartbeat_at,
-        "lease_expires_at": candidate.lease_expires_at,
-        "control_version": candidate.control_version,
-        "fence_token": candidate.fence_token,
-        "recovery_attempts": candidate.recovery_attempts,
-        "recovery_last_attempt_at": candidate.recovery_last_attempt_at,
-        "recovery_not_before": candidate.recovery_not_before,
-        "recovery_last_error": candidate.recovery_last_error,
-        "lease_lost": candidate.lease_lost,
-        "next_event_id": candidate.next_event_id,
-    }
-    return strict_json_equal(persisted_state, candidate_state) and _live_events_match(
-        persisted.events[0], candidate.events[0]
-    )
 
 
 def _live_events_match(persisted: LiveEvent, candidate: LiveEvent) -> bool:
@@ -1329,7 +1370,7 @@ def _live_events_match(persisted: LiveEvent, candidate: LiveEvent) -> bool:
         "phase": persisted.phase,
         "actor": persisted.actor,
         "action": persisted.action,
-        "payload": persisted.payload,
+        "payload": persisted._payload,
     }
     candidate_fields = {
         "id": candidate.id,
@@ -1340,7 +1381,7 @@ def _live_events_match(persisted: LiveEvent, candidate: LiveEvent) -> bool:
         "phase": candidate.phase,
         "actor": candidate.actor,
         "action": candidate.action,
-        "payload": candidate.payload,
+        "payload": candidate._payload,
     }
     return persisted_created_at == candidate_created_at and strict_json_equal(
         persisted_fields,
@@ -1432,6 +1473,21 @@ def _copy_json_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def strict_json_equal(left: object, right: object) -> bool:
+    try:
+        return _strict_json_equal(left, right, active_pairs=set(), depth=0)
+    except Exception:
+        return False
+
+
+def _strict_json_equal(
+    left: object,
+    right: object,
+    *,
+    active_pairs: set[tuple[int, int]],
+    depth: int,
+) -> bool:
+    if depth > _STRICT_JSON_MAX_DEPTH:
+        return False
     if type(left) is not type(right):
         return False
     value_type = type(left)
@@ -1442,16 +1498,41 @@ def strict_json_equal(left: object, right: object) -> bool:
     if value_type is float:
         return math.isfinite(left) and math.isfinite(right) and left == right
     if value_type is list:
-        return len(left) == len(right) and all(
-            strict_json_equal(left_item, right_item)
-            for left_item, right_item in zip(left, right, strict=True)
-        )
+        pair = (id(left), id(right))
+        if pair in active_pairs:
+            return False
+        active_pairs.add(pair)
+        try:
+            return len(left) == len(right) and all(
+                _strict_json_equal(
+                    left_item,
+                    right_item,
+                    active_pairs=active_pairs,
+                    depth=depth + 1,
+                )
+                for left_item, right_item in zip(left, right, strict=True)
+            )
+        finally:
+            active_pairs.remove(pair)
     if value_type is dict:
         if any(type(key) is not str for key in left) or any(type(key) is not str for key in right):
             return False
-        return left.keys() == right.keys() and all(
-            strict_json_equal(left[key], right[key]) for key in left
-        )
+        pair = (id(left), id(right))
+        if pair in active_pairs:
+            return False
+        active_pairs.add(pair)
+        try:
+            return left.keys() == right.keys() and all(
+                _strict_json_equal(
+                    left[key],
+                    right[key],
+                    active_pairs=active_pairs,
+                    depth=depth + 1,
+                )
+                for key in left
+            )
+        finally:
+            active_pairs.remove(pair)
     return False
 
 

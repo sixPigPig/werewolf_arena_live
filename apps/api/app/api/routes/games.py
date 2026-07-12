@@ -63,12 +63,10 @@ from app.werewolf.live import (
     RunLeaseUnavailable,
     RunRecoveryCandidate,
     format_sse,
-    strict_json_equal,
 )
 from app.werewolf.live_store import (
     DatabaseLiveStore,
-    format_live_datetime,
-    parse_live_datetime,
+    stored_event_matches,
 )
 from app.werewolf.player_configs import (
     PlayerConfig,
@@ -223,6 +221,7 @@ class SessionLiveStore:
         self,
         run_id: str,
         *,
+        expected_events: tuple[LiveEvent, ...],
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
@@ -231,6 +230,7 @@ class SessionLiveStore:
         try:
             return DatabaseLiveStore(db).acquire_lease(
                 run_id,
+                expected_events=expected_events,
                 worker_id=worker_id,
                 heartbeat_at=heartbeat_at,
                 lease_expires_at=lease_expires_at,
@@ -282,6 +282,7 @@ class SessionLiveStore:
         self,
         run_id: str,
         *,
+        expected_events: tuple[LiveEvent, ...],
         worker_id: str,
         expected_attempts: int,
         max_attempts: int,
@@ -294,6 +295,7 @@ class SessionLiveStore:
         try:
             return DatabaseLiveStore(db).acquire_recovery_lease(
                 run_id,
+                expected_events=expected_events,
                 worker_id=worker_id,
                 expected_attempts=expected_attempts,
                 max_attempts=max_attempts,
@@ -911,34 +913,7 @@ def _compensate_committed_run(db: Session, run: LiveGameRun) -> bool:
 
 
 def _stored_event_matches(record: LiveEventRecord, expected: LiveEvent) -> bool:
-    expected_created_at = parse_live_datetime(expected.created_at)
-    stored_fields = {
-        "run_id": record.run_id,
-        "session_id": record.session_id,
-        "event_id": record.event_id,
-        "type": record.type,
-        "round": record.round,
-        "phase": record.phase,
-        "actor": record.actor,
-        "action": record.action,
-        "payload": record.payload,
-    }
-    expected_fields = {
-        "run_id": expected.run_id,
-        "session_id": expected.session_id,
-        "event_id": expected.id,
-        "type": expected.type,
-        "round": expected.round,
-        "phase": expected.phase,
-        "actor": expected.actor,
-        "action": expected.action,
-        "payload": expected.payload,
-    }
-    return (
-        expected_created_at is not None
-        and strict_json_equal(stored_fields, expected_fields)
-        and format_live_datetime(record.created_at) == format_live_datetime(expected_created_at)
-    )
+    return stored_event_matches(record, expected)
 
 
 def _attempt_committed_run_compensation(db: Session, run: LiveGameRun) -> bool:

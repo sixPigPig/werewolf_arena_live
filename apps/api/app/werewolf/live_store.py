@@ -15,6 +15,7 @@ from app.werewolf.live import (
     RunLeaseState,
     RunLeaseUnavailable,
     RunRecoveryCandidate,
+    strict_json_equal,
     validate_prepared_run,
     validate_rule_set_revision_metadata,
 )
@@ -197,6 +198,7 @@ class DatabaseLiveStore:
         self,
         run_id: str,
         *,
+        expected_events: tuple[LiveEvent, ...],
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
@@ -219,7 +221,10 @@ class DatabaseLiveStore:
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
-            if record is None or not self._lock_and_validate_complete_event_stream(record):
+            if record is None or not self._lock_and_validate_complete_event_stream(
+                record,
+                expected_events,
+            ):
                 self.db.rollback()
                 return None
             record.worker_id = worker_id
@@ -379,6 +384,7 @@ class DatabaseLiveStore:
         self,
         run_id: str,
         *,
+        expected_events: tuple[LiveEvent, ...],
         worker_id: str,
         expected_attempts: int,
         max_attempts: int,
@@ -412,7 +418,10 @@ class DatabaseLiveStore:
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
-            if record is None or not self._lock_and_validate_complete_event_stream(record):
+            if record is None or not self._lock_and_validate_complete_event_stream(
+                record,
+                expected_events,
+            ):
                 self.db.rollback()
                 return None
             record.worker_id = worker_id
@@ -430,7 +439,11 @@ class DatabaseLiveStore:
             self.db.rollback()
             raise
 
-    def _lock_and_validate_complete_event_stream(self, record: LiveRunRecord) -> bool:
+    def _lock_and_validate_complete_event_stream(
+        self,
+        record: LiveRunRecord,
+        expected_events: tuple[LiveEvent, ...],
+    ) -> bool:
         events = tuple(
             self.db.scalars(
                 select(LiveEventRecord)
@@ -447,6 +460,11 @@ class DatabaseLiveStore:
             and all(
                 event.run_id == record.run_id and event.session_id == record.session_id
                 for event in events
+            )
+            and len(events) == len(expected_events)
+            and all(
+                stored_event_matches(recorded, expected)
+                for recorded, expected in zip(events, expected_events, strict=True)
             )
         )
 
@@ -575,6 +593,40 @@ class DatabaseLiveStore:
 
 def _format_optional_datetime(value: datetime | None) -> str | None:
     return format_live_datetime(value) if value is not None else None
+
+
+def stored_event_matches(record: LiveEventRecord, expected: LiveEvent) -> bool:
+    try:
+        expected_created_at = parse_live_datetime(expected.created_at)
+        if expected_created_at is None:
+            return False
+        stored_fields = {
+            "run_id": record.run_id,
+            "session_id": record.session_id,
+            "event_id": record.event_id,
+            "type": record.type,
+            "round": record.round,
+            "phase": record.phase,
+            "actor": record.actor,
+            "action": record.action,
+            "payload": record.payload,
+        }
+        expected_fields = {
+            "run_id": expected.run_id,
+            "session_id": expected.session_id,
+            "event_id": expected.id,
+            "type": expected.type,
+            "round": expected.round,
+            "phase": expected.phase,
+            "actor": expected.actor,
+            "action": expected.action,
+            "payload": expected._payload,
+        }
+        return strict_json_equal(stored_fields, expected_fields) and format_live_datetime(
+            record.created_at
+        ) == format_live_datetime(expected_created_at)
+    except Exception:
+        return False
 
 
 def _event_record(event: LiveEvent) -> LiveEventRecord:
