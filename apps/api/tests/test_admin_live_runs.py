@@ -155,17 +155,13 @@ def _seed_run(
                         "prompt": "SENTINEL_PLAYER_PROMPT",
                     }
                 ],
-                lineup_quality_warnings=[
-                    {"warning": "SENTINEL_LINEUP_WARNING"}
-                ],
+                lineup_quality_warnings=[{"warning": "SENTINEL_LINEUP_WARNING"}],
                 winner=winner,
                 error=run_error,
                 created_at=created_at,
                 started_at=(created_at + timedelta(seconds=1) if status != "queued" else None),
                 completed_at=(
-                    created_at + timedelta(minutes=2)
-                    if status in {"completed", "failed"}
-                    else None
+                    created_at + timedelta(minutes=2) if status in {"completed", "failed"} else None
                 ),
                 updated_at=resolved_updated_at,
             )
@@ -322,9 +318,7 @@ def test_stop_live_run_requires_csrf_is_idempotent_and_audited(
     assert conflict.json()["code"] == "admin_idempotency_conflict"
 
     with context.session_factory() as db:
-        audit = db.scalar(
-            select(AuditEvent).where(AuditEvent.action == "admin.live_run.stop")
-        )
+        audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.live_run.stop"))
         persisted = db.get(LiveRunRecord, run.run_id)
         assert audit is not None
         assert audit.reason == request_body["reason"]
@@ -397,9 +391,7 @@ def test_resume_live_run_requires_persistent_resumable_state_and_returns_new_run
     assert replay.json()["replayed"] is True
 
     with context.session_factory() as db:
-        audit = db.scalar(
-            select(AuditEvent).where(AuditEvent.action == "admin.live_run.resume")
-        )
+        audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.live_run.resume"))
         assert audit is not None
         assert audit.after["run_id"] == payload["run_id"]
 
@@ -656,16 +648,22 @@ def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelist
         "player_count": 8,
     }
 
-    assert context.client.get(
-        "/api/v1/admin/live-runs",
-        params={"q": "SENTINEL_RUNNING_MODEL"},
-    ).json()["items"] == []
-    assert len(
+    assert (
         context.client.get(
             "/api/v1/admin/live-runs",
-            params={"q": "run_00000000000"},
+            params={"q": "SENTINEL_RUNNING_MODEL"},
         ).json()["items"]
-    ) == 3
+        == []
+    )
+    assert (
+        len(
+            context.client.get(
+                "/api/v1/admin/live-runs",
+                params={"q": "run_00000000000"},
+            ).json()["items"]
+        )
+        == 3
+    )
     assert [
         item["run_id"]
         for item in context.client.get(
@@ -713,9 +711,7 @@ def test_admin_live_runs_rejects_invalid_pagination_status_and_time_range(
     _login(context, monkeypatch, role="viewer")
 
     invalid_page = context.client.get("/api/v1/admin/live-runs", params={"page_size": 101})
-    invalid_status = context.client.get(
-        "/api/v1/admin/live-runs", params={"status": "stopped"}
-    )
+    invalid_status = context.client.get("/api/v1/admin/live-runs", params={"status": "stopped"})
     missing_timezone = context.client.get(
         "/api/v1/admin/live-runs",
         params={"created_from": "2026-07-11T10:00:00"},
@@ -980,9 +976,7 @@ def test_live_run_debug_requires_minimal_permission_sanitizes_bounds_and_audits(
         db.commit()
 
     _login(context, monkeypatch, role="viewer")
-    forbidden = context.client.get(
-        "/api/v1/admin/live-runs/run_000000000040/debug"
-    )
+    forbidden = context.client.get("/api/v1/admin/live-runs/run_000000000040/debug")
     assert forbidden.status_code == 403
     assert forbidden.json()["code"] == "admin_permission_denied"
     assert "runs.debug.read" in forbidden.json()["detail"]
@@ -999,9 +993,7 @@ def test_live_run_debug_requires_minimal_permission_sanitizes_bounds_and_audits(
     assert payload["run_error"] == "Upstream authentication or authorization failed"
     assert payload["voice_error_total"] == 24
     assert len(payload["voice_errors"]) == 20
-    assert {item["error"] for item in payload["voice_errors"]} == {
-        "Voice synthesis failed"
-    }
+    assert {item["error"] for item in payload["voice_errors"]} == {"Voice synthesis failed"}
     assert payload["truncated"] is True
     assert "SENTINEL" not in json.dumps(payload)
     assert "Bearer" not in json.dumps(payload)
@@ -1010,9 +1002,7 @@ def test_live_run_debug_requires_minimal_permission_sanitizes_bounds_and_audits(
 
     with context.session_factory() as db:
         audit = db.scalar(
-            select(AuditEvent).where(
-                AuditEvent.action == "admin.live_run.debug.read"
-            )
+            select(AuditEvent).where(AuditEvent.action == "admin.live_run.debug.read")
         )
     assert audit is not None
     assert audit.resource_type == "live_run"
@@ -1036,9 +1026,7 @@ def test_live_run_detail_and_debug_return_problem_404(
         "/api/v1/admin/live-runs/run_deadbeef0000",
         headers={"X-Request-ID": "missing-live-run-1"},
     )
-    debug = context.client.get(
-        "/api/v1/admin/live-runs/run_deadbeef0000/debug"
-    )
+    debug = context.client.get("/api/v1/admin/live-runs/run_deadbeef0000/debug")
 
     assert detail.status_code == 404
     assert detail.headers["content-type"].startswith("application/problem+json")
@@ -1114,9 +1102,7 @@ def test_admin_live_run_query_indexes_are_registered_and_migrated(
     assert len(run_indexes["ix_live_runs_updated_at_run_id_desc"].expressions) == 2
     assert len(run_indexes["ix_live_runs_created_at_run_id_desc"].expressions) == 2
     assert len(run_indexes["ix_live_runs_status_updated_at_run_id_desc"].expressions) == 3
-    voice_indexes = {
-        index.name: index for index in VoiceUtteranceRecord.__table__.indexes
-    }
+    voice_indexes = {index.name: index for index in VoiceUtteranceRecord.__table__.indexes}
     assert len(voice_indexes["ix_voice_utterances_run_status"].expressions) == 2
 
     migration_path = (
