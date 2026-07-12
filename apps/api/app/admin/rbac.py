@@ -22,6 +22,11 @@ class AdminPermission(StrEnum):
     PLAYERS_PUBLISH = "players.publish"
     PLAYERS_ARCHIVE = "players.archive"
     PLAYERS_AI_GENERATE = "players.ai_generate"
+    RULES_READ = "rules.read"
+    RULES_WRITE = "rules.write"
+    RULES_PUBLISH = "rules.publish"
+    RULES_ARCHIVE = "rules.archive"
+    RULES_SET_DEFAULT = "rules.set_default"
     VOICE_READ = "voice.read"
     VOICE_GENERATE_MISSING = "voice.generate_missing"
     VOICE_REGENERATE_ALL = "voice.regenerate_all"
@@ -38,6 +43,7 @@ _VIEWER_PERMISSIONS = frozenset(
         AdminPermission.RUNS_READ,
         AdminPermission.GAMES_READ,
         AdminPermission.PLAYERS_READ,
+        AdminPermission.RULES_READ,
         AdminPermission.VOICE_READ,
         AdminPermission.SETTINGS_READ,
     }
@@ -52,6 +58,7 @@ ROLE_PERMISSIONS: Final[Mapping[AdminRole, frozenset[AdminPermission]]] = Mappin
             AdminPermission.PLAYERS_PUBLISH,
             AdminPermission.PLAYERS_ARCHIVE,
             AdminPermission.PLAYERS_AI_GENERATE,
+            AdminPermission.RULES_WRITE,
             AdminPermission.VOICE_GENERATE_MISSING,
         },
         AdminRole.OPERATOR: _VIEWER_PERMISSIONS
