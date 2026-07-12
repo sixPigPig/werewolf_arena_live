@@ -630,6 +630,22 @@ def test_public_snapshot_maps_persisted_corruption_to_bounded_catalog_error(
     assert "classic_8" in message
     assert "not a complete configuration" not in message
     assert "description" not in message
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+
+
+def test_admin_snapshot_corruption_has_no_raw_exception_chain(db: Session) -> None:
+    aggregate = get_rule_set_aggregate(db, "classic_8")
+    assert aggregate is not None and aggregate.published is not None
+    aggregate.published.config = {"description": "SECRET ADMIN CONFIG"}
+
+    with pytest.raises(RuleSetCatalogCorrupt) as error:
+        admin_rule_revision_snapshot(aggregate.published, include_config=True)
+
+    assert error.value.reason == "revision_config_invalid"
+    assert "SECRET ADMIN CONFIG" not in str(error.value)
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
 
 
 def test_admin_snapshots_detach_config_and_bound_revision_history(db: Session) -> None:

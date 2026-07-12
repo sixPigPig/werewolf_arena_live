@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import replace
+import json
 
 import pytest
 from sqlalchemy import create_engine, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
@@ -191,6 +193,71 @@ def test_create_stores_a_detached_normalized_management_config(db: Session) -> N
 
     assert created.draft.config["role_counts"]["villager"] == 4  # type: ignore[index]
     assert isinstance(created.draft.config["rule_tags"], list)
+
+
+@pytest.mark.parametrize("display_order", [-1, True])
+def test_create_rejects_invalid_display_order_without_database_leak(
+    db: Session,
+    display_order: object,
+) -> None:
+    with pytest.raises(RuleSetValidationFailed) as caught:
+        create_rule_set(
+            db,
+            rule_set_id="invalid_order_8",
+            config=_config(),
+            display_order=display_order,  # type: ignore[arg-type]
+            actor_user_id=101,
+        )
+
+    assert caught.value.revision_id is None
+    assert caught.value.issues == (
+        RuleValidationIssue(
+            code="display_order_nonnegative",
+            path="display_order",
+            message="Display order must be a non-negative integer.",
+        ),
+    )
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert db.get(RuleSetRecord, "invalid_order_8") is None
+
+
+def test_create_integrity_race_maps_to_chain_free_bounded_conflict(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "SECRET SQL PARAMS DRIVER CONFIG DESCRIPTION"
+    original_flush = db.flush
+
+    def inject_create_race(*args, **kwargs):
+        if any(
+            isinstance(candidate, RuleSetRecord) and candidate.id == "create_race_8"
+            for candidate in db.new
+        ):
+            raise IntegrityError(
+                f"INSERT INTO rule_sets VALUES ({secret})",
+                {"description": secret},
+                RuntimeError(secret),
+            )
+        return original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db, "flush", inject_create_race)
+    with pytest.raises(RuleSetVersionConflict) as caught:
+        create_rule_set(
+            db,
+            rule_set_id="create_race_8",
+            config=_config(description=secret),
+            display_order=1,
+            actor_user_id=101,
+        )
+
+    error = caught.value
+    encoded = json.dumps({"message": str(error), "attributes": vars(error)})
+    assert secret not in encoded
+    assert "INSERT INTO" not in encoded
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    db.rollback()
 
 
 def test_invalid_draft_validation_returns_errors_and_publish_rejects(db: Session) -> None:
@@ -574,6 +641,58 @@ def test_default_archive_requires_and_atomically_switches_to_valid_replacement(
     assert [record.id for record in defaults] == ["a_replacement_8"]
 
 
+def test_default_handoff_second_flush_failure_maps_and_caller_rollback_is_atomic(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = _seed_default(db, _published(db, "z_atomic_default_8", display_order=1))
+    replacement = _published(db, "a_atomic_target_8", display_order=2)
+    db.commit()
+    current_record = db.get(RuleSetRecord, current.record.id)
+    replacement_record = db.get(RuleSetRecord, replacement.record.id)
+    assert current_record is not None and replacement_record is not None
+    current_id = current_record.id
+    replacement_id = replacement_record.id
+    current_version = current_record.lock_version
+    replacement_version = replacement_record.lock_version
+    secret = "SECRET DEFAULT UNIQUE SQL DRIVER"
+    original_flush = db.flush
+
+    def fail_replacement_flush(*args, **kwargs):
+        if current_record.status == "archived" and replacement_record.is_default:
+            raise IntegrityError(
+                f"UPDATE rule_sets SET is_default = true ({secret})",
+                {"secret": secret},
+                RuntimeError(secret),
+            )
+        return original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db, "flush", fail_replacement_flush)
+    with pytest.raises(RuleSetVersionConflict) as caught:
+        archive_rule_set(
+            db,
+            current_record.id,
+            expected_rule_set_lock_version=current_version,
+            replacement_default_rule_set_id=replacement_record.id,
+            replacement_expected_lock_version=replacement_version,
+            reason="Atomic replacement",
+            actor_user_id=303,
+        )
+
+    error = caught.value
+    assert secret not in json.dumps({"message": str(error), "attributes": vars(error)})
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    monkeypatch.setattr(db, "flush", original_flush)
+    db.rollback()
+    restored_current = db.get(RuleSetRecord, current_id)
+    restored_target = db.get(RuleSetRecord, replacement_id)
+    assert restored_current is not None and restored_current.status == "published"
+    assert restored_current.is_default is True
+    assert restored_target is not None and restored_target.status == "published"
+    assert restored_target.is_default is False
+
+
 def test_set_default_locks_in_stable_order_and_returns_both_aggregates(
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -703,6 +822,8 @@ def test_resolve_requires_exact_current_revision_and_hash_checked_projection(
         resolve_published_rule_set(db, "resolved_8")
     assert corrupt.value.reason == "content_hash_mismatch"
     assert "自定义规则" not in str(corrupt.value)
+    assert corrupt.value.__cause__ is None
+    assert corrupt.value.__context__ is None
 
 
 def test_lifecycle_keeps_published_and_superseded_content_immutable(db: Session) -> None:
@@ -794,6 +915,8 @@ def test_real_stale_orm_write_maps_to_bounded_version_conflict(tmp_path) -> None
             )
         assert caught.value.rule_set_id == "racing_8"
         assert caught.value.expected_rule_set_lock_version == expected_parent_version
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
 
 
 def test_restore_rejects_corrupt_archived_publication_without_exposing_it(
@@ -827,6 +950,8 @@ def test_restore_rejects_corrupt_archived_publication_without_exposing_it(
             actor_user_id=303,
         )
     assert caught.value.reason == "content_hash_mismatch"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     saved = db.get(RuleSetRecord, "corrupt_restore_8")
     assert saved is not None and saved.status == "archived"
 
@@ -856,6 +981,8 @@ def test_draft_config_corruption_maps_to_bounded_catalog_failure(db: Session) ->
         )
     assert validation_error.value.reason == "revision_config_invalid"
     assert secret not in str(validation_error.value)
+    assert validation_error.value.__cause__ is None
+    assert validation_error.value.__context__ is None
 
     with pytest.raises(RuleSetCatalogCorrupt) as publish_error:
         publish_rule_set(
@@ -867,6 +994,8 @@ def test_draft_config_corruption_maps_to_bounded_catalog_failure(db: Session) ->
             actor_user_id=101,
         )
     assert publish_error.value.reason == "revision_config_invalid"
+    assert publish_error.value.__cause__ is None
+    assert publish_error.value.__context__ is None
 
 
 def test_existing_id_and_stale_fork_precondition_use_domain_conflicts(db: Session) -> None:
@@ -895,8 +1024,9 @@ def test_existing_id_and_stale_fork_precondition_use_domain_conflicts(db: Sessio
 
 
 def test_domain_error_payloads_bound_identifiers_versions_and_issues() -> None:
-    huge_id = "r" * 10_000
-    huge_revision = "v" * 10_000
+    secret = "SECRET-CONFIG-SQL-DRIVER-DESCRIPTION"
+    huge_id = "r" * 80 + secret
+    huge_revision = "v" * 36 + secret
     huge_version = 10**100
     conflict = RuleSetVersionConflict(
         huge_id,
@@ -916,12 +1046,11 @@ def test_domain_error_payloads_bound_identifiers_versions_and_issues() -> None:
     ):
         assert version is None or 0 <= version <= 2_147_483_647
 
-    secret = "SECRET-CONFIG-AND-SQL-TEXT"
     issues = [
         RuleValidationIssue(
-            code="c" * 1_000,
-            path="p" * 1_000,
-            message=secret * 100,
+            code="c" * 80 + secret,
+            path="p" * 120 + secret,
+            message=secret,
         )
         for _ in range(75)
     ]
@@ -934,7 +1063,47 @@ def test_domain_error_payloads_bound_identifiers_versions_and_issues() -> None:
     assert all(len(issue.code) <= 80 for issue in validation.issues)
     assert all(len(issue.path) <= 120 for issue in validation.issues)
     assert all(len(issue.message) <= 240 for issue in validation.issues)
-    assert secret not in str(validation)
+    assert {issue.message for issue in validation.issues} == {"Rule configuration is invalid."}
+
+    catalog = RuleSetCatalogCorrupt(
+        huge_id,
+        pointer=secret,
+        revision_id=huge_revision,
+        reason=secret,
+    )
+    assert catalog.pointer == "catalog_pointer"
+    assert catalog.reason == "catalog_inconsistent"
+    assert len(catalog.rule_set_id) == 80
+    assert len(catalog.revision_id or "") == 36
+
+    errors = (
+        conflict,
+        validation,
+        catalog,
+        RuleSetNotFound(huge_id),
+        RuleSetRevisionNotFound(huge_id, revision_id=huge_revision),
+        RuleSetTransitionConflict(
+            huge_id,
+            current_status="s" * 20 + secret,
+            target_status="t" * 20 + secret,
+        ),
+        RuleSetUnavailable(
+            huge_id,
+            current_status="s" * 20 + secret,
+            current_revision_id=huge_revision,
+        ),
+        RuleRevisionChanged(
+            huge_id,
+            expected_revision_id=huge_revision,
+            current_revision_id=huge_revision,
+        ),
+        DefaultRuleRequired(huge_id, replacement_rule_set_id=huge_id),
+    )
+    encoded = json.dumps(
+        [{"message": str(error), "attributes": vars(error)} for error in errors],
+        default=str,
+    )
+    assert secret not in encoded
 
 
 def test_all_service_operations_flush_and_never_commit(
@@ -952,8 +1121,12 @@ def test_all_service_operations_flush_and_never_commit(
     def forbidden_commit() -> None:
         raise AssertionError("lifecycle services must not commit")
 
+    def forbidden_rollback() -> None:
+        raise AssertionError("lifecycle services must not rollback")
+
     monkeypatch.setattr(db, "flush", tracked_flush)
     monkeypatch.setattr(db, "commit", forbidden_commit)
+    monkeypatch.setattr(db, "rollback", forbidden_rollback)
 
     def call_and_require_flush(operation):
         before = flushes

@@ -14,6 +14,41 @@ _MAX_ISSUE_CODE = 80
 _MAX_ISSUE_PATH = 120
 _MAX_ISSUE_MESSAGE = 240
 _MAX_LOCK_VERSION = 2_147_483_647
+_GENERIC_ISSUE_MESSAGE = "Rule configuration is invalid."
+_CATALOG_POINTER_GENERIC = "catalog_pointer"
+_CATALOG_REASON_GENERIC = "catalog_inconsistent"
+_KNOWN_CATALOG_POINTERS = frozenset({"draft_revision_id", "current_published_revision_id"})
+_KNOWN_CATALOG_REASONS = frozenset(
+    {
+        _CATALOG_REASON_GENERIC,
+        "content_hash_mismatch",
+        "pointer_owner_mismatch",
+        "pointer_state_mismatch",
+        "pointer_target_missing",
+        "public_revision_unavailable",
+        "published_config_invalid",
+        "revision_config_invalid",
+        "schema_version_unsupported",
+    }
+)
+_CANONICAL_ISSUE_MESSAGES = frozenset(
+    {
+        "At least one good player is required.",
+        "At least one werewolf is required.",
+        "Badge bomb rules require werewolf self-explosion.",
+        "Display order must be a non-negative integer.",
+        "Double badge bomb rules require sheriff rules.",
+        "Each special role may appear at most once.",
+        "Player count must be between 6 and 12.",
+        "Sheriff vote weight must be 1 when sheriff rules are disabled.",
+        "Sheriff vote weight must be 1, 1.5, or 2.",
+        "Sheriff-directed speech requires sheriff rules.",
+        "Slaughter-side rules require at least one god role.",
+        "Slaughter-side rules require at least one villager.",
+        "Speech must be sequential when sheriff rules are disabled.",
+        "Werewolves must be fewer than good players.",
+    }
+)
 
 
 class RuleSetError(Exception):
@@ -47,7 +82,7 @@ class RuleSetValidationFailed(RuleSetError):
             RuleValidationIssue(
                 code=_bounded(issue.code, _MAX_ISSUE_CODE),
                 path=_bounded(issue.path, _MAX_ISSUE_PATH),
-                message=_bounded(issue.message, _MAX_ISSUE_MESSAGE),
+                message=_safe_issue_message(issue.message),
             )
             for issue in islice(issues, _MAX_ISSUES)
         )
@@ -148,15 +183,15 @@ class RuleSetCatalogCorrupt(RuntimeError):
         revision_id: str | None = None,
         reason: str = "catalog_inconsistent",
     ) -> None:
-        self.rule_set_id = rule_set_id
-        self.pointer = pointer
-        self.revision_id = revision_id
-        self.reason = reason
-        details = [rule_set_id]
-        if pointer is not None:
-            details.append(pointer)
-        if revision_id is not None:
-            details.append(revision_id)
+        self.rule_set_id = _bounded(rule_set_id, _MAX_RULE_SET_ID)
+        self.pointer = _safe_catalog_pointer(pointer)
+        self.revision_id = _bounded_optional(revision_id, _MAX_REVISION_ID)
+        self.reason = _safe_catalog_reason(reason)
+        details = [self.rule_set_id]
+        if self.pointer is not None:
+            details.append(self.pointer)
+        if self.revision_id is not None:
+            details.append(self.revision_id)
         super().__init__(f"Rule set catalog is corrupt: {' / '.join(details)}")
 
 
@@ -174,6 +209,26 @@ def _bounded_version(value: int | None) -> int | None:
     if value is None or isinstance(value, bool) or not isinstance(value, int):
         return None
     return max(0, min(value, _MAX_LOCK_VERSION))
+
+
+def _safe_issue_message(value: str) -> str:
+    if value in _CANONICAL_ISSUE_MESSAGES:
+        return _bounded(value, _MAX_ISSUE_MESSAGE)
+    return _GENERIC_ISSUE_MESSAGE
+
+
+def _safe_catalog_pointer(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value in _KNOWN_CATALOG_POINTERS:
+        return _bounded(value, 120)
+    return _CATALOG_POINTER_GENERIC
+
+
+def _safe_catalog_reason(value: str) -> str:
+    if value in _KNOWN_CATALOG_REASONS:
+        return _bounded(value, 80)
+    return _CATALOG_REASON_GENERIC
 
 
 __all__ = [

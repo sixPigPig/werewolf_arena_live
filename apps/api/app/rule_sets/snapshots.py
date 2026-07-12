@@ -227,7 +227,7 @@ def admin_rule_set_snapshot(aggregate: RuleSetAggregate) -> dict[str, object]:
 
 
 def public_rule_set_catalog_snapshot(aggregate: RuleSetAggregate) -> dict[str, object]:
-    compiled = _compile_public_aggregate(aggregate)
+    compiled = compile_published_rule_set_aggregate(aggregate)
     record = aggregate.record
     snapshot: dict[str, object] = {key: value for key, value in compiled.snapshot.items()}
     snapshot["roles"] = [dict(role) for role in cast(list[dict[str, object]], snapshot["roles"])]
@@ -596,14 +596,17 @@ def _day_actions(config: RuleSetConfig) -> tuple[str, ...]:
 
 
 def _admin_revision_config(revision: RuleSetRevisionRecord) -> dict[str, object]:
+    failure: RuleSetCatalogCorrupt | None = None
     try:
         config = normalize_rule_set_config(revision.config)
-    except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
-        raise RuleSetCatalogCorrupt(
+    except (AttributeError, KeyError, OverflowError, TypeError, ValueError):
+        failure = RuleSetCatalogCorrupt(
             revision.rule_set_id,
             revision_id=revision.id,
             reason="revision_config_invalid",
-        ) from error
+        )
+    if failure is not None:
+        raise failure
     return {
         "name": config.name,
         "description": config.description,
@@ -620,12 +623,19 @@ def _admin_revision_config(revision: RuleSetRevisionRecord) -> dict[str, object]
     }
 
 
-def _compile_public_aggregate(aggregate: RuleSetAggregate) -> CompiledRuleSet:
+def compile_published_rule_set_aggregate(
+    aggregate: RuleSetAggregate,
+    *,
+    allow_archived: bool = False,
+) -> CompiledRuleSet:
     record = aggregate.record
     revision = aggregate.published
+    parent_available = record.status == "published" and record.archived_at is None
+    archived_retention = (
+        allow_archived and record.status == "archived" and record.archived_at is not None
+    )
     if (
-        record.status != "published"
-        or record.archived_at is not None
+        not (parent_available or archived_retention)
         or revision is None
         or record.current_published_revision_id != revision.id
         or revision.rule_set_id != record.id
@@ -646,6 +656,7 @@ def _compile_public_aggregate(aggregate: RuleSetAggregate) -> CompiledRuleSet:
             revision_id=revision.id,
             reason="schema_version_unsupported",
         )
+    failure: RuleSetCatalogCorrupt | None = None
     try:
         config = normalize_rule_set_config(revision.config)
         compiled = compile_rule_set_config(
@@ -654,13 +665,15 @@ def _compile_public_aggregate(aggregate: RuleSetAggregate) -> CompiledRuleSet:
             revision_id=revision.id,
             revision_no=revision.revision_no,
         )
-    except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
-        raise RuleSetCatalogCorrupt(
+    except (AttributeError, KeyError, OverflowError, TypeError, ValueError):
+        failure = RuleSetCatalogCorrupt(
             record.id,
             pointer="current_published_revision_id",
             revision_id=revision.id,
             reason="published_config_invalid",
-        ) from error
+        )
+    if failure is not None:
+        raise failure
     if revision.content_hash != compiled.content_hash:
         raise RuleSetCatalogCorrupt(
             record.id,

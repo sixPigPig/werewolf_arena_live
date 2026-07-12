@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -28,11 +29,17 @@ from app.rule_sets.repository import (
 )
 from app.rule_sets.snapshots import (
     RULE_SCHEMA_VERSION,
+    compile_published_rule_set_aggregate,
     compile_rule_set_config,
     public_rule_set_catalog_snapshot,
     resolve_rule_set_snapshot,
 )
-from app.rule_sets.types import CompiledRuleSet, RuleSetConfig, RuleSetValidationResult
+from app.rule_sets.types import (
+    CompiledRuleSet,
+    RuleSetConfig,
+    RuleSetValidationResult,
+    RuleValidationIssue,
+)
 from app.rule_sets.validation import (
     RULE_ROLE_IDS,
     normalize_rule_set_config,
@@ -74,6 +81,8 @@ def create_rule_set(
     display_order: int,
     actor_user_id: int,
 ) -> RuleSetAggregate:
+    _validate_display_order(rule_set_id, display_order)
+    _flush_with_conflict(db, rule_set_id)
     if (existing := get_rule_set_record(db, rule_set_id)) is not None:
         raise RuleSetTransitionConflict(
             rule_set_id,
@@ -120,6 +129,13 @@ def update_rule_set_draft(
     expected_revision_lock_version: int | None,
     actor_user_id: int,
 ) -> RuleSetAggregate:
+    _validate_display_order(rule_set_id, display_order)
+    _flush_with_conflict(
+        db,
+        rule_set_id,
+        expected_rule_set_lock_version=expected_rule_set_lock_version,
+        expected_revision_lock_version=expected_revision_lock_version,
+    )
     aggregate = _required_aggregate(db, rule_set_id, for_update=True)
     if aggregate.record.lock_version != expected_rule_set_lock_version:
         raise RuleSetVersionConflict(
@@ -187,7 +203,11 @@ def validate_rule_set_draft(
     *,
     expected_revision_lock_version: int,
 ) -> RuleSetDraftValidation:
-    db.flush()
+    _flush_with_conflict(
+        db,
+        rule_set_id,
+        expected_revision_lock_version=expected_revision_lock_version,
+    )
     aggregate = _required_aggregate(db, rule_set_id, for_update=True)
     draft = aggregate.draft
     if draft is None:
@@ -232,6 +252,11 @@ def archive_rule_set(
     reason: str,
     actor_user_id: int,
 ) -> RuleSetAggregate:
+    _flush_with_conflict(
+        db,
+        rule_set_id,
+        expected_rule_set_lock_version=expected_rule_set_lock_version,
+    )
     lock_ids = [rule_set_id]
     if replacement_default_rule_set_id is not None:
         lock_ids.append(replacement_default_rule_set_id)
@@ -304,6 +329,11 @@ def restore_rule_set(
     reason: str,
     actor_user_id: int,
 ) -> RuleSetAggregate:
+    _flush_with_conflict(
+        db,
+        rule_set_id,
+        expected_rule_set_lock_version=expected_rule_set_lock_version,
+    )
     aggregate = _required_aggregate(db, rule_set_id, for_update=True)
     record = aggregate.record
     _ensure_parent_version(
@@ -318,7 +348,7 @@ def restore_rule_set(
         )
 
     if aggregate.published is not None:
-        _compile_retained_publication(aggregate)
+        compile_published_rule_set_aggregate(aggregate, allow_archived=True)
         target_status = "published"
     elif aggregate.draft is not None:
         target_status = "draft"
@@ -348,7 +378,11 @@ def set_default_rule_set(
     reason: str,
     actor_user_id: int,
 ) -> RuleSetDefaultChange:
-    db.flush()
+    _flush_with_conflict(
+        db,
+        rule_set_id,
+        expected_rule_set_lock_version=expected_rule_set_lock_version,
+    )
     previous_default_id = db.scalar(
         select(RuleSetRecord.id)
         .where(RuleSetRecord.is_default.is_(True))
@@ -375,7 +409,11 @@ def set_default_rule_set(
                 target.record,
                 expected_rule_set_lock_version=previous_default_expected_lock_version,
             )
-        db.flush()
+        _flush_with_conflict(
+            db,
+            rule_set_id,
+            expected_rule_set_lock_version=expected_rule_set_lock_version,
+        )
         return RuleSetDefaultChange(previous_default=None, current_default=target)
 
     previous = locked.get(previous_default_id) if previous_default_id is not None else None
@@ -428,6 +466,11 @@ def duplicate_rule_set(
     expected_source_lock_version: int,
     actor_user_id: int,
 ) -> RuleSetAggregate:
+    _flush_with_conflict(
+        db,
+        source_rule_set_id,
+        expected_rule_set_lock_version=expected_source_lock_version,
+    )
     source = _required_aggregate(db, source_rule_set_id, for_update=True)
     _ensure_parent_version(
         source.record,
@@ -446,19 +489,10 @@ def duplicate_rule_set(
         raise RuleSetRevisionNotFound(source_rule_set_id)
     source_config = _normalized_revision_config(source_revision)
     duplicated_config = _normalize_management_config(
-        RuleSetConfig(
+        replace(
+            source_config,
             name=new_name,
-            description=source_config.description,
-            complexity=source_config.complexity,
-            estimated_duration=source_config.estimated_duration,
-            rule_tags=source_config.rule_tags,
             role_counts=dict(source_config.role_counts),
-            win_condition=source_config.win_condition,
-            sheriff_enabled=source_config.sheriff_enabled,
-            sheriff_vote_weight=source_config.sheriff_vote_weight,
-            speech_policy=source_config.speech_policy,
-            werewolf_self_explosion_enabled=source_config.werewolf_self_explosion_enabled,
-            sheriff_badge_bomb_policy=source_config.sheriff_badge_bomb_policy,
         )
     )
     return create_rule_set(
@@ -479,6 +513,12 @@ def publish_rule_set(
     reason: str,
     actor_user_id: int,
 ) -> RuleSetAggregate:
+    _flush_with_conflict(
+        db,
+        rule_set_id,
+        expected_rule_set_lock_version=expected_rule_set_lock_version,
+        expected_revision_lock_version=expected_revision_lock_version,
+    )
     aggregate = _required_aggregate(db, rule_set_id, for_update=True)
     record = aggregate.record
     draft = aggregate.draft
@@ -568,7 +608,7 @@ def resolve_published_rule_set(
     expected_revision_id: str | None = None,
     for_update: bool = False,
 ) -> CompiledRuleSet:
-    db.flush()
+    _flush_with_conflict(db, rule_set_id)
     aggregate = _required_aggregate(db, rule_set_id, for_update=for_update)
     revision = aggregate.published
     if revision is None or aggregate.record.status != "published":
@@ -622,14 +662,18 @@ def _ensure_parent_version(
 
 
 def _normalized_revision_config(revision: RuleSetRevisionRecord) -> RuleSetConfig:
+    failure: RuleSetCatalogCorrupt | None = None
     try:
-        return normalize_rule_set_config(revision.config)
-    except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
-        raise RuleSetCatalogCorrupt(
+        config = normalize_rule_set_config(revision.config)
+    except (AttributeError, KeyError, OverflowError, TypeError, ValueError):
+        failure = RuleSetCatalogCorrupt(
             revision.rule_set_id,
             revision_id=revision.id,
             reason="revision_config_invalid",
-        ) from error
+        )
+    if failure is not None:
+        raise failure
+    return config
 
 
 def _flush_with_conflict(
@@ -640,17 +684,35 @@ def _flush_with_conflict(
     expected_rule_set_lock_version: int | None = None,
     expected_revision_lock_version: int | None = None,
 ) -> None:
+    conflict: RuleSetVersionConflict | None = None
     try:
         db.flush()
-    except StaleDataError as error:
-        raise RuleSetVersionConflict(
+    except (IntegrityError, StaleDataError):
+        conflict = RuleSetVersionConflict(
             rule_set_id,
             revision_id=revision_id,
             expected_rule_set_lock_version=expected_rule_set_lock_version,
             current_rule_set_lock_version=None,
             expected_revision_lock_version=expected_revision_lock_version,
             current_revision_lock_version=None,
-        ) from error
+        )
+    if conflict is not None:
+        raise conflict
+
+
+def _validate_display_order(rule_set_id: str, display_order: int) -> None:
+    if isinstance(display_order, bool) or not isinstance(display_order, int) or display_order < 0:
+        raise RuleSetValidationFailed(
+            rule_set_id,
+            revision_id=None,
+            issues=(
+                RuleValidationIssue(
+                    code="display_order_nonnegative",
+                    path="display_order",
+                    message="Display order must be a non-negative integer.",
+                ),
+            ),
+        )
 
 
 def _require_publishable_default(aggregate: RuleSetAggregate) -> None:
@@ -674,47 +736,6 @@ def _compile_public_aggregate(aggregate: RuleSetAggregate) -> CompiledRuleSet:
         key: value for key, value in catalog_snapshot.items() if key not in _PUBLIC_METADATA_FIELDS
     }
     return resolve_rule_set_snapshot(runtime_snapshot)
-
-
-def _compile_retained_publication(aggregate: RuleSetAggregate) -> CompiledRuleSet:
-    record = aggregate.record
-    revision = aggregate.published
-    if revision is None:
-        raise RuleSetRevisionNotFound(
-            record.id,
-            revision_id=record.current_published_revision_id,
-        )
-    if revision.schema_version != RULE_SCHEMA_VERSION:
-        raise RuleSetCatalogCorrupt(
-            record.id,
-            pointer="current_published_revision_id",
-            revision_id=revision.id,
-            reason="schema_version_unsupported",
-        )
-    try:
-        config = normalize_rule_set_config(revision.config)
-        candidate = compile_rule_set_config(
-            record.id,
-            config,
-            revision_id=revision.id,
-            revision_no=revision.revision_no,
-        )
-        compiled = resolve_rule_set_snapshot(candidate.snapshot)
-    except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
-        raise RuleSetCatalogCorrupt(
-            record.id,
-            pointer="current_published_revision_id",
-            revision_id=revision.id,
-            reason="published_config_invalid",
-        ) from error
-    if revision.content_hash != compiled.content_hash:
-        raise RuleSetCatalogCorrupt(
-            record.id,
-            pointer="current_published_revision_id",
-            revision_id=revision.id,
-            reason="content_hash_mismatch",
-        )
-    return compiled
 
 
 def _mark_archived(
@@ -745,22 +766,7 @@ def _mark_default(
 def _normalize_management_config(config: RuleSetConfig) -> RuleSetConfig:
     if not isinstance(config, RuleSetConfig):
         raise ValueError("config must be a RuleSetConfig")
-    return normalize_rule_set_config(
-        {
-            "name": config.name,
-            "description": config.description,
-            "complexity": config.complexity,
-            "estimated_duration": config.estimated_duration,
-            "rule_tags": config.rule_tags,
-            "role_counts": config.role_counts,
-            "win_condition": config.win_condition,
-            "sheriff_enabled": config.sheriff_enabled,
-            "sheriff_vote_weight": config.sheriff_vote_weight,
-            "speech_policy": config.speech_policy,
-            "werewolf_self_explosion_enabled": config.werewolf_self_explosion_enabled,
-            "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
-        }
-    )
+    return normalize_rule_set_config(_detached_config(config))
 
 
 def _detached_config(config: RuleSetConfig) -> dict[str, object]:
