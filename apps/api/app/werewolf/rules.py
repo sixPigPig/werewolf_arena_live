@@ -109,7 +109,7 @@ STARTER_6 = RuleSet(
     id="starter_6",
     version=RULE_SET_VERSION,
     name="新手 6 人快局",
-    description="更短的官方入门局，适合快速观察模型策略。",
+    description="更短的官方入门局,适合快速观察模型策略。",
     player_count=6,
     roles=(
         RoleSpec("狼人", 1, TEAM_WEREWOLVES, MODEL_GROUP_WEREWOLF, ROLE_CATEGORY_WEREWOLF),

@@ -51,7 +51,7 @@ def test_rule_set_snapshot_is_json_safe() -> None:
         "id": "starter_6",
         "version": "2026.04",
         "name": "新手 6 人快局",
-        "description": "更短的官方入门局，适合快速观察模型策略。",
+        "description": "更短的官方入门局,适合快速观察模型策略。",
         "player_count": 6,
         "roles": [
             {

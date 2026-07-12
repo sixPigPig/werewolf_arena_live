@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+
+if TYPE_CHECKING:
+    from app.werewolf.rules import RuleSet
 
 
 RuleRoleId = Literal["werewolf", "villager", "seer", "guard", "witch", "hunter", "idiot"]
@@ -25,6 +29,16 @@ class RuleSetConfig:
     @property
     def player_count(self) -> int:
         return sum(self.role_counts.values())
+
+
+@dataclass(frozen=True)
+class CompiledRuleSet:
+    rule_set: RuleSet
+    snapshot: dict[str, Any]
+    schema_version: int
+    revision_id: str | None
+    revision_no: int | None
+    content_hash: str
 
 
 @dataclass(frozen=True)
