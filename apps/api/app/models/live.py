@@ -22,6 +22,18 @@ class LiveRunRecord(Base):
     seed: Mapped[int | None] = mapped_column(nullable=True)
     max_rounds: Mapped[int] = mapped_column(nullable=False)
     rule_set_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    rule_set_revision_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "rule_set_revisions.id",
+            name="fk_live_runs_rule_set_revision_id_rule_set_revisions",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+        index=True,
+    )
+    rule_set_revision_no: Mapped[int | None] = mapped_column(nullable=True)
+    rule_set_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     rule_set: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     player_configs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     lineup_quality_warnings: Mapped[list[dict[str, str]]] = mapped_column(
@@ -95,6 +107,12 @@ Index(
 Index(
     "ix_live_runs_status_updated_at_run_id_desc",
     LiveRunRecord.status,
+    LiveRunRecord.updated_at.desc(),
+    LiveRunRecord.run_id.desc(),
+)
+Index(
+    "ix_live_runs_rule_set_id_updated_at_run_id_desc",
+    LiveRunRecord.rule_set_id,
     LiveRunRecord.updated_at.desc(),
     LiveRunRecord.run_id.desc(),
 )

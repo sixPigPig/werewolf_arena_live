@@ -433,6 +433,10 @@ def test_game_session_table_matches_expected_schema() -> None:
         "status",
         "winner",
         "round_count",
+        "rule_set_id",
+        "rule_set_revision_id",
+        "rule_set_revision_no",
+        "rule_set_content_hash",
         "rule_set",
         "resumable",
         "created_at",
@@ -475,6 +479,9 @@ def test_live_run_table_matches_expected_schema() -> None:
         "seed",
         "max_rounds",
         "rule_set_id",
+        "rule_set_revision_id",
+        "rule_set_revision_no",
+        "rule_set_content_hash",
         "rule_set",
         "player_configs",
         "lineup_quality_warnings",
@@ -532,6 +539,54 @@ def test_live_run_table_matches_expected_schema() -> None:
         index for index in table.indexes if index.name == "uq_live_runs_active_session"
     )
     assert active_session_index.unique is True
+
+
+def test_run_and_game_models_expose_rule_revision_metadata() -> None:
+    live_runs = LiveRunRecord.__table__
+    game_sessions = GameSessionRecord.__table__
+
+    for table in (live_runs, game_sessions):
+        _assert_string_column(table.c.rule_set_revision_id, length=36, nullable=True)
+        assert table.c.rule_set_revision_no.nullable is True
+        _assert_string_column(table.c.rule_set_content_hash, length=64, nullable=True)
+        _assert_foreign_key(
+            table.c.rule_set_revision_id,
+            target="rule_set_revisions.id",
+            ondelete="RESTRICT",
+        )
+
+    _assert_string_column(game_sessions.c.rule_set_id, length=80, nullable=True)
+    assert not game_sessions.c.rule_set_id.foreign_keys
+    _assert_index(
+        live_runs,
+        "ix_live_runs_rule_set_revision_id",
+        ["rule_set_revision_id"],
+    )
+    _assert_index(
+        live_runs,
+        "ix_live_runs_rule_set_id_updated_at_run_id_desc",
+        ["rule_set_id", "updated_at", "run_id"],
+    )
+    _assert_index(
+        game_sessions,
+        "ix_game_sessions_rule_set_revision_id",
+        ["rule_set_revision_id"],
+    )
+    _assert_index(
+        game_sessions,
+        "ix_game_sessions_rule_set_id_created_at_session_id_desc",
+        ["rule_set_id", "created_at", "session_id"],
+    )
+    for table, index_name in (
+        (live_runs, "ix_live_runs_rule_set_id_updated_at_run_id_desc"),
+        (game_sessions, "ix_game_sessions_rule_set_id_created_at_session_id_desc"),
+    ):
+        index = next(candidate for candidate in table.indexes if candidate.name == index_name)
+        assert [str(expression).endswith(" DESC") for expression in index.expressions] == [
+            False,
+            True,
+            True,
+        ]
 
 
 def test_runtime_worker_table_matches_expected_schema() -> None:

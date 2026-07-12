@@ -16,6 +16,19 @@ class GameSessionRecord(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     winner: Mapped[str | None] = mapped_column(String(80), nullable=True)
     round_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    rule_set_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    rule_set_revision_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "rule_set_revisions.id",
+            name="fk_game_sessions_rule_set_revision_id_rule_set_revisions",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+        index=True,
+    )
+    rule_set_revision_no: Mapped[int | None] = mapped_column(nullable=True)
+    rule_set_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     rule_set: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     resumable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -49,6 +62,12 @@ Index(
 Index(
     "ix_game_sessions_status_created_at_session_id_desc",
     GameSessionRecord.status,
+    GameSessionRecord.created_at.desc(),
+    GameSessionRecord.session_id.desc(),
+)
+Index(
+    "ix_game_sessions_rule_set_id_created_at_session_id_desc",
+    GameSessionRecord.rule_set_id,
     GameSessionRecord.created_at.desc(),
     GameSessionRecord.session_id.desc(),
 )
