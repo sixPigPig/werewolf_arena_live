@@ -2148,6 +2148,263 @@ def test_session_store_cannot_poison_local_activation_transport_after_commit(
         ]
 
 
+@pytest.mark.parametrize("ack_lost", [False, True], ids=("success", "ack-loss"))
+def test_session_store_restores_canonical_local_containers_after_activation_commit(
+    db_session: Session,
+    ack_lost: bool,
+) -> None:
+    failure = RuntimeError("activation commit acknowledgement lost")
+    armed = False
+    acknowledgement_lost = False
+
+    class AckLostActivationSession(Session):
+        saw_activation = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type in {"run_started", "run_recovered"}
+                for item in self.new
+            ):
+                self.saw_activation = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if ack_lost and armed and self.saw_activation and not acknowledgement_lost:
+                acknowledgement_lost = True
+                raise failure
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=AckLostActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class AliasReplacingSessionLiveStore(SessionLiveStore):
+        retained_run = None
+        registry = None
+
+        def save_new_run(self, run) -> None:
+            self.retained_run = run
+            super().save_new_run(run)
+
+        def _replace_local_aliases(self, run_id: str) -> None:
+            list.clear(self.retained_run.events)
+            list.clear(self.retained_run.subscribers)
+            self.retained_run.events = []
+            self.retained_run.subscribers = []
+            self.retained_run.rule_set = {"store-only-mutation": True}
+            self.retained_run.status = "failed"
+            self.retained_run.next_event_id = 999
+            self.retained_run.persisted_event_count = 999
+            self.retained_run.lease_lost = True
+            self.registry._runs = {run_id: object()}
+            self.registry._activation_events = {(run_id, 999): object()}
+
+        def activate_run(self, run_id: str, **kwargs) -> None:
+            try:
+                super().activate_run(run_id, **kwargs)
+            except Exception:
+                self._replace_local_aliases(run_id)
+                raise
+            self._replace_local_aliases(run_id)
+
+    store = AliasReplacingSessionLiveStore(session_factory)
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id=f"worker-container-continuity-{ack_lost}",
+    )
+    store.registry = registry
+    run = registry.create_run(
+        session_id=f"game_container_continuity_{ack_lost}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    original_rule_set = copy.deepcopy(run.rule_set)
+    original_persisted_event_count = run.persisted_event_count
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    original_events_container = run.events
+    original_subscribers_container = run.subscribers
+    original_runs_container = registry._runs
+    original_activation_events_container = registry._activation_events
+    armed = True
+
+    activation = registry.mark_running(run.run_id)
+    repeated = registry.mark_running(run.run_id)
+
+    assert acknowledgement_lost is ack_lost
+    assert registry._runs is original_runs_container
+    assert registry._activation_events is original_activation_events_container
+    assert registry.get_run(run.run_id) is run
+    assert run.events is original_events_container
+    assert run.subscribers is original_subscribers_container
+    assert activation is repeated is run.events[1]
+    assert activation.type == "run_started"
+    assert activation.payload == {}
+    assert run.rule_set == original_rule_set
+    assert run.status == "running"
+    assert run.lease_lost is False
+    assert run.persisted_event_count == original_persisted_event_count
+    assert run.next_event_id == 3
+    assert [(event.id, event.type) for event in run.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
+    assert len(run.subscribers) == 1
+    assert run.subscribers[0] is subscriber
+    assert registry.events_after(run.run_id) == run.events
+    assert registry._activation_events[(run.run_id, run.fence_token)] is activation
+    assert subscriber.get_nowait() is activation
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.rule_set == original_rule_set
+        assert [(event.event_id, event.type, event.payload) for event in events] == [
+            (1, "run_created", events[0].payload),
+            (2, "run_started", {}),
+        ]
+
+
+def test_session_store_restores_canonical_local_state_after_rejected_activation(
+    db_session: Session,
+) -> None:
+    failure = RuntimeError("activation event flush failed before commit")
+    armed = False
+    injected = False
+
+    class FailingActivationSession(Session):
+        def flush(self, objects=None) -> None:
+            nonlocal injected
+            if (
+                armed
+                and not injected
+                and any(
+                    isinstance(item, LiveEventRecord)
+                    and item.type in {"run_started", "run_recovered"}
+                    for item in self.new
+                )
+            ):
+                injected = True
+                raise failure
+            super().flush(objects)
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=FailingActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class AliasReplacingSessionLiveStore(SessionLiveStore):
+        retained_run = None
+        registry = None
+        accepted_state = None
+
+        def save_new_run(self, run) -> None:
+            self.retained_run = run
+            super().save_new_run(run)
+
+        def activate_run(self, run_id: str, **kwargs) -> None:
+            tracked_names = (
+                ACTIVATION_ACK_RUN_FIELD_NAMES
+                | ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
+                | {"lease_lost", "persisted_event_count", "next_event_id"}
+            )
+            self.accepted_state = {
+                name: copy.deepcopy(getattr(self.retained_run, name)) for name in tracked_names
+            }
+            try:
+                super().activate_run(run_id, **kwargs)
+            except Exception:
+                for name in ACTIVATION_ACK_RUN_FIELD_NAMES:
+                    value = getattr(self.retained_run, name)
+                    if type(value) is dict:
+                        poisoned = {"store-only-mutation": name}
+                    elif type(value) is list:
+                        poisoned = [{"store-only-mutation": name}]
+                    elif type(value) is int:
+                        poisoned = value + 100
+                    else:
+                        poisoned = f"store-only-{name}"
+                    setattr(self.retained_run, name, poisoned)
+                for name in ACTIVATION_ACK_RUN_TIMESTAMP_NAMES:
+                    setattr(self.retained_run, name, "2000-01-01T00:00:00Z")
+                self.retained_run.lease_lost = True
+                self.retained_run.persisted_event_count = 999
+                self.retained_run.next_event_id = 999
+                list.clear(self.retained_run.events)
+                list.clear(self.retained_run.subscribers)
+                self.retained_run.events = []
+                self.retained_run.subscribers = []
+                self.registry._runs = {run_id: object()}
+                self.registry._activation_events = {(run_id, 999): object()}
+                raise
+
+    store = AliasReplacingSessionLiveStore(session_factory)
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id="worker-rejected-container-continuity",
+    )
+    store.registry = registry
+    run = registry.create_run(
+        session_id="game_rejected_container_continuity",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    original_run_id = run.run_id
+    original_events_container = run.events
+    original_subscribers_container = run.subscribers
+    original_runs_container = registry._runs
+    original_activation_events_container = registry._activation_events
+    armed = True
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_running(original_run_id)
+
+    assert raised.value is failure
+    assert injected is True
+    assert store.accepted_state is not None
+    assert registry._runs is original_runs_container
+    assert registry._activation_events is original_activation_events_container
+    assert registry.get_run(original_run_id) is run
+    assert run.events is original_events_container
+    assert run.subscribers is original_subscribers_container
+    for name, value in store.accepted_state.items():
+        assert getattr(run, name) == value
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert run.subscribers == [subscriber]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, original_run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == original_run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "queued"
+        assert [(event.event_id, event.type) for event in events] == [(1, "run_created")]
+
+
 def test_null_rule_snapshot_activation_rejects_nonempty_local_expectation(
     db_session: Session,
 ) -> None:

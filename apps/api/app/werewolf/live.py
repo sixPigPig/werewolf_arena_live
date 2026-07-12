@@ -327,11 +327,13 @@ class RunActivationSourceState:
     worker_heartbeat_at: str | None
     lease_expires_at: str | None
     next_event_id: int
+    persisted_event_count: int
     fields: dict[str, object]
     timestamps: dict[str, str | None]
     events: tuple[RunActivationExpectedEvent, ...]
     events_container: list[LiveEvent]
     subscribers: tuple[queue.Queue[LiveEvent], ...]
+    subscribers_container: list[queue.Queue[LiveEvent]]
 
 
 @dataclass(frozen=True)
@@ -917,6 +919,22 @@ class LiveRunRegistry:
             local_activation_carrier = _clone_activation_expected_event(
                 tuple.__getitem__(expected_state.events, -1)
             )
+            runs_container = self._runs
+            activation_events_container = self._activation_events
+            if (
+                type(runs_container) is not dict
+                or dict.get(runs_container, source.run_id) is not run
+                or type(activation_events_container) is not dict
+            ):
+                _raise_invalid_exact_json_value()
+            runs_snapshot = dict.copy(runs_container)
+            activation_events_snapshot = dict.copy(activation_events_container)
+            activation_cache_event_indexes = _capture_activation_cache_event_indexes(
+                activation_events_snapshot,
+                run_id=source.run_id,
+                events_container=source.events_container,
+                expected_events=tuple(expected_state.events[:-1]),
+            )
             try:
                 self._persist_activation_locked(
                     run,
@@ -928,19 +946,70 @@ class LiveRunRegistry:
                     activation=activation_transport,
                     started_at=started_at,
                 )
-            except Exception:
+            except Exception as activation_error:
                 if not self._activation_was_committed_locked(
                     expected_state,
                     registry_worker_id=registry_worker_id,
                 ):
+                    try:
+                        _restore_rejected_activation_state(
+                            run,
+                            source=source,
+                            expected_state=expected_state,
+                        )
+                        if isinstance(activation_error, RunLeaseUnavailable):
+                            object.__setattr__(run, "lease_lost", True)
+                        object.__setattr__(self, "_runs", runs_container)
+                        dict.clear(runs_container)
+                        dict.update(runs_container, runs_snapshot)
+                        object.__setattr__(self, "_activation_events", activation_events_container)
+                        _restore_activation_cache_snapshot(
+                            activation_events_container,
+                            snapshot=activation_events_snapshot,
+                            event_indexes=activation_cache_event_indexes,
+                            events_container=source.events_container,
+                        )
+                    except Exception:
+                        pass
                     raise
-                run.lease_lost = False
             local_activation = _live_event_from_expected_event(local_activation_carrier)
-            run.status = "running"
-            run.started_at = started_at
-            run.next_event_id = source.next_event_id + 1
-            list.append(source.events_container, local_activation)
-            dict.__setitem__(self._activation_events, activation_key, local_activation)
+            try:
+                registry_continuity_preserved = (
+                    self._runs is runs_container
+                    and dict.get(runs_container, source.run_id) is run
+                    and self._activation_events is activation_events_container
+                )
+            except Exception:
+                registry_continuity_preserved = False
+            if registry_continuity_preserved and _activation_source_continuity_preserved(
+                run,
+                source=source,
+                expected_state=expected_state,
+            ):
+                object.__setattr__(run, "status", "running")
+                object.__setattr__(run, "started_at", started_at)
+                object.__setattr__(run, "lease_lost", False)
+                object.__setattr__(run, "next_event_id", expected_state.next_event_id)
+                list.append(source.events_container, local_activation)
+            else:
+                _restore_committed_activation_state(
+                    run,
+                    source=source,
+                    expected_state=expected_state,
+                    local_activation=local_activation,
+                )
+            object.__setattr__(self, "_runs", runs_container)
+            dict.clear(runs_container)
+            dict.update(runs_container, runs_snapshot)
+            dict.__setitem__(runs_container, source.run_id, run)
+            object.__setattr__(self, "_activation_events", activation_events_container)
+            _restore_activation_cache_snapshot(
+                activation_events_container,
+                snapshot=activation_events_snapshot,
+                event_indexes=activation_cache_event_indexes,
+                events_container=source.events_container,
+            )
+            dict.__setitem__(activation_events_container, activation_key, local_activation)
             for subscriber in source.subscribers:
                 subscriber.put(local_activation)
             return local_activation
@@ -1300,10 +1369,13 @@ class LiveRunRegistry:
             run.lease_lost = True
             raise
         except Exception:
-            _require_unchanged_registry_worker_id(
-                self.worker_id,
-                captured=registry_worker_id,
-            )
+            try:
+                _require_unchanged_registry_worker_id(
+                    self.worker_id,
+                    captured=registry_worker_id,
+                )
+            except Exception:
+                pass
             raise
         _require_unchanged_registry_worker_id(
             self.worker_id,
@@ -1316,8 +1388,8 @@ class LiveRunRegistry:
         *,
         registry_worker_id: str,
     ) -> bool:
-        verifier = getattr(self._live_store, "activation_was_committed", None)
         try:
+            verifier = getattr(self._live_store, "activation_was_committed", None)
             _require_unchanged_registry_worker_id(
                 self.worker_id,
                 captured=registry_worker_id,
@@ -1701,6 +1773,9 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
     _require_exact_int(run.recovery_attempts)
     _require_exact_optional_str(run.recovery_last_error)
     _require_exact_int(run.next_event_id)
+    _require_exact_int(run.persisted_event_count)
+    if run.persisted_event_count < 0:
+        _raise_invalid_exact_json_value()
     if type(run.lease_lost) is not bool:
         _raise_invalid_exact_json_value()
     if type(run.rule_set) is not dict:
@@ -1781,11 +1856,246 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
         worker_heartbeat_at=run.worker_heartbeat_at,
         lease_expires_at=run.lease_expires_at,
         next_event_id=run.next_event_id,
+        persisted_event_count=run.persisted_event_count,
         fields=fields,
         timestamps=timestamps,
         events=events,
         events_container=run.events,
         subscribers=tuple(subscribers),
+        subscribers_container=run.subscribers,
+    )
+
+
+def _activation_source_continuity_preserved(
+    run: object,
+    *,
+    source: RunActivationSourceState,
+    expected_state: RunActivationExpectedState,
+) -> bool:
+    try:
+        if (
+            type(run) is not LiveGameRun
+            or run.events is not source.events_container
+            or run.subscribers is not source.subscribers_container
+        ):
+            return False
+        current = _capture_activation_source_state(run)
+        expected_events = tuple(expected_state.events[:-1])
+        return bool(
+            strict_json_equal(current.fields, source.fields)
+            and strict_json_equal(current.timestamps, source.timestamps)
+            and current.lease_lost is source.lease_lost
+            and current.next_event_id == source.next_event_id
+            and current.persisted_event_count == source.persisted_event_count
+            and _activation_expected_events_equal(current.events, expected_events)
+            and _subscriber_sequences_identical(current.subscribers, source.subscribers)
+        )
+    except Exception:
+        return False
+
+
+def _restore_committed_activation_state(
+    run: object,
+    *,
+    source: RunActivationSourceState,
+    expected_state: RunActivationExpectedState,
+    local_activation: LiveEvent,
+) -> None:
+    if type(run) is not LiveGameRun or type(local_activation) is not LiveEvent:
+        _raise_invalid_exact_json_value()
+    trusted = _clone_activation_expected_state(expected_state)
+    fields = trusted.fields
+    timestamps = trusted.timestamps
+    for name, value in dict.items(fields):
+        object.__setattr__(run, name, value)
+    for name, value in dict.items(timestamps):
+        object.__setattr__(run, name, value)
+
+    expected_prefix = tuple(trusted.events[:-1])
+    if _live_event_prefix_matches(source.events_container, expected_prefix):
+        local_events = [
+            list.__getitem__(source.events_container, index)
+            for index in range(list.__len__(source.events_container))
+        ]
+    else:
+        local_events = [_live_event_from_expected_event(event) for event in expected_prefix]
+    list.append(local_events, local_activation)
+    list.clear(source.events_container)
+    list.extend(source.events_container, local_events)
+    list.clear(source.subscribers_container)
+    list.extend(source.subscribers_container, source.subscribers)
+
+    object.__setattr__(run, "lease_lost", False)
+    object.__setattr__(run, "persisted_event_count", source.persisted_event_count)
+    object.__setattr__(run, "events", source.events_container)
+    object.__setattr__(run, "subscribers", source.subscribers_container)
+    object.__setattr__(run, "next_event_id", trusted.next_event_id)
+
+
+def _restore_rejected_activation_state(
+    run: object,
+    *,
+    source: RunActivationSourceState,
+    expected_state: RunActivationExpectedState,
+) -> None:
+    if type(run) is not LiveGameRun:
+        _raise_invalid_exact_json_value()
+    trusted = _clone_activation_expected_state(expected_state)
+    fields = _strict_json_snapshot(source.fields)
+    timestamps = _strict_json_snapshot(source.timestamps)
+    if type(fields) is not dict or type(timestamps) is not dict:
+        _raise_invalid_exact_json_value()
+    for name, value in dict.items(fields):
+        object.__setattr__(run, name, value)
+    for name, value in dict.items(timestamps):
+        object.__setattr__(run, name, value)
+
+    expected_events = tuple(trusted.events[:-1])
+    if _live_event_prefix_matches(source.events_container, expected_events):
+        local_events = [
+            list.__getitem__(source.events_container, index)
+            for index in range(list.__len__(source.events_container))
+        ]
+    else:
+        local_events = [_live_event_from_expected_event(event) for event in expected_events]
+    list.clear(source.events_container)
+    list.extend(source.events_container, local_events)
+    list.clear(source.subscribers_container)
+    list.extend(source.subscribers_container, source.subscribers)
+
+    object.__setattr__(run, "lease_lost", source.lease_lost)
+    object.__setattr__(run, "persisted_event_count", source.persisted_event_count)
+    object.__setattr__(run, "events", source.events_container)
+    object.__setattr__(run, "subscribers", source.subscribers_container)
+    object.__setattr__(run, "next_event_id", source.next_event_id)
+
+
+def _capture_activation_cache_event_indexes(
+    snapshot: object,
+    *,
+    run_id: str,
+    events_container: object,
+    expected_events: object,
+) -> dict[tuple[str, int], int]:
+    if (
+        type(snapshot) is not dict
+        or type(events_container) is not list
+        or type(expected_events) is not tuple
+    ):
+        _raise_invalid_exact_json_value()
+    indexes: dict[tuple[str, int], int] = {}
+    for key, value in dict.items(snapshot):
+        if type(key) is not tuple or tuple.__len__(key) != 2:
+            _raise_invalid_exact_json_value()
+        cached_run_id = tuple.__getitem__(key, 0)
+        cached_fence_token = tuple.__getitem__(key, 1)
+        _require_exact_str(cached_run_id)
+        _require_exact_int(cached_fence_token)
+        if cached_fence_token < 0:
+            _raise_invalid_exact_json_value()
+        if cached_run_id != run_id:
+            continue
+        if type(value) is not LiveEvent:
+            _raise_invalid_exact_json_value()
+        event_index = next(
+            (
+                index
+                for index in range(list.__len__(events_container))
+                if list.__getitem__(events_container, index) is value
+            ),
+            None,
+        )
+        if event_index is None or event_index >= tuple.__len__(expected_events):
+            _raise_invalid_exact_json_value()
+        actual = _activation_expected_event(value)
+        expected = tuple.__getitem__(expected_events, event_index)
+        if not _activation_expected_events_equal((actual,), (expected,)):
+            _raise_invalid_exact_json_value()
+        dict.__setitem__(indexes, key, event_index)
+    return indexes
+
+
+def _restore_activation_cache_snapshot(
+    container: object,
+    *,
+    snapshot: object,
+    event_indexes: object,
+    events_container: object,
+) -> None:
+    if (
+        type(container) is not dict
+        or type(snapshot) is not dict
+        or type(event_indexes) is not dict
+        or type(events_container) is not list
+    ):
+        _raise_invalid_exact_json_value()
+    dict.clear(container)
+    for key, value in dict.items(snapshot):
+        if not dict.__contains__(event_indexes, key):
+            dict.__setitem__(container, key, value)
+    for key, event_index in dict.items(event_indexes):
+        _require_exact_int(event_index)
+        if event_index < 0 or event_index >= list.__len__(events_container):
+            _raise_invalid_exact_json_value()
+        event = list.__getitem__(events_container, event_index)
+        if type(event) is not LiveEvent:
+            _raise_invalid_exact_json_value()
+        dict.__setitem__(container, key, event)
+
+
+def _live_event_prefix_matches(
+    events: object,
+    expected: tuple[RunActivationExpectedEvent, ...],
+) -> bool:
+    try:
+        if type(events) is not list or list.__len__(events) != tuple.__len__(expected):
+            return False
+        actual = tuple(
+            _activation_expected_event(list.__getitem__(events, index))
+            for index in range(list.__len__(events))
+        )
+        return _activation_expected_events_equal(actual, expected)
+    except Exception:
+        return False
+
+
+def _activation_expected_events_equal(
+    left: object,
+    right: object,
+) -> bool:
+    if type(left) is not tuple or type(right) is not tuple:
+        return False
+    if tuple.__len__(left) != tuple.__len__(right):
+        return False
+    for index in range(tuple.__len__(left)):
+        left_event = tuple.__getitem__(left, index)
+        right_event = tuple.__getitem__(right, index)
+        if (
+            type(left_event) is not RunActivationExpectedEvent
+            or type(right_event) is not RunActivationExpectedEvent
+            or left_event.id != right_event.id
+            or left_event.type != right_event.type
+            or left_event.run_id != right_event.run_id
+            or left_event.session_id != right_event.session_id
+            or left_event.created_at != right_event.created_at
+            or left_event.round != right_event.round
+            or left_event.phase != right_event.phase
+            or left_event.actor != right_event.actor
+            or left_event.action != right_event.action
+            or not strict_json_equal(left_event.payload, right_event.payload)
+        ):
+            return False
+    return True
+
+
+def _subscriber_sequences_identical(left: object, right: object) -> bool:
+    if type(left) is not tuple or type(right) is not tuple:
+        return False
+    if tuple.__len__(left) != tuple.__len__(right):
+        return False
+    return all(
+        tuple.__getitem__(left, index) is tuple.__getitem__(right, index)
+        for index in range(tuple.__len__(left))
     )
 
 

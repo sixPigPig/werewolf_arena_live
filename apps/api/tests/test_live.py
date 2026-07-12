@@ -1952,6 +1952,57 @@ def test_cached_mark_running_reacquires_an_expired_same_worker_lease() -> None:
     ]
 
 
+def test_rejected_recovery_relinks_prior_activation_cache_to_restored_event() -> None:
+    failure = RuntimeError("recovery activation persistence failed")
+
+    class PoisoningRejectedRecoveryStore(RecordingLiveStore):
+        retained_run = None
+        fail_recovery = False
+
+        def save_new_run(self, run) -> None:
+            self.retained_run = run
+            super().save_new_run(run)
+
+        def activate_run(self, run_id, **activation) -> None:
+            if self.fail_recovery:
+                prior_activation = self.retained_run.events[1]
+                object.__setattr__(prior_activation, "type", "store_poisoned")
+                prior_activation._payload["store-only-mutation"] = True
+                raise failure
+            super().activate_run(run_id, **activation)
+
+    store = PoisoningRejectedRecoveryStore()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-rejected-recovery")
+    run = registry.create_run(
+        session_id="game_rejected_recovery_cache_identity",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    first_activation = registry.mark_running(run.run_id)
+    assert subscriber.get_nowait() is first_activation
+    run.lease_expires_at = "2000-01-01T00:00:00Z"
+    store.fail_recovery = True
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_running(run.run_id)
+
+    assert raised.value is failure
+    assert run.status == "running"
+    assert run.fence_token == 2
+    assert run.next_event_id == 3
+    assert [(event.id, event.type, event.payload) for event in run.events] == [
+        (1, "run_created", run.events[0].payload),
+        (2, "run_started", {}),
+    ]
+    restored_activation = registry._activation_events[(run.run_id, 1)]
+    assert restored_activation is run.events[1]
+    assert restored_activation is not first_activation
+    assert subscriber.empty()
+
+
 @pytest.mark.parametrize("terminal_status", ["completed", "failed", "canceled"])
 def test_mark_running_never_reactivates_a_terminal_run(terminal_status: str) -> None:
     store = RecordingLiveStore()
@@ -2500,6 +2551,141 @@ def test_mark_running_rejects_registry_worker_mutation_without_hooks(
         assert run.worker_heartbeat_at is None
         assert run.lease_expires_at is None
         assert run.fence_token == 0
+    assert run.status == "queued"
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+def test_verifier_lookup_failure_preserves_original_activation_exception() -> None:
+    activation_failure = RuntimeError("original activation persistence failure")
+    lookup_failure = RuntimeError("nested verifier lookup failure")
+    hook_calls = {"bool": 0, "equal": 0, "hash": 0, "str": 0}
+
+    class HostileWorker(str):
+        def __bool__(self):
+            hook_calls["bool"] += 1
+            return True
+
+        def __eq__(self, _other):
+            hook_calls["equal"] += 1
+            return True
+
+        def __hash__(self):
+            hook_calls["hash"] += 1
+            return str.__hash__(self)
+
+        def __str__(self):
+            hook_calls["str"] += 1
+            return str.__str__(self)
+
+    class FailingVerifierLookupStore(ActivationBoundaryStore):
+        registry = None
+        verifier_lookups = 0
+
+        def __getattribute__(self, name):
+            if name == "activation_was_committed":
+                lookups = object.__getattribute__(self, "verifier_lookups") + 1
+                object.__setattr__(self, "verifier_lookups", lookups)
+                if lookups == 2:
+                    registry = object.__getattribute__(self, "registry")
+                    registry.worker_id = HostileWorker("worker-activation-boundary")
+                    raise lookup_failure
+            return super().__getattribute__(name)
+
+        def activate_run(self, _run_id, **_activation) -> None:
+            self.activation_calls += 1
+            raise activation_failure
+
+    store = FailingVerifierLookupStore(
+        activation_test_lease_state(worker_id="worker-activation-boundary")
+    )
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id="worker-activation-boundary",
+    )
+    store.registry = registry
+    run = registry.create_run(
+        session_id="game_verifier_lookup_failure_identity",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_running(run.run_id)
+
+    assert raised.value is activation_failure
+    assert raised.value is not lookup_failure
+    assert hook_calls == {name: 0 for name in hook_calls}
+    assert store.acquire_calls == 1
+    assert store.activation_calls == 1
+    assert store.ack_verification_calls == 0
+    assert run.status == "queued"
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+def test_activator_worker_mutation_does_not_replace_original_failure() -> None:
+    activation_failure = RuntimeError("original activation persistence failure")
+    hook_calls = {"bool": 0, "equal": 0, "hash": 0, "str": 0}
+
+    class HostileWorker(str):
+        def __bool__(self):
+            hook_calls["bool"] += 1
+            return True
+
+        def __eq__(self, _other):
+            hook_calls["equal"] += 1
+            return True
+
+        def __hash__(self):
+            hook_calls["hash"] += 1
+            return str.__hash__(self)
+
+        def __str__(self):
+            hook_calls["str"] += 1
+            return str.__str__(self)
+
+    class FailingWorkerMutatingStore(ActivationBoundaryStore):
+        registry = None
+
+        def activate_run(self, _run_id, **_activation) -> None:
+            self.activation_calls += 1
+            self.registry.worker_id = HostileWorker("worker-activation-boundary")
+            raise activation_failure
+
+    store = FailingWorkerMutatingStore(
+        activation_test_lease_state(worker_id="worker-activation-boundary")
+    )
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id="worker-activation-boundary",
+    )
+    store.registry = registry
+    run = registry.create_run(
+        session_id="game_activator_worker_failure_identity",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_running(run.run_id)
+
+    assert raised.value is activation_failure
+    assert hook_calls == {name: 0 for name in hook_calls}
+    assert store.acquire_calls == 1
+    assert store.activation_calls == 1
+    assert store.ack_verification_calls == 0
+    assert type(registry.worker_id) is HostileWorker
     assert run.status == "queued"
     assert run.next_event_id == 2
     assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
