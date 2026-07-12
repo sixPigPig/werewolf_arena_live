@@ -1,17 +1,23 @@
 import json
+import logging
+import os
+import threading
+import time
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.routes import games as games_routes
 from app.api.routes.games import (
     CreatePlayerConfigRequest,
     SessionLiveStore,
@@ -23,6 +29,7 @@ from app.api.routes.games import (
     list_available_player_profiles,
     normalize_player_config_requests,
 )
+from app.api.public.dependencies import public_problem
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
@@ -35,14 +42,23 @@ from app.models.live import (
     VoiceUtteranceRecord,
 )
 from app.models.player_avatar_asset import PlayerAvatarAsset
+from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.rule_sets.service import (
+    publish_rule_set,
+    resolve_published_rule_set,
+    update_rule_set_draft,
+)
+from app.rule_sets.types import CompiledRuleSet
+from app.rule_sets.validation import normalize_rule_set_config
 from app.werewolf.checkpoint import CHECKPOINT_SCHEMA_VERSION
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.player_presets import default_personality_text
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.voice import VoiceUtterance
 from app.werewolf.voice_store import DatabaseVoiceStore
+from tests.rule_set_fixtures import OFFICIAL_RULE_SET_SEEDS, seed_official_rule_sets
 
 
 engine = create_engine(
@@ -62,6 +78,9 @@ class BrokenSession:
 
     def query(self, *_args: object) -> None:
         raise OperationalError("select", {}, Exception("database unavailable"))
+
+    def rollback(self) -> None:
+        pass
 
     def close(self) -> None:
         pass
@@ -91,9 +110,12 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
         session.query(LiveRunRecord).delete()
         session.query(GameReplayPayload).delete()
         session.query(GameSessionRecord).delete()
+        session.query(RuleSetRevisionRecord).delete()
+        session.query(RuleSetRecord).delete()
         session.query(VirtualPlayerProfile).delete()
         session.query(PlayerAvatarAsset).delete()
         session.query(User).delete()
+        seed_official_rule_sets(session)
         session.commit()
     yield
     app.dependency_overrides.clear()
@@ -104,6 +126,8 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
         session.query(LiveRunRecord).delete()
         session.query(GameReplayPayload).delete()
         session.query(GameSessionRecord).delete()
+        session.query(RuleSetRevisionRecord).delete()
+        session.query(RuleSetRecord).delete()
         session.query(VirtualPlayerProfile).delete()
         session.query(PlayerAvatarAsset).delete()
         session.query(User).delete()
@@ -295,9 +319,7 @@ def test_session_voice_store_updates_subtitle_timings() -> None:
         )
 
     assert loaded is not None
-    assert loaded["subtitle_timings"] == [
-        {"text": "夜晚降临。", "start_ms": 0, "end_ms": 800}
-    ]
+    assert loaded["subtitle_timings"] == [{"text": "夜晚降临。", "start_ms": 0, "end_ms": 800}]
 
 
 def sample_state(session_id: str, *, winner: str = "狼人阵营", error: str = "") -> dict:
@@ -413,10 +435,202 @@ def test_list_rule_sets_returns_official_rules() -> None:
         "classic_12_seer_witch_hunter_idiot",
     ]
     assert payload["rule_sets"][0]["role_summary"] == "2 狼人 / 1 预言家 / 1 守卫 / 4 村民"
-    assert any(
-        rule["id"] == "classic_12_seer_witch_hunter_idiot"
-        for rule in payload["rule_sets"]
+    assert any(rule["id"] == "classic_12_seer_witch_hunter_idiot" for rule in payload["rule_sets"])
+
+
+def test_list_rule_sets_returns_published_database_revisions_default_first() -> None:
+    with TestingSessionLocal() as session:
+        classic = session.get(RuleSetRecord, "classic_8")
+        social = session.get(RuleSetRecord, "social_8")
+        assert classic is not None
+        assert social is not None
+        classic.is_default = False
+        session.flush()
+        social.is_default = True
+        social.display_order = 99
+        session.commit()
+
+    response = client.get("/api/v1/games/rule-sets")
+
+    assert response.status_code == 200, response.text
+    items = response.json()["rule_sets"]
+    assert [item["id"] for item in items] == [
+        "social_8",
+        "classic_8",
+        "starter_6",
+        "classic_12_seer_witch_hunter_idiot",
+    ]
+    expected_fields = {
+        "id",
+        "version",
+        "name",
+        "description",
+        "player_count",
+        "roles",
+        "night_actions",
+        "day_actions",
+        "win_condition",
+        "reveal_policy",
+        "complexity",
+        "estimated_duration",
+        "role_summary",
+        "sheriff_enabled",
+        "sheriff_vote_weight",
+        "speech_policy",
+        "speech_rounds",
+        "rule_tags",
+        "werewolf_self_explosion_enabled",
+        "sheriff_badge_bomb_policy",
+        "revision_id",
+        "revision_no",
+        "schema_version",
+        "content_hash",
+        "is_default",
+    }
+    assert all(set(item) == expected_fields for item in items)
+    assert all(item["version"] == str(item["revision_no"]) for item in items)
+    assert all(len(item["content_hash"]) == 64 for item in items)
+    assert items[0]["is_default"] is True
+    assert set(items[0]["roles"][0]) == {
+        "role",
+        "count",
+        "team",
+        "model_group",
+        "category",
+    }
+
+
+def test_list_rule_sets_returns_503_without_static_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_catalog(*_args: object, **_kwargs: object) -> object:
+        raise OperationalError("select", {}, Exception("database unavailable"))
+
+    monkeypatch.setattr(
+        "app.api.routes.games.list_published_rule_sets",
+        fail_catalog,
+        raising=False,
     )
+
+    response = client.get("/api/v1/games/rule-sets")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "rule_set_store_unavailable"
+    assert "rule_sets" not in response.json()["detail"]
+
+
+def test_list_rule_sets_returns_503_for_corrupt_catalog_without_stale_snapshot() -> None:
+    with TestingSessionLocal() as session:
+        session.execute(
+            RuleSetRevisionRecord.__table__.update()
+            .where(RuleSetRevisionRecord.id == "e9fa678e-9b18-5079-91d2-f74835364fb6")
+            .values(content_hash="0" * 64)
+        )
+        session.commit()
+
+    response = client.get("/api/v1/games/rule-sets")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "rule_set_store_unavailable"
+    assert "current_rule_set" not in response.json()["detail"]
+
+
+def test_list_rule_sets_static_mode_synthesizes_official_revision_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "rule_set_catalog_source", "static", raising=False)
+
+    def reject_database_read(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("static compatibility mode must not read the catalog database")
+
+    monkeypatch.setattr(
+        "app.api.routes.games.list_published_rule_sets",
+        reject_database_read,
+        raising=False,
+    )
+
+    response = client.get("/api/v1/games/rule-sets")
+
+    assert response.status_code == 200, response.text
+    items = response.json()["rule_sets"]
+    assert [item["revision_id"] for item in items] == [
+        seed["revision_id"] for seed in OFFICIAL_RULE_SET_SEEDS
+    ]
+    assert [item["content_hash"] for item in items] == [
+        seed["content_hash"] for seed in OFFICIAL_RULE_SET_SEEDS
+    ]
+    starter = next(item for item in items if item["id"] == "starter_6")
+    assert starter["description"] == "更短的官方入门局,适合快速观察模型策略。"
+
+
+def test_list_rule_sets_static_mode_rejects_revision_hash_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "rule_set_catalog_source", "static")
+    monkeypatch.setitem(
+        games_routes._STATIC_RULE_REVISIONS,
+        "classic_8",
+        (
+            "e9fa678e-9b18-5079-91d2-f74835364fb6",
+            "0" * 64,
+            True,
+        ),
+    )
+
+    response = client.get("/api/v1/games/rule-sets")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "rule_set_store_unavailable"
+
+
+def test_rule_set_catalog_openapi_schema_requires_the_exact_client_contract() -> None:
+    schema = app.openapi()["components"]["schemas"]["PublicRuleSetCatalogItem"]
+
+    assert set(schema["required"]) == set(schema["properties"])
+    assert "display_order" not in schema["properties"]
+    assert {
+        "revision_id",
+        "revision_no",
+        "schema_version",
+        "content_hash",
+        "is_default",
+        "roles",
+    }.issubset(schema["required"])
+
+
+def test_public_problem_extensions_cannot_override_core_problem_fields() -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/games/rule-sets",
+            "headers": [(b"x-request-id", b"request-safe")],
+            "client": ("127.0.0.1", 12345),
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "query_string": b"",
+        }
+    )
+
+    problem = public_problem(
+        request,
+        status_code=409,
+        code="safe_code",
+        detail="Safe detail.",
+        extensions={
+            "code": "overridden",
+            "message": "Overridden.",
+            "request_id": "overridden",
+            "current_rule_set": {"id": "classic_8"},
+        },
+    )
+
+    assert problem.detail == {
+        "code": "safe_code",
+        "message": "Safe detail.",
+        "request_id": "request-safe",
+        "current_rule_set": {"id": "classic_8"},
+    }
 
 
 def test_list_model_options_returns_configured_models(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -473,9 +687,7 @@ def test_list_model_options_falls_back_to_default_without_keys(
 
     assert response.status_code == 200
     assert response.json() == {
-        "models": [
-            {"id": "deepseek-v4-flash", "label": "默认模型 · deepseek-v4-flash"}
-        ]
+        "models": [{"id": "deepseek-v4-flash", "label": "默认模型 · deepseek-v4-flash"}]
     }
 
 
@@ -507,6 +719,835 @@ def test_create_game_run_accepts_rule_set_id(
     payload = response.json()
     assert payload["rule_set"]["id"] == "starter_6"
     assert captured[0]["rule_set_id"] == "starter_6"
+
+
+def test_create_game_run_pins_expected_revision_and_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+    lock_flags: list[bool] = []
+    real_resolver = games_routes.resolve_published_rule_set
+
+    def capturing_resolver(
+        db: Session,
+        rule_set_id: str,
+        *,
+        expected_revision_id: str | None,
+        for_update: bool = False,
+    ) -> CompiledRuleSet:
+        lock_flags.append(for_update)
+        return real_resolver(
+            db,
+            rule_set_id,
+            expected_revision_id=expected_revision_id,
+            for_update=for_update,
+        )
+
+    def fake_background_run(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr(games_routes, "resolve_published_rule_set", capturing_resolver)
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", fake_background_run)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+    revision_id = "e9fa678e-9b18-5079-91d2-f74835364fb6"
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": revision_id,
+                "seed": 21,
+                "max_rounds": 1,
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["rule_set_revision_id"] == revision_id
+    assert payload["rule_set_revision_no"] == 1
+    assert payload["rule_set_content_hash"] == payload["rule_set"]["content_hash"]
+    assert payload["rule_set"]["revision_id"] == revision_id
+    assert len(captured) == 1
+    compiled = captured[0]["compiled"]
+    assert isinstance(compiled, CompiledRuleSet)
+    assert compiled.snapshot == payload["rule_set"]
+    assert compiled.content_hash == payload["rule_set_content_hash"]
+    assert captured[0]["run_id"] == payload["run_id"]
+    assert lock_flags == [True]
+
+    with TestingSessionLocal() as session:
+        saved_run = session.get(LiveRunRecord, payload["run_id"])
+        saved_events = (
+            session.query(LiveEventRecord)
+            .filter(LiveEventRecord.run_id == payload["run_id"])
+            .order_by(LiveEventRecord.event_id.asc())
+            .all()
+        )
+    assert saved_run is not None
+    assert saved_run.rule_set_revision_id == compiled.revision_id
+    assert saved_run.rule_set_revision_no == compiled.revision_no
+    assert saved_run.rule_set_content_hash == compiled.content_hash
+    assert saved_run.rule_set == compiled.snapshot
+    assert [event.type for event in saved_events] == ["run_created"]
+    assert saved_events[0].payload["rule_set"] == compiled.snapshot
+
+
+def test_create_game_run_static_mode_pins_the_same_official_managed_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(6)
+    monkeypatch.setattr(settings, "rule_set_catalog_source", "static", raising=False)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def reject_database_resolver(*_args: object, **_kwargs: object) -> CompiledRuleSet:
+        raise AssertionError("static create must not resolve through the database catalog")
+
+    class DeferredThread:
+        def __init__(self, *, target, kwargs, daemon) -> None:
+            del target, daemon
+            captured.append(kwargs)
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(games_routes, "resolve_published_rule_set", reject_database_resolver)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", DeferredThread)
+    seed = next(item for item in OFFICIAL_RULE_SET_SEEDS if item["id"] == "starter_6")
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "starter_6",
+                "expected_rule_revision_id": seed["revision_id"],
+                "seed": 21,
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["rule_set_revision_id"] == seed["revision_id"]
+    assert payload["rule_set_content_hash"] == seed["content_hash"]
+    assert payload["rule_set"]["description"] == ("更短的官方入门局,适合快速观察模型策略。")
+    assert len(captured) == 1
+    compiled = captured[0]["compiled"]
+    assert isinstance(compiled, CompiledRuleSet)
+    assert compiled.snapshot == payload["rule_set"]
+
+
+def test_create_game_run_rejects_revision_changed_with_current_catalog_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    thread_constructions: list[object] = []
+
+    class NeverThread:
+        def __init__(self, **kwargs: object) -> None:
+            thread_constructions.append(kwargs)
+
+        def start(self) -> None:
+            raise AssertionError("revision conflicts must not start a worker")
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", NeverThread)
+
+    try:
+        current_response = client.get("/api/v1/games/rule-sets")
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "00000000-0000-0000-0000-000000000000",
+                "seed": 21,
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert current_response.status_code == 200
+    current = next(
+        item for item in current_response.json()["rule_sets"] if item["id"] == "classic_8"
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "rule_revision_changed",
+        "message": "The selected rule revision has changed.",
+        "request_id": response.headers["X-Request-ID"],
+        "current_rule_set": current,
+    }
+    assert thread_constructions == []
+    with TestingSessionLocal() as session:
+        assert session.query(LiveRunRecord).count() == 0
+        assert session.query(LiveEventRecord).count() == 0
+    assert registry._runs == {}
+
+
+def test_create_game_run_rejects_archived_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    with TestingSessionLocal() as session:
+        classic = session.get(RuleSetRecord, "classic_8")
+        social = session.get(RuleSetRecord, "social_8")
+        assert classic is not None
+        assert social is not None
+        classic.is_default = False
+        classic.status = "archived"
+        classic.archived_at = datetime.now(UTC)
+        session.flush()
+        social.is_default = True
+        session.commit()
+
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    thread_constructions: list[object] = []
+
+    class NeverThread:
+        def __init__(self, **kwargs: object) -> None:
+            thread_constructions.append(kwargs)
+
+        def start(self) -> None:
+            raise AssertionError("archived rules must not start a worker")
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", NeverThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "e9fa678e-9b18-5079-91d2-f74835364fb6",
+                "seed": 21,
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "rule_set_unavailable"
+    assert "current_rule_set" not in response.json()["detail"]
+    assert thread_constructions == []
+    with TestingSessionLocal() as session:
+        assert session.query(LiveRunRecord).count() == 0
+        assert session.query(LiveEventRecord).count() == 0
+    assert registry._runs == {}
+
+
+def test_create_game_run_without_expected_revision_records_compatibility(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+
+    class DeferredThread:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", DeferredThread)
+
+    try:
+        with caplog.at_level(logging.INFO, logger="app.api.routes.games"):
+            response = client.post(
+                "/api/v1/games/runs",
+                json={"rule_set_id": "classic_8", "seed": 21},
+            )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201, response.text
+    compatibility_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event_code", None) == "legacy_rule_create"
+    ]
+    assert len(compatibility_records) == 1
+    record = compatibility_records[0]
+    assert record.rule_set_id == "classic_8"
+    assert record.rule_set_revision_no == 1
+    assert record.rule_set_schema_version == 1
+    assert record.rule_set_content_hash_prefix == response.json()["rule_set_content_hash"][:12]
+    assert "包含狼人" not in record.getMessage()
+    assert response.json()["rule_set"] not in record.__dict__.values()
+
+
+def test_background_thread_starts_only_after_run_transaction_commits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    db = TestingSessionLocal()
+    order: list[str] = []
+    observations: dict[str, object] = {}
+    original_commit = db.commit
+
+    def tracking_commit() -> None:
+        assert registry._runs == {}
+        order.append("commit")
+        original_commit()
+        assert registry._runs == {}
+
+    monkeypatch.setattr(db, "commit", tracking_commit)
+
+    def override_tracking_db() -> Generator[Session, None, None]:
+        yield db
+
+    app.dependency_overrides[get_db] = override_tracking_db
+
+    class TrackingThread:
+        def __init__(self, *, target, kwargs, daemon) -> None:
+            del target, daemon
+            order.append("thread_constructed")
+            run_id = str(kwargs["run_id"])
+            observations["attached"] = registry.try_get_run(run_id) is not None
+            with TestingSessionLocal() as observer:
+                observations["run_committed"] = observer.get(LiveRunRecord, run_id) is not None
+                observations["event_committed"] = (
+                    observer.query(LiveEventRecord).filter(LiveEventRecord.run_id == run_id).count()
+                    == 1
+                )
+
+        def start(self) -> None:
+            order.append("thread_started")
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", TrackingThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "e9fa678e-9b18-5079-91d2-f74835364fb6",
+                "seed": 21,
+            },
+        )
+    finally:
+        db.close()
+        clear_overrides()
+
+    assert response.status_code == 201, response.text
+    assert order == ["commit", "thread_constructed", "thread_started"]
+    assert observations == {
+        "attached": True,
+        "run_committed": True,
+        "event_committed": True,
+    }
+
+
+@pytest.mark.skipif(
+    not os.getenv("TEST_POSTGRESQL_URL"),
+    reason="requires an explicitly disposable PostgreSQL URL",
+)
+def test_publish_waits_while_run_selection_holds_parent_lock() -> None:
+    database_url = os.environ["TEST_POSTGRESQL_URL"]
+    schema = f"task3_lock_{uuid4().hex}"
+    admin_engine = create_engine(database_url)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    scoped_engine = create_engine(
+        database_url,
+        connect_args={"options": f"-csearch_path={schema}"},
+    )
+    ScopedSession = sessionmaker(bind=scoped_engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(scoped_engine)
+    errors: list[BaseException] = []
+    selection_locked = threading.Event()
+    release_selection = threading.Event()
+    publish_entered = threading.Event()
+    publish_completed = threading.Event()
+
+    try:
+        with ScopedSession() as setup:
+            setup.add(
+                User(
+                    id=101,
+                    email="task3-lock@example.test",
+                    display_name="Task 3 Lock",
+                    admin_role="super_admin",
+                )
+            )
+            seed_official_rule_sets(setup)
+            setup.commit()
+            classic_seed = next(
+                seed for seed in OFFICIAL_RULE_SET_SEEDS if seed["id"] == "classic_8"
+            )
+            draft_config = normalize_rule_set_config(
+                {**classic_seed["config"], "name": "经典 8 人局 第二版"}
+            )
+            draft = update_rule_set_draft(
+                setup,
+                "classic_8",
+                config=draft_config,
+                display_order=1,
+                expected_rule_set_lock_version=1,
+                expected_revision_lock_version=None,
+                actor_user_id=101,
+            )
+            assert draft.draft is not None
+            parent_lock_version = draft.record.lock_version
+            revision_lock_version = draft.draft.lock_version
+            setup.commit()
+
+        def hold_selection_lock() -> None:
+            try:
+                with ScopedSession() as selection_db:
+                    resolve_published_rule_set(
+                        selection_db,
+                        "classic_8",
+                        expected_revision_id=("e9fa678e-9b18-5079-91d2-f74835364fb6"),
+                        for_update=True,
+                    )
+                    selection_locked.set()
+                    if not release_selection.wait(timeout=5):
+                        raise TimeoutError("selection lock release timed out")
+                    selection_db.commit()
+            except BaseException as exc:
+                errors.append(exc)
+                selection_locked.set()
+
+        def publish_next_revision() -> None:
+            try:
+                if not selection_locked.wait(timeout=5):
+                    raise TimeoutError("selection did not acquire its lock")
+                with ScopedSession() as publish_db:
+                    publish_entered.set()
+                    publish_rule_set(
+                        publish_db,
+                        "classic_8",
+                        expected_rule_set_lock_version=parent_lock_version,
+                        expected_revision_lock_version=revision_lock_version,
+                        reason="Verify run selection serialization",
+                        actor_user_id=101,
+                    )
+                    publish_db.commit()
+                    publish_completed.set()
+            except BaseException as exc:
+                errors.append(exc)
+                publish_completed.set()
+
+        selection_thread = threading.Thread(target=hold_selection_lock)
+        publish_thread = threading.Thread(target=publish_next_revision)
+        selection_thread.start()
+        assert selection_locked.wait(timeout=5)
+        publish_thread.start()
+        assert publish_entered.wait(timeout=5)
+        time.sleep(0.25)
+        assert not publish_completed.is_set()
+        release_selection.set()
+        selection_thread.join(timeout=5)
+        publish_thread.join(timeout=5)
+
+        assert not selection_thread.is_alive()
+        assert not publish_thread.is_alive()
+        assert errors == []
+        assert publish_completed.is_set()
+    finally:
+        release_selection.set()
+        scoped_engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()
+
+
+def test_create_game_run_stage_failure_rolls_back_without_local_or_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    thread_constructions: list[object] = []
+
+    def fail_stage(*_args: object, **_kwargs: object) -> None:
+        raise OperationalError("insert", {}, Exception("stage failed"))
+
+    class NeverThread:
+        def __init__(self, **kwargs: object) -> None:
+            thread_constructions.append(kwargs)
+
+        def start(self) -> None:
+            raise AssertionError("a failed stage must not start a worker")
+
+    monkeypatch.setattr(
+        "app.api.routes.games.DatabaseLiveStore.stage_new_run",
+        fail_stage,
+        raising=False,
+    )
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", NeverThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "e9fa678e-9b18-5079-91d2-f74835364fb6",
+                "seed": 21,
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "rule_set_store_unavailable"
+    assert thread_constructions == []
+    assert registry._runs == {}
+    with TestingSessionLocal() as session:
+        assert session.query(LiveRunRecord).count() == 0
+        assert session.query(LiveEventRecord).count() == 0
+
+
+def test_create_game_run_commit_failure_rolls_back_without_local_or_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    db = TestingSessionLocal()
+    thread_constructions: list[object] = []
+
+    def fail_commit() -> None:
+        raise OperationalError("commit", {}, Exception("commit failed"))
+
+    monkeypatch.setattr(db, "commit", fail_commit)
+
+    def override_failing_db() -> Generator[Session, None, None]:
+        yield db
+
+    app.dependency_overrides[get_db] = override_failing_db
+
+    class NeverThread:
+        def __init__(self, **kwargs: object) -> None:
+            thread_constructions.append(kwargs)
+
+        def start(self) -> None:
+            raise AssertionError("a failed commit must not start a worker")
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", NeverThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "e9fa678e-9b18-5079-91d2-f74835364fb6",
+                "seed": 21,
+            },
+        )
+    finally:
+        db.close()
+        clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "rule_set_store_unavailable"
+    assert thread_constructions == []
+    assert registry._runs == {}
+    with TestingSessionLocal() as session:
+        assert session.query(LiveRunRecord).count() == 0
+        assert session.query(LiveEventRecord).count() == 0
+
+
+def test_create_game_run_compensates_when_commit_succeeds_but_ack_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    db = TestingSessionLocal()
+    original_commit = db.commit
+    commit_calls = 0
+    thread_constructions: list[object] = []
+
+    def uncertain_commit() -> None:
+        nonlocal commit_calls
+        commit_calls += 1
+        original_commit()
+        if commit_calls == 1:
+            raise OperationalError("commit", {}, Exception("commit ack lost"))
+
+    monkeypatch.setattr(db, "commit", uncertain_commit)
+
+    def override_uncertain_db() -> Generator[Session, None, None]:
+        yield db
+
+    app.dependency_overrides[get_db] = override_uncertain_db
+
+    class NeverThread:
+        def __init__(self, **kwargs: object) -> None:
+            thread_constructions.append(kwargs)
+
+        def start(self) -> None:
+            raise AssertionError("an uncertain commit must not start a worker")
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", NeverThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "e9fa678e-9b18-5079-91d2-f74835364fb6",
+                "seed": 21,
+            },
+        )
+    finally:
+        db.close()
+        clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "rule_set_store_unavailable"
+    assert commit_calls == 2
+    assert thread_constructions == []
+    assert registry._runs == {}
+    with TestingSessionLocal() as session:
+        assert session.query(LiveRunRecord).count() == 0
+        assert session.query(LiveEventRecord).count() == 0
+
+
+def test_create_game_run_attach_failure_compensates_committed_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    if not hasattr(registry, "attach_prepared_run"):
+        pytest.fail("LiveRunRegistry.attach_prepared_run is missing")
+
+    def fail_attach(_run: object) -> None:
+        raise RuntimeError("attach failed")
+
+    monkeypatch.setattr(registry, "attach_prepared_run", fail_attach)
+    thread_constructions: list[object] = []
+
+    class NeverThread:
+        def __init__(self, **kwargs: object) -> None:
+            thread_constructions.append(kwargs)
+
+        def start(self) -> None:
+            raise AssertionError("a failed attach must not start a worker")
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", NeverThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "e9fa678e-9b18-5079-91d2-f74835364fb6",
+                "seed": 21,
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "game_run_start_unavailable"
+    assert thread_constructions == []
+    assert registry._runs == {}
+    with TestingSessionLocal() as session:
+        assert session.query(LiveRunRecord).count() == 0
+        assert session.query(LiveEventRecord).count() == 0
+
+
+@pytest.mark.parametrize("failure_phase", ["construct", "start"])
+def test_create_game_run_thread_failure_detaches_and_compensates_committed_rows(
+    failure_phase: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    starts: list[str] = []
+
+    class FailingThread:
+        def __init__(self, **_kwargs: object) -> None:
+            if failure_phase == "construct":
+                raise RuntimeError("thread construction failed")
+
+        def start(self) -> None:
+            starts.append("attempted")
+            raise RuntimeError("thread start failed")
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", FailingThread)
+    non_raising_client = TestClient(app, raise_server_exceptions=False)
+
+    try:
+        response = non_raising_client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "e9fa678e-9b18-5079-91d2-f74835364fb6",
+                "seed": 21,
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "game_run_start_unavailable"
+    assert starts == ([] if failure_phase == "construct" else ["attempted"])
+    assert registry._runs == {}
+    with TestingSessionLocal() as session:
+        assert session.query(LiveRunRecord).count() == 0
+        assert session.query(LiveEventRecord).count() == 0
+
+
+@pytest.mark.parametrize("compensation_outcome", ["condition_mismatch", "storage_error"])
+def test_create_game_run_thread_failure_keeps_recoverable_row_when_compensation_fails(
+    compensation_outcome: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+
+    class FailingThread:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread start failed")
+
+    def fail_compensation(*_args: object, **_kwargs: object) -> bool:
+        if compensation_outcome == "storage_error":
+            raise OperationalError("delete", {}, Exception("cleanup unavailable"))
+        return False
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", FailingThread)
+    monkeypatch.setattr(
+        "app.api.routes.games._compensate_committed_run",
+        fail_compensation,
+        raising=False,
+    )
+    non_raising_client = TestClient(app, raise_server_exceptions=False)
+
+    try:
+        response = non_raising_client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "e9fa678e-9b18-5079-91d2-f74835364fb6",
+                "seed": 21,
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "game_run_start_unavailable"
+    assert registry._runs == {}
+    with TestingSessionLocal() as session:
+        saved_run = session.query(LiveRunRecord).one()
+        saved_events = session.query(LiveEventRecord).all()
+    assert saved_run.status == "queued"
+    assert saved_run.fence_token == 0
+    assert saved_run.worker_heartbeat_at is None
+    assert [event.type for event in saved_events] == ["run_created"]
+
+
+@pytest.mark.parametrize(
+    "external_change",
+    [
+        "worker_id",
+        "control_version",
+        "stop_requested",
+        "extra_event",
+        "mutated_event",
+    ],
+)
+def test_create_game_run_thread_failure_does_not_delete_externally_changed_run(
+    external_change: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    changed_at = datetime.now(UTC)
+
+    class FailingThread:
+        def __init__(self, *, target, kwargs, daemon) -> None:
+            del target, daemon
+            self.run_id = str(kwargs["run_id"])
+            self.session_id = str(kwargs["session_id"])
+
+        def start(self) -> None:
+            with TestingSessionLocal() as external:
+                record = external.get(LiveRunRecord, self.run_id)
+                assert record is not None
+                if external_change == "worker_id":
+                    record.worker_id = "worker_external"
+                elif external_change == "control_version":
+                    record.control_version = 1
+                elif external_change == "stop_requested":
+                    record.stop_requested_at = changed_at
+                elif external_change == "extra_event":
+                    external.add(
+                        LiveEventRecord(
+                            run_id=self.run_id,
+                            event_id=2,
+                            session_id=self.session_id,
+                            type="run_stop_requested",
+                            payload={"requested_at": changed_at.isoformat()},
+                        )
+                    )
+                else:
+                    event = external.get(LiveEventRecord, (self.run_id, 1))
+                    assert event is not None
+                    event.type = "externally_mutated"
+                external.commit()
+            raise RuntimeError("thread start failed after external control change")
+
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", FailingThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "classic_8",
+                "expected_rule_revision_id": "e9fa678e-9b18-5079-91d2-f74835364fb6",
+                "seed": 21,
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "game_run_start_unavailable"
+    assert registry._runs == {}
+    with TestingSessionLocal() as session:
+        saved_run = session.query(LiveRunRecord).one()
+        saved_events = session.query(LiveEventRecord).order_by(LiveEventRecord.event_id.asc()).all()
+    assert saved_run.status == "queued"
+    assert saved_run.fence_token == 0
+    if external_change == "worker_id":
+        assert saved_run.worker_id == "worker_external"
+    elif external_change == "control_version":
+        assert saved_run.control_version == 1
+        assert saved_run.stop_requested_at is None
+    elif external_change == "stop_requested":
+        assert saved_run.control_version == 0
+        assert saved_run.stop_requested_at is not None
+    elif external_change == "extra_event":
+        assert [event.type for event in saved_events] == [
+            "run_created",
+            "run_stop_requested",
+        ]
+    else:
+        assert [event.type for event in saved_events] == ["externally_mutated"]
 
 
 def test_create_game_run_randomly_fills_profiles_when_no_lineup_selected(
@@ -570,9 +1611,7 @@ def test_create_game_run_returns_lineup_quality_warnings_for_homogeneous_profile
     warnings = response.json()["lineup_quality_warnings"]
     assert warnings
     assert all(set(warning) == {"code", "detail"} for warning in warnings)
-    assert "homogeneous_personality_lineup" in {
-        warning["code"] for warning in warnings
-    }
+    assert "homogeneous_personality_lineup" in {warning["code"] for warning in warnings}
 
 
 def test_create_game_run_rejects_when_player_library_is_too_small(
@@ -663,8 +1702,9 @@ def test_create_game_run_rejects_unknown_rule_set(
     finally:
         clear_overrides()
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == "Unknown rule set: missing_rule"
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "rule_set_unavailable"
+    assert "current_rule_set" not in response.json()["detail"]
 
 
 def test_create_game_run_resolves_profile_configs(
@@ -771,6 +1811,7 @@ def test_create_game_run_returns_503_when_profile_database_is_unavailable(
     override_replay_store()
     override_live_registry(registry)
     app.dependency_overrides[get_db] = override_broken_db
+    monkeypatch.setattr(settings, "rule_set_catalog_source", "static", raising=False)
     captured: list[dict[str, object]] = []
 
     def fake_background_run(**kwargs: object) -> None:
@@ -1232,7 +2273,8 @@ def test_create_game_run_persists_live_run_and_created_event(
     assert saved_run is not None
     assert saved_run.session_id == payload["session_id"]
     assert [event.type for event in saved_events] == ["run_created"]
-    assert [event[2] for event in store.events] == ["run_created"]
+    assert store.saved_runs == []
+    assert store.events == []
     assert captured[0]["run_id"] == payload["run_id"]
 
 
@@ -1664,13 +2706,13 @@ def test_get_game_playback_returns_persisted_events_and_saved_voices() -> None:
             "speaker_kind": "player",
             "speaker_name": "阿青",
             "mime_type": "audio/L16",
-                "audio_format": "pcm",
-                "sample_rate": 24000,
-                "duration_ms": 123,
-                "subtitle_timings": [],
-                "chunks": [{"chunk_index": 0, "data": "YWJj"}],
-            }
-        ]
+            "audio_format": "pcm",
+            "sample_rate": 24000,
+            "duration_ms": 123,
+            "subtitle_timings": [],
+            "chunks": [{"chunk_index": 0, "data": "YWJj"}],
+        }
+    ]
 
 
 def test_get_game_playback_repairs_incomplete_saved_subtitle_timings() -> None:
@@ -1689,7 +2731,11 @@ def test_get_game_playback_repairs_incomplete_saved_subtitle_timings() -> None:
         "model_response_delta",
         actor="阿青",
         action="debate",
-        payload={"request_id": "req-voice", "visible_text": "我是村民，我先过。", "is_public": True},
+        payload={
+            "request_id": "req-voice",
+            "visible_text": "我是村民，我先过。",
+            "is_public": True,
+        },
     )
     with TestingSessionLocal() as session:
         voice_store = DatabaseVoiceStore(session, session_id=session_id)
@@ -1884,8 +2930,7 @@ def test_get_game_playback_suppresses_secret_wolf_consensus_actions() -> None:
     )
 
 
-def test_get_game_playback_suppresses_secret_wolf_self_explosion_check(
-) -> None:
+def test_get_game_playback_suppresses_secret_wolf_self_explosion_check() -> None:
     session_id = "game_1200abcd"
     state = sample_state(session_id, winner="好人阵营")
     state["rounds"][0]["werewolf_self_exploded"] = "张三"
@@ -1924,13 +2969,10 @@ def test_get_game_playback_suppresses_secret_wolf_self_explosion_check(
     assert [
         event
         for event in events
-        if event["action"] == "werewolf_self_explosion"
-        and event["type"] in private_event_types
+        if event["action"] == "werewolf_self_explosion" and event["type"] in private_event_types
     ] == []
     day_state = next(
-        event
-        for event in events
-        if event["type"] == "state_updated" and event["phase"] == "day"
+        event for event in events if event["type"] == "state_updated" and event["phase"] == "day"
     )
     assert day_state["payload"]["werewolf_self_exploded"] == "张三"
     serialized_events = json.dumps(events, ensure_ascii=False)

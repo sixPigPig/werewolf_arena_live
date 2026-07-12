@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -46,11 +47,7 @@ def get_current_public_principal(
             code="public_session_database_unavailable",
             detail="Public session data is temporarily unavailable.",
         ) from exc
-    if (
-        session is None
-        or session.revoked_at is not None
-        or public_session_is_expired(session)
-    ):
+    if session is None or session.revoked_at is not None or public_session_is_expired(session):
         raise public_problem(
             request,
             status_code=401,
@@ -98,11 +95,14 @@ def public_problem(
     status_code: int,
     code: str,
     detail: str,
+    extensions: Mapping[str, object] | None = None,
 ) -> HTTPException:
     request_id = request_id_for(request)
+    problem_detail = dict(extensions or {})
+    problem_detail.update({"code": code, "message": detail, "request_id": request_id})
     return HTTPException(
         status_code=status_code,
-        detail={"code": code, "message": detail, "request_id": request_id},
+        detail=problem_detail,
         headers={
             "Cache-Control": "private, no-store",
             "Pragma": "no-cache",

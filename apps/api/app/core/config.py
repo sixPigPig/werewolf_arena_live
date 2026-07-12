@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Python React Web API"
     app_environment: Literal["development", "test", "staging", "production"] = "development"
+    rule_set_catalog_source: Literal["static", "database"] = "database"
     api_v1_prefix: str = "/api/v1"
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
@@ -35,9 +36,9 @@ class Settings(BaseSettings):
     admin_dev_auth_enabled: bool = False
     admin_dev_auth_email: str = "admin@example.test"
     admin_dev_auth_display_name: str = "Development Admin"
-    admin_dev_auth_role: Literal[
-        "viewer", "content_editor", "operator", "super_admin"
-    ] = "super_admin"
+    admin_dev_auth_role: Literal["viewer", "content_editor", "operator", "super_admin"] = (
+        "super_admin"
+    )
     admin_session_cookie_name: str = "werewolf_admin_session"
     admin_session_cookie_secure: bool = True
     admin_session_ttl_seconds: int = Field(default=8 * 60 * 60, ge=300, le=7 * 24 * 60 * 60)
@@ -74,9 +75,7 @@ class Settings(BaseSettings):
     ark_tts_judge_asset_sample_rate: int = 24000
     judge_voice_worker_poll_seconds: float = Field(default=2.0, ge=0.25, le=60.0)
     judge_voice_worker_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
-    judge_voice_worker_probe_max_age_seconds: float = Field(
-        default=45.0, ge=5.0, le=300.0
-    )
+    judge_voice_worker_probe_max_age_seconds: float = Field(default=45.0, ge=5.0, le=300.0)
     live_run_lease_seconds: float = Field(default=15.0, ge=5.0, le=120.0)
     live_run_heartbeat_seconds: float = Field(default=3.0, ge=0.5, le=30.0)
     live_run_event_poll_seconds: float = Field(default=0.25, ge=0.05, le=5.0)
@@ -85,9 +84,7 @@ class Settings(BaseSettings):
     live_run_reaper_backoff_seconds: float = Field(default=30.0, ge=5.0, le=3600.0)
     live_run_reaper_max_attempts: int = Field(default=3, ge=1, le=10)
     live_run_reaper_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
-    live_run_reaper_probe_max_age_seconds: float = Field(
-        default=45.0, ge=5.0, le=300.0
-    )
+    live_run_reaper_probe_max_age_seconds: float = Field(default=45.0, ge=5.0, le=300.0)
 
     @field_validator("cors_origins", "public_cors_origins", mode="before")
     @classmethod
@@ -103,14 +100,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_admin_production_safety(self) -> "Settings":
+        if self.rule_set_catalog_source == "static" and self.app_environment != "staging":
+            raise ValueError("RULE_SET_CATALOG_SOURCE=static is allowed only in staging")
         if self.live_run_heartbeat_seconds >= self.live_run_lease_seconds:
             raise ValueError(
                 "LIVE_RUN_HEARTBEAT_SECONDS must be shorter than LIVE_RUN_LEASE_SECONDS"
             )
-        if (
-            self.live_run_reaper_heartbeat_seconds
-            >= self.live_run_reaper_probe_max_age_seconds
-        ):
+        if self.live_run_reaper_heartbeat_seconds >= self.live_run_reaper_probe_max_age_seconds:
             raise ValueError(
                 "LIVE_RUN_REAPER_HEARTBEAT_SECONDS must be shorter than "
                 "LIVE_RUN_REAPER_PROBE_MAX_AGE_SECONDS"
@@ -156,10 +152,7 @@ class Settings(BaseSettings):
             raise ValueError(
                 "LEGACY_PLAYER_PROFILE_FAVORITE_WRITES_ENABLED cannot be enabled in production"
             )
-        if (
-            self.app_environment == "production"
-            and self.legacy_judge_voice_generation_enabled
-        ):
+        if self.app_environment == "production" and self.legacy_judge_voice_generation_enabled:
             raise ValueError(
                 "LEGACY_JUDGE_VOICE_GENERATION_ENABLED cannot be enabled in production"
             )
@@ -190,7 +183,9 @@ class Settings(BaseSettings):
                 "ADMIN_OIDC_REDIRECT_URI": self.admin_oidc_redirect_uri,
                 "ADMIN_OIDC_WEB_BASE_URL": self.admin_oidc_web_base_url,
             }
-            insecure = [name for name, value in oidc_urls.items() if not value.startswith("https://")]
+            insecure = [
+                name for name, value in oidc_urls.items() if not value.startswith("https://")
+            ]
             if insecure:
                 raise ValueError(f"{', '.join(insecure)} must use HTTPS in production")
         if self.admin_dev_auth_enabled and not self.admin_dev_auth_email.strip():

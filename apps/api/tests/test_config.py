@@ -64,6 +64,7 @@ def test_settings_ignores_deepseek_env_values(tmp_path) -> None:
 def test_settings_defaults_disable_tts() -> None:
     settings = Settings(_env_file=None)
 
+    assert settings.rule_set_catalog_source == "database"
     assert settings.ark_tts_enabled is False
     assert settings.ark_tts_api_key == ""
     assert settings.ark_tts_resource_id == "seed-tts-2.0"
@@ -84,6 +85,49 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.live_run_reaper_max_attempts == 3
     assert settings.live_run_reaper_heartbeat_seconds == 10.0
     assert settings.live_run_reaper_probe_max_age_seconds == 45.0
+
+
+def test_settings_accepts_static_rule_catalog_only_for_staging(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENVIRONMENT", "staging")
+    monkeypatch.setenv("RULE_SET_CATALOG_SOURCE", "static")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.rule_set_catalog_source == "static"
+
+
+@pytest.mark.parametrize("environment", ["development", "test"])
+def test_settings_rejects_static_rule_catalog_outside_staging(
+    environment: str,
+) -> None:
+    with pytest.raises(ValidationError, match="RULE_SET_CATALOG_SOURCE"):
+        Settings(
+            _env_file=None,
+            app_environment=environment,
+            rule_set_catalog_source="static",
+        )
+
+
+def test_settings_rejects_static_rule_catalog_in_safe_production() -> None:
+    with pytest.raises(ValidationError, match="RULE_SET_CATALOG_SOURCE"):
+        Settings(
+            _env_file=None,
+            app_environment="production",
+            rule_set_catalog_source="static",
+            cors_origins=["https://admin.example"],
+            public_cors_origins=["https://mobile.example"],
+            admin_oidc_enabled=True,
+            admin_oidc_issuer_url="https://identity.example",
+            admin_oidc_client_id="admin-web",
+            admin_oidc_client_secret="client-secret",
+            admin_oidc_redirect_uri=("https://api.example/api/v1/admin/oidc/callback"),
+            admin_oidc_web_base_url="https://admin.example",
+        )
+
+
+def test_settings_rejects_unknown_rule_catalog_source() -> None:
+    with pytest.raises(ValidationError, match="rule_set_catalog_source"):
+        Settings(_env_file=None, rule_set_catalog_source="fallback")
 
 
 def test_settings_rejects_live_run_heartbeat_not_shorter_than_lease(

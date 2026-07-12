@@ -63,6 +63,11 @@ class FailingLiveStore:
         raise RuntimeError(f"cannot append {event.id}")
 
 
+class EventFailingLiveStore(RecordingLiveStore):
+    def append_event(self, event, **_fence) -> None:
+        raise RuntimeError(f"cannot append {event.id}")
+
+
 class RacingActiveRunStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -117,6 +122,93 @@ def test_registry_creates_run_with_initial_event() -> None:
     assert run.events[0].payload["rule_set_revision_id"] is None
     assert run.events[0].payload["rule_set_revision_no"] is None
     assert run.events[0].payload["rule_set_content_hash"] is None
+
+
+def test_prepare_run_builds_initial_event_without_store_write_or_registry_attach() -> None:
+    store = RecordingLiveStore()
+    registry = LiveRunRegistry(live_store=store)
+
+    run = registry.prepare_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+        **managed_rule_kwargs(),
+    )
+
+    assert store.saved_runs == []
+    assert store.events == []
+    assert registry._runs == {}
+    assert run.events[0].type == "run_created"
+    assert run.events[0].id == 1
+    assert run.events[0].run_id == run.run_id
+    assert run.events[0].session_id == run.session_id
+    assert run.events[0].payload["rule_set"] == run.rule_set
+    assert run.next_event_id == 2
+    assert run.event_count == 1
+
+
+def test_attach_prepared_run_writes_only_the_local_registry() -> None:
+    store = RecordingLiveStore()
+    registry = LiveRunRegistry(live_store=store)
+    run = registry.prepare_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+
+    registry.attach_prepared_run(run)
+
+    assert registry.get_run(run.run_id) is run
+    assert store.saved_runs == []
+    assert store.events == []
+
+
+def test_attach_prepared_run_rejects_duplicate_run_and_active_session_conflicts() -> None:
+    registry = LiveRunRegistry()
+    first = registry.prepare_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    registry.attach_prepared_run(first)
+    conflicting_session = registry.prepare_run(
+        session_id=first.session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=22,
+        max_rounds=8,
+    )
+
+    with pytest.raises(ValueError, match="already attached"):
+        registry.attach_prepared_run(first)
+    with pytest.raises(ValueError, match="active run"):
+        registry.attach_prepared_run(conflicting_session)
+
+    assert registry.get_run(first.run_id) is first
+    assert conflicting_session.run_id not in registry._runs
+
+
+def test_create_run_compatibility_wrapper_does_not_attach_when_initial_event_save_fails() -> None:
+    store = EventFailingLiveStore()
+    registry = LiveRunRegistry(live_store=store)
+
+    with pytest.raises(RuntimeError, match="cannot append"):
+        registry.create_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+        )
+
+    assert registry._runs == {}
+    assert len(store.saved_runs) == 1
 
 
 def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
@@ -456,6 +548,35 @@ def test_registry_get_or_create_active_run_is_atomic_per_session() -> None:
 
     assert created is True
     assert replacement.run_id != first_run_id
+
+
+def test_get_or_create_rechecks_local_winner_after_create_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    winner = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    monkeypatch.setattr(
+        registry,
+        "try_get_active_run_for_session",
+        lambda _session_id: None,
+    )
+
+    run, created = registry.get_or_create_active_run(
+        session_id=winner.session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+
+    assert run is winner
+    assert created is False
 
 
 def test_format_sse_preserves_unicode_and_payload_history_is_stable() -> None:

@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.routes.games import SessionLiveStore
 from app.db.base import Base
-from app.models.live import LiveRunRecord
+from app.models.live import LiveEventRecord, LiveRunRecord
 from app.werewolf.live import (
     EventSink,
     GameRunCanceled,
@@ -74,6 +74,72 @@ def test_live_store_round_trips_pinned_rule_metadata_exactly(db_session: Session
     assert loaded.rule_set_content_hash == "a" * 64
     assert loaded.rule_set == snapshot
     assert loaded.rule_set is not run.rule_set
+
+
+def test_stage_new_run_flushes_run_and_real_initial_event_without_committing(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.prepare_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    store = DatabaseLiveStore(db_session)
+    commit_calls: list[None] = []
+
+    def reject_commit() -> None:
+        commit_calls.append(None)
+        raise AssertionError("stage_new_run must not commit")
+
+    monkeypatch.setattr(db_session, "commit", reject_commit)
+
+    store.stage_new_run(run)
+
+    saved_run = db_session.get(LiveRunRecord, run.run_id)
+    saved_events = (
+        db_session.query(LiveEventRecord).filter(LiveEventRecord.run_id == run.run_id).all()
+    )
+    assert saved_run is not None
+    assert saved_run.rule_set == run.rule_set
+    assert saved_run.player_configs == run.player_configs
+    assert len(saved_events) == 1
+    assert saved_events[0].event_id == run.events[0].id
+    assert saved_events[0].type == "run_created"
+    assert saved_events[0].payload == run.events[0].payload
+    assert commit_calls == []
+
+    db_session.rollback()
+    assert db_session.get(LiveRunRecord, run.run_id) is None
+    assert (
+        db_session.query(LiveEventRecord).filter(LiveEventRecord.run_id == run.run_id).count() == 0
+    )
+
+
+def test_stage_new_run_rejects_mutated_prepared_run_before_database_access(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = LiveRunRegistry().prepare_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    run.status = "completed"
+    run.completed_at = datetime.now(tz=UTC).isoformat()
+
+    def reject_database_access(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("invalid prepared runs must fail before database access")
+
+    monkeypatch.setattr(db_session, "get", reject_database_access)
+
+    with pytest.raises(ValueError, match="fresh prepared run"):
+        DatabaseLiveStore(db_session).stage_new_run(run)
 
 
 def test_live_store_loads_backfilled_pinned_scalars_with_legacy_snapshot(

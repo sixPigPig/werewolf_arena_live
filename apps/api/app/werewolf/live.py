@@ -355,6 +355,44 @@ class LiveRunRegistry:
         player_configs: list[PlayerConfig] | None = None,
         lineup_quality_warnings: list[dict[str, str]] | None = None,
     ) -> LiveGameRun:
+        run = self.prepare_run(
+            session_id=session_id,
+            villager_model=villager_model,
+            werewolf_model=werewolf_model,
+            seed=seed,
+            max_rounds=max_rounds,
+            rule_set_id=rule_set_id,
+            rule_set_revision_id=rule_set_revision_id,
+            rule_set_revision_no=rule_set_revision_no,
+            rule_set_content_hash=rule_set_content_hash,
+            rule_set=rule_set,
+            player_configs=player_configs,
+            lineup_quality_warnings=lineup_quality_warnings,
+        )
+        with self._lock:
+            self._raise_if_prepared_run_conflicts_locked(run)
+            self._persist_run_locked(run, raise_on_error=True)
+            for event in run.events:
+                self._persist_event_locked(run, event, raise_on_error=True)
+            self.attach_prepared_run(run)
+        return run
+
+    def prepare_run(
+        self,
+        *,
+        session_id: str,
+        villager_model: str,
+        werewolf_model: str,
+        seed: int | None,
+        max_rounds: int,
+        rule_set_id: str = DEFAULT_RULE_SET_ID,
+        rule_set_revision_id: str | None = None,
+        rule_set_revision_no: int | None = None,
+        rule_set_content_hash: str | None = None,
+        rule_set: dict[str, Any] | None = None,
+        player_configs: list[PlayerConfig] | None = None,
+        lineup_quality_warnings: list[dict[str, str]] | None = None,
+    ) -> LiveGameRun:
         rule_set_data = (
             _copy_json_payload(rule_set)
             if rule_set is not None
@@ -368,32 +406,29 @@ class LiveRunRegistry:
         )
         player_config_data = [config.to_dict() for config in player_configs or []]
         lineup_warning_data = _copy_json_payload(lineup_quality_warnings or [])
-        with self._lock:
-            run = LiveGameRun(
-                run_id=f"run_{uuid.uuid4().hex[:12]}",
-                session_id=session_id,
-                villager_model=villager_model,
-                werewolf_model=werewolf_model,
-                seed=seed,
-                max_rounds=max_rounds,
-                rule_set_id=rule_set_id,
-                rule_set_revision_id=rule_set_revision_id,
-                rule_set_revision_no=rule_set_revision_no,
-                rule_set_content_hash=rule_set_content_hash,
-                rule_set=rule_set_data,
-                player_configs=player_config_data,
-                lineup_quality_warnings=lineup_warning_data,
-                worker_id=self.worker_id,
-            )
-            self._runs[run.run_id] = run
-            try:
-                self._persist_run_locked(run, raise_on_error=True)
-            except Exception:
-                self._runs.pop(run.run_id, None)
-                raise
-            self._publish_locked(
-                run,
-                "run_created",
+        run = LiveGameRun(
+            run_id=f"run_{uuid.uuid4().hex[:12]}",
+            session_id=session_id,
+            villager_model=villager_model,
+            werewolf_model=werewolf_model,
+            seed=seed,
+            max_rounds=max_rounds,
+            rule_set_id=rule_set_id,
+            rule_set_revision_id=rule_set_revision_id,
+            rule_set_revision_no=rule_set_revision_no,
+            rule_set_content_hash=rule_set_content_hash,
+            rule_set=rule_set_data,
+            player_configs=player_config_data,
+            lineup_quality_warnings=lineup_warning_data,
+            worker_id=self.worker_id,
+        )
+        run.events.append(
+            LiveEvent(
+                id=1,
+                type="run_created",
+                run_id=run.run_id,
+                session_id=run.session_id,
+                created_at=utc_now(),
                 payload={
                     "session_id": session_id,
                     "villager_model": villager_model,
@@ -409,7 +444,31 @@ class LiveRunRegistry:
                     "lineup_quality_warnings": lineup_warning_data,
                 },
             )
-            return run
+        )
+        run.next_event_id = 2
+        return run
+
+    def attach_prepared_run(self, run: LiveGameRun) -> None:
+        validate_prepared_run(run)
+        with self._lock:
+            self._raise_if_prepared_run_conflicts_locked(run)
+            self._runs[run.run_id] = run
+
+    def detach_prepared_run(self, run: LiveGameRun) -> bool:
+        with self._lock:
+            if self._runs.get(run.run_id) is not run:
+                return False
+            self._runs.pop(run.run_id)
+            return True
+
+    def _raise_if_prepared_run_conflicts_locked(self, run: LiveGameRun) -> None:
+        if run.run_id in self._runs:
+            raise ValueError(f"Run {run.run_id} is already attached")
+        active_run = self._active_run_for_session_locked(run.session_id)
+        if active_run is not None:
+            raise ValueError(
+                f"Session {run.session_id} already has an active run {active_run.run_id}"
+            )
 
     def try_get_active_run_for_session(self, session_id: str) -> LiveGameRun | None:
         with self._lock:
@@ -460,6 +519,10 @@ class LiveRunRegistry:
                 True,
             )
         except Exception:
+            with self._lock:
+                local_raced_run = self._active_run_for_session_locked(session_id)
+            if local_raced_run is not None:
+                return local_raced_run, False
             raced_run = self._load_persisted_active_run(session_id)
             if raced_run is not None:
                 return raced_run, False
@@ -918,7 +981,13 @@ class LiveRunRegistry:
                 if raise_on_error:
                     raise
 
-    def _persist_event_locked(self, run: LiveGameRun, event: LiveEvent) -> None:
+    def _persist_event_locked(
+        self,
+        run: LiveGameRun,
+        event: LiveEvent,
+        *,
+        raise_on_error: bool = False,
+    ) -> None:
         if self._live_store is not None:
             try:
                 self._live_store.append_event(
@@ -935,6 +1004,8 @@ class LiveRunRegistry:
                     event.id,
                     event.run_id,
                 )
+                if raise_on_error:
+                    raise
 
     def _supports_store_method(self, method_name: str) -> bool:
         return callable(getattr(self._live_store, method_name, None))
@@ -1077,6 +1148,21 @@ class LiveRunRegistry:
         finally:
             with self._lock:
                 self._persistent_subscriptions.pop(id(subscriber), None)
+
+
+def validate_prepared_run(run: LiveGameRun) -> None:
+    if run.status != "queued" or run.started_at is not None or run.completed_at is not None:
+        raise ValueError(f"Run {run.run_id} is not a fresh prepared run")
+    if len(run.events) != 1 or run.next_event_id != 2:
+        raise ValueError(f"Run {run.run_id} must contain exactly one initial event")
+    event = run.events[0]
+    if (
+        event.id != 1
+        or event.type != "run_created"
+        or event.run_id != run.run_id
+        or event.session_id != run.session_id
+    ):
+        raise ValueError(f"Run {run.run_id} has an invalid initial event")
 
 
 class EventSink:

@@ -15,6 +15,7 @@ from app.werewolf.live import (
     RunLeaseState,
     RunLeaseUnavailable,
     RunRecoveryCandidate,
+    validate_prepared_run,
     validate_rule_set_revision_metadata,
 )
 
@@ -37,6 +38,54 @@ def format_live_datetime(value: datetime) -> str:
 class DatabaseLiveStore:
     def __init__(self, db: Session) -> None:
         self.db = db
+
+    def stage_new_run(self, run: LiveGameRun) -> None:
+        validate_prepared_run(run)
+        validate_rule_set_revision_metadata(
+            rule_set_revision_id=run.rule_set_revision_id,
+            rule_set_revision_no=run.rule_set_revision_no,
+            rule_set_content_hash=run.rule_set_content_hash,
+            rule_set=run.rule_set,
+        )
+        if self.db.get(LiveRunRecord, run.run_id) is not None:
+            raise ValueError(f"Run {run.run_id} already exists")
+        event = run.events[0]
+
+        self.db.add(
+            LiveRunRecord(
+                run_id=run.run_id,
+                session_id=run.session_id,
+                status=run.status,
+                villager_model=run.villager_model,
+                werewolf_model=run.werewolf_model,
+                seed=run.seed,
+                max_rounds=run.max_rounds,
+                rule_set_id=run.rule_set_id,
+                rule_set_revision_id=run.rule_set_revision_id,
+                rule_set_revision_no=run.rule_set_revision_no,
+                rule_set_content_hash=run.rule_set_content_hash,
+                rule_set=copy.deepcopy(run.rule_set),
+                player_configs=copy.deepcopy(run.player_configs),
+                lineup_quality_warnings=copy.deepcopy(run.lineup_quality_warnings),
+                winner=run.winner,
+                error=run.error,
+                created_at=parse_live_datetime(run.created_at) or datetime.now(tz=UTC),
+                started_at=parse_live_datetime(run.started_at),
+                completed_at=parse_live_datetime(run.completed_at),
+                stop_requested_at=parse_live_datetime(run.stop_requested_at),
+                worker_id=run.worker_id,
+                worker_heartbeat_at=parse_live_datetime(run.worker_heartbeat_at),
+                lease_expires_at=parse_live_datetime(run.lease_expires_at),
+                control_version=run.control_version,
+                fence_token=run.fence_token,
+                recovery_attempts=run.recovery_attempts,
+                recovery_last_attempt_at=parse_live_datetime(run.recovery_last_attempt_at),
+                recovery_not_before=parse_live_datetime(run.recovery_not_before),
+                recovery_last_error=run.recovery_last_error,
+            )
+        )
+        self.db.add(_event_record(event))
+        self.db.flush()
 
     def save_run(self, run: LiveGameRun) -> None:
         validate_rule_set_revision_metadata(
@@ -379,19 +428,7 @@ class DatabaseLiveStore:
         if guard.rowcount != 1:
             self.db.rollback()
             raise RunLeaseUnavailable(f"Run {event.run_id} event was rejected by its fencing token")
-        record = LiveEventRecord(
-            run_id=event.run_id,
-            event_id=event.id,
-            session_id=event.session_id,
-            type=event.type,
-            round=event.round,
-            phase=event.phase,
-            actor=event.actor,
-            action=event.action,
-            payload=event.payload,
-            created_at=parse_live_datetime(event.created_at) or datetime.now(tz=UTC),
-        )
-        self.db.add(record)
+        self.db.add(_event_record(event))
         self._commit()
 
     def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]:
@@ -447,3 +484,18 @@ class DatabaseLiveStore:
 
 def _format_optional_datetime(value: datetime | None) -> str | None:
     return format_live_datetime(value) if value is not None else None
+
+
+def _event_record(event: LiveEvent) -> LiveEventRecord:
+    return LiveEventRecord(
+        run_id=event.run_id,
+        event_id=event.id,
+        session_id=event.session_id,
+        type=event.type,
+        round=event.round,
+        phase=event.phase,
+        actor=event.actor,
+        action=event.action,
+        payload=event.payload,
+        created_at=parse_live_datetime(event.created_at) or datetime.now(tz=UTC),
+    )
