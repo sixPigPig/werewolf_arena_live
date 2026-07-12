@@ -4,9 +4,11 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping
-from typing import cast
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, cast
 
+from app.models.rule_set import RuleSetRevisionRecord
+from app.rule_sets.errors import RuleSetCatalogCorrupt
 from app.rule_sets.types import CompiledRuleSet, RuleRoleId, RuleSetConfig
 from app.rule_sets.validation import (
     RULE_ROLE_IDS,
@@ -47,6 +49,10 @@ from app.werewolf.rules import (
 )
 
 
+if TYPE_CHECKING:
+    from app.rule_sets.repository import RuleSetAggregate
+
+
 RULE_SCHEMA_VERSION = 1
 ROLE_ORDER: tuple[RuleRoleId, ...] = (
     "werewolf",
@@ -80,11 +86,10 @@ _RUNTIME_FIELDS = (
     "rule_tags",
 )
 _RUNTIME_FIELD_SET = frozenset(_RUNTIME_FIELDS)
-_REVISION_FIELDS = frozenset(
-    {"revision_id", "revision_no", "schema_version", "content_hash"}
-)
+_REVISION_FIELDS = frozenset({"revision_id", "revision_no", "schema_version", "content_hash"})
 _ROLE_FIELDS = frozenset({"role", "count", "team", "model_group", "category"})
 _CONTENT_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+_CHANGED_FIELD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,119}")
 
 _ROLE_DEFINITIONS: dict[RuleRoleId, tuple[str, str, str, str]] = {
     "werewolf": (
@@ -105,9 +110,7 @@ _ROLE_DEFINITIONS: dict[RuleRoleId, tuple[str, str, str, str]] = {
         ROLE_CATEGORY_CIVILIAN,
     ),
 }
-_ROLE_IDS_BY_DEFINITION = {
-    definition: role_id for role_id, definition in _ROLE_DEFINITIONS.items()
-}
+_ROLE_IDS_BY_DEFINITION = {definition: role_id for role_id, definition in _ROLE_DEFINITIONS.items()}
 
 
 def canonical_rule_set_config(config: RuleSetConfig) -> dict[str, object]:
@@ -118,9 +121,7 @@ def canonical_rule_set_config(config: RuleSetConfig) -> dict[str, object]:
         "complexity": config.complexity,
         "estimated_duration": config.estimated_duration,
         "rule_tags": list(config.rule_tags),
-        "role_counts": {
-            role_id: config.role_counts[role_id] for role_id in RULE_ROLE_IDS
-        },
+        "role_counts": {role_id: config.role_counts[role_id] for role_id in RULE_ROLE_IDS},
         "win_condition": config.win_condition,
         "sheriff_enabled": config.sheriff_enabled,
         "sheriff_vote_weight": float(config.sheriff_vote_weight),
@@ -172,6 +173,88 @@ def rule_set_config_from_snapshot(snapshot: Mapping[str, object]) -> RuleSetConf
 def resolve_rule_set_snapshot(snapshot: Mapping[str, object]) -> CompiledRuleSet:
     compiled, _ = _resolve_snapshot(snapshot)
     return compiled
+
+
+def admin_rule_revision_snapshot(
+    revision: RuleSetRevisionRecord,
+    *,
+    include_config: bool,
+) -> dict[str, object]:
+    return {
+        "id": revision.id,
+        "rule_set_id": revision.rule_set_id,
+        "revision_no": revision.revision_no,
+        "state": revision.state,
+        "schema_version": revision.schema_version,
+        "content_hash": revision.content_hash,
+        "lock_version": revision.lock_version,
+        "config": _admin_revision_config(revision) if include_config else None,
+        "player_count": revision.player_count,
+        "role_summary": revision.role_summary,
+        "created_at": revision.created_at,
+        "updated_at": revision.updated_at,
+        "published_at": revision.published_at,
+        "published_by": _actor_id(revision.published_by_user_id),
+    }
+
+
+def admin_rule_set_snapshot(aggregate: RuleSetAggregate) -> dict[str, object]:
+    record = aggregate.record
+    return {
+        "id": record.id,
+        "status": record.status,
+        "is_default": record.is_default,
+        "display_order": record.display_order,
+        "lock_version": record.lock_version,
+        "draft_revision": (
+            admin_rule_revision_snapshot(aggregate.draft, include_config=True)
+            if aggregate.draft is not None
+            else None
+        ),
+        "published_revision": (
+            admin_rule_revision_snapshot(aggregate.published, include_config=True)
+            if aggregate.published is not None
+            else None
+        ),
+        "revisions": [
+            admin_rule_revision_snapshot(revision, include_config=False)
+            for revision in aggregate.revisions
+        ],
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def public_rule_set_catalog_snapshot(aggregate: RuleSetAggregate) -> dict[str, object]:
+    compiled = _compile_public_aggregate(aggregate)
+    record = aggregate.record
+    snapshot: dict[str, object] = {key: value for key, value in compiled.snapshot.items()}
+    snapshot["roles"] = [dict(role) for role in cast(list[dict[str, object]], snapshot["roles"])]
+    snapshot.update(
+        {
+            "is_default": record.is_default,
+            "display_order": record.display_order,
+            "role_summary": " / ".join(
+                f"{role.count} {role.role}" for role in compiled.rule_set.roles
+            ),
+        }
+    )
+    return snapshot
+
+
+def audit_rule_set_snapshot(
+    aggregate: RuleSetAggregate,
+    *,
+    changed_fields: Iterable[str] = (),
+) -> dict[str, object]:
+    return {
+        "id": aggregate.record.id,
+        "status": aggregate.record.status,
+        "lock_version": aggregate.record.lock_version,
+        "draft_revision": _audit_revision_snapshot(aggregate.draft),
+        "published_revision": _audit_revision_snapshot(aggregate.published),
+        "changed_fields": _bounded_changed_fields(changed_fields),
+    }
 
 
 def _compile_rule_set(
@@ -253,9 +336,7 @@ def _resolve_snapshot(
             "sheriff_enabled": snapshot["sheriff_enabled"],
             "sheriff_vote_weight": snapshot["sheriff_vote_weight"],
             "speech_policy": snapshot["speech_policy"],
-            "werewolf_self_explosion_enabled": snapshot[
-                "werewolf_self_explosion_enabled"
-            ],
+            "werewolf_self_explosion_enabled": snapshot["werewolf_self_explosion_enabled"],
             "sheriff_badge_bomb_policy": snapshot["sheriff_badge_bomb_policy"],
         }
     )
@@ -285,9 +366,7 @@ def _resolve_snapshot(
             raise ValueError("snapshot content_hash does not match canonical configuration")
     else:
         if snapshot["version"] != RULE_SET_VERSION:
-            raise ValueError(
-                f"legacy snapshot version must be {RULE_SET_VERSION}"
-            )
+            raise ValueError(f"legacy snapshot version must be {RULE_SET_VERSION}")
         compiled = _compile_rule_set(
             rule_set_id,
             config,
@@ -441,9 +520,7 @@ def _normalize_config_boundary(config: RuleSetConfig) -> RuleSetConfig:
                 "sheriff_enabled": config.sheriff_enabled,
                 "sheriff_vote_weight": config.sheriff_vote_weight,
                 "speech_policy": config.speech_policy,
-                "werewolf_self_explosion_enabled": (
-                    config.werewolf_self_explosion_enabled
-                ),
+                "werewolf_self_explosion_enabled": (config.werewolf_self_explosion_enabled),
                 "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
             }
         )
@@ -477,8 +554,7 @@ def _validate_revision_metadata(
     ):
         raise ValueError(f"schema_version must be {RULE_SCHEMA_VERSION}")
     if content_hash is not None and (
-        not isinstance(content_hash, str)
-        or _CONTENT_HASH_PATTERN.fullmatch(content_hash) is None
+        not isinstance(content_hash, str) or _CONTENT_HASH_PATTERN.fullmatch(content_hash) is None
     ):
         raise ValueError("content_hash must be 64 lowercase hexadecimal characters")
 
@@ -516,3 +592,114 @@ def _day_actions(config: RuleSetConfig) -> tuple[str, ...]:
         actions.append(ACTION_HUNTER_SHOOT)
     actions.append(ACTION_SUMMARIZE)
     return tuple(actions)
+
+
+def _admin_revision_config(revision: RuleSetRevisionRecord) -> dict[str, object]:
+    try:
+        config = normalize_rule_set_config(revision.config)
+    except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
+        raise RuleSetCatalogCorrupt(
+            revision.rule_set_id,
+            revision_id=revision.id,
+            reason="revision_config_invalid",
+        ) from error
+    return {
+        "name": config.name,
+        "description": config.description,
+        "complexity": config.complexity,
+        "estimated_duration": config.estimated_duration,
+        "rule_tags": list(config.rule_tags),
+        "role_counts": {role_id: config.role_counts[role_id] for role_id in RULE_ROLE_IDS},
+        "win_condition": config.win_condition,
+        "sheriff_enabled": config.sheriff_enabled,
+        "sheriff_vote_weight": config.sheriff_vote_weight,
+        "speech_policy": config.speech_policy,
+        "werewolf_self_explosion_enabled": config.werewolf_self_explosion_enabled,
+        "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
+    }
+
+
+def _compile_public_aggregate(aggregate: RuleSetAggregate) -> CompiledRuleSet:
+    record = aggregate.record
+    revision = aggregate.published
+    if (
+        record.status != "published"
+        or record.archived_at is not None
+        or revision is None
+        or record.current_published_revision_id != revision.id
+        or revision.rule_set_id != record.id
+        or revision.state != "published"
+    ):
+        raise RuleSetCatalogCorrupt(
+            record.id,
+            pointer="current_published_revision_id",
+            revision_id=(
+                revision.id if revision is not None else record.current_published_revision_id
+            ),
+            reason="public_revision_unavailable",
+        )
+    if revision.schema_version != RULE_SCHEMA_VERSION:
+        raise RuleSetCatalogCorrupt(
+            record.id,
+            pointer="current_published_revision_id",
+            revision_id=revision.id,
+            reason="schema_version_unsupported",
+        )
+    try:
+        config = normalize_rule_set_config(revision.config)
+        compiled = compile_rule_set_config(
+            record.id,
+            config,
+            revision_id=revision.id,
+            revision_no=revision.revision_no,
+        )
+    except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
+        raise RuleSetCatalogCorrupt(
+            record.id,
+            pointer="current_published_revision_id",
+            revision_id=revision.id,
+            reason="published_config_invalid",
+        ) from error
+    if revision.content_hash != compiled.content_hash:
+        raise RuleSetCatalogCorrupt(
+            record.id,
+            pointer="current_published_revision_id",
+            revision_id=revision.id,
+            reason="content_hash_mismatch",
+        )
+    return compiled
+
+
+def _audit_revision_snapshot(
+    revision: RuleSetRevisionRecord | None,
+) -> dict[str, object] | None:
+    if revision is None:
+        return None
+    return {
+        "id": revision.id,
+        "rule_set_id": revision.rule_set_id,
+        "revision_no": revision.revision_no,
+        "state": revision.state,
+        "schema_version": revision.schema_version,
+        "content_hash": revision.content_hash,
+        "lock_version": revision.lock_version,
+    }
+
+
+def _bounded_changed_fields(changed_fields: Iterable[str]) -> list[str]:
+    bounded: list[str] = []
+    seen: set[str] = set()
+    for field in changed_fields:
+        if len(bounded) >= 50:
+            break
+        if not isinstance(field, str):
+            continue
+        normalized = field[:120]
+        if _CHANGED_FIELD_PATTERN.fullmatch(normalized) is not None and normalized not in seen:
+            seen.add(normalized)
+            bounded.append(normalized)
+    return bounded
+
+
+def _actor_id(value: int | None) -> str | None:
+    return str(value) if value is not None else None
