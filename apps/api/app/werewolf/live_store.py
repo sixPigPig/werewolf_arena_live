@@ -15,6 +15,7 @@ from app.werewolf.live import (
     GameRunCanceled,
     LiveEvent,
     LiveGameRun,
+    RunActivationExpectedEvent,
     RunActivationExpectedState,
     RunLeaseState,
     RunLeaseUnavailable,
@@ -189,6 +190,7 @@ class DatabaseLiveStore:
         expected_events: tuple[LiveEvent, ...],
         expected_status: str,
         expected_started_at: str | None,
+        canonicalize_null_rule_set: bool,
         activation: LiveEvent,
         worker_id: str,
         fence_token: int,
@@ -207,7 +209,8 @@ class DatabaseLiveStore:
             == format_live_datetime(parsed_expected_started_at)
         )
         if (
-            not status_and_start_are_canonical
+            type(canonicalize_null_rule_set) is not bool
+            or not status_and_start_are_canonical
             or not recovery_start_is_unchanged
             or activation.id != len(expected_events) + 1
             or activation.type != expected_type
@@ -263,6 +266,10 @@ class DatabaseLiveStore:
                 raise RunLeaseUnavailable(f"Run {run_id} activation lease expired")
             if activation.session_id != record.session_id:
                 raise ValueError(f"Run {run_id} has an invalid activation session")
+            if record.rule_set is None:
+                if not self._rule_set_is_sql_null(run_id) or not canonicalize_null_rule_set:
+                    raise RunLeaseUnavailable(f"Run {run_id} activation rule set changed")
+                record.rule_set = {}
             record.status = "running"
             record.started_at = parsed_started_at
             self.db.flush([record])
@@ -615,6 +622,12 @@ class DatabaseLiveStore:
             )
             or 0
         )
+        if record.rule_set is None:
+            if not self._rule_set_is_sql_null(record.run_id):
+                raise ValueError(f"Run {record.run_id} has an invalid JSON null rule set")
+            rule_set: dict[str, Any] = {}
+        else:
+            rule_set = copy.deepcopy(record.rule_set)
         return LiveGameRun(
             run_id=record.run_id,
             session_id=record.session_id,
@@ -626,7 +639,7 @@ class DatabaseLiveStore:
             rule_set_revision_id=record.rule_set_revision_id,
             rule_set_revision_no=record.rule_set_revision_no,
             rule_set_content_hash=record.rule_set_content_hash,
-            rule_set=copy.deepcopy({} if record.rule_set is None else record.rule_set),
+            rule_set=rule_set,
             player_configs=copy.deepcopy(record.player_configs or []),
             lineup_quality_warnings=copy.deepcopy(record.lineup_quality_warnings or []),
             status=record.status,
@@ -647,6 +660,14 @@ class DatabaseLiveStore:
             recovery_last_error=record.recovery_last_error,
             persisted_event_count=event_count,
             next_event_id=event_count + 1,
+        )
+
+    def _rule_set_is_sql_null(self, run_id: str) -> bool:
+        return (
+            self.db.scalar(
+                select(LiveRunRecord.rule_set.is_(None)).where(LiveRunRecord.run_id == run_id)
+            )
+            is True
         )
 
     def append_event(
@@ -813,7 +834,7 @@ def _stored_activation_state_matches(
                 for event in events
             )
             and all(
-                stored_event_matches(stored, expected_event)
+                _stored_activation_event_matches(stored, expected_event)
                 for stored, expected_event in zip(events, expected.events, strict=True)
             )
         )
@@ -859,6 +880,43 @@ def stored_event_matches(record: LiveEventRecord, expected: LiveEvent) -> bool:
             "actor": expected.actor,
             "action": expected.action,
             "payload": expected._payload,
+        }
+        return strict_json_equal(stored_fields, expected_fields) and format_live_datetime(
+            record.created_at
+        ) == format_live_datetime(expected_created_at)
+    except Exception:
+        return False
+
+
+def _stored_activation_event_matches(
+    record: LiveEventRecord,
+    expected: RunActivationExpectedEvent,
+) -> bool:
+    try:
+        expected_created_at = parse_live_datetime(expected.created_at)
+        if expected_created_at is None:
+            return False
+        stored_fields = {
+            "run_id": record.run_id,
+            "session_id": record.session_id,
+            "event_id": record.event_id,
+            "type": record.type,
+            "round": record.round,
+            "phase": record.phase,
+            "actor": record.actor,
+            "action": record.action,
+            "payload": record.payload,
+        }
+        expected_fields = {
+            "run_id": expected.run_id,
+            "session_id": expected.session_id,
+            "event_id": expected.id,
+            "type": expected.type,
+            "round": expected.round,
+            "phase": expected.phase,
+            "actor": expected.actor,
+            "action": expected.action,
+            "payload": expected.payload,
         }
         return strict_json_equal(stored_fields, expected_fields) and format_live_datetime(
             record.created_at

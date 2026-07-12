@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import math
@@ -302,11 +301,25 @@ class LiveGameRun:
 
 
 @dataclass(frozen=True)
+class RunActivationExpectedEvent:
+    id: int
+    type: str
+    run_id: str
+    session_id: str
+    created_at: str
+    round: int | None
+    phase: str | None
+    actor: str | None
+    action: str | None
+    payload: dict[str, object]
+
+
+@dataclass(frozen=True)
 class RunActivationExpectedState:
     run_id: str
     fields: dict[str, object]
     timestamps: dict[str, str | None]
-    events: tuple[LiveEvent, ...]
+    events: tuple[RunActivationExpectedEvent, ...]
     event_count: int
     next_event_id: int
 
@@ -323,6 +336,7 @@ class LiveStore(Protocol):
         expected_events: tuple[LiveEvent, ...],
         expected_status: str,
         expected_started_at: str | None,
+        canonicalize_null_rule_set: bool,
         activation: LiveEvent,
         worker_id: str,
         fence_token: int,
@@ -773,6 +787,7 @@ class LiveRunRegistry:
                         "Persistent live store does not support atomic activation "
                         "acknowledgement verification"
                     )
+            expected_events = _validated_activation_source_events(run)
             supports_lease = self._supports_store_method("acquire_lease")
             has_claimed_lease = (
                 run.worker_id == self.worker_id
@@ -791,7 +806,7 @@ class LiveRunRegistry:
             lease_state = (
                 None
                 if has_claimed_lease
-                else self._acquire_lease(run_id, expected_events=tuple(run.events))
+                else self._acquire_lease(run_id, expected_events=expected_events)
             )
             if lease_state is None and not has_claimed_lease and supports_lease:
                 raise RunLeaseUnavailable(f"Run {run_id} is owned by another worker")
@@ -803,10 +818,9 @@ class LiveRunRegistry:
             existing_activation = self._activation_events.get(activation_key)
             if run.status == "running" and existing_activation is not None:
                 return existing_activation
-            expected_events = tuple(run.events)
             expected_status = run.status
             expected_started_at = run.started_at
-            started_at = expected_started_at or utc_now()
+            started_at = utc_now() if expected_started_at is None else expected_started_at
             activation = LiveEvent(
                 id=run.next_event_id,
                 type="run_recovered" if expected_started_at is not None else "run_started",
@@ -822,12 +836,17 @@ class LiveRunRegistry:
                 activation=activation,
                 started_at=started_at,
             )
+            expected_rule_set = expected_state.fields["rule_set"]
+            canonicalize_null_rule_set = (
+                type(expected_rule_set) is dict and dict.__len__(expected_rule_set) == 0
+            )
             try:
                 self._persist_activation_locked(
                     run,
                     expected_events=expected_events,
                     expected_status=expected_status,
                     expected_started_at=expected_started_at,
+                    canonicalize_null_rule_set=canonicalize_null_rule_set,
                     activation=activation,
                     started_at=started_at,
                 )
@@ -1163,6 +1182,7 @@ class LiveRunRegistry:
         expected_events: tuple[LiveEvent, ...],
         expected_status: str,
         expected_started_at: str | None,
+        canonicalize_null_rule_set: bool,
         activation: LiveEvent,
         started_at: str,
     ) -> None:
@@ -1179,6 +1199,7 @@ class LiveRunRegistry:
                 expected_events=expected_events,
                 expected_status=expected_status,
                 expected_started_at=expected_started_at,
+                canonicalize_null_rule_set=canonicalize_null_rule_set,
                 activation=activation,
                 worker_id=run.worker_id or self.worker_id,
                 fence_token=run.fence_token,
@@ -1477,32 +1498,62 @@ def _activation_expected_state(
     activation: LiveEvent,
     started_at: str,
 ) -> RunActivationExpectedState:
-    events = copy.deepcopy((*run.events, activation))
-    fields = copy.deepcopy(
-        {
-            "run_id": run.run_id,
-            "session_id": run.session_id,
-            "status": "running",
-            "villager_model": run.villager_model,
-            "werewolf_model": run.werewolf_model,
-            "seed": run.seed,
-            "max_rounds": run.max_rounds,
-            "rule_set_id": run.rule_set_id,
-            "rule_set_revision_id": run.rule_set_revision_id,
-            "rule_set_revision_no": run.rule_set_revision_no,
-            "rule_set_content_hash": run.rule_set_content_hash,
-            "rule_set": run.rule_set,
-            "player_configs": run.player_configs,
-            "lineup_quality_warnings": run.lineup_quality_warnings,
-            "winner": run.winner,
-            "error": run.error,
-            "worker_id": run.worker_id,
-            "control_version": run.control_version,
-            "fence_token": run.fence_token,
-            "recovery_attempts": run.recovery_attempts,
-            "recovery_last_error": run.recovery_last_error,
-        }
-    )
+    if type(run) is not LiveGameRun or type(run.events) is not list:
+        _raise_invalid_exact_json_value()
+    _require_exact_str(run.run_id)
+    _require_exact_str(run.session_id)
+    _require_exact_str(run.status)
+    _require_exact_str(run.villager_model)
+    _require_exact_str(run.werewolf_model)
+    _require_exact_optional_int(run.seed)
+    _require_exact_int(run.max_rounds)
+    _require_exact_str(run.rule_set_id)
+    _require_exact_optional_str(run.rule_set_revision_id)
+    _require_exact_optional_int(run.rule_set_revision_no)
+    _require_exact_optional_str(run.rule_set_content_hash)
+    _require_exact_optional_str(run.winner)
+    _require_exact_optional_str(run.error)
+    _require_exact_optional_str(run.worker_id)
+    _require_exact_int(run.control_version)
+    _require_exact_int(run.fence_token)
+    _require_exact_int(run.recovery_attempts)
+    _require_exact_optional_str(run.recovery_last_error)
+    _require_exact_int(run.next_event_id)
+    _require_exact_optional_timestamp(run.started_at)
+    if type(run.rule_set) is not dict:
+        _raise_invalid_exact_json_value()
+    if type(run.player_configs) is not list:
+        _raise_invalid_exact_json_value()
+    if type(run.lineup_quality_warnings) is not list:
+        _raise_invalid_exact_json_value()
+
+    raw_fields = {
+        "run_id": run.run_id,
+        "session_id": run.session_id,
+        "status": "running",
+        "villager_model": run.villager_model,
+        "werewolf_model": run.werewolf_model,
+        "seed": run.seed,
+        "max_rounds": run.max_rounds,
+        "rule_set_id": run.rule_set_id,
+        "rule_set_revision_id": run.rule_set_revision_id,
+        "rule_set_revision_no": run.rule_set_revision_no,
+        "rule_set_content_hash": run.rule_set_content_hash,
+        "rule_set": run.rule_set,
+        "player_configs": run.player_configs,
+        "lineup_quality_warnings": run.lineup_quality_warnings,
+        "winner": run.winner,
+        "error": run.error,
+        "worker_id": run.worker_id,
+        "control_version": run.control_version,
+        "fence_token": run.fence_token,
+        "recovery_attempts": run.recovery_attempts,
+        "recovery_last_error": run.recovery_last_error,
+    }
+    fields = _strict_json_snapshot(raw_fields)
+    if type(fields) is not dict:
+        _raise_invalid_exact_json_value()
+
     timestamps = {
         "created_at": run.created_at,
         "started_at": started_at,
@@ -1513,6 +1564,21 @@ def _activation_expected_state(
         "recovery_last_attempt_at": run.recovery_last_attempt_at,
         "recovery_not_before": run.recovery_not_before,
     }
+    for name, value in timestamps.items():
+        if value is None:
+            if name in {"created_at", "started_at"}:
+                _raise_invalid_exact_json_value()
+            continue
+        _require_exact_str(value)
+        try:
+            _normalized_live_timestamp(value)
+        except Exception:
+            _raise_invalid_exact_json_value()
+
+    events = tuple(
+        _activation_expected_event(list.__getitem__(run.events, index))
+        for index in range(list.__len__(run.events))
+    ) + (_activation_expected_event(activation),)
     if (
         fields.keys() != ACTIVATION_ACK_RUN_FIELD_NAMES
         or timestamps.keys() != ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
@@ -1526,6 +1592,149 @@ def _activation_expected_state(
         event_count=len(events),
         next_event_id=run.next_event_id + 1,
     )
+
+
+def _validated_activation_source_events(run: object) -> tuple[LiveEvent, ...]:
+    if type(run) is not LiveGameRun or type(run.events) is not list:
+        _raise_invalid_exact_json_value()
+    events: list[LiveEvent] = []
+    for index in range(list.__len__(run.events)):
+        event = list.__getitem__(run.events, index)
+        _activation_expected_event(event)
+        list.append(events, event)
+    return tuple(events)
+
+
+def _activation_expected_event(event: object) -> RunActivationExpectedEvent:
+    if type(event) is not LiveEvent:
+        _raise_invalid_exact_json_value()
+    _require_exact_int(event.id)
+    if event.id <= 0:
+        _raise_invalid_exact_json_value()
+    _require_exact_str(event.type)
+    _require_exact_str(event.run_id)
+    _require_exact_str(event.session_id)
+    _require_exact_str(event.created_at)
+    _require_exact_optional_int(event.round)
+    _require_exact_optional_str(event.phase)
+    _require_exact_optional_str(event.actor)
+    _require_exact_optional_str(event.action)
+    if type(event._payload) is not dict:
+        _raise_invalid_exact_json_value()
+    try:
+        _normalized_live_timestamp(event.created_at)
+    except Exception:
+        _raise_invalid_exact_json_value()
+    payload = _strict_json_snapshot(event._payload)
+    if type(payload) is not dict:
+        _raise_invalid_exact_json_value()
+    return RunActivationExpectedEvent(
+        id=event.id,
+        type=event.type,
+        run_id=event.run_id,
+        session_id=event.session_id,
+        created_at=event.created_at,
+        round=event.round,
+        phase=event.phase,
+        actor=event.actor,
+        action=event.action,
+        payload=payload,
+    )
+
+
+def _require_exact_str(value: object) -> None:
+    if type(value) is not str:
+        _raise_invalid_exact_json_value()
+
+
+def _require_exact_optional_str(value: object) -> None:
+    if value is not None and type(value) is not str:
+        _raise_invalid_exact_json_value()
+
+
+def _require_exact_int(value: object) -> None:
+    if type(value) is not int:
+        _raise_invalid_exact_json_value()
+
+
+def _require_exact_optional_int(value: object) -> None:
+    if value is not None and type(value) is not int:
+        _raise_invalid_exact_json_value()
+
+
+def _require_exact_optional_timestamp(value: object) -> None:
+    if value is None:
+        return
+    _require_exact_str(value)
+    try:
+        _normalized_live_timestamp(value)
+    except Exception:
+        _raise_invalid_exact_json_value()
+
+
+def _strict_json_snapshot(value: object) -> object:
+    memo: dict[int, tuple[object, int]] = {}
+    active: set[int] = set()
+
+    def walk(current: object, depth: int) -> tuple[object, int]:
+        if depth > _STRICT_JSON_MAX_DEPTH:
+            _raise_invalid_exact_json_value()
+        value_type = type(current)
+        if current is None:
+            return None, 0
+        if value_type is str or value_type is bool or value_type is int:
+            return current, 0
+        if value_type is float:
+            if not math.isfinite(current):
+                _raise_invalid_exact_json_value()
+            return current, 0
+        if value_type is not list and value_type is not dict:
+            _raise_invalid_exact_json_value()
+
+        identity = id(current)
+        if identity in active:
+            _raise_invalid_exact_json_value()
+        memoized = memo.get(identity)
+        if memoized is not None:
+            clone, height = memoized
+            if depth + height > _STRICT_JSON_MAX_DEPTH:
+                _raise_invalid_exact_json_value()
+            return clone, height
+
+        active.add(identity)
+        try:
+            if value_type is list:
+                clone_list: list[object] = []
+                height = 0
+                for index in range(list.__len__(current)):
+                    child, child_height = walk(list.__getitem__(current, index), depth + 1)
+                    list.append(clone_list, child)
+                    height = max(height, child_height + 1)
+                clone: object = clone_list
+            else:
+                clone_dict: dict[str, object] = {}
+                height = 0
+                for key, child_value in dict.items(current):
+                    if type(key) is not str:
+                        _raise_invalid_exact_json_value()
+                    child, child_height = walk(child_value, depth + 1)
+                    dict.__setitem__(clone_dict, key, child)
+                    height = max(height, child_height + 1)
+                clone = clone_dict
+        finally:
+            active.remove(identity)
+        memo[identity] = (clone, height)
+        return clone, height
+
+    try:
+        snapshot, _ = walk(value, 0)
+        return snapshot
+    except Exception:
+        _raise_invalid_exact_json_value()
+
+
+def _raise_invalid_exact_json_value() -> None:
+    raise ValueError("invalid exact JSON value") from None
 
 
 def _prepared_runs_match(persisted: LiveGameRun, candidate: LiveGameRun) -> bool:
@@ -1714,7 +1923,7 @@ def _strict_json_equal(
     value_type = type(left)
     if left is None:
         return True
-    if value_type in {str, bool, int}:
+    if value_type is str or value_type is bool or value_type is int:
         return left == right
     if value_type is float:
         return math.isfinite(left) and math.isfinite(right) and left == right

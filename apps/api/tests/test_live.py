@@ -87,6 +87,273 @@ def test_strict_json_equal_rejects_non_json_and_non_finite_values() -> None:
     assert strict_json_equal(deeply_nested, deeply_nested) is False
 
 
+def test_strict_json_snapshot_detaches_valid_raw_json_and_preserves_exact_types() -> None:
+    shared = {"values": [True, 1, 1.0]}
+    source = {"first": shared, "second": shared}
+
+    snapshot = live_module._strict_json_snapshot(source)
+
+    assert type(snapshot) is dict
+    assert strict_json_equal(snapshot, source) is True
+    assert snapshot is not source
+    assert snapshot["first"] is snapshot["second"]
+    assert snapshot["first"] is not shared
+    assert [type(value) for value in snapshot["first"]["values"]] == [bool, int, float]
+
+    shared["values"].append("changed-after-capture")
+
+    assert snapshot["first"]["values"] == [True, 1, 1.0]
+
+
+def test_strict_json_snapshot_rejects_shallow_first_deep_alias_reuse() -> None:
+    shared = ["leaf"]
+    deep_alias: object = shared
+    for _ in range(127):
+        deep_alias = [deep_alias]
+    source = {"shallow": shared, "deep": deep_alias}
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        live_module._strict_json_snapshot(source)
+
+
+@pytest.mark.parametrize(
+    "malformed_case",
+    [
+        "arbitrary-object",
+        "tuple",
+        "numeric-key",
+        "string-key-subclass",
+        "list-subclass",
+        "scalar-subclass",
+        "cycle",
+        "deep",
+        "nan",
+        "positive-infinity",
+        "negative-infinity",
+    ],
+)
+def test_mark_running_rejects_malformed_activation_run_fields_without_side_effects(
+    malformed_case: str,
+) -> None:
+    class StringSubclass(str):
+        pass
+
+    class ListSubclass(list):
+        pass
+
+    class IntSubclass(int):
+        pass
+
+    if malformed_case == "arbitrary-object":
+        malformed: object = object()
+    elif malformed_case == "tuple":
+        malformed = (1,)
+    elif malformed_case == "numeric-key":
+        malformed = {1: "value"}
+    elif malformed_case == "string-key-subclass":
+        malformed = {StringSubclass("key"): "value"}
+    elif malformed_case == "list-subclass":
+        malformed = ListSubclass([1])
+    elif malformed_case == "scalar-subclass":
+        malformed = IntSubclass(1)
+    elif malformed_case == "cycle":
+        cycle: list[object] = []
+        cycle.append(cycle)
+        malformed = cycle
+    elif malformed_case == "deep":
+        malformed = "leaf"
+        for _ in range(2_000):
+            malformed = [malformed]
+    elif malformed_case == "nan":
+        malformed = float("nan")
+    elif malformed_case == "positive-infinity":
+        malformed = float("inf")
+    else:
+        malformed = float("-inf")
+
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id=f"game_malformed_activation_{malformed_case}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    run.rule_set["malformed"] = malformed
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        registry.mark_running(run.run_id)
+
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+@pytest.mark.parametrize(
+    "malformed_case",
+    ["payload-tuple", "boolean-id", "boolean-round", "string-subclass", "invalid-timestamp"],
+)
+def test_mark_running_rejects_malformed_activation_event_without_side_effects(
+    malformed_case: str,
+) -> None:
+    class StringSubclass(str):
+        pass
+
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id=f"game_malformed_activation_event_{malformed_case}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    event = run.events[0]
+    if malformed_case == "payload-tuple":
+        event._payload["malformed"] = (1,)
+    elif malformed_case == "boolean-id":
+        object.__setattr__(event, "id", True)
+    elif malformed_case == "boolean-round":
+        object.__setattr__(event, "round", True)
+    elif malformed_case == "string-subclass":
+        object.__setattr__(event, "type", StringSubclass("run_created"))
+    else:
+        object.__setattr__(event, "created_at", "not-a-timestamp")
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        registry.mark_running(run.run_id)
+
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.next_event_id == 2
+    assert len(run.events) == 1
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+@pytest.mark.parametrize(
+    "malicious_location",
+    ["rule-set", "player-configs", "warnings", "event-payload", "events-list"],
+)
+def test_activation_expectation_rejects_malicious_copy_hooks_without_invoking_them(
+    malicious_location: str,
+) -> None:
+    hook_calls = {
+        "copy": 0,
+        "deepcopy": 0,
+        "reduce": 0,
+        "getstate": 0,
+        "iter": 0,
+        "bool": 0,
+        "eq": 0,
+    }
+
+    class MaliciousValue:
+        def __copy__(self):
+            hook_calls["copy"] += 1
+            return "coerced-value"
+
+        def __deepcopy__(self, _memo):
+            hook_calls["deepcopy"] += 1
+            return "coerced-value"
+
+        def __reduce_ex__(self, _protocol):
+            hook_calls["reduce"] += 1
+            return (str, ("coerced-value",))
+
+        def __getstate__(self):
+            hook_calls["getstate"] += 1
+            return "coerced-value"
+
+        def __iter__(self):
+            hook_calls["iter"] += 1
+            return iter(())
+
+        def __bool__(self):
+            hook_calls["bool"] += 1
+            return True
+
+        def __eq__(self, _other):
+            hook_calls["eq"] += 1
+            return True
+
+    class MaliciousList(list):
+        def __iter__(self):
+            hook_calls["iter"] += 1
+            return super().__iter__()
+
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id=f"game_malicious_snapshot_{malicious_location}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    malicious = MaliciousValue()
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    if malicious_location == "rule-set":
+        run.rule_set["malicious"] = malicious
+    elif malicious_location == "player-configs":
+        run.player_configs.append({"malicious": malicious})
+    elif malicious_location == "warnings":
+        run.lineup_quality_warnings.append({"malicious": malicious})
+    elif malicious_location == "event-payload":
+        run.events[0]._payload["malicious"] = malicious
+    else:
+        run.events = MaliciousList(run.events)
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        registry.mark_running(run.run_id)
+
+    assert hook_calls == {name: 0 for name in hook_calls}
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.next_event_id == 2
+    assert len(run.events) == 1
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+@pytest.mark.parametrize(
+    ("field_name", "malformed_value"),
+    [
+        ("status", type("StatusSubclass", (str,), {})("queued")),
+        ("seed", True),
+        ("max_rounds", 8.0),
+        ("created_at", type("TimestampSubclass", (str,), {})("2026-07-13T00:00:00Z")),
+        ("started_at", object()),
+    ],
+)
+def test_mark_running_rejects_malformed_activation_run_scalars(
+    field_name: str,
+    malformed_value: object,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id=f"game_malformed_scalar_{field_name}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    setattr(run, field_name, malformed_value)
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        registry.mark_running(run.run_id)
+
+    assert run.status == ("queued" if field_name != "status" else malformed_value)
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
 def test_prepared_run_matching_does_not_normalize_raw_fields_or_event_payloads() -> None:
     candidate = LiveRunRegistry(worker_id="worker-candidate").prepare_run(
         session_id="game_raw_match",
@@ -159,6 +426,42 @@ class RecordingLiveStore:
             recovery_not_before=None,
             recovery_last_error=None,
         )
+
+
+def test_malformed_expectation_cannot_reach_activation_or_ack_verification() -> None:
+    class CountingStore(RecordingLiveStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.activation_calls = 0
+            self.ack_verification_calls = 0
+
+        def activate_run(self, _run_id, **_activation) -> None:
+            self.activation_calls += 1
+
+        def activation_was_committed(self, _expected_state) -> bool:
+            self.ack_verification_calls += 1
+            return False
+
+    store = CountingStore()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-malformed-expectation")
+    run = registry.create_run(
+        session_id="game_malformed_expectation_persistence_boundary",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    run.rule_set["malicious"] = object()
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        registry.mark_running(run.run_id)
+
+    assert store.fence_token == 1
+    assert store.activation_calls == 0
+    assert store.ack_verification_calls == 0
+    assert run.status == "queued"
+    assert run.next_event_id == 2
+    assert registry._activation_events == {}
 
 
 class FailingLiveStore:

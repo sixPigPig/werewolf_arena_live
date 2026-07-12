@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, delete, event as sqlalchemy_event, select, text, update
+from sqlalchemy import create_engine, delete, event as sqlalchemy_event, null, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
@@ -1440,7 +1440,7 @@ def test_live_store_loads_legacy_null_rule_snapshot_as_an_empty_snapshot(
             seed=7,
             max_rounds=8,
             rule_set_id="classic_8",
-            rule_set=None,
+            rule_set=null(),
         )
     )
     db_session.commit()
@@ -1452,6 +1452,32 @@ def test_live_store_loads_legacy_null_rule_snapshot_as_an_empty_snapshot(
     assert loaded.rule_set_revision_no is None
     assert loaded.rule_set_content_hash is None
     assert loaded.rule_set == {}
+
+
+def test_live_store_rejects_json_null_rule_snapshot(
+    db_session: Session,
+) -> None:
+    db_session.add(
+        LiveRunRecord(
+            run_id="run_json_null_rule",
+            session_id="game_json_null_rule",
+            status="completed",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+            rule_set_id="classic_8",
+            rule_set=None,
+        )
+    )
+    db_session.commit()
+    is_sql_null = db_session.scalar(
+        select(LiveRunRecord.rule_set.is_(None)).where(LiveRunRecord.run_id == "run_json_null_rule")
+    )
+
+    assert is_sql_null is False
+    with pytest.raises(ValueError, match="invalid JSON null rule set"):
+        DatabaseLiveStore(db_session).load_run("run_json_null_rule")
 
 
 @pytest.mark.parametrize(
@@ -2007,6 +2033,294 @@ def test_session_store_recovers_an_exact_activation_after_commit_ack_loss(
             (1, "run_created"),
             (2, "run_started"),
         ]
+
+
+def test_null_rule_snapshot_activation_rejects_nonempty_local_expectation(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-nonempty-null-rule",
+    )
+    run = registry.create_run(
+        session_id="game_nonempty_null_rule",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    assert run.rule_set
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    with session_factory() as db:
+        db.execute(
+            update(LiveRunRecord).where(LiveRunRecord.run_id == run.run_id).values(rule_set=null())
+        )
+        db.commit()
+
+    with pytest.raises(RunLeaseUnavailable, match="activation rule set changed"):
+        registry.mark_running(run.run_id)
+
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.rule_set is None
+        assert saved.status == "queued"
+        assert [(event.event_id, event.type) for event in events] == [(1, "run_created")]
+
+
+def test_json_null_rule_snapshot_is_not_canonicalized_during_activation(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-json-null-rule",
+    )
+    run = registry.create_run(
+        session_id="game_json_null_rule_activation",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set={},
+    )
+    assert run.rule_set == {}
+    with session_factory() as db:
+        db.execute(
+            update(LiveRunRecord).where(LiveRunRecord.run_id == run.run_id).values(rule_set=None)
+        )
+        db.commit()
+        stored_value, is_sql_null = db.execute(
+            select(LiveRunRecord.rule_set, LiveRunRecord.rule_set.is_(None)).where(
+                LiveRunRecord.run_id == run.run_id
+            )
+        ).one()
+        assert stored_value is None
+        assert is_sql_null is False
+
+    with pytest.raises(RunLeaseUnavailable, match="activation rule set changed"):
+        registry.mark_running(run.run_id)
+
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.next_event_id == 2
+    assert registry._activation_events == {}
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        is_sql_null = observer.scalar(
+            select(LiveRunRecord.rule_set.is_(None)).where(LiveRunRecord.run_id == run.run_id)
+        )
+        assert saved is not None
+        assert saved.rule_set is None
+        assert is_sql_null is False
+        assert saved.status == "queued"
+        assert [(event.event_id, event.type) for event in events] == [(1, "run_created")]
+
+
+def test_legacy_null_rule_snapshot_activation_ack_canonicalizes_atomically(
+    db_session: Session,
+) -> None:
+    failure = RuntimeError("legacy activation commit acknowledgement lost")
+    armed = False
+    acknowledgement_lost = False
+
+    class AckLostActivationSession(Session):
+        saw_activation = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type in {"run_started", "run_recovered"}
+                for item in self.new
+            ):
+                self.saw_activation = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if armed and self.saw_activation and not acknowledgement_lost:
+                acknowledgement_lost = True
+                raise failure
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=AckLostActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-legacy-null-owner",
+    )
+    run = owner.create_run(
+        session_id="game_legacy_null_activation_ack",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    with session_factory() as db:
+        db.execute(
+            update(LiveRunRecord).where(LiveRunRecord.run_id == run.run_id).values(rule_set=null())
+        )
+        db.commit()
+        assert (
+            db.scalar(select(LiveRunRecord.rule_set).where(LiveRunRecord.run_id == run.run_id))
+            is None
+        )
+
+    recovery = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-legacy-null-recovery",
+    )
+    claimed = recovery.try_claim_stale_run(run.run_id)
+    assert claimed is not None
+    assert claimed.rule_set == {}
+    assert claimed.status == "queued"
+    assert claimed.fence_token == 1
+    subscriber = recovery.subscribe(run.run_id, after_id=1)
+    armed = True
+
+    activation = recovery.mark_running(run.run_id)
+    repeated = recovery.mark_running(run.run_id)
+
+    assert acknowledgement_lost is True
+    assert activation is repeated is claimed.events[1]
+    assert claimed.status == "running"
+    assert claimed.rule_set == {}
+    assert claimed.fence_token == 1
+    assert claimed.next_event_id == 3
+    assert subscriber.get_nowait() is activation
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.rule_set == {}
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+        ]
+
+
+def test_legacy_null_rule_snapshot_activation_failure_rolls_back_canonicalization(
+    db_session: Session,
+) -> None:
+    failure = RuntimeError("legacy activation event flush failed")
+    armed = False
+    injected = False
+
+    class FailingActivationSession(Session):
+        def flush(self, objects=None) -> None:
+            nonlocal injected
+            if (
+                armed
+                and not injected
+                and any(
+                    isinstance(item, LiveEventRecord)
+                    and item.type in {"run_started", "run_recovered"}
+                    for item in self.new
+                )
+            ):
+                injected = True
+                raise failure
+            super().flush(objects)
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=FailingActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-legacy-null-failure-owner",
+    )
+    run = owner.create_run(
+        session_id="game_legacy_null_activation_failure",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    with session_factory() as db:
+        db.execute(
+            update(LiveRunRecord).where(LiveRunRecord.run_id == run.run_id).values(rule_set=null())
+        )
+        db.commit()
+
+    recovery = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-legacy-null-failure-recovery",
+    )
+    claimed = recovery.try_claim_stale_run(run.run_id)
+    assert claimed is not None
+    assert claimed.rule_set == {}
+    subscriber = recovery.subscribe(run.run_id, after_id=1)
+    armed = True
+
+    with pytest.raises(RuntimeError) as raised:
+        recovery.mark_running(run.run_id)
+
+    assert raised.value is failure
+    assert injected is True
+    assert claimed.status == "queued"
+    assert claimed.started_at is None
+    assert claimed.rule_set == {}
+    assert claimed.fence_token == 1
+    assert claimed.next_event_id == 2
+    assert [(event.id, event.type) for event in claimed.events] == [(1, "run_created")]
+    assert recovery._activation_events == {}
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "queued"
+        assert saved.rule_set is None
+        assert [(event.event_id, event.type) for event in events] == [(1, "run_created")]
 
 
 @pytest.mark.parametrize("mutation", ["full-row", "expired-lease"])
