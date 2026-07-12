@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import queue
 import re
 import threading
@@ -560,43 +561,30 @@ class LiveRunRegistry:
     def try_claim_stale_run(self, run_id: str) -> LiveGameRun | None:
         """Atomically attach an active run whose worker lease has expired."""
         with self._lock:
-            local_run = self._runs.get(run_id)
-        if local_run is not None:
-            persisted = self._load_complete_persisted_run(run_id)
-            if persisted is None or not _lease_is_expired(persisted.lease_expires_at):
+            initial_local_run = self._runs.get(run_id)
+            initial_fence_token = (
+                initial_local_run.fence_token if initial_local_run is not None else None
+            )
+        persisted = self._load_complete_persisted_run(run_id)
+        if persisted is None or not _lease_is_expired(persisted.lease_expires_at):
+            return None
+        with self._lock:
+            run = self._runs.get(run_id)
+            if initial_local_run is None:
+                if run is not None:
+                    return None
+            elif run is not initial_local_run or run.fence_token != initial_fence_token:
                 return None
-            with self._lock:
-                local_run = self._complete_local_run_locked(
-                    self._runs.get(run_id),
-                    require_active=True,
-                )
-            if local_run is None:
-                return None
+            if run is not None:
+                run = self._complete_local_run_locked(run, require_active=True)
+                if run is None:
+                    return None
             lease_state = self._acquire_lease(run_id)
             if lease_state is None:
                 return None
-            with self._lock:
-                self._apply_lease_state_locked(local_run, lease_state)
-                return local_run
-        persisted = self._load_complete_persisted_run(run_id)
-        if persisted is None:
-            return None
-        with self._lock:
-            if run_id in self._runs:
-                return None
-            self._runs[run_id] = persisted
-        try:
-            lease_state = self._acquire_lease(run_id)
-        except Exception:
-            with self._lock:
-                self._runs.pop(run_id, None)
-            raise
-        if lease_state is None:
-            with self._lock:
-                self._runs.pop(run_id, None)
-            return None
-        with self._lock:
-            run = self._runs[run_id]
+            if run is None:
+                run = persisted
+                self._runs[run_id] = persisted
             self._apply_lease_state_locked(run, lease_state)
             return run
 
@@ -630,28 +618,28 @@ class LiveRunRegistry:
         if not callable(acquire):
             return None
         with self._lock:
-            local_run = self._runs.get(candidate.run_id)
+            initial_local_run = self._runs.get(candidate.run_id)
+            initial_fence_token = (
+                initial_local_run.fence_token if initial_local_run is not None else None
+            )
         persisted = self._load_complete_persisted_run(candidate.run_id)
         if persisted is None:
             return None
-        added = False
-        if local_run is None:
-            with self._lock:
-                local_run = self._runs.get(candidate.run_id)
-                if local_run is None:
-                    local_run = persisted
-                    self._runs[candidate.run_id] = local_run
-                    added = True
-        if not added:
-            with self._lock:
+        heartbeat_at, lease_expires_at = self._lease_window()
+        with self._lock:
+            local_run = self._runs.get(candidate.run_id)
+            if initial_local_run is None:
+                if local_run is not None:
+                    return None
+            elif local_run is not initial_local_run or local_run.fence_token != initial_fence_token:
+                return None
+            if local_run is not None:
                 local_run = self._complete_local_run_locked(
-                    self._runs.get(candidate.run_id),
+                    local_run,
                     require_active=True,
                 )
-            if local_run is None:
-                return None
-        heartbeat_at, lease_expires_at = self._lease_window()
-        try:
+                if local_run is None:
+                    return None
             state = acquire(
                 candidate.run_id,
                 worker_id=self.worker_id,
@@ -662,17 +650,11 @@ class LiveRunRegistry:
                 lease_expires_at=lease_expires_at,
                 recovery_not_before=recovery_not_before,
             )
-        except Exception:
-            if added:
-                with self._lock:
-                    self._runs.pop(candidate.run_id, None)
-            raise
-        if state is None:
-            if added:
-                with self._lock:
-                    self._runs.pop(candidate.run_id, None)
-            return None
-        with self._lock:
+            if state is None:
+                return None
+            if local_run is None:
+                local_run = persisted
+                self._runs[candidate.run_id] = local_run
             self._apply_lease_state_locked(local_run, state)
             return local_run
 
@@ -1299,20 +1281,36 @@ def _prepared_runs_match(persisted: LiveGameRun, candidate: LiveGameRun) -> bool
         validate_prepared_run(candidate)
     except ValueError:
         return False
-    return (
-        persisted.to_summary() == candidate.to_summary()
-        and persisted.worker_id == candidate.worker_id
-        and persisted.worker_heartbeat_at == candidate.worker_heartbeat_at
-        and persisted.lease_expires_at == candidate.lease_expires_at
-        and persisted.control_version == candidate.control_version
-        and persisted.fence_token == candidate.fence_token
-        and persisted.recovery_attempts == candidate.recovery_attempts
-        and persisted.recovery_last_attempt_at == candidate.recovery_last_attempt_at
-        and persisted.recovery_not_before == candidate.recovery_not_before
-        and persisted.recovery_last_error == candidate.recovery_last_error
-        and persisted.lease_lost == candidate.lease_lost
-        and persisted.next_event_id == candidate.next_event_id
-        and _live_events_match(persisted.events[0], candidate.events[0])
+    persisted_state = {
+        "summary": persisted.to_summary(),
+        "worker_id": persisted.worker_id,
+        "worker_heartbeat_at": persisted.worker_heartbeat_at,
+        "lease_expires_at": persisted.lease_expires_at,
+        "control_version": persisted.control_version,
+        "fence_token": persisted.fence_token,
+        "recovery_attempts": persisted.recovery_attempts,
+        "recovery_last_attempt_at": persisted.recovery_last_attempt_at,
+        "recovery_not_before": persisted.recovery_not_before,
+        "recovery_last_error": persisted.recovery_last_error,
+        "lease_lost": persisted.lease_lost,
+        "next_event_id": persisted.next_event_id,
+    }
+    candidate_state = {
+        "summary": candidate.to_summary(),
+        "worker_id": candidate.worker_id,
+        "worker_heartbeat_at": candidate.worker_heartbeat_at,
+        "lease_expires_at": candidate.lease_expires_at,
+        "control_version": candidate.control_version,
+        "fence_token": candidate.fence_token,
+        "recovery_attempts": candidate.recovery_attempts,
+        "recovery_last_attempt_at": candidate.recovery_last_attempt_at,
+        "recovery_not_before": candidate.recovery_not_before,
+        "recovery_last_error": candidate.recovery_last_error,
+        "lease_lost": candidate.lease_lost,
+        "next_event_id": candidate.next_event_id,
+    }
+    return strict_json_equal(persisted_state, candidate_state) and _live_events_match(
+        persisted.events[0], candidate.events[0]
     )
 
 
@@ -1320,19 +1318,33 @@ def _live_events_match(persisted: LiveEvent, candidate: LiveEvent) -> bool:
     try:
         persisted_created_at = _normalized_live_timestamp(persisted.created_at)
         candidate_created_at = _normalized_live_timestamp(candidate.created_at)
-    except (TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         return False
-    return (
-        persisted.id == candidate.id
-        and persisted.type == candidate.type
-        and persisted.run_id == candidate.run_id
-        and persisted.session_id == candidate.session_id
-        and persisted_created_at == candidate_created_at
-        and persisted.round == candidate.round
-        and persisted.phase == candidate.phase
-        and persisted.actor == candidate.actor
-        and persisted.action == candidate.action
-        and persisted.payload == candidate.payload
+    persisted_fields = {
+        "id": persisted.id,
+        "type": persisted.type,
+        "run_id": persisted.run_id,
+        "session_id": persisted.session_id,
+        "round": persisted.round,
+        "phase": persisted.phase,
+        "actor": persisted.actor,
+        "action": persisted.action,
+        "payload": persisted.payload,
+    }
+    candidate_fields = {
+        "id": candidate.id,
+        "type": candidate.type,
+        "run_id": candidate.run_id,
+        "session_id": candidate.session_id,
+        "round": candidate.round,
+        "phase": candidate.phase,
+        "actor": candidate.actor,
+        "action": candidate.action,
+        "payload": candidate.payload,
+    }
+    return persisted_created_at == candidate_created_at and strict_json_equal(
+        persisted_fields,
+        candidate_fields,
     )
 
 
@@ -1417,6 +1429,30 @@ def format_sse(event: LiveEvent) -> str:
 
 def _copy_json_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(payload, ensure_ascii=False))
+
+
+def strict_json_equal(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
+    value_type = type(left)
+    if left is None:
+        return True
+    if value_type in {str, bool, int}:
+        return left == right
+    if value_type is float:
+        return math.isfinite(left) and math.isfinite(right) and left == right
+    if value_type is list:
+        return len(left) == len(right) and all(
+            strict_json_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    if value_type is dict:
+        if any(type(key) is not str for key in left) or any(type(key) is not str for key in right):
+            return False
+        return left.keys() == right.keys() and all(
+            strict_json_equal(left[key], right[key]) for key in left
+        )
+    return False
 
 
 def _lease_is_expired(value: str | None) -> bool:

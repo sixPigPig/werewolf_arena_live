@@ -63,6 +63,7 @@ from app.werewolf.live import (
     RunLeaseUnavailable,
     RunRecoveryCandidate,
     format_sse,
+    strict_json_equal,
 )
 from app.werewolf.live_store import (
     DatabaseLiveStore,
@@ -911,16 +912,31 @@ def _compensate_committed_run(db: Session, run: LiveGameRun) -> bool:
 
 def _stored_event_matches(record: LiveEventRecord, expected: LiveEvent) -> bool:
     expected_created_at = parse_live_datetime(expected.created_at)
-    return expected_created_at is not None and (
-        record.run_id == expected.run_id
-        and record.session_id == expected.session_id
-        and record.event_id == expected.id
-        and record.type == expected.type
-        and record.round == expected.round
-        and record.phase == expected.phase
-        and record.actor == expected.actor
-        and record.action == expected.action
-        and record.payload == expected.payload
+    stored_fields = {
+        "run_id": record.run_id,
+        "session_id": record.session_id,
+        "event_id": record.event_id,
+        "type": record.type,
+        "round": record.round,
+        "phase": record.phase,
+        "actor": record.actor,
+        "action": record.action,
+        "payload": record.payload,
+    }
+    expected_fields = {
+        "run_id": expected.run_id,
+        "session_id": expected.session_id,
+        "event_id": expected.id,
+        "type": expected.type,
+        "round": expected.round,
+        "phase": expected.phase,
+        "actor": expected.actor,
+        "action": expected.action,
+        "payload": expected.payload,
+    }
+    return (
+        expected_created_at is not None
+        and strict_json_equal(stored_fields, expected_fields)
         and format_live_datetime(record.created_at) == format_live_datetime(expected_created_at)
     )
 

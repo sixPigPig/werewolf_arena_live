@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes import games as games_routes
@@ -1309,6 +1310,63 @@ def test_compensation_waits_for_event_lock_and_keeps_the_committed_mutation() ->
         with admin_engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         admin_engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("expected_value", "persisted_value"),
+    [(False, 0), (True, 1), (1, 1.0)],
+    ids=["false-to-zero", "true-to-one", "int-to-float"],
+)
+def test_compensation_rejects_type_coercive_nested_event_payload_changes(
+    expected_value: object,
+    persisted_value: object,
+) -> None:
+    run = LiveRunRegistry(worker_id="worker-compensation").prepare_run(
+        session_id="game_compensation_strict",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set={
+            "id": "classic_8",
+            "strict_comparison_marker": {"value": expected_value},
+        },
+    )
+    with TestingSessionLocal() as setup:
+        games_routes.DatabaseLiveStore(setup).save_new_run(run)
+    with TestingSessionLocal() as external:
+        event = external.get(LiveEventRecord, (run.run_id, 1))
+        assert event is not None
+        payload = dict(event.payload)
+        rule_set = dict(payload["rule_set"])
+        marker = dict(rule_set["strict_comparison_marker"])
+        marker["value"] = persisted_value
+        rule_set["strict_comparison_marker"] = marker
+        payload["rule_set"] = rule_set
+        event.payload = payload
+        flag_modified(event, "payload")
+        external.commit()
+    with TestingSessionLocal() as observer:
+        changed_event = observer.get(LiveEventRecord, (run.run_id, 1))
+        assert changed_event is not None
+        changed_value = changed_event.payload["rule_set"]["strict_comparison_marker"]["value"]
+        assert changed_value == persisted_value
+        assert type(changed_value) is type(persisted_value)
+        assert games_routes._stored_event_matches(changed_event, run.events[0]) is False
+
+    with TestingSessionLocal() as cleanup:
+        compensated = games_routes._compensate_committed_run(cleanup, run)
+
+    assert compensated is False
+    with TestingSessionLocal() as observer:
+        saved_run = observer.get(LiveRunRecord, run.run_id)
+        saved_event = observer.get(LiveEventRecord, (run.run_id, 1))
+    assert saved_run is not None
+    assert saved_event is not None
+    assert saved_event.payload["rule_set"]["strict_comparison_marker"]["value"] == persisted_value
+    assert type(saved_event.payload["rule_set"]["strict_comparison_marker"]["value"]) is type(
+        persisted_value
+    )
 
 
 def test_create_game_run_stage_failure_rolls_back_without_local_or_worker(

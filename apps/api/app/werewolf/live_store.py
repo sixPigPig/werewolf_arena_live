@@ -203,30 +203,35 @@ class DatabaseLiveStore:
     ) -> RunLeaseState | None:
         heartbeat = parse_live_datetime(heartbeat_at)
         expires = parse_live_datetime(lease_expires_at)
-        result = self.db.execute(
-            update(LiveRunRecord)
-            .where(
-                LiveRunRecord.run_id == run_id,
-                LiveRunRecord.status.in_(("queued", "running")),
-                or_(
-                    LiveRunRecord.worker_id.is_(None),
-                    LiveRunRecord.worker_id == worker_id,
-                    LiveRunRecord.lease_expires_at.is_(None),
-                    LiveRunRecord.lease_expires_at <= heartbeat,
-                ),
+        try:
+            record = self.db.scalar(
+                select(LiveRunRecord)
+                .where(
+                    LiveRunRecord.run_id == run_id,
+                    LiveRunRecord.status.in_(("queued", "running")),
+                    or_(
+                        LiveRunRecord.worker_id.is_(None),
+                        LiveRunRecord.worker_id == worker_id,
+                        LiveRunRecord.lease_expires_at.is_(None),
+                        LiveRunRecord.lease_expires_at <= heartbeat,
+                    ),
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
-            .values(
-                worker_id=worker_id,
-                worker_heartbeat_at=heartbeat,
-                lease_expires_at=expires,
-                fence_token=LiveRunRecord.fence_token + 1,
-            )
-            .execution_options(synchronize_session=False)
-        )
-        self._commit()
-        if result.rowcount != 1:
-            return None
-        return self._lease_state(run_id)
+            if record is None or not self._lock_and_validate_complete_event_stream(record):
+                self.db.rollback()
+                return None
+            record.worker_id = worker_id
+            record.worker_heartbeat_at = heartbeat
+            record.lease_expires_at = expires
+            record.fence_token += 1
+            state = self._lease_state_from_record(record)
+            self.db.commit()
+            return state
+        except Exception:
+            self.db.rollback()
+            raise
 
     def heartbeat_lease(
         self,
@@ -260,6 +265,9 @@ class DatabaseLiveStore:
         record = self.db.get(LiveRunRecord, run_id)
         if record is None:
             return None
+        return self._lease_state_from_record(record)
+
+    def _lease_state_from_record(self, record: LiveRunRecord) -> RunLeaseState:
         return RunLeaseState(
             worker_id=record.worker_id,
             worker_heartbeat_at=_format_optional_datetime(record.worker_heartbeat_at),
@@ -284,6 +292,50 @@ class DatabaseLiveStore:
     ) -> list[RunRecoveryCandidate]:
         stale = parse_live_datetime(stale_before)
         current = parse_live_datetime(now)
+        event_count = (
+            select(func.count(LiveEventRecord.event_id))
+            .where(LiveEventRecord.run_id == LiveRunRecord.run_id)
+            .correlate(LiveRunRecord)
+            .scalar_subquery()
+        )
+        matching_session_event_count = (
+            select(func.count(LiveEventRecord.event_id))
+            .where(
+                LiveEventRecord.run_id == LiveRunRecord.run_id,
+                LiveEventRecord.session_id == LiveRunRecord.session_id,
+            )
+            .correlate(LiveRunRecord)
+            .scalar_subquery()
+        )
+        distinct_event_id_count = (
+            select(func.count(func.distinct(LiveEventRecord.event_id)))
+            .where(LiveEventRecord.run_id == LiveRunRecord.run_id)
+            .correlate(LiveRunRecord)
+            .scalar_subquery()
+        )
+        minimum_event_id = (
+            select(func.min(LiveEventRecord.event_id))
+            .where(LiveEventRecord.run_id == LiveRunRecord.run_id)
+            .correlate(LiveRunRecord)
+            .scalar_subquery()
+        )
+        maximum_event_id = (
+            select(func.max(LiveEventRecord.event_id))
+            .where(LiveEventRecord.run_id == LiveRunRecord.run_id)
+            .correlate(LiveRunRecord)
+            .scalar_subquery()
+        )
+        has_initial_event = (
+            select(LiveEventRecord.event_id)
+            .where(
+                LiveEventRecord.run_id == LiveRunRecord.run_id,
+                LiveEventRecord.session_id == LiveRunRecord.session_id,
+                LiveEventRecord.event_id == 1,
+                LiveEventRecord.type == "run_created",
+            )
+            .correlate(LiveRunRecord)
+            .exists()
+        )
         rows = self.db.execute(
             select(
                 LiveRunRecord.run_id,
@@ -293,6 +345,12 @@ class DatabaseLiveStore:
             .where(
                 LiveRunRecord.status.in_(("queued", "running")),
                 LiveRunRecord.recovery_attempts < max_attempts,
+                event_count > 0,
+                matching_session_event_count == event_count,
+                distinct_event_id_count == event_count,
+                minimum_event_id == 1,
+                maximum_event_id == event_count,
+                has_initial_event,
                 or_(
                     LiveRunRecord.recovery_not_before.is_(None),
                     LiveRunRecord.recovery_not_before <= current,
@@ -331,41 +389,66 @@ class DatabaseLiveStore:
     ) -> RunLeaseState | None:
         stale = parse_live_datetime(stale_before)
         heartbeat = parse_live_datetime(heartbeat_at)
-        result = self.db.execute(
-            update(LiveRunRecord)
-            .where(
-                LiveRunRecord.run_id == run_id,
-                LiveRunRecord.status.in_(("queued", "running")),
-                LiveRunRecord.recovery_attempts == expected_attempts,
-                LiveRunRecord.recovery_attempts < max_attempts,
-                or_(
-                    LiveRunRecord.recovery_not_before.is_(None),
-                    LiveRunRecord.recovery_not_before <= heartbeat,
-                ),
-                or_(
-                    LiveRunRecord.lease_expires_at <= stale,
-                    (
-                        LiveRunRecord.lease_expires_at.is_(None)
-                        & (LiveRunRecord.created_at <= stale)
+        try:
+            record = self.db.scalar(
+                select(LiveRunRecord)
+                .where(
+                    LiveRunRecord.run_id == run_id,
+                    LiveRunRecord.status.in_(("queued", "running")),
+                    LiveRunRecord.recovery_attempts == expected_attempts,
+                    LiveRunRecord.recovery_attempts < max_attempts,
+                    or_(
+                        LiveRunRecord.recovery_not_before.is_(None),
+                        LiveRunRecord.recovery_not_before <= heartbeat,
                     ),
-                ),
+                    or_(
+                        LiveRunRecord.lease_expires_at <= stale,
+                        (
+                            LiveRunRecord.lease_expires_at.is_(None)
+                            & (LiveRunRecord.created_at <= stale)
+                        ),
+                    ),
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
-            .values(
-                worker_id=worker_id,
-                worker_heartbeat_at=heartbeat,
-                lease_expires_at=parse_live_datetime(lease_expires_at),
-                fence_token=LiveRunRecord.fence_token + 1,
-                recovery_attempts=LiveRunRecord.recovery_attempts + 1,
-                recovery_last_attempt_at=heartbeat,
-                recovery_not_before=parse_live_datetime(recovery_not_before),
-                recovery_last_error=None,
+            if record is None or not self._lock_and_validate_complete_event_stream(record):
+                self.db.rollback()
+                return None
+            record.worker_id = worker_id
+            record.worker_heartbeat_at = heartbeat
+            record.lease_expires_at = parse_live_datetime(lease_expires_at)
+            record.fence_token += 1
+            record.recovery_attempts += 1
+            record.recovery_last_attempt_at = heartbeat
+            record.recovery_not_before = parse_live_datetime(recovery_not_before)
+            record.recovery_last_error = None
+            state = self._lease_state_from_record(record)
+            self.db.commit()
+            return state
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def _lock_and_validate_complete_event_stream(self, record: LiveRunRecord) -> bool:
+        events = tuple(
+            self.db.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == record.run_id)
+                .order_by(LiveEventRecord.event_id.asc())
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
-            .execution_options(synchronize_session=False)
         )
-        self._commit()
-        if result.rowcount != 1:
-            return None
-        return self._lease_state(run_id)
+        return bool(
+            events
+            and [event.event_id for event in events] == list(range(1, len(events) + 1))
+            and events[0].type == "run_created"
+            and all(
+                event.run_id == record.run_id and event.session_id == record.session_id
+                for event in events
+            )
+        )
 
     def _run_from_record(self, record: LiveRunRecord) -> LiveGameRun:
         event_count = int(

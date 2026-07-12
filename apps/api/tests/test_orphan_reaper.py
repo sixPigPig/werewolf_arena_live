@@ -18,6 +18,7 @@ from app.werewolf.orphan_reaper import (
 )
 from app.werewolf.replay import DatabaseReplayStore
 
+
 def _session_factory() -> sessionmaker[Session]:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
@@ -130,6 +131,79 @@ def test_reaper_claims_checkpoint_with_new_fence_and_schedules_backoff() -> None
         assert saved.recovery_not_before is not None
 
 
+def test_incomplete_rows_cannot_starve_a_valid_recovery_candidate_page() -> None:
+    session_factory = _session_factory()
+    stale_at = datetime.now(tz=UTC) - timedelta(hours=1)
+    with session_factory() as db:
+        db.add_all(
+            [
+                LiveRunRecord(
+                    run_id=f"run_invalid_{index:02d}",
+                    session_id=f"game_invalid_{index:02d}",
+                    status="queued",
+                    villager_model="deepseek-chat",
+                    werewolf_model="deepseek-chat",
+                    seed=index,
+                    max_rounds=8,
+                    rule_set_id="starter_6",
+                    rule_set={"id": "starter_6"},
+                    created_at=stale_at + timedelta(seconds=index),
+                    worker_id="worker-missing",
+                    worker_heartbeat_at=stale_at,
+                    lease_expires_at=stale_at,
+                )
+                for index in range(20)
+            ]
+        )
+        db.commit()
+    _owner, valid_run_id = _seed_orphan(
+        session_factory,
+        session_id="game_6600abcd",
+    )
+    reaper = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-reaper",
+    )
+    now = datetime.now(tz=UTC)
+
+    candidates = reaper.recovery_candidates(
+        stale_before=now.isoformat(),
+        now=now.isoformat(),
+        max_attempts=3,
+        limit=20,
+    )
+
+    assert [candidate.run_id for candidate in candidates] == [valid_run_id]
+    executor_calls: list[str] = []
+
+    def execute_recovery(run, registry) -> None:
+        executor_calls.append(run.run_id)
+        registry.mark_running(run.run_id)
+
+    result = run_next_orphan_recovery(
+        session_factory,
+        reaper,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=execute_recovery,
+    )
+    repeated = run_next_orphan_recovery(
+        session_factory,
+        reaper,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=execute_recovery,
+    )
+
+    assert result is not None
+    assert result.run_id == valid_run_id
+    assert result.outcome == "resumed"
+    assert executor_calls == [valid_run_id]
+    assert repeated is None
+
+
 def test_only_one_reaper_can_claim_the_same_candidate() -> None:
     session_factory = _session_factory()
     _owner, run_id = _seed_orphan(
@@ -215,9 +289,7 @@ def test_reaper_fails_orphan_without_checkpoint_and_cancels_pending_stop() -> No
         canceled = db.get(LiveRunRecord, canceled_run_id)
         assert failed is not None
         assert failed.status == "failed"
-        assert failed.recovery_last_error == (
-            "Orphaned live run has no valid resume checkpoint"
-        )
+        assert failed.recovery_last_error == ("Orphaned live run has no valid resume checkpoint")
         assert canceled is not None
         assert canceled.status == "canceled"
 
@@ -237,22 +309,28 @@ def test_reaper_respects_backoff_and_max_attempts() -> None:
     reaper = LiveRunRegistry(live_store=SessionLiveStore(session_factory))
     now = datetime.now(tz=UTC)
 
-    assert reaper.recovery_candidates(
-        stale_before=now.isoformat(),
-        now=now.isoformat(),
-        max_attempts=3,
-    ) == []
+    assert (
+        reaper.recovery_candidates(
+            stale_before=now.isoformat(),
+            now=now.isoformat(),
+            max_attempts=3,
+        )
+        == []
+    )
     with session_factory() as db:
         record = db.get(LiveRunRecord, run_id)
         assert record is not None
         record.recovery_not_before = now - timedelta(seconds=1)
         record.recovery_attempts = 3
         db.commit()
-    assert reaper.recovery_candidates(
-        stale_before=now.isoformat(),
-        now=now.isoformat(),
-        max_attempts=3,
-    ) == []
+    assert (
+        reaper.recovery_candidates(
+            stale_before=now.isoformat(),
+            now=now.isoformat(),
+            max_attempts=3,
+        )
+        == []
+    )
 
 
 def test_continuous_reaper_reports_recoveries_until_stopped(monkeypatch) -> None:

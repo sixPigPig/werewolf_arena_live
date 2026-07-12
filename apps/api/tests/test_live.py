@@ -9,7 +9,14 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.werewolf.live import LiveEvent, LiveGameRun, LiveRunRegistry, format_sse
+from app.werewolf.live import (
+    LiveEvent,
+    LiveGameRun,
+    LiveRunRegistry,
+    RunLeaseState,
+    format_sse,
+    strict_json_equal,
+)
 from app.werewolf.player_configs import PlayerConfig
 
 
@@ -44,6 +51,30 @@ def managed_rule_kwargs() -> dict:
         }
     )
     return kwargs
+
+
+def test_strict_json_equal_accepts_valid_type_exact_nested_json() -> None:
+    value = {
+        "none": None,
+        "boolean": True,
+        "integer": 1,
+        "float": 1.0,
+        "string": "value",
+        "nested": [{"enabled": False, "weights": [1, 2.5]}],
+    }
+
+    assert strict_json_equal(value, copy.deepcopy(value)) is True
+
+
+def test_strict_json_equal_rejects_non_json_and_non_finite_values() -> None:
+    non_json = object()
+
+    assert strict_json_equal(float("nan"), float("nan")) is False
+    assert strict_json_equal(float("inf"), float("inf")) is False
+    assert strict_json_equal(float("-inf"), float("-inf")) is False
+    assert strict_json_equal((1,), (1,)) is False
+    assert strict_json_equal({1: "value"}, {1: "value"}) is False
+    assert strict_json_equal(non_json, non_json) is False
 
 
 class RecordingLiveStore:
@@ -1012,6 +1043,83 @@ def test_unique_conflict_logs_only_safe_metadata_and_returns_the_other_complete_
     )
 
 
+def test_concurrent_same_registry_stale_claims_advance_the_fence_once() -> None:
+    durable = LiveRunRegistry(worker_id="worker-old").prepare_run(
+        session_id="game_stale_claim_race",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    durable.status = "running"
+    durable.started_at = "2026-07-12T10:00:00Z"
+    durable.worker_id = "worker-old"
+    durable.worker_heartbeat_at = "2026-07-12T10:00:00Z"
+    durable.lease_expires_at = "2026-07-12T10:00:01Z"
+    durable.fence_token = 1
+
+    class RacingStaleClaimStore:
+        def __init__(self) -> None:
+            self.prevalidation_barrier = threading.Barrier(2)
+            self.state_lock = threading.Lock()
+            self.acquire_calls = 0
+            self.fence_token = 1
+
+        def load_run(self, run_id):
+            if run_id != durable.run_id:
+                return None
+            loaded = copy.deepcopy(durable)
+            loaded.events = []
+            loaded.persisted_event_count = 1
+            loaded.next_event_id = 2
+            return loaded
+
+        def events_after(self, run_id, *, after_id=None):
+            assert run_id == durable.run_id
+            self.prevalidation_barrier.wait(timeout=5)
+            return [
+                copy.deepcopy(event)
+                for event in durable.events
+                if after_id is None or event.id > after_id
+            ]
+
+        def acquire_lease(
+            self,
+            run_id,
+            *,
+            worker_id,
+            heartbeat_at,
+            lease_expires_at,
+        ):
+            assert run_id == durable.run_id
+            with self.state_lock:
+                self.acquire_calls += 1
+                self.fence_token += 1
+                return RunLeaseState(
+                    worker_id=worker_id,
+                    worker_heartbeat_at=heartbeat_at,
+                    lease_expires_at=lease_expires_at,
+                    stop_requested_at=None,
+                    status="running",
+                    control_version=0,
+                    fence_token=self.fence_token,
+                    recovery_attempts=0,
+                    recovery_last_attempt_at=None,
+                    recovery_not_before=None,
+                    recovery_last_error=None,
+                )
+
+    store = RacingStaleClaimStore()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-claimant")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(registry.try_claim_stale_run, [durable.run_id] * 2))
+
+    assert sum(result is not None for result in results) == 1
+    assert store.acquire_calls == 1
+    assert registry.get_run(durable.run_id).fence_token == 2
+
+
 def test_unique_conflict_returns_the_other_complete_winner_after_it_starts_running() -> None:
     winner_registry = LiveRunRegistry(worker_id="worker-winner")
     winner = winner_registry.create_run(
@@ -1099,6 +1207,58 @@ def test_get_or_create_normalizes_the_exact_candidate_event_timestamp_after_ack_
 
     assert created is True
     assert registry.get_run(run.run_id) is run
+
+
+@pytest.mark.parametrize(
+    ("expected_value", "persisted_value"),
+    [(False, 0), (True, 1), (1, 1.0)],
+    ids=["false-to-zero", "true-to-one", "int-to-float"],
+)
+def test_get_or_create_rejects_type_coercive_ack_candidate_changes(
+    expected_value: object,
+    persisted_value: object,
+) -> None:
+    failure = RuntimeError("commit acknowledgement lost")
+
+    class TypeCoerciveAckLostLiveStore(AckLostLiveStore):
+        def save_new_run(self, run) -> None:
+            self.committed_run = copy.deepcopy(run)
+            self.committed_run.rule_set["strict_comparison_marker"]["value"] = persisted_value
+            event = self.committed_run.events[0]
+            payload = event.payload
+            payload["rule_set"]["strict_comparison_marker"]["value"] = persisted_value
+            self.committed_run.events[0] = LiveEvent(
+                id=event.id,
+                type=event.type,
+                run_id=event.run_id,
+                session_id=event.session_id,
+                created_at=event.created_at,
+                round=event.round,
+                phase=event.phase,
+                actor=event.actor,
+                action=event.action,
+                payload=payload,
+            )
+            raise self.failure
+
+    store = TypeCoerciveAckLostLiveStore(failure)
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-candidate")
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.get_or_create_active_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+            rule_set={
+                "id": "classic_8",
+                "strict_comparison_marker": {"value": expected_value},
+            },
+        )
+
+    assert raised.value is failure
+    assert registry._runs == {}
 
 
 def test_get_or_create_does_not_downgrade_a_mismatched_exact_candidate_to_other_winner() -> None:

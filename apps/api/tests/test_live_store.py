@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, delete, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -86,6 +87,43 @@ def seed_incomplete_live_run(
     db_session.add(record)
     db_session.commit()
     return record
+
+
+def live_run_claim_state(
+    session_factory: sessionmaker[Session],
+    run_id: str,
+) -> tuple[object, ...]:
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run_id)
+        assert saved is not None
+        return (
+            saved.status,
+            saved.worker_id,
+            saved.worker_heartbeat_at,
+            saved.lease_expires_at,
+            saved.stop_requested_at,
+            saved.control_version,
+            saved.fence_token,
+            saved.recovery_attempts,
+            saved.recovery_last_attempt_at,
+            saved.recovery_not_before,
+            saved.recovery_last_error,
+        )
+
+
+class DeleteEventsBeforeClaimSessionLiveStore(SessionLiveStore):
+    def _delete_events(self, run_id: str) -> None:
+        with self.session_factory() as db:
+            db.execute(delete(LiveEventRecord).where(LiveEventRecord.run_id == run_id))
+            db.commit()
+
+    def acquire_lease(self, run_id: str, **kwargs):
+        self._delete_events(run_id)
+        return super().acquire_lease(run_id, **kwargs)
+
+    def acquire_recovery_lease(self, run_id: str, **kwargs):
+        self._delete_events(run_id)
+        return super().acquire_recovery_lease(run_id, **kwargs)
 
 
 def test_session_store_read_boundaries_reject_a_zero_event_active_run(
@@ -179,6 +217,104 @@ def test_orphan_claim_rejects_a_zero_event_run_without_mutating_recovery_state(
     )
     assert result is None
     assert background_starts == []
+
+
+def test_stale_claim_rechecks_events_atomically_after_prevalidation(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-stale-owner",
+    )
+    run = owner.create_run(
+        session_id="game_atomic_stale",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        saved.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+        saved.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+        db.commit()
+    before = live_run_claim_state(session_factory, run.run_id)
+    claimant = LiveRunRegistry(
+        live_store=DeleteEventsBeforeClaimSessionLiveStore(session_factory),
+        worker_id="worker-stale-claimant",
+    )
+
+    claimed = claimant.try_claim_stale_run(run.run_id)
+
+    assert claimed is None
+    assert claimant._runs == {}
+    assert live_run_claim_state(session_factory, run.run_id) == before
+    with session_factory() as observer:
+        assert (
+            observer.query(LiveEventRecord).filter(LiveEventRecord.run_id == run.run_id).count()
+            == 0
+        )
+
+
+def test_orphan_claim_rechecks_events_atomically_after_prevalidation(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-orphan-owner",
+    )
+    run = owner.create_run(
+        session_id="game_atomic_orphan",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        saved.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+        saved.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+        db.commit()
+    before = live_run_claim_state(session_factory, run.run_id)
+    claimant = LiveRunRegistry(
+        live_store=DeleteEventsBeforeClaimSessionLiveStore(session_factory),
+        worker_id="worker-orphan-claimant",
+    )
+    now = datetime.now(tz=UTC)
+
+    claimed = claimant.try_claim_orphan(
+        RunRecoveryCandidate(
+            run_id=run.run_id,
+            session_id=run.session_id,
+            recovery_attempts=0,
+        ),
+        stale_before=(now - timedelta(seconds=1)).isoformat(),
+        recovery_not_before=(now + timedelta(seconds=30)).isoformat(),
+        max_attempts=3,
+    )
+
+    assert claimed is None
+    assert claimant._runs == {}
+    assert live_run_claim_state(session_factory, run.run_id) == before
+    with session_factory() as observer:
+        assert (
+            observer.query(LiveEventRecord).filter(LiveEventRecord.run_id == run.run_id).count()
+            == 0
+        )
 
 
 def test_live_store_round_trips_pinned_rule_metadata_exactly(db_session: Session) -> None:
@@ -445,6 +581,139 @@ def test_two_registries_converge_on_one_complete_database_winner() -> None:
         assert saved_events[0].run_id == saved_runs[0].run_id
         assert saved_events[0].event_id == 1
         assert saved_events[0].type == "run_created"
+    finally:
+        scoped_engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()
+
+
+@pytest.mark.skipif(
+    not os.getenv("TEST_POSTGRESQL_URL"),
+    reason="requires an explicitly disposable PostgreSQL URL",
+)
+def test_stale_claim_waits_for_event_lock_then_rejects_a_deleted_stream() -> None:
+    database_url = os.environ["TEST_POSTGRESQL_URL"]
+    schema = f"task3_atomic_claim_{uuid4().hex}"
+    admin_engine = create_engine(database_url)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    scoped_engine = create_engine(
+        database_url,
+        connect_args={"options": f"-csearch_path={schema}"},
+    )
+    ScopedSession = sessionmaker(bind=scoped_engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(scoped_engine)
+    claim_entered = threading.Event()
+    claim_pid: list[int] = []
+    claim_results: list[object] = []
+    errors: list[BaseException] = []
+
+    class ObservableClaimStore(SessionLiveStore):
+        def acquire_lease(self, run_id: str, **kwargs):
+            db = self.session_factory()
+            try:
+                pid = db.scalar(text("SELECT pg_backend_pid()"))
+                assert isinstance(pid, int)
+                claim_pid.append(pid)
+                claim_entered.set()
+                return DatabaseLiveStore(db).acquire_lease(run_id, **kwargs)
+            finally:
+                db.close()
+
+    try:
+        owner = LiveRunRegistry(
+            live_store=SessionLiveStore(ScopedSession),
+            worker_id="worker-pg-owner",
+        )
+        run = owner.create_run(
+            session_id="game_atomic_claim",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+        )
+        owner.mark_running(run.run_id)
+        with ScopedSession() as db:
+            saved = db.get(LiveRunRecord, run.run_id)
+            assert saved is not None
+            saved.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+            saved.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+            db.commit()
+        before = live_run_claim_state(ScopedSession, run.run_id)
+        claimant = LiveRunRegistry(
+            live_store=ObservableClaimStore(ScopedSession),
+            worker_id="worker-pg-claimant",
+        )
+        modifier = ScopedSession()
+        claim_thread: threading.Thread | None = None
+        try:
+            event = modifier.scalar(
+                select(LiveEventRecord)
+                .where(
+                    LiveEventRecord.run_id == run.run_id,
+                    LiveEventRecord.event_id == 1,
+                )
+                .with_for_update()
+            )
+            assert event is not None
+            modifier.delete(event)
+            modifier.flush()
+
+            def claim() -> None:
+                try:
+                    claim_results.append(claimant.try_claim_stale_run(run.run_id))
+                except BaseException as exc:
+                    errors.append(exc)
+                    claim_entered.set()
+
+            claim_thread = threading.Thread(target=claim)
+            claim_thread.start()
+            assert claim_entered.wait(timeout=5)
+            assert claim_pid
+
+            deadline = time.monotonic() + 5
+            observed_lock_wait = False
+            while time.monotonic() < deadline:
+                with admin_engine.connect() as observer:
+                    activity = observer.execute(
+                        text(
+                            "SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = :pid"
+                        ),
+                        {"pid": claim_pid[0]},
+                    ).one_or_none()
+                if activity is not None and activity.wait_event_type == "Lock":
+                    blocked_query = activity.query.lower()
+                    assert "live_events" in blocked_query
+                    assert "for update" in blocked_query
+                    observed_lock_wait = True
+                    break
+                time.sleep(0.01)
+            assert observed_lock_wait
+            assert claim_results == []
+            assert claimant._runs == {}
+
+            modifier.commit()
+            claim_thread.join(timeout=5)
+            assert not claim_thread.is_alive()
+        finally:
+            modifier.rollback()
+            modifier.close()
+            if claim_thread is not None:
+                claim_thread.join(timeout=5)
+
+        assert errors == []
+        assert claim_results == [None]
+        assert claimant._runs == {}
+        assert live_run_claim_state(ScopedSession, run.run_id) == before
+        with ScopedSession() as observer:
+            remaining_event_ids = [
+                event.event_id
+                for event in observer.query(LiveEventRecord)
+                .filter(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            ]
+        assert remaining_event_ids == [2]
     finally:
         scoped_engine.dispose()
         with admin_engine.begin() as connection:
