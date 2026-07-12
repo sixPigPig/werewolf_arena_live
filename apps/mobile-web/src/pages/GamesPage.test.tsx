@@ -951,7 +951,7 @@ describe("GamesPage", () => {
 
     await screen.findByText("已选 0/2 · 可自动补齐");
     const disabledLaunchButton = screen.getByRole("button", {
-      name: "开始对局",
+      name: "还差 2 位",
     });
     expect(disabledLaunchButton).toBeDisabled();
     expect(disabledLaunchButton).toHaveClass("mobile-lobby-launch-ready");
@@ -1109,7 +1109,7 @@ describe("GamesPage", () => {
       screen.queryByRole("button", { name: "随机补齐" }),
     ).not.toBeInTheDocument();
     expect(await screen.findByText("已选 0/2 · 还差 1 名玩家")).toBeVisible();
-    expect(screen.getByRole("button", { name: "开始对局" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
     expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
   });
 
@@ -1117,8 +1117,8 @@ describe("GamesPage", () => {
     renderGamesPage();
 
     expect(await screen.findByText("已选 0/2 · 可自动补齐")).toBeVisible();
-    expect(screen.getByRole("button", { name: "开始对局" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "开始对局" })).toHaveClass(
+    expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "还差 2 位" })).toHaveClass(
       "mobile-lobby-launch-ready",
     );
 
@@ -1145,7 +1145,7 @@ describe("GamesPage", () => {
     renderGamesPage();
 
     expect(await screen.findByText("已选 0/2 · 还差 1 名玩家")).toBeVisible();
-    expect(screen.getByRole("button", { name: "开始对局" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
     expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
   });
 
