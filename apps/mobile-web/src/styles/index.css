@@ -3419,6 +3419,34 @@ textarea {
   box-shadow: none !important;
 }
 
+.mobile-lobby-modal-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  width: 100%;
+  height: 100svh;
+  place-items: end center;
+}
+
+.mobile-lobby-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 72%);
+}
+
+.mobile-lobby-modal {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 480px);
+  box-sizing: border-box;
+  color: #f4e8d2;
+}
+
+.mobile-app-shell:has(.mobile-lobby-modal-layer) .mobile-tab-bar {
+  display: none;
+}
+
 .mobile-lobby-field > span,
 .mobile-profile-search > span,
 .mobile-profile-select > span {
