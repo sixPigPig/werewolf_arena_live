@@ -2340,6 +2340,173 @@ def test_mark_running_rejects_malformed_lease_state_before_local_application(
     assert subscriber.empty()
 
 
+def test_mark_running_rejects_negative_source_fence_before_acquisition() -> None:
+    store = ActivationBoundaryStore(
+        activation_test_lease_state(
+            worker_id="worker-activation-boundary",
+            fence_token=0,
+        )
+    )
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id="worker-activation-boundary",
+    )
+    run = registry.create_run(
+        session_id="game_negative_source_fence",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    run.fence_token = -1
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        registry.mark_running(run.run_id)
+
+    assert store.acquire_calls == 0
+    assert store.activation_calls == 0
+    assert store.ack_verification_calls == 0
+    assert run.worker_id == "worker-activation-boundary"
+    assert run.worker_heartbeat_at is None
+    assert run.lease_expires_at is None
+    assert run.fence_token == -1
+    assert run.status == "queued"
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+@pytest.mark.parametrize(
+    "mutation_seam",
+    [
+        "capability",
+        "acquire",
+        "persist-capability",
+        "persist-call",
+        "ack-capability",
+        "ack-call",
+    ],
+)
+def test_mark_running_rejects_registry_worker_mutation_without_hooks(
+    mutation_seam: str,
+) -> None:
+    hook_calls = {"bool": 0, "equal": 0, "hash": 0, "str": 0}
+
+    class HostileWorker(str):
+        def __bool__(self):
+            hook_calls["bool"] += 1
+            return True
+
+        def __eq__(self, _other):
+            hook_calls["equal"] += 1
+            return True
+
+        def __hash__(self):
+            hook_calls["hash"] += 1
+            return str.__hash__(self)
+
+        def __str__(self):
+            hook_calls["str"] += 1
+            return str.__str__(self)
+
+    class WorkerMutatingStore(ActivationBoundaryStore):
+        registry = None
+        mutated = False
+        activate_lookups = 0
+        ack_lookups = 0
+
+        def __getattribute__(self, name):
+            if name == "activate_run":
+                lookups = object.__getattribute__(self, "activate_lookups") + 1
+                object.__setattr__(self, "activate_lookups", lookups)
+                if mutation_seam == "persist-capability" and lookups == 2:
+                    registry = object.__getattribute__(self, "registry")
+                    registry.worker_id = HostileWorker("worker-activation-boundary")
+            if name == "activation_was_committed":
+                lookups = object.__getattribute__(self, "ack_lookups") + 1
+                object.__setattr__(self, "ack_lookups", lookups)
+                if mutation_seam == "ack-capability" and lookups == 2:
+                    registry = object.__getattribute__(self, "registry")
+                    registry.worker_id = HostileWorker("worker-activation-boundary")
+            if (
+                name == "activation_was_committed"
+                and mutation_seam == "capability"
+                and not object.__getattribute__(self, "mutated")
+            ):
+                object.__setattr__(self, "mutated", True)
+                registry = object.__getattribute__(self, "registry")
+                registry.worker_id = HostileWorker("worker-activation-boundary")
+            return super().__getattribute__(name)
+
+        def acquire_lease(self, _run_id, **_claim):
+            self.acquire_calls += 1
+            if mutation_seam == "acquire":
+                self.registry.worker_id = HostileWorker("worker-activation-boundary")
+            return self.returned_lease_state
+
+        def activate_run(self, _run_id, **_activation) -> None:
+            self.activation_calls += 1
+            if mutation_seam == "persist-call":
+                self.registry.worker_id = HostileWorker("worker-activation-boundary")
+            if mutation_seam in {"ack-capability", "ack-call"}:
+                raise RuntimeError("activation persistence failed")
+
+        def activation_was_committed(self, _expected_state) -> bool:
+            self.ack_verification_calls += 1
+            if mutation_seam == "ack-call":
+                self.registry.worker_id = HostileWorker("worker-activation-boundary")
+            return False
+
+    store = WorkerMutatingStore(activation_test_lease_state(worker_id="worker-activation-boundary"))
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id="worker-activation-boundary",
+    )
+    store.registry = registry
+    run = registry.create_run(
+        session_id=f"game_worker_mutation_{mutation_seam}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    expected_error = RuntimeError if mutation_seam.startswith("ack-") else ValueError
+    with pytest.raises(expected_error):
+        registry.mark_running(run.run_id)
+
+    assert hook_calls == {name: 0 for name in hook_calls}
+    assert store.acquire_calls == (0 if mutation_seam == "capability" else 1)
+    expected_activation_calls = (
+        1 if mutation_seam in {"persist-call", "ack-capability", "ack-call"} else 0
+    )
+    assert store.activation_calls == expected_activation_calls
+    assert store.ack_verification_calls == (1 if mutation_seam == "ack-call" else 0)
+    assert type(registry.worker_id) is HostileWorker
+    assert run.worker_id == "worker-activation-boundary"
+    if mutation_seam in {
+        "persist-capability",
+        "persist-call",
+        "ack-capability",
+        "ack-call",
+    }:
+        assert run.worker_heartbeat_at == "2026-07-13T00:00:00Z"
+        assert run.lease_expires_at == "2099-07-13T00:00:15Z"
+        assert run.fence_token == 1
+    else:
+        assert run.worker_heartbeat_at is None
+        assert run.lease_expires_at is None
+        assert run.fence_token == 0
+    assert run.status == "queued"
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
 def test_activation_store_cannot_mutate_the_ack_expectation_through_event_aliases() -> None:
     failure = RuntimeError("activation persistence failed after mutating its input")
 

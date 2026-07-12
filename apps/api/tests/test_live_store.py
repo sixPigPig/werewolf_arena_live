@@ -2035,6 +2035,119 @@ def test_session_store_recovers_an_exact_activation_after_commit_ack_loss(
         ]
 
 
+@pytest.mark.parametrize("ack_lost", [False, True], ids=("success", "ack-loss"))
+def test_session_store_cannot_poison_local_activation_transport_after_commit(
+    db_session: Session,
+    ack_lost: bool,
+) -> None:
+    failure = RuntimeError("activation commit acknowledgement lost")
+    armed = False
+    acknowledgement_lost = False
+
+    class AckLostActivationSession(Session):
+        saw_activation = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type in {"run_started", "run_recovered"}
+                for item in self.new
+            ):
+                self.saw_activation = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if ack_lost and armed and self.saw_activation and not acknowledgement_lost:
+                acknowledgement_lost = True
+                raise failure
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=AckLostActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class PoisoningSessionLiveStore(SessionLiveStore):
+        transported_activation = None
+        verifier_state = None
+
+        def activate_run(self, run_id: str, *, activation, **kwargs) -> None:
+            self.transported_activation = activation
+            try:
+                super().activate_run(run_id, activation=activation, **kwargs)
+            except Exception:
+                object.__setattr__(activation, "type", "store_poisoned")
+                object.__setattr__(activation, "action", "store_poisoned")
+                activation._payload["store-only-mutation"] = True
+                raise
+            object.__setattr__(activation, "type", "store_poisoned")
+            object.__setattr__(activation, "action", "store_poisoned")
+            activation._payload["store-only-mutation"] = True
+
+        def activation_was_committed(self, expected_state) -> bool:
+            committed = super().activation_was_committed(expected_state)
+            self.verifier_state = expected_state
+            activation = expected_state.events[-1]
+            object.__setattr__(activation, "type", "verifier_poisoned")
+            activation.payload["verifier-only-mutation"] = True
+            return committed
+
+    store = PoisoningSessionLiveStore(session_factory)
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id=f"worker-poisoned-transport-{ack_lost}",
+    )
+    run = registry.create_run(
+        session_id=f"game_poisoned_transport_{ack_lost}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    armed = True
+
+    activation = registry.mark_running(run.run_id)
+    repeated = registry.mark_running(run.run_id)
+
+    assert acknowledgement_lost is ack_lost
+    assert store.transported_activation is not None
+    assert store.transported_activation.type == "store_poisoned"
+    assert store.transported_activation.action == "store_poisoned"
+    assert store.transported_activation.payload == {"store-only-mutation": True}
+    if ack_lost:
+        assert store.verifier_state is not None
+        assert store.verifier_state.events[-1].type == "verifier_poisoned"
+        assert store.verifier_state.events[-1].payload == {"verifier-only-mutation": True}
+    else:
+        assert store.verifier_state is None
+    assert activation is repeated is run.events[1]
+    assert activation is not store.transported_activation
+    assert activation.type == "run_started"
+    assert activation.action is None
+    assert activation.payload == {}
+    assert registry._activation_events[(run.run_id, run.fence_token)] is activation
+    assert subscriber.get_nowait() is activation
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "running"
+        assert [(event.event_id, event.type, event.action, event.payload) for event in events] == [
+            (1, "run_created", None, events[0].payload),
+            (2, "run_started", None, {}),
+        ]
+
+
 def test_null_rule_snapshot_activation_rejects_nonempty_local_expectation(
     db_session: Session,
 ) -> None:
