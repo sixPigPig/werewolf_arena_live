@@ -30,8 +30,12 @@ class GameSessionRecord(Base):
     rule_set_revision_no: Mapped[int | None] = mapped_column(nullable=True)
     rule_set_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     rule_set: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    resumable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    resumable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

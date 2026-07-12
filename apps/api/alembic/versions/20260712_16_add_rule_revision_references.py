@@ -37,6 +37,8 @@ _LEGACY_SNAPSHOT_MATCHES = {
     ),
 }
 
+_BACKFILL_BATCH_SIZE = 500
+
 
 def _canonical_snapshot_hash(snapshot: object) -> str | None:
     try:
@@ -47,9 +49,26 @@ def _canonical_snapshot_hash(snapshot: object) -> str | None:
             separators=(",", ":"),
             allow_nan=False,
         ).encode("utf-8")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError, RecursionError):
         return None
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _reject_nonfinite_json(_value: str) -> None:
+    raise ValueError("non-finite JSON value")
+
+
+def _parse_snapshot(raw_snapshot: object) -> dict[str, object] | None:
+    if not isinstance(raw_snapshot, str):
+        return None
+    try:
+        snapshot = json.loads(raw_snapshot, parse_constant=_reject_nonfinite_json)
+        if not isinstance(snapshot, dict):
+            return None
+        json.dumps(snapshot, allow_nan=False)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+    return snapshot
 
 
 def _snapshot_rule_set_id(snapshot: object) -> str | None:
@@ -73,39 +92,51 @@ def _revision_values(snapshot: object) -> dict[str, object] | None:
     }
 
 
-def _add_columns() -> None:
-    with op.batch_alter_table("live_runs") as batch_op:
-        batch_op.add_column(
-            sa.Column(
-                "rule_set_revision_id",
-                sa.String(length=36),
-                sa.ForeignKey(
-                    "rule_set_revisions.id",
-                    name="fk_live_runs_rule_set_revision_id_rule_set_revisions",
-                    ondelete="RESTRICT",
-                ),
-                nullable=True,
-            )
-        )
-        batch_op.add_column(sa.Column("rule_set_revision_no", sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column("rule_set_content_hash", sa.String(length=64), nullable=True))
+def _add_columns(connection: Any) -> None:
+    live_existing = {column["name"] for column in sa.inspect(connection).get_columns("live_runs")}
+    live_columns = (
+        sa.Column(
+            "rule_set_revision_id",
+            sa.String(length=36),
+            sa.ForeignKey(
+                "rule_set_revisions.id",
+                name="fk_live_runs_rule_set_revision_id_rule_set_revisions",
+                ondelete="RESTRICT",
+            ),
+            nullable=True,
+        ),
+        sa.Column("rule_set_revision_no", sa.Integer(), nullable=True),
+        sa.Column("rule_set_content_hash", sa.String(length=64), nullable=True),
+    )
+    missing_live = [column for column in live_columns if column.name not in live_existing]
+    if missing_live:
+        with op.batch_alter_table("live_runs") as batch_op:
+            for column in missing_live:
+                batch_op.add_column(column)
 
-    with op.batch_alter_table("game_sessions") as batch_op:
-        batch_op.add_column(sa.Column("rule_set_id", sa.String(length=80), nullable=True))
-        batch_op.add_column(
-            sa.Column(
-                "rule_set_revision_id",
-                sa.String(length=36),
-                sa.ForeignKey(
-                    "rule_set_revisions.id",
-                    name="fk_game_sessions_rule_set_revision_id_rule_set_revisions",
-                    ondelete="RESTRICT",
-                ),
-                nullable=True,
-            )
-        )
-        batch_op.add_column(sa.Column("rule_set_revision_no", sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column("rule_set_content_hash", sa.String(length=64), nullable=True))
+    game_existing = {
+        column["name"] for column in sa.inspect(connection).get_columns("game_sessions")
+    }
+    game_columns = (
+        sa.Column("rule_set_id", sa.String(length=80), nullable=True),
+        sa.Column(
+            "rule_set_revision_id",
+            sa.String(length=36),
+            sa.ForeignKey(
+                "rule_set_revisions.id",
+                name="fk_game_sessions_rule_set_revision_id_rule_set_revisions",
+                ondelete="RESTRICT",
+            ),
+            nullable=True,
+        ),
+        sa.Column("rule_set_revision_no", sa.Integer(), nullable=True),
+        sa.Column("rule_set_content_hash", sa.String(length=64), nullable=True),
+    )
+    missing_game = [column for column in game_columns if column.name not in game_existing]
+    if missing_game:
+        with op.batch_alter_table("game_sessions") as batch_op:
+            for column in missing_game:
+                batch_op.add_column(column)
 
 
 def _backfill_game_sessions(connection: Any) -> None:
@@ -116,26 +147,85 @@ def _backfill_game_sessions(connection: Any) -> None:
         sa.column("rule_set_revision_id", sa.String(length=36)),
         sa.column("rule_set_revision_no", sa.Integer()),
         sa.column("rule_set_content_hash", sa.String(length=64)),
-        sa.column("rule_set", sa.JSON()),
+        sa.column("rule_set"),
     )
-    rows = connection.execute(
-        sa.select(game_sessions.c.session_id, game_sessions.c.rule_set)
-    ).mappings()
-    for row in rows:
-        snapshot = row["rule_set"]
-        values: dict[str, object] = {}
-        rule_set_id = _snapshot_rule_set_id(snapshot)
-        if rule_set_id is not None:
-            values["rule_set_id"] = rule_set_id
-        revision_values = _revision_values(snapshot)
-        if revision_values is not None:
-            values.update(revision_values)
-        if values:
-            connection.execute(
-                game_sessions.update()
-                .where(game_sessions.c.session_id == row["session_id"])
-                .values(**values)
+    raw_rule_set = sa.cast(game_sessions.c.rule_set, sa.Text()).label("raw_rule_set")
+    stable_update = (
+        game_sessions.update()
+        .where(game_sessions.c.session_id == sa.bindparam("row_session_id"))
+        .values(rule_set_id=sa.bindparam("target_rule_set_id"))
+    )
+    exact_update = (
+        game_sessions.update()
+        .where(game_sessions.c.session_id == sa.bindparam("row_session_id"))
+        .values(
+            rule_set_id=sa.bindparam("target_rule_set_id"),
+            rule_set_revision_id=sa.bindparam("target_revision_id"),
+            rule_set_revision_no=sa.bindparam("target_revision_no"),
+            rule_set_content_hash=sa.bindparam("target_content_hash"),
+        )
+    )
+    last_session_id: str | None = None
+    while True:
+        query = (
+            sa.select(
+                game_sessions.c.session_id,
+                raw_rule_set,
+                game_sessions.c.rule_set_id,
+                game_sessions.c.rule_set_revision_id,
+                game_sessions.c.rule_set_revision_no,
+                game_sessions.c.rule_set_content_hash,
             )
+            .order_by(game_sessions.c.session_id)
+            .limit(_BACKFILL_BATCH_SIZE)
+        )
+        if last_session_id is not None:
+            query = query.where(game_sessions.c.session_id > last_session_id)
+        rows = connection.execute(query).mappings().all()
+        if not rows:
+            break
+
+        stable_parameters: list[dict[str, object]] = []
+        exact_parameters: list[dict[str, object]] = []
+        for row in rows:
+            snapshot = _parse_snapshot(row["raw_rule_set"])
+            rule_set_id = _snapshot_rule_set_id(snapshot)
+            revision_values = _revision_values(snapshot)
+            if rule_set_id is None:
+                continue
+            if revision_values is None:
+                if row["rule_set_id"] != rule_set_id:
+                    stable_parameters.append(
+                        {
+                            "row_session_id": row["session_id"],
+                            "target_rule_set_id": rule_set_id,
+                        }
+                    )
+                continue
+            if (
+                row["rule_set_id"] == rule_set_id
+                and row["rule_set_revision_id"] == revision_values["rule_set_revision_id"]
+                and row["rule_set_revision_no"] == revision_values["rule_set_revision_no"]
+                and row["rule_set_content_hash"] == revision_values["rule_set_content_hash"]
+            ):
+                continue
+            exact_parameters.append(
+                {
+                    "row_session_id": row["session_id"],
+                    "target_rule_set_id": rule_set_id,
+                    "target_revision_id": revision_values["rule_set_revision_id"],
+                    "target_revision_no": revision_values["rule_set_revision_no"],
+                    "target_content_hash": revision_values["rule_set_content_hash"],
+                }
+            )
+
+        if stable_parameters:
+            connection.execute(stable_update, stable_parameters)
+        if exact_parameters:
+            connection.execute(exact_update, exact_parameters)
+        last_session_id = rows[-1]["session_id"]
+        if len(rows) < _BACKFILL_BATCH_SIZE:
+            break
 
 
 def _backfill_live_runs(connection: Any) -> None:
@@ -145,18 +235,65 @@ def _backfill_live_runs(connection: Any) -> None:
         sa.column("rule_set_revision_id", sa.String(length=36)),
         sa.column("rule_set_revision_no", sa.Integer()),
         sa.column("rule_set_content_hash", sa.String(length=64)),
-        sa.column("rule_set", sa.JSON()),
+        sa.column("rule_set"),
     )
-    rows = connection.execute(sa.select(live_runs.c.run_id, live_runs.c.rule_set)).mappings()
-    for row in rows:
-        values = _revision_values(row["rule_set"])
-        if values is not None:
-            connection.execute(
-                live_runs.update().where(live_runs.c.run_id == row["run_id"]).values(**values)
+    raw_rule_set = sa.cast(live_runs.c.rule_set, sa.Text()).label("raw_rule_set")
+    exact_update = (
+        live_runs.update()
+        .where(live_runs.c.run_id == sa.bindparam("row_run_id"))
+        .values(
+            rule_set_revision_id=sa.bindparam("target_revision_id"),
+            rule_set_revision_no=sa.bindparam("target_revision_no"),
+            rule_set_content_hash=sa.bindparam("target_content_hash"),
+        )
+    )
+    last_run_id: str | None = None
+    while True:
+        query = (
+            sa.select(
+                live_runs.c.run_id,
+                raw_rule_set,
+                live_runs.c.rule_set_revision_id,
+                live_runs.c.rule_set_revision_no,
+                live_runs.c.rule_set_content_hash,
+            )
+            .order_by(live_runs.c.run_id)
+            .limit(_BACKFILL_BATCH_SIZE)
+        )
+        if last_run_id is not None:
+            query = query.where(live_runs.c.run_id > last_run_id)
+        rows = connection.execute(query).mappings().all()
+        if not rows:
+            break
+
+        exact_parameters: list[dict[str, object]] = []
+        for row in rows:
+            revision_values = _revision_values(_parse_snapshot(row["raw_rule_set"]))
+            if revision_values is None:
+                continue
+            if (
+                row["rule_set_revision_id"] == revision_values["rule_set_revision_id"]
+                and row["rule_set_revision_no"] == revision_values["rule_set_revision_no"]
+                and row["rule_set_content_hash"] == revision_values["rule_set_content_hash"]
+            ):
+                continue
+            exact_parameters.append(
+                {
+                    "row_run_id": row["run_id"],
+                    "target_revision_id": revision_values["rule_set_revision_id"],
+                    "target_revision_no": revision_values["rule_set_revision_no"],
+                    "target_content_hash": revision_values["rule_set_content_hash"],
+                }
             )
 
+        if exact_parameters:
+            connection.execute(exact_update, exact_parameters)
+        last_run_id = rows[-1]["run_id"]
+        if len(rows) < _BACKFILL_BATCH_SIZE:
+            break
 
-def _create_indexes() -> None:
+
+def _create_indexes(*, postgresql_concurrently: bool) -> None:
     live_runs = sa.table(
         "live_runs",
         sa.column("rule_set_id", sa.String(length=80)),
@@ -171,10 +308,14 @@ def _create_indexes() -> None:
         sa.column("created_at", sa.DateTime(timezone=True)),
         sa.column("session_id", sa.String(length=32)),
     )
+    index_options: dict[str, bool] = {"if_not_exists": True}
+    if postgresql_concurrently:
+        index_options["postgresql_concurrently"] = True
     op.create_index(
         "ix_live_runs_rule_set_revision_id",
         "live_runs",
         [live_runs.c.rule_set_revision_id],
+        **index_options,
     )
     op.create_index(
         "ix_live_runs_rule_set_id_updated_at_run_id_desc",
@@ -184,11 +325,13 @@ def _create_indexes() -> None:
             live_runs.c.updated_at.desc(),
             live_runs.c.run_id.desc(),
         ],
+        **index_options,
     )
     op.create_index(
         "ix_game_sessions_rule_set_revision_id",
         "game_sessions",
         [game_sessions.c.rule_set_revision_id],
+        **index_options,
     )
     op.create_index(
         "ix_game_sessions_rule_set_id_created_at_session_id_desc",
@@ -198,35 +341,37 @@ def _create_indexes() -> None:
             game_sessions.c.created_at.desc(),
             game_sessions.c.session_id.desc(),
         ],
+        **index_options,
     )
 
 
-def upgrade() -> None:
-    _add_columns()
-    connection = op.get_bind()
-    _backfill_game_sessions(connection)
-    _backfill_live_runs(connection)
-    _create_indexes()
-
-
-def downgrade() -> None:
+def _drop_indexes(*, postgresql_concurrently: bool) -> None:
+    index_options: dict[str, bool] = {"if_exists": True}
+    if postgresql_concurrently:
+        index_options["postgresql_concurrently"] = True
     op.drop_index(
         "ix_game_sessions_rule_set_id_created_at_session_id_desc",
         table_name="game_sessions",
+        **index_options,
     )
     op.drop_index(
         "ix_game_sessions_rule_set_revision_id",
         table_name="game_sessions",
+        **index_options,
     )
     op.drop_index(
         "ix_live_runs_rule_set_id_updated_at_run_id_desc",
         table_name="live_runs",
+        **index_options,
     )
     op.drop_index(
         "ix_live_runs_rule_set_revision_id",
         table_name="live_runs",
+        **index_options,
     )
 
+
+def _drop_columns() -> None:
     with op.batch_alter_table("game_sessions") as batch_op:
         batch_op.drop_column("rule_set_content_hash")
         batch_op.drop_column("rule_set_revision_no")
@@ -237,3 +382,28 @@ def downgrade() -> None:
         batch_op.drop_column("rule_set_content_hash")
         batch_op.drop_column("rule_set_revision_no")
         batch_op.drop_column("rule_set_revision_id")
+
+
+def upgrade() -> None:
+    connection = op.get_bind()
+    _add_columns(connection)
+    if connection.dialect.name == "postgresql":
+        with op.get_context().autocommit_block():
+            autocommit_connection = op.get_bind()
+            _backfill_game_sessions(autocommit_connection)
+            _backfill_live_runs(autocommit_connection)
+            _create_indexes(postgresql_concurrently=True)
+        return
+    _backfill_game_sessions(connection)
+    _backfill_live_runs(connection)
+    _create_indexes(postgresql_concurrently=False)
+
+
+def downgrade() -> None:
+    connection = op.get_bind()
+    if connection.dialect.name == "postgresql":
+        with op.get_context().autocommit_block():
+            _drop_indexes(postgresql_concurrently=True)
+    else:
+        _drop_indexes(postgresql_concurrently=False)
+    _drop_columns()

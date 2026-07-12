@@ -56,15 +56,9 @@ class LiveRunRecord(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
-    control_version: Mapped[int] = mapped_column(
-        nullable=False, default=0, server_default="0"
-    )
-    fence_token: Mapped[int] = mapped_column(
-        nullable=False, default=0, server_default="0"
-    )
-    recovery_attempts: Mapped[int] = mapped_column(
-        nullable=False, default=0, server_default="0"
-    )
+    control_version: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    fence_token: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    recovery_attempts: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     recovery_last_attempt_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
