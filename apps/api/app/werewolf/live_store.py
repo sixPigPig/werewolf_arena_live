@@ -10,9 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.models.live import LiveEventRecord, LiveRunRecord
 from app.werewolf.live import (
+    ACTIVATION_ACK_RUN_FIELD_NAMES,
+    ACTIVATION_ACK_RUN_TIMESTAMP_NAMES,
     GameRunCanceled,
     LiveEvent,
     LiveGameRun,
+    RunActivationExpectedState,
     RunLeaseState,
     RunLeaseUnavailable,
     RunRecoveryCandidate,
@@ -270,6 +273,48 @@ class DatabaseLiveStore:
         except Exception:
             self.db.rollback()
             raise
+
+    def activation_was_committed(
+        self,
+        expected_state: RunActivationExpectedState,
+    ) -> bool:
+        matches = False
+        try:
+            with self.db.no_autoflush:
+                inventory_is_complete = activation_ack_schema_inventory_complete()
+                expectation_is_complete = (
+                    expected_state.fields.keys() == ACTIVATION_ACK_RUN_FIELD_NAMES
+                    and expected_state.timestamps.keys() == ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
+                )
+                if inventory_is_complete and expectation_is_complete:
+                    record = self.db.scalar(
+                        select(LiveRunRecord)
+                        .where(LiveRunRecord.run_id == expected_state.run_id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                    if record is not None:
+                        events = tuple(
+                            self.db.scalars(
+                                select(LiveEventRecord)
+                                .where(LiveEventRecord.run_id == expected_state.run_id)
+                                .order_by(LiveEventRecord.event_id.asc())
+                                .with_for_update()
+                                .execution_options(populate_existing=True)
+                            )
+                        )
+                        matches = _stored_activation_state_matches(
+                            record,
+                            events,
+                            expected_state,
+                        )
+        except Exception:
+            matches = False
+        try:
+            self.db.rollback()
+        except Exception:
+            return False
+        return matches
 
     def load_run(self, run_id: str) -> LiveGameRun | None:
         record = self.db.get(LiveRunRecord, run_id)
@@ -686,6 +731,106 @@ class DatabaseLiveStore:
 
 def _format_optional_datetime(value: datetime | None) -> str | None:
     return format_live_datetime(value) if value is not None else None
+
+
+_ACTIVATION_ACK_SERVER_MANAGED_COLUMNS = frozenset({"updated_at"})
+
+
+def activation_ack_schema_inventory_complete() -> bool:
+    compared_columns = ACTIVATION_ACK_RUN_FIELD_NAMES | ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
+    table_columns = frozenset(column.name for column in LiveRunRecord.__table__.columns)
+    return (
+        compared_columns.isdisjoint(_ACTIVATION_ACK_SERVER_MANAGED_COLUMNS)
+        and compared_columns | _ACTIVATION_ACK_SERVER_MANAGED_COLUMNS == table_columns
+    )
+
+
+def _stored_activation_state_matches(
+    record: LiveRunRecord,
+    events: tuple[LiveEventRecord, ...],
+    expected: RunActivationExpectedState,
+) -> bool:
+    try:
+        stored_fields = {
+            "run_id": record.run_id,
+            "session_id": record.session_id,
+            "status": record.status,
+            "villager_model": record.villager_model,
+            "werewolf_model": record.werewolf_model,
+            "seed": record.seed,
+            "max_rounds": record.max_rounds,
+            "rule_set_id": record.rule_set_id,
+            "rule_set_revision_id": record.rule_set_revision_id,
+            "rule_set_revision_no": record.rule_set_revision_no,
+            "rule_set_content_hash": record.rule_set_content_hash,
+            "rule_set": record.rule_set,
+            "player_configs": record.player_configs,
+            "lineup_quality_warnings": record.lineup_quality_warnings,
+            "winner": record.winner,
+            "error": record.error,
+            "worker_id": record.worker_id,
+            "control_version": record.control_version,
+            "fence_token": record.fence_token,
+            "recovery_attempts": record.recovery_attempts,
+            "recovery_last_error": record.recovery_last_error,
+        }
+        stored_timestamps = {
+            "created_at": record.created_at,
+            "started_at": record.started_at,
+            "completed_at": record.completed_at,
+            "stop_requested_at": record.stop_requested_at,
+            "worker_heartbeat_at": record.worker_heartbeat_at,
+            "lease_expires_at": record.lease_expires_at,
+            "recovery_last_attempt_at": record.recovery_last_attempt_at,
+            "recovery_not_before": record.recovery_not_before,
+        }
+        lease_expires_at = (
+            parse_live_datetime(format_live_datetime(record.lease_expires_at))
+            if record.lease_expires_at is not None
+            else None
+        )
+        return bool(
+            stored_fields.keys() == ACTIVATION_ACK_RUN_FIELD_NAMES
+            and stored_timestamps.keys() == ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
+            and strict_json_equal(stored_fields, expected.fields)
+            and all(
+                _stored_timestamp_matches(stored_timestamps[name], expected.timestamps[name])
+                for name in ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
+            )
+            and record.status == "running"
+            and record.stop_requested_at is None
+            and record.worker_id is not None
+            and record.fence_token > 0
+            and lease_expires_at is not None
+            and lease_expires_at > datetime.now(tz=UTC)
+            and expected.event_count == len(expected.events)
+            and expected.next_event_id == expected.event_count + 1
+            and len(events) == expected.event_count
+            and [event.event_id for event in events] == list(range(1, len(events) + 1))
+            and events[0].type == "run_created"
+            and all(
+                event.run_id == record.run_id and event.session_id == record.session_id
+                for event in events
+            )
+            and all(
+                stored_event_matches(stored, expected_event)
+                for stored, expected_event in zip(events, expected.events, strict=True)
+            )
+        )
+    except Exception:
+        return False
+
+
+def _stored_timestamp_matches(
+    stored: datetime | None,
+    expected: str | None,
+) -> bool:
+    if stored is None or expected is None:
+        return stored is None and expected is None
+    parsed_expected = parse_live_datetime(expected)
+    return parsed_expected is not None and format_live_datetime(stored) == format_live_datetime(
+        parsed_expected
+    )
 
 
 def stored_event_matches(record: LiveEventRecord, expected: LiveEvent) -> bool:

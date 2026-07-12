@@ -59,6 +59,7 @@ from app.werewolf.live import (
     LiveEvent,
     LiveGameRun,
     LiveRunRegistry,
+    RunActivationExpectedState,
     RunLeaseState,
     RunLeaseUnavailable,
     RunRecoveryCandidate,
@@ -203,6 +204,16 @@ class SessionLiveStore:
                 fence_token=fence_token,
                 started_at=started_at,
             )
+        finally:
+            db.close()
+
+    def activation_was_committed(
+        self,
+        expected_state: RunActivationExpectedState,
+    ) -> bool:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).activation_was_committed(expected_state)
         finally:
             db.close()
 

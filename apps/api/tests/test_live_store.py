@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 import threading
 import time
@@ -9,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, delete, select, text
+from sqlalchemy import create_engine, delete, event as sqlalchemy_event, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
@@ -19,6 +20,8 @@ from app.api.routes.games import SessionLiveStore
 from app.db.base import Base
 from app.models.live import LiveEventRecord, LiveRunRecord
 from app.werewolf.live import (
+    ACTIVATION_ACK_RUN_FIELD_NAMES,
+    ACTIVATION_ACK_RUN_TIMESTAMP_NAMES,
     EventSink,
     GameRunCanceled,
     LiveEvent,
@@ -26,7 +29,10 @@ from app.werewolf.live import (
     RunLeaseUnavailable,
     RunRecoveryCandidate,
 )
-from app.werewolf.live_store import DatabaseLiveStore
+from app.werewolf.live_store import (
+    DatabaseLiveStore,
+    activation_ack_schema_inventory_complete,
+)
 from app.werewolf.orphan_reaper import run_next_orphan_recovery
 
 
@@ -54,6 +60,16 @@ def pinned_rule_snapshot() -> dict[str, object]:
         "content_hash": "a" * 64,
         "storage_marker": {"preserve": ["exact", 2]},
     }
+
+
+def test_activation_ack_inventory_covers_every_semantic_run_column() -> None:
+    table_columns = frozenset(column.name for column in LiveRunRecord.__table__.columns)
+
+    assert activation_ack_schema_inventory_complete() is True
+    assert (
+        ACTIVATION_ACK_RUN_FIELD_NAMES | ACTIVATION_ACK_RUN_TIMESTAMP_NAMES | {"updated_at"}
+        == table_columns
+    )
 
 
 def seed_incomplete_live_run(
@@ -1172,6 +1188,217 @@ def test_activation_waits_for_event_lock_then_rejects_a_changed_expected_stream(
         admin_engine.dispose()
 
 
+@pytest.mark.skipif(
+    not os.getenv("TEST_POSTGRESQL_URL"),
+    reason="requires an explicitly disposable PostgreSQL URL",
+)
+def test_activation_ack_verifier_locks_run_then_events_before_stop_control_update() -> None:
+    database_url = os.environ["TEST_POSTGRESQL_URL"]
+    schema = f"task3_activation_ack_lock_{uuid4().hex}"
+    admin_engine = create_engine(database_url)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    scoped_engine = create_engine(
+        database_url,
+        connect_args={"options": f"-csearch_path={schema}"},
+    )
+    armed = False
+    acknowledgement_lost = False
+    verifier_context = threading.local()
+    verifier_run_locked = threading.Event()
+    release_verifier = threading.Event()
+    verifier_statements: list[str] = []
+
+    class AckLostActivationSession(Session):
+        saw_activation = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type in {"run_started", "run_recovered"}
+                for item in self.new
+            ):
+                self.saw_activation = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if armed and self.saw_activation and not acknowledgement_lost:
+                acknowledgement_lost = True
+                raise RuntimeError("activation commit acknowledgement lost")
+
+    ScopedSession = sessionmaker(
+        bind=scoped_engine,
+        class_=AckLostActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    Base.metadata.create_all(scoped_engine)
+
+    class ObservableAckVerifierStore(SessionLiveStore):
+        def __init__(self) -> None:
+            super().__init__(ScopedSession)
+            self.activation_verification_calls = 0
+
+        def activation_was_committed(self, expected_state):
+            self.activation_verification_calls += 1
+            verifier_context.active = True
+            try:
+                return super().activation_was_committed(expected_state)
+            finally:
+                verifier_context.active = False
+
+    def observe_verifier_statement(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ) -> None:
+        if not getattr(verifier_context, "active", False):
+            return
+        verifier_statements.append(statement)
+        normalized = statement.lower()
+        if "from live_runs" in normalized and "for update" in normalized:
+            verifier_run_locked.set()
+            assert release_verifier.wait(timeout=5)
+
+    sqlalchemy_event.listen(scoped_engine, "after_cursor_execute", observe_verifier_statement)
+    activation_results: list[LiveEvent] = []
+    activation_errors: list[BaseException] = []
+    mutator_errors: list[BaseException] = []
+    mutator_pid: list[int] = []
+    mutator_entered = threading.Event()
+    mutator_committed = threading.Event()
+    activation_thread: threading.Thread | None = None
+    mutator_thread: threading.Thread | None = None
+    try:
+        store = ObservableAckVerifierStore()
+        registry = LiveRunRegistry(
+            live_store=store,
+            worker_id="worker-pg-activation-ack",
+            lease_seconds=30,
+        )
+        run = registry.create_run(
+            session_id="game_pg_activation_ack_lock",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+        )
+        armed = True
+
+        def activate() -> None:
+            try:
+                activation_results.append(registry.mark_running(run.run_id))
+            except BaseException as exc:
+                activation_errors.append(exc)
+                verifier_run_locked.set()
+
+        activation_thread = threading.Thread(target=activate)
+        activation_thread.start()
+        assert verifier_run_locked.wait(timeout=5)
+
+        def mutate_stop_control() -> None:
+            try:
+                with ScopedSession() as mutator:
+                    pid = mutator.scalar(text("SELECT pg_backend_pid()"))
+                    assert isinstance(pid, int)
+                    mutator_pid.append(pid)
+                    mutator_entered.set()
+                    mutator.execute(
+                        update(LiveRunRecord)
+                        .where(LiveRunRecord.run_id == run.run_id)
+                        .values(
+                            stop_requested_at=datetime.now(tz=UTC),
+                            control_version=LiveRunRecord.control_version + 1,
+                        )
+                    )
+                    mutator.commit()
+                    mutator_committed.set()
+            except BaseException as exc:
+                mutator_errors.append(exc)
+                mutator_entered.set()
+
+        mutator_thread = threading.Thread(target=mutate_stop_control)
+        mutator_thread.start()
+        assert mutator_entered.wait(timeout=5)
+        assert mutator_pid
+
+        deadline = time.monotonic() + 5
+        observed_lock_wait = False
+        while time.monotonic() < deadline:
+            with admin_engine.connect() as observer:
+                activity = observer.execute(
+                    text("SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = :pid"),
+                    {"pid": mutator_pid[0]},
+                ).one_or_none()
+            if activity is not None and activity.wait_event_type == "Lock":
+                blocked_query = activity.query.lower()
+                assert "update live_runs" in blocked_query
+                observed_lock_wait = True
+                break
+            time.sleep(0.01)
+        assert observed_lock_wait
+        assert activation_results == []
+        assert activation_errors == []
+        assert mutator_committed.is_set() is False
+
+        release_verifier.set()
+        activation_thread.join(timeout=5)
+        mutator_thread.join(timeout=5)
+        assert not activation_thread.is_alive()
+        assert not mutator_thread.is_alive()
+
+        assert acknowledgement_lost is True
+        assert store.activation_verification_calls == 1
+        assert activation_errors == []
+        assert mutator_errors == []
+        assert len(activation_results) == 1
+        assert activation_results[0] is run.events[1]
+        assert mutator_committed.is_set() is True
+        locked_statements = [
+            statement.lower()
+            for statement in verifier_statements
+            if "for update" in statement.lower()
+        ]
+        assert len(locked_statements) == 2
+        assert "from live_runs" in locked_statements[0]
+        assert "from live_events" in locked_statements[1]
+        assert all(
+            statement.lstrip().lower().startswith("select") for statement in verifier_statements
+        )
+        with ScopedSession() as observer:
+            saved = observer.get(LiveRunRecord, run.run_id)
+            events = list(
+                observer.scalars(
+                    select(LiveEventRecord)
+                    .where(LiveEventRecord.run_id == run.run_id)
+                    .order_by(LiveEventRecord.event_id)
+                )
+            )
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.stop_requested_at is not None
+        assert saved.control_version == 1
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+        ]
+    finally:
+        release_verifier.set()
+        if activation_thread is not None:
+            activation_thread.join(timeout=5)
+        if mutator_thread is not None:
+            mutator_thread.join(timeout=5)
+        sqlalchemy_event.remove(scoped_engine, "after_cursor_execute", observe_verifier_statement)
+        scoped_engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()
+
+
 def test_live_store_loads_backfilled_pinned_scalars_with_legacy_snapshot(
     db_session: Session,
 ) -> None:
@@ -1722,6 +1949,7 @@ def test_session_store_recovers_an_exact_activation_after_commit_ack_loss(
             super().__init__(session_factory)
             self.load_run_calls = 0
             self.events_after_calls = 0
+            self.activation_verification_calls = 0
 
         def load_run(self, run_id: str):
             self.load_run_calls += 1
@@ -1730,6 +1958,10 @@ def test_session_store_recovers_an_exact_activation_after_commit_ack_loss(
         def events_after(self, run_id: str, *, after_id=None):
             self.events_after_calls += 1
             return super().events_after(run_id, after_id=after_id)
+
+        def activation_was_committed(self, expected_state):
+            self.activation_verification_calls += 1
+            return super().activation_was_committed(expected_state)
 
     store = ObservedSessionLiveStore()
     registry = LiveRunRegistry(live_store=store, worker_id="worker-activation-ack")
@@ -1747,8 +1979,9 @@ def test_session_store_recovers_an_exact_activation_after_commit_ack_loss(
     repeated = registry.mark_running(run.run_id)
 
     assert acknowledgement_lost is True
-    assert store.load_run_calls == 1
-    assert store.events_after_calls == 1
+    assert store.activation_verification_calls == 1
+    assert store.load_run_calls == 0
+    assert store.events_after_calls == 0
     assert activation is repeated is run.events[1]
     assert subscriber.get_nowait() is activation
     assert subscriber.empty()
@@ -1774,6 +2007,222 @@ def test_session_store_recovers_an_exact_activation_after_commit_ack_loss(
             (1, "run_created"),
             (2, "run_started"),
         ]
+
+
+@pytest.mark.parametrize("mutation", ["full-row", "expired-lease"])
+def test_session_store_rejects_activation_ack_when_durable_run_state_changed(
+    db_session: Session,
+    mutation: str,
+) -> None:
+    failure = RuntimeError(f"activation {mutation} acknowledgement lost")
+    armed = False
+    acknowledgement_lost = False
+    plain_session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class MutatingAckLostActivationSession(Session):
+        saw_activation = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type in {"run_started", "run_recovered"}
+                for item in self.new
+            ):
+                self.saw_activation = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if armed and self.saw_activation and not acknowledgement_lost:
+                acknowledgement_lost = True
+                with plain_session_factory() as mutator:
+                    record = mutator.get(LiveRunRecord, run.run_id)
+                    assert record is not None
+                    if mutation == "full-row":
+                        record.villager_model = "mutated-model"
+                        record.control_version += 7
+                        record.recovery_last_error = "mutated-recovery"
+                        changed_rule_set = copy.deepcopy(record.rule_set)
+                        assert changed_rule_set is not None
+                        assert type(changed_rule_set["sheriff_enabled"]) is bool
+                        changed_rule_set["sheriff_enabled"] = 0
+                        changed_rule_set["roles"][0]["count"] = 2.0
+                        record.rule_set = changed_rule_set
+                        flag_modified(record, "rule_set")
+                        record.player_configs = [{"seat": 1, "name": "durable-only-player"}]
+                        flag_modified(record, "player_configs")
+                    else:
+                        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+                    mutator.commit()
+                raise failure
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=MutatingAckLostActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id=f"worker-activation-{mutation}",
+    )
+    run = registry.create_run(
+        session_id=f"game_activation_ack_{mutation}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    armed = True
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_running(run.run_id)
+
+    assert raised.value is failure
+    assert acknowledgement_lost is True
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.fence_token == 1
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert (run.run_id, run.fence_token) not in registry._activation_events
+    assert subscriber.empty()
+    with plain_session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "running"
+        if mutation == "full-row":
+            assert saved.villager_model == "mutated-model"
+            assert saved.control_version == 7
+            assert type(saved.rule_set["sheriff_enabled"]) is int
+            assert type(saved.rule_set["roles"][0]["count"]) is float
+            assert saved.player_configs[0]["name"] == "durable-only-player"
+        else:
+            assert saved.lease_expires_at is not None
+            assert saved.lease_expires_at <= datetime.now(tz=UTC).replace(tzinfo=None)
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+        ]
+
+
+def test_atomic_activation_ack_verifier_rejects_the_legacy_stop_control_read_seam(
+    db_session: Session,
+) -> None:
+    failure = RuntimeError("activation acknowledgement lost across read seam")
+    armed = False
+    acknowledgement_lost = False
+    plain_session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class AckLostActivationSession(Session):
+        saw_activation = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type in {"run_started", "run_recovered"}
+                for item in self.new
+            ):
+                self.saw_activation = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if armed and self.saw_activation and not acknowledgement_lost:
+                acknowledgement_lost = True
+                raise failure
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=AckLostActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class StopControlReadSeamStore(SessionLiveStore):
+        def __init__(self) -> None:
+            super().__init__(session_factory)
+            self.mutated = False
+            self.load_run_calls = 0
+            self.events_after_calls = 0
+            self.activation_verification_calls = 0
+
+        def _mutate_stop_control(self, run_id: str) -> None:
+            if self.mutated:
+                return
+            self.mutated = True
+            with plain_session_factory() as mutator:
+                record = mutator.get(LiveRunRecord, run_id)
+                assert record is not None
+                record.stop_requested_at = datetime.now(tz=UTC)
+                record.control_version += 1
+                mutator.commit()
+
+        def load_run(self, run_id: str):
+            self.load_run_calls += 1
+            stale = super().load_run(run_id)
+            self._mutate_stop_control(run_id)
+            return stale
+
+        def events_after(self, run_id: str, *, after_id=None):
+            self.events_after_calls += 1
+            return super().events_after(run_id, after_id=after_id)
+
+        def activation_was_committed(self, expected_state):
+            self.activation_verification_calls += 1
+            self._mutate_stop_control(expected_state.run_id)
+            return super().activation_was_committed(expected_state)
+
+    store = StopControlReadSeamStore()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-activation-read-seam")
+    run = registry.create_run(
+        session_id="game_activation_ack_read_seam",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    armed = True
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_running(run.run_id)
+
+    assert raised.value is failure
+    assert acknowledgement_lost is True
+    assert store.mutated is True
+    assert store.activation_verification_calls == 1
+    assert store.load_run_calls == 0
+    assert store.events_after_calls == 0
+    assert run.status == "queued"
+    assert run.stop_requested_at is None
+    assert run.control_version == 0
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+    with plain_session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.stop_requested_at is not None
+        assert saved.control_version == 1
 
 
 def test_session_store_recovery_activation_failure_retries_the_same_fence(

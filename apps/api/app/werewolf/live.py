@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -22,6 +23,43 @@ _RULE_SET_REVISION_FIELDS = frozenset(
 )
 _CONTENT_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 _STRICT_JSON_MAX_DEPTH = 128
+ACTIVATION_ACK_RUN_FIELD_NAMES = frozenset(
+    {
+        "run_id",
+        "session_id",
+        "status",
+        "villager_model",
+        "werewolf_model",
+        "seed",
+        "max_rounds",
+        "rule_set_id",
+        "rule_set_revision_id",
+        "rule_set_revision_no",
+        "rule_set_content_hash",
+        "rule_set",
+        "player_configs",
+        "lineup_quality_warnings",
+        "winner",
+        "error",
+        "worker_id",
+        "control_version",
+        "fence_token",
+        "recovery_attempts",
+        "recovery_last_error",
+    }
+)
+ACTIVATION_ACK_RUN_TIMESTAMP_NAMES = frozenset(
+    {
+        "created_at",
+        "started_at",
+        "completed_at",
+        "stop_requested_at",
+        "worker_heartbeat_at",
+        "lease_expires_at",
+        "recovery_last_attempt_at",
+        "recovery_not_before",
+    }
+)
 
 
 class GameRunCanceled(RuntimeError):
@@ -263,6 +301,16 @@ class LiveGameRun:
         }
 
 
+@dataclass(frozen=True)
+class RunActivationExpectedState:
+    run_id: str
+    fields: dict[str, object]
+    timestamps: dict[str, str | None]
+    events: tuple[LiveEvent, ...]
+    event_count: int
+    next_event_id: int
+
+
 class LiveStore(Protocol):
     def save_new_run(self, run: LiveGameRun) -> None: ...
 
@@ -280,6 +328,11 @@ class LiveStore(Protocol):
         fence_token: int,
         started_at: str,
     ) -> None: ...
+
+    def activation_was_committed(
+        self,
+        expected_state: RunActivationExpectedState,
+    ) -> bool: ...
 
     def append_event(
         self,
@@ -715,6 +768,11 @@ class LiveRunRegistry:
                     raise RuntimeError(
                         "Persistent live store does not support activation lease acquisition"
                     )
+                if not self._supports_store_method("activation_was_committed"):
+                    raise RuntimeError(
+                        "Persistent live store does not support atomic activation "
+                        "acknowledgement verification"
+                    )
             supports_lease = self._supports_store_method("acquire_lease")
             has_claimed_lease = (
                 run.worker_id == self.worker_id
@@ -759,6 +817,11 @@ class LiveRunRegistry:
                     {"fence_token": run.fence_token} if expected_started_at is not None else None
                 ),
             )
+            expected_state = _activation_expected_state(
+                run,
+                activation=activation,
+                started_at=started_at,
+            )
             try:
                 self._persist_activation_locked(
                     run,
@@ -769,12 +832,7 @@ class LiveRunRegistry:
                     started_at=started_at,
                 )
             except Exception:
-                if not self._activation_was_committed_locked(
-                    run,
-                    expected_events=expected_events,
-                    activation=activation,
-                    started_at=started_at,
-                ):
+                if not self._activation_was_committed_locked(expected_state):
                     raise
                 run.lease_lost = False
             run.status = "running"
@@ -1132,33 +1190,13 @@ class LiveRunRegistry:
 
     def _activation_was_committed_locked(
         self,
-        run: LiveGameRun,
-        *,
-        expected_events: tuple[LiveEvent, ...],
-        activation: LiveEvent,
-        started_at: str,
+        expected_state: RunActivationExpectedState,
     ) -> bool:
+        verifier = getattr(self._live_store, "activation_was_committed", None)
+        if not callable(verifier):
+            return False
         try:
-            persisted = self._load_complete_persisted_run(run.run_id)
-            return bool(
-                persisted is not None
-                and persisted.status == "running"
-                and persisted.worker_id == (run.worker_id or self.worker_id)
-                and persisted.fence_token == run.fence_token
-                and persisted.stop_requested_at is None
-                and _normalized_live_timestamp(persisted.started_at or "")
-                == _normalized_live_timestamp(started_at)
-                and len(persisted.events) == len(expected_events) + 1
-                and all(
-                    _live_events_match(stored, expected)
-                    for stored, expected in zip(
-                        persisted.events[:-1],
-                        expected_events,
-                        strict=True,
-                    )
-                )
-                and _live_events_match(persisted.events[-1], activation)
-            )
+            return verifier(expected_state) is True
         except Exception:
             return False
 
@@ -1431,6 +1469,63 @@ class LiveRunRegistry:
         finally:
             with self._lock:
                 self._persistent_subscriptions.pop(id(subscriber), None)
+
+
+def _activation_expected_state(
+    run: LiveGameRun,
+    *,
+    activation: LiveEvent,
+    started_at: str,
+) -> RunActivationExpectedState:
+    events = copy.deepcopy((*run.events, activation))
+    fields = copy.deepcopy(
+        {
+            "run_id": run.run_id,
+            "session_id": run.session_id,
+            "status": "running",
+            "villager_model": run.villager_model,
+            "werewolf_model": run.werewolf_model,
+            "seed": run.seed,
+            "max_rounds": run.max_rounds,
+            "rule_set_id": run.rule_set_id,
+            "rule_set_revision_id": run.rule_set_revision_id,
+            "rule_set_revision_no": run.rule_set_revision_no,
+            "rule_set_content_hash": run.rule_set_content_hash,
+            "rule_set": run.rule_set,
+            "player_configs": run.player_configs,
+            "lineup_quality_warnings": run.lineup_quality_warnings,
+            "winner": run.winner,
+            "error": run.error,
+            "worker_id": run.worker_id,
+            "control_version": run.control_version,
+            "fence_token": run.fence_token,
+            "recovery_attempts": run.recovery_attempts,
+            "recovery_last_error": run.recovery_last_error,
+        }
+    )
+    timestamps = {
+        "created_at": run.created_at,
+        "started_at": started_at,
+        "completed_at": run.completed_at,
+        "stop_requested_at": run.stop_requested_at,
+        "worker_heartbeat_at": run.worker_heartbeat_at,
+        "lease_expires_at": run.lease_expires_at,
+        "recovery_last_attempt_at": run.recovery_last_attempt_at,
+        "recovery_not_before": run.recovery_not_before,
+    }
+    if (
+        fields.keys() != ACTIVATION_ACK_RUN_FIELD_NAMES
+        or timestamps.keys() != ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
+    ):
+        raise RuntimeError("Activation acknowledgement state inventory is incomplete")
+    return RunActivationExpectedState(
+        run_id=run.run_id,
+        fields=fields,
+        timestamps=timestamps,
+        events=events,
+        event_count=len(events),
+        next_event_id=run.next_event_id + 1,
+    )
 
 
 def _prepared_runs_match(persisted: LiveGameRun, candidate: LiveGameRun) -> bool:

@@ -133,6 +133,9 @@ class RecordingLiveStore:
         self.saved_runs.append((activation.run_id, "running", None, None))
         self.events.append((activation.run_id, activation.id, activation.type))
 
+    def activation_was_committed(self, _expected_state) -> bool:
+        return False
+
     def acquire_lease(
         self,
         _run_id,
@@ -170,6 +173,9 @@ class FailingLiveStore:
 
     def activate_run(self, run_id, **_activation) -> None:
         raise RuntimeError(f"cannot activate {run_id}")
+
+    def activation_was_committed(self, _expected_state) -> bool:
+        return False
 
     def acquire_lease(
         self,
@@ -563,6 +569,103 @@ def test_persistent_activation_rejects_a_store_without_atomic_support_before_wri
     assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
     assert store.saved_runs == []
     assert store.events == []
+
+
+def test_persistent_activation_rejects_a_store_without_atomic_ack_verification() -> None:
+    class MissingAckVerifierStore:
+        def __init__(self) -> None:
+            self.acquire_calls = 0
+            self.activation_calls = 0
+
+        def acquire_lease(self, _run_id, **_claim):
+            self.acquire_calls += 1
+            raise AssertionError("lease acquisition must not run without ACK verification")
+
+        def activate_run(self, _run_id, **_activation) -> None:
+            self.activation_calls += 1
+            raise AssertionError("activation must not run without ACK verification")
+
+    store = MissingAckVerifierStore()
+    registry = LiveRunRegistry(live_store=store)
+    run = registry.prepare_run(
+        session_id="game_missing_atomic_ack_verifier",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    registry.attach_prepared_run(run)
+
+    with pytest.raises(RuntimeError, match="acknowledgement verification"):
+        registry.mark_running(run.run_id)
+
+    assert store.acquire_calls == 0
+    assert store.activation_calls == 0
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+
+
+def test_activation_ack_verifier_failure_rethrows_the_original_activation_error() -> None:
+    activation_failure = RuntimeError("activation commit acknowledgement lost")
+    verifier_failure = RuntimeError("activation verifier read failed")
+
+    class FailingAckVerifierStore:
+        def acquire_lease(
+            self,
+            _run_id,
+            *,
+            worker_id,
+            heartbeat_at,
+            lease_expires_at,
+            **_expected,
+        ):
+            return RunLeaseState(
+                worker_id=worker_id,
+                worker_heartbeat_at=heartbeat_at,
+                lease_expires_at=lease_expires_at,
+                stop_requested_at=None,
+                status="queued",
+                control_version=0,
+                fence_token=1,
+                recovery_attempts=0,
+                recovery_last_attempt_at=None,
+                recovery_not_before=None,
+                recovery_last_error=None,
+            )
+
+        def activate_run(self, _run_id, **_activation) -> None:
+            raise activation_failure
+
+        def activation_was_committed(self, _expected_state) -> bool:
+            raise verifier_failure
+
+    registry = LiveRunRegistry(
+        live_store=FailingAckVerifierStore(),
+        worker_id="worker-failing-ack-verifier",
+    )
+    run = registry.prepare_run(
+        session_id="game_failing_activation_ack_verifier",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    registry.attach_prepared_run(run)
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_running(run.run_id)
+
+    assert raised.value is activation_failure
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.fence_token == 1
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
 
 
 def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
@@ -1253,6 +1356,9 @@ def test_concurrent_fresh_mark_running_claims_once_and_returns_one_activation() 
         def activate_run(self, _run_id, **_activation) -> None:
             return None
 
+        def activation_was_committed(self, _expected_state) -> bool:
+            return False
+
         def acquire_lease(
             self,
             _run_id,
@@ -1412,6 +1518,9 @@ def test_cached_mark_running_rechecks_worker_fence_before_returning_activation()
 
         def activate_run(self, _run_id, **_activation) -> None:
             return None
+
+        def activation_was_committed(self, _expected_state) -> bool:
+            return False
 
         def acquire_lease(
             self,
