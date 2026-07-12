@@ -187,7 +187,7 @@ class DatabaseLiveStore:
         self,
         run_id: str,
         *,
-        expected_events: tuple[LiveEvent, ...],
+        expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
         expected_status: str,
         expected_started_at: str | None,
         canonicalize_null_rule_set: bool,
@@ -343,7 +343,7 @@ class DatabaseLiveStore:
         self,
         run_id: str,
         *,
-        expected_events: tuple[LiveEvent, ...],
+        expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
@@ -587,7 +587,7 @@ class DatabaseLiveStore:
     def _lock_and_validate_complete_event_stream(
         self,
         record: LiveRunRecord,
-        expected_events: tuple[LiveEvent, ...],
+        expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
     ) -> bool:
         events = tuple(
             self.db.scalars(
@@ -854,7 +854,14 @@ def _stored_timestamp_matches(
     )
 
 
-def stored_event_matches(record: LiveEventRecord, expected: LiveEvent) -> bool:
+def stored_event_matches(
+    record: LiveEventRecord,
+    expected: LiveEvent | RunActivationExpectedEvent,
+) -> bool:
+    if type(expected) is RunActivationExpectedEvent:
+        return _stored_activation_event_matches(record, expected)
+    if type(expected) is not LiveEvent:
+        return False
     try:
         expected_created_at = parse_live_datetime(expected.created_at)
         if expected_created_at is None:

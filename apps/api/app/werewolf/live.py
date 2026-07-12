@@ -315,6 +315,26 @@ class RunActivationExpectedEvent:
 
 
 @dataclass(frozen=True)
+class RunActivationSourceState:
+    run_id: str
+    session_id: str
+    status: str
+    worker_id: str | None
+    fence_token: int
+    lease_lost: bool
+    stop_requested_at: str | None
+    started_at: str | None
+    worker_heartbeat_at: str | None
+    lease_expires_at: str | None
+    next_event_id: int
+    fields: dict[str, object]
+    timestamps: dict[str, str | None]
+    events: tuple[RunActivationExpectedEvent, ...]
+    events_container: list[LiveEvent]
+    subscribers: tuple[queue.Queue[LiveEvent], ...]
+
+
+@dataclass(frozen=True)
 class RunActivationExpectedState:
     run_id: str
     fields: dict[str, object]
@@ -333,7 +353,7 @@ class LiveStore(Protocol):
         self,
         run_id: str,
         *,
-        expected_events: tuple[LiveEvent, ...],
+        expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
         expected_status: str,
         expected_started_at: str | None,
         canonicalize_null_rule_set: bool,
@@ -366,7 +386,7 @@ class LiveStore(Protocol):
         self,
         run_id: str,
         *,
-        expected_events: tuple[LiveEvent, ...],
+        expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
@@ -769,11 +789,17 @@ class LiveRunRegistry:
         )
 
     def mark_running(self, run_id: str) -> LiveEvent:
+        _require_exact_str(run_id)
         with self._lock:
-            run = self._runs[run_id]
-            self._raise_if_stop_requested_locked(run)
-            self._raise_if_not_startable_locked(run)
-            if self._live_store is not None:
+            _require_exact_str(self.worker_id)
+            registry_worker_id = self.worker_id
+            run = dict.__getitem__(self._runs, run_id)
+            source = _capture_activation_source_state(run)
+            if source.run_id != run_id:
+                _raise_invalid_exact_json_value()
+            _raise_if_activation_source_not_startable(source)
+            has_live_store = self._live_store is not None
+            if has_live_store:
                 if not self._supports_store_method("activate_run"):
                     raise RuntimeError(
                         "Persistent live store does not support atomic activation persistence"
@@ -787,52 +813,71 @@ class LiveRunRegistry:
                         "Persistent live store does not support atomic activation "
                         "acknowledgement verification"
                     )
-            expected_events = _validated_activation_source_events(run)
             supports_lease = self._supports_store_method("acquire_lease")
-            has_claimed_lease = (
-                run.worker_id == self.worker_id
-                and run.fence_token > 0
-                and not run.lease_lost
-                and (self._live_store is None or not _lease_is_expired(run.lease_expires_at))
+            has_claimed_lease = _activation_source_has_current_lease(
+                source,
+                registry_worker_id=registry_worker_id,
+                has_live_store=has_live_store,
             )
-            activation_key = (run_id, run.fence_token)
-            existing_activation = self._activation_events.get(activation_key)
+            activation_key = (source.run_id, source.fence_token)
+            existing_activation = _validated_cached_activation(
+                self._activation_events.get(activation_key)
+            )
             if (
-                run.status == "running"
+                source.status == "running"
                 and existing_activation is not None
-                and (has_claimed_lease or self._live_store is None)
+                and (has_claimed_lease or not has_live_store)
             ):
                 return existing_activation
             lease_state = (
                 None
                 if has_claimed_lease
-                else self._acquire_lease(run_id, expected_events=expected_events)
+                else self._acquire_lease(source.run_id, expected_events=source.events)
             )
             if lease_state is None and not has_claimed_lease and supports_lease:
-                raise RunLeaseUnavailable(f"Run {run_id} is owned by another worker")
+                raise RunLeaseUnavailable(f"Run {source.run_id} is owned by another worker")
             if lease_state is not None:
-                self._apply_lease_state_locked(run, lease_state)
-            self._raise_if_stop_requested_locked(run)
-            self._raise_if_not_startable_locked(run)
-            activation_key = (run_id, run.fence_token)
-            existing_activation = self._activation_events.get(activation_key)
-            if run.status == "running" and existing_activation is not None:
+                trusted_lease_state = _validated_activation_lease_state(
+                    lease_state,
+                    registry_worker_id=registry_worker_id,
+                    expected_status=source.status,
+                    previous_fence_token=source.fence_token,
+                )
+                self._apply_lease_state_locked(run, trusted_lease_state)
+            source = _capture_activation_source_state(run)
+            if source.run_id != run_id:
+                _raise_invalid_exact_json_value()
+            _raise_if_activation_source_not_startable(source)
+            if has_live_store and not _activation_source_has_current_lease(
+                source,
+                registry_worker_id=registry_worker_id,
+                has_live_store=True,
+            ):
+                raise RunLeaseUnavailable(f"Run {source.run_id} is owned by another worker")
+            activation_key = (source.run_id, source.fence_token)
+            existing_activation = _validated_cached_activation(
+                self._activation_events.get(activation_key)
+            )
+            if source.status == "running" and existing_activation is not None:
                 return existing_activation
-            expected_status = run.status
-            expected_started_at = run.started_at
+            expected_status = source.status
+            expected_started_at = source.started_at
             started_at = utc_now() if expected_started_at is None else expected_started_at
+            _require_exact_timestamp(started_at)
+            activation_created_at = utc_now()
+            _require_exact_timestamp(activation_created_at)
             activation = LiveEvent(
-                id=run.next_event_id,
+                id=source.next_event_id,
                 type="run_recovered" if expected_started_at is not None else "run_started",
-                run_id=run.run_id,
-                session_id=run.session_id,
-                created_at=utc_now(),
+                run_id=source.run_id,
+                session_id=source.session_id,
+                created_at=activation_created_at,
                 payload=(
-                    {"fence_token": run.fence_token} if expected_started_at is not None else None
+                    {"fence_token": source.fence_token} if expected_started_at is not None else None
                 ),
             )
             expected_state = _activation_expected_state(
-                run,
+                source,
                 activation=activation,
                 started_at=started_at,
             )
@@ -843,7 +888,7 @@ class LiveRunRegistry:
             try:
                 self._persist_activation_locked(
                     run,
-                    expected_events=expected_events,
+                    source=source,
                     expected_status=expected_status,
                     expected_started_at=expected_started_at,
                     canonicalize_null_rule_set=canonicalize_null_rule_set,
@@ -856,10 +901,10 @@ class LiveRunRegistry:
                 run.lease_lost = False
             run.status = "running"
             run.started_at = started_at
-            run.next_event_id += 1
-            run.events.append(activation)
-            self._activation_events[activation_key] = activation
-            for subscriber in run.subscribers:
+            run.next_event_id = source.next_event_id + 1
+            list.append(source.events_container, activation)
+            dict.__setitem__(self._activation_events, activation_key, activation)
+            for subscriber in source.subscribers:
                 subscriber.put(activation)
             return activation
 
@@ -1179,7 +1224,7 @@ class LiveRunRegistry:
         self,
         run: LiveGameRun,
         *,
-        expected_events: tuple[LiveEvent, ...],
+        source: RunActivationSourceState,
         expected_status: str,
         expected_started_at: str | None,
         canonicalize_null_rule_set: bool,
@@ -1195,14 +1240,14 @@ class LiveRunRegistry:
             )
         try:
             activator(
-                run.run_id,
-                expected_events=expected_events,
+                source.run_id,
+                expected_events=source.events,
                 expected_status=expected_status,
                 expected_started_at=expected_started_at,
                 canonicalize_null_rule_set=canonicalize_null_rule_set,
                 activation=activation,
-                worker_id=run.worker_id or self.worker_id,
-                fence_token=run.fence_token,
+                worker_id=source.worker_id,
+                fence_token=source.fence_token,
                 started_at=started_at,
             )
         except RunLeaseUnavailable:
@@ -1363,7 +1408,7 @@ class LiveRunRegistry:
         self,
         run_id: str,
         *,
-        expected_events: tuple[LiveEvent, ...],
+        expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
     ) -> RunLeaseState | None:
         acquire = getattr(self._live_store, "acquire_lease", None)
         if not callable(acquire):
@@ -1493,12 +1538,37 @@ class LiveRunRegistry:
 
 
 def _activation_expected_state(
-    run: LiveGameRun,
+    source: RunActivationSourceState,
     *,
     activation: LiveEvent,
     started_at: str,
 ) -> RunActivationExpectedState:
-    if type(run) is not LiveGameRun or type(run.events) is not list:
+    fields = _strict_json_snapshot(source.fields)
+    timestamps = _strict_json_snapshot(source.timestamps)
+    if type(fields) is not dict or type(timestamps) is not dict:
+        _raise_invalid_exact_json_value()
+    dict.__setitem__(fields, "status", "running")
+    dict.__setitem__(timestamps, "started_at", started_at)
+    events = tuple(_clone_activation_expected_event(event) for event in source.events) + (
+        _activation_expected_event(activation),
+    )
+    if (
+        fields.keys() != ACTIVATION_ACK_RUN_FIELD_NAMES
+        or timestamps.keys() != ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
+    ):
+        raise RuntimeError("Activation acknowledgement state inventory is incomplete")
+    return RunActivationExpectedState(
+        run_id=source.run_id,
+        fields=fields,
+        timestamps=timestamps,
+        events=events,
+        event_count=len(events),
+        next_event_id=source.next_event_id + 1,
+    )
+
+
+def _capture_activation_source_state(run: object) -> RunActivationSourceState:
+    if type(run) is not LiveGameRun:
         _raise_invalid_exact_json_value()
     _require_exact_str(run.run_id)
     _require_exact_str(run.session_id)
@@ -1519,18 +1589,21 @@ def _activation_expected_state(
     _require_exact_int(run.recovery_attempts)
     _require_exact_optional_str(run.recovery_last_error)
     _require_exact_int(run.next_event_id)
-    _require_exact_optional_timestamp(run.started_at)
+    if type(run.lease_lost) is not bool:
+        _raise_invalid_exact_json_value()
     if type(run.rule_set) is not dict:
         _raise_invalid_exact_json_value()
     if type(run.player_configs) is not list:
         _raise_invalid_exact_json_value()
     if type(run.lineup_quality_warnings) is not list:
         _raise_invalid_exact_json_value()
+    if type(run.events) is not list or type(run.subscribers) is not list:
+        _raise_invalid_exact_json_value()
 
     raw_fields = {
         "run_id": run.run_id,
         "session_id": run.session_id,
-        "status": "running",
+        "status": run.status,
         "villager_model": run.villager_model,
         "werewolf_model": run.werewolf_model,
         "seed": run.seed,
@@ -1556,7 +1629,7 @@ def _activation_expected_state(
 
     timestamps = {
         "created_at": run.created_at,
-        "started_at": started_at,
+        "started_at": run.started_at,
         "completed_at": run.completed_at,
         "stop_requested_at": run.stop_requested_at,
         "worker_heartbeat_at": run.worker_heartbeat_at,
@@ -1564,45 +1637,121 @@ def _activation_expected_state(
         "recovery_last_attempt_at": run.recovery_last_attempt_at,
         "recovery_not_before": run.recovery_not_before,
     }
-    for name, value in timestamps.items():
-        if value is None:
-            if name in {"created_at", "started_at"}:
-                _raise_invalid_exact_json_value()
-            continue
-        _require_exact_str(value)
-        try:
-            _normalized_live_timestamp(value)
-        except Exception:
-            _raise_invalid_exact_json_value()
-
+    for name, value in dict.items(timestamps):
+        if name == "created_at":
+            _require_exact_timestamp(value)
+        else:
+            _require_exact_optional_timestamp(value)
     events = tuple(
         _activation_expected_event(list.__getitem__(run.events, index))
         for index in range(list.__len__(run.events))
-    ) + (_activation_expected_event(activation),)
+    )
+    subscribers: list[queue.Queue[LiveEvent]] = []
+    for index in range(list.__len__(run.subscribers)):
+        subscriber = list.__getitem__(run.subscribers, index)
+        if type(subscriber) is not queue.Queue:
+            _raise_invalid_exact_json_value()
+        list.append(subscribers, subscriber)
     if (
         fields.keys() != ACTIVATION_ACK_RUN_FIELD_NAMES
         or timestamps.keys() != ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
     ):
         raise RuntimeError("Activation acknowledgement state inventory is incomplete")
-    return RunActivationExpectedState(
+    return RunActivationSourceState(
         run_id=run.run_id,
+        session_id=run.session_id,
+        status=run.status,
+        worker_id=run.worker_id,
+        fence_token=run.fence_token,
+        lease_lost=run.lease_lost,
+        stop_requested_at=run.stop_requested_at,
+        started_at=run.started_at,
+        worker_heartbeat_at=run.worker_heartbeat_at,
+        lease_expires_at=run.lease_expires_at,
+        next_event_id=run.next_event_id,
         fields=fields,
         timestamps=timestamps,
         events=events,
-        event_count=len(events),
-        next_event_id=run.next_event_id + 1,
+        events_container=run.events,
+        subscribers=tuple(subscribers),
     )
 
 
-def _validated_activation_source_events(run: object) -> tuple[LiveEvent, ...]:
-    if type(run) is not LiveGameRun or type(run.events) is not list:
+def _raise_if_activation_source_not_startable(source: RunActivationSourceState) -> None:
+    if source.lease_lost:
+        raise RunLeaseUnavailable("Live run worker lease was lost")
+    if source.stop_requested_at is not None:
+        raise GameRunCanceled("Game run was canceled by an administrator")
+    if source.status not in {"queued", "running"}:
+        raise ValueError(f"Run {source.run_id} is not active")
+
+
+def _activation_source_has_current_lease(
+    source: RunActivationSourceState,
+    *,
+    registry_worker_id: str,
+    has_live_store: bool,
+) -> bool:
+    return bool(
+        source.worker_id == registry_worker_id
+        and source.fence_token > 0
+        and not source.lease_lost
+        and (not has_live_store or not _lease_is_expired(source.lease_expires_at))
+    )
+
+
+def _validated_cached_activation(value: object | None) -> LiveEvent | None:
+    if value is None:
+        return None
+    _activation_expected_event(value)
+    return value
+
+
+def _validated_activation_lease_state(
+    value: object,
+    *,
+    registry_worker_id: str,
+    expected_status: str,
+    previous_fence_token: int,
+) -> RunLeaseState:
+    if type(value) is not RunLeaseState:
         _raise_invalid_exact_json_value()
-    events: list[LiveEvent] = []
-    for index in range(list.__len__(run.events)):
-        event = list.__getitem__(run.events, index)
-        _activation_expected_event(event)
-        list.append(events, event)
-    return tuple(events)
+    _require_exact_optional_str(value.worker_id)
+    _require_exact_optional_timestamp(value.worker_heartbeat_at)
+    _require_exact_optional_timestamp(value.lease_expires_at)
+    _require_exact_optional_timestamp(value.stop_requested_at)
+    _require_exact_str(value.status)
+    _require_exact_int(value.control_version)
+    _require_exact_int(value.fence_token)
+    _require_exact_int(value.recovery_attempts)
+    _require_exact_optional_timestamp(value.recovery_last_attempt_at)
+    _require_exact_optional_timestamp(value.recovery_not_before)
+    _require_exact_optional_str(value.recovery_last_error)
+    if (
+        value.worker_id != registry_worker_id
+        or value.worker_heartbeat_at is None
+        or value.lease_expires_at is None
+        or value.status != expected_status
+        or value.status not in {"queued", "running"}
+        or value.control_version < 0
+        or value.fence_token <= previous_fence_token
+        or value.recovery_attempts < 0
+        or _lease_is_expired(value.lease_expires_at)
+    ):
+        _raise_invalid_exact_json_value()
+    return RunLeaseState(
+        worker_id=value.worker_id,
+        worker_heartbeat_at=value.worker_heartbeat_at,
+        lease_expires_at=value.lease_expires_at,
+        stop_requested_at=value.stop_requested_at,
+        status=value.status,
+        control_version=value.control_version,
+        fence_token=value.fence_token,
+        recovery_attempts=value.recovery_attempts,
+        recovery_last_attempt_at=value.recovery_last_attempt_at,
+        recovery_not_before=value.recovery_not_before,
+        recovery_last_error=value.recovery_last_error,
+    )
 
 
 def _activation_expected_event(event: object) -> RunActivationExpectedEvent:
@@ -1642,6 +1791,39 @@ def _activation_expected_event(event: object) -> RunActivationExpectedEvent:
     )
 
 
+def _clone_activation_expected_event(event: object) -> RunActivationExpectedEvent:
+    if type(event) is not RunActivationExpectedEvent:
+        _raise_invalid_exact_json_value()
+    _require_exact_int(event.id)
+    if event.id <= 0:
+        _raise_invalid_exact_json_value()
+    _require_exact_str(event.type)
+    _require_exact_str(event.run_id)
+    _require_exact_str(event.session_id)
+    _require_exact_timestamp(event.created_at)
+    _require_exact_optional_int(event.round)
+    _require_exact_optional_str(event.phase)
+    _require_exact_optional_str(event.actor)
+    _require_exact_optional_str(event.action)
+    if type(event.payload) is not dict:
+        _raise_invalid_exact_json_value()
+    payload = _strict_json_snapshot(event.payload)
+    if type(payload) is not dict:
+        _raise_invalid_exact_json_value()
+    return RunActivationExpectedEvent(
+        id=event.id,
+        type=event.type,
+        run_id=event.run_id,
+        session_id=event.session_id,
+        created_at=event.created_at,
+        round=event.round,
+        phase=event.phase,
+        actor=event.actor,
+        action=event.action,
+        payload=payload,
+    )
+
+
 def _require_exact_str(value: object) -> None:
     if type(value) is not str:
         _raise_invalid_exact_json_value()
@@ -1662,14 +1844,18 @@ def _require_exact_optional_int(value: object) -> None:
         _raise_invalid_exact_json_value()
 
 
-def _require_exact_optional_timestamp(value: object) -> None:
-    if value is None:
-        return
+def _require_exact_timestamp(value: object) -> None:
     _require_exact_str(value)
     try:
         _normalized_live_timestamp(value)
     except Exception:
         _raise_invalid_exact_json_value()
+
+
+def _require_exact_optional_timestamp(value: object) -> None:
+    if value is None:
+        return
+    _require_exact_timestamp(value)
 
 
 def _strict_json_snapshot(value: object) -> object:

@@ -413,12 +413,13 @@ class RecordingLiveStore:
         **_expected,
     ):
         self.fence_token += 1
+        expected_events = _expected["expected_events"]
         return RunLeaseState(
             worker_id=worker_id,
             worker_heartbeat_at=heartbeat_at,
             lease_expires_at=lease_expires_at,
             stop_requested_at=None,
-            status="queued",
+            status="running" if len(expected_events) > 1 else "queued",
             control_version=0,
             fence_token=self.fence_token,
             recovery_attempts=0,
@@ -426,6 +427,55 @@ class RecordingLiveStore:
             recovery_not_before=None,
             recovery_last_error=None,
         )
+
+
+def activation_test_lease_state(
+    *,
+    worker_id: object = "worker-activation-boundary",
+    worker_heartbeat_at: object = "2026-07-13T00:00:00Z",
+    lease_expires_at: object = "2099-07-13T00:00:15Z",
+    stop_requested_at: object = None,
+    status: object = "queued",
+    control_version: object = 0,
+    fence_token: object = 1,
+    recovery_attempts: object = 0,
+    recovery_last_attempt_at: object = None,
+    recovery_not_before: object = None,
+    recovery_last_error: object = None,
+) -> RunLeaseState:
+    return RunLeaseState(
+        worker_id=worker_id,
+        worker_heartbeat_at=worker_heartbeat_at,
+        lease_expires_at=lease_expires_at,
+        stop_requested_at=stop_requested_at,
+        status=status,
+        control_version=control_version,
+        fence_token=fence_token,
+        recovery_attempts=recovery_attempts,
+        recovery_last_attempt_at=recovery_last_attempt_at,
+        recovery_not_before=recovery_not_before,
+        recovery_last_error=recovery_last_error,
+    )
+
+
+class ActivationBoundaryStore(RecordingLiveStore):
+    def __init__(self, returned_lease_state: object = None) -> None:
+        super().__init__()
+        self.returned_lease_state = returned_lease_state
+        self.acquire_calls = 0
+        self.activation_calls = 0
+        self.ack_verification_calls = 0
+
+    def acquire_lease(self, _run_id, **_claim):
+        self.acquire_calls += 1
+        return self.returned_lease_state
+
+    def activate_run(self, _run_id, **_activation) -> None:
+        self.activation_calls += 1
+
+    def activation_was_committed(self, _expected_state) -> bool:
+        self.ack_verification_calls += 1
+        return False
 
 
 def test_malformed_expectation_cannot_reach_activation_or_ack_verification() -> None:
@@ -456,7 +506,7 @@ def test_malformed_expectation_cannot_reach_activation_or_ack_verification() -> 
     with pytest.raises(ValueError, match="invalid exact JSON value"):
         registry.mark_running(run.run_id)
 
-    assert store.fence_token == 1
+    assert store.fence_token == 0
     assert store.activation_calls == 0
     assert store.ack_verification_calls == 0
     assert run.status == "queued"
@@ -1942,6 +1992,491 @@ def test_mark_running_never_reactivates_a_terminal_run(terminal_status: str) -> 
         tuple(store.events),
         store.fence_token,
     ) == before
+
+
+@pytest.mark.parametrize(
+    "hostile_source",
+    [
+        "call-run-id",
+        "mismatched-run-id",
+        "run-id",
+        "status",
+        "registry-worker",
+        "run-worker",
+        "fence",
+        "lease-lost",
+        "stop-timestamp",
+        "start-timestamp",
+        "heartbeat-timestamp",
+        "expiry-timestamp",
+    ],
+)
+def test_mark_running_validates_hostile_guard_sources_before_use(
+    hostile_source: str,
+) -> None:
+    hook_calls = {
+        "bool": 0,
+        "compare": 0,
+        "equal": 0,
+        "hash": 0,
+        "replace": 0,
+        "str": 0,
+    }
+    replacement: object = None
+    target_name = ""
+
+    def trigger(name: str) -> None:
+        hook_calls[name] += 1
+        if target_name == "registry-worker":
+            registry.worker_id = replacement
+        elif target_name:
+            setattr(run, target_name, replacement)
+
+    class HostileString(str):
+        def __bool__(self):
+            trigger("bool")
+            return True
+
+        def __eq__(self, _other):
+            trigger("equal")
+            return True
+
+        def __hash__(self):
+            trigger("hash")
+            return str.__hash__(self)
+
+        def __str__(self):
+            trigger("str")
+            return str.__str__(self)
+
+        def replace(self, old, new, count=-1):
+            trigger("replace")
+            return str.replace(self, old, new, count)
+
+    class HostileInteger(int):
+        def __bool__(self):
+            trigger("bool")
+            return True
+
+        def __eq__(self, _other):
+            trigger("equal")
+            return True
+
+        def __gt__(self, _other):
+            trigger("compare")
+            return True
+
+        def __hash__(self):
+            trigger("hash")
+            return int.__hash__(self)
+
+    class HostileTruth:
+        def __bool__(self):
+            trigger("bool")
+            return False
+
+        def __eq__(self, _other):
+            trigger("equal")
+            return True
+
+        def __hash__(self):
+            trigger("hash")
+            return 1
+
+        def __str__(self):
+            trigger("str")
+            return "hostile-truth"
+
+    store = ActivationBoundaryStore(
+        activation_test_lease_state(worker_id="worker-activation-boundary")
+    )
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id="worker-activation-boundary",
+    )
+    run = registry.create_run(
+        session_id=f"game_hostile_guard_{hostile_source}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    call_run_id: object = run.run_id
+
+    if hostile_source == "call-run-id":
+        call_run_id = HostileString(run.run_id)
+    elif hostile_source == "mismatched-run-id":
+        run.run_id = "run_mismatched"
+    elif hostile_source == "run-id":
+        target_name = "run_id"
+        replacement = "mutated-run-id"
+        run.run_id = HostileString(run.run_id)
+    elif hostile_source == "status":
+        target_name = "status"
+        replacement = "queued"
+        run.status = HostileString("queued")
+    elif hostile_source == "registry-worker":
+        target_name = "registry-worker"
+        replacement = "worker-activation-boundary"
+        registry.worker_id = HostileString("worker-activation-boundary")
+    elif hostile_source == "run-worker":
+        target_name = "worker_id"
+        replacement = "worker-activation-boundary"
+        run.worker_id = HostileString("worker-activation-boundary")
+    elif hostile_source == "fence":
+        target_name = "fence_token"
+        replacement = 1
+        run.fence_token = HostileInteger(1)
+    elif hostile_source == "lease-lost":
+        target_name = "lease_lost"
+        replacement = False
+        run.lease_lost = HostileTruth()
+    elif hostile_source == "stop-timestamp":
+        target_name = "stop_requested_at"
+        replacement = None
+        run.stop_requested_at = HostileString("2026-07-13T00:00:00Z")
+    elif hostile_source == "start-timestamp":
+        target_name = "started_at"
+        replacement = "2026-07-13T00:00:00Z"
+        run.started_at = HostileString("2026-07-13T00:00:00Z")
+    elif hostile_source == "heartbeat-timestamp":
+        target_name = "worker_heartbeat_at"
+        replacement = "2026-07-13T00:00:00Z"
+        run.worker_heartbeat_at = HostileString("2026-07-13T00:00:00Z")
+    else:
+        run.fence_token = 1
+        target_name = "lease_expires_at"
+        replacement = "2099-07-13T00:00:15Z"
+        run.lease_expires_at = HostileString("2099-07-13T00:00:15Z")
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        registry.mark_running(call_run_id)
+
+    assert hook_calls == {name: 0 for name in hook_calls}
+    assert store.acquire_calls == 0
+    assert store.activation_calls == 0
+    assert store.ack_verification_calls == 0
+    assert run.next_event_id == 2
+    assert len(run.events) == 1
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+@pytest.mark.parametrize(
+    "malformed_state",
+    [
+        "arbitrary-object",
+        "state-subclass",
+        "worker",
+        "heartbeat",
+        "expiry",
+        "stop",
+        "status",
+        "control-version",
+        "fence",
+        "recovery-attempts",
+        "recovery-last-attempt",
+        "recovery-not-before",
+        "recovery-error",
+        "wrong-worker",
+        "missing-worker",
+        "terminal-status",
+        "changed-active-status",
+        "zero-fence",
+        "stale-fence",
+        "missing-heartbeat",
+        "missing-expiry",
+        "expired-lease",
+    ],
+)
+def test_mark_running_rejects_malformed_lease_state_before_local_application(
+    malformed_state: str,
+) -> None:
+    hook_calls = {
+        "bool": 0,
+        "compare": 0,
+        "equal": 0,
+        "getattribute": 0,
+        "hash": 0,
+        "replace": 0,
+        "str": 0,
+    }
+
+    class HostileString(str):
+        def __bool__(self):
+            hook_calls["bool"] += 1
+            return True
+
+        def __eq__(self, _other):
+            hook_calls["equal"] += 1
+            return True
+
+        def __hash__(self):
+            hook_calls["hash"] += 1
+            return str.__hash__(self)
+
+        def __str__(self):
+            hook_calls["str"] += 1
+            return str.__str__(self)
+
+        def replace(self, old, new, count=-1):
+            hook_calls["replace"] += 1
+            return str.replace(self, old, new, count)
+
+    class HostileInteger(int):
+        def __bool__(self):
+            hook_calls["bool"] += 1
+            return True
+
+        def __eq__(self, _other):
+            hook_calls["equal"] += 1
+            return True
+
+        def __gt__(self, _other):
+            hook_calls["compare"] += 1
+            return True
+
+        def __hash__(self):
+            hook_calls["hash"] += 1
+            return int.__hash__(self)
+
+    class HostileLeaseState(RunLeaseState):
+        def __getattribute__(self, name):
+            hook_calls["getattribute"] += 1
+            return super().__getattribute__(name)
+
+    if malformed_state == "arbitrary-object":
+        state: object = object()
+    elif malformed_state == "state-subclass":
+        state = HostileLeaseState(
+            **activation_test_lease_state().__dict__,
+        )
+    else:
+        overrides: dict[str, object] = {}
+        if malformed_state == "worker":
+            overrides["worker_id"] = HostileString("worker-activation-boundary")
+        elif malformed_state == "heartbeat":
+            overrides["worker_heartbeat_at"] = HostileString("2026-07-13T00:00:00Z")
+        elif malformed_state == "expiry":
+            overrides["lease_expires_at"] = HostileString("2099-07-13T00:00:15Z")
+        elif malformed_state == "stop":
+            overrides["stop_requested_at"] = HostileString("2026-07-13T00:00:00Z")
+        elif malformed_state == "status":
+            overrides["status"] = HostileString("queued")
+        elif malformed_state == "control-version":
+            overrides["control_version"] = HostileInteger(0)
+        elif malformed_state == "fence":
+            overrides["fence_token"] = HostileInteger(1)
+        elif malformed_state == "recovery-attempts":
+            overrides["recovery_attempts"] = HostileInteger(0)
+        elif malformed_state == "recovery-last-attempt":
+            overrides["recovery_last_attempt_at"] = HostileString("2026-07-13T00:00:00Z")
+        elif malformed_state == "recovery-not-before":
+            overrides["recovery_not_before"] = HostileString("2026-07-13T00:00:00Z")
+        elif malformed_state == "recovery-error":
+            overrides["recovery_last_error"] = HostileString("malformed")
+        elif malformed_state == "wrong-worker":
+            overrides["worker_id"] = "worker-other"
+        elif malformed_state == "missing-worker":
+            overrides["worker_id"] = None
+        elif malformed_state == "terminal-status":
+            overrides["status"] = "completed"
+        elif malformed_state == "changed-active-status":
+            overrides["status"] = "running"
+        elif malformed_state == "zero-fence":
+            overrides["fence_token"] = 0
+        elif malformed_state == "stale-fence":
+            overrides["fence_token"] = 1
+        elif malformed_state == "missing-heartbeat":
+            overrides["worker_heartbeat_at"] = None
+        elif malformed_state == "missing-expiry":
+            overrides["lease_expires_at"] = None
+        else:
+            overrides["lease_expires_at"] = "2000-01-01T00:00:00Z"
+        state = activation_test_lease_state(**overrides)
+
+    store = ActivationBoundaryStore(state)
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id="worker-activation-boundary",
+    )
+    run = registry.create_run(
+        session_id=f"game_malformed_lease_{malformed_state}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    if malformed_state == "stale-fence":
+        run.fence_token = 1
+        run.lease_expires_at = "2000-01-01T00:00:00Z"
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        registry.mark_running(run.run_id)
+
+    assert hook_calls == {name: 0 for name in hook_calls}
+    assert store.acquire_calls == 1
+    assert store.activation_calls == 0
+    assert store.ack_verification_calls == 0
+    assert type(run.worker_id) is str and run.worker_id == registry.worker_id
+    assert run.worker_heartbeat_at is None
+    expected_lease_expiry = "2000-01-01T00:00:00Z" if malformed_state == "stale-fence" else None
+    assert run.lease_expires_at == expected_lease_expiry
+    assert run.stop_requested_at is None
+    assert type(run.control_version) is int and run.control_version == 0
+    expected_fence_token = 1 if malformed_state == "stale-fence" else 0
+    assert type(run.fence_token) is int and run.fence_token == expected_fence_token
+    assert type(run.recovery_attempts) is int and run.recovery_attempts == 0
+    assert run.recovery_last_attempt_at is None
+    assert run.recovery_not_before is None
+    assert run.recovery_last_error is None
+    assert run.lease_lost is False
+    assert run.status == "queued"
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+def test_activation_store_cannot_mutate_the_ack_expectation_through_event_aliases() -> None:
+    failure = RuntimeError("activation persistence failed after mutating its input")
+
+    class MutatingActivationStore(ActivationBoundaryStore):
+        def __init__(self) -> None:
+            super().__init__(activation_test_lease_state(worker_id="worker-activation-boundary"))
+            self.verified_state = None
+
+        def activate_run(self, _run_id, *, expected_events, **_activation) -> None:
+            self.activation_calls += 1
+            expected_events[0].payload["store-only-mutation"] = True
+            raise failure
+
+        def activation_was_committed(self, expected_state) -> bool:
+            self.ack_verification_calls += 1
+            self.verified_state = expected_state
+            return False
+
+    store = MutatingActivationStore()
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id="worker-activation-boundary",
+    )
+    run = registry.create_run(
+        session_id="game_activation_expected_event_alias",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_running(run.run_id)
+
+    assert raised.value is failure
+    assert store.verified_state is not None
+    assert "store-only-mutation" not in store.verified_state.events[0].payload
+    assert store.acquire_calls == 1
+    assert store.activation_calls == 1
+    assert store.ack_verification_calls == 1
+    assert run.status == "queued"
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+def test_mark_running_recaptures_hostile_run_mutation_after_lease_acquisition() -> None:
+    hook_calls = {"bool": 0, "equal": 0, "hash": 0, "str": 0}
+
+    class HostileStatus(str):
+        def __bool__(self):
+            hook_calls["bool"] += 1
+            return True
+
+        def __eq__(self, _other):
+            hook_calls["equal"] += 1
+            return True
+
+        def __hash__(self):
+            hook_calls["hash"] += 1
+            return str.__hash__(self)
+
+        def __str__(self):
+            hook_calls["str"] += 1
+            return str.__str__(self)
+
+    class MutatingAcquireStore(ActivationBoundaryStore):
+        run = None
+
+        def acquire_lease(self, _run_id, **_claim):
+            self.acquire_calls += 1
+            self.run.status = HostileStatus("queued")
+            return self.returned_lease_state
+
+    store = MutatingAcquireStore(
+        activation_test_lease_state(worker_id="worker-activation-boundary")
+    )
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id="worker-activation-boundary",
+    )
+    run = registry.create_run(
+        session_id="game_post_lease_hostile_recapture",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    store.run = run
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        registry.mark_running(run.run_id)
+
+    assert hook_calls == {name: 0 for name in hook_calls}
+    assert store.acquire_calls == 1
+    assert store.activation_calls == 0
+    assert store.ack_verification_calls == 0
+    assert run.fence_token == 1
+    assert run.next_event_id == 2
+    assert len(run.events) == 1
+    assert registry._activation_events == {}
+    assert subscriber.empty()
+
+
+def test_captured_activation_guards_preserve_lease_stop_terminal_precedence() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_captured_guard_precedence",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    activation = registry.mark_running(run.run_id)
+    run.status = "completed"
+    run.stop_requested_at = "2026-07-13T00:00:00Z"
+    run.lease_lost = True
+
+    with pytest.raises(RunLeaseUnavailable):
+        registry.mark_running(run.run_id)
+
+    run.lease_lost = False
+    with pytest.raises(GameRunCanceled):
+        registry.mark_running(run.run_id)
+
+    run.stop_requested_at = None
+    with pytest.raises(ValueError, match="not active"):
+        registry.mark_running(run.run_id)
+
+    assert run.events[1] is activation
+    assert [(event.id, event.type) for event in run.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
 
 
 def test_unique_conflict_returns_the_other_complete_winner_after_it_starts_running() -> None:
