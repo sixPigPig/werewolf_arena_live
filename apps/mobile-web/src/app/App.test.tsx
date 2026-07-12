@@ -166,15 +166,10 @@ describe("mobile app scaffold", () => {
     const rootRule = styles.match(/(?:^|\n):root\s*{[^}]+}/)?.[0] ?? "";
     const pageRule =
       styles.match(/(?:^|\n)\.mobile-page\s*{[^}]+}/)?.[0] ?? "";
-    const lobbyPageRule =
-      styles.match(/(?:^|\n)\.mobile-lobby-page\s*{[^}]+}/)?.[0] ?? "";
 
     expect(rootRule).toContain("--mobile-page-padding-inline: 16px");
     expect(pageRule).toContain(
       "padding: 24px var(--mobile-page-padding-inline) 160px",
-    );
-    expect(lobbyPageRule).toContain(
-      "padding: 10px var(--mobile-page-padding-inline) calc(var(--mobile-tab-frame-height) + 128px + env(safe-area-inset-bottom))",
     );
   });
 

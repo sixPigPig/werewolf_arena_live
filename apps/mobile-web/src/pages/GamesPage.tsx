@@ -25,6 +25,8 @@ import {
 import { LobbyRulePicker } from "../components/lobby/LobbyRulePicker";
 import { LobbyRuleSummary } from "../components/lobby/LobbyRuleSummary";
 import { LobbyLineupSection } from "../components/lobby/LobbyLineupSection";
+import { LobbyAdvancedSettings } from "../components/lobby/LobbyAdvancedSettings";
+import { LobbyLaunchBar } from "../components/lobby/LobbyLaunchBar";
 import {
   buildLineupLaunchStatus,
   clampSeat,
@@ -271,9 +273,6 @@ export function GamesPage() {
     !isSubmitDisabled &&
     launchStatus.emptySeatCount > 0 &&
     launchStatus.profileShortageCount === 0;
-  const launchButtonStateClass = createGameRunMutation.isPending
-    ? "mobile-lobby-launch-pending"
-    : "mobile-lobby-launch-ready";
   const canAdvanceAfterConfirm = pendingProfile
     ? hasNextEmptySeat(
         upsertSeatProfile(
@@ -582,22 +581,6 @@ export function GamesPage() {
           </h1>
         </header>
 
-        {validationError ? (
-          <p className="mobile-status-banner" role="alert">
-            {validationError}
-          </p>
-        ) : null}
-        {shortage ? (
-          <p className="mobile-status-banner" role="alert">
-            玩家库玩家不足
-          </p>
-        ) : null}
-        {createGameRunMutation.isError ? (
-          <p className="mobile-status-banner" role="alert">
-            无法发起对局
-          </p>
-        ) : null}
-
       <LobbyRuleSummary
         changeButtonRef={rulePickerTriggerRef}
         disabled={createGameRunMutation.isPending || ruleSetsQuery.isFetching}
@@ -627,62 +610,31 @@ export function GamesPage() {
         <p className="mobile-lobby-inline-error">玩家库加载失败</p>
       ) : null}
 
-      <section
-        aria-labelledby="mobile-create-title"
-        className="mobile-lobby-section mobile-lobby-board-section"
-      >
-        <div className="mobile-lobby-section-heading">
-          <h2 id="mobile-create-title">填充设置</h2>
-        </div>
-        <div className="mobile-lobby-settings-grid">
-          <label className="mobile-lobby-field">
-            <span>种子</span>
-            <input
-              inputMode="numeric"
-              onChange={(event) => setSeed(event.target.value)}
-              placeholder="随机"
-              type="number"
-              value={seed}
-            />
-          </label>
-          <label className="mobile-lobby-field">
-            <span>最大轮数</span>
-            <input
-              inputMode="numeric"
-              max={20}
-              min={1}
-              onChange={(event) => {
-                setMaxRounds(event.target.value);
-                setValidationError(null);
-              }}
-              type="number"
-              value={maxRounds}
-            />
-          </label>
-        </div>
-      </section>
+      <LobbyAdvancedSettings
+        disabled={createGameRunMutation.isPending}
+        maxRounds={maxRounds}
+        maxRoundsError={validationError}
+        onMaxRoundsChange={(value) => {
+          setMaxRounds(value);
+          setValidationError(null);
+        }}
+        onSeedChange={setSeed}
+        seed={seed}
+      />
 
-        <div className="mobile-action-bar mobile-lobby-action-bar">
-          <span className="mobile-lobby-launch-status">
-            {launchStatus.summaryText}
-          </span>
-          <button
-            className={[
-              "mobile-button",
-              "mobile-button-primary",
-              launchButtonStateClass,
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            disabled={isLaunchDisabled}
-            onClick={handleSubmit}
-            type="button"
-          >
-            <span>
-              {createGameRunMutation.isPending ? "发起中" : launchStatus.ctaLabel}
-            </span>
-          </button>
-        </div>
+      <LobbyLaunchBar
+        error={
+          createGameRunMutation.isError
+            ? "无法发起对局"
+            : shortage
+              ? "玩家库玩家不足"
+              : null
+        }
+        isLaunchDisabled={isLaunchDisabled}
+        isPending={createGameRunMutation.isPending}
+        onLaunch={handleSubmit}
+        status={launchStatus}
+      />
       </div>
 
       {isRulePickerOpen ? (
