@@ -262,6 +262,7 @@ def test_two_registries_converge_on_one_complete_database_winner() -> None:
             super().__init__(ScopedSession)
             self._read_lock = threading.Lock()
             self._first_read = True
+            self.attempted_run_id: str | None = None
 
         def active_run_for_session(self, session_id: str):
             observed = super().active_run_for_session(session_id)
@@ -273,9 +274,14 @@ def test_two_registries_converge_on_one_complete_database_winner() -> None:
                 first_reads.wait(timeout=5)
             return observed
 
+        def save_new_run(self, run) -> None:
+            self.attempted_run_id = run.run_id
+            super().save_new_run(run)
+
+    stores = [FirstReadBarrierStore(), FirstReadBarrierStore()]
     registries = [
-        LiveRunRegistry(live_store=FirstReadBarrierStore(), worker_id="worker-a"),
-        LiveRunRegistry(live_store=FirstReadBarrierStore(), worker_id="worker-b"),
+        LiveRunRegistry(live_store=stores[0], worker_id="worker-a"),
+        LiveRunRegistry(live_store=stores[1], worker_id="worker-b"),
     ]
 
     def create_or_get(registry: LiveRunRegistry):
@@ -295,6 +301,13 @@ def test_two_registries_converge_on_one_complete_database_winner() -> None:
         assert sorted(created for _run, created in results) == [False, True]
         assert all(run.event_count == 1 for run, _created in results)
         assert all(run.next_event_id == 2 for run, _created in results)
+        winner_id = results[0][0].run_id
+        for store, (_run, created) in zip(stores, results, strict=True):
+            assert store.attempted_run_id is not None
+            if created:
+                assert store.attempted_run_id == winner_id
+            else:
+                assert store.attempted_run_id != winner_id
         with ScopedSession() as observer:
             saved_runs = observer.query(LiveRunRecord).all()
             saved_events = observer.query(LiveEventRecord).all()

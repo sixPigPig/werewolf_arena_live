@@ -371,11 +371,13 @@ class LiveRunRegistry:
             player_configs=player_configs,
             lineup_quality_warnings=lineup_quality_warnings,
         )
-        with self._lock:
-            self._raise_if_prepared_run_conflicts_locked(run)
-            self._persist_new_run_locked(run)
-            self.attach_prepared_run(run)
-        return run
+        try:
+            return self._persist_and_attach_prepared_run(run)
+        except Exception:
+            recovery_status, recovered_run = self._recover_committed_prepared_run(run)
+            if recovery_status == "recovered" and recovered_run is not None:
+                return recovered_run
+            raise
 
     def prepare_run(
         self,
@@ -448,6 +450,13 @@ class LiveRunRegistry:
         run.next_event_id = 2
         return run
 
+    def _persist_and_attach_prepared_run(self, run: LiveGameRun) -> LiveGameRun:
+        with self._lock:
+            self._raise_if_prepared_run_conflicts_locked(run)
+            self._persist_new_run_locked(run)
+            self.attach_prepared_run(run)
+        return run
+
     def attach_prepared_run(self, run: LiveGameRun) -> None:
         validate_prepared_run(run)
         with self._lock:
@@ -498,33 +507,45 @@ class LiveRunRegistry:
             rule_set_content_hash=rule_set_content_hash,
             rule_set=rule_set if rule_set is not None else {},
         )
-        active_run = self.try_get_active_run_for_session(session_id)
+        with self._lock:
+            active_run = self._complete_local_active_run_locked(session_id)
         if active_run is not None:
             return active_run, False
+        active_run = self._load_persisted_active_run(session_id)
+        active_run = self._hydrate_complete_persisted_run(active_run)
+        if active_run is not None:
+            return active_run, False
+        candidate = self.prepare_run(
+            session_id=session_id,
+            villager_model=villager_model,
+            werewolf_model=werewolf_model,
+            seed=seed,
+            max_rounds=max_rounds,
+            rule_set_id=rule_set_id,
+            rule_set_revision_id=rule_set_revision_id,
+            rule_set_revision_no=rule_set_revision_no,
+            rule_set_content_hash=rule_set_content_hash,
+            rule_set=rule_set,
+            player_configs=player_configs,
+        )
         try:
-            return (
-                self.create_run(
-                    session_id=session_id,
-                    villager_model=villager_model,
-                    werewolf_model=werewolf_model,
-                    seed=seed,
-                    max_rounds=max_rounds,
-                    rule_set_id=rule_set_id,
-                    rule_set_revision_id=rule_set_revision_id,
-                    rule_set_revision_no=rule_set_revision_no,
-                    rule_set_content_hash=rule_set_content_hash,
-                    rule_set=rule_set,
-                    player_configs=player_configs,
-                ),
-                True,
-            )
+            return self._persist_and_attach_prepared_run(candidate), True
         except Exception:
+            recovery_status, recovered_run = self._recover_committed_prepared_run(candidate)
+            if recovery_status == "recovered" and recovered_run is not None:
+                return recovered_run, True
+            if recovery_status != "absent":
+                raise
             with self._lock:
-                local_raced_run = self._active_run_for_session_locked(session_id)
-            if local_raced_run is not None:
+                local_raced_run = self._complete_local_active_run_locked(session_id)
+            if local_raced_run is not None and local_raced_run.run_id != candidate.run_id:
                 return local_raced_run, False
-            raced_run = self._load_persisted_active_run(session_id)
-            if raced_run is not None:
+            try:
+                raced_run = self._load_persisted_active_run(session_id)
+            except Exception:
+                raced_run = None
+            raced_run = self._hydrate_complete_persisted_run(raced_run)
+            if raced_run is not None and raced_run.run_id != candidate.run_id:
                 return raced_run, False
             raise
 
@@ -990,7 +1011,14 @@ class LiveRunRegistry:
         try:
             saver(run)
         except Exception:
-            logger.exception("Failed to persist live run %s", run.run_id)
+            logger.error(
+                "live_run_initial_persistence_failed run_id=%s",
+                run.run_id,
+                extra={
+                    "event_code": "live_run_initial_persistence_failed",
+                    "run_id": run.run_id,
+                },
+            )
             raise
 
     def _persist_event_locked(
@@ -1029,6 +1057,70 @@ class LiveRunRegistry:
     def _load_persisted_active_run(self, session_id: str) -> LiveGameRun | None:
         loader = getattr(self._live_store, "active_run_for_session", None)
         return loader(session_id) if callable(loader) else None
+
+    def _recover_committed_prepared_run(
+        self,
+        candidate: LiveGameRun,
+    ) -> tuple[Literal["absent", "recovered", "unsafe"], LiveGameRun | None]:
+        try:
+            persisted = self._load_persisted_run(candidate.run_id)
+        except Exception:
+            return "unsafe", None
+        if persisted is None:
+            return "absent", None
+        persisted = self._hydrate_complete_persisted_run(
+            persisted,
+            require_prepared=True,
+        )
+        if persisted is None or not _prepared_runs_match(persisted, candidate):
+            return "unsafe", None
+        try:
+            self.attach_prepared_run(persisted)
+        except Exception:
+            return "unsafe", None
+        return "recovered", persisted
+
+    def _complete_local_active_run_locked(self, session_id: str) -> LiveGameRun | None:
+        run = self._active_run_for_session_locked(session_id)
+        if run is None or run.events:
+            return run
+        return self._hydrate_complete_persisted_run(run)
+
+    def _hydrate_complete_persisted_run(
+        self,
+        run: LiveGameRun | None,
+        *,
+        require_prepared: bool = False,
+    ) -> LiveGameRun | None:
+        if run is None:
+            return None
+        try:
+            events = run.events
+            if not events:
+                loader = getattr(self._live_store, "events_after", None)
+                if not callable(loader):
+                    return None
+                events = list(loader(run.run_id))
+                run.events = events
+            if (
+                not events
+                or run.event_count != len(events)
+                or [event.id for event in events] != list(range(1, len(events) + 1))
+                or any(
+                    event.run_id != run.run_id or event.session_id != run.session_id
+                    for event in events
+                )
+                or events[0].type != "run_created"
+                or run.next_event_id != events[-1].id + 1
+            ):
+                return None
+            if require_prepared:
+                validate_prepared_run(run)
+            elif run.status not in {"queued", "running"}:
+                return None
+        except Exception:
+            return None
+        return run
 
     def _lease_window(self) -> tuple[str, str]:
         heartbeat_at = datetime.now(tz=UTC)
@@ -1160,6 +1252,55 @@ class LiveRunRegistry:
         finally:
             with self._lock:
                 self._persistent_subscriptions.pop(id(subscriber), None)
+
+
+def _prepared_runs_match(persisted: LiveGameRun, candidate: LiveGameRun) -> bool:
+    try:
+        validate_prepared_run(candidate)
+    except ValueError:
+        return False
+    return (
+        persisted.to_summary() == candidate.to_summary()
+        and persisted.worker_id == candidate.worker_id
+        and persisted.worker_heartbeat_at == candidate.worker_heartbeat_at
+        and persisted.lease_expires_at == candidate.lease_expires_at
+        and persisted.control_version == candidate.control_version
+        and persisted.fence_token == candidate.fence_token
+        and persisted.recovery_attempts == candidate.recovery_attempts
+        and persisted.recovery_last_attempt_at == candidate.recovery_last_attempt_at
+        and persisted.recovery_not_before == candidate.recovery_not_before
+        and persisted.recovery_last_error == candidate.recovery_last_error
+        and persisted.lease_lost == candidate.lease_lost
+        and persisted.next_event_id == candidate.next_event_id
+        and _live_events_match(persisted.events[0], candidate.events[0])
+    )
+
+
+def _live_events_match(persisted: LiveEvent, candidate: LiveEvent) -> bool:
+    try:
+        persisted_created_at = _normalized_live_timestamp(persisted.created_at)
+        candidate_created_at = _normalized_live_timestamp(candidate.created_at)
+    except (TypeError, ValueError):
+        return False
+    return (
+        persisted.id == candidate.id
+        and persisted.type == candidate.type
+        and persisted.run_id == candidate.run_id
+        and persisted.session_id == candidate.session_id
+        and persisted_created_at == candidate_created_at
+        and persisted.round == candidate.round
+        and persisted.phase == candidate.phase
+        and persisted.actor == candidate.actor
+        and persisted.action == candidate.action
+        and persisted.payload == candidate.payload
+    )
+
+
+def _normalized_live_timestamp(value: str) -> str:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return _format_datetime(parsed)
 
 
 def validate_prepared_run(run: LiveGameRun) -> None:

@@ -2195,6 +2195,8 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     captured: list[dict[str, object]] = []
 
     def fake_resume_background(**kwargs: object) -> None:
+        run_id = str(kwargs["run_id"])
+        assert registry.get_run(run_id).run_id == run_id
         captured.append(kwargs)
 
     monkeypatch.setattr("app.api.routes.games._resume_game_in_background", fake_resume_background)
@@ -2227,6 +2229,71 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     ]
     assert captured[0]["session_id"] == session_id
     assert set(captured[0]) == {"run_id", "registry", "session_id"}
+
+
+def test_resume_game_run_recovers_commit_ack_loss_and_starts_one_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    store_game_session(
+        session_id,
+        state=sample_state(session_id, winner="", error="Maximum rounds exceeded"),
+        checkpoint=sample_checkpoint(session_id),
+    )
+    commit_failure = RuntimeError("commit acknowledgement lost")
+
+    class CommitAckLostSessionLiveStore(SessionLiveStore):
+        def __init__(self) -> None:
+            super().__init__(TestingSessionLocal)
+
+        def save_new_run(self, run) -> None:
+            db = TestingSessionLocal()
+            original_commit = db.commit
+
+            def commit_then_raise() -> None:
+                original_commit()
+                raise commit_failure
+
+            setattr(db, "commit", commit_then_raise)
+            try:
+                games_routes.DatabaseLiveStore(db).save_new_run(run)
+            finally:
+                db.close()
+
+    registry = LiveRunRegistry(
+        live_store=CommitAckLostSessionLiveStore(),
+        worker_id="worker-resume-candidate",
+    )
+    override_replay_store()
+    override_live_registry(registry)
+    captured: list[dict[str, object]] = []
+
+    def fake_resume_background(**kwargs: object) -> None:
+        run_id = str(kwargs["run_id"])
+        assert registry.get_run(run_id).run_id == run_id
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.api.routes.games._resume_game_in_background", fake_resume_background)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert len(captured) == 1
+    assert captured[0]["run_id"] == payload["run_id"]
+    assert registry.get_run(payload["run_id"]).next_event_id == 2
+    with TestingSessionLocal() as db:
+        saved_runs = db.query(LiveRunRecord).all()
+        saved_events = db.query(LiveEventRecord).all()
+    assert len(saved_runs) == 1
+    assert len(saved_events) == 1
+    assert saved_events[0].run_id == saved_runs[0].run_id == payload["run_id"]
+    assert saved_events[0].event_id == 1
+    assert saved_events[0].type == "run_created"
 
 
 def test_resume_game_run_reuses_active_run_without_starting_another_task(

@@ -7,8 +7,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
-from app.werewolf.live import LiveGameRun, LiveRunRegistry, format_sse
+from app.werewolf.live import LiveEvent, LiveGameRun, LiveRunRegistry, format_sse
+from app.werewolf.player_configs import PlayerConfig
 
 
 def classic_rule_kwargs() -> dict:
@@ -143,6 +145,131 @@ class RacingActiveRunStore:
 
     def append_event(self, _event, **_fence) -> None:
         return None
+
+
+class PersistenceFailureStore:
+    def __init__(self, failure: Exception) -> None:
+        self.failure = failure
+        self.attempted_run_id = None
+
+    def active_run_for_session(self, _session_id):
+        return None
+
+    def load_run(self, _run_id):
+        return None
+
+    def save_new_run(self, run) -> None:
+        self.attempted_run_id = run.run_id
+        raise self.failure
+
+
+class AckLostLiveStore:
+    def __init__(self, failure: Exception) -> None:
+        self.failure = failure
+        self.committed_run = None
+
+    def save_new_run(self, run) -> None:
+        self.committed_run = copy.deepcopy(run)
+        raise self.failure
+
+    def load_run(self, run_id):
+        if self.committed_run is None or self.committed_run.run_id != run_id:
+            return None
+        loaded = copy.deepcopy(self.committed_run)
+        loaded.events = []
+        loaded.persisted_event_count = 1
+        loaded.next_event_id = 2
+        return loaded
+
+    def active_run_for_session(self, session_id):
+        if self.committed_run is None or self.committed_run.session_id != session_id:
+            return None
+        return self.load_run(self.committed_run.run_id)
+
+    def events_after(self, run_id, *, after_id=None):
+        if self.committed_run is None or self.committed_run.run_id != run_id:
+            return []
+        return [
+            copy.deepcopy(event)
+            for event in self.committed_run.events
+            if after_id is None or event.id > after_id
+        ]
+
+
+class UniqueConflictWinnerStore:
+    def __init__(self, winner: LiveGameRun, failure: Exception) -> None:
+        self.winner = copy.deepcopy(winner)
+        self.failure = failure
+        self.attempted_run_id = None
+
+    def _loaded_winner(self):
+        loaded = copy.deepcopy(self.winner)
+        loaded.events = []
+        loaded.persisted_event_count = len(self.winner.events)
+        loaded.next_event_id = len(self.winner.events) + 1
+        return loaded
+
+    def active_run_for_session(self, session_id):
+        if self.attempted_run_id is None or self.winner.session_id != session_id:
+            return None
+        return self._loaded_winner()
+
+    def load_run(self, run_id):
+        if run_id == self.winner.run_id:
+            return self._loaded_winner()
+        return None
+
+    def events_after(self, run_id, *, after_id=None):
+        if run_id != self.winner.run_id:
+            return []
+        return [
+            copy.deepcopy(event)
+            for event in self.winner.events
+            if after_id is None or event.id > after_id
+        ]
+
+    def save_new_run(self, run) -> None:
+        self.attempted_run_id = run.run_id
+        raise self.failure
+
+
+def sensitive_player_config() -> PlayerConfig:
+    return PlayerConfig(
+        seat=1,
+        profile_id="profile-secret",
+        name="player-name-secret",
+        model="player-model-secret",
+        personality_id="secret",
+        personality="personality-secret",
+        appearance_id="secret",
+        avatar_prompt="avatar-secret",
+        tags=("tag-secret",),
+    )
+
+
+def assert_safe_initial_persistence_log(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    run_id: str,
+    sensitive_values: tuple[str, ...],
+) -> None:
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event_code", None) == "live_run_initial_persistence_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert getattr(record, "run_id", None) == run_id
+    assert record.exc_info is None
+    assert record.exc_text is None
+    assert record.stack_info is None
+    rendered = f"{caplog.text}\n{record.__dict__!r}"
+    assert "live_run_initial_persistence_failed" in rendered
+    assert run_id in rendered
+    assert "Traceback" not in rendered
+    for sensitive in sensitive_values:
+        assert sensitive not in rendered
 
 
 def test_registry_creates_run_with_initial_event() -> None:
@@ -633,6 +760,42 @@ def test_registry_get_or_create_active_run_is_atomic_per_session() -> None:
     assert replacement.run_id != first_run_id
 
 
+def test_get_or_create_fast_path_does_not_copy_or_replace_local_active_events() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+
+    class IterationCountingEvents(list):
+        def __init__(self, events) -> None:
+            super().__init__(events)
+            self.iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
+
+    events = IterationCountingEvents(run.events)
+    run.events = events
+
+    active, created = registry.get_or_create_active_run(
+        session_id=run.session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+
+    assert active is run
+    assert created is False
+    assert run.events is events
+    assert events.iterations == 0
+
+
 def test_get_or_create_rechecks_local_winner_after_create_race(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -738,7 +901,278 @@ def test_live_registry_rejects_created_run_when_initial_persistence_fails(caplog
             )
 
     assert registry.try_get_active_run_for_session("game_1200abcd") is None
-    assert any("Failed to persist live run" in record.message for record in caplog.records)
+    assert any(
+        getattr(record, "event_code", None) == "live_run_initial_persistence_failed"
+        for record in caplog.records
+    )
+
+
+def test_generic_initial_persistence_failure_logs_only_safe_metadata_and_reraises_same_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    failure = RuntimeError(
+        "generic-write-secret INSERT INTO live_runs model-secret snapshot-secret "
+        "player-name-secret personality-secret player_configs"
+    )
+    store = PersistenceFailureStore(failure)
+    registry = LiveRunRegistry(live_store=store)
+
+    with caplog.at_level(logging.ERROR, logger="app.werewolf.live"):
+        with pytest.raises(RuntimeError) as raised:
+            registry.get_or_create_active_run(
+                session_id="game_1200abcd",
+                villager_model="model-secret",
+                werewolf_model="other-model-secret",
+                seed=7,
+                max_rounds=8,
+                rule_set_id="classic_8",
+                rule_set={
+                    **classic_rule_kwargs()["rule_set"],
+                    "storage_marker": "snapshot-secret",
+                },
+                player_configs=[sensitive_player_config()],
+            )
+
+    assert raised.value is failure
+    assert store.attempted_run_id is not None
+    assert registry._runs == {}
+    assert_safe_initial_persistence_log(
+        caplog,
+        run_id=store.attempted_run_id,
+        sensitive_values=(
+            "generic-write-secret",
+            "INSERT INTO live_runs",
+            "model-secret",
+            "snapshot-secret",
+            "player-name-secret",
+            "personality-secret",
+            "player_configs",
+        ),
+    )
+
+
+def test_unique_conflict_logs_only_safe_metadata_and_returns_the_other_complete_winner(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    winner = LiveRunRegistry(worker_id="worker-winner").prepare_run(
+        session_id="game_1200abcd",
+        villager_model="winner-model",
+        werewolf_model="winner-model",
+        seed=8,
+        max_rounds=8,
+    )
+    failure = IntegrityError(
+        "INSERT INTO live_runs (villager_model, rule_set, player_configs) "
+        "VALUES (%(model)s, %(snapshot)s, %(players)s)",
+        {
+            "model": "model-secret",
+            "snapshot": {"storage_marker": "snapshot-secret"},
+            "players": [
+                {
+                    "name": "player-name-secret",
+                    "personality": "personality-secret",
+                }
+            ],
+        },
+        RuntimeError("unique-conflict-secret"),
+    )
+    store = UniqueConflictWinnerStore(winner, failure)
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-loser")
+
+    with caplog.at_level(logging.ERROR, logger="app.werewolf.live"):
+        run, created = registry.get_or_create_active_run(
+            session_id=winner.session_id,
+            villager_model="model-secret",
+            werewolf_model="other-model-secret",
+            seed=7,
+            max_rounds=8,
+            rule_set_id="classic_8",
+            rule_set={
+                **classic_rule_kwargs()["rule_set"],
+                "storage_marker": "snapshot-secret",
+            },
+            player_configs=[sensitive_player_config()],
+        )
+
+    assert run.run_id == winner.run_id
+    assert created is False
+    assert store.attempted_run_id is not None
+    assert_safe_initial_persistence_log(
+        caplog,
+        run_id=store.attempted_run_id,
+        sensitive_values=(
+            "unique-conflict-secret",
+            "INSERT INTO live_runs",
+            "model-secret",
+            "snapshot-secret",
+            "player-name-secret",
+            "personality-secret",
+            "player_configs",
+        ),
+    )
+
+
+def test_unique_conflict_returns_the_other_complete_winner_after_it_starts_running() -> None:
+    winner_registry = LiveRunRegistry(worker_id="worker-winner")
+    winner = winner_registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="winner-model",
+        werewolf_model="winner-model",
+        seed=8,
+        max_rounds=8,
+    )
+    winner_registry.mark_running(winner.run_id)
+    failure = RuntimeError("unique active session conflict")
+    store = UniqueConflictWinnerStore(winner, failure)
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-loser")
+
+    run, created = registry.get_or_create_active_run(
+        session_id=winner.session_id,
+        villager_model="loser-model",
+        werewolf_model="loser-model",
+        seed=7,
+        max_rounds=8,
+    )
+
+    assert created is False
+    assert run.run_id == winner.run_id
+    assert run.status == "running"
+    assert run.next_event_id == 3
+    assert [event.type for event in run.events] == ["run_created", "run_started"]
+
+
+def test_get_or_create_attaches_its_exact_complete_candidate_after_commit_ack_loss() -> None:
+    failure = RuntimeError("commit acknowledgement lost")
+    store = AckLostLiveStore(failure)
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-candidate")
+
+    run, created = registry.get_or_create_active_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+
+    assert created is True
+    assert store.committed_run is not None
+    assert run.run_id == store.committed_run.run_id
+    assert registry.get_run(run.run_id) is run
+    assert run.event_count == 1
+    assert run.next_event_id == 2
+    assert [event.type for event in run.events] == ["run_created"]
+
+
+def test_get_or_create_normalizes_the_exact_candidate_event_timestamp_after_ack_loss() -> None:
+    failure = RuntimeError("commit acknowledgement lost")
+
+    class NormalizedTimestampAckLostLiveStore(AckLostLiveStore):
+        def events_after(self, run_id, *, after_id=None):
+            events = super().events_after(run_id, after_id=after_id)
+            assert len(events) == 1
+            event = events[0]
+            return [
+                LiveEvent(
+                    id=event.id,
+                    type=event.type,
+                    run_id=event.run_id,
+                    session_id=event.session_id,
+                    created_at=event.created_at.replace("Z", "+00:00"),
+                    round=event.round,
+                    phase=event.phase,
+                    actor=event.actor,
+                    action=event.action,
+                    payload=event.payload,
+                )
+            ]
+
+    store = NormalizedTimestampAckLostLiveStore(failure)
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-candidate")
+
+    run, created = registry.get_or_create_active_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+
+    assert created is True
+    assert registry.get_run(run.run_id) is run
+
+
+def test_get_or_create_does_not_downgrade_a_mismatched_exact_candidate_to_other_winner() -> None:
+    failure = RuntimeError("commit acknowledgement lost")
+
+    class MismatchedAckLostLiveStore(AckLostLiveStore):
+        def save_new_run(self, run) -> None:
+            self.committed_run = copy.deepcopy(run)
+            self.committed_run.villager_model = "externally-mutated-model"
+            raise self.failure
+
+    store = MismatchedAckLostLiveStore(failure)
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-candidate")
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.get_or_create_active_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+        )
+
+    assert raised.value is failure
+    assert registry._runs == {}
+
+
+def test_get_or_create_does_not_return_a_preexisting_zero_event_active_row() -> None:
+    half_run = LiveRunRegistry(worker_id="worker-legacy").prepare_run(
+        session_id="game_1200abcd",
+        villager_model="legacy-model",
+        werewolf_model="legacy-model",
+        seed=6,
+        max_rounds=8,
+    )
+    half_run.events = []
+    half_run.persisted_event_count = 0
+    half_run.next_event_id = 1
+    failure = RuntimeError("unique active session conflict")
+
+    class PreexistingHalfRunStore:
+        def __init__(self) -> None:
+            self.save_attempts = 0
+
+        def active_run_for_session(self, session_id):
+            if session_id == half_run.session_id:
+                return copy.deepcopy(half_run)
+            return None
+
+        def load_run(self, _run_id):
+            return None
+
+        def events_after(self, _run_id, *, after_id=None):
+            return []
+
+        def save_new_run(self, _run) -> None:
+            self.save_attempts += 1
+            raise failure
+
+    store = PreexistingHalfRunStore()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-candidate")
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.get_or_create_active_run(
+            session_id=half_run.session_id,
+            villager_model="candidate-model",
+            werewolf_model="candidate-model",
+            seed=7,
+            max_rounds=8,
+        )
+
+    assert raised.value is failure
+    assert store.save_attempts == 1
+    assert registry._runs == {}
 
 
 def test_live_registry_publishes_to_subscriber_when_event_persistence_fails() -> None:
