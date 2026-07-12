@@ -622,9 +622,10 @@ describe("GamesPage", () => {
       screen.queryByRole("group", { name: "规则选择指示" }),
     ).not.toBeInTheDocument();
 
-    await user.click(
-      within(summary).getByRole("button", { name: "更换规则" }),
-    );
+    const changeRuleButton = within(summary).getByRole("button", {
+      name: "更换规则",
+    });
+    await user.click(changeRuleButton);
     const picker = screen.getByRole("dialog", { name: "选择规则" });
     expect(picker).toHaveAttribute("aria-modal", "true");
     await user.click(
@@ -638,6 +639,96 @@ describe("GamesPage", () => {
     expect(
       screen.getByRole("button", { name: "选择 6 号座位，当前为 请选择" }),
     ).toBeVisible();
+    expect(changeRuleButton).toHaveFocus();
+  });
+
+  it("presents known artwork and an unknown-rule fallback with modal focus behavior", async () => {
+    const user = userEvent.setup();
+    const unknownRuleSet: RuleSetSummary = {
+      ...classicRuleSet,
+      id: "custom_10",
+      name: "自定义 10 人局",
+      player_count: 10,
+      role_summary: "3 狼人 / 7 好人",
+      complexity: "自定义",
+    };
+    gameClientMocks.listRuleSets.mockResolvedValue({
+      rule_sets: [classicRuleSet, unknownRuleSet],
+    });
+    renderGamesPage();
+
+    const summary = await screen.findByRole("region", { name: "当前规则" });
+    await within(summary).findByText("经典 8 人");
+    const changeRuleButton = within(summary).getByRole("button", {
+      name: "更换规则",
+    });
+    await user.click(changeRuleButton);
+
+    const picker = screen.getByRole("dialog", { name: "选择规则" });
+    const selectedRule = within(picker).getByRole("button", {
+      name: "选择规则 经典 8 人",
+    });
+    const unknownRule = within(picker).getByRole("button", {
+      name: "选择规则 自定义 10 人局",
+    });
+    expect(selectedRule).toHaveAttribute("aria-pressed", "true");
+    expect(selectedRule.querySelector("img")).toHaveAttribute(
+      "src",
+      expect.stringContaining("classic-8-selected"),
+    );
+    expect(unknownRule).toHaveAttribute("aria-pressed", "false");
+    expect(unknownRule.querySelector("img")).not.toBeInTheDocument();
+    expect(unknownRule).toHaveTextContent("自定义 10 人局");
+    expect(unknownRule).toHaveTextContent("10 人");
+    expect(unknownRule).toHaveTextContent("3 狼人 / 7 好人");
+    await waitFor(() => expect(selectedRule).toHaveFocus());
+
+    await user.click(
+      within(picker).getByRole("button", { name: "关闭规则选择" }),
+    );
+    expect(changeRuleButton).toHaveFocus();
+
+    await user.click(changeRuleButton);
+    await user.click(
+      screen.getByRole("button", { name: "选择规则 自定义 10 人局" }),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "选择规则" }),
+    ).not.toBeInTheDocument();
+    expect(changeRuleButton).toHaveFocus();
+  });
+
+  it("disables rule changes while a cached rule query refreshes", async () => {
+    let resolveRefresh!: (value: { rule_sets: RuleSetSummary[] }) => void;
+    const refreshResponse = new Promise<{ rule_sets: RuleSetSummary[] }>(
+      (resolve) => {
+        resolveRefresh = resolve;
+      },
+    );
+    gameClientMocks.listRuleSets
+      .mockResolvedValueOnce({ rule_sets: [classicRuleSet] })
+      .mockReturnValueOnce(refreshResponse);
+    const { queryClient } = renderGamesPage();
+
+    const summary = await screen.findByRole("region", { name: "当前规则" });
+    await within(summary).findByText("经典 8 人");
+    const changeRuleButton = within(summary).getByRole("button", {
+      name: "更换规则",
+    });
+    let refreshPromise!: Promise<void>;
+    act(() => {
+      refreshPromise = queryClient.refetchQueries({ queryKey: ["rule-sets"] });
+    });
+
+    try {
+      await waitFor(() => expect(changeRuleButton).toBeDisabled());
+    } finally {
+      resolveRefresh({ rule_sets: [classicRuleSet] });
+      await act(async () => {
+        await refreshPromise;
+      });
+    }
+    await waitFor(() => expect(changeRuleButton).toBeEnabled());
   });
 
   it("retries a failed rule query from the summary", async () => {
@@ -653,6 +744,32 @@ describe("GamesPage", () => {
 
     expect(await screen.findByText("新手 6 人快局")).toBeVisible();
     expect(gameClientMocks.listRuleSets).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables the retry action while the rule query refetches", async () => {
+    const user = userEvent.setup();
+    let resolveRetry!: (value: { rule_sets: RuleSetSummary[] }) => void;
+    const retryResponse = new Promise<{ rule_sets: RuleSetSummary[] }>(
+      (resolve) => {
+        resolveRetry = resolve;
+      },
+    );
+    gameClientMocks.listRuleSets
+      .mockRejectedValueOnce(new Error("rules unavailable"))
+      .mockReturnValueOnce(retryResponse);
+    renderGamesPage();
+
+    const retryButton = await screen.findByRole("button", {
+      name: "重新加载规则",
+    });
+    await user.click(retryButton);
+
+    try {
+      expect(retryButton).toBeDisabled();
+    } finally {
+      resolveRetry({ rule_sets: [starterRuleSet] });
+      await screen.findByText("新手 6 人快局");
+    }
   });
 
   it("lets the twelve-seat lobby scroll clear of the fixed action bar", async () => {

@@ -34,7 +34,7 @@ export function LobbyRuleSummary({
         </p>
       </div>
       {isError ? (
-        <button onClick={onRetry} type="button">
+        <button disabled={disabled} onClick={onRetry} type="button">
           重新加载规则
         </button>
       ) : (

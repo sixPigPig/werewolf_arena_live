@@ -644,7 +644,7 @@ export function GamesPage() {
 
       <LobbyRuleSummary
         changeButtonRef={rulePickerTriggerRef}
-        disabled={createGameRunMutation.isPending}
+        disabled={createGameRunMutation.isPending || ruleSetsQuery.isFetching}
         isError={ruleSetsQuery.isError}
         isLoading={ruleSetsQuery.isPending}
         onOpenPicker={openRulePicker}
