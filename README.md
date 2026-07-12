@@ -3,8 +3,7 @@
 ## 仓库结构
 
 - `apps/api`：FastAPI 后端
-- `apps/web`：React SPA 前端
-- `apps/mobile-web`：移动端 React SPA 前端
+- `apps/mobile-web`：唯一 C 端移动 React SPA
 - `apps/admin-web`：独立运营与诊断后台
 - `packages/game-client`：共享前端 API client、类型与对局状态辅助逻辑
 - `docs`：架构与规划文档
@@ -15,7 +14,6 @@
 
 ```bash
 cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env
 cp apps/admin-web/.env.example apps/admin-web/.env
 ```
 
@@ -72,7 +70,7 @@ cd apps/api
 
 ## 本地运行
 
-后端、旧桌面端、移动端和管理后台可分别在独立终端运行。
+后端、移动端和管理后台可分别在独立终端运行。
 
 终端 1，启动 FastAPI：
 
@@ -104,34 +102,7 @@ http://127.0.0.1:8000
 curl http://127.0.0.1:8000/api/v1/health
 ```
 
-终端 2，启动 Vite 前端：
-
-```bash
-make web
-```
-
-等价直接命令：
-
-```bash
-cd apps/web
-pnpm dev --host 0.0.0.0 --port 5173
-```
-
-前端地址：
-
-```text
-http://127.0.0.1:5173
-```
-
-同一局域网内的手机或其他电脑也可以访问：
-
-```text
-http://<你的电脑局域网 IP>:5173
-```
-
-开发服务器会把 `/api` 代理到 `http://127.0.0.1:8000`，因此前端页面中的 `/api/v1/...` 请求会自动转发到 FastAPI。
-
-终端 3，启动移动端 Web：
+终端 2，启动移动端 Web：
 
 ```bash
 make mobile-web
@@ -149,9 +120,9 @@ http://127.0.0.1:5174
 http://<你的电脑局域网 IP>:5174
 ```
 
-移动端和桌面端共用 `/api/v1/...`，开发服务器会把 `/api` 代理到 `http://127.0.0.1:8000`。
+开发服务器会把 `/api` 代理到 `http://127.0.0.1:8000`。C 端正式支持 320～480 CSS px 的移动设备竖屏；桌面端、平板和横屏不在验收范围内。
 
-终端 4，启动管理后台：
+终端 3，启动管理后台：
 
 ```bash
 make admin-web
@@ -162,8 +133,6 @@ make admin-web
 ```bash
 pnpm --dir apps/admin-web exec playwright install chromium
 make admin-e2e
-```
-
 管理后台地址：
 
 ```text
@@ -176,7 +145,7 @@ http://127.0.0.1:5175
 
 直播 orphan 自动恢复由独立进程 `.venv/bin/python -m app.cli run-live-run-reaper`（本地可用 `make live-run-reaper`）执行，不随每个 API 副本重复启动。它在租约过期并超过宽限期后原子认领运行：有停止请求则取消，有有效 checkpoint 则恢复，否则标记失败；认领使用指数退避并受最大次数限制。`--once` 可做单次部署验收。恢复次数、最近认领时间、退避截止时间和“自动恢复已耗尽”告警会显示在 Admin 运行监控中。
 
-法官语音资产使用 `/api/v1/admin/judge-voice-lines*` 提供 `voice.read` 保护的覆盖率、分类筛选、缺失项和受认证试听；普通 DTO 不返回文件路径、旧 public URL、manifest、字幕内容或音频字节。迁移 `20260711_06` 建立 PostgreSQL 独立资产表，`.venv/bin/python -m app.cli import-judge-voice-assets` 可幂等导入旧静态文件；Admin、实时法官语音和回放均数据库优先、旧目录回退。旧文件暂留作回滚输入。旧 Web 匿名生成 POST 默认关闭，production 禁止重新开启。
+法官语音资产使用 `/api/v1/admin/judge-voice-lines*` 提供 `voice.read` 保护的覆盖率、分类筛选、缺失项和受认证试听；普通 DTO 不返回文件路径、public URL、manifest、字幕内容或音频字节。迁移 `20260711_06` 建立 PostgreSQL 独立资产表，`.venv/bin/python -m app.cli import-judge-voice-assets` 可从 `apps/api/resources/judge-voice-seed` 幂等导入种子资产；Admin、实时法官语音和回放均数据库优先、API 自有种子目录回退。
 
 迁移 `20260711_07` 建立持久语音生成任务。Admin 使用 CSRF、`voice.generate_missing` / `voice.regenerate_all` 和 `Idempotency-Key` 排队，独立 worker 通过 `.venv/bin/python -m app.cli run-judge-voice-worker` 持续领取任务；`--once` 仅用于单次运维检查，API 或 worker 重启不会丢失 queued job。
 
@@ -215,16 +184,9 @@ cd apps/api
 
 再配置 `ADMIN_OIDC_ISSUER_URL`、`ADMIN_OIDC_CLIENT_ID`、`ADMIN_OIDC_CLIENT_SECRET`、`ADMIN_OIDC_REDIRECT_URI` 和 `ADMIN_OIDC_WEB_BASE_URL`。首次登录只接受提供商签名且 `email_verified=true` 的 ID Token，并把预配置账号永久绑定到 issuer/sub；后续不会按浏览器输入或 OIDC role claim 提权。登录事务、state、浏览器绑定、PKCE verifier 和 nonce 均在服务端校验，回调失败只返回稳定错误分类。
 
-旧 `/api/v1/player-profiles` 内容和全局收藏写入均默认关闭；如旧 Web 仍需短期联调，可仅在非 production 环境分别显式设置：
-
-```dotenv
-LEGACY_PLAYER_PROFILE_CONTENT_WRITES_ENABLED=true
-LEGACY_PLAYER_PROFILE_FAVORITE_WRITES_ENABLED=true
-```
-
-production 会拒绝启用这两个开关。Mobile 已使用 `/api/v1/public/player-profiles*`、独立 Public Session 和
+Mobile 使用 `/api/v1/public/player-profiles*`、独立 Public Session 和
 `/api/v1/public/me/favorite-player-profiles*`，不会回退匿名 PATCH。Guest 收藏按当前浏览器 Cookie 隔离；清除 Cookie 或更换设备后无法找回，跨设备同步需要后续接入正式 C 端身份源。
-`mobile-web` 是唯一继续演进的 C 端页面；`apps/web` 仅作为迁移期兼容端保留，不向 Admin 搬运大厅、观战剧场或普通回放 UI。
+`mobile-web` 是唯一 C 端页面；Admin 不承载大厅、观战剧场或普通回放 UI。
 
 本地 HTTP 联调还需要：
 
@@ -259,11 +221,11 @@ chunk 的 utterance，然后再订阅后续实时事件。移动端首次开启�
 
 ## 实时观战流程
 
-1. 打开 `http://127.0.0.1:5173/games`。
+1. 打开 `http://127.0.0.1:5174/games`。
 2. 点击“发起对局”。
-3. 页面会进入 `/games/live/<run_id>`。
-4. 实时观战页会展示玩家列表、当前聚焦玩家、原始事件侧栏。
-5. 对局结束后点击“查看完整复盘”进入 `/games/<session_id>`。
+3. 页面会进入 `/games/<run_id>/live`。
+4. 实时观战页会展示玩家、阶段、字幕和语音状态。
+5. 对局结束后进入 `/games/<session_id>/replay` 查看完整复盘。
 
 新对局的历史记录、完整复盘和恢复检查点保存在 PostgreSQL。旧版 `apps/api/logs/game_*` 文件记录不会再被读取；完成迁移后可执行：
 
@@ -288,21 +250,19 @@ base URL 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`。新增 OpenAI
 
 ## 质量检查
 
-API 和桌面端 Web 检查：
+完整质量检查：
 
 - `make lint`
 - `make test`
-- `cd apps/web && pnpm build`
 
 完整前端/共享包检查：
 
 ```bash
 cd apps/api && .venv/bin/python -m pytest
-cd apps/web && pnpm test -- --run
-cd apps/web && pnpm build
 pnpm --dir packages/game-client test -- --run
 pnpm --dir apps/mobile-web test -- --run
 pnpm --dir apps/mobile-web build
+pnpm --dir apps/mobile-web test:e2e
 pnpm --dir apps/admin-web lint
 pnpm --dir apps/admin-web test -- --run
 pnpm --dir apps/admin-web build

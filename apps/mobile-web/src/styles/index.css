@@ -24,6 +24,16 @@ body {
   line-height: 1.45;
 }
 
+.mobile-route-loading {
+  display: grid;
+  min-height: 100svh;
+  place-items: center;
+  padding: 24px;
+  color: #f6d892;
+  font-weight: 700;
+  text-align: center;
+}
+
 button,
 input,
 select,

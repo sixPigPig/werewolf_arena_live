@@ -42,22 +42,6 @@ jobs:
       - run: cd apps/api && uv run ruff check .
       - run: cd apps/api && uv run pytest
 
-  web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: cd apps/web && pnpm lint
-      - run: cd apps/web && pnpm test -- --run
-      - run: cd apps/web && pnpm build
-
   admin-web:
     runs-on: ubuntu-latest
     steps:
@@ -117,6 +101,31 @@ jobs:
       - run: pnpm --dir apps/mobile-web test -- --run
       - run: pnpm --dir apps/mobile-web build
 
+  mobile-browser:
+    needs: mobile-client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/mobile-web exec playwright install --with-deps chromium
+      - run: pnpm --dir apps/mobile-web test:e2e
+      - name: Upload Mobile browser report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-browser-report
+          path: |
+            apps/mobile-web/playwright-report
+            apps/mobile-web/test-results
+          if-no-files-found: ignore
+
   deployment-manifests:
     runs-on: ubuntu-latest
     steps:
@@ -124,7 +133,7 @@ jobs:
       - uses: azure/setup-kubectl@v5
         with:
           version: v1.34.1
-      - run: bash -n scripts/deploy-kubernetes.sh scripts/smoke-admin-deployment.sh
+      - run: bash -n scripts/deploy-kubernetes.sh scripts/smoke-admin-deployment.sh scripts/smoke-mobile-deployment.sh
       - run: docker compose --profile app --profile voice --profile monitoring config --quiet
       - run: scripts/deploy-kubernetes.sh staging sha-0000000000000000000000000000000000000000 --render-dir /tmp/werewolf-staging
       - run: scripts/deploy-kubernetes.sh production sha-0000000000000000000000000000000000000000 --render-dir /tmp/werewolf-production
@@ -132,16 +141,18 @@ jobs:
       - run: test -s /tmp/werewolf-production/migration.yaml && test -s /tmp/werewolf-production/application.yaml
       - run: grep -q 'name: werewolf-judge-voice-worker' /tmp/werewolf-staging/application.yaml
       - run: grep -q 'name: werewolf-judge-voice-worker' /tmp/werewolf-production/application.yaml
+      - run: grep -q 'name: werewolf-mobile-web' /tmp/werewolf-staging/application.yaml
+      - run: grep -q 'name: werewolf-mobile-web' /tmp/werewolf-production/application.yaml
       - run: grep -q 'check-judge-voice-worker' /tmp/werewolf-staging/application.yaml
       - run: grep -q 'check-judge-voice-worker' /tmp/werewolf-production/application.yaml
 
   container-images:
     needs:
       - api
-      - web
       - admin-web
       - admin-web-browser
       - mobile-client
+      - mobile-browser
       - deployment-manifests
     runs-on: ubuntu-latest
     permissions:
@@ -158,6 +169,9 @@ jobs:
             target: runtime
           - image: werewolf-admin-web
             dockerfile: apps/admin-web/Dockerfile
+            target: runtime
+          - image: werewolf-mobile-web
+            dockerfile: apps/mobile-web/Dockerfile
             target: runtime
     steps:
       - uses: actions/checkout@v6
@@ -219,7 +233,9 @@ jobs:
       - name: Deploy immutable main image to staging
         env:
           ADMIN_BASE_URL: ${{ vars.ADMIN_BASE_URL }}
+          MOBILE_BASE_URL: ${{ vars.MOBILE_BASE_URL }}
           IMAGE_TAG: sha-${{ github.sha }}
         run: |
           test -n "$ADMIN_BASE_URL"
+          test -n "$MOBILE_BASE_URL"
           scripts/deploy-kubernetes.sh staging "$IMAGE_TAG"

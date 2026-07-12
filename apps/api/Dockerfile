@@ -27,8 +27,8 @@ COPY --from=builder --chown=werewolf:werewolf /workspace/apps/api/.venv .venv
 COPY --chown=werewolf:werewolf apps/api/app app
 COPY --chown=werewolf:werewolf apps/api/alembic alembic
 COPY --chown=werewolf:werewolf apps/api/alembic.ini apps/api/pyproject.toml ./
-# Keep the repository-relative fallback used by legacy judge voice assets.
-COPY --chown=werewolf:werewolf apps/web/public/judge-voice /workspace/apps/web/public/judge-voice
+# Keep the API-owned seed assets used for database imports and local fallback.
+COPY --chown=werewolf:werewolf apps/api/resources resources
 
 RUN mkdir -p logs && chown werewolf:werewolf logs
 USER werewolf

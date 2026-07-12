@@ -1,5 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import "antd-mobile/es/global";
+import { configure } from "@testing-library/react";
+
+configure({ asyncUtilTimeout: 3000 });
 
 class TestResizeObserver {
   observe() {}

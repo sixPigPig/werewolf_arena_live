@@ -8,10 +8,10 @@ node_modules/
 .pnpm-store/
 dist/
 coverage/
-apps/web/dist/
-apps/web/coverage/
 apps/admin-web/playwright-report/
 apps/admin-web/test-results/
+apps/mobile-web/playwright-report/
+apps/mobile-web/test-results/
 
 # Python
 __pycache__/

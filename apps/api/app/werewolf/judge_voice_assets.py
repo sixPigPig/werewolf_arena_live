@@ -67,7 +67,9 @@ class JudgeVoiceGenerationResult:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_JUDGE_VOICE_ASSET_DIR = REPO_ROOT / "apps" / "web" / "public" / "judge-voice"
+DEFAULT_JUDGE_VOICE_ASSET_DIR = (
+    REPO_ROOT / "apps" / "api" / "resources" / "judge-voice-seed"
+)
 DEFAULT_PUBLIC_BASE_PATH = "/judge-voice"
 PLAYER_SEAT_RANGE = range(1, 13)
 PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")

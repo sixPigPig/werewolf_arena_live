@@ -3,8 +3,7 @@
 ## Applications
 
 - `apps/api`: FastAPI service exposing `/api/v1/...`
-- `apps/web`: legacy compatibility SPA retained during C-end migration
-- `apps/mobile-web`: independent Vite React mobile SPA and the only C-end surface that continues to evolve
+- `apps/mobile-web`: the only C-end surface, supporting 320–480 CSS px mobile portrait browsers
 - `apps/admin-web`: independent Vite React admin SPA with a fail-closed auth/session boundary
 - `packages/game-client`: shared frontend API client, types, lineup helpers, replay adapters, and live-state derivation
 
@@ -12,7 +11,6 @@
 
 - PostgreSQL runs in Docker via `docker-compose.yml`
 - The API runs locally on `http://localhost:8000`
-- The desktop SPA runs locally on `http://localhost:5173`
 - The mobile SPA runs locally on `http://localhost:5174`
 - The admin SPA runs locally on `http://localhost:5175`
 
@@ -22,7 +20,7 @@
 2. React Router renders the selected client shell.
 3. Admin authenticated development mode first calls `/api/v1/admin/me` with cookie credentials; preview mode makes no API request.
 4. The API resolves the server-side Admin session, active user and fixed-role permissions before returning the Admin shell.
-5. Mobile 玩家目录使用 `/api/v1/public/player-profiles*`，设备级收藏使用独立 Public Session 与 `/api/v1/public/me/favorite-player-profiles*`；其他游戏流量仍按后续切片迁移。
+5. Mobile 玩家目录使用 `/api/v1/public/player-profiles*`，设备级收藏使用独立 Public Session 与 `/api/v1/public/me/favorite-player-profiles*`；大厅、对局、观战和回放使用 `/api/v1/games*`。
 6. Admin 对局列表与详情只调用 `/api/v1/admin/games*`；普通详情返回白名单诊断摘要，受限错误摘要必须在 `games.debug.read` 下由用户显式请求独立 `/debug`。
 7. Admin 运行监控只调用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要；第 1 页存在 queued/running 记录时每 5 秒轮询，否则每 30 秒发现新记录，其他页不自动轮询。
 8. Admin 法官语音资产只调用 `/api/v1/admin/judge-voice-lines*`；列表返回安全元数据，音频通过同权限的受认证 endpoint 按需读取。

@@ -11,6 +11,16 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
+  name: werewolf-mobile-web
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: werewolf-mobile-web
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
   name: werewolf-admin-web
 spec:
   minAvailable: 2

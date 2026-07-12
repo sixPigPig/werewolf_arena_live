@@ -622,6 +622,8 @@ export function GamesPage() {
           <img
             alt="狼人杀对局大厅"
             className="mobile-lobby-hero-image"
+            decoding="async"
+            fetchPriority="high"
             src={lobbyHeroBanner}
           />
           <h1 className="mobile-sr-only" id="mobile-lobby-title">
@@ -698,6 +700,8 @@ export function GamesPage() {
                       alt=""
                       aria-hidden="true"
                       className="mobile-lobby-rule-card-image"
+                      decoding="async"
+                      loading="lazy"
                       src={ruleCardImage}
                     />
                   ) : (

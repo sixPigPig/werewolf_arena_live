@@ -30,8 +30,8 @@ services:
     environment: &api-environment
       APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/app
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5174}
-      PUBLIC_CORS_ORIGINS: ${PUBLIC_CORS_ORIGINS:-http://localhost:5174}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:8081,http://localhost:5174}
+      PUBLIC_CORS_ORIGINS: ${PUBLIC_CORS_ORIGINS:-http://localhost:8081,http://localhost:5174}
       ADMIN_DEV_AUTH_ENABLED: ${ADMIN_DEV_AUTH_ENABLED:-true}
       ADMIN_SESSION_COOKIE_SECURE: ${ADMIN_SESSION_COOKIE_SECURE:-false}
       PUBLIC_SESSION_COOKIE_SECURE: ${PUBLIC_SESSION_COOKIE_SECURE:-false}
@@ -127,6 +127,24 @@ services:
       VITE_ADMIN_PREVIEW_MODE: "false"
     ports:
       - "${ADMIN_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mobile:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: apps/mobile-web/Dockerfile
+      target: development
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-public.ecr.aws/docker/library/node:22-alpine}
+    image: werewolf-mobile-web-dev:local
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8000
+    ports:
+      - "${MOBILE_PORT:-8081}:8080"
     depends_on:
       api:
         condition: service_healthy

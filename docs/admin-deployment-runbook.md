@@ -1,13 +1,13 @@
 # Admin Web 发布与回滚 Runbook
 
-本文覆盖 API、`admin-web` 和持久语音 worker 的生产发布。`mobile-web` 是唯一 C 端；旧 `apps/web` 只保留迁移期兼容能力。
+本文覆盖 API、`mobile-web`、`admin-web`、reaper 和持久语音 worker 的生产发布。`mobile-web` 是唯一 C 端。
 
 ## 发布前置条件
 
 1. OIDC 提供商已注册 confidential client，允许 Authorization Code、PKCE S256，并精确登记 callback；在真实账号验收完成前不要开放 production Admin 入口。
 2. PostgreSQL 已创建独立数据库和最小权限账号，数据库与对象备份已验证可恢复。
 3. API、Admin 和 Mobile 使用 HTTPS 同源或明确的 HTTPS allowlist；反向代理保留 Cookie、Origin 和 WebSocket/SSE 语义。
-4. `apps/web/public/judge-voice` 至少保留两个发布周期，作为数据库语音资产的回滚输入。
+4. `apps/api/resources/judge-voice-seed` 随 API 镜像保留，作为数据库语音资产的初始化与回滚输入。
 
 生产配置必须显式设置：
 
@@ -70,10 +70,12 @@ cd apps/api
 
 ## 容器制品
 
-API、迁移任务、语音 worker 和 live-run reaper 共用 `apps/api/Dockerfile`；Admin 使用 `apps/admin-web/Dockerfile` 的 `runtime` 阶段。镜像构建不会写入 `.env`、密钥、日志、虚拟环境或 `node_modules`：
+API、迁移任务、语音 worker 和 live-run reaper 共用 `apps/api/Dockerfile`；Mobile 与 Admin 分别使用各自 Dockerfile 的 `runtime` 阶段。镜像构建不会写入 `.env`、密钥、日志、虚拟环境或 `node_modules`：
 
 ```bash
 docker build -f apps/api/Dockerfile -t ghcr.io/sixpigpig/werewolf-api:<git-sha> .
+docker build -f apps/mobile-web/Dockerfile --target runtime \
+  -t ghcr.io/sixpigpig/werewolf-mobile-web:<git-sha> .
 docker build -f apps/admin-web/Dockerfile --target runtime \
   -t ghcr.io/sixpigpig/werewolf-admin-web:<git-sha> .
 ```
@@ -86,10 +88,11 @@ Admin 正式镜像固定启用认证、关闭 fixture preview 和开发登录；
 make stack-up
 docker compose --profile app ps
 curl --fail http://127.0.0.1:8080/
+curl --fail http://127.0.0.1:8081/
 curl --fail http://127.0.0.1:8000/api/v1/health/ready
 ```
 
-访问 `http://127.0.0.1:8080`。启动监控或语音 worker 时使用：
+Admin 位于 `http://127.0.0.1:8080`，Mobile 位于 `http://127.0.0.1:8081`。启动监控或语音 worker 时使用：
 
 ```bash
 docker compose --profile app --profile monitoring up --build -d
@@ -100,9 +103,10 @@ Prometheus 位于 `http://127.0.0.1:19090`（可通过 `PROMETHEUS_PORT` 修改�
 
 ### CI 镜像发布
 
-`.github/workflows/ci.yml` 在 API、Admin、Mobile、旧 Web 和部署清单全部通过后构建两个正式镜像。Pull Request 只构建不推送；`main` 和 `v*` tag 会使用 `GITHUB_TOKEN` 推送到 GHCR，并生成 provenance 与 SBOM：
+`.github/workflows/ci.yml` 在 API、Admin、Mobile 和部署清单全部通过后构建三个正式镜像。Pull Request 只构建不推送；`main` 和 `v*` tag 会使用 `GITHUB_TOKEN` 推送到 GHCR，并生成 provenance 与 SBOM：
 
 - `ghcr.io/sixpigpig/werewolf-api:sha-<40位提交SHA>`
+- `ghcr.io/sixpigpig/werewolf-mobile-web:sha-<40位提交SHA>`
 - `ghcr.io/sixpigpig/werewolf-admin-web:sha-<40位提交SHA>`
 - `main` 是便于观察的移动标签，`v*` 是发布别名；部署脚本只接受完整提交 SHA 标签，拒绝 `main`、`latest` 和其他可变标签。
 
@@ -110,7 +114,7 @@ Prometheus 位于 `http://127.0.0.1:19090`（可通过 `PROMETHEUS_PORT` 修改�
 
 ### Kubernetes 发布顺序
 
-`deploy/kubernetes/base` 包含 API、单副本 reaper、单副本持久语音 Worker、Admin、Service、生产配置与探针。语音 Worker 复用 API 镜像，以 `run-judge-voice-worker` 持续领取任务；它不暴露网络端口，通过数据库心跳和 `check-judge-voice-worker` 健康探针确认实际可用，重启策略由 Deployment 管理。`overlays/staging` 使用单副本，`overlays/production` 使用三副本 API/Admin 并增加 PodDisruptionBudget；两个 overlay 都固定 GHCR 镜像 SHA，并提供 HTTPS Ingress。
+`deploy/kubernetes/base` 包含 API、单副本 reaper、单副本持久语音 Worker、Mobile、Admin、Service、生产配置与探针。语音 Worker 复用 API 镜像，以 `run-judge-voice-worker` 持续领取任务；它不暴露网络端口，通过数据库心跳和 `check-judge-voice-worker` 健康探针确认实际可用，重启策略由 Deployment 管理。`overlays/staging` 使用单副本，`overlays/production` 使用三副本 API/Mobile/Admin 并增加 PodDisruptionBudget；两个 overlay 都固定 GHCR 镜像 SHA，并分别提供 Mobile 与 Admin HTTPS Ingress。
 
 首次部署前必须完成：
 
@@ -125,13 +129,14 @@ Prometheus 位于 `http://127.0.0.1:19090`（可通过 `PROMETHEUS_PORT` 修改�
 scripts/deploy-kubernetes.sh staging sha-<40位提交SHA> \
   --render-dir /tmp/werewolf-staging
 
+MOBILE_BASE_URL=https://m.staging.example.com \
 ADMIN_BASE_URL=https://admin.staging.example.com \
   scripts/deploy-kubernetes.sh staging sha-<40位提交SHA>
 ```
 
-GitHub Actions 的 `deploy` workflow 提供相同流程。仓库管理员需要创建 `staging`、`production` Environments：各环境保存 Base64 编码的 `KUBE_CONFIG_B64` Secret 和 `ADMIN_BASE_URL` Variable；如集群需要其他客户端版本，可再设置 `KUBECTL_VERSION`，默认固定为 `v1.34.1`。production 应配置必需审核人和受保护分支。workflow 只接受 `sha-<40位提交SHA>`，不会修改数据库回退版本。若要在 `main` 全部门禁和镜像发布完成后自动部署 staging，再创建仓库级 Variable `AUTO_DEPLOY_STAGING=true`；未显式开启时不会连接任何集群。
+GitHub Actions 的 `deploy` workflow 提供相同流程。仓库管理员需要创建 `staging`、`production` Environments：各环境保存 Base64 编码的 `KUBE_CONFIG_B64` Secret，以及 `MOBILE_BASE_URL`、`ADMIN_BASE_URL` Variables；如集群需要其他客户端版本，可再设置 `KUBECTL_VERSION`，默认固定为 `v1.34.1`。production 应配置必需审核人和受保护分支。workflow 只接受 `sha-<40位提交SHA>`，不会修改数据库回退版本。若要在 `main` 全部门禁和镜像发布完成后自动部署 staging，再创建仓库级 Variable `AUTO_DEPLOY_STAGING=true`；未显式开启时不会连接任何集群。
 
-迁移 Job 名称固定；脚本会先删除上一份已完成 Job，再创建新 Job并等待。入口网关只把 Admin 域名转发到 `werewolf-admin-web:8080`，它会同源代理业务 `/api`，但明确阻断外部 `/api/v1/metrics`；Prometheus 仍从集群内部 API Service 抓取。Mobile 域名和 API 暴露策略由 C 端部署独立管理。
+迁移 Job 名称固定；脚本会先删除上一份已完成 Job，再创建新 Job并等待。入口网关分别把 Mobile 与 Admin 域名转发到对应 Web Service；两个 Nginx 都同源代理业务 `/api` 并阻断外部 `/api/v1/metrics`。Prometheus 仍从集群内部 API Service 抓取。
 
 ## 数据库与资产展开
 
@@ -142,7 +147,7 @@ cd apps/api
 .venv/bin/alembic upgrade head
 .venv/bin/alembic check
 .venv/bin/python -m app.cli import-judge-voice-assets \
-  --source ../web/public/judge-voice
+  --source resources/judge-voice-seed
 ```
 
 资产导入幂等，可重复运行。确认导入数量、缺失数与字节数后再切换应用版本。不要在已有新版本写入后直接执行 Alembic downgrade。
@@ -174,7 +179,7 @@ systemd 模板见 `deploy/systemd/werewolf-live-run-reaper.service.example`。�
 
 发布停止时先从负载均衡摘除 API，再发送 SIGTERM；语音 Worker 和 reaper 收到 SIGTERM 后不会领取新任务，并在当前任务/恢复边界返回后退出。Kubernetes 的语音 Worker 使用单副本 Recreate 与 90 秒优雅终止窗口，避免滚动更新期间重复消费。进程管理器应使用有限退避重启，避免数据库故障时形成快速重启循环。
 
-Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-web/dist`。Web 服务器必须把未知页面路由回退到 `index.html`，把 `/api` 反向代理至 API，并禁止缓存 Admin HTML；带哈希的静态资源可长期缓存。
+Mobile 与 Admin 静态产物分别由各自的 `pnpm build` 生成。Web 服务器必须把未知页面路由回退到 `index.html`，把 `/api` 反向代理至 API，并禁止缓存 HTML；带哈希的静态资源可长期缓存。
 
 ## 健康探针与发布冒烟
 
@@ -187,7 +192,7 @@ Admin 静态产物由 `pnpm --dir apps/admin-web build` 生成到 `apps/admin-we
 
 Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告警规则见 `deploy/prometheus/live-run-alerts.yml`，覆盖 reaper 无心跳、stale orphan 积压、自动恢复耗尽和扫描错误。Kubernetes API Pod 已带标准 `prometheus.io` 注解；集群 Prometheus 必须启用对应的 Pod discovery，或在平台侧建立等价的 PodMonitor/ServiceMonitor。发布后先运行 `python -m app.cli run-live-run-reaper --once`，再启动持续进程；持续进程启动后 `check-live-run-reaper` 必须返回 `reaper=ok`，语音 Worker 启动后 `check-judge-voice-worker` 必须返回 `judge_voice_worker=ok`。
 
-`scripts/smoke-admin-deployment.sh` 自动检查 Admin 健康、API live/ready、数据库迁移、未登录权限边界、metrics 外部阻断和 SPA 深链。它不代替真实 OIDC 账号验收；OIDC 登录、角色绑定和高风险后台操作仍按下方清单人工验收。
+`scripts/smoke-mobile-deployment.sh` 自动检查 Mobile 健康、API live/ready、metrics 外部阻断和 SPA 深链；`scripts/smoke-admin-deployment.sh` 额外检查未登录权限边界。它们不代替真实 OIDC 账号验收；OIDC 登录、角色绑定和高风险后台操作仍按下方清单人工验收。
 
 发布后检查：
 
@@ -198,7 +203,7 @@ Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告�
 5. 玩家列表、对局记录、运行监控和语音资产均读取真实 API。
 6. 使用有权限账号排队一个“生成缺失”任务，确认 worker 日志出现 job ID、页面进入终态且审计只有一次。
 7. 检查 `/metrics` 中 `werewolf_live_run_reaper_up 1`，并确认 Admin 对 stale/退避/耗尽状态的展示与数据库一致。
-8. Mobile 大厅、玩家图鉴、收藏、开局和观战走 `mobile-web`；不要把旧 Web 暴露为新 C 端入口。
+8. 在 320px、390px 和 412px 移动视口验证 Mobile 大厅、玩家图鉴、收藏、开局和观战；桌面端不在支持范围内。
 
 ## 回滚
 
@@ -207,7 +212,7 @@ Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告�
 1. 从负载均衡摘除新 API，停止新 worker，保留 queued/running 任务记录。
 2. 恢复上一版 API、Admin 和 Mobile 制品；上一版必须在发布前验证可读取扩展后的 schema。
 3. 检查 `/health/ready`，再逐步恢复流量。
-4. 语音数据库读取异常时保留新表，恢复上一版应用并使用旧静态目录；不要删除资产表或旧文件。
+4. 语音数据库读取异常时保留新表，恢复上一版应用并使用 API 自有种子目录；不要删除资产表或种子文件。
 5. 只有在确认没有新版本写入且备份可恢复时，才单独评审数据库 downgrade。
 
 若数据库不可用或迁移落后，保持 readiness 为 503 并停止发布；若 worker 不可用，API 可继续提供只读资产和排队能力，但必须告警 queued 任务积压，恢复 worker 后由持久队列继续处理。

@@ -942,7 +942,7 @@ describe("GamesPage", () => {
     expect(
       screen.queryByRole("button", { name: "收藏补齐" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "补齐席位" })).toHaveClass(
+    expect(await screen.findByRole("button", { name: "补齐席位" })).toHaveClass(
       "mobile-lobby-fill-toggle",
     );
     expect(screen.getByRole("button", { name: "清空席位" })).toHaveClass(

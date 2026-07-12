@@ -23,3 +23,28 @@ spec:
                 name: werewolf-admin-web
                 port:
                   name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: werewolf-mobile-web
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - m.staging.example.com
+      secretName: werewolf-mobile-staging-tls
+  rules:
+    - host: m.staging.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: werewolf-mobile-web
+                port:
+                  name: http

@@ -12,6 +12,9 @@ images:
   - name: werewolf-admin-web
     newName: ghcr.io/sixpigpig/werewolf-admin-web
     newTag: sha-REPLACE_ME
+  - name: werewolf-mobile-web
+    newName: ghcr.io/sixpigpig/werewolf-mobile-web
+    newTag: sha-REPLACE_ME
 configMapGenerator:
   - name: werewolf-api-config
     behavior: replace
@@ -23,6 +26,13 @@ patches:
   - target:
       kind: Deployment
       name: werewolf-api
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  - target:
+      kind: Deployment
+      name: werewolf-mobile-web
     patch: |-
       - op: replace
         path: /spec/replicas

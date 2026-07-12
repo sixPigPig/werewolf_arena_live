@@ -8,7 +8,7 @@ usage: deploy-kubernetes.sh <staging|production> <image-tag> [--render-dir <dire
 image-tag must be sha-<40 lowercase hex characters>.
 Without --render-dir, the script applies bootstrap configuration, runs and waits
 for the database migration, rolls out the application, then runs Admin smoke checks
-when ADMIN_BASE_URL is set.
+when MOBILE_BASE_URL and/or ADMIN_BASE_URL are set.
 EOF
 }
 
@@ -87,6 +87,11 @@ if ! grep -q 'name: werewolf-judge-voice-worker' "$output_dir/application.yaml";
   exit 1
 fi
 
+if ! grep -q 'name: werewolf-mobile-web' "$output_dir/application.yaml"; then
+  echo "rendered manifest is missing the mobile C-end" >&2
+  exit 1
+fi
+
 if [[ -n "$render_dir" ]]; then
   echo "rendered deployment manifests: ${output_dir}"
   exit 0
@@ -118,8 +123,14 @@ kubectl rollout status deployment/werewolf-live-run-reaper --namespace "$namespa
   --timeout="${ROLLOUT_TIMEOUT:-5m}"
 kubectl rollout status deployment/werewolf-judge-voice-worker --namespace "$namespace" \
   --timeout="${ROLLOUT_TIMEOUT:-5m}"
+kubectl rollout status deployment/werewolf-mobile-web --namespace "$namespace" \
+  --timeout="${ROLLOUT_TIMEOUT:-5m}"
 kubectl rollout status deployment/werewolf-admin-web --namespace "$namespace" \
   --timeout="${ROLLOUT_TIMEOUT:-5m}"
+
+if [[ -n "${MOBILE_BASE_URL:-}" ]]; then
+  "$repo_root/scripts/smoke-mobile-deployment.sh" "$MOBILE_BASE_URL"
+fi
 
 if [[ -n "${ADMIN_BASE_URL:-}" ]]; then
   "$repo_root/scripts/smoke-admin-deployment.sh" "$ADMIN_BASE_URL"

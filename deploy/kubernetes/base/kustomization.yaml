@@ -5,6 +5,7 @@ resources:
   - api-deployment.yaml
   - reaper-deployment.yaml
   - judge-voice-worker-deployment.yaml
+  - mobile-deployment.yaml
   - admin-deployment.yaml
   - services.yaml
 configMapGenerator:

@@ -26,6 +26,7 @@ export function MobileTabBar() {
             alt=""
             aria-hidden="true"
             className="mobile-tab-image"
+            decoding="async"
             draggable={false}
             src={tab.imageSrc}
           />

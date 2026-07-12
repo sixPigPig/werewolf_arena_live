@@ -1,11 +1,11 @@
 # Admin Web 规划、设计与开发方案
 
-状态：独立 Admin、认证/RBAC/审计、玩家内容、对局诊断、运行监控与受控恢复、语音资产与持久任务、账号治理、运营总览/任务中心/只读设置/全局搜索、生产部署与分阶段发布自动化均已完成；剩余工作是实际 OIDC 租户与集群验收、浏览器级 E2E/可访问性加固，以及 Mobile 其余 Public API 切流和旧 Web 退役。
+状态：独立 Admin、认证/RBAC/审计、玩家内容、对局诊断、运行监控与受控恢复、语音资产与持久任务、账号治理、运营总览/任务中心/只读设置/全局搜索、生产部署与分阶段发布自动化均已完成；旧 Web 已退役，Mobile 是唯一 C 端。剩余工作是实际 OIDC 租户与集群验收及浏览器级 E2E/可访问性加固。
 
 ## 1. 决策摘要
 
-- 新建 `apps/admin-web`，与 `apps/web`、`apps/mobile-web` 独立构建和发布。
-- `mobile-web` 最终成为唯一 C 端；`apps/web` 在切流稳定后退役。
+- `apps/admin-web` 与 `apps/mobile-web` 独立构建和发布。
+- `mobile-web` 是唯一 C 端；已删除从未上线的 `apps/web`。
 - Admin 不复制旧 Web 的哥特主题、全局 CSS、C 端大厅和直播剧场。
 - Admin 首版不调用当前匿名 `/api/v1/*` 写接口，生产构建默认 fail closed。
 - 后端采用 `/api/v1/public/*` 与 `/api/v1/admin/*` 双边界，迁移期保留旧接口兼容层。
@@ -336,7 +336,7 @@ draft -> published -> archived
 
 数据库迁移采用 expand/contract：新表、新列至少保留两个发布周期，首次发布不 drop 旧结构。回填脚本必须幂等并输出迁移前后统计。
 
-## 9. 旧 Web 迁移策略
+## 9. 旧 Web 迁移策略（已完成）
 
 | 旧能力 | Admin 去向 | 策略 |
 |---|---|---|
@@ -374,7 +374,7 @@ draft -> published -> archived
 6. 语音存储迁移和生成任务；
 7. Live run 只读监控；（已完成）
 8. Mobile 切 Public API 与旧 URL 重定向；
-9. 稳定观察后停止旧 Web 流量。
+9. 删除从未上线的旧 Web 应用及构建配置。（已完成）
 
 ## 11. 测试与 CI
 
@@ -417,7 +417,7 @@ draft -> published -> archived
 - 前端、Admin API 和数据库 expand 迁移可独立回滚；
 - 数据已经写入后优先回滚应用，不执行破坏性 Alembic downgrade；
 - 旧结构和旧语音文件至少保留两个版本周期；
-- Mobile 切流后观察一个稳定周期，再删除 `apps/web`。
+- Mobile 独立构建发布；从未上线的 `apps/web` 已直接删除。
 
 ## 13. 正式上线 Definition of Done
 
@@ -429,7 +429,7 @@ draft -> published -> archived
 - 玩家、对局、运行列表均为服务端分页；
 - 编辑冲突以 409 明确提示；
 - Mobile 已使用专用收藏接口；
-- 语音文件不再写入 `apps/web/public`；
+- 语音种子文件归属 `apps/api/resources/judge-voice-seed`；
 - Live 停止与检查点恢复只向 `runs.control` 开放，使用 CSRF、幂等、原因、确认、审计和 fencing token；
 - 键盘可完成核心操作，焦点始终可见；
 - Admin 不加载旧 Web 哥特资产；
@@ -482,7 +482,7 @@ draft -> published -> archived
 - 新增独立 Public Guest Session、CSRF、Origin allowlist、会话限流和过期 Guest 清理；
 - 收藏 PUT/DELETE 幂等并按 Guest User 隔离，不接受客户端提供的 user ID；
 - Public Catalog 与新游戏配置仅输出受管同源头像，阻断 legacy 外链追踪；
-- game-client 保留 legacy API/type，旧 Web 在共存期仍可构建；Mobile 不会回退全局 favorite PATCH；
+- game-client 保留仍被 Mobile 使用的对局 API/type；Mobile 不会回退全局 favorite PATCH；
 - 当前进程内限流只适用于既有单 worker 部署，反向代理环境必须配置可信客户端地址或边缘限流；规模扩大前将过期清理迁为批处理任务。
 
 ### 阶段 3A：Admin 对局记录只读切片
@@ -520,7 +520,7 @@ draft -> published -> archived
 - `import-judge-voice-assets` 从旧静态目录幂等导入，重复执行复用 checksum/元数据一致的记录，文件变化时更新同一资产；
 - Admin 列表查询只投影元数据，不读取 LargeBinary；试听按 ID 单条读取数据库音频；
 - 实时静态法官语音和普通回放均数据库优先，记录缺失时回退旧目录，满足 expand/contract 回滚边界；
-- 旧文件至少保留两个发布周期，本阶段不删除 `apps/web/public/judge-voice`。
+- 语音种子文件已迁入 `apps/api/resources/judge-voice-seed`，不再阻塞旧 Web 删除。
 
 阶段 4B1 已完成。4B2 的生成任务必须使用持久任务表或外部队列，不能以无恢复能力的进程内线程冒充可靠异步任务。
 

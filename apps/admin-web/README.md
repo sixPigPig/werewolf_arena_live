@@ -68,8 +68,8 @@ pnpm test:e2e
 ## 设计原则
 
 - 不调用当前匿名 `/api/v1/*` 管理写接口；
-- 不从 `apps/web/src` 跨应用导入；
-- 不复制旧 Web 的哥特全局样式和 C 端页面；
+- 不从其他前端应用跨目录导入；
+- 不复制 Mobile 的哥特全局样式和 C 端页面；
 - Admin/Public DTO、权限和 OpenAPI client 相互独立；
 - 前端权限隐藏只改善体验，服务端必须强制鉴权；
 - 业务接入只使用 `/api/v1/admin/*`，并复用现有 session、权限依赖和审计入口；
