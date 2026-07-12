@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
+import threading
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -140,6 +144,170 @@ def test_stage_new_run_rejects_mutated_prepared_run_before_database_access(
 
     with pytest.raises(ValueError, match="fresh prepared run"):
         DatabaseLiveStore(db_session).stage_new_run(run)
+
+
+def test_save_new_run_stages_and_commits_the_run_and_initial_event_once(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = LiveRunRegistry().prepare_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    store = DatabaseLiveStore(db_session)
+    original_commit = db_session.commit
+    commit_calls = 0
+
+    def tracking_commit() -> None:
+        nonlocal commit_calls
+        commit_calls += 1
+        original_commit()
+
+    monkeypatch.setattr(db_session, "commit", tracking_commit)
+
+    store.save_new_run(run)
+
+    assert commit_calls == 1
+    assert db_session.get(LiveRunRecord, run.run_id) is not None
+    events = db_session.query(LiveEventRecord).filter_by(run_id=run.run_id).all()
+    assert len(events) == 1
+    assert events[0].event_id == 1
+    assert events[0].type == "run_created"
+
+
+def test_save_new_run_rolls_back_when_initial_event_staging_fails(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = LiveRunRegistry().prepare_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    store = DatabaseLiveStore(db_session)
+    original_stage = store.stage_new_run
+
+    def fail_after_staging(staged_run) -> None:
+        original_stage(staged_run)
+        raise RuntimeError("initial event write failed")
+
+    monkeypatch.setattr(store, "stage_new_run", fail_after_staging)
+
+    with pytest.raises(RuntimeError, match="initial event write failed"):
+        store.save_new_run(run)
+
+    assert db_session.get(LiveRunRecord, run.run_id) is None
+    assert db_session.query(LiveEventRecord).filter_by(run_id=run.run_id).count() == 0
+
+
+def test_save_new_run_rolls_back_when_commit_fails(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = LiveRunRegistry().prepare_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    store = DatabaseLiveStore(db_session)
+    original_rollback = db_session.rollback
+    rollback_calls = 0
+
+    def fail_commit() -> None:
+        raise RuntimeError("commit failed")
+
+    def tracking_rollback() -> None:
+        nonlocal rollback_calls
+        rollback_calls += 1
+        original_rollback()
+
+    monkeypatch.setattr(db_session, "commit", fail_commit)
+    monkeypatch.setattr(db_session, "rollback", tracking_rollback)
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        store.save_new_run(run)
+
+    assert rollback_calls == 1
+    assert db_session.get(LiveRunRecord, run.run_id) is None
+    assert db_session.query(LiveEventRecord).filter_by(run_id=run.run_id).count() == 0
+
+
+@pytest.mark.skipif(
+    not os.getenv("TEST_POSTGRESQL_URL"),
+    reason="requires an explicitly disposable PostgreSQL URL",
+)
+def test_two_registries_converge_on_one_complete_database_winner() -> None:
+    database_url = os.environ["TEST_POSTGRESQL_URL"]
+    schema = f"task3_atomic_create_{uuid4().hex}"
+    admin_engine = create_engine(database_url)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    scoped_engine = create_engine(
+        database_url,
+        connect_args={"options": f"-csearch_path={schema}"},
+    )
+    ScopedSession = sessionmaker(bind=scoped_engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(scoped_engine)
+    first_reads = threading.Barrier(2)
+
+    class FirstReadBarrierStore(SessionLiveStore):
+        def __init__(self) -> None:
+            super().__init__(ScopedSession)
+            self._read_lock = threading.Lock()
+            self._first_read = True
+
+        def active_run_for_session(self, session_id: str):
+            observed = super().active_run_for_session(session_id)
+            with self._read_lock:
+                wait_for_peer = self._first_read
+                self._first_read = False
+            if wait_for_peer:
+                assert observed is None
+                first_reads.wait(timeout=5)
+            return observed
+
+    registries = [
+        LiveRunRegistry(live_store=FirstReadBarrierStore(), worker_id="worker-a"),
+        LiveRunRegistry(live_store=FirstReadBarrierStore(), worker_id="worker-b"),
+    ]
+
+    def create_or_get(registry: LiveRunRegistry):
+        return registry.get_or_create_active_run(
+            session_id="game_atomic_create",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(create_or_get, registries))
+
+        assert len({run.run_id for run, _created in results}) == 1
+        assert sorted(created for _run, created in results) == [False, True]
+        assert all(run.event_count == 1 for run, _created in results)
+        assert all(run.next_event_id == 2 for run, _created in results)
+        with ScopedSession() as observer:
+            saved_runs = observer.query(LiveRunRecord).all()
+            saved_events = observer.query(LiveEventRecord).all()
+        assert len(saved_runs) == 1
+        assert len(saved_events) == 1
+        assert saved_events[0].run_id == saved_runs[0].run_id
+        assert saved_events[0].event_id == 1
+        assert saved_events[0].type == "run_created"
+    finally:
+        scoped_engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()
 
 
 def test_live_store_loads_backfilled_pinned_scalars_with_legacy_snapshot(

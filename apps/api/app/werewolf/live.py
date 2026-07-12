@@ -262,6 +262,8 @@ class LiveGameRun:
 
 
 class LiveStore(Protocol):
+    def save_new_run(self, run: LiveGameRun) -> None: ...
+
     def save_run(self, run: LiveGameRun) -> None: ...
 
     def append_event(
@@ -371,9 +373,7 @@ class LiveRunRegistry:
         )
         with self._lock:
             self._raise_if_prepared_run_conflicts_locked(run)
-            self._persist_run_locked(run, raise_on_error=True)
-            for event in run.events:
-                self._persist_event_locked(run, event, raise_on_error=True)
+            self._persist_new_run_locked(run)
             self.attach_prepared_run(run)
         return run
 
@@ -980,6 +980,18 @@ class LiveRunRegistry:
                 logger.exception("Failed to persist live run %s", run.run_id)
                 if raise_on_error:
                     raise
+
+    def _persist_new_run_locked(self, run: LiveGameRun) -> None:
+        if self._live_store is None:
+            return
+        saver = getattr(self._live_store, "save_new_run", None)
+        if not callable(saver):
+            raise RuntimeError("Persistent live store does not support atomic new-run persistence")
+        try:
+            saver(run)
+        except Exception:
+            logger.exception("Failed to persist live run %s", run.run_id)
+            raise
 
     def _persist_event_locked(
         self,

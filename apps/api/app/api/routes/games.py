@@ -64,7 +64,11 @@ from app.werewolf.live import (
     RunRecoveryCandidate,
     format_sse,
 )
-from app.werewolf.live_store import DatabaseLiveStore
+from app.werewolf.live_store import (
+    DatabaseLiveStore,
+    format_live_datetime,
+    parse_live_datetime,
+)
 from app.werewolf.player_configs import (
     PlayerConfig,
     clean_optional_string,
@@ -161,6 +165,13 @@ def get_replay_store(db: Annotated[Session, Depends(get_db)]) -> DatabaseReplayS
 class SessionLiveStore:
     def __init__(self, session_factory: Callable[[], Session] | None = None) -> None:
         self.session_factory = session_factory or SessionLocal
+
+    def save_new_run(self, run: LiveGameRun) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseLiveStore(db).save_new_run(run)
+        finally:
+            db.close()
 
     def save_run(self, run: LiveGameRun) -> None:
         db = self.session_factory()
@@ -876,25 +887,42 @@ def _compensate_committed_run(db: Session, run: LiveGameRun) -> bool:
     if record is None:
         db.rollback()
         return False
+    if len(run.events) != 1:
+        db.rollback()
+        return False
+    expected_event = run.events[0]
     events = tuple(
         db.scalars(
             select(LiveEventRecord)
             .where(LiveEventRecord.run_id == run.run_id)
             .order_by(LiveEventRecord.event_id.asc())
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     )
-    if (
-        len(events) != 1
-        or events[0].event_id != 1
-        or events[0].type != "run_created"
-        or events[0].session_id != run.session_id
-    ):
+    if len(events) != 1 or not _stored_event_matches(events[0], expected_event):
         db.rollback()
         return False
     db.execute(delete(LiveEventRecord).where(LiveEventRecord.run_id == run.run_id))
     db.delete(record)
     db.commit()
     return True
+
+
+def _stored_event_matches(record: LiveEventRecord, expected: LiveEvent) -> bool:
+    expected_created_at = parse_live_datetime(expected.created_at)
+    return expected_created_at is not None and (
+        record.run_id == expected.run_id
+        and record.session_id == expected.session_id
+        and record.event_id == expected.id
+        and record.type == expected.type
+        and record.round == expected.round
+        and record.phase == expected.phase
+        and record.actor == expected.actor
+        and record.action == expected.action
+        and record.payload == expected.payload
+        and format_live_datetime(record.created_at) == format_live_datetime(expected_created_at)
+    )
 
 
 def _attempt_committed_run_compensation(db: Session, run: LiveGameRun) -> bool:

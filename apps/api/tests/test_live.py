@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import threading
@@ -51,11 +52,19 @@ class RecordingLiveStore:
     def save_run(self, run) -> None:
         self.saved_runs.append((run.run_id, run.status, run.winner, run.error))
 
+    def save_new_run(self, run) -> None:
+        self.saved_runs.append((run.run_id, run.status, run.winner, run.error))
+        event = run.events[0]
+        self.events.append((event.run_id, event.id, event.type))
+
     def append_event(self, event, **_fence) -> None:
         self.events.append((event.run_id, event.id, event.type))
 
 
 class FailingLiveStore:
+    def save_new_run(self, run) -> None:
+        raise RuntimeError(f"cannot save {run.run_id}")
+
     def save_run(self, run) -> None:
         raise RuntimeError(f"cannot save {run.run_id}")
 
@@ -64,8 +73,39 @@ class FailingLiveStore:
 
 
 class EventFailingLiveStore(RecordingLiveStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_run = None
+
+    def save_new_run(self, run) -> None:
+        raise RuntimeError(f"cannot append {run.events[0].id}")
+
+    def save_run(self, run) -> None:
+        super().save_run(run)
+        self.active_run = copy.deepcopy(run)
+        self.active_run.events = []
+        self.active_run.persisted_event_count = 0
+        self.active_run.next_event_id = 1
+
     def append_event(self, event, **_fence) -> None:
         raise RuntimeError(f"cannot append {event.id}")
+
+    def active_run_for_session(self, session_id):
+        if self.active_run is not None and self.active_run.session_id == session_id:
+            return self.active_run
+        return None
+
+
+class LegacyTwoPhaseLiveStore:
+    def __init__(self) -> None:
+        self.saved_runs = []
+        self.events = []
+
+    def save_run(self, run) -> None:
+        self.saved_runs.append(run.run_id)
+
+    def append_event(self, event, **_fence) -> None:
+        self.events.append((event.run_id, event.id))
 
 
 class RacingActiveRunStore:
@@ -89,11 +129,17 @@ class RacingActiveRunStore:
                 else None
             )
 
+    def save_new_run(self, run) -> None:
+        with self._lock:
+            if self.active_run is not None:
+                raise RuntimeError("unique active session conflict")
+            self.active_run = copy.deepcopy(run)
+
     def save_run(self, run) -> None:
         with self._lock:
             if self.active_run is not None:
                 raise RuntimeError("unique active session conflict")
-            self.active_run = run
+            self.active_run = copy.deepcopy(run)
 
     def append_event(self, _event, **_fence) -> None:
         return None
@@ -208,7 +254,44 @@ def test_create_run_compatibility_wrapper_does_not_attach_when_initial_event_sav
         )
 
     assert registry._runs == {}
-    assert len(store.saved_runs) == 1
+    assert store.active_run is None
+    assert store.saved_runs == []
+
+
+def test_get_or_create_does_not_return_a_half_persisted_run_after_initial_event_failure() -> None:
+    store = EventFailingLiveStore()
+    registry = LiveRunRegistry(live_store=store)
+
+    with pytest.raises(RuntimeError, match="cannot append"):
+        registry.get_or_create_active_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+        )
+
+    assert registry._runs == {}
+    assert store.active_run is None
+    assert store.saved_runs == []
+
+
+def test_persistent_create_rejects_a_store_without_atomic_new_run_support_before_writing() -> None:
+    store = LegacyTwoPhaseLiveStore()
+    registry = LiveRunRegistry(live_store=store)
+
+    with pytest.raises(RuntimeError, match="atomic new-run persistence"):
+        registry.create_run(
+            session_id="game_1200abcd",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=21,
+            max_rounds=8,
+        )
+
+    assert store.saved_runs == []
+    assert store.events == []
+    assert registry._runs == {}
 
 
 def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
@@ -697,6 +780,10 @@ def test_two_registries_converge_on_one_active_run_during_create_race() -> None:
 
     assert len({run.run_id for run, _created in results}) == 1
     assert sorted(created for _run, created in results) == [False, True]
+    assert store.active_run is not None
+    assert store.active_run.event_count == 1
+    assert store.active_run.next_event_id == 2
+    assert [event.type for event in store.active_run.events] == ["run_created"]
 
 
 def test_live_registry_marks_completed_when_persistence_fails() -> None:

@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -275,6 +275,12 @@ class RecordingSessionLiveStore(SessionLiveStore):
         super().__init__(TestingSessionLocal)
         self.saved_runs: list[tuple[str, str]] = []
         self.events: list[tuple[str, int, str]] = []
+
+    def save_new_run(self, run) -> None:
+        event = run.events[0]
+        self.saved_runs.append((run.run_id, run.status))
+        self.events.append((event.run_id, event.id, event.type))
+        super().save_new_run(run)
 
     def save_run(self, run) -> None:
         self.saved_runs.append((run.run_id, run.status))
@@ -1165,6 +1171,117 @@ def test_publish_waits_while_run_selection_holds_parent_lock() -> None:
         admin_engine.dispose()
 
 
+@pytest.mark.skipif(
+    not os.getenv("TEST_POSTGRESQL_URL"),
+    reason="requires an explicitly disposable PostgreSQL URL",
+)
+def test_compensation_waits_for_event_lock_and_keeps_the_committed_mutation() -> None:
+    database_url = os.environ["TEST_POSTGRESQL_URL"]
+    schema = f"task3_compensation_lock_{uuid4().hex}"
+    admin_engine = create_engine(database_url)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    scoped_engine = create_engine(
+        database_url,
+        connect_args={"options": f"-csearch_path={schema}"},
+    )
+    ScopedSession = sessionmaker(bind=scoped_engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(scoped_engine)
+    run = LiveRunRegistry(worker_id="worker-compensation").prepare_run(
+        session_id="game_compensation_lock",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    compensation_started = threading.Event()
+    compensation_pid: list[int] = []
+    compensation_results: list[bool] = []
+    errors: list[BaseException] = []
+
+    try:
+        with ScopedSession() as setup:
+            games_routes.DatabaseLiveStore(setup).stage_new_run(run)
+            setup.commit()
+
+        modifier = ScopedSession()
+        compensation_thread: threading.Thread | None = None
+        try:
+            event = modifier.scalar(
+                select(LiveEventRecord)
+                .where(
+                    LiveEventRecord.run_id == run.run_id,
+                    LiveEventRecord.event_id == 1,
+                )
+                .with_for_update()
+            )
+            assert event is not None
+            event.payload = {**event.payload, "externally_mutated": True}
+            modifier.flush()
+
+            def compensate() -> None:
+                try:
+                    with ScopedSession() as cleanup:
+                        pid = cleanup.scalar(text("SELECT pg_backend_pid()"))
+                        assert isinstance(pid, int)
+                        compensation_pid.append(pid)
+                        compensation_started.set()
+                        compensation_results.append(
+                            games_routes._compensate_committed_run(cleanup, run)
+                        )
+                except BaseException as exc:
+                    errors.append(exc)
+                    compensation_started.set()
+
+            compensation_thread = threading.Thread(target=compensate)
+            compensation_thread.start()
+            assert compensation_started.wait(timeout=5)
+            assert compensation_pid
+
+            deadline = time.monotonic() + 5
+            observed_lock_wait = False
+            while time.monotonic() < deadline:
+                with admin_engine.connect() as observer:
+                    activity = observer.execute(
+                        text(
+                            "SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = :pid"
+                        ),
+                        {"pid": compensation_pid[0]},
+                    ).one_or_none()
+                if activity is not None and activity.wait_event_type == "Lock":
+                    blocked_query = activity.query.lower()
+                    assert "live_events" in blocked_query
+                    assert "for update" in blocked_query
+                    observed_lock_wait = True
+                    break
+                time.sleep(0.01)
+            assert observed_lock_wait
+            assert compensation_results == []
+
+            modifier.commit()
+            compensation_thread.join(timeout=5)
+            assert not compensation_thread.is_alive()
+        finally:
+            modifier.rollback()
+            modifier.close()
+            if compensation_thread is not None:
+                compensation_thread.join(timeout=5)
+
+        assert errors == []
+        assert compensation_results == [False]
+        with ScopedSession() as observer:
+            saved_run = observer.get(LiveRunRecord, run.run_id)
+            saved_event = observer.get(LiveEventRecord, (run.run_id, 1))
+        assert saved_run is not None
+        assert saved_event is not None
+        assert saved_event.payload["externally_mutated"] is True
+    finally:
+        scoped_engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()
+
+
 def test_create_game_run_stage_failure_rolls_back_without_local_or_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1467,6 +1584,12 @@ def test_create_game_run_thread_failure_keeps_recoverable_row_when_compensation_
         "stop_requested",
         "extra_event",
         "mutated_event",
+        "payload_only",
+        "created_at_only",
+        "round_only",
+        "phase_only",
+        "actor_only",
+        "action_only",
     ],
 )
 def test_create_game_run_thread_failure_does_not_delete_externally_changed_run(
@@ -1504,10 +1627,25 @@ def test_create_game_run_thread_failure_does_not_delete_externally_changed_run(
                             payload={"requested_at": changed_at.isoformat()},
                         )
                     )
-                else:
+                elif external_change == "mutated_event":
                     event = external.get(LiveEventRecord, (self.run_id, 1))
                     assert event is not None
                     event.type = "externally_mutated"
+                else:
+                    event = external.get(LiveEventRecord, (self.run_id, 1))
+                    assert event is not None
+                    if external_change == "payload_only":
+                        event.payload = {**event.payload, "externally_mutated": True}
+                    elif external_change == "created_at_only":
+                        event.created_at = datetime(2030, 1, 1, tzinfo=UTC)
+                    elif external_change == "round_only":
+                        event.round = 9
+                    elif external_change == "phase_only":
+                        event.phase = "externally_mutated"
+                    elif external_change == "actor_only":
+                        event.actor = "external"
+                    elif external_change == "action_only":
+                        event.action = "external"
                 external.commit()
             raise RuntimeError("thread start failed after external control change")
 
@@ -1546,8 +1684,23 @@ def test_create_game_run_thread_failure_does_not_delete_externally_changed_run(
             "run_created",
             "run_stop_requested",
         ]
-    else:
+    elif external_change == "mutated_event":
         assert [event.type for event in saved_events] == ["externally_mutated"]
+    else:
+        assert [event.type for event in saved_events] == ["run_created"]
+        event = saved_events[0]
+        if external_change == "payload_only":
+            assert event.payload["externally_mutated"] is True
+        elif external_change == "created_at_only":
+            assert event.created_at == datetime(2030, 1, 1)
+        elif external_change == "round_only":
+            assert event.round == 9
+        elif external_change == "phase_only":
+            assert event.phase == "externally_mutated"
+        elif external_change == "actor_only":
+            assert event.actor == "external"
+        elif external_change == "action_only":
+            assert event.action == "external"
 
 
 def test_create_game_run_randomly_fills_profiles_when_no_lineup_selected(
