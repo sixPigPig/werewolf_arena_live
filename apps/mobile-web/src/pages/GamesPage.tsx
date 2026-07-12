@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-query";
 import {
   type CSSProperties,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -18,18 +19,12 @@ import {
 import { useNavigate } from "react-router-dom";
 
 import lobbyHeroBanner from "../assets/mobile-lobby-hero-banner.png";
-import classic12SelectedCard from "../assets/rule-cards/classic-12-selected.png";
-import classic12UnselectedCard from "../assets/rule-cards/classic-12-unselected.png";
-import classic8SelectedCard from "../assets/rule-cards/classic-8-selected.png";
-import classic8UnselectedCard from "../assets/rule-cards/classic-8-unselected.png";
-import social8SelectedCard from "../assets/rule-cards/social-8-selected.png";
-import social8UnselectedCard from "../assets/rule-cards/social-8-unselected.png";
-import starter6SelectedCard from "../assets/rule-cards/starter-6-selected.png";
-import starter6UnselectedCard from "../assets/rule-cards/starter-6-unselected.png";
 import {
   MobileBottomSelect,
   type MobileBottomSelectOption,
 } from "../components/MobileBottomSelect";
+import { LobbyRulePicker } from "../components/lobby/LobbyRulePicker";
+import { LobbyRuleSummary } from "../components/lobby/LobbyRuleSummary";
 import {
   buildLineupLaunchStatus,
   clampSeat,
@@ -84,6 +79,7 @@ export function GamesPage() {
   const [shortage, setShortage] = useState(false);
   const [activeSeat, setActiveSeat] = useState(1);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
+  const [isRulePickerOpen, setIsRulePickerOpen] = useState(false);
   const [isClearConfirming, setIsClearConfirming] = useState(false);
   const [isFillOptionsOpen, setIsFillOptionsOpen] = useState(false);
   const [pendingProfileId, setPendingProfileId] = useState<string | null>(null);
@@ -98,8 +94,7 @@ export function GamesPage() {
   const profileCardScrollRef = useRef<HTMLDivElement | null>(null);
   const profilePullDistanceRef = useRef(0);
   const profilePullStartYRef = useRef<number | null>(null);
-  const ruleScrollRef = useRef<HTMLDivElement | null>(null);
-  const ruleCardRefs = useRef(new Map<string, HTMLLabelElement>());
+  const rulePickerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const seatButtonRefs = useRef(new Map<number, HTMLButtonElement>());
   const [profilePullDistance, setProfilePullDistance] = useState(0);
 
@@ -322,20 +317,21 @@ export function GamesPage() {
     return () => window.clearTimeout(timeoutId);
   }, [isClearConfirming]);
 
-  function handleRuleSetChange(
-    ruleSetId: string,
-    options: { scrollCardIntoView?: boolean } = {},
-  ) {
+  const openRulePicker = useCallback(() => {
+    setIsRulePickerOpen(true);
+  }, []);
+
+  const closeRulePicker = useCallback(() => {
+    setIsRulePickerOpen(false);
+  }, []);
+
+  function handleRuleSetChange(ruleSetId: string) {
     const nextRuleSet = ruleSets.find((ruleSet) => ruleSet.id === ruleSetId);
     setSelectedRuleSetId(ruleSetId);
     setValidationError(null);
     setShortage(false);
     setIsClearConfirming(false);
     setIsFillOptionsOpen(false);
-
-    if (options.scrollCardIntoView) {
-      scrollRuleCardIntoView(ruleSetId);
-    }
 
     if (nextRuleSet) {
       setActiveSeat((currentSeat) =>
@@ -348,23 +344,6 @@ export function GamesPage() {
         ).configs,
       );
     }
-  }
-
-  function scrollRuleCardIntoView(ruleSetId: string) {
-    const ruleCard = ruleCardRefs.current.get(ruleSetId);
-    const ruleScroll = ruleScrollRef.current;
-
-    if (!ruleCard || !ruleScroll) {
-      return;
-    }
-
-    const scrollLeft =
-      ruleCard.offsetLeft - (ruleScroll.clientWidth - ruleCard.offsetWidth) / 2;
-
-    ruleScroll.scrollTo({
-      left: Math.max(0, scrollLeft),
-      behavior: "smooth",
-    });
   }
 
   function openProfileDrawer(seat: number, trigger: HTMLButtonElement) {
@@ -663,110 +642,15 @@ export function GamesPage() {
           </p>
         ) : null}
 
-      <section
-        aria-labelledby="mobile-rule-title"
-        className="mobile-lobby-section mobile-lobby-board-section"
-      >
-        <div className="mobile-lobby-section-heading">
-          <h2 id="mobile-rule-title">规则选择</h2>
-        </div>
-        {ruleSetsQuery.isError ? <p>规则加载失败</p> : null}
-        <div className="mobile-lobby-rule-picker">
-          <div className="mobile-lobby-rule-scroll" ref={ruleScrollRef}>
-            {ruleSets.map((ruleSet) => {
-              const isSelected = selectedRuleSet?.id === ruleSet.id;
-              const ruleCardImage = getRuleCardImage(ruleSet.id, isSelected);
-              const ruleCardFallbackSummary =
-                ruleSet.role_summary ?? ruleSet.complexity ?? "自定义规则";
-              const ruleCardAccessibleName = ruleCardImage
-                ? `选择规则 ${ruleSet.name}`
-                : [
-                    `选择规则 ${ruleSet.name}`,
-                    `${ruleSet.player_count} 人局`,
-                    ruleCardFallbackSummary,
-                  ].join("，");
-
-              return (
-                <label
-                  className={[
-                    "mobile-lobby-rule-card",
-                    isSelected ? "mobile-lobby-rule-card-active" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  key={ruleSet.id}
-                  ref={(element) => {
-                    if (element) {
-                      ruleCardRefs.current.set(ruleSet.id, element);
-                    } else {
-                      ruleCardRefs.current.delete(ruleSet.id);
-                    }
-                  }}
-                >
-                  <input
-                    aria-label={ruleCardAccessibleName}
-                    checked={isSelected}
-                    name="mobile-rule-set"
-                    onChange={() => handleRuleSetChange(ruleSet.id)}
-                    type="radio"
-                    value={ruleSet.id}
-                  />
-                  {ruleCardImage ? (
-                    <img
-                      alt=""
-                      aria-hidden="true"
-                      className="mobile-lobby-rule-card-image"
-                      decoding="async"
-                      loading="lazy"
-                      src={ruleCardImage}
-                    />
-                  ) : (
-                    <span className="mobile-lobby-rule-card-fallback">
-                      <strong>{ruleSet.name}</strong>
-                      <span>{ruleSet.player_count} 人局</span>
-                      <small>{ruleCardFallbackSummary}</small>
-                    </span>
-                  )}
-                </label>
-              );
-            })}
-            {isLoading ? <p>加载中</p> : null}
-          </div>
-          {ruleSets.length > 0 ? (
-            <div
-              aria-label="规则选择指示"
-              className="mobile-lobby-rule-dots"
-              role="group"
-            >
-              {ruleSets.map((ruleSet) => {
-                const isSelected = selectedRuleSet?.id === ruleSet.id;
-                const tone = getRuleCardTone(ruleSet.id);
-
-                return (
-                  <button
-                    aria-current={isSelected ? "true" : undefined}
-                    aria-label={`切换到规则 ${ruleSet.name}`}
-                    className={[
-                      "mobile-lobby-rule-dot",
-                      `mobile-lobby-rule-dot-${tone}`,
-                      isSelected ? "mobile-lobby-rule-dot-active" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    key={ruleSet.id}
-                    onClick={() =>
-                      handleRuleSetChange(ruleSet.id, {
-                        scrollCardIntoView: true,
-                      })
-                    }
-                    type="button"
-                  />
-                );
-              })}
-            </div>
-          ) : null}
-        </div>
-      </section>
+      <LobbyRuleSummary
+        changeButtonRef={rulePickerTriggerRef}
+        disabled={createGameRunMutation.isPending}
+        isError={ruleSetsQuery.isError}
+        isLoading={ruleSetsQuery.isPending}
+        onOpenPicker={openRulePicker}
+        onRetry={() => void ruleSetsQuery.refetch()}
+        ruleSet={selectedRuleSet}
+      />
 
       {selectedRuleSet ? (
         <section
@@ -943,6 +827,17 @@ export function GamesPage() {
           </button>
         </div>
       </div>
+
+      {isRulePickerOpen ? (
+        <LobbyRulePicker
+          backgroundRef={lobbyContentRef}
+          onClose={closeRulePicker}
+          onSelect={handleRuleSetChange}
+          restoreFocusRef={rulePickerTriggerRef}
+          ruleSets={ruleSets}
+          selectedRuleSetId={selectedRuleSet?.id ?? null}
+        />
+      ) : null}
 
       {isProfileDrawerOpen ? (
         <div className="mobile-profile-drawer-layer">
@@ -1217,52 +1112,4 @@ export function GamesPage() {
       ) : null}
     </main>
   );
-}
-
-type RuleCardImages = {
-  selected: string;
-  unselected: string;
-};
-
-const ruleCardImagesById: Partial<Record<string, RuleCardImages>> = {
-  classic_8: {
-    selected: classic8SelectedCard,
-    unselected: classic8UnselectedCard,
-  },
-  starter_6: {
-    selected: starter6SelectedCard,
-    unselected: starter6UnselectedCard,
-  },
-  social_8: {
-    selected: social8SelectedCard,
-    unselected: social8UnselectedCard,
-  },
-  classic_12_seer_witch_hunter_idiot: {
-    selected: classic12SelectedCard,
-    unselected: classic12UnselectedCard,
-  },
-};
-
-function getRuleCardImage(
-  ruleSetId: string,
-  isSelected: boolean,
-): string | null {
-  const images = ruleCardImagesById[ruleSetId];
-
-  if (!images) {
-    return null;
-  }
-
-  return isSelected ? images.selected : images.unselected;
-}
-
-function getRuleCardTone(ruleSetId: string) {
-  const tones: Record<string, string> = {
-    classic_8: "classic",
-    starter_6: "starter",
-    social_8: "social",
-    classic_12_seer_witch_hunter_idiot: "advanced",
-  };
-
-  return tones[ruleSetId] ?? "classic";
 }

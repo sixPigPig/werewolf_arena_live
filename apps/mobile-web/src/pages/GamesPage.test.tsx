@@ -63,14 +63,6 @@ const starterRuleSet: RuleSetSummary = {
   role_summary: "1 狼人 / 1 预言家 / 1 守卫 / 3 村民",
 };
 
-const socialRuleSet: RuleSetSummary = {
-  ...classicRuleSet,
-  id: "social_8",
-  name: "社交 8 人局",
-  player_count: 8,
-  role_summary: "2 狼人 / 1 女巫 / 1 猎人 / 4 村民",
-};
-
 const classic12RuleSet: RuleSetSummary = {
   ...classicRuleSet,
   id: "classic_12_seer_witch_hunter_idiot",
@@ -616,92 +608,51 @@ describe("GamesPage", () => {
     expect(heroRule).toContain("object-position: left center");
   });
 
-  it("uses cropped rule card images instead of text inside rule choices", async () => {
+  it("shows one current rule summary and changes rules in a modal picker", async () => {
+    const user = userEvent.setup();
     gameClientMocks.listRuleSets.mockResolvedValue({
-      rule_sets: [
-        { ...classicRuleSet, player_count: 8, role_summary: "2 狼人 / 1 预言家 / 1 守卫 / 4 村民" },
-        starterRuleSet,
-      ],
+      rule_sets: [classicRuleSet, starterRuleSet],
     });
     renderGamesPage();
 
-    const selectedRule = await screen.findByRole("radio", {
-      name: "选择规则 经典 8 人",
-    });
-    const unselectedRule = screen.getByRole("radio", {
-      name: "选择规则 新手 6 人快局",
-    });
-    const selectedCard = selectedRule.closest(".mobile-lobby-rule-card");
-    const unselectedCard = unselectedRule.closest(".mobile-lobby-rule-card");
+    const summary = await screen.findByRole("region", { name: "当前规则" });
+    expect(await within(summary).findByText("经典 8 人")).toBeVisible();
+    expect(within(summary).getByText(/测试阵容/)).toBeVisible();
+    expect(
+      screen.queryByRole("group", { name: "规则选择指示" }),
+    ).not.toBeInTheDocument();
 
-    expect(selectedCard).not.toHaveTextContent("经典 8 人局");
-    expect(selectedCard).not.toHaveTextContent("2 狼人");
-    expect(selectedCard?.querySelector(".mobile-lobby-rule-card-image")).toHaveAttribute(
-      "src",
-      expect.stringContaining("selected"),
+    await user.click(
+      within(summary).getByRole("button", { name: "更换规则" }),
     );
-    expect(unselectedCard).not.toHaveTextContent("新手 6 人快局");
-    expect(unselectedCard).not.toHaveTextContent("1 狼人");
-    expect(unselectedCard?.querySelector(".mobile-lobby-rule-card-image")).toHaveAttribute(
-      "src",
-      expect.stringContaining("unselected"),
+    const picker = screen.getByRole("dialog", { name: "选择规则" });
+    expect(picker).toHaveAttribute("aria-modal", "true");
+    await user.click(
+      within(picker).getByRole("button", { name: "选择规则 新手 6 人快局" }),
     );
 
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const scrollRule = styles.match(/\.mobile-lobby-rule-scroll\s*{[^}]+}/)?.[0];
-    const imageRule = styles.match(/\.mobile-lobby-rule-card-image\s*{[^}]+}/)?.[0];
-    const pickerRule = styles.match(/\.mobile-lobby-rule-picker\s*{[^}]+}/)?.[0];
-
-    expect(pickerRule).toContain("gap: 0");
-    expect(scrollRule).toContain("grid-auto-columns: calc((100% - 8px) / 3)");
-    expect(scrollRule).toContain("gap: 4px");
-    expect(scrollRule).toContain("padding: 0 1px 0");
-    expect(imageRule).toContain("aspect-ratio: 3 / 4");
-    expect(styles).not.toContain(".mobile-lobby-rule-card:focus-within");
-    [
-      "classic-8-selected",
-      "classic-8-unselected",
-      "starter-6-selected",
-      "starter-6-unselected",
-      "social-8-selected",
-      "social-8-unselected",
-      "classic-12-selected",
-      "classic-12-unselected",
-    ].forEach((assetName) => {
-      expect(readPngMetadata(`src/assets/rule-cards/${assetName}.png`)).toEqual({
-        width: 1080,
-        height: 1440,
-        colorType: 6,
-      });
-    });
+    expect(
+      screen.queryByRole("dialog", { name: "选择规则" }),
+    ).not.toBeInTheDocument();
+    expect(within(summary).getByText("新手 6 人快局")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "选择 6 号座位，当前为 请选择" }),
+    ).toBeVisible();
   });
 
-  it("renders a text fallback instead of classic artwork for unknown rule card assets", async () => {
-    gameClientMocks.listRuleSets.mockResolvedValue({
-      rule_sets: [
-        {
-          ...classicRuleSet,
-          id: "custom_10",
-          name: "自定义 10 人局",
-          player_count: 10,
-          role_summary: "3 狼人 / 7 好人",
-          complexity: "自定义",
-        },
-      ],
-    });
+  it("retries a failed rule query from the summary", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.listRuleSets
+      .mockRejectedValueOnce(new Error("rules unavailable"))
+      .mockResolvedValueOnce({ rule_sets: [starterRuleSet] });
     renderGamesPage();
 
-    const selectedRule = await screen.findByRole("radio", {
-      name: "选择规则 自定义 10 人局，10 人局，3 狼人 / 7 好人",
-    });
-    const selectedCard = selectedRule.closest(".mobile-lobby-rule-card");
+    await user.click(
+      await screen.findByRole("button", { name: "重新加载规则" }),
+    );
 
-    expect(selectedCard).toHaveTextContent("自定义 10 人局");
-    expect(selectedCard).toHaveTextContent("10 人局");
-    expect(selectedCard).toHaveTextContent("3 狼人 / 7 好人");
-    expect(
-      selectedCard?.querySelector(".mobile-lobby-rule-card-image"),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByText("新手 6 人快局")).toBeVisible();
+    expect(gameClientMocks.listRuleSets).toHaveBeenCalledTimes(2);
   });
 
   it("lets the twelve-seat lobby scroll clear of the fixed action bar", async () => {
@@ -726,9 +677,6 @@ describe("GamesPage", () => {
       )?.[0] ?? "";
     const lobbyPageRule =
       styles.match(/(?:^|\n)\.mobile-lobby-page\s*{[^}]+}/)?.[0] ?? "";
-    const ruleScrollRule =
-      styles.match(/(?:^|\n)\.mobile-lobby-rule-scroll\s*{[^}]+}/)?.[0] ?? "";
-
     expect(lobbyContentRegionRule).toContain("overflow-y: auto");
     expect(lobbyContentRegionRule).not.toContain("overflow: hidden");
     expect(lobbyPageRule).toContain("min-height: 100%");
@@ -738,70 +686,12 @@ describe("GamesPage", () => {
     expect(lobbyPageRule).toContain(
       "padding: 10px var(--mobile-page-padding-inline) calc(var(--mobile-tab-frame-height) + 128px + env(safe-area-inset-bottom))",
     );
-    expect(ruleScrollRule).toContain("overflow-x: auto");
   });
 
-  it("centers rule indicator dots and highlights the selected rule color", async () => {
-    const user = userEvent.setup();
-    const scrollTo = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
-      configurable: true,
-      value: scrollTo,
-    });
-    gameClientMocks.listRuleSets.mockResolvedValue({
-      rule_sets: [classicRuleSet, starterRuleSet, socialRuleSet, classic12RuleSet],
-    });
+  it("adds gothic board backgrounds behind the lineup and settings headings", async () => {
     renderGamesPage();
 
-    const indicators = await screen.findByLabelText("规则选择指示");
-    const dots = within(indicators).getAllByRole("button");
-
-    expect(dots).toHaveLength(4);
-    expect(dots[0]).toHaveAttribute("aria-current", "true");
-    expect(dots[0]).toHaveClass("mobile-lobby-rule-dot-classic");
-    expect(dots[1]).toHaveClass("mobile-lobby-rule-dot-starter");
-    expect(dots[2]).toHaveClass("mobile-lobby-rule-dot-social");
-    expect(dots[3]).toHaveClass("mobile-lobby-rule-dot-advanced");
-
-    await user.click(dots[1]);
-
-    expect(
-      screen.getByRole("radio", { name: "选择规则 新手 6 人快局" }),
-    ).toBeChecked();
-    expect(scrollTo).toHaveBeenCalledWith({
-      behavior: "smooth",
-      left: expect.any(Number),
-    });
-    expect(dots[1]).toHaveAttribute("aria-current", "true");
-    expect(dots[0]).not.toHaveAttribute("aria-current");
-
-    const styles = readFileSync("src/styles/index.css", "utf8");
-    const dotsRule = styles.match(/\.mobile-lobby-rule-dots\s*{[^}]+}/)?.[0];
-    const dotRule = styles.match(/\.mobile-lobby-rule-dot\s*{[^}]+}/)?.[0] ?? "";
-    const dotBeforeRule =
-      styles.match(/\.mobile-lobby-rule-dot::before\s*{[^}]+}/)?.[0] ?? "";
-    const activeDotBeforeRule =
-      styles.match(/\.mobile-lobby-rule-dot-active::before\s*{[^}]+}/)?.[0] ?? "";
-
-    expect(dotsRule).toContain("justify-content: center");
-    expect(dotsRule).toContain("gap: 4px");
-    expect(dotsRule).toContain("min-height: 20px");
-    expect(dotRule).toContain("width: 22px");
-    expect(dotRule).toContain("height: 20px");
-    expect(dotRule).toContain("background: transparent");
-    expect(dotBeforeRule).toContain("width: 7px");
-    expect(dotBeforeRule).toContain("height: 7px");
-    expect(activeDotBeforeRule).toContain("width: 18px");
-    expect(styles).toContain(".mobile-lobby-rule-dot-classic");
-    expect(styles).toContain(".mobile-lobby-rule-dot-starter");
-    expect(styles).toContain(".mobile-lobby-rule-dot-social");
-    expect(styles).toContain(".mobile-lobby-rule-dot-advanced");
-  });
-
-  it("adds gothic board backgrounds behind the three lobby section headings", async () => {
-    renderGamesPage();
-
-    const headingNames = ["规则选择", "组建阵容", "填充设置"];
+    const headingNames = ["组建阵容", "填充设置"];
 
     for (const headingName of headingNames) {
       const heading = await screen.findByRole("heading", { name: headingName });
@@ -884,10 +774,8 @@ describe("GamesPage", () => {
     });
     renderGamesPage();
 
-    const ruleHeading = await screen.findByRole("heading", { name: "规则选择" });
-    const ruleSection = ruleHeading.closest("section");
-    expect(ruleSection).not.toBeNull();
-    expect(within(ruleSection as HTMLElement).queryByText("12 人局")).not.toBeInTheDocument();
+    const ruleSummary = await screen.findByRole("region", { name: "当前规则" });
+    expect(within(ruleSummary).queryByText("12 人局")).not.toBeInTheDocument();
 
     const seatSummary = await screen.findByText("12 人预女猎白局 · 12 个座位");
     expect(seatSummary).toHaveClass("mobile-lobby-seat-summary");
