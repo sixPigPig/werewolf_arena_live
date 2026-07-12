@@ -32,7 +32,7 @@ RuleTag = Annotated[str, Field(min_length=1, max_length=RULE_TAG_MAX_LENGTH)]
 
 
 class AdminRuleSetRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class AdminRuleRoleCounts(AdminRuleSetRequest):

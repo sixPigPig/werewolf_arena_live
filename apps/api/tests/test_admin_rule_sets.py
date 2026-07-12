@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -454,6 +456,56 @@ def test_rule_set_list_filters_sorts_and_paginates_safe_snapshots(
     assert "updated_by_user_id" not in item
 
 
+@pytest.mark.parametrize(
+    ("params", "expected_field", "contains_giant_input"),
+    [
+        ({"page": 10**100}, "query.page", True),
+        ({"player_count": 10**100}, "query.player_count", True),
+        ({"player_count": 0}, "query.player_count", False),
+        ({"player_count": 13}, "query.player_count", False),
+    ],
+    ids=("huge-page", "huge-player-count", "player-count-zero", "player-count-thirteen"),
+)
+def test_rule_set_list_rejects_unsafe_integer_filters_before_repository_access(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+    params: dict[str, int],
+    expected_field: str,
+    contains_giant_input: bool,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    repository_calls: list[dict[str, object]] = []
+
+    def repository_sentinel(*_args: object, **kwargs: object) -> SimpleNamespace:
+        repository_calls.append(kwargs)
+        return SimpleNamespace(
+            items=(),
+            page=1,
+            page_size=20,
+            total=0,
+            pages=0,
+        )
+
+    monkeypatch.setattr(route_module, "list_rule_sets", repository_sentinel)
+    _login(context, monkeypatch)
+
+    response = context.client.get("/api/v1/admin/rule-sets", params=params)
+
+    assert response.status_code == 422
+    assert repository_calls == []
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+    request_id = response.headers["x-request-id"]
+    assert 1 <= len(request_id) <= 80
+    payload = response.json()
+    assert payload["code"] == "admin_request_invalid"
+    assert payload["detail"] == "One or more request fields are invalid."
+    assert {error["field"] for error in payload["errors"]} == {expected_field}
+    if contains_giant_input:
+        assert str(10**100) not in response.text
+
+
 def test_rule_set_detail_is_bounded_and_uses_current_storage_counts_and_warnings(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
@@ -597,3 +649,226 @@ def test_rule_set_request_contracts_are_strict_and_bounded() -> None:
         }
     )
     assert archive.replacement_default_rule_set_id == "replacement_rule"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (field, value)
+        for field in (
+            "expected_rule_set_lock_version",
+            "expected_revision_lock_version",
+            "display_order",
+        )
+        for value in (True, False, "1", 1.0)
+    ],
+)
+def test_rule_set_draft_integer_fields_reject_coerced_scalars(
+    field: str,
+    value: object,
+) -> None:
+    from app.api.schemas.admin_rule_sets import AdminRuleSetDraftUpdate
+
+    payload = {
+        "expected_rule_set_lock_version": 1,
+        "expected_revision_lock_version": 1,
+        "display_order": 0,
+        "config": _config(name="Strict integers"),
+    }
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        AdminRuleSetDraftUpdate.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "role_id",
+    ["werewolf", "villager", "seer", "guard", "witch", "hunter", "idiot"],
+)
+@pytest.mark.parametrize("value", [True, False, "1", 1.0])
+def test_each_rule_role_count_rejects_coerced_scalars(
+    role_id: str,
+    value: object,
+) -> None:
+    from app.api.schemas.admin_rule_sets import AdminRuleSetDraftUpdate
+
+    payload = {
+        "expected_rule_set_lock_version": 1,
+        "expected_revision_lock_version": 1,
+        "display_order": 0,
+        "config": _config(name="Strict roles"),
+    }
+    role_counts = payload["config"]["role_counts"]
+    assert isinstance(role_counts, dict)
+    role_counts[role_id] = value
+
+    with pytest.raises(ValidationError):
+        AdminRuleSetDraftUpdate.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "field", "value"),
+    [
+        ("validate", "expected_revision_lock_version", "1"),
+        ("transition", "expected_rule_set_lock_version", True),
+        ("transition", "expected_revision_lock_version", 1.0),
+        ("archive", "replacement_expected_lock_version", "2"),
+        ("default", "expected_rule_set_lock_version", 1.0),
+        ("default", "previous_default_expected_lock_version", "1"),
+        ("duplicate", "expected_source_lock_version", True),
+    ],
+)
+def test_every_rule_request_lock_version_layer_is_strict(
+    model_name: str,
+    field: str,
+    value: object,
+) -> None:
+    from app.api.schemas.admin_rule_sets import (
+        AdminRuleSetArchive,
+        AdminRuleSetDefaultTransition,
+        AdminRuleSetDuplicate,
+        AdminRuleSetTransition,
+        AdminRuleSetValidate,
+    )
+
+    cases = {
+        "validate": (
+            AdminRuleSetValidate,
+            {"expected_revision_lock_version": 1},
+        ),
+        "transition": (
+            AdminRuleSetTransition,
+            {
+                "expected_rule_set_lock_version": 1,
+                "expected_revision_lock_version": 1,
+                "reason": "publish rule",
+            },
+        ),
+        "archive": (
+            AdminRuleSetArchive,
+            {
+                "expected_rule_set_lock_version": 1,
+                "expected_revision_lock_version": None,
+                "reason": "archive rule",
+                "replacement_default_rule_set_id": "replacement_rule",
+                "replacement_expected_lock_version": 2,
+            },
+        ),
+        "default": (
+            AdminRuleSetDefaultTransition,
+            {
+                "expected_rule_set_lock_version": 1,
+                "previous_default_expected_lock_version": 1,
+                "reason": "set default rule",
+            },
+        ),
+        "duplicate": (
+            AdminRuleSetDuplicate,
+            {
+                "expected_source_lock_version": 1,
+                "new_rule_set_id": "copied_rule",
+                "new_name": "Copied Rule",
+            },
+        ),
+    }
+    model, valid_payload = cases[model_name]
+    payload = copy.deepcopy(valid_payload)
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        model.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sheriff_enabled", 1),
+        ("sheriff_enabled", "true"),
+        ("werewolf_self_explosion_enabled", 0),
+        ("werewolf_self_explosion_enabled", "false"),
+    ],
+)
+def test_rule_config_booleans_reject_integer_and_string_values(
+    field: str,
+    value: object,
+) -> None:
+    from app.api.schemas.admin_rule_sets import AdminRuleSetDraftUpdate
+
+    config = _config(name="Strict booleans")
+    config[field] = value
+
+    with pytest.raises(ValidationError):
+        AdminRuleSetDraftUpdate.model_validate(
+            {
+                "expected_rule_set_lock_version": 1,
+                "expected_revision_lock_version": 1,
+                "display_order": 0,
+                "config": config,
+            }
+        )
+
+
+def test_rule_config_vote_weight_rejects_numeric_string() -> None:
+    from app.api.schemas.admin_rule_sets import AdminRuleSetDraftUpdate
+
+    config = _config(name="Strict vote weight")
+    config["sheriff_vote_weight"] = "1.0"
+
+    with pytest.raises(ValidationError):
+        AdminRuleSetDraftUpdate.model_validate(
+            {
+                "expected_rule_set_lock_version": 1,
+                "expected_revision_lock_version": 1,
+                "display_order": 0,
+                "config": config,
+            }
+        )
+
+
+def test_fully_exact_typed_nested_rule_request_remains_valid() -> None:
+    from app.api.schemas.admin_rule_sets import AdminRuleSetDraftUpdate
+
+    request = AdminRuleSetDraftUpdate.model_validate(
+        {
+            "expected_rule_set_lock_version": 3,
+            "expected_revision_lock_version": 2,
+            "display_order": 1,
+            "config": _config(name="Exact typed request"),
+        }
+    )
+
+    assert type(request.expected_rule_set_lock_version) is int
+    assert type(request.expected_revision_lock_version) is int
+    assert type(request.display_order) is int
+    assert type(request.config.sheriff_vote_weight) is float
+    assert type(request.config.sheriff_enabled) is bool
+    assert all(type(value) is int for value in request.config.role_counts.model_dump().values())
+
+
+def test_strict_request_models_preserve_extra_length_and_range_rejections() -> None:
+    from app.api.schemas.admin_rule_sets import AdminRuleSetDraftUpdate
+
+    base = {
+        "expected_rule_set_lock_version": 1,
+        "expected_revision_lock_version": 1,
+        "display_order": 0,
+        "config": _config(name="Bounded request"),
+    }
+    invalid_payloads = []
+    for field, value in (
+        ("display_order", -1),
+        ("unexpected", "field"),
+    ):
+        payload = copy.deepcopy(base)
+        payload[field] = value
+        invalid_payloads.append(payload)
+    too_long_name = copy.deepcopy(base)
+    too_long_name["config"]["name"] = "x" * 121
+    invalid_payloads.append(too_long_name)
+    negative_role = copy.deepcopy(base)
+    negative_role["config"]["role_counts"]["werewolf"] = -1
+    invalid_payloads.append(negative_role)
+
+    for payload in invalid_payloads:
+        with pytest.raises(ValidationError):
+            AdminRuleSetDraftUpdate.model_validate(payload)

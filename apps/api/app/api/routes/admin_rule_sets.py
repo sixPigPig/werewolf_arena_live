@@ -43,6 +43,7 @@ from app.rule_sets.snapshots import admin_rule_set_snapshot
 
 router = APIRouter()
 RecoverableDatabaseError = (OperationalError, ProgrammingError)
+_MAX_PAGE = 2_147_483_647
 
 _ROLE_OPTIONS = (
     {"id": "werewolf", "label": "狼人", "min_count": 1, "max_count": 5},
@@ -124,11 +125,14 @@ def list_admin_rule_sets(
         AdminPrincipal,
         Depends(require_admin_permission(AdminPermission.RULES_READ)),
     ],
-    page: Annotated[int, Query(ge=1)] = 1,
+    page: Annotated[int, Query(ge=1, le=_MAX_PAGE)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     q: Annotated[str | None, Query(max_length=120)] = None,
     status: RuleSetStatus | None = None,
-    player_count: Annotated[int | None, Query(ge=0)] = None,
+    player_count: Annotated[
+        int | None,
+        Query(ge=PLAYER_COUNT_MIN, le=PLAYER_COUNT_MAX),
+    ] = None,
     sort: RuleSetSort = "display_order",
 ) -> AdminRuleSetListResponse:
     try:
