@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 
 
 RULE_SCHEMA_VERSION = 1
+_MAX_ADMIN_REVISION_HISTORY = 50
 ROLE_ORDER: tuple[RuleRoleId, ...] = (
     "werewolf",
     "seer",
@@ -218,7 +219,7 @@ def admin_rule_set_snapshot(aggregate: RuleSetAggregate) -> dict[str, object]:
         ),
         "revisions": [
             admin_rule_revision_snapshot(revision, include_config=False)
-            for revision in aggregate.revisions
+            for revision in aggregate.revisions[:_MAX_ADMIN_REVISION_HISTORY]
         ],
         "created_at": record.created_at,
         "updated_at": record.updated_at,

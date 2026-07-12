@@ -5,12 +5,13 @@ from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.models import RuleSetRecord, RuleSetRevisionRecord
 from app.rule_sets.repository import (
+    RuleSetAggregate,
     RuleSetCatalogCorrupt,
     RuleSetPage,
     get_rule_set_aggregate,
@@ -340,6 +341,61 @@ def test_single_record_revision_and_bounded_history_reads(db: Session) -> None:
         list_rule_set_revisions(db, "classic_8", limit=51)
 
 
+def test_aggregate_read_executes_one_parent_pointer_and_history_statement(
+    db: Session,
+) -> None:
+    engine = db.get_bind()
+    statements: list[str] = []
+
+    def count_statement(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_statement)
+    try:
+        aggregate = get_rule_set_aggregate(db, "classic_8")
+    finally:
+        event.remove(engine, "before_cursor_execute", count_statement)
+
+    assert aggregate is not None
+    assert len(statements) == 3
+
+
+def test_default_repository_history_returns_latest_fifty_in_deterministic_order(
+    db: Session,
+) -> None:
+    db.add_all(
+        _revision(
+            revision_id=f"20000000-0000-0000-0000-{revision_no:012d}",
+            rule_set_id="classic_8",
+            revision_no=revision_no,
+            state="superseded",
+            config=_classic_config(name=f"历史版本 {revision_no}"),
+            updated_at=datetime(2026, 7, 1, tzinfo=UTC),
+        )
+        for revision_no in range(3, 58)
+    )
+    db.commit()
+
+    history = list_rule_set_revisions(db, "classic_8")
+    aggregate = get_rule_set_aggregate(db, "classic_8")
+
+    assert aggregate is not None
+    assert len(history) == len(aggregate.revisions) == 50
+    assert [revision.revision_no for revision in history] == list(range(57, 7, -1))
+    assert [revision.id for revision in history] == [
+        f"20000000-0000-0000-0000-{revision_no:012d}" for revision_no in range(57, 7, -1)
+    ]
+    assert aggregate.revisions == history
+    assert next_rule_set_revision_no(db, "classic_8") == 58
+
+
 def test_public_listing_excludes_draft_and_archived_and_is_default_first(
     db: Session,
 ) -> None:
@@ -353,6 +409,62 @@ def test_public_listing_excludes_draft_and_archived_and_is_default_first(
     assert all(aggregate.record.status == "published" for aggregate in aggregates)
     assert all(aggregate.draft is None for aggregate in aggregates)
     assert all(aggregate.published is not None for aggregate in aggregates)
+
+
+def test_public_listing_breaks_equal_display_order_ties_by_stable_id(db: Session) -> None:
+    timestamp = datetime(2026, 7, 5, tzinfo=UTC)
+    alpha_revision_id = "00000000-0000-0000-0000-000000000501"
+    zeta_revision_id = "00000000-0000-0000-0000-000000000601"
+    db.add_all(
+        (
+            RuleSetRecord(
+                id="zeta_rule",
+                status="published",
+                current_published_revision_id=zeta_revision_id,
+                is_default=False,
+                display_order=5,
+                created_at=timestamp,
+                updated_at=timestamp,
+            ),
+            RuleSetRecord(
+                id="alpha_rule",
+                status="published",
+                current_published_revision_id=alpha_revision_id,
+                is_default=False,
+                display_order=5,
+                created_at=timestamp,
+                updated_at=timestamp,
+            ),
+            _revision(
+                revision_id=zeta_revision_id,
+                rule_set_id="zeta_rule",
+                revision_no=1,
+                state="published",
+                config=_social_config(name="Zeta Rule"),
+                updated_at=timestamp,
+            ),
+            _revision(
+                revision_id=alpha_revision_id,
+                rule_set_id="alpha_rule",
+                revision_no=1,
+                state="published",
+                config=_social_config(name="Alpha Rule"),
+                updated_at=timestamp,
+            ),
+        )
+    )
+    db.commit()
+
+    aggregates = list_published_rule_sets(db)
+
+    assert [aggregate.record.id for aggregate in aggregates] == [
+        "classic_8",
+        "starter_6",
+        "alpha_rule",
+        "zeta_rule",
+    ]
+    assert "draft_only" not in {aggregate.record.id for aggregate in aggregates}
+    assert "archived_social" not in {aggregate.record.id for aggregate in aggregates}
 
 
 @pytest.mark.parametrize(
@@ -372,15 +484,70 @@ def test_parent_pointer_ownership_mismatch_raises_catalog_corrupt(
     setattr(record, pointer, foreign_revision_id)
     db.flush()
 
-    with pytest.raises(RuleSetCatalogCorrupt):
-        get_rule_set_record(db, "classic_8")
+    for read in (
+        lambda: get_rule_set_record(db, "classic_8"),
+        lambda: get_rule_set_aggregate(db, "classic_8"),
+        lambda: list_published_rule_sets(db),
+    ):
+        with pytest.raises(RuleSetCatalogCorrupt) as error:
+            read()
+        _assert_bounded_catalog_error(
+            error.value,
+            pointer=pointer,
+            revision_id=foreign_revision_id,
+            reason="pointer_owner_mismatch",
+        )
 
-    with pytest.raises(RuleSetCatalogCorrupt) as error:
-        get_rule_set_aggregate(db, "classic_8")
 
-    assert error.value.rule_set_id == "classic_8"
-    assert error.value.pointer == pointer
-    assert foreign_revision_id in str(error.value)
+@pytest.mark.parametrize(
+    ("pointer", "revision_id", "reason"),
+    [
+        (
+            "current_published_revision_id",
+            "00000000-0000-0000-0000-000000000999",
+            "pointer_target_missing",
+        ),
+        (
+            "draft_revision_id",
+            "00000000-0000-0000-0000-000000000998",
+            "pointer_target_missing",
+        ),
+        (
+            "current_published_revision_id",
+            CLASSIC_OLD_REVISION_ID,
+            "pointer_state_mismatch",
+        ),
+        (
+            "draft_revision_id",
+            CLASSIC_REVISION_ID,
+            "pointer_state_mismatch",
+        ),
+    ],
+)
+def test_parent_pointer_missing_target_or_wrong_state_is_rejected_at_every_read_boundary(
+    db: Session,
+    pointer: str,
+    revision_id: str,
+    reason: str,
+) -> None:
+    record = db.get(RuleSetRecord, "classic_8")
+    assert record is not None
+    setattr(record, pointer, revision_id)
+    db.flush()
+
+    for read in (
+        lambda: get_rule_set_record(db, "classic_8"),
+        lambda: get_rule_set_aggregate(db, "classic_8"),
+        lambda: list_published_rule_sets(db),
+    ):
+        with pytest.raises(RuleSetCatalogCorrupt) as error:
+            read()
+        _assert_bounded_catalog_error(
+            error.value,
+            pointer=pointer,
+            revision_id=revision_id,
+            reason=reason,
+        )
 
 
 def test_public_listing_never_silently_uses_a_foreign_published_pointer(
@@ -496,6 +663,37 @@ def test_admin_snapshots_detach_config_and_bound_revision_history(db: Session) -
     assert all(item["config"] is None for item in snapshot["revisions"])
 
 
+def test_admin_snapshot_caps_caller_supplied_revision_history_at_fifty(
+    db: Session,
+) -> None:
+    aggregate = get_rule_set_aggregate(db, "classic_8")
+    assert aggregate is not None
+    supplied = tuple(
+        _revision(
+            revision_id=f"10000000-0000-0000-0000-{revision_no:012d}",
+            rule_set_id="classic_8",
+            revision_no=revision_no,
+            state="superseded",
+            config=_classic_config(name=f"历史版本 {revision_no}"),
+            updated_at=datetime(2026, 7, 1, tzinfo=UTC),
+        )
+        for revision_no in range(55, 0, -1)
+    )
+    unbounded = RuleSetAggregate(
+        record=aggregate.record,
+        draft=aggregate.draft,
+        published=aggregate.published,
+        revisions=supplied,
+    )
+
+    snapshot = admin_rule_set_snapshot(unbounded)
+
+    assert len(snapshot["revisions"]) == 50
+    assert [item["revision_no"] for item in snapshot["revisions"]] == list(range(55, 5, -1))
+    assert all(item["config"] is None for item in snapshot["revisions"])
+    assert all("name" not in item and "description" not in item for item in snapshot["revisions"])
+
+
 def test_audit_snapshot_contains_only_bounded_metadata_and_changed_fields(
     db: Session,
 ) -> None:
@@ -522,3 +720,21 @@ def test_audit_snapshot_contains_only_bounded_metadata_and_changed_fields(
     assert "roles" not in encoded
     assert "tampered" not in encoded
     assert "must-not-enter-audit" not in encoded
+
+
+def _assert_bounded_catalog_error(
+    error: RuleSetCatalogCorrupt,
+    *,
+    pointer: str,
+    revision_id: str,
+    reason: str,
+) -> None:
+    assert vars(error) == {
+        "rule_set_id": "classic_8",
+        "pointer": pointer,
+        "revision_id": revision_id,
+        "reason": reason,
+    }
+    assert len(str(error)) <= 200
+    assert "config" not in str(error)
+    assert "description" not in str(error)

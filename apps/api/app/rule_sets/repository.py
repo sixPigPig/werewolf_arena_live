@@ -130,10 +130,7 @@ def get_rule_set_record(
     *,
     for_update: bool = False,
 ) -> RuleSetRecord | None:
-    query = select(RuleSetRecord).where(RuleSetRecord.id == rule_set_id)
-    if for_update:
-        query = query.with_for_update()
-    record = db.scalar(query)
+    record = _fetch_rule_set_record(db, rule_set_id, for_update=for_update)
     if record is not None:
         _aggregates_for_records(db, (record,))
     return record
@@ -146,7 +143,7 @@ def get_rule_set_aggregate(
     revision_limit: int = _MAX_REVISION_HISTORY,
     for_update: bool = False,
 ) -> RuleSetAggregate | None:
-    record = get_rule_set_record(db, rule_set_id, for_update=for_update)
+    record = _fetch_rule_set_record(db, rule_set_id, for_update=for_update)
     if record is None:
         return None
     aggregate = _aggregates_for_records(db, (record,))[0]
@@ -225,6 +222,18 @@ def list_published_rule_sets(db: Session) -> tuple[RuleSetAggregate, ...]:
         )
         for aggregate in aggregates
     )
+
+
+def _fetch_rule_set_record(
+    db: Session,
+    rule_set_id: str,
+    *,
+    for_update: bool,
+) -> RuleSetRecord | None:
+    query = select(RuleSetRecord).where(RuleSetRecord.id == rule_set_id)
+    if for_update:
+        query = query.with_for_update()
+    return db.scalar(query)
 
 
 def _aggregates_for_records(
