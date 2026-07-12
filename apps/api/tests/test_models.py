@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import JSON, LargeBinary, String, Text, create_engine
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +16,7 @@ from app.models.live import (
 )
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.public import PublicSession, UserFavoritePlayerProfile
+from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.runtime_worker import RuntimeWorkerRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -78,12 +81,10 @@ def test_user_table_matches_expected_schema() -> None:
     assert table.c.auth_provider.nullable is True
     assert table.c.auth_subject.nullable is True
     assert any(
-        constraint.name == "ck_users_auth_identity_paired"
-        for constraint in table.constraints
+        constraint.name == "ck_users_auth_identity_paired" for constraint in table.constraints
     )
     assert any(
-        constraint.name == "uq_users_auth_provider_subject"
-        for constraint in table.constraints
+        constraint.name == "uq_users_auth_provider_subject" for constraint in table.constraints
     )
     assert table.c.admin_role.index is True
     assert table.c.admin_version.nullable is False
@@ -569,6 +570,206 @@ def test_runtime_worker_table_matches_expected_schema() -> None:
         "ix_runtime_workers_type_heartbeat_desc",
         ["worker_type", "heartbeat_at"],
     )
+
+
+def test_rule_set_catalog_tables_match_expected_schema() -> None:
+    rule_sets = RuleSetRecord.__table__
+    revisions = RuleSetRevisionRecord.__table__
+
+    assert rule_sets.name == "rule_sets"
+    assert set(rule_sets.columns.keys()) == {
+        "id",
+        "status",
+        "current_published_revision_id",
+        "draft_revision_id",
+        "is_default",
+        "display_order",
+        "lock_version",
+        "created_by_user_id",
+        "updated_by_user_id",
+        "archived_by_user_id",
+        "created_at",
+        "updated_at",
+        "archived_at",
+    }
+    assert revisions.name == "rule_set_revisions"
+    assert set(revisions.columns.keys()) == {
+        "id",
+        "rule_set_id",
+        "revision_no",
+        "state",
+        "schema_version",
+        "content_hash",
+        "lock_version",
+        "name",
+        "description",
+        "player_count",
+        "role_summary",
+        "complexity",
+        "estimated_duration",
+        "config",
+        "created_by_user_id",
+        "updated_by_user_id",
+        "published_by_user_id",
+        "publish_reason",
+        "created_at",
+        "updated_at",
+        "published_at",
+    }
+
+    _assert_string_column(rule_sets.c.id, length=80, nullable=False)
+    _assert_string_column(
+        rule_sets.c.current_published_revision_id,
+        length=36,
+        nullable=True,
+    )
+    _assert_string_column(rule_sets.c.draft_revision_id, length=36, nullable=True)
+    assert not rule_sets.c.current_published_revision_id.foreign_keys
+    assert not rule_sets.c.draft_revision_id.foreign_keys
+    assert rule_sets.c.current_published_revision_id.index is True
+    assert rule_sets.c.draft_revision_id.index is True
+
+    _assert_string_column(revisions.c.id, length=36, nullable=False)
+    _assert_string_column(revisions.c.rule_set_id, length=80, nullable=False)
+    _assert_foreign_key(
+        revisions.c.rule_set_id,
+        target="rule_sets.id",
+        ondelete="RESTRICT",
+    )
+    _assert_string_column(revisions.c.content_hash, length=64, nullable=True)
+    _assert_string_column(revisions.c.name, length=120, nullable=False)
+    _assert_text_column(revisions.c.description, nullable=False)
+    _assert_json_column(revisions.c.config, nullable=False)
+
+    constraint_names = {
+        constraint.name
+        for table in (rule_sets, revisions)
+        for constraint in table.constraints
+        if constraint.name is not None
+    }
+    assert {
+        "ck_rule_sets_status",
+        "ck_rule_sets_lock_version_positive",
+        "ck_rule_sets_display_order_nonnegative",
+        "ck_rule_sets_default_published",
+        "ck_rule_sets_pointer_state",
+        "ck_rule_sets_archive_timestamp",
+        "ck_rule_set_revisions_state",
+        "ck_rule_set_revisions_revision_positive",
+        "ck_rule_set_revisions_schema_version",
+        "ck_rule_set_revisions_lock_version_positive",
+        "ck_rule_set_revisions_publish_fields",
+        "uq_rule_set_revisions_rule_revision",
+    } <= constraint_names
+
+    indexes = {index.name: index for table in (rule_sets, revisions) for index in table.indexes}
+    for name in (
+        "uq_rule_sets_one_default",
+        "uq_rule_set_revisions_one_draft",
+        "uq_rule_set_revisions_one_published",
+    ):
+        assert indexes[name].unique is True
+        assert indexes[name].dialect_options["postgresql"]["where"] is not None
+        assert indexes[name].dialect_options["sqlite"]["where"] is not None
+
+    assert RuleSetRecord.__mapper__.version_id_col is rule_sets.c.lock_version
+    assert RuleSetRevisionRecord.__mapper__.version_id_col is revisions.c.lock_version
+
+
+def _published_rule_revision(*, revision_id: str) -> RuleSetRevisionRecord:
+    return RuleSetRevisionRecord(
+        id=revision_id,
+        rule_set_id="classic_8",
+        revision_no=1,
+        state="published",
+        schema_version=1,
+        content_hash="0" * 64,
+        name="经典 8 人局",
+        description="官方标准局",
+        player_count=8,
+        role_summary="2 狼人 / 6 好人",
+        complexity="标准",
+        estimated_duration="中",
+        config={"name": "经典 8 人局"},
+        published_at=datetime.now(UTC),
+    )
+
+
+def test_published_rule_revision_only_allows_clean_supersede_transition() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        revision = _published_rule_revision(revision_id="00000000-0000-0000-0000-000000000001")
+        session.add(revision)
+        session.commit()
+        session.refresh(revision)
+
+        revision.name = "被篡改"
+        revision.state = "superseded"
+        with pytest.raises(ValueError, match="published rule revision content is immutable"):
+            session.flush()
+        session.rollback()
+
+        revision = session.get(RuleSetRevisionRecord, revision.id)
+        assert revision is not None
+        revision.state = "superseded"
+        session.commit()
+
+        assert revision.state == "superseded"
+
+
+def test_published_and_superseded_rule_revisions_cannot_be_deleted_or_rewritten() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        published = _published_rule_revision(revision_id="00000000-0000-0000-0000-000000000002")
+        session.add(published)
+        session.commit()
+
+        session.delete(published)
+        with pytest.raises(ValueError, match="only draft rule revisions can be deleted"):
+            session.flush()
+        session.rollback()
+
+        published = session.get(RuleSetRevisionRecord, published.id)
+        assert published is not None
+        published.state = "superseded"
+        session.commit()
+        published.description = "被篡改"
+        with pytest.raises(ValueError, match="superseded rule revision is immutable"):
+            session.flush()
+
+
+def test_never_published_draft_revision_can_be_deleted() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        draft = RuleSetRevisionRecord(
+            id="00000000-0000-0000-0000-000000000003",
+            rule_set_id="starter_6",
+            revision_no=1,
+            state="draft",
+            schema_version=1,
+            content_hash=None,
+            name="新手 6 人快局",
+            description="草稿",
+            player_count=6,
+            role_summary="1 狼人 / 5 好人",
+            complexity="入门",
+            estimated_duration="短",
+            config={"name": "新手 6 人快局"},
+        )
+        session.add(draft)
+        session.commit()
+        draft_id = draft.id
+
+        session.delete(draft)
+        session.commit()
+
+        assert session.get(RuleSetRevisionRecord, draft_id) is None
 
 
 def test_live_event_table_matches_expected_schema() -> None:
