@@ -1,12 +1,26 @@
 /// <reference types="node" />
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { RouterProvider, createMemoryRouter, type RouteObject } from "react-router-dom";
+import {
+  Navigate,
+  RouterProvider,
+  createMemoryRouter,
+  type RouteObject,
+} from "react-router-dom";
 
+import { MobileAppShell } from "../layout/MobileAppShell";
+import { GameDetailPage } from "../pages/GameDetailPage";
+import { GamesPage } from "../pages/GamesPage";
+import { HistoryPage } from "../pages/HistoryPage";
+import { LivePage } from "../pages/LivePage";
+import { LiveReplayPage } from "../pages/LiveReplayPage";
+import { PlaybackPage } from "../pages/PlaybackPage";
+import { PlayerDetailPage } from "../pages/PlayerDetailPage";
+import { PlayersPage } from "../pages/PlayersPage";
 import { routes } from "../routes/definitions";
 import { updateRootFontSize } from "../styles/rem";
 
@@ -32,6 +46,24 @@ const routeSmokeCases = [
   { path: "/players", heading: "玩家图鉴" },
   { path: "/players/seer-1", heading: "玩家详情" },
   { path: "/history", heading: "对局历史" },
+];
+
+const eagerTestRoutes: RouteObject[] = [
+  {
+    path: "/",
+    element: <MobileAppShell />,
+    children: [
+      { index: true, element: <Navigate to="/games" replace /> },
+      { path: "games", element: <GamesPage /> },
+      { path: "games/:gameId", element: <GameDetailPage /> },
+      { path: "games/:gameId/live", element: <LivePage /> },
+      { path: "games/:gameId/live-replay", element: <LiveReplayPage /> },
+      { path: "games/:gameId/replay", element: <PlaybackPage /> },
+      { path: "players", element: <PlayersPage /> },
+      { path: "players/:playerId", element: <PlayerDetailPage /> },
+      { path: "history", element: <HistoryPage /> },
+    ],
+  },
 ];
 
 function joinRoutePath(parentPath: string, childPath?: string) {
@@ -75,10 +107,13 @@ function renderWithQueryClient(ui: ReactNode) {
 
 describe("mobile app scaffold", () => {
   it("redirects the mobile root route to games", async () => {
-    const router = createMemoryRouter(routes, { initialEntries: ["/"] });
+    const router = createMemoryRouter(eagerTestRoutes, { initialEntries: ["/"] });
 
     renderWithQueryClient(<RouterProvider router={router} />);
 
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/games");
+    });
     expect(
       await screen.findByRole("heading", { name: "狼人杀对局大厅" }),
     ).toBeInTheDocument();
@@ -90,7 +125,9 @@ describe("mobile app scaffold", () => {
 
   it("renders every required mobile route", async () => {
     for (const routeCase of routeSmokeCases) {
-      const router = createMemoryRouter(routes, { initialEntries: [routeCase.path] });
+      const router = createMemoryRouter(eagerTestRoutes, {
+        initialEntries: [routeCase.path],
+      });
       const { unmount } = renderWithQueryClient(
         <RouterProvider router={router} />,
       );

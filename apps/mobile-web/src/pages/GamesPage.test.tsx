@@ -14,12 +14,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 
-import { routes } from "../routes/definitions";
 import type {
   GameRun,
   PublicPlayerProfile,
   RuleSetSummary,
 } from "@werewolf-arena/game-client";
+import { GamesPage } from "./GamesPage";
 
 const gameClientMocks = vi.hoisted(() => ({
   createGameRun: vi.fn(),
@@ -129,7 +129,13 @@ function renderGamesPage() {
       mutations: { retry: false },
     },
   });
-  const router = createMemoryRouter(routes, { initialEntries: ["/games"] });
+  const router = createMemoryRouter(
+    [
+      { path: "/games", element: <GamesPage /> },
+      { path: "/games/:gameId/live", element: <div /> },
+    ],
+    { initialEntries: ["/games"] },
+  );
 
   render(
     <QueryClientProvider client={queryClient}>
