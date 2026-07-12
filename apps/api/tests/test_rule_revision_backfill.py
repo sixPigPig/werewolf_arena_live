@@ -76,7 +76,7 @@ class RecordingOperations:
             {"dialect": type("RecordingDialect", (), {"name": dialect_name})()},
         )()
         self.context = RecordingMigrationContext(events)
-        self.index_calls: list[tuple[str, dict[str, object]]] = []
+        self.index_calls: list[tuple[str, str, dict[str, object]]] = []
 
     def get_bind(self) -> object:
         return self.connection
@@ -85,10 +85,36 @@ class RecordingOperations:
         return self.context
 
     def create_index(self, index_name: str, *_args: object, **kwargs: object) -> None:
-        self.index_calls.append((index_name, kwargs))
+        self.index_calls.append(("create", index_name, kwargs))
 
     def drop_index(self, index_name: str, **kwargs: object) -> None:
-        self.index_calls.append((index_name, kwargs))
+        self.index_calls.append(("drop", index_name, kwargs))
+
+
+def _correct_postgresql_index_entry(
+    *,
+    index_name: str = "ix_live_runs_rule_set_revision_id",
+    table_name: str = "live_runs",
+    columns: tuple[str, ...] = ("rule_set_revision_id",),
+    descending: tuple[bool, ...] = (False,),
+    **overrides: object,
+) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "index_name": index_name,
+        "table_name": table_name,
+        "is_valid": True,
+        "is_ready": True,
+        "is_unique": False,
+        "access_method": "btree",
+        "has_predicate": False,
+        "has_expressions": False,
+        "key_count": len(columns),
+        "total_column_count": len(columns),
+        "column_names": columns,
+        "descending": descending,
+    }
+    entry.update(overrides)
+    return entry
 
 
 def _role(
@@ -617,6 +643,12 @@ def test_postgresql_upgrade_releases_schema_lock_before_data_and_concurrent_inde
     )
     monkeypatch.setattr(
         migration,
+        "_repair_postgresql_indexes",
+        lambda _connection: events.append("index_recovery"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        migration,
         "_create_indexes",
         lambda *, postgresql_concurrently: events.append(
             f"indexes_concurrently_{postgresql_concurrently}"
@@ -630,6 +662,7 @@ def test_postgresql_upgrade_releases_schema_lock_before_data_and_concurrent_inde
         "autocommit_enter",
         "game_backfill",
         "live_backfill",
+        "index_recovery",
         "indexes_concurrently_True",
         "autocommit_exit",
     ]
@@ -679,10 +712,152 @@ def test_postgresql_index_operations_are_concurrent_and_restart_safe() -> None:
     migration._drop_indexes(postgresql_concurrently=True)
 
     assert len(operations.index_calls) == 8
-    for _index_name, kwargs in operations.index_calls[:4]:
+    for operation, _index_name, kwargs in operations.index_calls[:4]:
+        assert operation == "create"
         assert kwargs["if_not_exists"] is True
         assert kwargs["postgresql_concurrently"] is True
-    for _index_name, kwargs in operations.index_calls[4:]:
+    for operation, _index_name, kwargs in operations.index_calls[4:]:
+        assert operation == "drop"
+        assert kwargs["if_exists"] is True
+        assert kwargs["postgresql_concurrently"] is True
+
+
+def test_postgresql_index_catalog_decision_covers_all_required_properties() -> None:
+    migration = _load_migration(BACKFILL_MIGRATION_PATH, "backfill_index_catalog")
+    expected_specs = (
+        (
+            "ix_live_runs_rule_set_revision_id",
+            "live_runs",
+            (("rule_set_revision_id", False),),
+        ),
+        (
+            "ix_live_runs_rule_set_id_updated_at_run_id_desc",
+            "live_runs",
+            (("rule_set_id", False), ("updated_at", True), ("run_id", True)),
+        ),
+        (
+            "ix_game_sessions_rule_set_revision_id",
+            "game_sessions",
+            (("rule_set_revision_id", False),),
+        ),
+        (
+            "ix_game_sessions_rule_set_id_created_at_session_id_desc",
+            "game_sessions",
+            (("rule_set_id", False), ("created_at", True), ("session_id", True)),
+        ),
+    )
+    assert migration._POSTGRESQL_INDEX_SPECS == expected_specs
+
+    expected_columns = expected_specs[1][2]
+    correct = _correct_postgresql_index_entry(
+        index_name=expected_specs[1][0],
+        columns=tuple(column for column, _descending in expected_columns),
+        descending=tuple(descending for _column, descending in expected_columns),
+    )
+    bad_entries = {
+        "invalid": {**correct, "is_valid": False},
+        "not_ready": {**correct, "is_ready": False},
+        "wrong_table": {**correct, "table_name": "game_sessions"},
+        "wrong_column": {
+            **correct,
+            "column_names": ("rule_set_id", "created_at", "run_id"),
+        },
+        "wrong_order": {
+            **correct,
+            "column_names": ("updated_at", "rule_set_id", "run_id"),
+        },
+        "wrong_direction": {**correct, "descending": (False, False, True)},
+        "unique": {**correct, "is_unique": True},
+        "predicate": {**correct, "has_predicate": True},
+        "expression": {**correct, "has_expressions": True},
+        "wrong_method": {**correct, "access_method": "hash"},
+        "included_column": {**correct, "total_column_count": 4},
+    }
+
+    assert (
+        migration._postgresql_index_needs_replacement(
+            None,
+            table_name=expected_specs[1][1],
+            columns=expected_columns,
+        )
+        is False
+    )
+    assert (
+        migration._postgresql_index_needs_replacement(
+            correct,
+            table_name=expected_specs[1][1],
+            columns=expected_columns,
+        )
+        is False
+    )
+    for case, entry in bad_entries.items():
+        assert migration._postgresql_index_needs_replacement(
+            entry,
+            table_name=expected_specs[1][1],
+            columns=expected_columns,
+        ), case
+
+
+def test_postgresql_index_recovery_drops_only_bad_existing_indexes_before_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = _load_migration(BACKFILL_MIGRATION_PATH, "backfill_index_recovery")
+    operations = RecordingOperations("postgresql", [])
+    migration.op = operations
+    specs = (
+        (
+            "ix_live_runs_rule_set_revision_id",
+            "live_runs",
+            (("rule_set_revision_id", False),),
+        ),
+        (
+            "ix_live_runs_rule_set_id_updated_at_run_id_desc",
+            "live_runs",
+            (("rule_set_id", False), ("updated_at", True), ("run_id", True)),
+        ),
+        (
+            "ix_game_sessions_rule_set_revision_id",
+            "game_sessions",
+            (("rule_set_revision_id", False),),
+        ),
+        (
+            "ix_game_sessions_rule_set_id_created_at_session_id_desc",
+            "game_sessions",
+            (("rule_set_id", False), ("created_at", True), ("session_id", True)),
+        ),
+    )
+    catalog = {
+        specs[0][0]: _correct_postgresql_index_entry(),
+        specs[1][0]: _correct_postgresql_index_entry(
+            index_name=specs[1][0],
+            columns=tuple(column for column, _descending in specs[1][2]),
+            descending=tuple(descending for _column, descending in specs[1][2]),
+            is_valid=False,
+        ),
+        specs[3][0]: _correct_postgresql_index_entry(
+            index_name=specs[3][0],
+            table_name=specs[3][1],
+            columns=tuple(column for column, _descending in specs[3][2]),
+            descending=(False, False, True),
+        ),
+    }
+    monkeypatch.setattr(
+        migration,
+        "_load_postgresql_index_catalog",
+        lambda _connection: catalog,
+        raising=False,
+    )
+
+    migration._repair_postgresql_indexes(operations.connection)
+    migration._create_indexes(postgresql_concurrently=True)
+
+    assert [call[:2] for call in operations.index_calls] == [
+        ("drop", specs[1][0]),
+        ("drop", specs[3][0]),
+        *(("create", index_name) for index_name, _table_name, _columns in specs),
+    ]
+    for operation, _index_name, kwargs in operations.index_calls[:2]:
+        assert operation == "drop"
         assert kwargs["if_exists"] is True
         assert kwargs["postgresql_concurrently"] is True
 

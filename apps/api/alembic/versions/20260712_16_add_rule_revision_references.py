@@ -39,6 +39,29 @@ _LEGACY_SNAPSHOT_MATCHES = {
 
 _BACKFILL_BATCH_SIZE = 500
 
+_POSTGRESQL_INDEX_SPECS = (
+    (
+        "ix_live_runs_rule_set_revision_id",
+        "live_runs",
+        (("rule_set_revision_id", False),),
+    ),
+    (
+        "ix_live_runs_rule_set_id_updated_at_run_id_desc",
+        "live_runs",
+        (("rule_set_id", False), ("updated_at", True), ("run_id", True)),
+    ),
+    (
+        "ix_game_sessions_rule_set_revision_id",
+        "game_sessions",
+        (("rule_set_revision_id", False),),
+    ),
+    (
+        "ix_game_sessions_rule_set_id_created_at_session_id_desc",
+        "game_sessions",
+        (("rule_set_id", False), ("created_at", True), ("session_id", True)),
+    ),
+)
+
 
 def _canonical_snapshot_hash(snapshot: object) -> str | None:
     try:
@@ -293,6 +316,95 @@ def _backfill_live_runs(connection: Any) -> None:
             break
 
 
+def _postgresql_index_needs_replacement(
+    catalog_entry: Any | None,
+    *,
+    table_name: str,
+    columns: tuple[tuple[str, bool], ...],
+) -> bool:
+    if catalog_entry is None:
+        return False
+    expected_column_names = tuple(column_name for column_name, _descending in columns)
+    expected_descending = tuple(descending for _column_name, descending in columns)
+    return not (
+        catalog_entry["table_name"] == table_name
+        and catalog_entry["is_valid"] is True
+        and catalog_entry["is_ready"] is True
+        and catalog_entry["is_unique"] is False
+        and catalog_entry["access_method"] == "btree"
+        and catalog_entry["has_predicate"] is False
+        and catalog_entry["has_expressions"] is False
+        and catalog_entry["key_count"] == len(columns)
+        and catalog_entry["total_column_count"] == len(columns)
+        and tuple(catalog_entry["column_names"]) == expected_column_names
+        and tuple(catalog_entry["descending"]) == expected_descending
+    )
+
+
+def _load_postgresql_index_catalog(connection: Any) -> dict[str, Any]:
+    index_names = [index_name for index_name, _table_name, _columns in _POSTGRESQL_INDEX_SPECS]
+    statement = sa.text(
+        """
+        SELECT index_relation.relname AS index_name,
+               table_relation.relname AS table_name,
+               index_metadata.indisvalid AS is_valid,
+               index_metadata.indisready AS is_ready,
+               index_metadata.indisunique AS is_unique,
+               access_method.amname AS access_method,
+               index_metadata.indpred IS NOT NULL AS has_predicate,
+               index_metadata.indexprs IS NOT NULL AS has_expressions,
+               index_metadata.indnkeyatts AS key_count,
+               index_metadata.indnatts AS total_column_count,
+               ARRAY(
+                   SELECT table_attribute.attname
+                   FROM unnest(index_metadata.indkey::smallint[])
+                        WITH ORDINALITY AS key_column(attribute_number, position)
+                   LEFT JOIN pg_catalog.pg_attribute AS table_attribute
+                     ON table_attribute.attrelid = index_metadata.indrelid
+                    AND table_attribute.attnum = key_column.attribute_number
+                   WHERE key_column.position <= index_metadata.indnkeyatts
+                   ORDER BY key_column.position
+               ) AS column_names,
+               ARRAY(
+                   SELECT (sort_option.option_value & 1) = 1
+                   FROM unnest(index_metadata.indoption::smallint[])
+                        WITH ORDINALITY AS sort_option(option_value, position)
+                   WHERE sort_option.position <= index_metadata.indnkeyatts
+                   ORDER BY sort_option.position
+               ) AS descending
+        FROM pg_catalog.pg_class AS index_relation
+        JOIN pg_catalog.pg_namespace AS index_namespace
+          ON index_namespace.oid = index_relation.relnamespace
+        JOIN pg_catalog.pg_index AS index_metadata
+          ON index_metadata.indexrelid = index_relation.oid
+        JOIN pg_catalog.pg_class AS table_relation
+          ON table_relation.oid = index_metadata.indrelid
+        JOIN pg_catalog.pg_am AS access_method
+          ON access_method.oid = index_relation.relam
+        WHERE index_namespace.nspname = current_schema()
+          AND index_relation.relname IN :index_names
+        """
+    ).bindparams(sa.bindparam("index_names", expanding=True))
+    rows = connection.execute(statement, {"index_names": index_names}).mappings()
+    return {row["index_name"]: dict(row) for row in rows}
+
+
+def _repair_postgresql_indexes(connection: Any) -> None:
+    catalog = _load_postgresql_index_catalog(connection)
+    for index_name, table_name, columns in _POSTGRESQL_INDEX_SPECS:
+        if _postgresql_index_needs_replacement(
+            catalog.get(index_name),
+            table_name=table_name,
+            columns=columns,
+        ):
+            op.drop_index(
+                index_name,
+                table_name=table_name,
+                if_exists=True,
+                postgresql_concurrently=True,
+            )
+
+
 def _create_indexes(*, postgresql_concurrently: bool) -> None:
     live_runs = sa.table(
         "live_runs",
@@ -392,6 +504,7 @@ def upgrade() -> None:
             autocommit_connection = op.get_bind()
             _backfill_game_sessions(autocommit_connection)
             _backfill_live_runs(autocommit_connection)
+            _repair_postgresql_indexes(autocommit_connection)
             _create_indexes(postgresql_concurrently=True)
         return
     _backfill_game_sessions(connection)
