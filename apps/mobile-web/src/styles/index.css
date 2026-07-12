@@ -1077,7 +1077,7 @@ textarea {
   }
 
   .mobile-lobby-seat-card strong {
-    font-size: 12px;
+    font-size: 3.75vw;
   }
 
 }
@@ -3117,4 +3117,47 @@ textarea {
   border: 0 !important;
   outline: 0 !important;
   box-shadow: none !important;
+}
+
+@media (max-width: 360px) {
+  .mobile-lobby-page p,
+  .mobile-lobby-page span,
+  .mobile-lobby-page small,
+  .mobile-lobby-page strong,
+  .mobile-lobby-page em,
+  .mobile-lobby-page button,
+  .mobile-lobby-page input,
+  .mobile-lobby-page summary {
+    font-size: max(3.75vw, 1em) !important;
+  }
+
+  .mobile-profile-row {
+    grid-template-columns: minmax(0, 1fr) 13.75vw;
+  }
+
+  .mobile-lobby-modal-header button,
+  .mobile-profile-filter-trigger,
+  .mobile-profile-picker-footer button,
+  .mobile-profile-row > button:last-child,
+  .mobile-profile-empty button,
+  .mobile-profile-picker-list > button {
+    min-width: 13.75vw;
+    min-height: 13.75vw;
+  }
+
+  .mobile-lobby-rule-summary > button,
+  .mobile-lobby-lineup-actions button,
+  .mobile-lobby-lineup-menu button,
+  .mobile-lobby-advanced summary,
+  .mobile-lobby-launch-button,
+  .mobile-lobby-field input,
+  .mobile-profile-picker .mobile-profile-search input,
+  .mobile-profile-select-trigger {
+    min-height: 13.75vw;
+  }
+
+  .mobile-lobby-lineup-actions button,
+  .mobile-lobby-lineup-menu button {
+    min-width: 13.75vw;
+  }
 }
