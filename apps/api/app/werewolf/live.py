@@ -268,6 +268,19 @@ class LiveStore(Protocol):
 
     def save_run(self, run: LiveGameRun) -> None: ...
 
+    def activate_run(
+        self,
+        run_id: str,
+        *,
+        expected_events: tuple[LiveEvent, ...],
+        expected_status: str,
+        expected_started_at: str | None,
+        activation: LiveEvent,
+        worker_id: str,
+        fence_token: int,
+        started_at: str,
+    ) -> None: ...
+
     def append_event(
         self,
         event: LiveEvent,
@@ -691,42 +704,86 @@ class LiveRunRegistry:
     def mark_running(self, run_id: str) -> LiveEvent:
         with self._lock:
             run = self._runs[run_id]
+            self._raise_if_stop_requested_locked(run)
+            self._raise_if_not_startable_locked(run)
+            if self._live_store is not None:
+                if not self._supports_store_method("activate_run"):
+                    raise RuntimeError(
+                        "Persistent live store does not support atomic activation persistence"
+                    )
+                if not self._supports_store_method("acquire_lease"):
+                    raise RuntimeError(
+                        "Persistent live store does not support activation lease acquisition"
+                    )
+            supports_lease = self._supports_store_method("acquire_lease")
+            has_claimed_lease = (
+                run.worker_id == self.worker_id
+                and run.fence_token > 0
+                and not run.lease_lost
+                and (self._live_store is None or not _lease_is_expired(run.lease_expires_at))
+            )
             activation_key = (run_id, run.fence_token)
             existing_activation = self._activation_events.get(activation_key)
-            if run.status == "running" and existing_activation is not None:
+            if (
+                run.status == "running"
+                and existing_activation is not None
+                and (has_claimed_lease or self._live_store is None)
+            ):
                 return existing_activation
-            has_claimed_lease = (
-                run.worker_id == self.worker_id and run.fence_token > 0 and not run.lease_lost
-            )
             lease_state = (
                 None
                 if has_claimed_lease
                 else self._acquire_lease(run_id, expected_events=tuple(run.events))
             )
-            if (
-                lease_state is None
-                and not has_claimed_lease
-                and self._supports_store_method("acquire_lease")
-            ):
+            if lease_state is None and not has_claimed_lease and supports_lease:
                 raise RunLeaseUnavailable(f"Run {run_id} is owned by another worker")
             if lease_state is not None:
                 self._apply_lease_state_locked(run, lease_state)
+            self._raise_if_stop_requested_locked(run)
+            self._raise_if_not_startable_locked(run)
             activation_key = (run_id, run.fence_token)
             existing_activation = self._activation_events.get(activation_key)
             if run.status == "running" and existing_activation is not None:
                 return existing_activation
-            self._raise_if_stop_requested_locked(run)
-            recovered = run.started_at is not None
-            run.status = "running"
-            if run.started_at is None:
-                run.started_at = utc_now()
-            self._persist_run_locked(run)
-            activation = self._publish_locked(
-                run,
-                "run_recovered" if recovered else "run_started",
-                payload={"fence_token": run.fence_token} if recovered else None,
+            expected_events = tuple(run.events)
+            expected_status = run.status
+            expected_started_at = run.started_at
+            started_at = expected_started_at or utc_now()
+            activation = LiveEvent(
+                id=run.next_event_id,
+                type="run_recovered" if expected_started_at is not None else "run_started",
+                run_id=run.run_id,
+                session_id=run.session_id,
+                created_at=utc_now(),
+                payload=(
+                    {"fence_token": run.fence_token} if expected_started_at is not None else None
+                ),
             )
+            try:
+                self._persist_activation_locked(
+                    run,
+                    expected_events=expected_events,
+                    expected_status=expected_status,
+                    expected_started_at=expected_started_at,
+                    activation=activation,
+                    started_at=started_at,
+                )
+            except Exception:
+                if not self._activation_was_committed_locked(
+                    run,
+                    expected_events=expected_events,
+                    activation=activation,
+                    started_at=started_at,
+                ):
+                    raise
+                run.lease_lost = False
+            run.status = "running"
+            run.started_at = started_at
+            run.next_event_id += 1
+            run.events.append(activation)
             self._activation_events[activation_key] = activation
+            for subscriber in run.subscribers:
+                subscriber.put(activation)
             return activation
 
     def mark_completed(self, run_id: str, *, winner: str) -> LiveEvent:
@@ -829,6 +886,11 @@ class LiveRunRegistry:
             raise RunLeaseUnavailable("Live run worker lease was lost")
         if run.stop_requested_at is not None:
             raise GameRunCanceled("Game run was canceled by an administrator")
+
+    @staticmethod
+    def _raise_if_not_startable_locked(run: LiveGameRun) -> None:
+        if run.status not in {"queued", "running"}:
+            raise ValueError(f"Run {run.run_id} is not active")
 
     def adopt_stop_request(
         self,
@@ -1035,6 +1097,70 @@ class LiveRunRegistry:
                 },
             )
             raise
+
+    def _persist_activation_locked(
+        self,
+        run: LiveGameRun,
+        *,
+        expected_events: tuple[LiveEvent, ...],
+        expected_status: str,
+        expected_started_at: str | None,
+        activation: LiveEvent,
+        started_at: str,
+    ) -> None:
+        if self._live_store is None:
+            return
+        activator = getattr(self._live_store, "activate_run", None)
+        if not callable(activator):
+            raise RuntimeError(
+                "Persistent live store does not support atomic activation persistence"
+            )
+        try:
+            activator(
+                run.run_id,
+                expected_events=expected_events,
+                expected_status=expected_status,
+                expected_started_at=expected_started_at,
+                activation=activation,
+                worker_id=run.worker_id or self.worker_id,
+                fence_token=run.fence_token,
+                started_at=started_at,
+            )
+        except RunLeaseUnavailable:
+            run.lease_lost = True
+            raise
+
+    def _activation_was_committed_locked(
+        self,
+        run: LiveGameRun,
+        *,
+        expected_events: tuple[LiveEvent, ...],
+        activation: LiveEvent,
+        started_at: str,
+    ) -> bool:
+        try:
+            persisted = self._load_complete_persisted_run(run.run_id)
+            return bool(
+                persisted is not None
+                and persisted.status == "running"
+                and persisted.worker_id == (run.worker_id or self.worker_id)
+                and persisted.fence_token == run.fence_token
+                and persisted.stop_requested_at is None
+                and _normalized_live_timestamp(persisted.started_at or "")
+                == _normalized_live_timestamp(started_at)
+                and len(persisted.events) == len(expected_events) + 1
+                and all(
+                    _live_events_match(stored, expected)
+                    for stored, expected in zip(
+                        persisted.events[:-1],
+                        expected_events,
+                        strict=True,
+                    )
+                )
+                and _live_events_match(persisted.events[-1], activation)
+            )
+        except Exception:
+            return False
 
     def _persist_event_locked(
         self,

@@ -1025,6 +1025,153 @@ def test_claim_waits_for_locked_structurally_valid_stream_change(
         admin_engine.dispose()
 
 
+@pytest.mark.skipif(
+    not os.getenv("TEST_POSTGRESQL_URL"),
+    reason="requires an explicitly disposable PostgreSQL URL",
+)
+def test_activation_waits_for_event_lock_then_rejects_a_changed_expected_stream() -> None:
+    database_url = os.environ["TEST_POSTGRESQL_URL"]
+    schema = f"task3_atomic_activation_{uuid4().hex}"
+    admin_engine = create_engine(database_url)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    scoped_engine = create_engine(
+        database_url,
+        connect_args={"options": f"-csearch_path={schema}"},
+    )
+    ScopedSession = sessionmaker(bind=scoped_engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(scoped_engine)
+    activation_entered = threading.Event()
+    activation_pid: list[int] = []
+    results: list[LiveEvent] = []
+    errors: list[BaseException] = []
+
+    class ObservableActivationStore(SessionLiveStore):
+        def activate_run(self, run_id: str, **kwargs) -> None:
+            db = self.session_factory()
+            try:
+                pid = db.scalar(text("SELECT pg_backend_pid()"))
+                assert isinstance(pid, int)
+                activation_pid.append(pid)
+                activation_entered.set()
+                DatabaseLiveStore(db).activate_run(run_id, **kwargs)
+            finally:
+                db.close()
+
+    try:
+        store = ObservableActivationStore(ScopedSession)
+        registry = LiveRunRegistry(
+            live_store=store,
+            worker_id="worker-pg-activation",
+            lease_seconds=30,
+        )
+        run = registry.create_run(
+            session_id="game_pg_atomic_activation",
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+        )
+        heartbeat_at = datetime.now(tz=UTC)
+        lease_state = store.acquire_lease(
+            run.run_id,
+            expected_events=tuple(run.events),
+            worker_id=registry.worker_id,
+            heartbeat_at=heartbeat_at.isoformat(),
+            lease_expires_at=(heartbeat_at + timedelta(seconds=30)).isoformat(),
+        )
+        assert lease_state is not None
+        registry._apply_lease_state_locked(run, lease_state)
+        modifier = ScopedSession()
+        activation_thread: threading.Thread | None = None
+        try:
+            event = modifier.scalar(
+                select(LiveEventRecord)
+                .where(
+                    LiveEventRecord.run_id == run.run_id,
+                    LiveEventRecord.event_id == 1,
+                )
+                .with_for_update()
+            )
+            assert event is not None
+            event.action = "external-update"
+            modifier.flush()
+
+            def activate() -> None:
+                try:
+                    results.append(registry.mark_running(run.run_id))
+                except BaseException as exc:
+                    errors.append(exc)
+                    activation_entered.set()
+
+            activation_thread = threading.Thread(target=activate)
+            activation_thread.start()
+            assert activation_entered.wait(timeout=5)
+            assert activation_pid
+
+            deadline = time.monotonic() + 5
+            observed_lock_wait = False
+            while time.monotonic() < deadline:
+                with admin_engine.connect() as observer:
+                    activity = observer.execute(
+                        text(
+                            "SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = :pid"
+                        ),
+                        {"pid": activation_pid[0]},
+                    ).one_or_none()
+                if activity is not None and activity.wait_event_type == "Lock":
+                    blocked_query = activity.query.lower()
+                    assert "live_events" in blocked_query
+                    assert "for update" in blocked_query
+                    observed_lock_wait = True
+                    break
+                time.sleep(0.01)
+            assert observed_lock_wait
+            assert results == []
+            assert errors == []
+
+            modifier.commit()
+            activation_thread.join(timeout=5)
+            assert not activation_thread.is_alive()
+        finally:
+            modifier.rollback()
+            modifier.close()
+            if activation_thread is not None:
+                activation_thread.join(timeout=5)
+
+        assert results == []
+        assert len(errors) == 1
+        assert isinstance(errors[0], RunLeaseUnavailable)
+        assert run.status == "queued"
+        assert run.started_at is None
+        assert run.fence_token == 1
+        assert run.lease_lost is True
+        assert run.next_event_id == 2
+        assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+        assert registry._activation_events == {}
+        with ScopedSession() as observer:
+            saved = observer.get(LiveRunRecord, run.run_id)
+            events = list(
+                observer.scalars(
+                    select(LiveEventRecord)
+                    .where(LiveEventRecord.run_id == run.run_id)
+                    .order_by(LiveEventRecord.event_id)
+                )
+            )
+        assert saved is not None
+        assert saved.status == "queued"
+        assert saved.worker_id == registry.worker_id
+        assert saved.fence_token == 1
+        assert [(event.event_id, event.type, event.action) for event in events] == [
+            (1, "run_created", "external-update")
+        ]
+    finally:
+        scoped_engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()
+
+
 def test_live_store_loads_backfilled_pinned_scalars_with_legacy_snapshot(
     db_session: Session,
 ) -> None:
@@ -1426,6 +1573,308 @@ def test_live_run_stop_is_cooperative_and_persists_canceled_terminal_state(
     assert saved.status == "canceled"
     assert saved.stop_requested_at is not None
     assert saved.error is None
+
+
+@pytest.mark.parametrize("failure_stage", ["status", "event"])
+def test_session_store_activation_failure_rolls_back_and_retries_without_a_phantom(
+    db_session: Session,
+    failure_stage: str,
+) -> None:
+    failure = RuntimeError(f"injected activation {failure_stage} failure")
+    armed = False
+    injected = False
+
+    class FailingActivationSession(Session):
+        def flush(self, objects=None) -> None:
+            nonlocal injected
+            if armed and not injected:
+                has_running_status = any(
+                    isinstance(item, LiveRunRecord) and item.status == "running"
+                    for item in self.dirty
+                )
+                has_activation_event = any(
+                    isinstance(item, LiveEventRecord)
+                    and item.type in {"run_started", "run_recovered"}
+                    for item in self.new
+                )
+                if (failure_stage == "status" and has_running_status) or (
+                    failure_stage == "event" and has_activation_event
+                ):
+                    injected = True
+                    raise failure
+            super().flush(objects)
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=FailingActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-activation-retry",
+    )
+    run = registry.create_run(
+        session_id=f"game_activation_{failure_stage}_failure",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    armed = True
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_running(run.run_id)
+
+    assert raised.value is failure
+    assert injected is True
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.fence_token == 1
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert (run.run_id, run.fence_token) not in registry._activation_events
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "queued"
+        assert saved.started_at is None
+        assert saved.worker_id == "worker-activation-retry"
+        assert saved.fence_token == 1
+        assert [(event.event_id, event.type) for event in events] == [(1, "run_created")]
+
+    activation = registry.mark_running(run.run_id)
+    repeated = registry.mark_running(run.run_id)
+
+    assert activation is repeated is run.events[1]
+    assert run.status == "running"
+    assert run.started_at is not None
+    assert run.fence_token == 1
+    assert run.next_event_id == 3
+    assert [(event.id, event.type) for event in run.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
+    assert subscriber.get_nowait() is activation
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.started_at is not None
+        assert saved.fence_token == 1
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+        ]
+
+
+def test_session_store_recovers_an_exact_activation_after_commit_ack_loss(
+    db_session: Session,
+) -> None:
+    failure = RuntimeError("activation commit acknowledgement lost")
+    armed = False
+    acknowledgement_lost = False
+
+    class AckLostActivationSession(Session):
+        saw_activation = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type in {"run_started", "run_recovered"}
+                for item in self.new
+            ):
+                self.saw_activation = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if armed and self.saw_activation and not acknowledgement_lost:
+                acknowledgement_lost = True
+                raise failure
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=AckLostActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class ObservedSessionLiveStore(SessionLiveStore):
+        def __init__(self) -> None:
+            super().__init__(session_factory)
+            self.load_run_calls = 0
+            self.events_after_calls = 0
+
+        def load_run(self, run_id: str):
+            self.load_run_calls += 1
+            return super().load_run(run_id)
+
+        def events_after(self, run_id: str, *, after_id=None):
+            self.events_after_calls += 1
+            return super().events_after(run_id, after_id=after_id)
+
+    store = ObservedSessionLiveStore()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-activation-ack")
+    run = registry.create_run(
+        session_id="game_activation_ack_loss",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    armed = True
+
+    activation = registry.mark_running(run.run_id)
+    repeated = registry.mark_running(run.run_id)
+
+    assert acknowledgement_lost is True
+    assert store.load_run_calls == 1
+    assert store.events_after_calls == 1
+    assert activation is repeated is run.events[1]
+    assert subscriber.get_nowait() is activation
+    assert subscriber.empty()
+    assert run.status == "running"
+    assert run.fence_token == 1
+    assert [(event.id, event.type) for event in run.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.fence_token == 1
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+        ]
+
+
+def test_session_store_recovery_activation_failure_retries_the_same_fence(
+    db_session: Session,
+) -> None:
+    failure = RuntimeError("injected recovery activation event failure")
+    armed = False
+    injected = False
+
+    class FailingRecoveryActivationSession(Session):
+        def flush(self, objects=None) -> None:
+            nonlocal injected
+            if (
+                armed
+                and not injected
+                and any(
+                    isinstance(item, LiveEventRecord) and item.type == "run_recovered"
+                    for item in self.new
+                )
+            ):
+                injected = True
+                raise failure
+            super().flush(objects)
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=FailingRecoveryActivationSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-recovery-owner",
+    )
+    recovery = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-recovery-retry",
+    )
+    run = owner.create_run(
+        session_id="game_recovery_activation_failure",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    with session_factory() as db:
+        record = db.get(LiveRunRecord, run.run_id)
+        assert record is not None
+        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        db.commit()
+
+    claimed = recovery.try_claim_stale_run(run.run_id)
+    assert claimed is not None
+    assert claimed.status == "running"
+    assert claimed.fence_token == 2
+    subscriber = recovery.subscribe(run.run_id, after_id=2)
+    armed = True
+
+    with pytest.raises(RuntimeError) as raised:
+        recovery.mark_running(run.run_id)
+
+    assert raised.value is failure
+    assert injected is True
+    assert claimed.status == "running"
+    assert claimed.fence_token == 2
+    assert claimed.next_event_id == 3
+    assert [(event.id, event.type) for event in claimed.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
+    assert (claimed.run_id, claimed.fence_token) not in recovery._activation_events
+    assert subscriber.empty()
+
+    activation = recovery.mark_running(run.run_id)
+    repeated = recovery.mark_running(run.run_id)
+
+    assert activation is repeated is claimed.events[2]
+    assert activation.type == "run_recovered"
+    assert activation.payload == {"fence_token": 2}
+    assert claimed.fence_token == 2
+    assert claimed.next_event_id == 4
+    assert subscriber.get_nowait() is activation
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.fence_token == 2
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+            (3, "run_recovered"),
+        ]
 
 
 def test_two_registries_share_run_events_lease_and_stop_signal(

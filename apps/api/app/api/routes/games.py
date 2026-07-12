@@ -179,6 +179,33 @@ class SessionLiveStore:
         finally:
             db.close()
 
+    def activate_run(
+        self,
+        run_id: str,
+        *,
+        expected_events: tuple[LiveEvent, ...],
+        expected_status: str,
+        expected_started_at: str | None,
+        activation: LiveEvent,
+        worker_id: str,
+        fence_token: int,
+        started_at: str,
+    ) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseLiveStore(db).activate_run(
+                run_id,
+                expected_events=expected_events,
+                expected_status=expected_status,
+                expected_started_at=expected_started_at,
+                activation=activation,
+                worker_id=worker_id,
+                fence_token=fence_token,
+                started_at=started_at,
+            )
+        finally:
+            db.close()
+
     def append_event(
         self,
         event: LiveEvent,

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.live import LiveEventRecord, LiveRunRecord
 from app.werewolf.live import (
+    GameRunCanceled,
     LiveEvent,
     LiveGameRun,
     RunLeaseState,
@@ -177,6 +178,98 @@ class DatabaseLiveStore:
             record.lease_expires_at = parse_live_datetime(run.lease_expires_at)
         record.started_at = parse_live_datetime(run.started_at)
         self._commit()
+
+    def activate_run(
+        self,
+        run_id: str,
+        *,
+        expected_events: tuple[LiveEvent, ...],
+        expected_status: str,
+        expected_started_at: str | None,
+        activation: LiveEvent,
+        worker_id: str,
+        fence_token: int,
+        started_at: str,
+    ) -> None:
+        parsed_started_at = parse_live_datetime(started_at)
+        parsed_expected_started_at = parse_live_datetime(expected_started_at)
+        expected_type = "run_recovered" if expected_started_at is not None else "run_started"
+        expected_payload = {"fence_token": fence_token} if expected_started_at is not None else {}
+        status_and_start_are_canonical = (
+            expected_status == "queued" and expected_started_at is None
+        ) or (expected_status == "running" and expected_started_at is not None)
+        recovery_start_is_unchanged = parsed_started_at is not None and (
+            parsed_expected_started_at is None
+            or format_live_datetime(parsed_started_at)
+            == format_live_datetime(parsed_expected_started_at)
+        )
+        if (
+            not status_and_start_are_canonical
+            or not recovery_start_is_unchanged
+            or activation.id != len(expected_events) + 1
+            or activation.type != expected_type
+            or activation.run_id != run_id
+            or activation.round is not None
+            or activation.phase is not None
+            or activation.actor is not None
+            or activation.action is not None
+            or parse_live_datetime(activation.created_at) is None
+            or not strict_json_equal(activation._payload, expected_payload)
+        ):
+            raise ValueError(f"Run {run_id} has an invalid activation transition")
+        try:
+            record = self.db.scalar(
+                select(LiveRunRecord)
+                .where(LiveRunRecord.run_id == run_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if record is None:
+                raise RunLeaseUnavailable(f"Run {run_id} no longer exists")
+            if record.stop_requested_at is not None:
+                raise GameRunCanceled("Game run was canceled by an administrator")
+            lease_expires_at = (
+                parse_live_datetime(format_live_datetime(record.lease_expires_at))
+                if record.lease_expires_at is not None
+                else None
+            )
+            lease_is_live = lease_expires_at is not None and lease_expires_at > datetime.now(tz=UTC)
+            stored_started_at = _format_optional_datetime(record.started_at)
+            normalized_expected_started_at = (
+                format_live_datetime(parsed_expected_started_at)
+                if parsed_expected_started_at is not None
+                else None
+            )
+            if (
+                record.status != expected_status
+                or stored_started_at != normalized_expected_started_at
+                or record.worker_id != worker_id
+                or record.fence_token != fence_token
+                or fence_token <= 0
+                or not lease_is_live
+            ):
+                raise RunLeaseUnavailable(f"Run {run_id} activation was rejected by its lease")
+            if not self._lock_and_validate_complete_event_stream(record, expected_events):
+                raise RunLeaseUnavailable(f"Run {run_id} activation event stream changed")
+            lease_expires_at = (
+                parse_live_datetime(format_live_datetime(record.lease_expires_at))
+                if record.lease_expires_at is not None
+                else None
+            )
+            if lease_expires_at is None or lease_expires_at <= datetime.now(tz=UTC):
+                raise RunLeaseUnavailable(f"Run {run_id} activation lease expired")
+            if activation.session_id != record.session_id:
+                raise ValueError(f"Run {run_id} has an invalid activation session")
+            record.status = "running"
+            record.started_at = parsed_started_at
+            self.db.flush([record])
+            event_record = _event_record(activation)
+            self.db.add(event_record)
+            self.db.flush([event_record])
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
     def load_run(self, run_id: str) -> LiveGameRun | None:
         record = self.db.get(LiveRunRecord, run_id)

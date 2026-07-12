@@ -11,10 +11,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app.werewolf import live as live_module
 from app.werewolf.live import (
+    GameRunCanceled,
     LiveEvent,
     LiveGameRun,
     LiveRunRegistry,
     RunLeaseState,
+    RunLeaseUnavailable,
     format_sse,
     strict_json_equal,
 )
@@ -114,6 +116,7 @@ class RecordingLiveStore:
     def __init__(self) -> None:
         self.saved_runs = []
         self.events = []
+        self.fence_token = 0
 
     def save_run(self, run) -> None:
         self.saved_runs.append((run.run_id, run.status, run.winner, run.error))
@@ -126,6 +129,34 @@ class RecordingLiveStore:
     def append_event(self, event, **_fence) -> None:
         self.events.append((event.run_id, event.id, event.type))
 
+    def activate_run(self, _run_id, *, activation, **_expected) -> None:
+        self.saved_runs.append((activation.run_id, "running", None, None))
+        self.events.append((activation.run_id, activation.id, activation.type))
+
+    def acquire_lease(
+        self,
+        _run_id,
+        *,
+        worker_id,
+        heartbeat_at,
+        lease_expires_at,
+        **_expected,
+    ):
+        self.fence_token += 1
+        return RunLeaseState(
+            worker_id=worker_id,
+            worker_heartbeat_at=heartbeat_at,
+            lease_expires_at=lease_expires_at,
+            stop_requested_at=None,
+            status="queued",
+            control_version=0,
+            fence_token=self.fence_token,
+            recovery_attempts=0,
+            recovery_last_attempt_at=None,
+            recovery_not_before=None,
+            recovery_last_error=None,
+        )
+
 
 class FailingLiveStore:
     def save_new_run(self, run) -> None:
@@ -136,6 +167,32 @@ class FailingLiveStore:
 
     def append_event(self, event, **_fence) -> None:
         raise RuntimeError(f"cannot append {event.id}")
+
+    def activate_run(self, run_id, **_activation) -> None:
+        raise RuntimeError(f"cannot activate {run_id}")
+
+    def acquire_lease(
+        self,
+        _run_id,
+        *,
+        worker_id,
+        heartbeat_at,
+        lease_expires_at,
+        **_expected,
+    ):
+        return RunLeaseState(
+            worker_id=worker_id,
+            worker_heartbeat_at=heartbeat_at,
+            lease_expires_at=lease_expires_at,
+            stop_requested_at=None,
+            status="queued",
+            control_version=0,
+            fence_token=1,
+            recovery_attempts=0,
+            recovery_last_attempt_at=None,
+            recovery_not_before=None,
+            recovery_last_error=None,
+        )
 
 
 class EventFailingLiveStore(RecordingLiveStore):
@@ -483,6 +540,29 @@ def test_persistent_create_rejects_a_store_without_atomic_new_run_support_before
     assert store.saved_runs == []
     assert store.events == []
     assert registry._runs == {}
+
+
+def test_persistent_activation_rejects_a_store_without_atomic_support_before_writing() -> None:
+    store = LegacyTwoPhaseLiveStore()
+    registry = LiveRunRegistry(live_store=store)
+    run = registry.prepare_run(
+        session_id="game_missing_atomic_activation",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    registry.attach_prepared_run(run)
+
+    with pytest.raises(RuntimeError, match="atomic activation persistence"):
+        registry.mark_running(run.run_id)
+
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.next_event_id == 2
+    assert [(event.id, event.type) for event in run.events] == [(1, "run_created")]
+    assert store.saved_runs == []
+    assert store.events == []
 
 
 def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
@@ -1170,6 +1250,9 @@ def test_concurrent_fresh_mark_running_claims_once_and_returns_one_activation() 
         def append_event(self, _event, **_fence) -> None:
             return None
 
+        def activate_run(self, _run_id, **_activation) -> None:
+            return None
+
         def acquire_lease(
             self,
             _run_id,
@@ -1274,6 +1357,179 @@ def test_preclaimed_recovery_mark_running_is_idempotent_for_the_current_fence() 
     assert [event.id for event in run.events] == [1, 2, 3]
     assert run.events[2].payload == {"fence_token": 2}
     assert results[0] is results[1] is repeated is run.events[2]
+
+
+def test_cached_mark_running_rechecks_stop_request_before_returning_activation() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_cached_stop_guard",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    activation = registry.mark_running(run.run_id)
+    registry.request_stop(run.run_id)
+    before = (run.status, run.fence_token, run.next_event_id, tuple(run.events))
+
+    with pytest.raises(GameRunCanceled):
+        registry.mark_running(run.run_id)
+
+    assert (run.status, run.fence_token, run.next_event_id, tuple(run.events)) == before
+    assert run.events[1] is activation
+
+
+def test_cached_mark_running_rechecks_lease_loss_before_returning_activation() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_cached_lease_guard",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    activation = registry.mark_running(run.run_id)
+    run.lease_lost = True
+    before = (run.status, run.fence_token, run.next_event_id, tuple(run.events))
+
+    with pytest.raises(RunLeaseUnavailable):
+        registry.mark_running(run.run_id)
+
+    assert (run.status, run.fence_token, run.next_event_id, tuple(run.events)) == before
+    assert run.events[1] is activation
+
+
+def test_cached_mark_running_rechecks_worker_fence_before_returning_activation() -> None:
+    class FencedActivationStore:
+        def __init__(self) -> None:
+            self.acquire_calls = 0
+
+        def save_run(self, _run) -> None:
+            return None
+
+        def append_event(self, _event, **_fence) -> None:
+            return None
+
+        def activate_run(self, _run_id, **_activation) -> None:
+            return None
+
+        def acquire_lease(
+            self,
+            _run_id,
+            *,
+            worker_id,
+            heartbeat_at,
+            lease_expires_at,
+            **_expected,
+        ):
+            self.acquire_calls += 1
+            if self.acquire_calls > 1:
+                return None
+            return RunLeaseState(
+                worker_id=worker_id,
+                worker_heartbeat_at=heartbeat_at,
+                lease_expires_at=lease_expires_at,
+                stop_requested_at=None,
+                status="queued",
+                control_version=0,
+                fence_token=1,
+                recovery_attempts=0,
+                recovery_last_attempt_at=None,
+                recovery_not_before=None,
+                recovery_last_error=None,
+            )
+
+    store = FencedActivationStore()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-owner")
+    run = registry.prepare_run(
+        session_id="game_cached_fence_guard",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    registry.attach_prepared_run(run)
+    activation = registry.mark_running(run.run_id)
+    run.worker_id = "worker-new-owner"
+    before = (run.status, run.fence_token, run.next_event_id, tuple(run.events))
+
+    with pytest.raises(RunLeaseUnavailable):
+        registry.mark_running(run.run_id)
+
+    assert store.acquire_calls == 2
+    assert (run.status, run.fence_token, run.next_event_id, tuple(run.events)) == before
+    assert run.events[1] is activation
+
+
+def test_cached_mark_running_reacquires_an_expired_same_worker_lease() -> None:
+    store = RecordingLiveStore()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-expired-cache")
+    run = registry.create_run(
+        session_id="game_cached_expired_lease",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    first_activation = registry.mark_running(run.run_id)
+    run.lease_expires_at = "2000-01-01T00:00:00Z"
+
+    recovered = registry.mark_running(run.run_id)
+    repeated = registry.mark_running(run.run_id)
+
+    assert store.fence_token == 2
+    assert run.fence_token == 2
+    assert recovered is repeated is run.events[2]
+    assert recovered is not first_activation
+    assert recovered.type == "run_recovered"
+    assert recovered.payload == {"fence_token": 2}
+    assert [(event.id, event.type) for event in run.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+        (3, "run_recovered"),
+    ]
+
+
+@pytest.mark.parametrize("terminal_status", ["completed", "failed", "canceled"])
+def test_mark_running_never_reactivates_a_terminal_run(terminal_status: str) -> None:
+    store = RecordingLiveStore()
+    registry = LiveRunRegistry(live_store=store)
+    run = registry.create_run(
+        session_id=f"game_terminal_{terminal_status}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    registry.mark_running(run.run_id)
+    if terminal_status == "completed":
+        registry.mark_completed(run.run_id, winner="好人阵营")
+    elif terminal_status == "failed":
+        registry.mark_failed(run.run_id, error="terminal failure")
+    else:
+        registry.mark_canceled(run.run_id)
+    before = (
+        run.status,
+        run.fence_token,
+        run.next_event_id,
+        tuple(run.events),
+        tuple(store.saved_runs),
+        tuple(store.events),
+        store.fence_token,
+    )
+
+    with pytest.raises(ValueError, match="not active"):
+        registry.mark_running(run.run_id)
+
+    assert (
+        run.status,
+        run.fence_token,
+        run.next_event_id,
+        tuple(run.events),
+        tuple(store.saved_runs),
+        tuple(store.events),
+        store.fence_token,
+    ) == before
 
 
 def test_unique_conflict_returns_the_other_complete_winner_after_it_starts_running() -> None:
