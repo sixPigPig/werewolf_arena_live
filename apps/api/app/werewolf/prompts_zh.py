@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from typing import Any
 
 DEFAULT_GAME_RULES = """你正在进行一局数字版狼人杀。
@@ -269,15 +268,19 @@ def _prompt_rule_settings(
     sheriff_enabled = snapshot.get("sheriff_enabled") is True
     raw_weight = snapshot.get("sheriff_vote_weight")
     sheriff_vote_weight = 1.0
-    if (
-        isinstance(raw_weight, (int, float))
-        and not isinstance(raw_weight, bool)
-        and math.isfinite(raw_weight)
-        and raw_weight > 0
-    ):
-        sheriff_vote_weight = float(raw_weight)
+    if type(raw_weight) in {int, float}:
+        try:
+            normalized_weight = float(raw_weight)
+        except (OverflowError, ValueError):
+            normalized_weight = 1.0
+        if normalized_weight in {1.0, 1.5, 2.0}:
+            sheriff_vote_weight = normalized_weight
     raw_badge_policy = snapshot.get("sheriff_badge_bomb_policy")
-    badge_policy = raw_badge_policy if raw_badge_policy in {"none", "double"} else "none"
+    badge_policy = (
+        raw_badge_policy
+        if isinstance(raw_badge_policy, str) and raw_badge_policy in {"none", "double"}
+        else "none"
+    )
     self_explosion_enabled = snapshot.get("werewolf_self_explosion_enabled") is True
     return sheriff_enabled, sheriff_vote_weight, badge_policy, self_explosion_enabled
 
@@ -358,6 +361,7 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
     if action == "werewolf_self_explosion":
         stage = world_state.get("self_explosion_stage") or "白天公开阶段"
         sheriff = world_state.get("sheriff")
+        election_open = world_state.get("sheriff_election_open") is True
         bomb_count = int(world_state.get("sheriff_pre_election_bomb_count") or 0)
         sheriff_enabled, _, badge_policy, self_explosion_enabled = _prompt_rule_settings(
             world_state
@@ -375,22 +379,30 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
                 f"当前警长是{sheriff}，此时自爆不会直接造成警徽流失；"
                 "若你是警长，则按死亡警长规则处理警徽。"
             )
-        elif badge_policy == "double":
+        elif election_open and badge_policy == "double":
             badge_context = (
                 "当前还没有警长，采用双爆吞警徽规则：第一次警长产生前自爆只会中断警长竞选，"
                 "第二次警长产生前自爆会导致警徽流失。"
             )
-        else:
+        elif election_open:
             badge_context = (
                 "当前还没有警长；警长产生前自爆会中断当次竞选，但多次自爆不会累计造成警徽流失。"
             )
+        else:
+            badge_context = "警长竞选已经结束，当前没有可用警徽；自爆不会造成警徽流失。"
         feature_context = (
             "锁定规则已启用狼人自爆。"
             if self_explosion_enabled
             else "锁定规则未确认启用狼人自爆；仅在引擎明确开放该动作时选择。"
         )
         benefit_examples = "阻止关键查验、保护最后隐狼或直接创造胜势"
-        if self_explosion_enabled and sheriff_enabled and not sheriff and badge_policy == "double":
+        if (
+            self_explosion_enabled
+            and sheriff_enabled
+            and election_open
+            and not sheriff
+            and badge_policy == "double"
+        ):
             benefit_examples = f"吞警徽、{benefit_examples}"
         return (
             "行动：狼人自爆判断。\n"

@@ -229,35 +229,47 @@ def test_sheriff_vote_prompt_uses_pinned_vote_weight(weight: float) -> None:
 
 
 @pytest.mark.parametrize(
-    ("snapshot", "sheriff", "expected", "forbidden"),
+    ("snapshot", "sheriff", "election_open", "expected", "forbidden"),
     [
         (
             _prompt_rule_snapshot(sheriff_enabled=False),
             None,
+            False,
             "本局不设警长，也没有警徽",
             "吞警徽",
         ),
         (
             _prompt_rule_snapshot(sheriff_badge_bomb_policy="none"),
             None,
+            True,
             "多次自爆不会累计造成警徽流失",
             "吞警徽",
         ),
         (
             _prompt_rule_snapshot(sheriff_badge_bomb_policy="double"),
             None,
+            True,
             "第二次警长产生前自爆会导致警徽流失",
             None,
         ),
         (
             _prompt_rule_snapshot(sheriff_badge_bomb_policy="double"),
             "Bob",
+            False,
             "当前警长是Bob",
+            "吞警徽",
+        ),
+        (
+            _prompt_rule_snapshot(sheriff_badge_bomb_policy="double"),
+            None,
+            False,
+            "警长竞选已经结束，当前没有可用警徽",
             "吞警徽",
         ),
         (
             _prompt_rule_snapshot(werewolf_self_explosion_enabled=False),
             None,
+            False,
             "锁定规则未确认启用狼人自爆",
             "吞警徽",
         ),
@@ -266,6 +278,7 @@ def test_sheriff_vote_prompt_uses_pinned_vote_weight(weight: float) -> None:
 def test_self_explosion_prompt_uses_pinned_sheriff_policy(
     snapshot: dict[str, object],
     sheriff: str | None,
+    election_open: bool,
     expected: str,
     forbidden: str | None,
 ) -> None:
@@ -274,6 +287,7 @@ def test_self_explosion_prompt_uses_pinned_sheriff_policy(
         {
             "rule_set_snapshot": snapshot,
             "sheriff": sheriff,
+            "sheriff_election_open": election_open,
             "sheriff_pre_election_bomb_count": 1,
         }
     )
@@ -283,6 +297,40 @@ def test_self_explosion_prompt_uses_pinned_sheriff_policy(
     assert expected in prompt
     if forbidden is not None:
         assert forbidden not in prompt
+
+
+@pytest.mark.parametrize(
+    "malformed_weight",
+    [3, 10**1_000, float("inf"), float("nan"), True, "1.5", []],
+)
+def test_prompt_rejects_malformed_sheriff_vote_weights(malformed_weight: object) -> None:
+    world_state = _world_state_for_special_action("村民", "Bob、Carol")
+    world_state["rule_set_snapshot"] = _prompt_rule_snapshot(
+        sheriff_vote_weight=malformed_weight,
+    )
+
+    prompt, _schema = build_prompt("sheriff_vote", world_state)
+
+    assert "当选警长在白天放逐投票中计为 1 票" in prompt
+
+
+@pytest.mark.parametrize("malformed_policy", [[], {}, 1, True, "double-ish"])
+def test_prompt_rejects_malformed_badge_policies(malformed_policy: object) -> None:
+    world_state = _world_state_for_special_action("狼人", "自爆、不自爆")
+    world_state.update(
+        {
+            "rule_set_snapshot": _prompt_rule_snapshot(
+                sheriff_badge_bomb_policy=malformed_policy,
+            ),
+            "sheriff": None,
+            "sheriff_election_open": True,
+        }
+    )
+
+    prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
+
+    assert "多次自爆不会累计造成警徽流失" in prompt
+    assert "吞警徽" not in prompt
 
 
 def test_prompt_rule_settings_fail_closed_and_do_not_dump_snapshot_description() -> None:

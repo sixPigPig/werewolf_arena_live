@@ -2208,6 +2208,7 @@ class GameEngine:
             "werewolf_context": self._werewolf_context(player, active_players),
             "sheriff_election": self._sheriff_election_context(round_state),
             "sheriff": self.state.sheriff,
+            "sheriff_election_open": self._should_run_sheriff_election(round_state),
             "sheriff_pre_election_bomb_count": self.state.sheriff_pre_election_bomb_count,
             "debate_turns_left": max(0, self.debate_turns - len(round_state.debate)),
             "options": "、".join(options),

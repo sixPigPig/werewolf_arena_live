@@ -1387,6 +1387,11 @@ def test_world_state_carries_detached_exact_rule_snapshot() -> None:
     assert snapshot["roles"] is not state.rule_set["roles"]
     snapshot["roles"][0]["role"] = "tampered"
     assert state.rule_set["roles"][0]["role"] != "tampered"
+    assert world_state["sheriff_election_open"] is True
+
+    state.sheriff_badge_lost = True
+    post_election_world_state = engine._world_state(state.players[0], [], round_state)
+    assert post_election_world_state["sheriff_election_open"] is False
 
 
 def test_world_state_marks_four_player_endgame_pressure() -> None:
@@ -2735,6 +2740,7 @@ def test_werewolf_self_explosion_prompt_renders_double_badge_context() -> None:
         "options": "自爆、不自爆",
         "self_explosion_stage": "警上发言前",
         "sheriff": None,
+        "sheriff_election_open": True,
         "sheriff_pre_election_bomb_count": 1,
         "rule_set_snapshot": {
             "sheriff_enabled": True,
