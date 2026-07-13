@@ -55,7 +55,7 @@ Result: DONE
 
 ## Commits
 
-- Final-fix commit: recorded after this report is committed.
+- Final-fix implementation commit: `c3988451` (`fix(admin): close rule set final review gaps`).
 - Review base: `cd7c3d61` (`fix(admin): harden rule set accessibility`).
 
 ## Concerns
