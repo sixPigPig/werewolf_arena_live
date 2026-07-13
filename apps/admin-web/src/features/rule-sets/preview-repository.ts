@@ -61,7 +61,7 @@ export async function setDefaultPreviewRuleSet(id: string, request: SetDefaultRu
 }
 
 export async function archivePreviewRuleSet(id: string, request: ArchiveRuleSetRequest) {
-  const rule = find(id); assertRuleLock(rule, request.expected_rule_set_lock_version); assertReason(request.reason); if (rule.status !== "published") throw problem(409, "admin_rule_set_invalid_state", "只有已发布规则可归档");
+  const rule = find(id); assertRuleLock(rule, request.expected_rule_set_lock_version); assertReason(request.reason); if (rule.status === "archived") throw problem(409, "rule_set_unavailable", "规则已经归档");
   const hasReplacementId = request.replacement_default_rule_set_id !== null; const hasReplacementVersion = request.replacement_expected_lock_version !== null;
   if (hasReplacementId !== hasReplacementVersion) throw problem(422, "admin_rule_set_validation_failed", "替代规则 ID 和版本必须同时提供");
   if (rule.is_default) { if (!request.replacement_default_rule_set_id || request.replacement_expected_lock_version === null || request.replacement_default_rule_set_id === id) throw problem(409, "default_rule_required", "默认规则归档时必须指定其他已发布规则"); const replacement = find(request.replacement_default_rule_set_id); assertRuleLock(replacement, request.replacement_expected_lock_version); if (replacement.status !== "published") throw problem(409, "rule_set_unavailable", "替代规则必须已发布"); rule.is_default = false; replacement.is_default = true; touch(replacement); }
@@ -69,7 +69,7 @@ export async function archivePreviewRuleSet(id: string, request: ArchiveRuleSetR
   rule.status = "archived"; touch(rule); return structuredClone(rule) as AdminRuleSet;
 }
 
-export async function restorePreviewRuleSet(id: string, request: RuleSetTransitionRequest) { const rule = find(id); assertRuleLock(rule, request.expected_rule_set_lock_version); assertReason(request.reason); if (rule.status !== "archived") throw problem(409, "admin_rule_set_invalid_state", "只有归档规则可恢复"); rule.status = "published"; touch(rule); return structuredClone(rule) as AdminRuleSet; }
+export async function restorePreviewRuleSet(id: string, request: RuleSetTransitionRequest) { const rule = find(id); assertRuleLock(rule, request.expected_rule_set_lock_version); assertReason(request.reason); if (rule.status !== "archived") throw problem(409, "rule_set_unavailable", "只有归档规则可恢复"); if (rule.published_revision) rule.status = "published"; else if (rule.draft_revision) rule.status = "draft"; else throw problem(409, "rule_revision_changed", "规则没有可恢复版本"); touch(rule); return structuredClone(rule) as AdminRuleSet; }
 export function resetPreviewRuleSets(options?: { withoutDefault?: boolean }) { rules = structuredClone(INITIAL); if (options?.withoutDefault) rules.forEach((rule) => { rule.is_default = false; }); }
 
 function activeConfig(rule: AdminRuleSetDetail) { return rule.draft_revision?.config ?? rule.published_revision?.config; }

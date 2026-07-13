@@ -59,6 +59,26 @@ describe("preview rule-set repository", () => {
     expect((await restorePreviewRuleSet(twelve.id, { expected_rule_set_lock_version: archived.lock_version, reason: "恢复规则" })).status).toBe("published");
   });
 
+  it("archives and restores draft and published lifecycles without changing revisions", async () => {
+    const draft = await getPreviewRuleSet("preview_draft");
+    const draftRevision = structuredClone(draft.draft_revision);
+    const draftHistory = structuredClone(draft.revisions);
+    const archivedDraft = await archivePreviewRuleSet(draft.id, { expected_rule_set_lock_version: draft.lock_version, replacement_default_rule_set_id: null, replacement_expected_lock_version: null, reason: "暂停草稿规则" });
+    expect(archivedDraft).toMatchObject({ status: "archived", lock_version: draft.lock_version + 1, draft_revision: draftRevision, revisions: draftHistory });
+    const archivedDraftDetail = await getPreviewRuleSet(draft.id);
+    expect(archivedDraftDetail).toMatchObject({ status: "archived", draft_revision: draftRevision, revisions: draftHistory });
+    const restoredDraft = await restorePreviewRuleSet(draft.id, { expected_rule_set_lock_version: archivedDraft.lock_version, reason: "恢复草稿规则" });
+    expect(restoredDraft).toMatchObject({ status: "draft", lock_version: draft.lock_version + 2, draft_revision: draftRevision, revisions: draftHistory });
+
+    const published = await getPreviewRuleSet("classic_12");
+    const archivedPublished = await archivePreviewRuleSet(published.id, { expected_rule_set_lock_version: published.lock_version, replacement_default_rule_set_id: null, replacement_expected_lock_version: null, reason: "暂停发布规则" });
+    const restoredPublished = await restorePreviewRuleSet(published.id, { expected_rule_set_lock_version: archivedPublished.lock_version, reason: "恢复发布规则" });
+    expect(restoredPublished).toMatchObject({ status: "published", lock_version: published.lock_version + 2, published_revision: published.published_revision, revisions: published.revisions });
+
+    const alreadyArchived = await getPreviewRuleSet("archived_rule");
+    await expect(archivePreviewRuleSet(alreadyArchived.id, { expected_rule_set_lock_version: alreadyArchived.lock_version, replacement_default_rule_set_id: null, replacement_expected_lock_version: null, reason: "重复归档规则" })).rejects.toMatchObject({ problem: { status: 409, code: "rule_set_unavailable" } });
+  });
+
   it("rejects replacement data for non-default archives and incomplete default replacement pairs", async () => {
     const twelve = await getPreviewRuleSet("classic_12");
     await expect(archivePreviewRuleSet(twelve.id, { expected_rule_set_lock_version: twelve.lock_version, replacement_default_rule_set_id: "classic_9", replacement_expected_lock_version: 1, reason: "归档非默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "rule_set_unavailable" } });
