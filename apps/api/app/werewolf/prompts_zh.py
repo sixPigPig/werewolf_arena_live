@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 DEFAULT_GAME_RULES = """你正在进行一局数字版狼人杀。
@@ -258,6 +259,29 @@ def _render_quality_feedback(world_state: dict[str, Any]) -> str:
     return f"质量反馈：\n- {feedback}"
 
 
+def _prompt_rule_settings(
+    world_state: dict[str, Any],
+) -> tuple[bool, float, str, bool]:
+    snapshot = world_state.get("rule_set_snapshot")
+    if not isinstance(snapshot, dict):
+        return False, 1.0, "none", False
+
+    sheriff_enabled = snapshot.get("sheriff_enabled") is True
+    raw_weight = snapshot.get("sheriff_vote_weight")
+    sheriff_vote_weight = 1.0
+    if (
+        isinstance(raw_weight, (int, float))
+        and not isinstance(raw_weight, bool)
+        and math.isfinite(raw_weight)
+        and raw_weight > 0
+    ):
+        sheriff_vote_weight = float(raw_weight)
+    raw_badge_policy = snapshot.get("sheriff_badge_bomb_policy")
+    badge_policy = raw_badge_policy if raw_badge_policy in {"none", "double"} else "none"
+    self_explosion_enabled = snapshot.get("werewolf_self_explosion_enabled") is True
+    return sheriff_enabled, sheriff_vote_weight, badge_policy, self_explosion_enabled
+
+
 def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
     role = world_state["role"]
     options = world_state.get("options", "")
@@ -296,9 +320,11 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "输出字段 reasoning 和 withdraw。"
         )
     if action == "sheriff_vote":
+        _, sheriff_vote_weight, _, _ = _prompt_rule_settings(world_state)
         return (
             "行动：警长投票。\n"
-            "警长拥有 1.5 票并决定白天发言方向。你必须从警长候选人中选择一名玩家投票。\n"
+            f"当选警长在白天放逐投票中计为 {sheriff_vote_weight:g} 票，并决定白天发言方向。"
+            "你必须从警长候选人中选择一名玩家投票。\n"
             f"候选人：{options}。\n"
             "输出字段 reasoning 和 sheriff_vote。"
         )
@@ -333,20 +359,48 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
         stage = world_state.get("self_explosion_stage") or "白天公开阶段"
         sheriff = world_state.get("sheriff")
         bomb_count = int(world_state.get("sheriff_pre_election_bomb_count") or 0)
-        badge_context = (
-            "当前还没有警长，采用双爆吞警徽规则：第一次警长产生前自爆只会中断警长竞选，"
-            "第二次警长产生前自爆会导致警徽流失。"
-            if not sheriff
-            else f"当前警长是{sheriff}，此时自爆不会吞警徽；若你是警长，则按死亡警长规则处理警徽。"
+        sheriff_enabled, _, badge_policy, self_explosion_enabled = _prompt_rule_settings(
+            world_state
         )
+        if not self_explosion_enabled:
+            badge_context = (
+                "本局不设警长，也没有警徽；锁定规则未启用自爆。"
+                if not sheriff_enabled
+                else "锁定规则未启用自爆，因此不应用警徽自爆策略。"
+            )
+        elif not sheriff_enabled:
+            badge_context = "本局不设警长，也没有警徽；自爆不涉及警徽处理。"
+        elif sheriff:
+            badge_context = (
+                f"当前警长是{sheriff}，此时自爆不会直接造成警徽流失；"
+                "若你是警长，则按死亡警长规则处理警徽。"
+            )
+        elif badge_policy == "double":
+            badge_context = (
+                "当前还没有警长，采用双爆吞警徽规则：第一次警长产生前自爆只会中断警长竞选，"
+                "第二次警长产生前自爆会导致警徽流失。"
+            )
+        else:
+            badge_context = (
+                "当前还没有警长；警长产生前自爆会中断当次竞选，但多次自爆不会累计造成警徽流失。"
+            )
+        feature_context = (
+            "锁定规则已启用狼人自爆。"
+            if self_explosion_enabled
+            else "锁定规则未确认启用狼人自爆；仅在引擎明确开放该动作时选择。"
+        )
+        benefit_examples = "阻止关键查验、保护最后隐狼或直接创造胜势"
+        if self_explosion_enabled and sheriff_enabled and not sheriff and badge_policy == "double":
+            benefit_examples = f"吞警徽、{benefit_examples}"
         return (
             "行动：狼人自爆判断。\n"
             f"当前阶段：{stage}。\n"
             f"警长产生前自爆次数：{bomb_count}。\n"
+            f"{feature_context}\n"
             f"{badge_context}\n"
             "选择自爆会公开你是狼人、你立刻出局，并让当天直接结束进入夜晚。\n"
             f"候选选项：{options}。\n"
-            "已有狼人自爆时，继续自爆必须能带来明确收益，例如吞警徽、阻止关键查验、保护最后隐狼或直接创造胜势。"
+            f"已有狼人自爆时，继续自爆必须能带来明确收益，例如{benefit_examples}。"
             "收益不明确时选择不自爆，保留白天发言空间。"
             "请以狼人阵营收益判断，输出字段 reasoning 和 self_explode。"
         )

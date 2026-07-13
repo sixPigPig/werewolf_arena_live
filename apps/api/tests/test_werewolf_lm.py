@@ -189,6 +189,17 @@ def test_vote_prompt_omits_debate_guidance() -> None:
     assert "本轮发言任务" not in prompt
 
 
+def _prompt_rule_snapshot(**overrides: object) -> dict[str, object]:
+    snapshot: dict[str, object] = {
+        "sheriff_enabled": True,
+        "sheriff_vote_weight": 1.5,
+        "sheriff_badge_bomb_policy": "double",
+        "werewolf_self_explosion_enabled": True,
+    }
+    snapshot.update(overrides)
+    return snapshot
+
+
 def test_werewolf_self_explosion_prompt_mentions_chain_cost() -> None:
     prompt, _schema = build_prompt(
         "werewolf_self_explosion",
@@ -203,6 +214,95 @@ def test_werewolf_self_explosion_prompt_mentions_chain_cost() -> None:
 
     assert "已有狼人自爆" in prompt
     assert "收益不明确时选择不自爆" in prompt
+
+
+@pytest.mark.parametrize("weight", [1.0, 1.5, 2.0])
+def test_sheriff_vote_prompt_uses_pinned_vote_weight(weight: float) -> None:
+    world_state = _world_state_for_special_action("村民", "Bob、Carol")
+    world_state["rule_set_snapshot"] = _prompt_rule_snapshot(
+        sheriff_vote_weight=weight,
+    )
+
+    prompt, _schema = build_prompt("sheriff_vote", world_state)
+
+    assert f"当选警长在白天放逐投票中计为 {weight:g} 票" in prompt
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "sheriff", "expected", "forbidden"),
+    [
+        (
+            _prompt_rule_snapshot(sheriff_enabled=False),
+            None,
+            "本局不设警长，也没有警徽",
+            "吞警徽",
+        ),
+        (
+            _prompt_rule_snapshot(sheriff_badge_bomb_policy="none"),
+            None,
+            "多次自爆不会累计造成警徽流失",
+            "吞警徽",
+        ),
+        (
+            _prompt_rule_snapshot(sheriff_badge_bomb_policy="double"),
+            None,
+            "第二次警长产生前自爆会导致警徽流失",
+            None,
+        ),
+        (
+            _prompt_rule_snapshot(sheriff_badge_bomb_policy="double"),
+            "Bob",
+            "当前警长是Bob",
+            "吞警徽",
+        ),
+        (
+            _prompt_rule_snapshot(werewolf_self_explosion_enabled=False),
+            None,
+            "锁定规则未确认启用狼人自爆",
+            "吞警徽",
+        ),
+    ],
+)
+def test_self_explosion_prompt_uses_pinned_sheriff_policy(
+    snapshot: dict[str, object],
+    sheriff: str | None,
+    expected: str,
+    forbidden: str | None,
+) -> None:
+    world_state = _world_state_for_special_action("狼人", "自爆、不自爆")
+    world_state.update(
+        {
+            "rule_set_snapshot": snapshot,
+            "sheriff": sheriff,
+            "sheriff_pre_election_bomb_count": 1,
+        }
+    )
+
+    prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
+
+    assert expected in prompt
+    if forbidden is not None:
+        assert forbidden not in prompt
+
+
+def test_prompt_rule_settings_fail_closed_and_do_not_dump_snapshot_description() -> None:
+    marker = "RULE_DESCRIPTION_MUST_NOT_REACH_PROMPT"
+    world_state = _world_state_for_special_action("村民", "Bob、Carol")
+    world_state["rule_set_snapshot"] = {
+        "sheriff_enabled": "yes",
+        "sheriff_vote_weight": "1.5",
+        "sheriff_badge_bomb_policy": "double-ish",
+        "werewolf_self_explosion_enabled": "yes",
+        "description": marker,
+    }
+
+    vote_prompt, _schema = build_prompt("sheriff_vote", world_state)
+    explosion_prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
+
+    assert "当选警长在白天放逐投票中计为 1 票" in vote_prompt
+    assert "本局不设警长，也没有警徽" in explosion_prompt
+    assert marker not in vote_prompt
+    assert marker not in explosion_prompt
 
 
 def test_prompt_renders_endgame_context() -> None:
@@ -338,9 +438,7 @@ def test_parse_json_object_accepts_fenced_json() -> None:
 
 
 def test_parse_json_object_accepts_unescaped_newline_inside_string() -> None:
-    parsed = parse_json_object(
-        '{"reasoning":"观察发言","summary":"第一行\n第二行"}'
-    )
+    parsed = parse_json_object('{"reasoning":"观察发言","summary":"第一行\n第二行"}')
 
     assert parsed == {"reasoning": "观察发言", "summary": "第一行\n第二行"}
 
@@ -395,9 +493,7 @@ def test_action_visible_stream_field_only_allows_public_actions() -> None:
 
 
 def test_extract_openai_chat_delta_reads_compatible_sse_chunks() -> None:
-    chunk = ('data: {"choices":[{"delta":{"content":"我不是狼"}}]}\n\n').encode(
-        "utf-8"
-    )
+    chunk = ('data: {"choices":[{"delta":{"content":"我不是狼"}}]}\n\n').encode("utf-8")
 
     assert extract_openai_chat_delta(chunk) == "我不是狼"
     assert extract_openai_chat_delta(b"data: [DONE]\n\n") is None
@@ -414,10 +510,7 @@ def test_extract_openai_chat_delta_skips_role_only_events_in_same_chunk() -> Non
 
 
 def test_extract_openai_chat_delta_skips_leading_comment_in_same_chunk() -> None:
-    chunk = (
-        ": heartbeat\n\n"
-        'data: {"choices":[{"delta":{"content":"继续"}}]}\n\n'
-    ).encode("utf-8")
+    chunk = (': heartbeat\n\ndata: {"choices":[{"delta":{"content":"继续"}}]}\n\n').encode("utf-8")
 
     assert extract_openai_chat_delta(chunk) == "继续"
 
@@ -432,19 +525,16 @@ def test_extract_openai_chat_delta_joins_multiple_content_events_in_same_chunk()
 
 
 def test_extract_openai_chat_delta_preserves_content_before_done_in_same_chunk() -> None:
-    chunk = (
-        'data: {"choices":[{"delta":{"content":"结束前"}}]}\n\n'
-        "data: [DONE]\n\n"
-    ).encode("utf-8")
+    chunk = ('data: {"choices":[{"delta":{"content":"结束前"}}]}\n\ndata: [DONE]\n\n').encode(
+        "utf-8"
+    )
 
     assert extract_openai_chat_delta(chunk) == "结束前"
 
 
 def test_generate_action_with_events_streams_public_visible_text() -> None:
     sink = CapturingLmEventSink()
-    provider = StreamingFakeProvider(
-        ['{"reasoning":"试探",', '"say":"我', "不是", '狼"}']
-    )
+    provider = StreamingFakeProvider(['{"reasoning":"试探",', '"say":"我', "不是", '狼"}'])
 
     value, log = generate_action_with_events(
         provider=provider,
@@ -481,9 +571,7 @@ def test_generate_action_with_events_streams_public_visible_text() -> None:
 
 def test_generate_action_with_events_streams_public_text_with_unescaped_newline() -> None:
     sink = CapturingLmEventSink()
-    provider = StreamingFakeProvider(
-        ['{"reasoning":"试探",', '"say":"第一句\n', '第二句"}']
-    )
+    provider = StreamingFakeProvider(['{"reasoning":"试探",', '"say":"第一句\n', '第二句"}'])
 
     value, log = generate_action_with_events(
         provider=provider,
@@ -506,17 +594,13 @@ def test_generate_action_with_events_streams_public_text_with_unescaped_newline(
     assert value == "第一句\n第二句"
     assert log.raw_response == '{"reasoning":"试探","say":"第一句\n第二句"}'
     delta_events = [event for event in sink.events if event["type"] == "model_response_delta"]
-    assert [event["payload"]["visible_text"] for event in delta_events] == [
-        "第一句\n第二句"
-    ]
+    assert [event["payload"]["visible_text"] for event in delta_events] == ["第一句\n第二句"]
     assert [event["type"] for event in sink.events].count("model_request_failed") == 0
 
 
 def test_generate_action_with_events_suppresses_private_action_deltas() -> None:
     sink = CapturingLmEventSink()
-    provider = StreamingFakeProvider(
-        ['{"reasoning":"夜晚决策",', '"remove":"Bob"}']
-    )
+    provider = StreamingFakeProvider(['{"reasoning":"夜晚决策",', '"remove":"Bob"}'])
 
     value, log = generate_action_with_events(
         provider=provider,
@@ -753,9 +837,7 @@ def test_generate_action_with_events_sanitizes_public_failure_error() -> None:
     class LeakyErrorProvider:
         def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
             del model, prompt, temperature
-            raise RuntimeError(
-                "upstream body echoed prompt world_state raw_response reasoning"
-            )
+            raise RuntimeError("upstream body echoed prompt world_state raw_response reasoning")
 
     sink = CapturingLmEventSink()
 
@@ -974,11 +1056,7 @@ def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> Non
         requests.append({"url": url, "headers": headers, "payload": payload})
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
             ]
         }
 
@@ -1082,7 +1160,9 @@ def test_openai_compatible_provider_stream_does_not_retry_after_yield(monkeypatc
     chunks = provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3)
 
     assert next(chunks) == "已经输出"
-    with pytest.raises(RuntimeError, match="DeepSeek streaming request failed after partial output"):
+    with pytest.raises(
+        RuntimeError, match="DeepSeek streaming request failed after partial output"
+    ):
         next(chunks)
     assert len(attempts) == 1
 
@@ -1169,11 +1249,7 @@ def test_deepseek_provider_loads_key_from_dotenv(tmp_path, monkeypatch) -> None:
         requests.append({"url": url, "headers": headers, "payload": payload})
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
             ]
         }
 
@@ -1203,11 +1279,7 @@ def test_deepseek_provider_retries_connection_reset(monkeypatch) -> None:
             raise urllib.error.URLError(ConnectionResetError(54, "Connection reset by peer"))
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "重试成功", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "重试成功", "vote": "老周"})}}
             ]
         }
 
@@ -1251,11 +1323,7 @@ def test_minimax_provider_uses_env_and_reasoning_split(tmp_path, monkeypatch) ->
         requests.append({"url": url, "headers": headers, "payload": payload})
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
             ]
         }
 
@@ -1286,11 +1354,7 @@ def test_minimax_provider_accepts_mainland_api_host(monkeypatch) -> None:
         requests.append({"url": url, "headers": headers, "payload": payload})
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
             ]
         }
 
@@ -1333,11 +1397,7 @@ def test_qwen_provider_uses_dashscope_env_and_model_alias(tmp_path, monkeypatch)
         requests.append({"url": url, "headers": headers, "payload": payload})
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
             ]
         }
 
@@ -1354,7 +1414,9 @@ def test_qwen_provider_uses_dashscope_env_and_model_alias(tmp_path, monkeypatch)
     )
 
     assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
-    assert requests[0]["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    assert (
+        requests[0]["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    )
     assert requests[0]["headers"]["Authorization"] == "Bearer dashscope-key"
     assert requests[0]["payload"]["model"] == "qwen3.6-plus"
 
@@ -1366,11 +1428,7 @@ def test_qwen_provider_accepts_dashscope_api_host(tmp_path, monkeypatch) -> None
         requests.append({"url": url, "headers": headers, "payload": payload})
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
             ]
         }
 
@@ -1398,11 +1456,7 @@ def test_model_provider_router_routes_minimax_without_deepseek_key(tmp_path, mon
         requests.append({"url": url, "headers": headers, "payload": payload})
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
             ]
         }
 
@@ -1431,11 +1485,7 @@ def test_model_provider_router_routes_qwen_alias_without_other_keys(tmp_path, mo
         requests.append({"url": url, "headers": headers, "payload": payload})
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
             ]
         }
 
@@ -1454,7 +1504,9 @@ def test_model_provider_router_routes_qwen_alias_without_other_keys(tmp_path, mo
     )
 
     assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
-    assert requests[0]["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    assert (
+        requests[0]["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    )
     assert requests[0]["headers"]["Authorization"] == "Bearer dashscope-key"
     assert requests[0]["payload"]["model"] == "qwen3.6-plus"
 
@@ -1466,11 +1518,7 @@ def test_model_provider_router_routes_deepseek_models(monkeypatch) -> None:
         requests.append({"url": url, "headers": headers, "payload": payload})
         return {
             "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})
-                    }
-                }
+                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
             ]
         }
 

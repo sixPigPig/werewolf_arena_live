@@ -233,11 +233,7 @@ def initialize_game_state(
         player_configs=player_configs,
     )
     configs_by_seat = {config.seat: config for config in player_configs or []}
-    role_cards = [
-        role_spec
-        for role_spec in rule_set.roles
-        for _ in range(role_spec.count)
-    ]
+    role_cards = [role_spec for role_spec in rule_set.roles for _ in range(role_spec.count)]
     role_rng = random.Random(f"{seed}:roles") if seed is not None else random.Random()
     role_rng.shuffle(role_cards)
     players: list[Player] = []
@@ -269,7 +265,9 @@ def initialize_game_state(
             player.hunter_can_shoot = True
         players.append(player)
 
-    werewolves = [player for player in players if _role_team(rule_set, player.role) == TEAM_WEREWOLVES]
+    werewolves = [
+        player for player in players if _role_team(rule_set, player.role) == TEAM_WEREWOLVES
+    ]
     current_players = [player.name for player in players]
 
     for player in players:
@@ -380,7 +378,9 @@ class GameEngine:
             payload={"active_players": active_players.copy()},
         )
         players_by_name = self.state.player_by_name()
-        active_wolves = [name for name in active_players if self._is_werewolf(players_by_name[name])]
+        active_wolves = [
+            name for name in active_players if self._is_werewolf(players_by_name[name])
+        ]
         non_wolves = [
             name for name in active_players if not self._is_werewolf(players_by_name[name])
         ]
@@ -394,7 +394,9 @@ class GameEngine:
                 non_wolves,
             )
 
-        if ACTION_PROTECT in self.rule_set.night_actions and self._is_role_active(DOCTOR, active_players):
+        if ACTION_PROTECT in self.rule_set.night_actions and self._is_role_active(
+            DOCTOR, active_players
+        ):
             doctor = players_by_name[self._active_player_for_role(DOCTOR, active_players)]
             protected, round_log.protect = self._player_action(
                 player=doctor,
@@ -406,7 +408,9 @@ class GameEngine:
             )
             round_state.protected = protected
 
-        if ACTION_INVESTIGATE in self.rule_set.night_actions and self._is_role_active(SEER, active_players):
+        if ACTION_INVESTIGATE in self.rule_set.night_actions and self._is_role_active(
+            SEER, active_players
+        ):
             seer = players_by_name[self._active_player_for_role(SEER, active_players)]
             investigate_options = [
                 name
@@ -442,7 +446,9 @@ class GameEngine:
 
         if round_state.night_deaths:
             eliminated_names = "、".join(death.player for death in round_state.night_deaths)
-            self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
+            self._announce(
+                active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。"
+            )
             self._add_public_fact(
                 round_state.number,
                 "death",
@@ -660,9 +666,7 @@ class GameEngine:
             return
 
         poison_options = [
-            name
-            for name in active_players
-            if name != witch.name and name != round_state.attacked
+            name for name in active_players if name != witch.name and name != round_state.attacked
         ] + [NO_WITCH_POISON]
         if poison_options == [NO_WITCH_POISON]:
             return
@@ -679,7 +683,9 @@ class GameEngine:
             round_state.poisoned = str(poison_choice)
             witch.witch_poison_available = False
 
-    def _pending_night_deaths(self, round_state: RoundState, active_players: list[str]) -> list[DeathEvent]:
+    def _pending_night_deaths(
+        self, round_state: RoundState, active_players: list[str]
+    ) -> list[DeathEvent]:
         deaths: list[DeathEvent] = []
         if (
             round_state.attacked
@@ -735,7 +741,9 @@ class GameEngine:
             recorded_night_deaths.add(death.player)
             self._remove_player(active_players, death.player)
 
-        round_state.eliminated = round_state.night_deaths[0].player if round_state.night_deaths else None
+        round_state.eliminated = (
+            round_state.night_deaths[0].player if round_state.night_deaths else None
+        )
         return recorded_night_deaths
 
     def _resolve_night_death_aftermath(
@@ -890,7 +898,9 @@ class GameEngine:
         if exiled:
             self._resolve_day_exile(exiled, round_state, round_log, active_players)
         else:
-            self._announce(active_players, f"第{round_state.number}轮：白天投票未形成多数，无人被放逐。")
+            self._announce(
+                active_players, f"第{round_state.number}轮：白天投票未形成多数，无人被放逐。"
+            )
         self._publish_state_updated(
             round_state=round_state,
             phase="vote",
@@ -930,7 +940,9 @@ class GameEngine:
         )
         if round_state.night_deaths:
             eliminated_names = "、".join(death.player for death in round_state.night_deaths)
-            self._announce(active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。")
+            self._announce(
+                active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。"
+            )
             self._add_public_fact(
                 round_state.number,
                 "death",
@@ -1125,7 +1137,9 @@ class GameEngine:
         round_state.day_ended_by_self_explosion = True
         round_state.day_deaths.append(DeathEvent(wolf, "werewolf_self_explosion", wolf))
         self._remove_player(active_players, wolf)
-        self._announce(active_players, f"第{round_state.number}轮：{wolf}自爆为狼人，白天立即结束。")
+        self._announce(
+            active_players, f"第{round_state.number}轮：{wolf}自爆为狼人，白天立即结束。"
+        )
         self._add_public_fact(
             round_state.number,
             "reveal",
@@ -1420,9 +1434,7 @@ class GameEngine:
             return candidates.copy()
 
         start = candidates[self.rng.randrange(len(candidates))]
-        direction = self.rng.choice(
-            [SHERIFF_SPEECH_CLOCKWISE, SHERIFF_SPEECH_COUNTERCLOCKWISE]
-        )
+        direction = self.rng.choice([SHERIFF_SPEECH_CLOCKWISE, SHERIFF_SPEECH_COUNTERCLOCKWISE])
         seated_players = (
             list(reversed(active_players))
             if direction == SHERIFF_SPEECH_COUNTERCLOCKWISE
@@ -1623,9 +1635,7 @@ class GameEngine:
             return
 
         excluded_badge_targets = excluded_badge_targets or set()
-        badge_options = [
-            name for name in active_players if name not in excluded_badge_targets
-        ]
+        badge_options = [name for name in active_players if name not in excluded_badge_targets]
         old_sheriff = self.state.player_by_name()[dead_player]
         choice, action_log = self._player_action(
             player=old_sheriff,
@@ -1641,7 +1651,10 @@ class GameEngine:
             self._set_sheriff(choice)
             round_state.sheriff_badge_target = choice
             round_state.sheriff = choice
-            self._announce(active_players, f"第{round_state.number}轮：{dead_player}出局，将警徽移交给{choice}。")
+            self._announce(
+                active_players,
+                f"第{round_state.number}轮：{dead_player}出局，将警徽移交给{choice}。",
+            )
             return
 
         self._set_sheriff(None)
@@ -1652,8 +1665,7 @@ class GameEngine:
 
     def _is_recorded_round_death(self, player: str, round_state: RoundState) -> bool:
         return any(
-            death.player == player
-            for death in [*round_state.night_deaths, *round_state.day_deaths]
+            death.player == player for death in [*round_state.night_deaths, *round_state.day_deaths]
         )
 
     def _run_summaries(
@@ -2176,7 +2188,9 @@ class GameEngine:
         options: list[str],
         round_state: RoundState,
     ) -> dict[str, object]:
-        active_players = player.gamestate.current_players if player.gamestate else round_state.players
+        active_players = (
+            player.gamestate.current_players if player.gamestate else round_state.players
+        )
         debate = [f"{entry.speaker}：{entry.message}" for entry in round_state.debate]
         return {
             "name": player.name,
@@ -2190,6 +2204,7 @@ class GameEngine:
             "debate_guidance": self._debate_guidance(player, active_players, round_state),
             "personality": player.personality,
             "rule_text": render_rule_text(self.rule_set),
+            "rule_set_snapshot": copy.deepcopy(self.state.rule_set),
             "werewolf_context": self._werewolf_context(player, active_players),
             "sheriff_election": self._sheriff_election_context(round_state),
             "sheriff": self.state.sheriff,
@@ -2256,10 +2271,7 @@ class GameEngine:
         return debate_guidance_for_turn(
             speaker=player.name,
             active_players=speech_order,
-            prior_messages=[
-                f"{entry.speaker}：{entry.message}"
-                for entry in round_state.debate
-            ],
+            prior_messages=[f"{entry.speaker}：{entry.message}" for entry in round_state.debate],
             personality=player.personality,
         )
 
@@ -2352,7 +2364,9 @@ class GameEngine:
 
     def _get_winner(self, active_players: list[str]) -> str:
         players_by_name = self.state.player_by_name()
-        active_wolves = [name for name in active_players if self._is_werewolf(players_by_name[name])]
+        active_wolves = [
+            name for name in active_players if self._is_werewolf(players_by_name[name])
+        ]
         active_villagers = [name for name in active_players if name not in active_wolves]
 
         if self.rule_set.win_condition == WIN_CONDITION_SLAUGHTER_SIDE:

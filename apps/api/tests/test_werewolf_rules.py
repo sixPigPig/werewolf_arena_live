@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from app.werewolf.rules import (
@@ -183,6 +185,71 @@ def test_12_player_rule_text_describes_confirmed_table_rules() -> None:
     assert "警徽可移交或撕毁" in text
     assert "狼人白天公开阶段可以自爆" in text
     assert "采用双爆吞警徽" in text
+
+
+@pytest.mark.parametrize("weight", [1.0, 1.5, 2.0])
+def test_rule_text_uses_configured_sheriff_vote_weight(weight: float) -> None:
+    rule = replace(
+        get_rule_set("classic_12_seer_witch_hunter_idiot"),
+        sheriff_vote_weight=weight,
+    )
+
+    text = render_rule_text(rule)
+
+    assert f"警长投票计为 {weight:g} 票" in text
+
+
+def test_rule_text_describes_non_accumulating_pre_sheriff_explosions() -> None:
+    rule = replace(
+        get_rule_set("classic_12_seer_witch_hunter_idiot"),
+        sheriff_badge_bomb_policy="none",
+    )
+
+    text = render_rule_text(rule)
+
+    assert "警长产生前自爆会中断当次竞选" in text
+    assert "不会累计导致警徽流失" in text
+    assert "双爆吞警徽" not in text
+
+
+def test_rule_text_describes_self_explosion_without_sheriff_or_badge() -> None:
+    rule = replace(
+        get_rule_set("classic_12_seer_witch_hunter_idiot"),
+        sheriff_enabled=False,
+        sheriff_vote_weight=1.0,
+        sheriff_badge_bomb_policy="none",
+    )
+
+    text = render_rule_text(rule)
+
+    assert "狼人白天公开阶段可以自爆" in text
+    assert "本局不设警长，也没有警徽" in text
+    assert "警徽流失" not in text
+    assert "双爆吞警徽" not in text
+
+
+def test_rule_text_omits_self_explosion_policy_when_feature_is_disabled() -> None:
+    rule = replace(
+        get_rule_set("classic_12_seer_witch_hunter_idiot"),
+        werewolf_self_explosion_enabled=False,
+        sheriff_badge_bomb_policy="none",
+    )
+
+    text = render_rule_text(rule)
+
+    assert "自爆" not in text
+
+
+def test_rule_text_omits_absent_special_roles_and_description() -> None:
+    marker = "RULE_DESCRIPTION_MUST_NOT_REACH_PROMPT"
+    rule = replace(get_rule_set("social_8"), description=marker)
+
+    text = render_rule_text(rule)
+
+    assert "女巫拥有" not in text
+    assert "猎人死亡" not in text
+    assert "白痴首次" not in text
+    assert marker not in text
 
 
 def test_small_rule_sets_do_not_enable_werewolf_self_explosion() -> None:

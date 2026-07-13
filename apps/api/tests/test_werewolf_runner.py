@@ -1359,6 +1359,36 @@ def test_world_state_includes_public_facts_for_late_day_actions() -> None:
     assert "7号玩家警上声明6号玩家为好人。" in world_state["public_facts"]
 
 
+def test_world_state_carries_detached_exact_rule_snapshot() -> None:
+    compiled = managed_official_compiled_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="pinned_prompt_world_state",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=20260712,
+        rule_set=compiled.rule_set,
+    )
+    state.rule_set = copy.deepcopy(compiled.snapshot)
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=1,
+        rule_set=compiled.rule_set,
+        rng=random.Random(1),
+    )
+    round_state = RoundState(number=1, players=[player.name for player in state.players])
+
+    world_state = engine._world_state(state.players[0], [], round_state)
+    snapshot = world_state["rule_set_snapshot"]
+
+    assert snapshot == state.rule_set
+    assert snapshot is not state.rule_set
+    assert isinstance(snapshot, dict)
+    assert snapshot["roles"] is not state.rule_set["roles"]
+    snapshot["roles"][0]["role"] = "tampered"
+    assert state.rule_set["roles"][0]["role"] != "tampered"
+
+
 def test_world_state_marks_four_player_endgame_pressure() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -2706,6 +2736,12 @@ def test_werewolf_self_explosion_prompt_renders_double_badge_context() -> None:
         "self_explosion_stage": "警上发言前",
         "sheriff": None,
         "sheriff_pre_election_bomb_count": 1,
+        "rule_set_snapshot": {
+            "sheriff_enabled": True,
+            "sheriff_vote_weight": 1.5,
+            "sheriff_badge_bomb_policy": "double",
+            "werewolf_self_explosion_enabled": True,
+        },
     }
 
     prompt, schema = build_prompt("werewolf_self_explosion", world_state)

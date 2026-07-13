@@ -296,23 +296,27 @@ def render_rule_text(rule_set: RuleSet) -> str:
         lines.append(
             f"警长投票计为 {rule_set.sheriff_vote_weight:g} 票，警长死亡时警徽可移交或撕毁。"
         )
-        if rule_set.werewolf_self_explosion_enabled:
-            lines.append(
-                "狼人白天公开阶段可以自爆，自爆后该狼人公开出局并直接结束当天。"
-                "本规则采用双爆吞警徽：警长产生前第一次自爆只中断竞选，第二次自爆才会导致警徽流失。"
-            )
     else:
         lines.append("白天行动：按座次顺序进行一轮完整发言，随后投票放逐并进行总结。")
+        lines.append("本局不设警长，也没有警徽。")
+    if rule_set.werewolf_self_explosion_enabled:
+        self_explosion_text = "狼人白天公开阶段可以自爆，自爆后该狼人公开出局并直接结束当天。"
+        if not rule_set.sheriff_enabled:
+            self_explosion_text += "自爆不涉及警长或警徽处理。"
+        elif rule_set.sheriff_badge_bomb_policy == "double":
+            self_explosion_text += (
+                "本规则采用双爆吞警徽：警长产生前第一次自爆只中断竞选，第二次自爆才会导致警徽流失。"
+            )
+        else:
+            self_explosion_text += "警长产生前自爆会中断当次竞选，但多次自爆不会累计导致警徽流失。"
+        lines.append(self_explosion_text)
     lines.append("身份揭示：游戏过程中隐藏玩家真实身份。")
     return "\n".join(lines)
 
 
 def _render_win_condition_text(rule_set: RuleSet) -> str:
     if rule_set.win_condition == WIN_CONDITION_SLAUGHTER_SIDE:
-        return (
-            "胜利条件：好人阵营需要放逐/淘汰全部狼人获胜；"
-            "神职全灭或平民全灭时狼人获胜。"
-        )
+        return "胜利条件：好人阵营需要放逐/淘汰全部狼人获胜；神职全灭或平民全灭时狼人获胜。"
     return "胜利条件：好人阵营需要放逐/淘汰全部狼人获胜；狼人数量大于或等于其他存活玩家数量时狼人获胜。"
 
 
