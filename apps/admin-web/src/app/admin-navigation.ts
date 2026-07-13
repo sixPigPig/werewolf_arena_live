@@ -10,6 +10,11 @@ export type AdminPermission =
   | "players.publish"
   | "players.archive"
   | "players.ai_generate"
+  | "rules.read"
+  | "rules.write"
+  | "rules.publish"
+  | "rules.archive"
+  | "rules.set_default"
   | "users.manage"
   | "roles.manage"
   | "audit.read"
@@ -86,6 +91,14 @@ export const adminNavigation: AdminNavSection[] = [
         href: "/content/voice-assets",
         marker: "声",
         permission: "voice.read",
+      },
+      {
+        id: "rules",
+        label: "游戏规则",
+        description: "规则版本、发布与默认配置",
+        href: "/content/rules",
+        marker: "规",
+        permission: "rules.read",
       },
     ],
   },

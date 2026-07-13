@@ -20,6 +20,9 @@ import {
   JobsRoute,
   OverviewRoute,
   SettingsRoute,
+  RuleSetsRoute,
+  RuleSetNewRoute,
+  RuleSetDetailRoute,
 } from "@/routes/lazy-pages";
 
 export const routes: RouteObject[] = [
@@ -107,6 +110,18 @@ export const routes: RouteObject[] = [
                     <PlayerProfileEditorRoute />
                   </RequireAdminPermission>
                 ),
+              },
+              {
+                path: "content/rules",
+                element: <RequireAdminPermission permission="rules.read"><RuleSetsRoute /></RequireAdminPermission>,
+              },
+              {
+                path: "content/rules/new",
+                element: <RequireAdminPermission permission="rules.read"><RuleSetNewRoute /></RequireAdminPermission>,
+              },
+              {
+                path: "content/rules/:ruleSetId",
+                element: <RequireAdminPermission permission="rules.read"><RuleSetDetailRoute /></RequireAdminPermission>,
               },
               {
                 path: "system/jobs",

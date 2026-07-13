@@ -4,6 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { routes } from "@/routes";
+import type { AdminPermission } from "@/app/admin-navigation";
+
+const expectedPermissions = [
+  "rules.read", "rules.write", "rules.publish", "rules.archive", "rules.set_default",
+] as const satisfies readonly AdminPermission[];
 
 function renderRoute(path: string) {
   const queryClient = new QueryClient({
@@ -25,7 +30,10 @@ describe("admin app routes", () => {
     vi.stubEnv("VITE_ADMIN_PREVIEW_MODE", "true");
   });
 
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
 
   it("redirects the root to the operational overview", async () => {
     const router = renderRoute("/");
@@ -54,6 +62,47 @@ describe("admin app routes", () => {
     expect(router.state.location.pathname).toBe(
       "/content/players/preview-draft-1",
     );
+  });
+
+  it("exposes rule permissions and preview navigation", async () => {
+    expect(expectedPermissions).toHaveLength(5);
+    renderRoute("/overview");
+    expect(await screen.findByRole("link", { name: /游戏规则/ })).toHaveAttribute("href", "/content/rules");
+  });
+
+  it.each([
+    ["/content/rules", "规则内容库"],
+    ["/content/rules/new", "新建游戏规则"],
+    ["/content/rules/classic_9", "游戏规则详情"],
+  ])("resolves the lazy rule route %s", async (path, heading) => {
+    renderRoute(path);
+    expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+  });
+
+  it("forbids a connected session without rules.read", async () => {
+    vi.stubEnv("VITE_ADMIN_AUTH_ENABLED", "true");
+    vi.stubEnv("VITE_ADMIN_PREVIEW_MODE", "false");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      if (String(input).endsWith("/api/v1/admin/me")) {
+        return new Response(JSON.stringify({ user: { id: "viewer", email: "viewer@example.test", display_name: "观察员", role: "viewer" }, permissions: ["overview.read"], csrf_token: "csrf", session_expires_at: "2999-01-01T00:00:00Z" }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    }));
+    const router = renderRoute("/content/rules");
+    expect(await screen.findByRole("heading", { name: "没有访问权限" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/403");
+  });
+
+  it.each([
+    ["/overview", "运营总览"],
+    ["/content/players", "虚拟玩家"],
+    ["/content/voice-assets", "法官语音资产"],
+    ["/operations/games", "对局记录"],
+    ["/operations/runs", "运行监控"],
+    ["/system/settings", "运行设置"],
+  ])("keeps the existing route %s connected", async (path, heading) => {
+    renderRoute(path);
+    expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
   });
 
   it("renders an admin-specific not found page", async () => {
