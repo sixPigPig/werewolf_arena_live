@@ -3,6 +3,10 @@ import type {
   deriveLiveNarrativeState,
   LiveVoiceSubtitle,
 } from "@werewolf-arena/game-client";
+import {
+  removeSubtitlePunctuation,
+  stripSubtitlePunctuation,
+} from "@werewolf-arena/game-client";
 
 type GodViewState = ReturnType<typeof deriveGodViewState>;
 type LiveNarrativeState = ReturnType<typeof deriveLiveNarrativeState>;
@@ -14,7 +18,11 @@ export const PUBLIC_SPEECH_ACTIONS = [
 ] as const;
 
 export type MobileLiveSubtitle = {
+  activeText: string;
   speakerName: string;
+  completedText: string;
+  pageIndex: number;
+  pendingText: string;
   text: string;
   tone: "judge" | "player";
   colorIndex: number;
@@ -32,7 +40,7 @@ export function deriveMobileLiveSubtitle({
   const cue = narrativeState.cue;
 
   if (cue.kind === "player-speaking") {
-    const text = cue.speechText.trim();
+    const text = stripSubtitlePunctuation(cue.speechText);
     if (!text) {
       return null;
     }
@@ -45,6 +53,10 @@ export function deriveMobileLiveSubtitle({
     );
 
     return {
+      activeText: "",
+      completedText: text,
+      pageIndex: 0,
+      pendingText: "",
       speakerName,
       text,
       tone: "player",
@@ -56,12 +68,16 @@ export function deriveMobileLiveSubtitle({
     cue.kind === "judge" ||
     (cue.kind === "player-thinking" && isPublicSpeechAction(cue.action))
   ) {
-    const text = cue.judgeLine.trim();
+    const text = stripSubtitlePunctuation(cue.judgeLine);
     if (!text) {
       return null;
     }
 
     return {
+      activeText: "",
+      completedText: text,
+      pageIndex: 0,
+      pendingText: "",
       speakerName: "法官",
       text,
       tone: "judge",
@@ -79,20 +95,64 @@ export function voiceSubtitleToMobileSubtitle(
     return null;
   }
 
+  const progress = mobileSubtitleProgress(subtitle);
   if (subtitle.speakerKind === "judge") {
     return {
+      ...progress,
       colorIndex: 0,
       speakerName: subtitle.speakerName,
-      text: subtitle.text,
       tone: "judge",
     };
   }
 
   return {
+    ...progress,
     colorIndex: playerColorIndexFromSeatLabel(subtitle.speakerName),
     speakerName: subtitle.speakerName,
-    text: subtitle.text,
     tone: "player",
+  };
+}
+
+function mobileSubtitleProgress(subtitle: LiveVoiceSubtitle) {
+  const text = stripSubtitlePunctuation(subtitle.text);
+  const hasTimedProgress =
+    typeof subtitle.completedText === "string" &&
+    typeof subtitle.activeText === "string" &&
+    typeof subtitle.pendingText === "string";
+
+  if (!hasTimedProgress) {
+    return {
+      activeText: "",
+      completedText: text,
+      pageIndex: 0,
+      pendingText: "",
+      text,
+    };
+  }
+
+  const completedText = removeSubtitlePunctuation(subtitle.completedText);
+  const activeText = removeSubtitlePunctuation(subtitle.activeText);
+  const pendingText = removeSubtitlePunctuation(subtitle.pendingText);
+  const segmentedText = stripSubtitlePunctuation(
+    completedText + activeText + pendingText,
+  );
+
+  if (segmentedText !== text) {
+    return {
+      activeText: "",
+      completedText: text,
+      pageIndex: subtitle.pageIndex,
+      pendingText: "",
+      text,
+    };
+  }
+
+  return {
+    activeText,
+    completedText,
+    pageIndex: subtitle.pageIndex,
+    pendingText,
+    text,
   };
 }
 

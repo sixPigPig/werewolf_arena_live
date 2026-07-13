@@ -23,8 +23,8 @@ import {
   SUBTITLE_CLOCK_POLL_INTERVAL_MS,
   currentSubtitleForItem,
   isPcmAudioFormat,
+  subtitleDisplayForElapsedMs,
   subtitleElapsedMsForItem,
-  subtitleTextForElapsedMs,
   type LiveVoiceSubtitleClock,
 } from "./liveVoiceSubtitleClock";
 import type { PlaybackVoiceChunk, PlaybackVoiceUtterance } from "../types";
@@ -520,15 +520,18 @@ export function currentSubtitleForPlaybackVoices({
     return null;
   }
 
-  const text = subtitleTextForElapsedMs(playbackSubtitleCues(voice), elapsedMs);
-  if (!text) {
+  const display = subtitleDisplayForElapsedMs(
+    playbackSubtitleCues(voice),
+    elapsedMs,
+  );
+  if (!display) {
     return null;
   }
 
   return {
+    ...display,
     speakerKind: voice.speaker_kind,
     speakerName: voice.speaker_name,
-    text,
     utteranceId: voice.utterance_id,
   };
 }

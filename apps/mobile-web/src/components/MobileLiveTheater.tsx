@@ -115,9 +115,9 @@ export function MobileLiveTheater({
           currentEvent={currentEvent}
           currentPlayer={currentPlayer}
           godViewState={godViewState}
-          subtitle={subtitle}
         />
         <LiveSeatColumn players={right} side="right" />
+        {subtitle ? <LiveSubtitle subtitle={subtitle} /> : null}
       </section>
       <LiveTheaterControls
         canResumeRun={canResumeRun}
@@ -293,14 +293,12 @@ type LiveCenterStageProps = {
   currentEvent: LiveGameEvent | null;
   currentPlayer: GodViewPlayer | null;
   godViewState: GodViewState;
-  subtitle: MobileLiveSubtitle | null;
 };
 
 export function LiveCenterStage({
   currentEvent,
   currentPlayer,
   godViewState,
-  subtitle,
 }: LiveCenterStageProps) {
   const presenterAvatarImageUrl = currentPlayer
     ? resolveAvatarImageUrl({
@@ -330,7 +328,6 @@ export function LiveCenterStage({
       <strong>{currentPlayer?.name ?? "等待玩家行动"}</strong>
       <em>{currentPlayer?.stageStatus.label ?? godViewState.currentSeatLabel}</em>
       <p>{currentEvent ? liveStageEventLabel(currentEvent) : "等待事件"}</p>
-      {subtitle ? <LiveSubtitle subtitle={subtitle} /> : null}
       {currentEvent?.phase ? (
         <small>{phaseLabel(currentEvent.phase)}阶段</small>
       ) : null}
@@ -353,7 +350,20 @@ function LiveSubtitle({ subtitle }: LiveSubtitleProps) {
   return (
     <div aria-label="直播字幕" className={className} role="status">
       <strong>{subtitle.speakerName}</strong>
-      <span>{subtitle.text}</span>
+      <span aria-label={subtitle.text} className="mobile-live-subtitle-text">
+        <span
+          aria-hidden="true"
+          className="mobile-live-subtitle-completed"
+        >
+          {subtitle.completedText}
+        </span>
+        <span aria-hidden="true" className="mobile-live-subtitle-active">
+          {subtitle.activeText}
+        </span>
+        <span aria-hidden="true" className="mobile-live-subtitle-pending">
+          {subtitle.pendingText}
+        </span>
+      </span>
     </div>
   );
 }

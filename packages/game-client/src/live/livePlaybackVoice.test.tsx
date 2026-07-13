@@ -315,9 +315,12 @@ describe("playback voice", () => {
     });
     expect(pcmMocks.schedule).toHaveBeenCalledTimes(1);
     expect(result.current.currentSubtitle).toMatchObject({
+      activeText: "我",
+      completedText: "",
+      pendingText: "先发言",
       speakerKind: "player",
       speakerName: "1号玩家",
-      text: "我",
+      text: "我先发言",
     });
 
     context.currentTime = 10.2;
@@ -326,9 +329,12 @@ describe("playback voice", () => {
     });
 
     expect(result.current.currentSubtitle).toMatchObject({
+      activeText: "先",
+      completedText: "我",
+      pendingText: "发言",
       speakerKind: "player",
       speakerName: "1号玩家",
-      text: "我先发言。",
+      text: "我先发言",
     });
   });
 
@@ -384,9 +390,13 @@ describe("playback voice", () => {
     });
 
     expect(subtitle).toEqual({
+      activeText: "过",
+      completedText: "我先",
+      pageIndex: 0,
+      pendingText: "",
       speakerKind: "player",
       speakerName: "2号玩家",
-      text: "我先过。",
+      text: "我先过",
       utteranceId: "voice-1",
     });
   });
@@ -417,7 +427,7 @@ describe("playback voice", () => {
     ).toMatchObject({
       speakerKind: "player",
       speakerName: "2号玩家",
-      text: "我先过。",
+      text: "我先过",
     });
   });
 });

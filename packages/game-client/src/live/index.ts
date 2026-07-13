@@ -9,4 +9,5 @@ export * from "./livePcmPlayer";
 export * from "./livePhaseBar";
 export * from "./liveSpectator";
 export * from "./liveVoiceStream";
+export * from "./liveVoiceSubtitleClock";
 export * from "./useGameRunEvents";

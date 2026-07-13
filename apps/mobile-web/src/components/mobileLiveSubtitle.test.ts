@@ -10,6 +10,7 @@ import type {
 import {
   deriveMobileLiveSubtitle,
   type MobileLiveSubtitle,
+  voiceSubtitleToMobileSubtitle,
 } from "./mobileLiveSubtitle";
 
 type TestPlayer = Pick<GodViewPlayer, "name" | "seatNumber">;
@@ -89,8 +90,12 @@ describe("deriveMobileLiveSubtitle", () => {
     });
 
     expect(subtitle).toEqual<MobileLiveSubtitle>({
+      activeText: "",
+      completedText: "我先听后置位发言",
+      pageIndex: 0,
+      pendingText: "",
       speakerName: "3号玩家",
-      text: "我先听后置位发言。",
+      text: "我先听后置位发言",
       tone: "player",
       colorIndex: 2,
     });
@@ -108,8 +113,12 @@ describe("deriveMobileLiveSubtitle", () => {
     });
 
     expect(subtitle).toEqual<MobileLiveSubtitle>({
+      activeText: "",
+      completedText: "请听 1号玩家 的发言",
+      pageIndex: 0,
+      pendingText: "",
       speakerName: "法官",
-      text: "请听 1号玩家 的发言。",
+      text: "请听 1号玩家 的发言",
       tone: "judge",
       colorIndex: 0,
     });
@@ -125,8 +134,12 @@ describe("deriveMobileLiveSubtitle", () => {
     });
 
     expect(subtitle).toEqual<MobileLiveSubtitle>({
+      activeText: "",
+      completedText: "夜晚降临所有玩家请闭眼",
+      pageIndex: 0,
+      pendingText: "",
       speakerName: "法官",
-      text: "夜晚降临，所有玩家请闭眼。",
+      text: "夜晚降临所有玩家请闭眼",
       tone: "judge",
       colorIndex: 0,
     });
@@ -172,5 +185,31 @@ describe("deriveMobileLiveSubtitle", () => {
     expect(first?.colorIndex).toBeGreaterThanOrEqual(0);
     expect(first?.colorIndex).toBeLessThan(8);
     expect(second?.colorIndex).toBe(first?.colorIndex);
+  });
+});
+
+describe("voiceSubtitleToMobileSubtitle", () => {
+  it("preserves KTV progress while removing visible punctuation", () => {
+    expect(
+      voiceSubtitleToMobileSubtitle({
+        activeText: "发",
+        completedText: "我先，",
+        pageIndex: 2,
+        pendingText: "言。",
+        speakerKind: "player",
+        speakerName: "3号玩家",
+        text: "我先，发言。",
+        utteranceId: "voice-1",
+      }),
+    ).toEqual<MobileLiveSubtitle>({
+      activeText: "发",
+      colorIndex: 2,
+      completedText: "我先",
+      pageIndex: 2,
+      pendingText: "言",
+      speakerName: "3号玩家",
+      text: "我先发言",
+      tone: "player",
+    });
   });
 });

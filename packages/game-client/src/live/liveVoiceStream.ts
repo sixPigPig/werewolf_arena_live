@@ -95,6 +95,10 @@ export type LiveVoiceSubtitleCue = {
 };
 
 export type LiveVoiceSubtitle = {
+  activeText: string;
+  completedText: string;
+  pageIndex: number;
+  pendingText: string;
   speakerKind: "player" | "judge";
   speakerName: string;
   text: string;

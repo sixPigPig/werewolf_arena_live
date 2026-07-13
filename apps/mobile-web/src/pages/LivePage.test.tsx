@@ -536,6 +536,10 @@ describe("LivePage", () => {
       },
       currentSpeakerName: "1号玩家",
       currentSubtitle: {
+        activeText: "听",
+        completedText: "我先",
+        pageIndex: 0,
+        pendingText: "后置位发言。",
         speakerKind: "player",
         speakerName: "1号玩家",
         text: "我先听后置位发言。",
@@ -557,7 +561,22 @@ describe("LivePage", () => {
     expect(subtitle).toHaveClass("mobile-live-subtitle");
     expect(subtitle).toHaveClass("mobile-live-subtitle-player-0");
     expect(within(subtitle).getByText("1号玩家")).toBeVisible();
-    expect(within(subtitle).getByText("我先听后置位发言。")).toBeVisible();
+    expect(within(subtitle).getByLabelText("我先听后置位发言")).toBeVisible();
+    expect(
+      subtitle.querySelector(".mobile-live-subtitle-completed"),
+    ).toHaveTextContent("我先");
+    expect(
+      subtitle.querySelector(".mobile-live-subtitle-active"),
+    ).toHaveTextContent("听");
+    expect(
+      subtitle.querySelector(".mobile-live-subtitle-pending"),
+    ).toHaveTextContent("后置位发言");
+    expect(
+      within(await screen.findByRole("region", { name: "当前舞台" })).queryByRole(
+        "status",
+        { name: "直播字幕" },
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("renders judge subtitles from live voice timing", async () => {
@@ -595,23 +614,27 @@ describe("LivePage", () => {
     expect(subtitle).toHaveClass("mobile-live-subtitle-judge");
     expect(within(subtitle).getByText("法官")).toBeVisible();
     expect(
-      within(subtitle).getByText("本局游戏开始，请所有玩家确认自己的身份牌。"),
+      within(subtitle).getByLabelText("本局游戏开始请所有玩家确认自己的身份牌"),
     ).toBeVisible();
   });
 
-  it("styles mobile live subtitles as a lower-third speech HUD", () => {
+  it("styles mobile live subtitles as a full-width single-line KTV HUD", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
     const subtitleRule =
       styles.match(/(?:^|\n)\.mobile-live-subtitle\s*{[^}]+}/)?.[0] ?? "";
     const subtitleTextRule =
-      styles.match(/(?:^|\n)\.mobile-live-subtitle span\s*{[^}]+}/)?.[0] ?? "";
+      styles.match(/(?:^|\n)\.mobile-live-subtitle-text\s*{[^}]+}/)?.[0] ?? "";
+    const activeTextRule =
+      styles.match(/(?:^|\n)\.mobile-live-subtitle-active\s*{[^}]+}/)?.[0] ?? "";
+    const pendingTextRule =
+      styles.match(/(?:^|\n)\.mobile-live-subtitle-pending\s*{[^}]+}/)?.[0] ?? "";
     const judgeRule =
       styles.match(/(?:^|\n)\.mobile-live-subtitle-judge\s*{[^}]+}/)?.[0] ?? "";
     const playerZeroRule =
       styles.match(/(?:^|\n)\.mobile-live-subtitle-player-0\s*{[^}]+}/)?.[0] ?? "";
     const shortScreenRule =
       styles.match(
-        /@media \(max-height: 860px\) {[\s\S]*?\.mobile-live-subtitle strong,\s*\n\s*\.mobile-live-subtitle span\s*{[^}]+}/,
+        /@media \(max-height: 860px\) {[\s\S]*?\.mobile-live-subtitle-text\s*{[^}]+}/,
       )?.[0] ?? "";
     const accentFromRule = (rule: string) =>
       rule.match(/--mobile-live-subtitle-accent:\s*(#[0-9a-fA-F]{6})/)?.[1] ?? "";
@@ -627,18 +650,23 @@ describe("LivePage", () => {
       return accentFromRule(playerRule);
     });
 
-    expect(subtitleRule).toContain("max-width: 100%");
+    expect(subtitleRule).toContain("position: absolute");
+    expect(subtitleRule).toContain("right: 10px");
+    expect(subtitleRule).toContain("left: 10px");
     expect(subtitleRule).toContain("grid-template-columns: auto minmax(0, 1fr)");
     expect(subtitleTextRule).not.toContain("-webkit-line-clamp");
-    expect(subtitleTextRule).not.toContain("text-overflow: ellipsis");
-    expect(subtitleTextRule).not.toContain("overflow: hidden");
-    expect(subtitleTextRule).toContain("word-break: break-word");
+    expect(subtitleTextRule).toContain("text-overflow: clip");
+    expect(subtitleTextRule).toContain("overflow: hidden");
+    expect(subtitleTextRule).toContain("white-space: nowrap");
+    expect(subtitleTextRule).toContain("word-break: normal");
+    expect(activeTextRule).toContain("var(--mobile-live-subtitle-accent)");
+    expect(pendingTextRule).toContain("38%");
     expect(judgeRule).toContain("--mobile-live-subtitle-accent: #f4c76d");
     expect(playerZeroRule).toContain("--mobile-live-subtitle-accent: #8ddfd0");
     expect(styles).toContain(".mobile-live-subtitle-player-7");
     expect(playerAccents).not.toContain("");
     expect(playerAccents).not.toContain(judgeAccent);
-    expect(shortScreenRule).toContain("font-size: 11px");
+    expect(shortScreenRule).toContain("font-size: 12px");
   });
 
   it("renders the director controls with gothic icon slots", async () => {

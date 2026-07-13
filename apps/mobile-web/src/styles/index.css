@@ -2277,18 +2277,24 @@ textarea {
 
 .mobile-live-subtitle {
   --mobile-live-subtitle-accent: #f4c76d;
+  position: absolute;
+  z-index: 4;
+  right: 10px;
+  bottom: 12px;
+  left: 10px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 7px;
-  max-width: 100%;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
   box-sizing: border-box;
   border: 1px solid color-mix(in srgb, var(--mobile-live-subtitle-accent) 62%, transparent);
   border-radius: 0;
-  padding: 7px 9px;
+  padding: 8px 11px;
+  pointer-events: none;
   background:
     linear-gradient(180deg, rgb(255 239 192 / 7%), rgb(0 0 0 / 18%)),
-    rgb(5 8 12 / 72%);
+    rgb(5 8 12 / 86%);
   color: #fff2bf;
   box-shadow:
     inset 0 1px 0 rgb(255 245 202 / 10%),
@@ -2297,7 +2303,7 @@ textarea {
   text-align: left;
 }
 
-.mobile-live-subtitle strong {
+.mobile-live-subtitle > strong {
   color: var(--mobile-live-subtitle-accent);
   font-size: 12px;
   font-weight: 900;
@@ -2306,16 +2312,44 @@ textarea {
   text-shadow: 0 2px 5px rgb(0 0 0 / 72%);
 }
 
-.mobile-live-subtitle span {
+.mobile-live-subtitle-text {
   display: block;
   min-width: 0;
+  overflow: hidden;
   color: #fff4cf;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 800;
-  line-height: 1.4;
-  text-shadow: 0 2px 5px rgb(0 0 0 / 72%);
-  white-space: normal;
-  word-break: break-word;
+  line-height: 1.25;
+  text-overflow: clip;
+  text-shadow: 0 2px 5px rgb(0 0 0 / 76%);
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.mobile-live-subtitle-completed {
+  color: color-mix(in srgb, var(--mobile-live-subtitle-accent) 88%, #fff);
+}
+
+.mobile-live-subtitle-active {
+  color: #fff9df;
+  text-shadow:
+    0 0 5px #fff8d1,
+    0 0 11px color-mix(in srgb, var(--mobile-live-subtitle-accent) 86%, transparent),
+    0 2px 5px rgb(0 0 0 / 72%);
+  transition:
+    color 80ms linear,
+    text-shadow 80ms linear;
+}
+
+.mobile-live-subtitle-pending {
+  color: rgb(255 244 207 / 38%);
+  text-shadow: 0 2px 5px rgb(0 0 0 / 70%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-live-subtitle-active {
+    transition: none;
+  }
 }
 
 .mobile-live-subtitle-judge {
@@ -2538,6 +2572,18 @@ textarea {
     gap: 4px;
     padding: 11px 8px 10px;
   }
+
+  .mobile-live-subtitle {
+    right: 6px;
+    bottom: 8px;
+    left: 6px;
+    gap: 6px;
+    padding: 7px 8px;
+  }
+
+  .mobile-live-subtitle-text {
+    font-size: 13px;
+  }
 }
 
 @media (max-height: 860px) {
@@ -2597,9 +2643,12 @@ textarea {
     padding: 5px 7px;
   }
 
-  .mobile-live-subtitle strong,
-  .mobile-live-subtitle span {
+  .mobile-live-subtitle > strong {
     font-size: 11px;
+  }
+
+  .mobile-live-subtitle-text {
+    font-size: 12px;
   }
 
   .mobile-live-presenter {

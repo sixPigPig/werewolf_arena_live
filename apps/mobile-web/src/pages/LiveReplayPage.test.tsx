@@ -247,7 +247,7 @@ describe("LiveReplayPage", () => {
     });
     expect(subtitle).toHaveClass("mobile-live-subtitle-player-0");
     expect(within(subtitle).getByText("1号玩家")).toBeVisible();
-    expect(within(subtitle).getByText("语音时间轴字幕")).toBeVisible();
+    expect(within(subtitle).getByLabelText("语音时间轴字幕")).toBeVisible();
   });
 
   it("prefers timed replay voice subtitles over event-derived subtitles", async () => {
