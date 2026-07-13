@@ -31,12 +31,13 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
   const [draft, setDraft] = useState<RuleSetFormInput>(initial); const [errors, setErrors] = useState<RuleSetFormErrors>({});
   const [requestError, setRequestError] = useState<Error | null>(null); const [conflict, setConflict] = useState(false); const [validation, setValidation] = useState<ValidationView | null>(null);
   const [pending, setPending] = useState<"save" | "validate" | "reload" | null>(null); const [baseline, setBaseline] = useState(JSON.stringify(cleanRuleSetInput(initial, options))); const allowNavigation = useRef(false);
-  const [transition, setTransition] = useState<Transition | null>(null); const [transitionOpener, setTransitionOpener] = useState<HTMLButtonElement | null>(null); const [transitionPending, setTransitionPending] = useState(false); const [transitionError, setTransitionError] = useState<string | null>(null); const [announcement, setAnnouncement] = useState("");
+  const [transition, setTransition] = useState<Transition | null>(null); const [transitionOpener, setTransitionOpener] = useState<HTMLButtonElement | null>(null); const [transitionPending, setTransitionPending] = useState(false); const [transitionError, setTransitionError] = useState<string | null>(null); const [announcement, setAnnouncement] = useState<{ id: number; message: string } | null>(null); const announcementSequence = useRef(0);
   const cleaned = cleanRuleSetInput(draft, options); const isDirty = JSON.stringify(cleaned) !== baseline;
   const editable = canWrite && detail?.status !== "archived"; const blocker = useBlocker(({ currentLocation, nextLocation }) => !allowNavigation.current && isDirty && `${currentLocation.pathname}${currentLocation.search}${currentLocation.hash}` !== `${nextLocation.pathname}${nextLocation.search}${nextLocation.hash}`);
   useBeforeUnload(useCallback((event) => { if (isDirty) event.preventDefault(); }, [isDirty]), { capture: true });
   const publishedRules = useQuery({ queryKey: [...ruleSetKeys.lists, "transition", detail?.id], queryFn: ({ signal }) => listAllPublishedRules(repository, signal), enabled: Boolean(detail && (transition === "default" || (transition === "archive" && detail.is_default))) });
 
+  function announce(message: string) { announcementSequence.current += 1; setAnnouncement({ id: announcementSequence.current, message }); }
   function markChanged() { setValidation(null); }
   function changeConfig<K extends keyof RuleSetFormInput["config"]>(key: K, value: RuleSetFormInput["config"][K]) { setDraft((current) => ({ ...current, config: { ...current.config, [key]: value } })); setErrors((current) => ({ ...current, [key]: undefined, form: undefined })); markChanged(); }
   async function save(event: FormEvent) {
@@ -47,13 +48,13 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
       const fresh = await repository.get(saved.id); setDetail(fresh); const next = inputFromRuleSet(fresh, options); setDraft(next); setBaseline(JSON.stringify(cleanRuleSetInput(next, options)));
       await Promise.all([queryClient.invalidateQueries({ queryKey: ruleSetKeys.lists }), queryClient.invalidateQueries({ queryKey: ruleSetKeys.detail(saved.id) })]);
       if (isNew) { allowNavigation.current = true; navigate(`/content/rules/${encodeURIComponent(saved.id)}`); }
-      else setAnnouncement("草稿已保存");
+      else announce("草稿已保存");
     } catch (error) { setErrors(formErrorsFromApi(error)); if (isAdminApiError(error) && (error.status === 409 || error.status === 412)) setConflict(true); setRequestError(error as Error); }
     finally { setPending(null); }
   }
   async function validateSaved() {
     const revision = detail?.draft_revision; if (!revision) return; setPending("validate"); setRequestError(null);
-    try { const result = await repository.validate(detail.id, { expected_revision_lock_version: revision.lock_version }); setValidation({ ...result, revision_lock_version: revision.lock_version }); setErrors(formErrorsFromApi({ warnings: result.errors })); }
+    try { const result = await repository.validate(detail.id, { expected_revision_lock_version: revision.lock_version }); setValidation({ ...result, revision_lock_version: revision.lock_version }); setErrors(formErrorsFromApi({ warnings: result.errors })); announce(result.valid ? "规则校验通过" : "规则校验未通过"); }
     catch (error) { setErrors(formErrorsFromApi(error)); setRequestError(error as Error); }
     finally { setPending(null); }
   }
@@ -62,7 +63,7 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
   function openTransition(next: Transition, opener: HTMLButtonElement) { if (transitionPending) return; setTransitionError(null); setTransitionOpener(opener); setTransition(next); }
   function closeTransition() { if (transitionPending) return; setTransition(null); setTransitionOpener(null); }
   async function confirmTransition(reason: string, replacementId: string | null) {
-    if (!detail || !transition || transitionPending) return; setTransitionPending(true); setTransitionError(null); setAnnouncement("");
+    if (!detail || !transition || transitionPending) return; setTransitionPending(true); setTransitionError(null); setAnnouncement(null);
     try {
       if (transition === "publish") {
         const revision = detail.draft_revision; if (!revision || !validation?.valid || validation.revision_lock_version !== revision.lock_version || isDirty) return;
@@ -81,7 +82,7 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
       }
       const completed = transition; const fresh = await repository.get(detail.id); setDetail(fresh); const next = inputFromRuleSet(fresh, options); setDraft(next); setBaseline(JSON.stringify(cleanRuleSetInput(next, options))); setValidation(null); setConflict(false); setTransition(null); setTransitionOpener(null);
       await Promise.all([queryClient.invalidateQueries({ queryKey: ruleSetKeys.lists }), queryClient.invalidateQueries({ queryKey: ruleSetKeys.detail(detail.id) })]);
-      setAnnouncement({ publish: "规则已发布", default: "已设为默认规则", archive: "规则已归档", restore: "规则已恢复" }[completed]);
+      announce({ publish: "规则已发布", default: "已设为默认规则", archive: "规则已归档", restore: "规则已恢复" }[completed]);
     } catch (error) { setTransitionError(transitionMessage(error)); }
     finally { setTransitionPending(false); }
   }
@@ -91,7 +92,7 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
 
   return <div className="admin-page rule-set-editor-page"><header className="page-heading rule-set-heading"><div><span className="page-kicker">CONTENT / RULES</span><h1>{isNew ? "新建游戏规则" : "游戏规则详情"}</h1>{detail ? <p><span>{STATUS[detail.status]}</span>{detail.is_default ? " · 默认规则" : ""} · 规则锁版本 {detail.lock_version} · 草稿版本 {detail.draft_revision?.revision_no ?? "无"}</p> : <p>创建结构化规则草稿</p>}</div>{!editable ? <span className="page-readiness-badge">只读权限</span> : null}</header>
     <div className="rule-set-editor-layout"><div className="rule-set-editor-main">
-    {announcement ? <p aria-live="polite" className="rule-set-notice" role="status">{announcement}</p> : null}
+    {announcement ? <p aria-live="polite" className="rule-set-notice" key={announcement.id} role="status">{announcement.message}</p> : null}
     <form className="rule-set-form" onSubmit={save}><fieldset disabled={!editable || pending !== null}><legend>结构化规则配置</legend>
       <Field label="规则 ID" error={errors.id}><input aria-label="规则 ID" onChange={(e) => { setDraft({ ...draft, id: e.target.value }); markChanged(); }} readOnly={!isNew} value={draft.id} /></Field>
       <Field label="显示顺序" error={errors.display_order}><input aria-label="显示顺序" min="0" onChange={(e) => { setDraft({ ...draft, display_order: e.target.valueAsNumber }); markChanged(); }} type="number" value={draft.display_order} /></Field>

@@ -289,7 +289,9 @@ describe("rule editor", () => {
     const user = userEvent.setup(); const { router, queryClient } = renderRoute("/content/rules/classic_9"); const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     await user.type(await screen.findByLabelText("规则名称"), " saved"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "list"] })); expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "detail", "classic_9"] });
-    expect(screen.getByRole("status")).toHaveTextContent("草稿已保存");
+    const firstSaveAnnouncement = screen.getByRole("status"); expect(firstSaveAnnouncement).toHaveTextContent("草稿已保存");
+    await user.type(screen.getByLabelText("规则名称"), " again"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(screen.getByRole("status")).not.toBe(firstSaveAnnouncement)); expect(screen.getByRole("status")).toHaveTextContent("草稿已保存");
     await act(async () => { await router.navigate("/content/rules"); });
     expect(screen.queryByRole("dialog", { name: "未保存规则" })).not.toBeInTheDocument();
   });
@@ -371,6 +373,20 @@ describe("rule editor", () => {
     expect(screen.getByText("内容哈希：abcdef123456")).toBeInTheDocument(); expect(screen.getByText("规则预览正文")).toBeInTheDocument(); expect(screen.queryByText(/opaque|secret/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发布规则" })).toBeEnabled();
     await user.type(screen.getByLabelText("规则名称"), " 修改"); expect(screen.getByRole("button", { name: "发布规则" })).toBeDisabled();
+  });
+
+  it("announces valid and invalid server validation, including repeated outcomes", async () => {
+    useServerSession(["rules.read", "rules.write", "rules.publish"]); const base = { ...fixtureRuleSet("classic_9", "draft"), revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let validations = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = String(input); const common = serverCommon(url); if (common) return common;
+      if (url.endsWith("/api/v1/admin/rule-sets/classic_9")) return json(base);
+      if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) { validations += 1; const valid = validations === 1; return json({ valid, errors: valid ? [] : [{ code: "invalid", path: "config.name", message: "名称未通过校验" }], warnings: [], compiled_snapshot: null, content_hash: valid ? "a".repeat(64) : null, rule_text_preview: valid ? "ok" : null }); }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); const validate = await screen.findByRole("button", { name: "校验规则" });
+    await user.click(validate); const validAnnouncement = await screen.findByRole("status"); expect(validAnnouncement).toHaveTextContent("规则校验通过");
+    await user.click(validate); const invalidAnnouncement = await screen.findByRole("status"); expect(invalidAnnouncement).toHaveTextContent("规则校验未通过"); expect(invalidAnnouncement).not.toBe(validAnnouncement);
+    await user.click(validate); await waitFor(() => expect(screen.getByRole("status")).not.toBe(invalidAnnouncement)); expect(screen.getByRole("status")).toHaveTextContent("规则校验未通过");
   });
 
   it("publish rule requires its exact permission, trims a constrained reason, deduplicates, and refreshes from the server", async () => {
