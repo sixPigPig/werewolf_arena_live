@@ -14,6 +14,19 @@ function cue(
   return { endMs, startMs, text };
 }
 
+function subtitlePageTexts(text: string, endMs = 4000) {
+  const pages = new Map<number, string>();
+  const cues = [cue(text, 0, endMs)];
+
+  for (let elapsedMs = 0; elapsedMs <= endMs; elapsedMs += 20) {
+    const display = subtitleDisplayForElapsedMs(cues, elapsedMs);
+    if (display) {
+      pages.set(display.pageIndex, display.text);
+    }
+  }
+  return [...pages.values()];
+}
+
 describe("subtitleDisplayForElapsedMs", () => {
   it("shows the full punctuation-free phrase while lighting timed characters", () => {
     const cues = [cue("我", 0, 180), cue("先发言。", 180, 820)];
@@ -108,15 +121,63 @@ describe("subtitleDisplayForElapsedMs", () => {
     );
   });
 
-  it("balances long phrases instead of leaving an orphaned final page", () => {
+  it("balances long phrases without splitting detected words", () => {
     const cues = [cue("一二三四五六七八九十甲乙丙丁戊己庚辛", 0, 1800)];
 
     expect(subtitleDisplayForElapsedMs(cues, 0)?.text).toBe(
-      "一二三四五六七八九",
+      "一二三四五六七八",
     );
     expect(subtitleDisplayForElapsedMs(cues, 860)?.text).toBe(
-      "十甲乙丙丁戊己庚辛",
+      "九十甲乙丙丁戊己庚辛",
     );
+  });
+
+  it("keeps seat numbers and decimal expressions on one page", () => {
+    const seatNumberPages = subtitlePageTexts(
+      "甲乙丙丁戊己庚辛壬癸子丑寅12号玩家卯辰巳午未申酉戌亥",
+    );
+    const decimalPages = subtitlePageTexts(
+      "甲乙丙丁戊己庚辛壬癸子丑3.5票寅卯辰巳午未申酉戌亥",
+    );
+
+    expect(seatNumberPages.filter((page) => /\d/u.test(page))).toEqual([
+      expect.stringContaining("12号玩家"),
+    ]);
+    expect(decimalPages.filter((page) => /\d/u.test(page))).toEqual([
+      expect.stringContaining("3.5票"),
+    ]);
+  });
+
+  it("preserves a numeric expression split across timing cues", () => {
+    const cues = [cue("现在是3.", 0, 500), cue("5票", 500, 900)];
+
+    expect(subtitleDisplayForElapsedMs(cues, 400)).toMatchObject({
+      activeText: "3.",
+      pendingText: "5票",
+      text: "现在是3.5票",
+    });
+  });
+
+  it("keeps English words and game terms on one page", () => {
+    const englishPages = subtitlePageTexts(
+      "甲乙丙丁戊己庚辛壬癸子丑PlayerOne寅卯辰巳午未申酉戌亥",
+    );
+    const gameTermPages = subtitlePageTexts(
+      "甲乙丙丁戊己庚辛壬癸子丑警徽流寅卯辰巳午未申酉戌亥",
+    );
+
+    expect(englishPages.filter((page) => /[A-Z]/u.test(page))).toEqual([
+      expect.stringContaining("PlayerOne"),
+    ]);
+    expect(gameTermPages.filter((page) => /[警徽流]/u.test(page))).toEqual([
+      expect.stringContaining("警徽流"),
+    ]);
+  });
+
+  it("allows up to two overflow columns for a single protected token", () => {
+    const number = "123456789012345678";
+
+    expect(subtitlePageTexts(number)).toEqual([number]);
   });
 });
 
@@ -124,6 +185,12 @@ describe("stripSubtitlePunctuation", () => {
   it("removes pause punctuation while retaining spacing and expressive marks", () => {
     expect(stripSubtitlePunctuation(" 请听，1号玩家！ Ready, go～? ")).toBe(
       "请听1号玩家！ Ready go?",
+    );
+  });
+
+  it("retains punctuation that belongs to numeric expressions", () => {
+    expect(stripSubtitlePunctuation("3.5票，12:30，1-3号，80%！")).toBe(
+      "3.5票12:301-3号80%！",
     );
   });
 });

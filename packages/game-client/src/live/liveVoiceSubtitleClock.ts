@@ -9,6 +9,7 @@ export const SUBTITLE_CUE_LEAD_MS = 40;
 export const SUBTITLE_PAGE_MAX_COLUMNS = 16;
 
 const MIN_BALANCED_PAGE_COLUMNS = 6;
+const SUBTITLE_PAGE_MAX_OVERFLOW_COLUMNS = 2;
 const MAX_STANDALONE_SHORT_PHRASE_LENGTH = 2;
 const MIN_SUBTITLE_PAGE_DURATION_MS = 830;
 const MAX_SUBTITLE_CHARACTERS_PER_SECOND = 9;
@@ -16,6 +17,13 @@ const SUBTITLE_ACTIVE_GLOW_RATIO = 0.6;
 const SUBTITLE_FINAL_COLOR_HOLD_MS = 140;
 const SUBTITLE_MIN_ACTIVE_GLOW_MS = 60;
 const SUBTITLE_PUNCTUATION = /^(?:\p{P}|[~～])$/u;
+const SUBTITLE_DIGIT = /^\p{N}$/u;
+const SUBTITLE_NUMERIC_INFIX = /^[.．:：/／\-–—~～]$/u;
+const SUBTITLE_NUMERIC_SUFFIX = /^[%％]$/u;
+const SUBTITLE_ARABIC_NUMBER_TOKEN =
+  /(?:第)?\p{N}+(?:[.．]\p{N}+)*(?:(?:[:：/／\-–—~～]|比)\p{N}+(?:[.．]\p{N}+)*)*(?:[%％]|号玩家|号|票|轮|天|晚|局|次|人|队|倍|分|秒|点|年|月|日|岁)?/gu;
+const SUBTITLE_CHINESE_NUMBER_TOKEN =
+  /(?:第)?[零〇一二三四五六七八九十百千万两]+(?:比[零〇一二三四五六七八九十百千万两]+)*(?:号玩家|号|票|轮|天|晚|局|次|人|队|倍|分|秒|点|年|月|日|岁)/gu;
 const STRONG_SUBTITLE_BREAK = /^[。！？!?；;.…]$/u;
 const WEAK_SUBTITLE_BREAK = /^[，,、：:—–~～]$/u;
 const VISIBLE_SUBTITLE_PUNCTUATION = /^[！？!?]$/u;
@@ -23,6 +31,36 @@ const SUBTITLE_EMOJI = /^\p{Extended_Pictographic}$/u;
 const SUBTITLE_SEGMENTER = new Intl.Segmenter("zh-CN", {
   granularity: "grapheme",
 });
+const SUBTITLE_WORD_SEGMENTER = new Intl.Segmenter("zh-CN", {
+  granularity: "word",
+});
+const SUBTITLE_PROTECTED_TERMS = [
+  "狼人阵营",
+  "好人阵营",
+  "冲锋狼",
+  "预言家",
+  "警徽流",
+  "平安夜",
+  "女巫",
+  "猎人",
+  "白痴",
+  "村民",
+  "狼人",
+  "守卫",
+  "警上",
+  "警下",
+  "金水",
+  "查杀",
+  "银水",
+  "站边",
+  "悍跳",
+  "倒钩",
+  "自爆",
+  "票型",
+  "狼坑",
+  "好人",
+  "遗言",
+] as const;
 
 export type LiveVoiceSubtitleClock = {
   elapsedMs: number;
@@ -45,6 +83,12 @@ type TimedSubtitleUnit = {
   endMs: number;
   startMs: number;
   text: string;
+  tokenId: number;
+};
+
+type SubtitleProtectedRange = {
+  end: number;
+  start: number;
 };
 
 type SubtitlePage = {
@@ -218,11 +262,17 @@ export function subtitleTextForElapsedMs(
 }
 
 export function removeSubtitlePunctuation(value: string) {
-  return splitSubtitleGraphemes(value)
+  const graphemes = splitSubtitleGraphemes(value);
+  return graphemes
     .filter(
-      (grapheme) =>
+      (grapheme, index) =>
         !isSubtitlePunctuation(grapheme) ||
-        isVisibleSubtitlePunctuation(grapheme),
+        isVisibleSubtitlePunctuation(grapheme) ||
+        isNumericSubtitlePunctuation(
+          grapheme,
+          graphemes[index - 1] ?? "",
+          graphemes[index + 1] ?? "",
+        ),
     )
     .join("");
 }
@@ -368,6 +418,7 @@ function joinSubtitleRanges(
       endMs: separatorMs,
       startMs: separatorMs,
       text: " ",
+      tokenId: -1,
     },
     ...right,
   ];
@@ -386,8 +437,11 @@ function timedSubtitleUnits(cues: LiveVoiceSubtitleCue[]) {
       (left, right) => left.startMs - right.startMs || left.endMs - right.endMs,
     );
 
-  for (const cue of sortedCues) {
-    const graphemes = splitSubtitleGraphemes(cue.text);
+  const cueGraphemes = sortedCues.map((cue) => splitSubtitleGraphemes(cue.text));
+
+  for (let cueIndex = 0; cueIndex < sortedCues.length; cueIndex += 1) {
+    const cue = sortedCues[cueIndex];
+    const graphemes = cueGraphemes[cueIndex];
     const spokenGraphemes = graphemes.filter(
       (grapheme) =>
         !isSubtitlePunctuation(grapheme) && !isSubtitleWhitespace(grapheme),
@@ -396,12 +450,23 @@ function timedSubtitleUnits(cues: LiveVoiceSubtitleCue[]) {
     const durationMs = cue.endMs - cue.startMs;
     let spokenIndex = 0;
 
-    for (const grapheme of graphemes) {
+    for (let index = 0; index < graphemes.length; index += 1) {
+      const grapheme = graphemes[index];
       if (/^[\r\n]$/u.test(grapheme)) {
         attachSubtitleBreak(units, "strong");
         continue;
       }
       if (isSubtitlePunctuation(grapheme)) {
+        if (
+          isNumericSubtitlePunctuation(
+            grapheme,
+            graphemes[index - 1] ?? cueGraphemes[cueIndex - 1]?.at(-1) ?? "",
+            graphemes[index + 1] ?? cueGraphemes[cueIndex + 1]?.[0] ?? "",
+          )
+        ) {
+          attachSubtitlePunctuation(units, grapheme);
+          continue;
+        }
         attachVisibleSubtitlePunctuation(units, grapheme);
         attachSubtitleBreak(units, subtitleBreakStrength(grapheme));
         continue;
@@ -417,6 +482,7 @@ function timedSubtitleUnits(cues: LiveVoiceSubtitleCue[]) {
             endMs: whitespaceMs,
             startMs: whitespaceMs,
             text: " ",
+            tokenId: -1,
           });
         }
         continue;
@@ -433,11 +499,12 @@ function timedSubtitleUnits(cues: LiveVoiceSubtitleCue[]) {
         endMs,
         startMs,
         text: grapheme,
+        tokenId: 0,
       });
     }
   }
 
-  return trimSubtitleUnits(units);
+  return assignSubtitleTokenIds(trimSubtitleUnits(units));
 }
 
 function paginateSubtitleRange(units: TimedSubtitleUnit[]) {
@@ -453,7 +520,10 @@ function paginateSubtitleRange(units: TimedSubtitleUnit[]) {
     let pageEndIndex = -1;
 
     for (let index = 0; index <= hardLimitIndex; index += 1) {
-      if (remaining[index].breakAfter !== "weak") {
+      if (
+        remaining[index].breakAfter !== "weak" ||
+        !isLegalSubtitlePageBreak(remaining, index)
+      ) {
         continue;
       }
       const leadingWidth = subtitleUnitsWidth(remaining.slice(0, index + 1));
@@ -486,6 +556,59 @@ function paginateSubtitleRange(units: TimedSubtitleUnit[]) {
 }
 
 function subtitleEndIndexForWidth(units: TimedSubtitleUnit[], targetWidth: number) {
+  const hardEndIndex = rawSubtitleEndIndexForWidth(units, targetWidth);
+  if (isLegalSubtitlePageBreak(units, hardEndIndex)) {
+    return hardEndIndex;
+  }
+
+  let previousBoundaryIndex = -1;
+  for (let index = hardEndIndex - 1; index >= 0; index -= 1) {
+    if (isLegalSubtitlePageBreak(units, index)) {
+      previousBoundaryIndex = index;
+      break;
+    }
+  }
+
+  let nextBoundaryIndex = -1;
+  for (let index = hardEndIndex + 1; index < units.length; index += 1) {
+    if (isLegalSubtitlePageBreak(units, index)) {
+      nextBoundaryIndex = index;
+      break;
+    }
+  }
+
+  const previousWidth =
+    previousBoundaryIndex >= 0
+      ? subtitleUnitsWidth(units.slice(0, previousBoundaryIndex + 1))
+      : 0;
+  const nextWidth =
+    nextBoundaryIndex >= 0
+      ? subtitleUnitsWidth(units.slice(0, nextBoundaryIndex + 1))
+      : Number.POSITIVE_INFINITY;
+  const canUseNextBoundary =
+    nextWidth <=
+    SUBTITLE_PAGE_MAX_COLUMNS + SUBTITLE_PAGE_MAX_OVERFLOW_COLUMNS;
+
+  if (
+    canUseNextBoundary &&
+    (previousBoundaryIndex < 0 || previousWidth < MIN_BALANCED_PAGE_COLUMNS)
+  ) {
+    return nextBoundaryIndex;
+  }
+  if (previousBoundaryIndex >= 0) {
+    return previousBoundaryIndex;
+  }
+  if (canUseNextBoundary) {
+    return nextBoundaryIndex;
+  }
+
+  return hardEndIndex;
+}
+
+function rawSubtitleEndIndexForWidth(
+  units: TimedSubtitleUnit[],
+  targetWidth: number,
+) {
   let width = 0;
   let endIndex = 0;
   for (let index = 0; index < units.length; index += 1) {
@@ -497,6 +620,21 @@ function subtitleEndIndexForWidth(units: TimedSubtitleUnit[], targetWidth: numbe
     endIndex = index;
   }
   return endIndex;
+}
+
+function isLegalSubtitlePageBreak(
+  units: TimedSubtitleUnit[],
+  endIndex: number,
+) {
+  const currentUnit = units[endIndex];
+  const nextUnit = units[endIndex + 1];
+  return (
+    !currentUnit ||
+    !nextUnit ||
+    currentUnit.tokenId < 0 ||
+    nextUnit.tokenId < 0 ||
+    currentUnit.tokenId !== nextUnit.tokenId
+  );
 }
 
 function subtitleUnitsWidth(units: TimedSubtitleUnit[]) {
@@ -530,6 +668,13 @@ function attachVisibleSubtitlePunctuation(
   if (!isVisibleSubtitlePunctuation(grapheme)) {
     return;
   }
+  attachSubtitlePunctuation(units, grapheme);
+}
+
+function attachSubtitlePunctuation(
+  units: TimedSubtitleUnit[],
+  grapheme: string,
+) {
   const unit = lastSpokenUnit(units);
   if (!unit) {
     return;
@@ -580,6 +725,115 @@ function isSubtitlePunctuation(grapheme: string) {
 
 function isVisibleSubtitlePunctuation(grapheme: string) {
   return VISIBLE_SUBTITLE_PUNCTUATION.test(grapheme);
+}
+
+function isNumericSubtitlePunctuation(
+  grapheme: string,
+  previousGrapheme: string,
+  nextGrapheme: string,
+) {
+  if (SUBTITLE_NUMERIC_SUFFIX.test(grapheme)) {
+    return SUBTITLE_DIGIT.test(previousGrapheme);
+  }
+  return (
+    SUBTITLE_NUMERIC_INFIX.test(grapheme) &&
+    SUBTITLE_DIGIT.test(previousGrapheme) &&
+    SUBTITLE_DIGIT.test(nextGrapheme)
+  );
+}
+
+function assignSubtitleTokenIds(units: TimedSubtitleUnit[]) {
+  const text = units.map((unit) => unit.text).join("");
+  const parent = units.map((_, index) => index);
+  const unitRanges: SubtitleProtectedRange[] = [];
+  let offset = 0;
+
+  for (const unit of units) {
+    unitRanges.push({ end: offset + unit.text.length, start: offset });
+    offset += unit.text.length;
+  }
+
+  const findRoot = (index: number): number => {
+    if (parent[index] !== index) {
+      parent[index] = findRoot(parent[index]);
+    }
+    return parent[index];
+  };
+  const union = (leftIndex: number, rightIndex: number) => {
+    const leftRoot = findRoot(leftIndex);
+    const rightRoot = findRoot(rightIndex);
+    if (leftRoot !== rightRoot) {
+      parent[rightRoot] = leftRoot;
+    }
+  };
+  const protectRange = ({ end, start }: SubtitleProtectedRange) => {
+    let previousUnitIndex = -1;
+
+    for (let index = 0; index < units.length; index += 1) {
+      const unitRange = unitRanges[index];
+      if (unitRange.start >= end) {
+        break;
+      }
+      if (
+        unitRange.end <= start ||
+        isSubtitleWhitespace(units[index].text)
+      ) {
+        continue;
+      }
+      if (
+        previousUnitIndex >= 0 &&
+        previousUnitIndex + 1 === index &&
+        units[previousUnitIndex].breakAfter === "none"
+      ) {
+        union(previousUnitIndex, index);
+      }
+      previousUnitIndex = index;
+    }
+  };
+
+  for (const segment of SUBTITLE_WORD_SEGMENTER.segment(text)) {
+    if (segment.isWordLike) {
+      protectRange({
+        end: segment.index + segment.segment.length,
+        start: segment.index,
+      });
+    }
+  }
+  for (const pattern of [
+    SUBTITLE_ARABIC_NUMBER_TOKEN,
+    SUBTITLE_CHINESE_NUMBER_TOKEN,
+  ]) {
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
+      protectRange({
+        end: (match.index ?? 0) + match[0].length,
+        start: match.index ?? 0,
+      });
+    }
+  }
+  for (const term of SUBTITLE_PROTECTED_TERMS) {
+    let termIndex = text.indexOf(term);
+    while (termIndex >= 0) {
+      protectRange({ end: termIndex + term.length, start: termIndex });
+      termIndex = text.indexOf(term, termIndex + term.length);
+    }
+  }
+
+  const tokenIds = new Map<number, number>();
+  let nextTokenId = 0;
+  return units.map((unit, index) => {
+    if (isSubtitleWhitespace(unit.text)) {
+      return { ...unit, tokenId: -1 };
+    }
+    const root = findRoot(index);
+    let tokenId = tokenIds.get(root);
+    if (tokenId === undefined) {
+      tokenId = nextTokenId;
+      nextTokenId += 1;
+      tokenIds.set(root, tokenId);
+    }
+    return { ...unit, tokenId };
+  });
 }
 
 function isSubtitleWhitespace(grapheme: string) {

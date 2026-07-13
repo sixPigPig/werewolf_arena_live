@@ -232,4 +232,24 @@ describe("voiceSubtitleToMobileSubtitle", () => {
       text: "你确定吗？我不信！",
     });
   });
+
+  it("preserves KTV progress when numeric punctuation is active", () => {
+    expect(
+      voiceSubtitleToMobileSubtitle({
+        activeText: "3.",
+        completedText: "现在是",
+        pageIndex: 0,
+        pendingText: "5票",
+        speakerKind: "player",
+        speakerName: "2号玩家",
+        text: "现在是3.5票",
+        utteranceId: "voice-3",
+      }),
+    ).toMatchObject({
+      activeText: "3.",
+      completedText: "现在是",
+      pendingText: "5票",
+      text: "现在是3.5票",
+    });
+  });
 });

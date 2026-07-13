@@ -130,6 +130,18 @@ function mobileSubtitleProgress(subtitle: LiveVoiceSubtitle) {
     };
   }
 
+  const timedText =
+    subtitle.completedText + subtitle.activeText + subtitle.pendingText;
+  if (timedText === text) {
+    return {
+      activeText: subtitle.activeText,
+      completedText: subtitle.completedText,
+      pageIndex: subtitle.pageIndex,
+      pendingText: subtitle.pendingText,
+      text,
+    };
+  }
+
   const completedText = removeSubtitlePunctuation(subtitle.completedText);
   const activeText = removeSubtitlePunctuation(subtitle.activeText);
   const pendingText = removeSubtitlePunctuation(subtitle.pendingText);
