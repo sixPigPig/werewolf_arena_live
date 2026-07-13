@@ -1,5 +1,5 @@
 import type { LivePlayer, LiveSpectatorState } from "./liveSpectator";
-import { actionLabel, eventTypeLabel } from "./liveLabels";
+import { eventTypeLabel } from "./liveLabels";
 import type { LiveGameEvent } from "../types";
 
 export type GodViewIdentityGroup = "狼人" | "神职" | "平民" | "未知";
@@ -47,6 +47,9 @@ export type GodViewEventLine = {
   time: string;
   text: string;
   tone: "default" | "danger" | "info" | "success" | "warning";
+  round?: number | null;
+  phase?: string | null;
+  detail?: string;
 };
 
 export type GodViewActionLine = {
@@ -165,6 +168,7 @@ type MutableGodView = {
     round: number | null;
     phase: string | null;
   } | null;
+  nameToSeat: Map<string, number>;
 };
 
 type GodViewStageFocusKind =
@@ -216,6 +220,7 @@ export function deriveGodViewState(
     replayMarks: [],
     skillTriggers: [],
     suppressedNightActionFallbackScope: null,
+    nameToSeat: buildNameToSeat(spectator.players),
   };
 
   for (const event of events) {
@@ -291,7 +296,7 @@ export function deriveGodViewState(
     sheriffRuleState: buildSheriffRuleState(options.sheriffEnabled),
     speechOrder,
     speakerFlow: buildSpeakerFlow(players, speechOrder, view.stageFocus.speakerName),
-    eventLines: view.eventLines.slice(-7).reverse(),
+    eventLines: view.eventLines.slice(-60).reverse(),
     publicFacts: dedupe(view.publicFacts).slice(-6).reverse(),
     replayMarks: view.replayMarks.slice(-5).reverse(),
     skillTriggers: view.skillTriggers.slice(-5),
@@ -649,7 +654,7 @@ function collectTerminal(view: MutableGodView, event: LiveGameEvent) {
 }
 
 function collectEventLine(view: MutableGodView, event: LiveGameEvent) {
-  const line = eventLineFor(event);
+  const line = eventLineFor(event, view.nameToSeat);
   if (line) {
     view.eventLines.push(line);
   }
@@ -664,6 +669,8 @@ function collectEventLine(view: MutableGodView, event: LiveGameEvent) {
         time: timeLabel(event),
         text: eventTypeLabel(event.type),
         tone: "default",
+        round: event.round,
+        phase: event.phase,
       },
     );
   }
@@ -724,25 +731,44 @@ function buildVoteTallies(
   return Array.from(tallies.values()).sort((a, b) => b.count - a.count);
 }
 
-function eventLineFor(event: LiveGameEvent): GodViewEventLine | null {
+function eventLineFor(
+  event: LiveGameEvent,
+  nameToSeat: Map<string, number>,
+): GodViewEventLine | null {
   const payload = payloadForEvent(event);
-  if (event.type === "model_response_delta") {
+  if (event.type === "model_response_delta" || event.type === "model_thinking_tick") {
     return null;
   }
-  if (event.type === "action_requested" && event.actor) {
+  if (
+    event.type === "action_requested" &&
+    event.actor &&
+    isMeaningfulActionRequest(event.action)
+  ) {
     return {
       id: event.id,
       time: timeLabel(event),
-      text: `${event.actor} 开始${actionDisplay(event.action)}`,
+      text: actionRequestText(event, nameToSeat),
       tone: "info",
+      round: event.round,
+      phase: event.phase,
     };
   }
+  if (event.type === "action_parsed") {
+    return actionParsedLine(event, payload, nameToSeat);
+  }
   if (event.type === "state_updated") {
+    const text = stateUpdatedReplayText(event, payload, nameToSeat);
+    if (!text) {
+      return null;
+    }
     return {
       id: event.id,
       time: timeLabel(event),
-      text: stateUpdatedReplayText(payload),
+      text,
       tone: stateUpdatedReplayTone(payload),
+      round: event.round,
+      phase: event.phase,
+      detail: stateUpdatedReplayDetail(event, payload, nameToSeat),
     };
   }
   if (event.type === "phase_started") {
@@ -751,6 +777,8 @@ function eventLineFor(event: LiveGameEvent): GodViewEventLine | null {
       time: timeLabel(event),
       text: phaseEventText(event.phase),
       tone: "default",
+      round: event.round,
+      phase: event.phase,
     };
   }
   if (event.type === "round_started") {
@@ -759,6 +787,8 @@ function eventLineFor(event: LiveGameEvent): GodViewEventLine | null {
       time: timeLabel(event),
       text: event.round === null ? "新回合开始" : `第 ${event.round} 轮开始`,
       tone: "default",
+      round: event.round,
+      phase: event.phase,
     };
   }
   if (event.type === "game_completed") {
@@ -767,33 +797,385 @@ function eventLineFor(event: LiveGameEvent): GodViewEventLine | null {
       time: timeLabel(event),
       text: `结算：${stringField(payload, "winner") || "对局完成"}`,
       tone: "success",
+      round: event.round,
+      phase: event.phase,
     };
   }
   return null;
 }
 
-function stateUpdatedReplayText(payload: Record<string, unknown>) {
+function isMeaningfulActionRequest(action: string | null): boolean {
+  return (
+    action === "eliminate" ||
+    action === "remove" ||
+    action === "protect" ||
+    action === "guard" ||
+    action === "investigate" ||
+    action === "witch_save" ||
+    action === "witch_poison" ||
+    action === "vote" ||
+    action === "sheriff_vote" ||
+    action === "sheriff_runoff_vote"
+  );
+}
+
+function actionRequestText(
+  event: LiveGameEvent,
+  nameToSeat: Map<string, number>,
+): string {
+  if (event.action === "eliminate" || event.action === "remove") {
+    return "狼人开始行动";
+  }
+  if (event.action === "protect" || event.action === "guard") {
+    return "守卫开始行动";
+  }
+  if (event.action === "investigate") {
+    return "预言家开始行动";
+  }
+  if (event.action === "witch_save") {
+    return "女巫考虑使用解药";
+  }
+  if (event.action === "witch_poison") {
+    return "女巫考虑使用毒药";
+  }
+  return `${seatLabel(event.actor ?? "未知行动者", nameToSeat)} 等待投票`;
+}
+
+function actionParsedLine(
+  event: LiveGameEvent,
+  payload: Record<string, unknown>,
+  nameToSeat: Map<string, number>,
+): GodViewEventLine | null {
+  const action = event.action;
+  if (
+    !action ||
+    action === "werewolf_discuss" ||
+    action === "werewolf_kill_vote" ||
+    action === "debate" ||
+    action === "sheriff_speech" ||
+    action === "sheriff_pk_speech" ||
+    action === "summarize"
+  ) {
+    return null;
+  }
+
+  const choice = stringField(payload, "choice") || parsedChoice(payload);
+  const targetSeat = choice ? seatLabel(choice, nameToSeat) : "";
+  const base = {
+    id: event.id,
+    time: timeLabel(event),
+    round: event.round,
+    phase: event.phase,
+  };
+
+  if (action === "eliminate" || action === "remove") {
+    if (!choice) {
+      return null;
+    }
+    return {
+      ...base,
+      text: `狼人 -> ${targetSeat}`,
+      detail: `狼人阵营选择袭击 ${targetSeat}`,
+      tone: "danger",
+    };
+  }
+  if (action === "protect" || action === "guard") {
+    if (!choice) {
+      return null;
+    }
+    return {
+      ...base,
+      text: `守卫守护 ${targetSeat}`,
+      detail: `守卫守护 ${targetSeat}`,
+      tone: "success",
+    };
+  }
+  if (action === "investigate") {
+    if (!choice) {
+      return null;
+    }
+    return {
+      ...base,
+      text: `预言家查验 ${targetSeat}`,
+      detail: `预言家查验 ${targetSeat}`,
+      tone: "info",
+    };
+  }
+  if (action === "witch_save") {
+    const used = choice && choice !== "skip";
+    return {
+      ...base,
+      text: used ? `女巫救 ${targetSeat}` : "女巫未使用解药",
+      detail: used
+        ? `女巫对 ${targetSeat} 使用解药`
+        : "女巫未使用解药",
+      tone: used ? "success" : "default",
+    };
+  }
+  if (action === "witch_poison") {
+    const used = choice && choice !== "skip";
+    return {
+      ...base,
+      text: used ? `女巫毒 ${targetSeat}` : "女巫未使用毒药",
+      detail: used
+        ? `女巫对 ${targetSeat} 使用毒药`
+        : "女巫未使用毒药",
+      tone: used ? "danger" : "default",
+    };
+  }
+  if (action === "vote" || action === "sheriff_vote" || action === "sheriff_runoff_vote") {
+    if (!event.actor || !choice) {
+      return null;
+    }
+    return {
+      ...base,
+      text: `${seatLabel(event.actor, nameToSeat)} -> ${targetSeat}`,
+      detail: `${seatLabel(event.actor, nameToSeat)} 投给 ${targetSeat}`,
+      tone: "warning",
+    };
+  }
+  if (action === "sheriff_badge") {
+    if (choice === "destroy" || choice === "撕毁") {
+      return {
+        ...base,
+        text: "警徽撕毁",
+        detail: "警徽被撕毁",
+        tone: "warning",
+      };
+    }
+    if (!choice) {
+      return null;
+    }
+    return {
+      ...base,
+      text: `警徽移交 ${targetSeat}`,
+      detail: `警徽移交给 ${targetSeat}`,
+      tone: "success",
+    };
+  }
+  return null;
+}
+
+function stateUpdatedReplayText(
+  event: LiveGameEvent,
+  payload: Record<string, unknown>,
+  nameToSeat: Map<string, number>,
+): string | null {
   const exiled = stringField(payload, "exiled");
   if (exiled) {
-    return `放逐 ${exiled}`;
+    return `${seatLabel(exiled, nameToSeat)} 被放逐`;
   }
-  const eliminated = stringField(payload, "eliminated");
-  if (eliminated) {
-    return `夜晚死亡 ${eliminated}`;
+  if (isNightResolution(event, payload)) {
+    return nightResolutionText(payload, nameToSeat);
   }
-  const attacked = stringField(payload, "attacked");
-  const protectedPlayer = stringField(payload, "protected");
-  if (attacked && protectedPlayer === attacked) {
-    return "平安夜";
-  }
-  if (recordField(payload, "votes")) {
-    return "投票结果更新";
+  const votes = recordField(payload, "votes");
+  if (votes) {
+    return voteTallySummary(votes, recordField(payload, "vote_weights"), nameToSeat);
   }
   const debateEntry = payload.debate_entry;
   if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
-    return `${debateEntry.speaker} 发言`;
+    return `${seatLabel(debateEntry.speaker, nameToSeat)} 发言`;
+  }
+  const winner = stringField(payload, "winner");
+  if (winner) {
+    return `胜负已更新：${winner}`;
+  }
+  const selfExploded = stringField(payload, "werewolf_self_exploded");
+  if (selfExploded) {
+    return `${seatLabel(selfExploded, nameToSeat)} 狼人自爆`;
+  }
+  const hunterShot = stringField(payload, "hunter_shot");
+  if (hunterShot) {
+    return `猎人带走 ${seatLabel(hunterShot, nameToSeat)}`;
+  }
+  const idiotRevealed = stringField(payload, "idiot_revealed");
+  if (idiotRevealed) {
+    return `${seatLabel(idiotRevealed, nameToSeat)} 白痴翻牌`;
+  }
+  const badgeTarget = stringField(payload, "sheriff_badge_target");
+  if (badgeTarget) {
+    return `警徽移交 ${seatLabel(badgeTarget, nameToSeat)}`;
+  }
+  if (payload.sheriff_badge_lost === true) {
+    return "警徽撕毁";
+  }
+  return null;
+}
+
+function stateUpdatedReplayDetail(
+  event: LiveGameEvent,
+  payload: Record<string, unknown>,
+  nameToSeat: Map<string, number>,
+): string {
+  const exiled = stringField(payload, "exiled");
+  if (exiled) {
+    return `${seatLabel(exiled, nameToSeat)} 被投票放逐`;
+  }
+  if (isNightResolution(event, payload)) {
+    return nightResolutionDetail(payload, nameToSeat);
+  }
+  const votes = recordField(payload, "votes");
+  if (votes) {
+    return voteTallyDetail(votes, recordField(payload, "vote_weights"), nameToSeat);
+  }
+  return stateUpdatedReplayText(event, payload, nameToSeat) ?? "";
+}
+
+function isNightResolution(
+  event: LiveGameEvent,
+  payload: Record<string, unknown>,
+): boolean {
+  if (event.phase === "night") {
+    return Boolean(
+      stringField(payload, "attacked") ||
+        stringField(payload, "eliminated") ||
+        stringField(payload, "poisoned") ||
+        stringField(payload, "protected") ||
+        stringField(payload, "saved_by_witch") ||
+        Array.isArray(payload.night_deaths),
+    );
+  }
+  return Boolean(stringField(payload, "eliminated")) && !recordField(payload, "votes");
+}
+
+function nightResolutionText(
+  payload: Record<string, unknown>,
+  nameToSeat: Map<string, number>,
+): string {
+  const attacked = stringField(payload, "attacked");
+  const protectedPlayer = stringField(payload, "protected");
+  const eliminated = stringField(payload, "eliminated");
+  const poisoned = stringField(payload, "poisoned");
+  const savedByWitch = stringField(payload, "saved_by_witch");
+  const nightDeaths = stringArrayField(payload, "night_deaths");
+
+  const deaths: string[] = [];
+  if (eliminated) {
+    deaths.push(`${seatLabel(eliminated, nameToSeat)} 夜晚死亡`);
+  }
+  if (poisoned && poisoned !== eliminated) {
+    deaths.push(`${seatLabel(poisoned, nameToSeat)} 被毒杀`);
+  }
+  for (const death of nightDeaths) {
+    if (death !== eliminated && death !== poisoned) {
+      deaths.push(`${seatLabel(death, nameToSeat)} 夜晚死亡`);
+    }
+  }
+
+  if (deaths.length > 0) {
+    return deaths.join("，");
+  }
+  if (
+    attacked ||
+    savedByWitch ||
+    protectedPlayer ||
+    Array.isArray(payload.night_deaths)
+  ) {
+    return "平安夜";
   }
   return "局势更新";
+}
+
+function nightResolutionDetail(
+  payload: Record<string, unknown>,
+  nameToSeat: Map<string, number>,
+): string {
+  const text = nightResolutionText(payload, nameToSeat);
+  if (text === "平安夜") {
+    const attacked = stringField(payload, "attacked");
+    const savedByWitch = stringField(payload, "saved_by_witch");
+    const protectedPlayer = stringField(payload, "protected");
+    const saved = attacked && (protectedPlayer === attacked || savedByWitch === attacked);
+    return saved && attacked
+      ? `${seatLabel(attacked, nameToSeat)} 被袭击，被守护或解药救下，无人出局`
+      : "昨夜平安无事";
+  }
+  return text;
+}
+
+function voteTallySummary(
+  votes: Record<string, unknown>,
+  weights: Record<string, unknown> | null,
+  nameToSeat: Map<string, number>,
+): string {
+  const tallies = computeTallies(votes, weights);
+  if (tallies.length === 0) {
+    return "投票结果更新";
+  }
+  const topCount = tallies[0].count;
+  const tied = tallies.filter((entry) => entry.count === topCount);
+  if (tied.length > 1) {
+    return `平票 · ${tied
+      .map((entry) => `${seatLabel(entry.target, nameToSeat)} ${formatVoteCount(entry.count)}票`)
+      .join(" / ")}`;
+  }
+  return `${seatLabel(tallies[0].target, nameToSeat)} ${formatVoteCount(topCount)}票`;
+}
+
+function voteTallyDetail(
+  votes: Record<string, unknown>,
+  weights: Record<string, unknown> | null,
+  nameToSeat: Map<string, number>,
+): string {
+  const tallies = computeTallies(votes, weights);
+  if (tallies.length === 0) {
+    return "投票结果更新";
+  }
+  return tallies
+    .map(
+      (entry) =>
+        `${seatLabel(entry.target, nameToSeat)} ${formatVoteCount(entry.count)}票`,
+    )
+    .join("，");
+}
+
+type ComputedTally = {
+  target: string;
+  count: number;
+  voters: string[];
+};
+
+function computeTallies(
+  votes: Record<string, unknown>,
+  weights: Record<string, unknown> | null,
+): ComputedTally[] {
+  const tallies = new Map<string, ComputedTally>();
+  for (const [voter, target] of Object.entries(votes)) {
+    if (typeof target !== "string") {
+      continue;
+    }
+    const weight =
+      weights && typeof weights[voter] === "number"
+        ? (weights[voter] as number)
+        : 1;
+    const entry =
+      tallies.get(target) ??
+      tallies.set(target, { target, count: 0, voters: [] }).get(target)!;
+    entry.count += weight;
+    entry.voters.push(voter);
+  }
+  return Array.from(tallies.values()).sort(
+    (a, b) => b.count - a.count || a.target.localeCompare(b.target),
+  );
+}
+
+function formatVoteCount(value: number) {
+  const rounded = Number(value.toFixed(2));
+  return String(rounded);
+}
+
+function seatLabel(name: string, nameToSeat: Map<string, number>): string {
+  const seat = nameToSeat.get(name) ?? seatNumberFromReference(name);
+  return seat ? `${seat}号` : name;
+}
+
+function seatNumberFromReference(value: string): number | null {
+  const match = value.trim().match(/^(\d+)\s*号/);
+  if (!match) {
+    return null;
+  }
+  const seat = Number(match[1]);
+  return Number.isInteger(seat) && seat > 0 ? seat : null;
 }
 
 function stateUpdatedReplayTone(
@@ -802,15 +1184,46 @@ function stateUpdatedReplayTone(
   if (stringField(payload, "exiled") || stringField(payload, "eliminated")) {
     return "danger";
   }
+  if (stringField(payload, "poisoned")) {
+    return "danger";
+  }
   const attacked = stringField(payload, "attacked");
   const protectedPlayer = stringField(payload, "protected");
   if (attacked && protectedPlayer === attacked) {
     return "success";
   }
+  if (stringField(payload, "saved_by_witch")) {
+    return "success";
+  }
   if (recordField(payload, "votes")) {
     return "warning";
   }
+  if (stringField(payload, "werewolf_self_exploded")) {
+    return "danger";
+  }
+  if (
+    stringField(payload, "hunter_shot") ||
+    payload.sheriff_badge_lost === true
+  ) {
+    return "warning";
+  }
+  if (
+    stringField(payload, "idiot_revealed") ||
+    stringField(payload, "sheriff_badge_target")
+  ) {
+    return "info";
+  }
   return "default";
+}
+
+function buildNameToSeat(players: { name: string }[]): Map<string, number> {
+  const map = new Map<string, number>();
+  players.forEach((player, index) => {
+    if (player && typeof player.name === "string") {
+      map.set(player.name, index + 1);
+    }
+  });
+  return map;
 }
 
 function shouldSuppressNightActionFallback(view: MutableGodView) {
@@ -1361,25 +1774,6 @@ export function phaseDisplay(phase: string | null) {
     sheriff: "警长竞选",
   };
   return phase ? map[phase] ?? phase : "阶段未开始";
-}
-
-function actionDisplay(action: string | null) {
-  const map: Record<string, string> = {
-    debate: "发言",
-    vote: "投票",
-    eliminate: "刀人",
-    remove: "刀人",
-    guard: "守护",
-    protect: "守护",
-    investigate: "查验",
-    summarize: "总结",
-    sheriff_speech: "警上发言",
-    sheriff_pk_speech: "警长 PK 发言",
-    sheriff_vote: "警长投票",
-    sheriff_runoff_vote: "警长 PK 投票",
-    werewolf_self_explosion: "考虑自爆",
-  };
-  return action ? map[action] ?? actionLabel(action) : "行动";
 }
 
 function phaseEventText(phase: string | null) {

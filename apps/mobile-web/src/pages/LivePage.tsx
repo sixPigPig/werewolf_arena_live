@@ -208,6 +208,7 @@ export function LivePage() {
           godViewState={godViewState}
           liveStatusLabel={liveStatus.label}
           onBack={() => navigateBackToGames(navigate)}
+          onSelectEvent={(eventId) => director.seekToEventId(eventId)}
           onSelectPhase={(segment) =>
             director.seekToEventId(segment.startEventId)
           }

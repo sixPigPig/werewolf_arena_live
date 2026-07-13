@@ -99,6 +99,69 @@ describe("toDirectorCue", () => {
     ).toContain("已使用安全兜底：不使用毒药");
   });
 
+  it("keeps vote ballot, exile, peaceful night and night death as non-compressible 6000ms cues", () => {
+    const voteCue = toDirectorCue(
+      event({
+        type: "state_updated",
+        phase: "vote",
+        action: "vote",
+        payload: { votes: { 张三: "李四", 李四: "张三" } },
+      }),
+    );
+    expect(voteCue).toMatchObject({
+      importance: "key",
+      durationMs: 6000,
+      compressible: false,
+    });
+
+    const exileCue = toDirectorCue(
+      event({
+        type: "state_updated",
+        phase: "vote",
+        payload: { exiled: "王五", active_players: ["张三", "李四"] },
+      }),
+    );
+    expect(exileCue).toMatchObject({
+      importance: "key",
+      durationMs: 6000,
+      compressible: false,
+    });
+
+    const peacefulCue = toDirectorCue(
+      event({
+        type: "state_updated",
+        phase: "night",
+        payload: {
+          attacked: "李四",
+          protected: "李四",
+          eliminated: null,
+          active_players: ["张三", "李四"],
+        },
+      }),
+    );
+    expect(peacefulCue).toMatchObject({
+      importance: "key",
+      durationMs: 6000,
+      compressible: false,
+    });
+
+    const deathCue = toDirectorCue(
+      event({
+        type: "state_updated",
+        phase: "night",
+        payload: {
+          eliminated: "王五",
+          active_players: ["张三", "李四"],
+        },
+      }),
+    );
+    expect(deathCue).toMatchObject({
+      importance: "key",
+      durationMs: 6000,
+      compressible: false,
+    });
+  });
+
   it("renders state updates for debate, votes, exile and completed games", () => {
     expect(
       toDirectorCue(

@@ -214,6 +214,61 @@ const failedEvent: LiveGameEvent = {
   },
 };
 
+const nightPhaseStartEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "phase_started",
+  round: 1,
+  phase: "night",
+  actor: null,
+  action: null,
+  payload: { active_players: ["阿青", "白石", "南风", "木子"] },
+};
+
+const werewolfKillParsedEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 3,
+  type: "action_parsed",
+  round: 1,
+  phase: "night",
+  actor: "白石",
+  action: "remove",
+  payload: { choice: "阿青" },
+};
+
+const votePhaseStartEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "phase_started",
+  round: 1,
+  phase: "vote",
+  actor: null,
+  action: null,
+  payload: { active_players: ["白石", "南风", "木子"] },
+};
+
+const firstVoteParsedEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 3,
+  type: "action_parsed",
+  round: 1,
+  phase: "vote",
+  actor: "白石",
+  action: "vote",
+  payload: { choice: "南风" },
+};
+
+const secondVoteParsedEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 4,
+  type: "action_parsed",
+  round: 1,
+  phase: "vote",
+  actor: "南风",
+  action: "vote",
+  payload: { choice: "白石" },
+};
+
 function renderLiveRoute() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -272,7 +327,9 @@ describe("LivePage", () => {
     ).toBeVisible();
     expect((await screen.findAllByText("经典 8 人"))[0]).toBeVisible();
     expect(screen.queryByText("连接正常")).not.toBeInTheDocument();
-    expect(screen.getByText("对局开始")).toBeVisible();
+    expect(
+      screen.getByRole("status", { name: "当前舞台" }).querySelector("strong"),
+    ).toHaveTextContent("对局开始");
     expect(screen.getByText("第 1 天")).toBeVisible();
     expect(
       screen.getByRole("region", { name: "玩家席位" }),
@@ -299,7 +356,9 @@ describe("LivePage", () => {
     expect(
       await screen.findByRole("article", { name: "1号 阿青 平民 存活" }),
     ).toBeVisible();
-    expect(screen.getByText("对局开始")).toBeVisible();
+    expect(
+      screen.getByRole("status", { name: "当前舞台" }).querySelector("strong"),
+    ).toHaveTextContent("对局开始");
     expect(screen.queryByText("运行已创建")).not.toBeInTheDocument();
     expect(screen.queryByText("运行已开始")).not.toBeInTheDocument();
   });
@@ -401,7 +460,7 @@ describe("LivePage", () => {
 
     renderLiveRoute();
 
-    const stage = await screen.findByRole("region", { name: "当前舞台" });
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
     expect(within(stage).getByText("阿青")).toBeVisible();
     expect(within(stage).getByText("公开发言")).toBeVisible();
     expect(within(stage).queryByText("model_response_delta")).not.toBeInTheDocument();
@@ -476,7 +535,7 @@ describe("LivePage", () => {
     await user.click(await screen.findByRole("button", { name: "暂停" }));
     expect(screen.getByRole("button", { name: "继续" })).toBeVisible();
 
-    const stage = await screen.findByRole("region", { name: "当前舞台" });
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
     expect(within(stage).queryByText("阿青")).not.toBeInTheDocument();
   });
 
@@ -494,7 +553,7 @@ describe("LivePage", () => {
 
     renderLiveRoute();
 
-    const stage = await screen.findByRole("region", { name: "当前舞台" });
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
     expect(within(stage).queryByText("阿青")).not.toBeInTheDocument();
     expect(
       within(stage).queryByText("model_response_delta"),
@@ -513,7 +572,7 @@ describe("LivePage", () => {
 
     await user.click(await screen.findByRole("button", { name: "最新" }));
 
-    await screen.findByRole("region", { name: "当前舞台" });
+    await screen.findByRole("status", { name: "当前舞台" });
     expect(
       screen.queryByRole("status", {
         name: "直播字幕",
@@ -572,7 +631,7 @@ describe("LivePage", () => {
       subtitle.querySelector(".mobile-live-subtitle-pending"),
     ).toHaveTextContent("后置位发言");
     expect(
-      within(await screen.findByRole("region", { name: "当前舞台" })).queryByRole(
+      within(await screen.findByRole("status", { name: "当前舞台" })).queryByRole(
         "status",
         { name: "直播字幕" },
       ),
@@ -605,7 +664,7 @@ describe("LivePage", () => {
 
     renderLiveRoute();
 
-    await screen.findByRole("region", { name: "当前舞台" });
+    await screen.findByRole("status", { name: "当前舞台" });
 
     const subtitle = await screen.findByRole("status", {
       name: "直播字幕",
@@ -963,7 +1022,7 @@ describe("LivePage", () => {
       styles.match(/(?:^|\n)\.mobile-live-theater\s*{[^}]+}/)?.[0] ?? "";
 
     expect(theaterRule).toContain(
-      "grid-template-rows: auto minmax(128px, 20svh) minmax(0, 1fr) auto",
+      "grid-template-rows: auto minmax(108px, 18svh) minmax(0, 1fr) auto auto",
     );
     expect(phaseBarRule).toContain("position: absolute");
     expect(phaseBarRule).toContain("right: 0");
@@ -1053,5 +1112,153 @@ describe("LivePage", () => {
     expect(styles).toMatch(
       /@media \(max-height: 700px\) {[\s\S]*?\.mobile-live-seat small\s*{[^}]+display: none/,
     );
+  });
+
+  it("shows the night action actor and target in the action focus card", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, nightPhaseStartEvent, werewolfKillParsedEvent],
+      latestEvent: werewolfKillParsedEvent,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("狼人目标")).toBeVisible();
+    expect(within(stage).getByText("1号")).toBeVisible();
+  });
+
+  it("emphasizes every living wolf while the werewolf team is choosing", async () => {
+    const teamStartedEvent: LiveGameEvent = {
+      ...gameStartedEvent,
+      payload: {
+        players: [
+          { name: "阿青", role: "villager", model: "test-model" },
+          { name: "白石", role: "werewolf", model: "test-model" },
+          { name: "南风", role: "werewolf", model: "test-model" },
+          { name: "木子", role: "witch", model: "test-model" },
+        ],
+      },
+    };
+    const teamRequestEvent: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 2,
+      type: "action_requested",
+      phase: "night",
+      actor: "白石",
+      action: "remove",
+      payload: { options: ["阿青", "木子"] },
+    };
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [teamStartedEvent, teamRequestEvent],
+      latestEvent: teamRequestEvent,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    expect(
+      screen.getByRole("article", { name: "2号 白石 狼人 夜间行动中" }),
+    ).toHaveClass("mobile-live-seat-acting");
+    expect(
+      screen.getByRole("article", { name: "3号 南风 狼人 存活" }),
+    ).toHaveClass("mobile-live-seat-acting");
+    expect(
+      screen.getByRole("article", { name: "1号 阿青 平民 存活" }),
+    ).not.toHaveClass("mobile-live-seat-acting");
+  });
+
+  it("renders the vote focus and a persisted event rail behind the director", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [
+        gameStartedEvent,
+        votePhaseStartEvent,
+        firstVoteParsedEvent,
+        secondVoteParsedEvent,
+      ],
+      latestEvent: secondVoteParsedEvent,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("3号 -> 2号")).toBeVisible();
+
+    const rail = screen.getByRole("log");
+    // Only director-visible moments appear; no future second-vote before catch-up.
+    expect(within(rail).getByText("投票阶段开始")).toBeVisible();
+    expect(within(rail).getByText("2号 -> 3号")).toBeVisible();
+    expect(within(rail).getByText("3号 -> 2号")).toBeVisible();
+    expect(within(rail).queryByText("model_response_delta")).not.toBeInTheDocument();
+  });
+
+  it("seeks the director when selecting an older event from the event sheet", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [
+        gameStartedEvent,
+        votePhaseStartEvent,
+        firstVoteParsedEvent,
+        secondVoteParsedEvent,
+      ],
+      latestEvent: secondVoteParsedEvent,
+    });
+    gameClientMocks.useLiveVoiceStream.mockReturnValue({
+      connectionState: "idle",
+      currentItem: null,
+      currentSpeakerName: null,
+      errors: [],
+      unlockAudio,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    // Catch up to latest so all moments are visible, then open the sheet.
+    const railAll = screen.getByRole("button", {
+      name: /查看全部战报，共 \d+ 条/,
+    });
+    await user.click(railAll);
+
+    const dialog = await screen.findByRole("dialog", { name: "本轮战报" });
+    const olderRow = within(dialog).getByRole("button", {
+      name: /跳转到战报：投票阶段开始/,
+    });
+    await user.click(olderRow);
+
+    expect(dialog).not.toBeInTheDocument();
+    // After seeking to the phase-start event, the focus card shows the vote phase start.
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("白天投票开始")).toBeVisible();
+  });
+
+  it("does not reveal a future vote event while the director is behind backlog", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [
+        gameStartedEvent,
+        votePhaseStartEvent,
+        firstVoteParsedEvent,
+        secondVoteParsedEvent,
+      ],
+      latestEvent: secondVoteParsedEvent,
+    });
+
+    renderLiveRoute();
+
+    const rail = await screen.findByRole("log");
+    // Director starts at game_started; the parsed vote must not be visible yet.
+    expect(within(rail).queryByText("2号 -> 3号")).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: "最新" }));
+    expect(within(rail).getByText("2号 -> 3号")).toBeInTheDocument();
   });
 });

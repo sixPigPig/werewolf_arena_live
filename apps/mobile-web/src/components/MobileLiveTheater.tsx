@@ -1,9 +1,9 @@
+import { useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import {
   Gauge,
   Gavel,
-  Mic,
   PawPrint,
   Pause,
   Play,
@@ -13,10 +13,7 @@ import {
 } from "lucide-react";
 
 import {
-  actionLabel,
   deriveGodViewState,
-  liveEventTitle,
-  phaseLabel,
   resolveAvatarImageUrl,
   useLiveDirector,
   type GameRunStatus,
@@ -27,6 +24,13 @@ import {
 } from "@werewolf-arena/game-client";
 
 import { MobileLivePhaseBar } from "./MobileLivePhaseBar";
+import { MobileLiveActionStage } from "./MobileLiveActionStage";
+import { MobileLiveEventRail } from "./MobileLiveEventRail";
+import {
+  deriveMobileLiveFocusPresentation,
+  getActiveTheaterPlayer,
+  type MobileLiveFocusPresentation,
+} from "./mobileLiveActionModel";
 import { type MobileLiveSubtitle } from "./mobileLiveSubtitle";
 
 type LiveDirectorControlsState = ReturnType<typeof useLiveDirector>;
@@ -60,6 +64,7 @@ export type MobileLiveTheaterProps = {
   godViewState: GodViewState;
   liveStatusLabel: string;
   onBack: () => void;
+  onSelectEvent?: (eventId: number) => void;
   onSelectPhase: (segment: LivePhaseSegment) => void;
   onResumeRun: () => void;
   onToggleVoice?: () => void;
@@ -80,6 +85,7 @@ export function MobileLiveTheater({
   godViewState,
   liveStatusLabel,
   onBack,
+  onSelectEvent,
   onSelectPhase,
   onResumeRun,
   onToggleVoice,
@@ -92,12 +98,16 @@ export function MobileLiveTheater({
   voiceEnabled,
   voiceState,
 }: MobileLiveTheaterProps) {
-  const currentPlayer = getCurrentTheaterPlayer(godViewState);
+  const currentPlayer = getActiveTheaterPlayer(godViewState);
+  const presentation = deriveMobileLiveFocusPresentation(currentEvent, godViewState);
   const { left, right } = splitPlayersForColumns(godViewState.players);
   const failureReason = getLiveFailureReason(terminalEvent, run);
+  const theaterRef = useRef<HTMLElement | null>(null);
+  const railTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [eventSheetOpen, setEventSheetOpen] = useState(false);
 
   return (
-    <section className="mobile-live-theater" aria-label="实时观战剧场">
+    <section className="mobile-live-theater" aria-label="实时观战剧场" ref={theaterRef}>
       <MobileLiveTheaterTopBar
         liveStatusLabel={liveStatusLabel}
         onBack={onBack}
@@ -110,15 +120,28 @@ export function MobileLiveTheater({
         phaseLabel={godViewState.phaseLabel}
       />
       <section className="mobile-live-seat-stage" aria-label="玩家席位">
-        <LiveSeatColumn players={left} side="left" />
-        <LiveCenterStage
-          currentEvent={currentEvent}
+        <LiveSeatColumn players={left} presentation={presentation} side="left" />
+        <MobileLiveActionStage
+          presentation={presentation}
           currentPlayer={currentPlayer}
           godViewState={godViewState}
         />
-        <LiveSeatColumn players={right} side="right" />
+        <LiveSeatColumn players={right} presentation={presentation} side="right" />
         {subtitle ? <LiveSubtitle subtitle={subtitle} /> : null}
       </section>
+      <MobileLiveEventRail
+        backgroundRef={theaterRef}
+        eventLines={godViewState.eventLines}
+        godViewState={godViewState}
+        onCloseSheet={() => setEventSheetOpen(false)}
+        onSelectEvent={(eventId) => {
+          setEventSheetOpen(false);
+          onSelectEvent?.(eventId);
+        }}
+        onToggleSheet={() => setEventSheetOpen((value) => !value)}
+        sheetOpen={eventSheetOpen}
+        triggerRef={railTriggerRef}
+      />
       <LiveTheaterControls
         canResumeRun={canResumeRun}
         currentPlayer={currentPlayer}
@@ -193,16 +216,18 @@ export function LiveSkyBanner({ dayNightLabel, phaseLabel }: LiveSkyBannerProps)
 
 type LiveSeatColumnProps = {
   players: GodViewPlayer[];
+  presentation: MobileLiveFocusPresentation;
   side: "left" | "right";
 };
 
-export function LiveSeatColumn({ players, side }: LiveSeatColumnProps) {
+export function LiveSeatColumn({ players, presentation, side }: LiveSeatColumnProps) {
   return (
     <div className={`mobile-live-seat-column mobile-live-seat-column-${side}`}>
       {players.map((player, index) => (
         <LiveSeatAvatar
           key={player.name}
           player={player}
+          presentation={presentation}
           revealIndex={index}
           revealSide={side}
         />
@@ -213,18 +238,21 @@ export function LiveSeatColumn({ players, side }: LiveSeatColumnProps) {
 
 type LiveSeatAvatarProps = {
   player: GodViewPlayer;
+  presentation: MobileLiveFocusPresentation;
   revealIndex?: number;
   revealSide?: "left" | "right";
 };
 
 export function LiveSeatAvatar({
   player,
+  presentation,
   revealIndex = 0,
   revealSide = "left",
 }: LiveSeatAvatarProps) {
   const roleLabel = roleShortLabel(player.role);
   const statusLabel = player.isSpeaking ? "发言中" : player.stageStatus.label;
   const exitMarker = liveSeatExitMarker(player);
+  const modifier = seatModifierFor(player, presentation);
   const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}`;
   const avatarImageUrl = resolveAvatarImageUrl({
     avatar_image_url: player.avatarImageUrl,
@@ -234,6 +262,9 @@ export function LiveSeatAvatar({
     `mobile-live-seat-reveal-${revealSide}`,
     player.isSpeaking ? "mobile-live-seat-speaking" : "",
     player.isAlive ? "" : "mobile-live-seat-out",
+    modifier.acting ? "mobile-live-seat-acting" : "",
+    modifier.targetTone ? `mobile-live-seat-target mobile-live-seat-target-${modifier.targetTone}` : "",
+    modifier.voteCount !== null ? "mobile-live-seat-vote-target" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -270,10 +301,109 @@ export function LiveSeatAvatar({
             <Gavel aria-hidden="true" strokeWidth={2.2} />
           </span>
         ) : null}
+        {modifier.targetIcon ? (
+          <span
+            aria-label={`目标${modifier.targetLabel}`}
+            className={`mobile-live-seat-badge mobile-live-seat-badge-${modifier.targetTone}`}
+            role="img"
+          >
+            {modifier.targetIcon}
+          </span>
+        ) : null}
+        {modifier.voteCount !== null ? (
+          <span
+            aria-label={`${modifier.voteCount}票`}
+            className="mobile-live-seat-vote-count"
+          >
+            {modifier.voteCount}票
+          </span>
+        ) : null}
         <span className="mobile-live-seat-role">{roleLabel}</span>
       </span>
     </article>
   );
+}
+
+type SeatModifier = {
+  acting: boolean;
+  targetTone: "" | "danger" | "success" | "info" | "warning";
+  targetLabel: string;
+  targetIcon: "刀" | "救" | "毒" | "守" | "查" | "投" | "逐" | null;
+  voteCount: number | null;
+};
+
+function seatModifierFor(
+  player: GodViewPlayer,
+  presentation: MobileLiveFocusPresentation,
+): SeatModifier {
+  const isWerewolfTeamActing =
+    presentation.kind === "night-action" &&
+    presentation.actorName === "狼人阵营" &&
+    presentation.targetName === null &&
+    player.identityGroup === "狼人";
+  const acting =
+    (presentation.actorSeat === player.seatNumber || isWerewolfTeamActing) &&
+    presentation.kind !== "night-result" &&
+    presentation.kind !== "vote-result" &&
+    presentation.kind !== "terminal";
+
+  const targetTone = targetToneFor(presentation);
+  const isTarget =
+    Boolean(targetTone) &&
+    presentation.targetName !== null &&
+    presentation.targetName === player.name;
+  const targetLabel = isTarget ? targetLabelFor(presentation) : "";
+  const targetIcon = isTarget ? targetIconFor(presentation) : null;
+
+  const showVoteCount =
+    (presentation.kind === "vote-action" || presentation.kind === "vote-result") &&
+    player.receivedVotes > 0;
+  const voteCount = showVoteCount ? player.receivedVotes : null;
+
+  return {
+    acting,
+    targetTone: isTarget ? targetTone : "",
+    targetLabel,
+    targetIcon,
+    voteCount,
+  };
+}
+
+function targetToneFor(
+  presentation: MobileLiveFocusPresentation,
+): "" | "danger" | "success" | "info" | "warning" {
+  if (presentation.kind === "night-action") {
+    if (presentation.tone === "danger") return "danger";
+    if (presentation.tone === "success") return "success";
+    if (presentation.tone === "info") return "info";
+  }
+  if (presentation.kind === "vote-action" || presentation.kind === "vote-result") {
+    return "warning";
+  }
+  return "";
+}
+
+function targetLabelFor(presentation: MobileLiveFocusPresentation): string {
+  if (presentation.kind === "vote-action") return "投票";
+  if (presentation.kind === "vote-result") return "票型";
+  return presentation.title;
+}
+
+function targetIconFor(
+  presentation: MobileLiveFocusPresentation,
+): SeatModifier["targetIcon"] {
+  if (presentation.kind === "vote-action" || presentation.kind === "vote-result") {
+    return "投";
+  }
+  if (presentation.eyebrow === "狼人阵营" || presentation.eyebrow === "狼人目标") {
+    return "刀";
+  }
+  if (presentation.eyebrow === "女巫") {
+    return presentation.tone === "danger" ? "毒" : "救";
+  }
+  if (presentation.eyebrow === "守卫") return "守";
+  if (presentation.eyebrow === "预言家") return "查";
+  return null;
 }
 
 type LiveSeatExitMarker = "night" | "day-exile" | null;
@@ -287,52 +417,6 @@ function liveSeatExitMarker(player: GodViewPlayer): LiveSeatExitMarker {
   }
 
   return null;
-}
-
-type LiveCenterStageProps = {
-  currentEvent: LiveGameEvent | null;
-  currentPlayer: GodViewPlayer | null;
-  godViewState: GodViewState;
-};
-
-export function LiveCenterStage({
-  currentEvent,
-  currentPlayer,
-  godViewState,
-}: LiveCenterStageProps) {
-  const presenterAvatarImageUrl = currentPlayer
-    ? resolveAvatarImageUrl({
-        avatar_image_url: currentPlayer.avatarImageUrl,
-      })
-    : null;
-
-  return (
-    <section className="mobile-live-center-stage" aria-label="当前舞台">
-      <div className="mobile-live-presenter" aria-hidden="true">
-        {presenterAvatarImageUrl ? (
-          <img alt="" src={presenterAvatarImageUrl} />
-        ) : (
-          <span>
-            {currentPlayer
-              ? avatarInitial(currentPlayer.name, currentPlayer.seatNumber)
-              : "?"}
-          </span>
-        )}
-        {currentPlayer ? (
-          <span className="mobile-live-presenter-mic">
-            <Mic aria-hidden="true" size={14} strokeWidth={2.8} />
-          </span>
-        ) : null}
-      </div>
-      <span>{currentPlayer ? `${currentPlayer.seatNumber}号` : "等待"}</span>
-      <strong>{currentPlayer?.name ?? "等待玩家行动"}</strong>
-      <em>{currentPlayer?.stageStatus.label ?? godViewState.currentSeatLabel}</em>
-      <p>{currentEvent ? liveStageEventLabel(currentEvent) : "等待事件"}</p>
-      {currentEvent?.phase ? (
-        <small>{phaseLabel(currentEvent.phase)}阶段</small>
-      ) : null}
-    </section>
-  );
 }
 
 type LiveSubtitleProps = {
@@ -512,10 +596,6 @@ export function LiveTheaterControls({
   );
 }
 
-function liveStageEventLabel(event: LiveGameEvent) {
-  return event.action ? actionLabel(event.action) : liveEventTitle(event);
-}
-
 function voiceControlLabel(enabled: boolean, state: MobileLiveVoiceState) {
   if (state.connectionState === "unavailable") {
     return "不可用";
@@ -571,14 +651,6 @@ function getLiveFailureReason(
 function stringField(payload: Record<string, unknown>, key: string) {
   const value = payload[key];
   return typeof value === "string" && value.trim() ? value.trim() : "";
-}
-
-function getCurrentTheaterPlayer(state: GodViewState) {
-  return (
-    state.speakerFlow.current ??
-    state.players.find((player) => player.isSpeaking) ??
-    null
-  );
 }
 
 function splitPlayersForColumns(players: GodViewPlayer[]) {

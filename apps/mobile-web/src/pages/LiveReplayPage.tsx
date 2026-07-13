@@ -185,6 +185,7 @@ export function LiveReplayPage() {
             terminalEvent: visibleTerminalEvent,
           })}
           onBack={() => navigateBackToHistory(navigate)}
+          onSelectEvent={(eventId) => director.seekToEventId(eventId)}
           onSelectPhase={(segment) =>
             director.seekToEventId(segment.startEventId)
           }

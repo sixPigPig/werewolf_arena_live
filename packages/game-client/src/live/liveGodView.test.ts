@@ -628,3 +628,554 @@ describe("deriveGodViewState", () => {
     expect(state.vote.tallies).toEqual([]);
   });
 });
+
+function eightPlayerEvents(): LiveGameEvent[] {
+  return [
+    event({
+      id: 1,
+      type: "game_started",
+      payload: {
+        players: [
+          { name: "1号 狼人A", role: "werewolf", model: "deepseek-chat" },
+          { name: "2号 女巫", role: "witch", model: "deepseek-chat" },
+          { name: "3号 平民A", role: "villager", model: "deepseek-chat" },
+          { name: "4号 预言家", role: "seer", model: "deepseek-chat" },
+          { name: "5号 守卫", role: "guard", model: "deepseek-chat" },
+          { name: "6号 平民B", role: "villager", model: "deepseek-chat" },
+          { name: "7号 平民C", role: "villager", model: "deepseek-chat" },
+          { name: "8号 猎人", role: "hunter", model: "deepseek-chat" },
+        ],
+      },
+    }),
+  ];
+}
+
+describe("deriveGodViewState meaningful event lines", () => {
+  it("records parsed night actions with stable seats and readable text", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "night",
+        payload: {
+          active_players: [
+            "1号 狼人A",
+            "2号 女巫",
+            "4号 预言家",
+            "5号 守卫",
+          ],
+        },
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "remove",
+        payload: { choice: "7号 平民C" },
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "5号 守卫",
+        action: "protect",
+        payload: { choice: "7号 平民C" },
+      }),
+      event({
+        id: 5,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "4号 预言家",
+        action: "investigate",
+        payload: {
+          choice: "1号 狼人A",
+          result: { alignment: "werewolf" },
+        },
+      }),
+      event({
+        id: 6,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "2号 女巫",
+        action: "witch_save",
+        payload: { choice: "7号 平民C" },
+      }),
+      event({
+        id: 7,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "2号 女巫",
+        action: "witch_poison",
+        payload: { choice: "skip" },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+    const texts = state.eventLines.map((line) => line.text);
+
+    expect(texts).toEqual(
+      expect.arrayContaining([
+        "狼人 -> 7号",
+        "守卫守护 7号",
+        "预言家查验 1号",
+        "女巫救 7号",
+        "女巫未使用毒药",
+      ]),
+    );
+    // The seer investigation result is God-View knowledge shown on the center
+    // card via nightActions, but it must not leak into the public rail text.
+    const seerLine = state.eventLines.find((line) =>
+      line.text.startsWith("预言家查验"),
+    );
+    expect(seerLine?.text).toBe("预言家查验 1号");
+    expect(seerLine?.text).not.toContain("werewolf");
+    expect(seerLine?.text).not.toContain("狼");
+  });
+
+  it("normalizes seat-only aliases in parsed targets", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "remove",
+        payload: { choice: "7号玩家" },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+    const removeLine = state.eventLines.find((line) => line.id === 2);
+
+    expect(removeLine?.text).toBe("狼人 -> 7号");
+    expect(removeLine?.text).not.toContain("玩家号");
+  });
+
+  it("keeps only spectator-meaningful action requests and state updates", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "remove",
+      }),
+      event({
+        id: 3,
+        type: "action_requested",
+        round: 1,
+        phase: "sheriff",
+        actor: "2号 女巫",
+        action: "sheriff_run",
+      }),
+      event({
+        id: 4,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "2号 女巫",
+        action: "debate",
+      }),
+      event({
+        id: 5,
+        type: "action_requested",
+        round: 1,
+        phase: "summary",
+        actor: "2号 女巫",
+        action: "summarize",
+      }),
+      event({
+        id: 6,
+        type: "action_requested",
+        round: 1,
+        phase: "vote",
+        actor: "8号 猎人",
+        action: "vote",
+      }),
+      event({
+        id: 7,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        payload: { active_players: ["1号 狼人A", "2号 女巫"] },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+    const ids = state.eventLines.map((line) => line.id);
+
+    expect(ids).toContain(2);
+    expect(ids).toContain(6);
+    expect(ids).not.toContain(3);
+    expect(ids).not.toContain(4);
+    expect(ids).not.toContain(5);
+    expect(ids).not.toContain(7);
+    expect(state.eventLines.map((line) => line.text)).not.toContain("局势更新");
+  });
+
+  it("records skip as an explicit unused action and never drops it", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "night",
+        payload: { active_players: ["2号 女巫"] },
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "2号 女巫",
+        action: "witch_save",
+        payload: { choice: "skip" },
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "2号 女巫",
+        action: "witch_poison",
+        payload: { choice: "skip" },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+    const texts = state.eventLines.map((line) => line.text);
+
+    expect(texts).toContain("女巫未使用解药");
+    expect(texts).toContain("女巫未使用毒药");
+  });
+
+  it("records parsed votes with actor and target and keeps same-target votes distinct", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "vote",
+        payload: {
+          active_players: [
+            "1号 狼人A",
+            "2号 女巫",
+            "3号 平民A",
+            "6号 平民B",
+            "7号 平民C",
+          ],
+        },
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        round: 1,
+        phase: "vote",
+        actor: "8号 猎人",
+        action: "vote",
+        payload: { choice: "1号 狼人A" },
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "vote",
+        actor: "6号 平民B",
+        action: "vote",
+        payload: { choice: "1号 狼人A" },
+      }),
+      event({
+        id: 5,
+        type: "action_parsed",
+        round: 1,
+        phase: "vote",
+        actor: "7号 平民C",
+        action: "vote",
+        payload: { choice: "1号 狼人A" },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+    const voteLines = state.eventLines.filter((line) =>
+      line.text.includes("->"),
+    );
+
+    expect(voteLines.map((line) => line.text)).toEqual(
+      expect.arrayContaining([
+        "8号 -> 1号",
+        "6号 -> 1号",
+        "7号 -> 1号",
+      ]),
+    );
+    // Distinct event IDs even though the choice text is identical.
+    const ids = voteLines.map((line) => line.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(expect.arrayContaining([3, 4, 5]));
+  });
+
+  it("summarizes weighted and tied vote state updates", () => {
+    const weighted = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "vote",
+        payload: { active_players: ["1号 狼人A", "2号 女巫", "3号 平民A"] },
+      }),
+      event({
+        id: 3,
+        type: "state_updated",
+        round: 1,
+        phase: "vote",
+        payload: {
+          votes: { "1号 狼人A": "2号 女巫", "3号 平民A": "2号 女巫" },
+          vote_weights: { "1号 狼人A": 1.5 },
+        },
+      }),
+    ];
+    const weightedState = deriveGodViewState(
+      weighted,
+      deriveLiveSpectatorState(weighted),
+      "暗夜古堡",
+    );
+    const weightedLine = weightedState.eventLines.find((line) =>
+      line.text.includes("票"),
+    );
+    expect(weightedLine?.text).toContain("2号");
+    expect(weightedLine?.text).toContain("2.5票");
+
+    const tied = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "vote",
+        payload: {
+          active_players: ["1号 狼人A", "2号 女巫", "3号 平民A", "6号 平民B"],
+        },
+      }),
+      event({
+        id: 3,
+        type: "state_updated",
+        round: 1,
+        phase: "vote",
+        payload: {
+          votes: {
+            "1号 狼人A": "3号 平民A",
+            "2号 女巫": "3号 平民A",
+            "3号 平民A": "6号 平民B",
+            "6号 平民B": "6号 平民B",
+          },
+        },
+      }),
+    ];
+    const tiedState = deriveGodViewState(
+      tied,
+      deriveLiveSpectatorState(tied),
+      "暗夜古堡",
+    );
+    const tiedLine = tiedState.eventLines.find((line) =>
+      line.text.startsWith("平票"),
+    );
+    expect(tiedLine?.text).toContain("平票");
+    expect(tiedLine?.text).toContain("2票");
+  });
+
+  it("summarizes exile, night death, witch poison and peaceful night results", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "night",
+        payload: { active_players: ["1号 狼人A", "2号 女巫", "5号 守卫"] },
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "2号 女巫",
+        action: "witch_save",
+        payload: { choice: "7号 平民C" },
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "2号 女巫",
+        action: "witch_poison",
+        payload: { choice: "6号 平民B" },
+      }),
+      event({
+        id: 5,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        payload: {
+          active_players: ["1号 狼人A", "2号 女巫", "5号 守卫", "7号 平民C"],
+          attacked: "7号 平民C",
+          protected: "7号 平民C",
+          eliminated: null,
+        },
+      }),
+      event({
+        id: 6,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        payload: {
+          active_players: ["1号 狼人A", "2号 女巫", "5号 守卫", "7号 平民C"],
+          attacked: "3号 平民A",
+          eliminated: "3号 平民A",
+          poisoned: "6号 平民B",
+          saved_by_witch: "7号 平民C",
+        },
+      }),
+      event({
+        id: 7,
+        type: "phase_started",
+        round: 1,
+        phase: "vote",
+        payload: { active_players: ["1号 狼人A", "2号 女巫"] },
+      }),
+      event({
+        id: 8,
+        type: "state_updated",
+        round: 1,
+        phase: "vote",
+        payload: {
+          active_players: ["2号 女巫"],
+          exiled: "1号 狼人A",
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+    const texts = state.eventLines.map((line) => line.text);
+
+    expect(texts).toContain("平安夜");
+    expect(texts).toContain("3号 夜晚死亡，6号 被毒杀");
+    expect(texts).toContain("女巫毒 6号");
+    expect(texts).toContain("女巫救 7号");
+    expect(texts).toContain("1号 被放逐");
+  });
+
+  it("never leaks model ticks, deltas, raw payloads, prompts or private summaries", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "night",
+        payload: { active_players: ["1号 狼人A"] },
+      }),
+      event({
+        id: 3,
+        type: "model_thinking_tick",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "remove",
+        payload: { message: "正在思考", elapsed_ms: 1200, prompt: "secret prompt" },
+      }),
+      event({
+        id: 4,
+        type: "model_response_delta",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "remove",
+        payload: { visible_text: "secret delta", raw_response: "raw" },
+      }),
+      event({
+        id: 5,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "remove",
+        payload: {
+          choice: "7号 平民C",
+          raw_response: "raw",
+          prompt: "secret prompt",
+        },
+      }),
+      event({
+        id: 6,
+        type: "state_updated",
+        round: 1,
+        phase: "summary",
+        payload: {
+          public_summary: "第1轮：公开总结。",
+          private_summaries: { "1号 狼人A": "我是狼人，准备刀9号。" },
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+    const blob = state.eventLines
+      .map((line) => `${line.text} ${line.detail ?? ""}`)
+      .join("\n");
+
+    expect(state.eventLines.some((line) => line.id === 3)).toBe(false);
+    expect(state.eventLines.some((line) => line.id === 4)).toBe(false);
+    expect(blob).not.toContain("secret prompt");
+    expect(blob).not.toContain("secret delta");
+    expect(blob).not.toContain("raw_response");
+    expect(blob).not.toContain("raw");
+    expect(blob).not.toContain("准备刀9号");
+    expect(blob).not.toContain("我是狼人");
+  });
+
+  it("annotates event lines with round and phase for grouping", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "phase_started",
+        round: 1,
+        phase: "night",
+        payload: { active_players: ["1号 狼人A"] },
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "remove",
+        payload: { choice: "7号 平民C" },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+    const removeLine = state.eventLines.find((line) =>
+      line.text.startsWith("狼人 ->"),
+    );
+
+    expect(removeLine?.round).toBe(1);
+    expect(removeLine?.phase).toBe("night");
+    expect(typeof removeLine?.detail).toBe("string");
+    expect(removeLine?.detail).toContain("7号");
+  });
+});

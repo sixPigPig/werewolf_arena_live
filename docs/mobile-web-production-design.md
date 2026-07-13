@@ -48,6 +48,17 @@ Mobile Nginx 负责 SPA fallback、同源 API/WebSocket/SSE 代理、安全响�
 
 `scripts/check-mobile-bundle.mjs` 在生产构建后执行静态预算检查。Playwright 使用三个 Chromium 移动视口验证主导航和横向溢出；业务状态仍由 Vitest 覆盖，真实模型和 TTS 不进入浏览器测试。
 
+## 实时观战剧场契约
+
+实时观战与直播回放共用同一套 `MobileLiveTheater` 呈现层。剧场在单一视口网格中依次渲染顶栏、夜空横幅、玩家席位、相位感知中央舞台、本轮战报事件栏与控制栏。
+
+- **相位感知行动焦点**：中央舞台根据 `currentEvent` 与 `GodViewState` 派生出行动/投票/结算/技能/终局等焦点卡片，展示行动者或阵营、动作、目标或“未使用”、进度与结果。发言状态保持原有头像与麦克风呈现不变。
+- **本轮战报事件栏**：在席位舞台与控制栏之间渲染一行可横向滚动的关键事件芯片，仅消费 `director.currentEventId` 之前的 `eventLines`，不读取未来事件。`全部` 打开分组底部战报抽屉，选择某行调用 `director.seekToEventId`。
+- **可访问事件抽屉**：抽屉使用 `role="dialog"`、`aria-modal`、焦点陷阱、Escape 关闭、背景 inert 与触发焦点恢复，遵循 `LobbyModal` 既有语义但不复用大厅组件。
+- **导演可见事件边界**：所有行动与战报内容均派生自 `director.currentEventId` 截断后的 `stageEvents`，SSE 追赶与暂停期间不泄露未来行动或票型。
+- **关键结算时长**：投票票型更新、放逐、平安夜与夜晚死亡等 `state_updated` 仍为 6000ms 不可压缩关键导播提示，2× 时缩短为 3000ms，不引入第二套 UI 计时器。
+- **不依赖语音回放**：行动焦点与事件栏派生自保存事件，即使回放无语音也可阅读。
+
 ## 发布门禁
 
 1. API、game-client、mobile-web、admin-web lint/test/build 全部通过。

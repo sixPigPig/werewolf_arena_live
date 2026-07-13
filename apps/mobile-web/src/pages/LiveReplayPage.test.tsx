@@ -183,8 +183,8 @@ describe("LiveReplayPage", () => {
     );
     expect(screen.getByText("历史回放")).toBeVisible();
 
-    const stage = await screen.findByRole("region", { name: "当前舞台" });
-    expect(within(stage).getByText("对局开始")).toBeVisible();
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(stage.querySelector("strong")).toHaveTextContent("对局开始");
     expect(within(stage).queryByText("game_started")).not.toBeInTheDocument();
     expect(
       within(stage).queryByText("model_response_delta"),
@@ -200,7 +200,7 @@ describe("LiveReplayPage", () => {
     await user.click(await screen.findByRole("button", { name: "暂停" }));
     expect(screen.getByRole("button", { name: "继续" })).toBeVisible();
 
-    const stage = await screen.findByRole("region", { name: "当前舞台" });
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
     expect(within(stage).queryByText("阿青")).not.toBeInTheDocument();
     expect(
       within(stage).queryByText("model_response_delta"),
@@ -478,5 +478,129 @@ describe("LiveReplayPage", () => {
 
     expect(await screen.findByRole("button", { name: "语音不可用" })).toBeDisabled();
     expect(screen.getByText("这局回放没有保存的语音。")).toBeVisible();
+  });
+
+  it("renders the same action focus and event rail from saved playback", async () => {
+    const user = userEvent.setup();
+    const nightPhase: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 6,
+      type: "phase_started",
+      round: 1,
+      phase: "night",
+      payload: {
+        active_players: ["阿青", "白石", "南风", "木子"],
+        phase: "night",
+      },
+    };
+    const werewolfKill: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 7,
+      type: "action_parsed",
+      round: 1,
+      phase: "night",
+      actor: "白石",
+      action: "remove",
+      payload: { choice: "阿青" },
+    };
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        events: [gameStartedEvent, nightPhase, werewolfKill],
+      }),
+    );
+
+    renderLiveReplayRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("狼人目标")).toBeVisible();
+    expect(within(stage).getByText("1号")).toBeVisible();
+
+    const rail = screen.getByRole("log");
+    expect(within(rail).getByText("狼人 -> 1号")).toBeVisible();
+  });
+
+  it("seeks the replay director when selecting an event from the sheet", async () => {
+    const user = userEvent.setup();
+    const votePhase: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 6,
+      type: "phase_started",
+      round: 1,
+      phase: "vote",
+      payload: {
+        active_players: ["阿青", "白石", "南风", "木子"],
+        phase: "vote",
+      },
+    };
+    const firstVote: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 7,
+      type: "action_parsed",
+      round: 1,
+      phase: "vote",
+      actor: "白石",
+      action: "vote",
+      payload: { choice: "南风" },
+    };
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        events: [gameStartedEvent, votePhase, firstVote],
+      }),
+    );
+
+    renderLiveReplayRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const railAll = screen.getByRole("button", {
+      name: /查看全部战报，共 \d+ 条/,
+    });
+    await user.click(railAll);
+
+    const dialog = await screen.findByRole("dialog", { name: "本轮战报" });
+    await user.click(
+      within(dialog).getByRole("button", { name: /跳转到战报：投票阶段开始/ }),
+    );
+
+    expect(dialog).not.toBeInTheDocument();
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("白天投票开始")).toBeVisible();
+  });
+
+  it("renders action and result moments without saved voice", async () => {
+    const user = userEvent.setup();
+    const nightResolution: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 6,
+      type: "state_updated",
+      round: 1,
+      phase: "night",
+      payload: {
+        active_players: ["白石", "南风", "木子"],
+        attacked: "阿青",
+        eliminated: "阿青",
+      },
+    };
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        voices: [],
+        events: [gameStartedEvent, nightResolution],
+      }),
+    );
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "unavailable",
+      currentSpeakerName: null,
+      errors: ["这局回放没有保存的语音。"],
+      unlockAudio: vi.fn(async () => false),
+    });
+
+    renderLiveReplayRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("1号 夜晚死亡")).toBeVisible();
+
+    const rail = screen.getByRole("log");
+    expect(within(rail).getByText("1号 夜晚死亡")).toBeVisible();
   });
 });
