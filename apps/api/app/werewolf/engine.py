@@ -398,6 +398,11 @@ class GameEngine:
             DOCTOR, active_players
         ):
             doctor = players_by_name[self._active_player_for_role(DOCTOR, active_players)]
+            self._publish_night_judge_cue(
+                round_state,
+                "guard_wake",
+                "守卫请睁眼。",
+            )
             protected, round_log.protect = self._player_action(
                 player=doctor,
                 action=ACTION_PROTECT,
@@ -407,6 +412,11 @@ class GameEngine:
                 phase="night",
             )
             round_state.protected = protected
+            self._publish_night_judge_cue(
+                round_state,
+                "guard_sleep",
+                "守卫请闭眼。",
+            )
 
         if ACTION_INVESTIGATE in self.rule_set.night_actions and self._is_role_active(
             SEER, active_players
@@ -418,6 +428,11 @@ class GameEngine:
                 if name != seer.name and name not in seer.known_roles
             ]
             if investigate_options:
+                self._publish_night_judge_cue(
+                    round_state,
+                    "seer_wake",
+                    "预言家请睁眼。",
+                )
                 investigated, round_log.investigate = self._player_action(
                     player=seer,
                     action=ACTION_INVESTIGATE,
@@ -433,6 +448,11 @@ class GameEngine:
                     seer.add_observation(
                         f"第{round_state.number}轮：我查验了{investigated}，阵营是{alignment}。"
                     )
+                self._publish_night_judge_cue(
+                    round_state,
+                    "seer_sleep",
+                    "预言家请闭眼。",
+                )
 
         self._run_witch_phase(round_state, round_log, active_players)
         pending_deaths = self._pending_night_deaths(round_state, active_players)
@@ -484,6 +504,19 @@ class GameEngine:
         if not active_wolves or not non_wolves:
             return None
 
+        self._publish_night_judge_cue(
+            round_state,
+            "werewolves_wake",
+            "狼人请睁眼，请互相确认队友。",
+        )
+        self._publish(
+            "action_requested",
+            round_number=round_state.number,
+            phase="night",
+            actor=None,
+            action=ACTION_REMOVE,
+            payload={},
+        )
         players_by_name = self.state.player_by_name()
         candidates = non_wolves.copy()
         previous_vote_round: dict[str, object] | None = None
@@ -530,10 +563,48 @@ class GameEngine:
             round_log.werewolf_votes.append(vote_logs)
             vote_record = self._record_werewolf_vote_round(vote_round, candidates, votes)
             round_state.werewolf_vote_rounds.append(vote_record)
+            for wolf_name, target in votes.items():
+                public_target = self._public_player_reference(target)
+                public_result = {"target": public_target}
+                self._publish(
+                    "action_parsed",
+                    round_number=round_state.number,
+                    phase="night",
+                    actor=wolf_name,
+                    action=ACTION_WEREWOLF_KILL_VOTE,
+                    payload={
+                        "choice": public_target,
+                        "result": public_result,
+                        "visible_result": public_result,
+                        "vote_round": vote_round,
+                    },
+                )
             previous_vote_round = vote_record
             if vote_record["unanimous"]:
                 round_log.eliminate = vote_logs[0] if vote_logs else None
-                return str(vote_record["result"])
+                final_target = str(vote_record["result"])
+                public_target = self._public_player_reference(final_target)
+                public_result = {"target": public_target}
+                self._publish(
+                    "action_parsed",
+                    round_number=round_state.number,
+                    phase="night",
+                    actor=None,
+                    action=ACTION_REMOVE,
+                    payload={
+                        "choice": public_target,
+                        "result": public_result,
+                        "visible_result": public_result,
+                        "vote_round": vote_round,
+                        "final_target": True,
+                    },
+                )
+                self._publish_night_judge_cue(
+                    round_state,
+                    "werewolves_sleep",
+                    "狼人请闭眼。",
+                )
+                return final_target
 
             candidates = list(dict.fromkeys(votes.values()))
 
@@ -639,12 +710,38 @@ class GameEngine:
             return
         witch = players_by_name[witch_name]
 
-        used_antidote = False
-        if (
+        poison_options = [
+            name for name in active_players if name != witch.name and name != round_state.attacked
+        ] + [NO_WITCH_POISON]
+        can_offer_save = (
             ACTION_WITCH_SAVE in self.rule_set.night_actions
-            and round_state.attacked
+            and bool(round_state.attacked)
             and witch.witch_antidote_available
-        ):
+        )
+        can_offer_poison = (
+            ACTION_WITCH_POISON in self.rule_set.night_actions
+            and witch.witch_poison_available
+            and poison_options != [NO_WITCH_POISON]
+        )
+        if not can_offer_save and not can_offer_poison:
+            return
+
+        self._publish_night_judge_cue(
+            round_state,
+            "witch_wake",
+            "女巫请睁眼。",
+        )
+        if round_state.attacked:
+            public_target = self._public_player_reference(round_state.attacked)
+            self._publish_night_judge_cue(
+                round_state,
+                "witch_death",
+                f"今晚被狼人袭击的玩家是{public_target}。",
+                target=public_target,
+            )
+
+        used_antidote = False
+        if can_offer_save:
             save_choice, round_log.witch_save = self._player_action(
                 player=witch,
                 action=ACTION_WITCH_SAVE,
@@ -658,30 +755,24 @@ class GameEngine:
                 witch.witch_antidote_available = False
                 used_antidote = True
 
-        if (
-            used_antidote
-            or ACTION_WITCH_POISON not in self.rule_set.night_actions
-            or not witch.witch_poison_available
-        ):
-            return
+        if not used_antidote and can_offer_poison:
+            poison_choice, round_log.witch_poison = self._player_action(
+                player=witch,
+                action=ACTION_WITCH_POISON,
+                options=poison_options,
+                result_key="poison",
+                round_state=round_state,
+                phase="night",
+            )
+            if poison_choice and poison_choice != NO_WITCH_POISON:
+                round_state.poisoned = str(poison_choice)
+                witch.witch_poison_available = False
 
-        poison_options = [
-            name for name in active_players if name != witch.name and name != round_state.attacked
-        ] + [NO_WITCH_POISON]
-        if poison_options == [NO_WITCH_POISON]:
-            return
-
-        poison_choice, round_log.witch_poison = self._player_action(
-            player=witch,
-            action=ACTION_WITCH_POISON,
-            options=poison_options,
-            result_key="poison",
-            round_state=round_state,
-            phase="night",
+        self._publish_night_judge_cue(
+            round_state,
+            "witch_sleep",
+            "女巫请闭眼。",
         )
-        if poison_choice and poison_choice != NO_WITCH_POISON:
-            round_state.poisoned = str(poison_choice)
-            witch.witch_poison_available = False
 
     def _pending_night_deaths(
         self, round_state: RoundState, active_players: list[str]
@@ -1185,6 +1276,17 @@ class GameEngine:
         if not self._should_run_sheriff_election(round_state):
             return False
 
+        self._publish(
+            "judge_cue",
+            round_number=round_state.number,
+            phase="day",
+            actor=None,
+            action="sheriff_raise_hands",
+            payload={
+                "cue": "sheriff_raise_hands",
+                "visible_text": "想要竞选警长的玩家请举手。",
+            },
+        )
         players_by_name = self.state.player_by_name()
         candidates: list[str] = []
         voters: list[str] = []
@@ -2121,6 +2223,29 @@ class GameEngine:
             phase=phase,
             actor=actor,
             action=action,
+            payload=payload,
+        )
+
+    def _publish_night_judge_cue(
+        self,
+        round_state: RoundState,
+        cue: str,
+        visible_text: str,
+        *,
+        target: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "cue": cue,
+            "visible_text": visible_text,
+        }
+        if target:
+            payload["target"] = target
+        self._publish(
+            "judge_cue",
+            round_number=round_state.number,
+            phase="night",
+            actor=None,
+            action=cue,
             payload=payload,
         )
 

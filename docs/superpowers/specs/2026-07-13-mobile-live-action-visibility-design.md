@@ -111,18 +111,22 @@ Every non-speech center card contains:
 | Visible event/state | Center card example | Seat treatment | Event rail |
 |---|---|---|---|
 | `phase_started/night` | `第1夜 · 夜间行动开始` | No target highlight | `夜幕降临` |
+| `judge_cue/*_wake` | `法官提示 · 狼人/守卫/预言家/女巫请睁眼` | Relevant role seat may receive acting emphasis | Not added to result rail |
 | `action_requested/remove` | `狼人阵营 · 正在选择袭击目标` | Active wolf seat(s) use acting emphasis | `狼人开始行动` |
-| `action_parsed/remove` | `狼人目标 · 7号 警徽定狼` | Target receives danger outline | `狼人 → 7号` |
+| `action_parsed/werewolf_kill_vote` | `1号 警徽定狼 · 选择袭击目标 · 第2轮 · 投 7号` | Acting wolf and selected target receive emphasis | `1号 刀票 → 7号` |
+| `action_parsed/remove` | `狼人最终目标 · 袭击 7号` | Final target receives danger outline | `最终狼刀 → 7号` |
+| `judge_cue/witch_death` | `今晚被狼人袭击的玩家是 7号玩家` | Attacked target receives danger outline | Not added to result rail |
 | `action_requested/witch_save` | `3号 暗牌验心 · 正在决定是否使用解药` | Witch seat uses acting emphasis | `女巫考虑使用解药` |
 | `action_parsed/witch_save` | `女巫解药 · 救 7号` or `女巫解药 · 未使用` | Saved target receives success outline | `女巫救 7号` or `女巫未使用解药` |
 | `action_parsed/witch_poison` | `女巫毒药 · 毒 5号` or `未使用` | Poison target receives danger outline | `女巫毒 5号` |
+| `judge_cue/*_sleep` | `法官提示 · 当前角色请闭眼` | Clear acting emphasis | Not added to result rail |
 | `action_parsed/protect` | `守卫守护 · 7号` | Protected target receives success outline | `守卫守护 7号` |
 | `action_parsed/investigate` | `预言家查验 · 8号 · 狼人` | Investigated target receives info outline | `预言家查验 8号` |
 | night `state_updated` | `平安夜` or `昨夜死亡 · 7号` | Final affected seat marker remains | Resolution moment |
 
 `skip` is a meaningful action and must render as `未使用`, never disappear as if the event were missing.
 
-If a role has multiple acting players, such as the werewolf team, the center card uses `狼人阵营` as actor text and highlights the wolf seats without attempting to select one arbitrary portrait.
+During werewolf consensus, each `werewolf_kill_vote` names the acting wolf so every choice and revote can be followed. The separate `remove` event uses `狼人阵营` and marks the agreed final target. These public events must contain only the actor, selected target, vote round, and safe result fields; discussion, prompts, reasoning, and raw model output stay private.
 
 ### Vote states
 

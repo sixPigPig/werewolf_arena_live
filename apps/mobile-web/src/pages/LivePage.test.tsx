@@ -1126,8 +1126,8 @@ describe("LivePage", () => {
     await user.click(await screen.findByRole("button", { name: "最新" }));
 
     const stage = await screen.findByRole("status", { name: "当前舞台" });
-    expect(within(stage).getByText("狼人目标")).toBeVisible();
-    expect(within(stage).getByText("1号")).toBeVisible();
+    expect(within(stage).getByText("狼人最终目标")).toBeVisible();
+    expect(within(stage).getByText("袭击 1号")).toBeVisible();
   });
 
   it("emphasizes every living wolf while the werewolf team is choosing", async () => {
@@ -1170,6 +1170,80 @@ describe("LivePage", () => {
     expect(
       screen.getByRole("article", { name: "1号 阿青 平民 存活" }),
     ).not.toHaveClass("mobile-live-seat-acting");
+  });
+
+  it("shows each wolf's target and the final wolf kill in the report", async () => {
+    const teamStartedEvent: LiveGameEvent = {
+      ...gameStartedEvent,
+      payload: {
+        players: [
+          { name: "阿青", role: "villager", model: "test-model" },
+          { name: "白石", role: "werewolf", model: "test-model" },
+          { name: "南风", role: "werewolf", model: "test-model" },
+          { name: "木子", role: "witch", model: "test-model" },
+        ],
+      },
+    };
+    const wolfVote = (
+      id: number,
+      actor: string,
+      choice: string,
+      voteRound: number,
+    ): LiveGameEvent => ({
+      ...gameStartedEvent,
+      id,
+      type: "action_parsed",
+      phase: "night",
+      actor,
+      action: "werewolf_kill_vote",
+      payload: { choice, vote_round: voteRound },
+    });
+    const finalTarget: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 6,
+      type: "action_parsed",
+      phase: "night",
+      actor: null,
+      action: "remove",
+      payload: { choice: "阿青", vote_round: 2, final_target: true },
+    };
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [
+        teamStartedEvent,
+        wolfVote(2, "白石", "阿青", 1),
+        wolfVote(3, "南风", "木子", 1),
+        wolfVote(4, "白石", "阿青", 2),
+        wolfVote(5, "南风", "阿青", 2),
+        finalTarget,
+      ],
+      latestEvent: finalTarget,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const rail = screen.getByRole("log");
+    expect(within(rail).getAllByText("2号 刀票 -> 1号")).toHaveLength(2);
+    expect(within(rail).getByText("3号 刀票 -> 4号")).toBeVisible();
+    expect(within(rail).getByText("3号 刀票 -> 1号")).toBeVisible();
+    expect(within(rail).getByText("最终狼刀 -> 1号")).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: /查看全部战报，共 \d+ 条/ }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "本轮战报" });
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /跳转到战报：3号 刀票 -> 4号/,
+      }),
+    );
+
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("3号 南风")).toBeVisible();
+    expect(within(stage).getByText("选择袭击目标")).toBeVisible();
+    expect(within(stage).getByText("投 4号")).toBeVisible();
   });
 
   it("renders the vote focus and a persisted event rail behind the director", async () => {

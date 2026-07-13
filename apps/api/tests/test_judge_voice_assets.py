@@ -54,6 +54,7 @@ def test_catalog_contains_standard_werewolf_judge_lines() -> None:
 
     assert lines_by_id["night_start"].text == "夜晚降临，所有玩家请闭眼。"
     assert lines_by_id["werewolves_wake"].text == "狼人请睁眼，请互相确认队友。"
+    assert lines_by_id["witch_death"].text == "今晚被狼人袭击的玩家是{玩家}。"
     assert lines_by_id["dawn_peaceful"].text == "昨夜平安夜。"
     assert lines_by_id["speech_prompt"].text == "{玩家}请发言。"
     assert lines_by_id["exile_result"].text == "{玩家} 得票最高，被放逐出局。"
@@ -142,6 +143,36 @@ def test_generate_judge_voice_assets_expands_template_ids(tmp_path: Path) -> Non
     assert result.generated_ids[-1] == "speech_prompt_seat_12"
     assert (asset_dir / "speech_prompt_seat_10.mp3").exists()
     assert "10号玩家" in "".join(RecordingTtsClient.instances[9].calls[0]["text_chunks"])
+
+
+def test_selective_generation_preserves_other_manifest_lines(tmp_path: Path) -> None:
+    RecordingTtsClient.instances.clear()
+    asset_dir = tmp_path / "judge-voice"
+
+    asyncio.run(
+        generate_judge_voice_assets(
+            config=BASE_CONFIG,
+            asset_dir=asset_dir,
+            line_ids=["night_start"],
+            client_factory=RecordingTtsClient,
+        )
+    )
+    asyncio.run(
+        generate_judge_voice_assets(
+            config=BASE_CONFIG,
+            asset_dir=asset_dir,
+            line_ids=["witch_death"],
+            force=True,
+            client_factory=RecordingTtsClient,
+        )
+    )
+
+    manifest = json.loads((asset_dir / "manifest.json").read_text(encoding="utf-8"))
+    line_ids = [line["id"] for line in manifest["lines"]]
+    assert line_ids[0] == "night_start"
+    assert line_ids[1:] == [f"witch_death_seat_{seat:02d}" for seat in range(1, 13)]
+    witch_line = next(line for line in manifest["lines"] if line["id"] == "witch_death_seat_08")
+    assert witch_line["text"] == "今晚被狼人袭击的玩家是8号玩家。"
 
 
 def test_generate_judge_voice_assets_skips_existing_without_force(tmp_path: Path) -> None:

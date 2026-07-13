@@ -32,6 +32,7 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   game_started: "对局开始",
   round_started: "回合开始",
   phase_started: "阶段开始",
+  judge_cue: "法官提示",
   action_requested: "行动请求",
   model_request_started: "模型请求开始",
   model_thinking_tick: "模型思考中",

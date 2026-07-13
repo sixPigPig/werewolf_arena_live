@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-09T13:22:19Z",
+  "generated_at": "2026-07-13T14:19:16Z",
   "audio_format": "mp3",
   "sample_rate": 24000,
   "mime_type": "audio/mpeg",
@@ -911,94 +911,193 @@
     },
     {
       "id": "witch_death_seat_01",
-      "text": "今晚被袭击的玩家是1号玩家。",
+      "text": "今晚被狼人袭击的玩家是1号玩家。",
       "category": "女巫",
       "filename": "witch_death_seat_01.mp3",
       "public_url": "/judge-voice/witch_death_seat_01.mp3",
       "exists": true,
-      "byte_size": 24429,
+      "byte_size": 27885,
       "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
       "seat_number": 1,
       "subtitle_timings": [
         {
           "text": "今",
           "start_ms": 195,
-          "end_ms": 445
+          "end_ms": 435
         },
         {
           "text": "晚",
-          "start_ms": 445,
-          "end_ms": 675
+          "start_ms": 435,
+          "end_ms": 615
         },
         {
           "text": "被",
-          "start_ms": 675,
-          "end_ms": 875
+          "start_ms": 615,
+          "end_ms": 845
+        },
+        {
+          "text": "狼",
+          "start_ms": 845,
+          "end_ms": 1035
+        },
+        {
+          "text": "人",
+          "start_ms": 1035,
+          "end_ms": 1155
         },
         {
           "text": "袭",
-          "start_ms": 875,
-          "end_ms": 1085
+          "start_ms": 1155,
+          "end_ms": 1385
         },
         {
           "text": "击",
-          "start_ms": 1085,
-          "end_ms": 1225
-        },
-        {
-          "text": "的",
-          "start_ms": 1225,
-          "end_ms": 1345
-        },
-        {
-          "text": "玩",
-          "start_ms": 1345,
+          "start_ms": 1385,
           "end_ms": 1525
         },
         {
-          "text": "家",
+          "text": "的",
           "start_ms": 1525,
-          "end_ms": 1765
-        },
-        {
-          "text": "是",
-          "start_ms": 1765,
-          "end_ms": 1995
-        },
-        {
-          "text": "1",
-          "start_ms": 2075,
-          "end_ms": 2105
-        },
-        {
-          "text": "号",
-          "start_ms": 2105,
-          "end_ms": 2315
+          "end_ms": 1635
         },
         {
           "text": "玩",
-          "start_ms": 2315,
-          "end_ms": 2505
+          "start_ms": 1635,
+          "end_ms": 1805
+        },
+        {
+          "text": "家",
+          "start_ms": 1805,
+          "end_ms": 2045
+        },
+        {
+          "text": "是",
+          "start_ms": 2045,
+          "end_ms": 2265
+        },
+        {
+          "text": "1",
+          "start_ms": 2375,
+          "end_ms": 2405
+        },
+        {
+          "text": "号",
+          "start_ms": 2405,
+          "end_ms": 2595
+        },
+        {
+          "text": "玩",
+          "start_ms": 2595,
+          "end_ms": 2745
         },
         {
           "text": "家。",
-          "start_ms": 2505,
-          "end_ms": 2805
+          "start_ms": 2745,
+          "end_ms": 3045
         }
       ]
     },
     {
       "id": "witch_death_seat_02",
-      "text": "今晚被袭击的玩家是2号玩家。",
+      "text": "今晚被狼人袭击的玩家是2号玩家。",
       "category": "女巫",
       "filename": "witch_death_seat_02.mp3",
       "public_url": "/judge-voice/witch_death_seat_02.mp3",
       "exists": true,
-      "byte_size": 22893,
+      "byte_size": 25965,
       "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
       "seat_number": 2,
+      "subtitle_timings": [
+        {
+          "text": "今",
+          "start_ms": 235,
+          "end_ms": 415
+        },
+        {
+          "text": "晚",
+          "start_ms": 415,
+          "end_ms": 575
+        },
+        {
+          "text": "被",
+          "start_ms": 575,
+          "end_ms": 745
+        },
+        {
+          "text": "狼",
+          "start_ms": 745,
+          "end_ms": 905
+        },
+        {
+          "text": "人",
+          "start_ms": 905,
+          "end_ms": 1025
+        },
+        {
+          "text": "袭",
+          "start_ms": 1025,
+          "end_ms": 1265
+        },
+        {
+          "text": "击",
+          "start_ms": 1265,
+          "end_ms": 1435
+        },
+        {
+          "text": "的",
+          "start_ms": 1435,
+          "end_ms": 1535
+        },
+        {
+          "text": "玩",
+          "start_ms": 1535,
+          "end_ms": 1695
+        },
+        {
+          "text": "家",
+          "start_ms": 1695,
+          "end_ms": 1885
+        },
+        {
+          "text": "是",
+          "start_ms": 1885,
+          "end_ms": 2115
+        },
+        {
+          "text": "2",
+          "start_ms": 2275,
+          "end_ms": 2305
+        },
+        {
+          "text": "号",
+          "start_ms": 2305,
+          "end_ms": 2475
+        },
+        {
+          "text": "玩",
+          "start_ms": 2475,
+          "end_ms": 2635
+        },
+        {
+          "text": "家。",
+          "start_ms": 2635,
+          "end_ms": 2885
+        }
+      ]
+    },
+    {
+      "id": "witch_death_seat_03",
+      "text": "今晚被狼人袭击的玩家是3号玩家。",
+      "category": "女巫",
+      "filename": "witch_death_seat_03.mp3",
+      "public_url": "/judge-voice/witch_death_seat_03.mp3",
+      "exists": true,
+      "byte_size": 25965,
+      "template_id": "witch_death",
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 3,
       "subtitle_timings": [
         {
           "text": "今",
@@ -1008,633 +1107,90 @@
         {
           "text": "晚",
           "start_ms": 415,
-          "end_ms": 555
-        },
-        {
-          "text": "被",
-          "start_ms": 555,
-          "end_ms": 695
-        },
-        {
-          "text": "袭",
-          "start_ms": 695,
-          "end_ms": 885
-        },
-        {
-          "text": "击",
-          "start_ms": 885,
-          "end_ms": 1035
-        },
-        {
-          "text": "的",
-          "start_ms": 1035,
-          "end_ms": 1135
-        },
-        {
-          "text": "玩",
-          "start_ms": 1135,
-          "end_ms": 1305
-        },
-        {
-          "text": "家",
-          "start_ms": 1305,
-          "end_ms": 1515
-        },
-        {
-          "text": "是",
-          "start_ms": 1515,
-          "end_ms": 1695
-        },
-        {
-          "text": "2",
-          "start_ms": 1805,
-          "end_ms": 1835
-        },
-        {
-          "text": "号",
-          "start_ms": 1835,
-          "end_ms": 2025
-        },
-        {
-          "text": "玩",
-          "start_ms": 2025,
-          "end_ms": 2185
-        },
-        {
-          "text": "家。",
-          "start_ms": 2185,
-          "end_ms": 2485
-        }
-      ]
-    },
-    {
-      "id": "witch_death_seat_03",
-      "text": "今晚被袭击的玩家是3号玩家。",
-      "category": "女巫",
-      "filename": "witch_death_seat_03.mp3",
-      "public_url": "/judge-voice/witch_death_seat_03.mp3",
-      "exists": true,
-      "byte_size": 24429,
-      "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 3,
-      "subtitle_timings": [
-        {
-          "text": "今",
-          "start_ms": 215,
-          "end_ms": 425
-        },
-        {
-          "text": "晚",
-          "start_ms": 425,
-          "end_ms": 605
-        },
-        {
-          "text": "被",
-          "start_ms": 605,
-          "end_ms": 745
-        },
-        {
-          "text": "袭",
-          "start_ms": 745,
-          "end_ms": 955
-        },
-        {
-          "text": "击",
-          "start_ms": 955,
-          "end_ms": 1115
-        },
-        {
-          "text": "的",
-          "start_ms": 1115,
-          "end_ms": 1215
-        },
-        {
-          "text": "玩",
-          "start_ms": 1215,
-          "end_ms": 1395
-        },
-        {
-          "text": "家",
-          "start_ms": 1395,
-          "end_ms": 1675
-        },
-        {
-          "text": "是",
-          "start_ms": 1675,
-          "end_ms": 1895
-        },
-        {
-          "text": "3",
-          "start_ms": 2065,
-          "end_ms": 2095
-        },
-        {
-          "text": "号",
-          "start_ms": 2095,
-          "end_ms": 2295
-        },
-        {
-          "text": "玩",
-          "start_ms": 2295,
-          "end_ms": 2465
-        },
-        {
-          "text": "家。",
-          "start_ms": 2465,
-          "end_ms": 2805
-        }
-      ]
-    },
-    {
-      "id": "witch_death_seat_04",
-      "text": "今晚被袭击的玩家是4号玩家。",
-      "category": "女巫",
-      "filename": "witch_death_seat_04.mp3",
-      "public_url": "/judge-voice/witch_death_seat_04.mp3",
-      "exists": true,
-      "byte_size": 22893,
-      "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 4,
-      "subtitle_timings": [
-        {
-          "text": "今",
-          "start_ms": 215,
-          "end_ms": 425
-        },
-        {
-          "text": "晚",
-          "start_ms": 425,
-          "end_ms": 615
-        },
-        {
-          "text": "被",
-          "start_ms": 615,
-          "end_ms": 765
-        },
-        {
-          "text": "袭",
-          "start_ms": 765,
-          "end_ms": 965
-        },
-        {
-          "text": "击",
-          "start_ms": 965,
-          "end_ms": 1115
-        },
-        {
-          "text": "的",
-          "start_ms": 1115,
-          "end_ms": 1225
-        },
-        {
-          "text": "玩",
-          "start_ms": 1225,
-          "end_ms": 1385
-        },
-        {
-          "text": "家",
-          "start_ms": 1385,
-          "end_ms": 1625
-        },
-        {
-          "text": "是",
-          "start_ms": 1625,
-          "end_ms": 1865
-        },
-        {
-          "text": "4",
-          "start_ms": 2005,
-          "end_ms": 2035
-        },
-        {
-          "text": "号",
-          "start_ms": 2035,
-          "end_ms": 2215
-        },
-        {
-          "text": "玩",
-          "start_ms": 2215,
-          "end_ms": 2365
-        },
-        {
-          "text": "家。",
-          "start_ms": 2365,
-          "end_ms": 2655
-        }
-      ]
-    },
-    {
-      "id": "witch_death_seat_05",
-      "text": "今晚被袭击的玩家是5号玩家。",
-      "category": "女巫",
-      "filename": "witch_death_seat_05.mp3",
-      "public_url": "/judge-voice/witch_death_seat_05.mp3",
-      "exists": true,
-      "byte_size": 24621,
-      "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 5,
-      "subtitle_timings": [
-        {
-          "text": "今",
-          "start_ms": 235,
-          "end_ms": 425
-        },
-        {
-          "text": "晚",
-          "start_ms": 425,
           "end_ms": 595
         },
         {
           "text": "被",
           "start_ms": 595,
-          "end_ms": 735
+          "end_ms": 795
+        },
+        {
+          "text": "狼",
+          "start_ms": 795,
+          "end_ms": 965
+        },
+        {
+          "text": "人",
+          "start_ms": 965,
+          "end_ms": 1085
         },
         {
           "text": "袭",
-          "start_ms": 735,
-          "end_ms": 945
-        },
-        {
-          "text": "击",
-          "start_ms": 945,
-          "end_ms": 1105
-        },
-        {
-          "text": "的",
-          "start_ms": 1105,
-          "end_ms": 1205
-        },
-        {
-          "text": "玩",
-          "start_ms": 1205,
-          "end_ms": 1395
-        },
-        {
-          "text": "家",
-          "start_ms": 1395,
-          "end_ms": 1645
-        },
-        {
-          "text": "是",
-          "start_ms": 1645,
-          "end_ms": 1875
-        },
-        {
-          "text": "5",
-          "start_ms": 1965,
-          "end_ms": 1995
-        },
-        {
-          "text": "号",
-          "start_ms": 1995,
-          "end_ms": 2225
-        },
-        {
-          "text": "玩",
-          "start_ms": 2225,
-          "end_ms": 2385
-        },
-        {
-          "text": "家。",
-          "start_ms": 2385,
-          "end_ms": 2675
-        }
-      ]
-    },
-    {
-      "id": "witch_death_seat_06",
-      "text": "今晚被袭击的玩家是6号玩家。",
-      "category": "女巫",
-      "filename": "witch_death_seat_06.mp3",
-      "public_url": "/judge-voice/witch_death_seat_06.mp3",
-      "exists": true,
-      "byte_size": 22701,
-      "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 6,
-      "subtitle_timings": [
-        {
-          "text": "今",
-          "start_ms": 205,
-          "end_ms": 405
-        },
-        {
-          "text": "晚",
-          "start_ms": 405,
-          "end_ms": 555
-        },
-        {
-          "text": "被",
-          "start_ms": 555,
-          "end_ms": 685
-        },
-        {
-          "text": "袭",
-          "start_ms": 685,
-          "end_ms": 855
-        },
-        {
-          "text": "击",
-          "start_ms": 855,
-          "end_ms": 1015
-        },
-        {
-          "text": "的",
-          "start_ms": 1015,
-          "end_ms": 1105
-        },
-        {
-          "text": "玩",
-          "start_ms": 1105,
+          "start_ms": 1085,
           "end_ms": 1275
         },
         {
-          "text": "家",
-          "start_ms": 1275,
-          "end_ms": 1505
-        },
-        {
-          "text": "是",
-          "start_ms": 1505,
-          "end_ms": 1795
-        },
-        {
-          "text": "6",
-          "start_ms": 1905,
-          "end_ms": 1935
-        },
-        {
-          "text": "号",
-          "start_ms": 1935,
-          "end_ms": 2125
-        },
-        {
-          "text": "玩",
-          "start_ms": 2125,
-          "end_ms": 2265
-        },
-        {
-          "text": "家。",
-          "start_ms": 2265,
-          "end_ms": 2555
-        }
-      ]
-    },
-    {
-      "id": "witch_death_seat_07",
-      "text": "今晚被袭击的玩家是7号玩家。",
-      "category": "女巫",
-      "filename": "witch_death_seat_07.mp3",
-      "public_url": "/judge-voice/witch_death_seat_07.mp3",
-      "exists": true,
-      "byte_size": 22701,
-      "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 7,
-      "subtitle_timings": [
-        {
-          "text": "今",
-          "start_ms": 235,
-          "end_ms": 425
-        },
-        {
-          "text": "晚",
-          "start_ms": 425,
-          "end_ms": 575
-        },
-        {
-          "text": "被",
-          "start_ms": 575,
-          "end_ms": 715
-        },
-        {
-          "text": "袭",
-          "start_ms": 715,
-          "end_ms": 895
-        },
-        {
           "text": "击",
-          "start_ms": 895,
-          "end_ms": 1055
+          "start_ms": 1275,
+          "end_ms": 1405
         },
         {
           "text": "的",
-          "start_ms": 1055,
-          "end_ms": 1165
+          "start_ms": 1405,
+          "end_ms": 1505
         },
         {
           "text": "玩",
-          "start_ms": 1165,
-          "end_ms": 1335
+          "start_ms": 1505,
+          "end_ms": 1675
         },
         {
           "text": "家",
-          "start_ms": 1335,
-          "end_ms": 1565
+          "start_ms": 1675,
+          "end_ms": 1895
         },
         {
           "text": "是",
-          "start_ms": 1565,
-          "end_ms": 1735
+          "start_ms": 1895,
+          "end_ms": 2085
         },
         {
-          "text": "7",
-          "start_ms": 1915,
-          "end_ms": 1945
-        },
-        {
-          "text": "号",
-          "start_ms": 1945,
-          "end_ms": 2095
-        },
-        {
-          "text": "玩",
-          "start_ms": 2095,
+          "text": "3",
+          "start_ms": 2225,
           "end_ms": 2255
         },
         {
-          "text": "家。",
-          "start_ms": 2255,
-          "end_ms": 2555
-        }
-      ]
-    },
-    {
-      "id": "witch_death_seat_08",
-      "text": "今晚被袭击的玩家是8号玩家。",
-      "category": "女巫",
-      "filename": "witch_death_seat_08.mp3",
-      "public_url": "/judge-voice/witch_death_seat_08.mp3",
-      "exists": true,
-      "byte_size": 22701,
-      "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 8,
-      "subtitle_timings": [
-        {
-          "text": "今",
-          "start_ms": 215,
-          "end_ms": 405
-        },
-        {
-          "text": "晚",
-          "start_ms": 405,
-          "end_ms": 565
-        },
-        {
-          "text": "被",
-          "start_ms": 565,
-          "end_ms": 705
-        },
-        {
-          "text": "袭",
-          "start_ms": 705,
-          "end_ms": 875
-        },
-        {
-          "text": "击",
-          "start_ms": 875,
-          "end_ms": 1025
-        },
-        {
-          "text": "的",
-          "start_ms": 1025,
-          "end_ms": 1135
-        },
-        {
-          "text": "玩",
-          "start_ms": 1135,
-          "end_ms": 1305
-        },
-        {
-          "text": "家",
-          "start_ms": 1305,
-          "end_ms": 1505
-        },
-        {
-          "text": "是",
-          "start_ms": 1505,
-          "end_ms": 1685
-        },
-        {
-          "text": "8",
-          "start_ms": 1795,
-          "end_ms": 1825
-        },
-        {
           "text": "号",
-          "start_ms": 1825,
-          "end_ms": 2035
+          "start_ms": 2255,
+          "end_ms": 2445
         },
         {
           "text": "玩",
-          "start_ms": 2035,
-          "end_ms": 2185
+          "start_ms": 2445,
+          "end_ms": 2595
         },
         {
           "text": "家。",
-          "start_ms": 2185,
-          "end_ms": 2485
+          "start_ms": 2595,
+          "end_ms": 2885
         }
       ]
     },
     {
-      "id": "witch_death_seat_09",
-      "text": "今晚被袭击的玩家是9号玩家。",
+      "id": "witch_death_seat_04",
+      "text": "今晚被狼人袭击的玩家是4号玩家。",
       "category": "女巫",
-      "filename": "witch_death_seat_09.mp3",
-      "public_url": "/judge-voice/witch_death_seat_09.mp3",
+      "filename": "witch_death_seat_04.mp3",
+      "public_url": "/judge-voice/witch_death_seat_04.mp3",
       "exists": true,
-      "byte_size": 22701,
+      "byte_size": 25965,
       "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 9,
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 4,
       "subtitle_timings": [
         {
           "text": "今",
           "start_ms": 195,
-          "end_ms": 355
-        },
-        {
-          "text": "晚",
-          "start_ms": 355,
-          "end_ms": 495
-        },
-        {
-          "text": "被",
-          "start_ms": 495,
-          "end_ms": 625
-        },
-        {
-          "text": "袭",
-          "start_ms": 625,
-          "end_ms": 795
-        },
-        {
-          "text": "击",
-          "start_ms": 795,
-          "end_ms": 935
-        },
-        {
-          "text": "的",
-          "start_ms": 935,
-          "end_ms": 1035
-        },
-        {
-          "text": "玩",
-          "start_ms": 1035,
-          "end_ms": 1185
-        },
-        {
-          "text": "家",
-          "start_ms": 1185,
-          "end_ms": 1435
-        },
-        {
-          "text": "是",
-          "start_ms": 1435,
-          "end_ms": 1735
-        },
-        {
-          "text": "9",
-          "start_ms": 1865,
-          "end_ms": 1895
-        },
-        {
-          "text": "号",
-          "start_ms": 1895,
-          "end_ms": 2095
-        },
-        {
-          "text": "玩",
-          "start_ms": 2095,
-          "end_ms": 2235
-        },
-        {
-          "text": "家。",
-          "start_ms": 2235,
-          "end_ms": 2525
-        }
-      ]
-    },
-    {
-      "id": "witch_death_seat_10",
-      "text": "今晚被袭击的玩家是10号玩家。",
-      "category": "女巫",
-      "filename": "witch_death_seat_10.mp3",
-      "public_url": "/judge-voice/witch_death_seat_10.mp3",
-      "exists": true,
-      "byte_size": 22701,
-      "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 10,
-      "subtitle_timings": [
-        {
-          "text": "今",
-          "start_ms": 205,
           "end_ms": 395
         },
         {
@@ -1645,215 +1201,779 @@
         {
           "text": "被",
           "start_ms": 525,
-          "end_ms": 655
+          "end_ms": 675
         },
         {
-          "text": "袭",
-          "start_ms": 655,
-          "end_ms": 835
+          "text": "狼",
+          "start_ms": 675,
+          "end_ms": 855
         },
         {
-          "text": "击",
-          "start_ms": 835,
+          "text": "人",
+          "start_ms": 855,
           "end_ms": 965
         },
         {
-          "text": "的",
+          "text": "袭",
           "start_ms": 965,
-          "end_ms": 1065
+          "end_ms": 1165
+        },
+        {
+          "text": "击",
+          "start_ms": 1165,
+          "end_ms": 1325
+        },
+        {
+          "text": "的",
+          "start_ms": 1325,
+          "end_ms": 1435
         },
         {
           "text": "玩",
-          "start_ms": 1065,
-          "end_ms": 1235
+          "start_ms": 1435,
+          "end_ms": 1595
         },
         {
           "text": "家",
-          "start_ms": 1235,
-          "end_ms": 1475
+          "start_ms": 1595,
+          "end_ms": 1815
         },
         {
           "text": "是",
-          "start_ms": 1475,
-          "end_ms": 1665
+          "start_ms": 1815,
+          "end_ms": 2075
         },
         {
-          "text": "10",
-          "start_ms": 1875,
-          "end_ms": 1905
+          "text": "4",
+          "start_ms": 2265,
+          "end_ms": 2295
         },
         {
           "text": "号",
-          "start_ms": 1905,
-          "end_ms": 2105
+          "start_ms": 2295,
+          "end_ms": 2475
         },
         {
           "text": "玩",
-          "start_ms": 2105,
-          "end_ms": 2265
+          "start_ms": 2475,
+          "end_ms": 2645
         },
         {
           "text": "家。",
-          "start_ms": 2265,
-          "end_ms": 2595
+          "start_ms": 2645,
+          "end_ms": 2945
         }
       ]
     },
     {
-      "id": "witch_death_seat_11",
-      "text": "今晚被袭击的玩家是11号玩家。",
+      "id": "witch_death_seat_05",
+      "text": "今晚被狼人袭击的玩家是5号玩家。",
       "category": "女巫",
-      "filename": "witch_death_seat_11.mp3",
-      "public_url": "/judge-voice/witch_death_seat_11.mp3",
+      "filename": "witch_death_seat_05.mp3",
+      "public_url": "/judge-voice/witch_death_seat_05.mp3",
       "exists": true,
-      "byte_size": 22701,
+      "byte_size": 27885,
       "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 11,
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 5,
       "subtitle_timings": [
         {
           "text": "今",
-          "start_ms": 225,
-          "end_ms": 405
+          "start_ms": 215,
+          "end_ms": 425
         },
         {
           "text": "晚",
-          "start_ms": 405,
-          "end_ms": 555
+          "start_ms": 425,
+          "end_ms": 585
         },
         {
           "text": "被",
-          "start_ms": 555,
-          "end_ms": 685
+          "start_ms": 585,
+          "end_ms": 775
+        },
+        {
+          "text": "狼",
+          "start_ms": 775,
+          "end_ms": 945
+        },
+        {
+          "text": "人",
+          "start_ms": 945,
+          "end_ms": 1075
         },
         {
           "text": "袭",
-          "start_ms": 685,
-          "end_ms": 865
+          "start_ms": 1075,
+          "end_ms": 1305
         },
         {
           "text": "击",
-          "start_ms": 865,
+          "start_ms": 1305,
+          "end_ms": 1465
+        },
+        {
+          "text": "的",
+          "start_ms": 1465,
+          "end_ms": 1585
+        },
+        {
+          "text": "玩",
+          "start_ms": 1585,
+          "end_ms": 1785
+        },
+        {
+          "text": "家",
+          "start_ms": 1785,
+          "end_ms": 2085
+        },
+        {
+          "text": "是",
+          "start_ms": 2085,
+          "end_ms": 2315
+        },
+        {
+          "text": "5",
+          "start_ms": 2425,
+          "end_ms": 2455
+        },
+        {
+          "text": "号",
+          "start_ms": 2455,
+          "end_ms": 2685
+        },
+        {
+          "text": "玩",
+          "start_ms": 2685,
+          "end_ms": 2845
+        },
+        {
+          "text": "家。",
+          "start_ms": 2845,
+          "end_ms": 3165
+        }
+      ]
+    },
+    {
+      "id": "witch_death_seat_06",
+      "text": "今晚被狼人袭击的玩家是6号玩家。",
+      "category": "女巫",
+      "filename": "witch_death_seat_06.mp3",
+      "public_url": "/judge-voice/witch_death_seat_06.mp3",
+      "exists": true,
+      "byte_size": 29037,
+      "template_id": "witch_death",
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 6,
+      "subtitle_timings": [
+        {
+          "text": "今",
+          "start_ms": 255,
+          "end_ms": 525
+        },
+        {
+          "text": "晚",
+          "start_ms": 525,
+          "end_ms": 765
+        },
+        {
+          "text": "被",
+          "start_ms": 765,
           "end_ms": 1005
         },
         {
-          "text": "的",
+          "text": "狼",
           "start_ms": 1005,
-          "end_ms": 1105
+          "end_ms": 1195
+        },
+        {
+          "text": "人",
+          "start_ms": 1195,
+          "end_ms": 1345
+        },
+        {
+          "text": "袭",
+          "start_ms": 1345,
+          "end_ms": 1585
+        },
+        {
+          "text": "击",
+          "start_ms": 1585,
+          "end_ms": 1745
+        },
+        {
+          "text": "的",
+          "start_ms": 1745,
+          "end_ms": 1855
         },
         {
           "text": "玩",
-          "start_ms": 1105,
-          "end_ms": 1275
+          "start_ms": 1855,
+          "end_ms": 2065
         },
         {
           "text": "家",
-          "start_ms": 1275,
-          "end_ms": 1505
+          "start_ms": 2065,
+          "end_ms": 2295
         },
         {
           "text": "是",
-          "start_ms": 1505,
-          "end_ms": 1685
+          "start_ms": 2295,
+          "end_ms": 2515
         },
         {
-          "text": "11",
-          "start_ms": 1935,
-          "end_ms": 1965
+          "text": "6",
+          "start_ms": 2635,
+          "end_ms": 2665
         },
         {
           "text": "号",
-          "start_ms": 1965,
-          "end_ms": 2165
+          "start_ms": 2665,
+          "end_ms": 2865
         },
         {
           "text": "玩",
-          "start_ms": 2165,
-          "end_ms": 2305
+          "start_ms": 2865,
+          "end_ms": 3045
         },
         {
           "text": "家。",
-          "start_ms": 2305,
-          "end_ms": 2625
+          "start_ms": 3045,
+          "end_ms": 3365
         }
       ]
     },
     {
-      "id": "witch_death_seat_12",
-      "text": "今晚被袭击的玩家是12号玩家。",
+      "id": "witch_death_seat_07",
+      "text": "今晚被狼人袭击的玩家是7号玩家。",
       "category": "女巫",
-      "filename": "witch_death_seat_12.mp3",
-      "public_url": "/judge-voice/witch_death_seat_12.mp3",
+      "filename": "witch_death_seat_07.mp3",
+      "public_url": "/judge-voice/witch_death_seat_07.mp3",
       "exists": true,
-      "byte_size": 24621,
+      "byte_size": 27693,
       "template_id": "witch_death",
-      "template_text": "今晚被袭击的玩家是 {玩家}。",
-      "seat_number": 12,
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 7,
       "subtitle_timings": [
         {
           "text": "今",
-          "start_ms": 225,
-          "end_ms": 415
+          "start_ms": 215,
+          "end_ms": 445
         },
         {
           "text": "晚",
-          "start_ms": 415,
-          "end_ms": 575
+          "start_ms": 445,
+          "end_ms": 755
         },
         {
           "text": "被",
-          "start_ms": 575,
-          "end_ms": 705
+          "start_ms": 755,
+          "end_ms": 925
+        },
+        {
+          "text": "狼",
+          "start_ms": 925,
+          "end_ms": 1085
+        },
+        {
+          "text": "人",
+          "start_ms": 1085,
+          "end_ms": 1205
         },
         {
           "text": "袭",
-          "start_ms": 705,
-          "end_ms": 885
+          "start_ms": 1205,
+          "end_ms": 1425
         },
         {
           "text": "击",
-          "start_ms": 885,
-          "end_ms": 1015
+          "start_ms": 1425,
+          "end_ms": 1575
         },
         {
           "text": "的",
-          "start_ms": 1015,
-          "end_ms": 1115
+          "start_ms": 1575,
+          "end_ms": 1685
         },
         {
           "text": "玩",
-          "start_ms": 1115,
-          "end_ms": 1285
+          "start_ms": 1685,
+          "end_ms": 1855
         },
         {
           "text": "家",
-          "start_ms": 1285,
-          "end_ms": 1515
+          "start_ms": 1855,
+          "end_ms": 2145
         },
         {
           "text": "是",
-          "start_ms": 1515,
-          "end_ms": 1795
+          "start_ms": 2145,
+          "end_ms": 2365
         },
         {
-          "text": "12",
+          "text": "7",
+          "start_ms": 2545,
+          "end_ms": 2575
+        },
+        {
+          "text": "号",
+          "start_ms": 2575,
+          "end_ms": 2755
+        },
+        {
+          "text": "玩",
+          "start_ms": 2755,
+          "end_ms": 2895
+        },
+        {
+          "text": "家。",
+          "start_ms": 2895,
+          "end_ms": 3205
+        }
+      ]
+    },
+    {
+      "id": "witch_death_seat_08",
+      "text": "今晚被狼人袭击的玩家是8号玩家。",
+      "category": "女巫",
+      "filename": "witch_death_seat_08.mp3",
+      "public_url": "/judge-voice/witch_death_seat_08.mp3",
+      "exists": true,
+      "byte_size": 25965,
+      "template_id": "witch_death",
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 8,
+      "subtitle_timings": [
+        {
+          "text": "今",
+          "start_ms": 195,
+          "end_ms": 425
+        },
+        {
+          "text": "晚",
+          "start_ms": 425,
+          "end_ms": 605
+        },
+        {
+          "text": "被",
+          "start_ms": 605,
+          "end_ms": 735
+        },
+        {
+          "text": "狼",
+          "start_ms": 735,
+          "end_ms": 885
+        },
+        {
+          "text": "人",
+          "start_ms": 885,
+          "end_ms": 995
+        },
+        {
+          "text": "袭",
+          "start_ms": 995,
+          "end_ms": 1195
+        },
+        {
+          "text": "击",
+          "start_ms": 1195,
+          "end_ms": 1345
+        },
+        {
+          "text": "的",
+          "start_ms": 1345,
+          "end_ms": 1455
+        },
+        {
+          "text": "玩",
+          "start_ms": 1455,
+          "end_ms": 1615
+        },
+        {
+          "text": "家",
+          "start_ms": 1615,
+          "end_ms": 1855
+        },
+        {
+          "text": "是",
+          "start_ms": 1855,
+          "end_ms": 2105
+        },
+        {
+          "text": "8",
+          "start_ms": 2225,
+          "end_ms": 2255
+        },
+        {
+          "text": "号",
+          "start_ms": 2255,
+          "end_ms": 2485
+        },
+        {
+          "text": "玩",
+          "start_ms": 2485,
+          "end_ms": 2645
+        },
+        {
+          "text": "家。",
+          "start_ms": 2645,
+          "end_ms": 2955
+        }
+      ]
+    },
+    {
+      "id": "witch_death_seat_09",
+      "text": "今晚被狼人袭击的玩家是9号玩家。",
+      "category": "女巫",
+      "filename": "witch_death_seat_09.mp3",
+      "public_url": "/judge-voice/witch_death_seat_09.mp3",
+      "exists": true,
+      "byte_size": 27693,
+      "template_id": "witch_death",
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 9,
+      "subtitle_timings": [
+        {
+          "text": "今",
+          "start_ms": 205,
+          "end_ms": 425
+        },
+        {
+          "text": "晚",
+          "start_ms": 425,
+          "end_ms": 605
+        },
+        {
+          "text": "被",
+          "start_ms": 605,
+          "end_ms": 795
+        },
+        {
+          "text": "狼",
+          "start_ms": 795,
+          "end_ms": 965
+        },
+        {
+          "text": "人",
+          "start_ms": 965,
+          "end_ms": 1075
+        },
+        {
+          "text": "袭",
+          "start_ms": 1075,
+          "end_ms": 1275
+        },
+        {
+          "text": "击",
+          "start_ms": 1275,
+          "end_ms": 1435
+        },
+        {
+          "text": "的",
+          "start_ms": 1435,
+          "end_ms": 1535
+        },
+        {
+          "text": "玩",
+          "start_ms": 1535,
+          "end_ms": 1705
+        },
+        {
+          "text": "家",
+          "start_ms": 1705,
+          "end_ms": 1955
+        },
+        {
+          "text": "是",
+          "start_ms": 1955,
+          "end_ms": 2165
+        },
+        {
+          "text": "9",
+          "start_ms": 2325,
+          "end_ms": 2355
+        },
+        {
+          "text": "号",
+          "start_ms": 2355,
+          "end_ms": 2585
+        },
+        {
+          "text": "玩",
+          "start_ms": 2585,
+          "end_ms": 2735
+        },
+        {
+          "text": "家。",
+          "start_ms": 2735,
+          "end_ms": 3045
+        }
+      ]
+    },
+    {
+      "id": "witch_death_seat_10",
+      "text": "今晚被狼人袭击的玩家是10号玩家。",
+      "category": "女巫",
+      "filename": "witch_death_seat_10.mp3",
+      "public_url": "/judge-voice/witch_death_seat_10.mp3",
+      "exists": true,
+      "byte_size": 24621,
+      "template_id": "witch_death",
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 10,
+      "subtitle_timings": [
+        {
+          "text": "今",
+          "start_ms": 195,
+          "end_ms": 365
+        },
+        {
+          "text": "晚",
+          "start_ms": 365,
+          "end_ms": 525
+        },
+        {
+          "text": "被",
+          "start_ms": 525,
+          "end_ms": 685
+        },
+        {
+          "text": "狼",
+          "start_ms": 685,
+          "end_ms": 855
+        },
+        {
+          "text": "人",
+          "start_ms": 855,
+          "end_ms": 985
+        },
+        {
+          "text": "袭",
+          "start_ms": 985,
+          "end_ms": 1215
+        },
+        {
+          "text": "击",
+          "start_ms": 1215,
+          "end_ms": 1355
+        },
+        {
+          "text": "的",
+          "start_ms": 1355,
+          "end_ms": 1455
+        },
+        {
+          "text": "玩",
+          "start_ms": 1455,
+          "end_ms": 1605
+        },
+        {
+          "text": "家",
+          "start_ms": 1605,
+          "end_ms": 1805
+        },
+        {
+          "text": "是",
+          "start_ms": 1805,
+          "end_ms": 1985
+        },
+        {
+          "text": "10",
           "start_ms": 2145,
           "end_ms": 2175
         },
         {
           "text": "号",
           "start_ms": 2175,
-          "end_ms": 2365
+          "end_ms": 2335
         },
         {
           "text": "玩",
-          "start_ms": 2365,
-          "end_ms": 2525
+          "start_ms": 2335,
+          "end_ms": 2495
         },
         {
           "text": "家。",
-          "start_ms": 2525,
-          "end_ms": 2825
+          "start_ms": 2495,
+          "end_ms": 2805
+        }
+      ]
+    },
+    {
+      "id": "witch_death_seat_11",
+      "text": "今晚被狼人袭击的玩家是11号玩家。",
+      "category": "女巫",
+      "filename": "witch_death_seat_11.mp3",
+      "public_url": "/judge-voice/witch_death_seat_11.mp3",
+      "exists": true,
+      "byte_size": 29229,
+      "template_id": "witch_death",
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 11,
+      "subtitle_timings": [
+        {
+          "text": "今",
+          "start_ms": 185,
+          "end_ms": 425
+        },
+        {
+          "text": "晚",
+          "start_ms": 425,
+          "end_ms": 645
+        },
+        {
+          "text": "被",
+          "start_ms": 645,
+          "end_ms": 825
+        },
+        {
+          "text": "狼",
+          "start_ms": 825,
+          "end_ms": 1015
+        },
+        {
+          "text": "人",
+          "start_ms": 1015,
+          "end_ms": 1105
+        },
+        {
+          "text": "袭",
+          "start_ms": 1105,
+          "end_ms": 1335
+        },
+        {
+          "text": "击",
+          "start_ms": 1335,
+          "end_ms": 1475
+        },
+        {
+          "text": "的",
+          "start_ms": 1475,
+          "end_ms": 1585
+        },
+        {
+          "text": "玩",
+          "start_ms": 1585,
+          "end_ms": 1765
+        },
+        {
+          "text": "家",
+          "start_ms": 1765,
+          "end_ms": 2045
+        },
+        {
+          "text": "是",
+          "start_ms": 2045,
+          "end_ms": 2245
+        },
+        {
+          "text": "11",
+          "start_ms": 2565,
+          "end_ms": 2595
+        },
+        {
+          "text": "号",
+          "start_ms": 2595,
+          "end_ms": 2765
+        },
+        {
+          "text": "玩",
+          "start_ms": 2765,
+          "end_ms": 2935
+        },
+        {
+          "text": "家。",
+          "start_ms": 2935,
+          "end_ms": 3235
+        }
+      ]
+    },
+    {
+      "id": "witch_death_seat_12",
+      "text": "今晚被狼人袭击的玩家是12号玩家。",
+      "category": "女巫",
+      "filename": "witch_death_seat_12.mp3",
+      "public_url": "/judge-voice/witch_death_seat_12.mp3",
+      "exists": true,
+      "byte_size": 25965,
+      "template_id": "witch_death",
+      "template_text": "今晚被狼人袭击的玩家是{玩家}。",
+      "seat_number": 12,
+      "subtitle_timings": [
+        {
+          "text": "今",
+          "start_ms": 245,
+          "end_ms": 495
+        },
+        {
+          "text": "晚",
+          "start_ms": 495,
+          "end_ms": 635
+        },
+        {
+          "text": "被",
+          "start_ms": 635,
+          "end_ms": 805
+        },
+        {
+          "text": "狼",
+          "start_ms": 805,
+          "end_ms": 985
+        },
+        {
+          "text": "人",
+          "start_ms": 985,
+          "end_ms": 1075
+        },
+        {
+          "text": "袭",
+          "start_ms": 1075,
+          "end_ms": 1275
+        },
+        {
+          "text": "击",
+          "start_ms": 1275,
+          "end_ms": 1425
+        },
+        {
+          "text": "的",
+          "start_ms": 1425,
+          "end_ms": 1515
+        },
+        {
+          "text": "玩",
+          "start_ms": 1515,
+          "end_ms": 1675
+        },
+        {
+          "text": "家",
+          "start_ms": 1675,
+          "end_ms": 1845
+        },
+        {
+          "text": "是",
+          "start_ms": 1845,
+          "end_ms": 2015
+        },
+        {
+          "text": "12",
+          "start_ms": 2345,
+          "end_ms": 2375
+        },
+        {
+          "text": "号",
+          "start_ms": 2375,
+          "end_ms": 2545
+        },
+        {
+          "text": "玩",
+          "start_ms": 2545,
+          "end_ms": 2695
+        },
+        {
+          "text": "家。",
+          "start_ms": 2695,
+          "end_ms": 2965
         }
       ]
     },

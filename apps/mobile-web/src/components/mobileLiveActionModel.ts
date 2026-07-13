@@ -98,6 +98,25 @@ export function deriveMobileLiveFocusPresentation(
     return phaseStartPresentation(event, state);
   }
 
+  if (event.type === "judge_cue") {
+    const visibleText = stringField(payload, "visible_text") || "请听法官提示";
+    const target = stringField(payload, "target");
+    return {
+      eventId: event.id,
+      kind: event.phase === "night" ? "night-action" : "waiting",
+      tone: event.action === "witch_death" ? "danger" : "neutral",
+      actorName: "法官",
+      actorSeat: null,
+      actorRole: null,
+      targetName: target ? canonicalPlayerName(target, state) : null,
+      eyebrow: "法官提示",
+      title: visibleText,
+      detail: event.phase === "night" ? "夜间流程" : "白天流程",
+      progress: null,
+      accessibleText: visibleText,
+    };
+  }
+
   if (
     event.type === "action_requested" ||
     isModelActionProgressEvent(event.type)
@@ -360,10 +379,34 @@ function actionParsedPresentation(
     progress: null as string | null,
   };
 
+  if (action === "werewolf_kill_vote") {
+    const choice = readChoice(payload);
+    if (!choice) {
+      return malformedNight(event, state, "狼人刀票");
+    }
+    const actor = resolveActor(event, state);
+    const seat = seatLabel(choice, state);
+    const voteRound = integerField(payload, "vote_round");
+    const roundLabel = voteRound > 1 ? `第 ${voteRound} 轮 · ` : "";
+    return {
+      ...base,
+      kind: "night-action",
+      tone: "danger",
+      actorName: actor.name,
+      actorSeat: actor.seat,
+      actorRole: actor.role ?? "狼人",
+      targetName: canonicalPlayerName(choice, state),
+      eyebrow: "狼人刀票",
+      title: "选择袭击目标",
+      detail: `${roundLabel}投 ${seat}号`,
+      accessibleText: `${actor.label}${roundLabel}选择袭击 ${seat}号 ${choice}`,
+    };
+  }
+
   if (action === "remove" || action === "eliminate") {
     const choice = readChoice(payload);
     if (!choice) {
-      return malformedNight(event, state, "狼人目标");
+      return malformedNight(event, state, "狼人最终目标");
     }
     const seat = seatLabel(choice, state);
     return {
@@ -375,9 +418,9 @@ function actionParsedPresentation(
       actorRole: null,
       targetName: canonicalPlayerName(choice, state),
       eyebrow: "狼人阵营",
-      title: "狼人目标",
-      detail: `${seat}号`,
-      accessibleText: `狼人阵营选择袭击 ${seat}号 ${choice}`,
+      title: "狼人最终目标",
+      detail: `袭击 ${seat}号`,
+      accessibleText: `狼人阵营最终决定袭击 ${seat}号 ${choice}`,
     };
   }
 
@@ -1173,6 +1216,11 @@ function genericActionTitle(action: string | null): string {
 function stringField(payload: Record<string, unknown>, field: string): string {
   const value = payload[field];
   return typeof value === "string" ? value : "";
+}
+
+function integerField(payload: Record<string, unknown>, field: string): number {
+  const value = payload[field];
+  return typeof value === "number" && Number.isInteger(value) ? value : 0;
 }
 
 function stringArrayField(

@@ -474,6 +474,17 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
     };
   }
 
+  if (event.type === "judge_cue") {
+    return {
+      ...base,
+      title: "法官提示",
+      body: stringField(payload, "visible_text") || "请听法官提示。",
+      importance: "action",
+      durationMs: 1200,
+      compressible: true,
+    };
+  }
+
   if (event.type === "action_requested") {
     return {
       ...base,

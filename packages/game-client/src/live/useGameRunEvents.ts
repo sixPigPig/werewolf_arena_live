@@ -18,6 +18,7 @@ const EVENT_TYPES = [
   "game_started",
   "round_started",
   "phase_started",
+  "judge_cue",
   "action_requested",
   "model_request_started",
   "model_thinking_tick",

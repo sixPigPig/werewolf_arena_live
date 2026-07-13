@@ -3766,6 +3766,21 @@ def test_sheriff_run_requests_all_players_concurrently() -> None:
 
     engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
 
+    sheriff_cue = next(
+        event
+        for event in sink.events
+        if event["type"] == "judge_cue" and event["action"] == "sheriff_raise_hands"
+    )
+    first_run_request = next(
+        event
+        for event in sink.events
+        if event["type"] == "action_requested" and event["action"] == "sheriff_run"
+    )
+    assert sheriff_cue["payload"] == {
+        "cue": "sheriff_raise_hands",
+        "visible_text": "想要竞选警长的玩家请举手。",
+    }
+    assert sink.events.index(sheriff_cue) < sink.events.index(first_run_request)
     assert [
         actor for action, actor in provider.actions if action == "sheriff_run"
     ] == active_players
@@ -5037,7 +5052,7 @@ class RecordingEventSink:
         return None
 
 
-def test_werewolf_consensus_live_events_do_not_publish_wolf_actor() -> None:
+def test_werewolf_consensus_live_events_publish_only_safe_vote_results() -> None:
     rule_set = get_rule_set("classic_8")
     state = initialize_game_state(
         session_id="session_test_wolf_consensus_event_privacy",
@@ -5066,22 +5081,97 @@ def test_werewolf_consensus_live_events_do_not_publish_wolf_actor() -> None:
 
     engine._run_night_phase(round_state, round_log, active_players)
 
-    secret_actions = {"werewolf_discuss", "werewolf_kill_vote"}
-    secret_decision_event_types = {
+    wolf_start_event = next(
+        event
+        for event in event_sink.events
+        if event["action"] == "remove" and event["type"] == "action_requested"
+    )
+    assert wolf_start_event == {
+        "type": "action_requested",
+        "round": 1,
+        "phase": "night",
+        "actor": None,
+        "action": "remove",
+        "payload": {},
+    }
+    wolf_cues = [
+        event["action"]
+        for event in event_sink.events
+        if event["type"] == "judge_cue"
+        and event["action"] in {"werewolves_wake", "werewolves_sleep"}
+    ]
+    assert wolf_cues == ["werewolves_wake", "werewolves_sleep"]
+    private_decision_event_types = {
         "action_requested",
         "model_request_started",
         "model_response_delta",
         "model_thinking_delta",
         "model_thinking_tick",
         "model_response_received",
-        "action_parsed",
     }
-    secret_events = [
+    private_events = [
         event
         for event in event_sink.events
-        if event["action"] in secret_actions and event["type"] in secret_decision_event_types
+        if event["action"] in {"werewolf_discuss", "werewolf_kill_vote"}
+        and event["type"] in private_decision_event_types
     ]
-    assert secret_events == []
+    assert private_events == []
+    assert [
+        event["actor"]
+        for event in event_sink.events
+        if event["action"] == "werewolf_kill_vote" and event["type"] == "action_parsed"
+    ] == wolves
+    public_target = f"{[player.name for player in state.players].index(target) + 1}号玩家"
+    assert all(
+        event["payload"]
+        == {
+            "choice": public_target,
+            "result": {"target": public_target},
+            "visible_result": {"target": public_target},
+            "vote_round": 1,
+        }
+        for event in event_sink.events
+        if event["action"] == "werewolf_kill_vote" and event["type"] == "action_parsed"
+    )
+    final_event = next(
+        event
+        for event in event_sink.events
+        if event["action"] == "remove" and event["type"] == "action_parsed"
+    )
+    assert event_sink.events.index(wolf_start_event) < event_sink.events.index(final_event)
+    wolf_wake = next(
+        event
+        for event in event_sink.events
+        if event["type"] == "judge_cue" and event["action"] == "werewolves_wake"
+    )
+    wolf_sleep = next(
+        event
+        for event in event_sink.events
+        if event["type"] == "judge_cue" and event["action"] == "werewolves_sleep"
+    )
+    assert (
+        event_sink.events.index(wolf_wake)
+        < event_sink.events.index(wolf_start_event)
+        < event_sink.events.index(final_event)
+        < event_sink.events.index(wolf_sleep)
+    )
+    assert final_event["actor"] is None
+    assert final_event["payload"] == {
+        "choice": public_target,
+        "result": {"target": public_target},
+        "visible_result": {"target": public_target},
+        "vote_round": 1,
+        "final_target": True,
+    }
+    assert not any(event["action"] == "werewolf_discuss" for event in event_sink.events)
+    safe_wolf_events = [
+        event
+        for event in event_sink.events
+        if event["action"] in {"werewolf_kill_vote", "remove"} and event["type"] == "action_parsed"
+    ]
+    assert "message" not in str(safe_wolf_events)
+    assert "reasoning" not in str(safe_wolf_events)
+    assert "raw_response" not in str(safe_wolf_events)
     assert [log.actor for log in round_log.werewolf_discussion] == wolves
     assert len(round_log.werewolf_votes) == 1
     assert [log.actor for log in round_log.werewolf_votes[0]] == wolves
@@ -5153,6 +5243,32 @@ def test_witch_poison_invalid_choice_falls_back_to_no_poison() -> None:
 
     engine._run_witch_phase(round_state, round_log, active_players)
 
+    witch_cues = [
+        event
+        for event in sink.events
+        if event["type"] == "judge_cue"
+    ]
+    assert [event["action"] for event in witch_cues] == [
+        "witch_wake",
+        "witch_death",
+        "witch_sleep",
+    ]
+    assert witch_cues[1]["payload"] == {
+        "cue": "witch_death",
+        "visible_text": "今晚被狼人袭击的玩家是10号玩家。",
+        "target": "10号玩家",
+    }
+    poison_request = next(
+        event
+        for event in sink.events
+        if event["type"] == "action_requested" and event["action"] == ACTION_WITCH_POISON
+    )
+    assert (
+        sink.events.index(witch_cues[0])
+        < sink.events.index(witch_cues[1])
+        < sink.events.index(poison_request)
+        < sink.events.index(witch_cues[2])
+    )
     assert round_state.poisoned is None
     assert round_log.witch_poison is not None
     assert round_log.witch_poison.choice == NO_WITCH_POISON

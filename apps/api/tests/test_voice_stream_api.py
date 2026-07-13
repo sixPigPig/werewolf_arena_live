@@ -639,6 +639,8 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
     asset_dir = tmp_path / "judge-voice"
     asset_dir.mkdir()
     (asset_dir / "night_start.mp3").write_bytes(b"static-night")
+    (asset_dir / "werewolves_choose.mp3").write_bytes(b"static-wolves")
+    (asset_dir / "witch_death_seat_02.mp3").write_bytes(b"static-witch")
     (asset_dir / "game_over_villagers.mp3").write_bytes(b"static-end")
     (asset_dir / "manifest.json").write_text(
         """
@@ -654,6 +656,22 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
               "subtitle_timings": [
                 {"text": "夜晚降临，", "start_ms": 0, "end_ms": 500},
                 {"text": "所有玩家请闭眼。", "start_ms": 500, "end_ms": 1100}
+              ]
+            },
+            {
+              "id": "werewolves_choose",
+              "filename": "werewolves_choose.mp3",
+              "exists": true,
+              "subtitle_timings": [
+                {"text": "狼人请选择今晚袭击的目标。", "start_ms": 0, "end_ms": 1200}
+              ]
+            },
+            {
+              "id": "witch_death_seat_02",
+              "filename": "witch_death_seat_02.mp3",
+              "exists": true,
+              "subtitle_timings": [
+                {"text": "今晚被狼人袭击的玩家是2号玩家。", "start_ms": 0, "end_ms": 1400}
               ]
             },
             {
@@ -690,6 +708,21 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
             phase="night",
             payload={"active_players": ["阿青", "白石"]},
         )
+        registry.publish(
+            run.run_id,
+            "action_requested",
+            round_number=1,
+            phase="night",
+            action="remove",
+        )
+        registry.publish(
+            run.run_id,
+            "judge_cue",
+            round_number=1,
+            phase="night",
+            action="witch_death",
+            payload={"target": "2号玩家"},
+        )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
 
@@ -697,6 +730,14 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
 
     assert RecordingTtsClient.instances == []
     assert [message["type"] for message in websocket.messages] == [
+        "voice_start",
+        "subtitle_timing",
+        "audio_chunk",
+        "voice_end",
+        "voice_start",
+        "subtitle_timing",
+        "audio_chunk",
+        "voice_end",
         "voice_start",
         "subtitle_timing",
         "audio_chunk",
@@ -720,6 +761,30 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
         ],
     }
     assert chunk["data"] == "c3RhdGljLW5pZ2h0"
+    wolf_start, wolf_subtitle, wolf_chunk, _wolf_end = websocket.messages[4:8]
+    assert wolf_start["speaker_kind"] == "judge"
+    assert wolf_subtitle == {
+        "type": "subtitle_timing",
+        "utterance_id": wolf_start["utterance_id"],
+        "cues": [
+            {"text": "狼人请选择今晚袭击的目标。", "start_ms": 0, "end_ms": 1200}
+        ],
+    }
+    assert wolf_chunk["data"] == "c3RhdGljLXdvbHZlcw=="
+    witch_start, witch_subtitle, witch_chunk, _witch_end = websocket.messages[8:12]
+    assert witch_start["speaker_kind"] == "judge"
+    assert witch_subtitle == {
+        "type": "subtitle_timing",
+        "utterance_id": witch_start["utterance_id"],
+        "cues": [
+            {
+                "text": "今晚被狼人袭击的玩家是2号玩家。",
+                "start_ms": 0,
+                "end_ms": 1400,
+            }
+        ],
+    }
+    assert witch_chunk["data"] == "c3RhdGljLXdpdGNo"
 
 
 def test_voice_stream_service_uses_static_judge_assets_when_format_differs_from_live_config(

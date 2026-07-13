@@ -53,7 +53,8 @@
 
 Add focused tests proving `eventLines` contains stable event IDs and readable text for:
 
-- `狼人 → 7号` from `remove`/`eliminate`.
+- `1号 刀票 → 7号` from each `werewolf_kill_vote`, including revote rounds.
+- `最终狼刀 → 7号` from the separate `remove`/`eliminate` consensus result.
 - `女巫救 7号` and `女巫未使用解药`.
 - `女巫毒 5号` and `女巫未使用毒药`.
 - `守卫守护 7号`.

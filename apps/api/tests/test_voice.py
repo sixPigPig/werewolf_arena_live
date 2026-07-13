@@ -7,6 +7,7 @@ from app.werewolf.voice import (
     chunk_text_for_tts,
     event_to_voice_utterance,
     is_public_speech_event,
+    is_static_judge_voice_asset_used,
 )
 
 
@@ -238,6 +239,115 @@ def test_event_to_judge_voice_utterance_for_phase_start_is_short() -> None:
     assert utterance.speaker == "judge"
     assert utterance.text == "夜晚降临，所有玩家请闭眼。"
     assert utterance.static_asset_id == "night_start"
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_text", "expected_asset_id"),
+    [
+        ("remove", "狼人请选择今晚袭击的目标。", "werewolves_choose"),
+        ("protect", "请选择今晚守护的玩家。", "guard_choose"),
+        ("investigate", "请选择今晚查验的玩家。", "seer_choose"),
+        ("witch_save", "你是否使用解药？", "witch_save"),
+        (
+            "witch_poison",
+            "你是否使用毒药？如果使用，请选择毒杀目标。",
+            "witch_poison",
+        ),
+    ],
+)
+def test_night_action_request_uses_managed_judge_voice_asset(
+    action: str,
+    expected_text: str,
+    expected_asset_id: str,
+) -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(10, "action_requested", action=action, phase="night")
+
+    utterance = event_to_voice_utterance(event, config)
+
+    assert utterance is not None
+    assert utterance.speaker_kind == "judge"
+    assert utterance.text == expected_text
+    assert utterance.static_asset_id == expected_asset_id
+
+
+@pytest.mark.parametrize(
+    ("cue", "expected_text"),
+    [
+        ("werewolves_wake", "狼人请睁眼，请互相确认队友。"),
+        ("werewolves_sleep", "狼人请闭眼。"),
+        ("guard_wake", "守卫请睁眼。"),
+        ("guard_sleep", "守卫请闭眼。"),
+        ("seer_wake", "预言家请睁眼。"),
+        ("seer_sleep", "预言家请闭眼。"),
+        ("witch_wake", "女巫请睁眼。"),
+        ("witch_sleep", "女巫请闭眼。"),
+    ],
+)
+def test_night_role_cue_uses_managed_judge_voice_asset(
+    cue: str,
+    expected_text: str,
+) -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(11, "judge_cue", action=cue, phase="night")
+
+    utterance = event_to_voice_utterance(event, config)
+
+    assert utterance is not None
+    assert utterance.text == expected_text
+    assert utterance.static_asset_id == cue
+
+
+def test_witch_death_cue_names_attacked_seat_before_save_prompt() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(
+        12,
+        "judge_cue",
+        action="witch_death",
+        phase="night",
+        payload={"target": "8号玩家"},
+    )
+
+    utterance = event_to_voice_utterance(event, config)
+
+    assert utterance is not None
+    assert utterance.text == "今晚被狼人袭击的玩家是8号玩家。"
+    assert utterance.static_asset_id == "witch_death_seat_08"
+
+
+def test_sheriff_raise_hands_cue_uses_managed_static_asset() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(
+        13,
+        "judge_cue",
+        action="sheriff_raise_hands",
+        phase="day",
+    )
+
+    utterance = event_to_voice_utterance(event, config)
+
+    assert utterance is not None
+    assert utterance.text == "想要竞选警长的玩家请举手。"
+    assert utterance.static_asset_id == "sheriff_raise_hands"
+
+
+def test_speech_order_request_prompts_sheriff_with_managed_static_asset() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(
+        15,
+        "action_requested",
+        actor="阿青",
+        action="speech_order",
+        phase="day",
+    )
+
+    utterance = event_to_voice_utterance(event, config)
+
+    assert utterance is not None
+    assert utterance.speaker_kind == "judge"
+    assert utterance.text == "请警长选择从警左或警右开始发言。"
+    assert utterance.static_asset_id == "sheriff_choose_badge_side"
+    assert is_static_judge_voice_asset_used("sheriff_choose_badge_side") is True
 
 
 def test_summary_phase_judge_voice_prompts_sequential_speech() -> None:

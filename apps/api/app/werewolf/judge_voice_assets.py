@@ -90,7 +90,7 @@ JUDGE_VOICE_LINES: tuple[JudgeVoiceLine, ...] = (
     JudgeVoiceLine("seer_result_wolf", "法官示意，该玩家为狼人。", "预言家"),
     JudgeVoiceLine("seer_sleep", "预言家请闭眼。", "预言家"),
     JudgeVoiceLine("witch_wake", "女巫请睁眼。", "女巫"),
-    JudgeVoiceLine("witch_death", "今晚被袭击的玩家是 {玩家}。", "女巫"),
+    JudgeVoiceLine("witch_death", "今晚被狼人袭击的玩家是{玩家}。", "女巫"),
     JudgeVoiceLine("witch_save", "你是否使用解药？", "女巫"),
     JudgeVoiceLine("witch_poison", "你是否使用毒药？如果使用，请选择毒杀目标。", "女巫"),
     JudgeVoiceLine("witch_sleep", "女巫请闭眼。", "女巫"),
@@ -336,12 +336,14 @@ def _write_manifest(
     sample_rate: int,
     mime_type: str,
 ) -> None:
+    generated_lines = {asset.id: asdict(asset) for asset in assets}
+    lines = _merged_manifest_lines(path, generated_lines)
     manifest = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "audio_format": audio_format,
         "sample_rate": sample_rate,
         "mime_type": mime_type,
-        "lines": [asdict(asset) for asset in assets],
+        "lines": lines,
     }
     temporary_path = path.with_suffix(".json.tmp")
     temporary_path.write_text(
@@ -349,6 +351,36 @@ def _write_manifest(
         encoding="utf-8",
     )
     temporary_path.replace(path)
+
+
+def _merged_manifest_lines(
+    path: Path,
+    generated_lines: dict[str, dict[str, object]],
+) -> list[dict[str, object]]:
+    existing_lines: list[dict[str, object]] = []
+    try:
+        existing_manifest = json.loads(path.read_text(encoding="utf-8"))
+        raw_lines = existing_manifest.get("lines")
+        if isinstance(raw_lines, list):
+            existing_lines = [line for line in raw_lines if isinstance(line, dict)]
+    except Exception:
+        pass
+
+    merged: list[dict[str, object]] = []
+    replaced_ids: set[str] = set()
+    for existing_line in existing_lines:
+        line_id = existing_line.get("id")
+        if isinstance(line_id, str) and line_id in generated_lines:
+            merged.append(generated_lines[line_id])
+            replaced_ids.add(line_id)
+        else:
+            merged.append(existing_line)
+    merged.extend(
+        line
+        for line_id, line in generated_lines.items()
+        if line_id not in replaced_ids
+    )
+    return merged
 
 
 def _subtitle_timings_by_line_id(path: Path) -> dict[str, list[dict[str, int | str]]]:

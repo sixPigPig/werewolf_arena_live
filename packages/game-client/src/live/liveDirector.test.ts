@@ -19,6 +19,30 @@ function event(partial: Partial<LiveGameEvent>): LiveGameEvent {
 }
 
 describe("toDirectorCue", () => {
+  it("renders judge role cues with their public line", () => {
+    const cue = toDirectorCue(
+      event({
+        id: 2,
+        type: "judge_cue",
+        round: 1,
+        phase: "night",
+        action: "witch_death",
+        payload: {
+          visible_text: "今晚被狼人袭击的玩家是3号玩家。",
+          target: "3号玩家",
+        },
+      }),
+    );
+
+    expect(cue).toMatchObject({
+      eventId: 2,
+      title: "法官提示",
+      body: "今晚被狼人袭击的玩家是3号玩家。",
+      importance: "action",
+      compressible: true,
+    });
+  });
+
   it("renders action request as a playable action cue", () => {
     const cue = toDirectorCue(
       event({

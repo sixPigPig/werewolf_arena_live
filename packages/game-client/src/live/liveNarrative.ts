@@ -169,6 +169,21 @@ function cueForEvent({
     return phaseCue(cue, event.phase, godViewState, actorName);
   }
 
+  if (event.type === "judge_cue") {
+    const line = stringField(payload, "visible_text") || "请听法官提示。";
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: event.phase === "night" ? "night" : "neutral",
+      judgeLine: line,
+      performerLine: "法官正在主持流程。",
+      detailLine: line,
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
   if (event.type === "action_requested") {
     return actionRequestedCue(cue, actorName, nextSpeakerName, godViewState);
   }

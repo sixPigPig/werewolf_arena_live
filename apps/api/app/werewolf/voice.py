@@ -26,7 +26,22 @@ USED_STATIC_JUDGE_VOICE_ASSET_IDS = frozenset(
         "game_over_third_party",
         "game_over_villagers",
         "game_over_wolves",
+        "guard_choose",
+        "guard_sleep",
+        "guard_wake",
         "night_start",
+        "seer_choose",
+        "seer_sleep",
+        "seer_wake",
+        "sheriff_choose_badge_side",
+        "sheriff_raise_hands",
+        "werewolves_choose",
+        "werewolves_sleep",
+        "werewolves_wake",
+        "witch_poison",
+        "witch_save",
+        "witch_sleep",
+        "witch_wake",
     }
 )
 USED_STATIC_JUDGE_VOICE_ASSET_TEMPLATE_IDS = frozenset(
@@ -38,6 +53,7 @@ USED_STATIC_JUDGE_VOICE_ASSET_TEMPLATE_IDS = frozenset(
         "sheriff_result",
         "speech_prompt",
         "werewolf_self_explosion",
+        "witch_death",
     }
 )
 SENTENCE_PATTERN = re.compile(r"[^，。！？；,.!?;]+[，。！？；,.!?;]?")
@@ -80,6 +96,33 @@ def is_static_judge_voice_asset_used(
         asset_id in USED_STATIC_JUDGE_VOICE_ASSET_IDS
         or template_id in USED_STATIC_JUDGE_VOICE_ASSET_TEMPLATE_IDS
     )
+
+
+NIGHT_ACTION_JUDGE_CUES = {
+    "remove": JudgeVoiceCue("狼人请选择今晚袭击的目标。", "werewolves_choose"),
+    "eliminate": JudgeVoiceCue("狼人请选择今晚袭击的目标。", "werewolves_choose"),
+    "protect": JudgeVoiceCue("请选择今晚守护的玩家。", "guard_choose"),
+    "guard": JudgeVoiceCue("请选择今晚守护的玩家。", "guard_choose"),
+    "investigate": JudgeVoiceCue("请选择今晚查验的玩家。", "seer_choose"),
+    "witch_save": JudgeVoiceCue("你是否使用解药？", "witch_save"),
+    "witch_poison": JudgeVoiceCue(
+        "你是否使用毒药？如果使用，请选择毒杀目标。",
+        "witch_poison",
+    ),
+}
+NIGHT_ROLE_JUDGE_CUES = {
+    "werewolves_wake": JudgeVoiceCue(
+        "狼人请睁眼，请互相确认队友。",
+        "werewolves_wake",
+    ),
+    "werewolves_sleep": JudgeVoiceCue("狼人请闭眼。", "werewolves_sleep"),
+    "guard_wake": JudgeVoiceCue("守卫请睁眼。", "guard_wake"),
+    "guard_sleep": JudgeVoiceCue("守卫请闭眼。", "guard_sleep"),
+    "seer_wake": JudgeVoiceCue("预言家请睁眼。", "seer_wake"),
+    "seer_sleep": JudgeVoiceCue("预言家请闭眼。", "seer_sleep"),
+    "witch_wake": JudgeVoiceCue("女巫请睁眼。", "witch_wake"),
+    "witch_sleep": JudgeVoiceCue("女巫请闭眼。", "witch_sleep"),
+}
 
 
 def is_public_speech_event(event: LiveEvent) -> bool:
@@ -228,6 +271,33 @@ def _judge_cue_for_event(
         return JudgeVoiceCue("发言结束，进入放逐投票。", "exile_vote_start")
     if event.type == "phase_started" and event.phase == "summary":
         return JudgeVoiceCue("现在开始依次发言。")
+    if event.type == "judge_cue" and event.phase == "night":
+        role_cue = NIGHT_ROLE_JUDGE_CUES.get(event.action or "")
+        if role_cue is not None:
+            return role_cue
+        if event.action == "witch_death":
+            target = _string_payload(event, "target")
+            if not target:
+                return None
+            target_label = _player_label(target, player_seats, fallback="该玩家")
+            return JudgeVoiceCue(
+                f"今晚被狼人袭击的玩家是{target_label}。",
+                _seat_asset_id("witch_death", target, player_seats),
+            )
+    if event.type == "judge_cue" and event.action == "sheriff_raise_hands":
+        return JudgeVoiceCue(
+            "想要竞选警长的玩家请举手。",
+            "sheriff_raise_hands",
+        )
+    if event.type == "action_requested" and event.phase == "night":
+        night_action_cue = NIGHT_ACTION_JUDGE_CUES.get(event.action or "")
+        if night_action_cue is not None:
+            return night_action_cue
+    if event.type == "action_requested" and event.action == "speech_order":
+        return JudgeVoiceCue(
+            "请警长选择从警左或警右开始发言。",
+            "sheriff_choose_badge_side",
+        )
     if event.type == "action_requested" and event.action in PUBLIC_SPEECH_ACTIONS:
         actor_label = _player_label(event.actor, player_seats, fallback="当前玩家")
         return JudgeVoiceCue(
@@ -348,9 +418,15 @@ def _seat_asset_id(
     name: str | None,
     player_seats: Mapping[str, int] | None,
 ) -> str | None:
-    if not name or not player_seats:
+    if not name:
         return None
-    seat = player_seats.get(name)
+    public_label = re.fullmatch(r"(\d+)号玩家", name.strip())
+    if public_label is not None:
+        seat = int(public_label.group(1))
+    elif player_seats:
+        seat = player_seats.get(name)
+    else:
+        return None
     if not isinstance(seat, int) or not 1 <= seat <= 12:
         return None
     return f"{template_id}_seat_{seat:02d}"

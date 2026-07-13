@@ -513,11 +513,11 @@ describe("LiveReplayPage", () => {
     await user.click(await screen.findByRole("button", { name: "最新" }));
 
     const stage = await screen.findByRole("status", { name: "当前舞台" });
-    expect(within(stage).getByText("狼人目标")).toBeVisible();
-    expect(within(stage).getByText("1号")).toBeVisible();
+    expect(within(stage).getByText("狼人最终目标")).toBeVisible();
+    expect(within(stage).getByText("袭击 1号")).toBeVisible();
 
     const rail = screen.getByRole("log");
-    expect(within(rail).getByText("狼人 -> 1号")).toBeVisible();
+    expect(within(rail).getByText("最终狼刀 -> 1号")).toBeVisible();
   });
 
   it("seeks the replay director when selecting an event from the sheet", async () => {

@@ -723,7 +723,7 @@ describe("deriveGodViewState meaningful event lines", () => {
 
     expect(texts).toEqual(
       expect.arrayContaining([
-        "狼人 -> 7号",
+        "最终狼刀 -> 7号",
         "守卫守护 7号",
         "预言家查验 1号",
         "女巫救 7号",
@@ -757,8 +757,93 @@ describe("deriveGodViewState meaningful event lines", () => {
     const state = deriveGodViewState(events, spectator, "暗夜古堡");
     const removeLine = state.eventLines.find((line) => line.id === 2);
 
-    expect(removeLine?.text).toBe("狼人 -> 7号");
+    expect(removeLine?.text).toBe("最终狼刀 -> 7号");
     expect(removeLine?.text).not.toContain("玩家号");
+  });
+
+  it("records every wolf kill vote before the final team target", () => {
+    const events = [
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "1号 狼人A", role: "werewolf", model: "test" },
+            { name: "2号 狼人B", role: "werewolf", model: "test" },
+            { name: "3号 平民A", role: "villager", model: "test" },
+            { name: "4号 平民B", role: "villager", model: "test" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "werewolf_kill_vote",
+        payload: { choice: "3号玩家", vote_round: 1 },
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "2号 狼人B",
+        action: "werewolf_kill_vote",
+        payload: { choice: "4号玩家", vote_round: 1 },
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "werewolf_kill_vote",
+        payload: { choice: "3号玩家", vote_round: 2 },
+      }),
+      event({
+        id: 5,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "2号 狼人B",
+        action: "werewolf_kill_vote",
+        payload: { choice: "3号玩家", vote_round: 2 },
+      }),
+      event({
+        id: 6,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: null,
+        action: "remove",
+        payload: { choice: "3号玩家", vote_round: 2, final_target: true },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+    const texts = state.eventLines.map((line) => line.text);
+
+    expect(texts).toEqual(
+      expect.arrayContaining([
+        "1号 刀票 -> 3号",
+        "2号 刀票 -> 4号",
+        "2号 刀票 -> 3号",
+        "最终狼刀 -> 3号",
+      ]),
+    );
+    expect(
+      state.eventLines.find((line) => line.id === 5)?.detail,
+    ).toBe("第 2 轮 · 2号选择袭击 3号");
+    expect(state.nightActions).toEqual(
+      expect.arrayContaining([
+        { label: "1号 狼刀", value: "投 3号", tone: "danger" },
+        { label: "2号 狼刀", value: "投 4号", tone: "danger" },
+        { label: "2号 狼刀", value: "投 3号", tone: "danger" },
+        { label: "狼人目标", value: "击杀 3号玩家", tone: "danger" },
+      ]),
+    );
   });
 
   it("keeps only spectator-meaningful action requests and state updates", () => {
@@ -1170,7 +1255,7 @@ describe("deriveGodViewState meaningful event lines", () => {
     const spectator = deriveLiveSpectatorState(events);
     const state = deriveGodViewState(events, spectator, "暗夜古堡");
     const removeLine = state.eventLines.find((line) =>
-      line.text.startsWith("狼人 ->"),
+      line.text.startsWith("最终狼刀 ->"),
     );
 
     expect(removeLine?.round).toBe(1);

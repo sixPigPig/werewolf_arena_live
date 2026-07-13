@@ -64,6 +64,47 @@ describe("deriveMobileLiveFocusPresentation", () => {
     expect(presentation.accessibleText).toBeTruthy();
   });
 
+  it("shows the judge naming the attacked player before the witch acts", () => {
+    const { presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "judge_cue",
+        round: 1,
+        phase: "night",
+        action: "witch_death",
+        payload: {
+          visible_text: "今晚被狼人袭击的玩家是3号玩家。",
+          target: "3号玩家",
+        },
+      }),
+    ]);
+
+    expect(presentation.eyebrow).toBe("法官提示");
+    expect(presentation.title).toBe("今晚被狼人袭击的玩家是3号玩家。");
+    expect(presentation.targetName).toBe("3号 平民A");
+    expect(presentation.tone).toBe("danger");
+  });
+
+  it("shows the sheriff raise-hands cue as a daytime judge prompt", () => {
+    const { presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "judge_cue",
+        round: 1,
+        phase: "day",
+        action: "sheriff_raise_hands",
+        payload: { visible_text: "想要竞选警长的玩家请举手。" },
+      }),
+    ]);
+
+    expect(presentation.kind).toBe("waiting");
+    expect(presentation.eyebrow).toBe("法官提示");
+    expect(presentation.title).toBe("想要竞选警长的玩家请举手。");
+    expect(presentation.detail).toBe("白天流程");
+  });
+
   it("describes a night phase start as a night-action focus", () => {
     const { presentation } = focusFor([
       STARTED,
@@ -132,9 +173,33 @@ describe("deriveMobileLiveFocusPresentation", () => {
     ]);
 
     expect(presentation.kind).toBe("night-action");
-    expect(presentation.title).toContain("狼人目标");
+    expect(presentation.title).toContain("狼人最终目标");
+    expect(presentation.detail).toBe("袭击 7号");
     expect(presentation.targetName).toBe("7号 平民C");
     expect(presentation.accessibleText).toContain("7号");
+  });
+
+  it("describes each wolf's kill vote before the final target", () => {
+    const { presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "werewolf_kill_vote",
+        payload: { choice: "7号玩家", vote_round: 2 },
+      }),
+    ]);
+
+    expect(presentation.kind).toBe("night-action");
+    expect(presentation.actorName).toBe("1号 狼人A");
+    expect(presentation.actorSeat).toBe(1);
+    expect(presentation.eyebrow).toBe("狼人刀票");
+    expect(presentation.title).toBe("选择袭击目标");
+    expect(presentation.detail).toBe("第 2 轮 · 投 7号");
+    expect(presentation.targetName).toBe("7号 平民C");
   });
 
   it("keeps a private action visible while the model is still responding", () => {
@@ -171,7 +236,7 @@ describe("deriveMobileLiveFocusPresentation", () => {
       }),
     ]);
 
-    expect(presentation.detail).toBe("7号");
+    expect(presentation.detail).toBe("袭击 7号");
     expect(presentation.detail).not.toContain("玩家号");
     expect(presentation.targetName).toBe("7号 平民C");
   });

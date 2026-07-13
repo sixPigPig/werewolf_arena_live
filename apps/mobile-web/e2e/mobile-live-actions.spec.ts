@@ -51,10 +51,26 @@ function buildPlaybackEvents(): LiveGameEvent[] {
       round: 1,
       phase: "night",
       actor: "1号 暗巷观星",
-      action: "remove",
-      payload: { choice: "8号 守夜潜行" },
+      action: "werewolf_kill_vote",
+      payload: { choice: "8号 守夜潜行", vote_round: 1 },
     }),
     playbackEvent(4, {
+      type: "action_parsed",
+      round: 1,
+      phase: "night",
+      actor: "2号 暗牌验心",
+      action: "werewolf_kill_vote",
+      payload: { choice: "8号 守夜潜行", vote_round: 1 },
+    }),
+    playbackEvent(5, {
+      type: "action_parsed",
+      round: 1,
+      phase: "night",
+      actor: null,
+      action: "remove",
+      payload: { choice: "8号 守夜潜行", vote_round: 1, final_target: true },
+    }),
+    playbackEvent(6, {
       type: "action_parsed",
       round: 1,
       phase: "night",
@@ -62,7 +78,7 @@ function buildPlaybackEvents(): LiveGameEvent[] {
       action: "witch_save",
       payload: { choice: "8号 守夜潜行" },
     }),
-    playbackEvent(5, {
+    playbackEvent(7, {
       type: "action_parsed",
       round: 1,
       phase: "night",
@@ -70,7 +86,7 @@ function buildPlaybackEvents(): LiveGameEvent[] {
       action: "witch_poison",
       payload: { choice: "skip" },
     }),
-    playbackEvent(6, {
+    playbackEvent(8, {
       type: "state_updated",
       round: 1,
       phase: "night",
@@ -90,7 +106,7 @@ function buildPlaybackEvents(): LiveGameEvent[] {
         saved_by_witch: "8号 守夜潜行",
       },
     }),
-    playbackEvent(7, {
+    playbackEvent(9, {
       type: "phase_started",
       round: 1,
       phase: "vote",
@@ -107,7 +123,7 @@ function buildPlaybackEvents(): LiveGameEvent[] {
         ],
       },
     }),
-    playbackEvent(8, {
+    playbackEvent(10, {
       type: "action_parsed",
       round: 1,
       phase: "vote",
@@ -115,7 +131,7 @@ function buildPlaybackEvents(): LiveGameEvent[] {
       action: "vote",
       payload: { choice: "1号 暗巷观星" },
     }),
-    playbackEvent(9, {
+    playbackEvent(11, {
       type: "action_parsed",
       round: 1,
       phase: "vote",
@@ -123,7 +139,7 @@ function buildPlaybackEvents(): LiveGameEvent[] {
       action: "vote",
       payload: { choice: "1号 暗巷观星" },
     }),
-    playbackEvent(10, {
+    playbackEvent(12, {
       type: "action_parsed",
       round: 1,
       phase: "vote",
@@ -131,7 +147,7 @@ function buildPlaybackEvents(): LiveGameEvent[] {
       action: "vote",
       payload: { choice: "2号 暗牌验心" },
     }),
-    playbackEvent(11, {
+    playbackEvent(13, {
       type: "state_updated",
       round: 1,
       phase: "vote",
@@ -153,7 +169,7 @@ function buildPlaybackEvents(): LiveGameEvent[] {
         },
       },
     }),
-    playbackEvent(12, {
+    playbackEvent(14, {
       type: "game_completed",
       round: 1,
       phase: "summary",
@@ -234,7 +250,9 @@ test.describe("mobile live action visibility", () => {
     // The latest moment is the game completion; the rail should hold the exile.
     const rail = page.getByRole("log");
     await expect(rail).toContainText("被放逐");
-    await expect(rail).toContainText("狼人 -> 8号");
+    await expect(rail).toContainText("1号 刀票 -> 8号");
+    await expect(rail).toContainText("2号 刀票 -> 8号");
+    await expect(rail).toContainText("最终狼刀 -> 8号");
 
     await expectNoHorizontalOverflow(page);
   });
@@ -252,7 +270,9 @@ test.describe("mobile live action visibility", () => {
 
     const dialog = page.getByRole("dialog", { name: "本轮战报" });
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("狼人 -> 8号");
+    await expect(dialog).toContainText("1号 刀票 -> 8号");
+    await expect(dialog).toContainText("2号 刀票 -> 8号");
+    await expect(dialog).toContainText("最终狼刀 -> 8号");
     await expect(dialog).toContainText("被放逐");
 
     await dialog.getByRole("button", { name: "关闭" }).click();

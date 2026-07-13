@@ -395,7 +395,11 @@ function targetIconFor(
   if (presentation.kind === "vote-action" || presentation.kind === "vote-result") {
     return "投";
   }
-  if (presentation.eyebrow === "狼人阵营" || presentation.eyebrow === "狼人目标") {
+  if (
+    presentation.eyebrow === "狼人阵营" ||
+    presentation.eyebrow === "狼人目标" ||
+    presentation.eyebrow === "狼人刀票"
+  ) {
     return "刀";
   }
   if (presentation.eyebrow === "女巫") {

@@ -53,6 +53,9 @@ Mobile Nginx 负责 SPA fallback、同源 API/WebSocket/SSE 代理、安全响�
 实时观战与直播回放共用同一套 `MobileLiveTheater` 呈现层。剧场在单一视口网格中依次渲染顶栏、夜空横幅、玩家席位、相位感知中央舞台、本轮战报事件栏与控制栏。
 
 - **相位感知行动焦点**：中央舞台根据 `currentEvent` 与 `GodViewState` 派生出行动/投票/结算/技能/终局等焦点卡片，展示行动者或阵营、动作、目标或“未使用”、进度与结果。发言状态保持原有头像与麦克风呈现不变。
+- **狼人刀票与最终目标**：每只狼的 `action_parsed/werewolf_kill_vote` 按事件顺序展示行动者、目标与复投轮次；共识形成后再用独立的 `action_parsed/remove` 展示“狼人最终目标”。公开事件只携带行动者、目标、轮次和安全结果，不公开狼人讨论、提示词、推理或模型原始响应。
+- **夜间行动法官语音**：夜间用 `judge_cue` 串联狼人、守卫、预言家、女巫的睁眼与闭眼静态语音，角色的 `action_requested` 继续播放选择/技能询问音频。女巫睁眼后、解药询问前额外播放对应座位的 `witch_death_seat_01…12`，明确“今晚被狼人袭击的玩家是 X 号玩家”；公开提示只携带座位引用，不包含狼人候选人、队内讨论或模型内容。
+- **上警前置语音**：第一天警长竞选报名开始前发布 `judge_cue/sheriff_raise_hands`，播放语音管理中的 `sheriff_raise_hands` 静态音频“想要竞选警长的玩家请举手”，随后再依次展示玩家是否上警。
 - **本轮战报事件栏**：在席位舞台与控制栏之间渲染一行可横向滚动的关键事件芯片，仅消费 `director.currentEventId` 之前的 `eventLines`，不读取未来事件。`全部` 打开分组底部战报抽屉，选择某行调用 `director.seekToEventId`。
 - **可访问事件抽屉**：抽屉使用 `role="dialog"`、`aria-modal`、焦点陷阱、Escape 关闭、背景 inert 与触发焦点恢复，遵循 `LobbyModal` 既有语义但不复用大厅组件。
 - **导演可见事件边界**：所有行动与战报内容均派生自 `director.currentEventId` 截断后的 `stageEvents`，SSE 追赶与暂停期间不泄露未来行动或票型。

@@ -345,18 +345,24 @@ function collectActionLine(view: MutableGodView, event: LiveGameEvent) {
   }
 
   const payload = payloadForEvent(event);
+  const choice = stringField(payload, "choice") || parsedChoice(payload);
   if (
     event.phase === "night" &&
-    (event.action === "werewolf_discuss" ||
-      event.action === "werewolf_kill_vote")
+    (event.action === "werewolf_discuss" || event.action === "werewolf_kill_vote")
   ) {
     view.suppressedNightActionFallbackScope = {
       round: event.round,
       phase: event.phase,
     };
+    if (event.action === "werewolf_kill_vote" && event.actor && choice) {
+      pushUniqueAction(view, {
+        label: `${seatLabel(event.actor, view.nameToSeat)} 狼刀`,
+        value: `投 ${seatLabel(choice, view.nameToSeat)}`,
+        tone: "danger",
+      });
+    }
     return;
   }
-  const choice = stringField(payload, "choice") || parsedChoice(payload);
   if (event.action === "vote" && event.actor && choice) {
     view.voteTargets.set(event.actor, choice);
   }
@@ -850,7 +856,6 @@ function actionParsedLine(
   if (
     !action ||
     action === "werewolf_discuss" ||
-    action === "werewolf_kill_vote" ||
     action === "debate" ||
     action === "sheriff_speech" ||
     action === "sheriff_pk_speech" ||
@@ -868,14 +873,31 @@ function actionParsedLine(
     phase: event.phase,
   };
 
+  if (action === "werewolf_kill_vote") {
+    if (!event.actor || !choice) {
+      return null;
+    }
+    const actorSeat = seatLabel(event.actor, nameToSeat);
+    const voteRound =
+      typeof payload.vote_round === "number" && Number.isInteger(payload.vote_round)
+        ? payload.vote_round
+        : 1;
+    return {
+      ...base,
+      text: `${actorSeat} 刀票 -> ${targetSeat}`,
+      detail: `${voteRound > 1 ? `第 ${voteRound} 轮 · ` : ""}${actorSeat}选择袭击 ${targetSeat}`,
+      tone: "danger",
+    };
+  }
+
   if (action === "eliminate" || action === "remove") {
     if (!choice) {
       return null;
     }
     return {
       ...base,
-      text: `狼人 -> ${targetSeat}`,
-      detail: `狼人阵营选择袭击 ${targetSeat}`,
+      text: `最终狼刀 -> ${targetSeat}`,
+      detail: `狼人阵营最终决定袭击 ${targetSeat}`,
       tone: "danger",
     };
   }

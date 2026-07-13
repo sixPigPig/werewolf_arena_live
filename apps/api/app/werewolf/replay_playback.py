@@ -6,13 +6,6 @@ from typing import Any
 
 
 DEFAULT_PLAYBACK_CREATED_AT = "1970-01-01T00:00:00Z"
-NIGHT_ACTION_KEYS = (
-    "eliminate",
-    "protect",
-    "investigate",
-    "witch_save",
-    "witch_poison",
-)
 DAY_ACTION_KEYS = (
     "sheriff_run",
     "sheriff_speech",
@@ -140,13 +133,18 @@ def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
             phase="night",
             payload={"active_players": active_players},
         )
-        for action_log in _action_logs(round_log, NIGHT_ACTION_KEYS):
-            _publish_action_events(
-                publish,
-                action_log,
-                round_number=round_number,
-                phase="night",
-            )
+        _publish_werewolf_decision_events(
+            publish,
+            round_state,
+            round_log,
+            round_number=round_number,
+        )
+        _publish_night_role_action_events(
+            publish,
+            round_state,
+            round_log,
+            round_number=round_number,
+        )
         publish(
             "state_updated",
             round_number=round_number,
@@ -160,6 +158,19 @@ def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
             phase="day",
             payload={"active_players": active_players},
         )
+        sheriff_run_logs = _action_logs(round_log, ("sheriff_run",))
+        if sheriff_run_logs:
+            publish(
+                "judge_cue",
+                round_number=round_number,
+                phase="day",
+                actor=None,
+                action="sheriff_raise_hands",
+                payload={
+                    "cue": "sheriff_raise_hands",
+                    "visible_text": "想要竞选警长的玩家请举手。",
+                },
+            )
         for action_log in _action_logs(round_log, DAY_ACTION_KEYS):
             _publish_action_events(
                 publish,
@@ -247,6 +258,259 @@ def _publish_action_events(
             "result": public_result,
             "visible_result": public_result,
             "visible_text": visible_text,
+        },
+    )
+
+
+def _publish_werewolf_decision_events(
+    publish: Any,
+    round_state: dict[str, Any],
+    round_log: dict[str, Any],
+    *,
+    round_number: int,
+) -> None:
+    vote_rounds = _list_or_empty(round_state.get("werewolf_vote_rounds"))
+    eliminate = _dict_or_empty(round_log.get("eliminate"))
+    if not vote_rounds and not _looks_like_action_log(eliminate):
+        return
+
+    _publish_night_judge_cue(
+        publish,
+        cue="werewolves_wake",
+        visible_text="狼人请睁眼，请互相确认队友。",
+        round_number=round_number,
+    )
+    if eliminate.get("action") != "werewolf_kill_vote" and not vote_rounds:
+        _publish_action_events(
+            publish,
+            eliminate,
+            round_number=round_number,
+            phase="night",
+        )
+        _publish_night_judge_cue(
+            publish,
+            cue="werewolves_sleep",
+            visible_text="狼人请闭眼。",
+            round_number=round_number,
+        )
+        return
+
+    publish(
+        "action_requested",
+        round_number=round_number,
+        phase="night",
+        actor=None,
+        action="remove",
+        payload={},
+    )
+    if vote_rounds:
+        for index, raw_vote_round in enumerate(vote_rounds):
+            if not isinstance(raw_vote_round, dict):
+                continue
+            vote_round = raw_vote_round.get("round")
+            if not isinstance(vote_round, int):
+                vote_round = index + 1
+            for actor, target in _dict_or_empty(raw_vote_round.get("votes")).items():
+                if not isinstance(actor, str) or not isinstance(target, str):
+                    continue
+                _publish_werewolf_vote(
+                    publish,
+                    actor=actor,
+                    target=target,
+                    vote_round=vote_round,
+                    round_number=round_number,
+                )
+            final_target = _optional_str(raw_vote_round.get("result"))
+            if final_target:
+                _publish_final_werewolf_target(
+                    publish,
+                    target=final_target,
+                    vote_round=vote_round,
+                    round_number=round_number,
+                )
+        _publish_night_judge_cue(
+            publish,
+            cue="werewolves_sleep",
+            visible_text="狼人请闭眼。",
+            round_number=round_number,
+        )
+        return
+
+    # Older games only persisted the unanimous wolf action as `eliminate`.
+    actor = _optional_str(eliminate.get("actor"))
+    target = _optional_str(eliminate.get("choice"))
+    if not target:
+        _publish_night_judge_cue(
+            publish,
+            cue="werewolves_sleep",
+            visible_text="狼人请闭眼。",
+            round_number=round_number,
+        )
+        return
+    if actor:
+        _publish_werewolf_vote(
+            publish,
+            actor=actor,
+            target=target,
+            vote_round=1,
+            round_number=round_number,
+        )
+    _publish_final_werewolf_target(
+        publish,
+        target=target,
+        vote_round=1,
+        round_number=round_number,
+    )
+    _publish_night_judge_cue(
+        publish,
+        cue="werewolves_sleep",
+        visible_text="狼人请闭眼。",
+        round_number=round_number,
+    )
+
+
+def _publish_night_role_action_events(
+    publish: Any,
+    round_state: dict[str, Any],
+    round_log: dict[str, Any],
+    *,
+    round_number: int,
+) -> None:
+    role_groups = (
+        ("guard_wake", "守卫请睁眼。", ("protect",), "guard_sleep", "守卫请闭眼。"),
+        (
+            "seer_wake",
+            "预言家请睁眼。",
+            ("investigate",),
+            "seer_sleep",
+            "预言家请闭眼。",
+        ),
+    )
+    for wake_cue, wake_text, keys, sleep_cue, sleep_text in role_groups:
+        action_logs = _action_logs(round_log, keys)
+        if not action_logs:
+            continue
+        _publish_night_judge_cue(
+            publish,
+            cue=wake_cue,
+            visible_text=wake_text,
+            round_number=round_number,
+        )
+        for action_log in action_logs:
+            _publish_action_events(
+                publish,
+                action_log,
+                round_number=round_number,
+                phase="night",
+            )
+        _publish_night_judge_cue(
+            publish,
+            cue=sleep_cue,
+            visible_text=sleep_text,
+            round_number=round_number,
+        )
+
+    witch_logs = _action_logs(round_log, ("witch_save", "witch_poison"))
+    if not witch_logs:
+        return
+    _publish_night_judge_cue(
+        publish,
+        cue="witch_wake",
+        visible_text="女巫请睁眼。",
+        round_number=round_number,
+    )
+    attacked = _optional_str(round_state.get("attacked"))
+    if attacked:
+        _publish_night_judge_cue(
+            publish,
+            cue="witch_death",
+            visible_text=f"今晚被狼人袭击的玩家是{attacked}。",
+            round_number=round_number,
+            target=attacked,
+        )
+    for action_log in witch_logs:
+        _publish_action_events(
+            publish,
+            action_log,
+            round_number=round_number,
+            phase="night",
+        )
+    _publish_night_judge_cue(
+        publish,
+        cue="witch_sleep",
+        visible_text="女巫请闭眼。",
+        round_number=round_number,
+    )
+
+
+def _publish_night_judge_cue(
+    publish: Any,
+    *,
+    cue: str,
+    visible_text: str,
+    round_number: int,
+    target: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "cue": cue,
+        "visible_text": visible_text,
+    }
+    if target:
+        payload["target"] = target
+    publish(
+        "judge_cue",
+        round_number=round_number,
+        phase="night",
+        actor=None,
+        action=cue,
+        payload=payload,
+    )
+
+
+def _publish_werewolf_vote(
+    publish: Any,
+    *,
+    actor: str,
+    target: str,
+    vote_round: int,
+    round_number: int,
+) -> None:
+    result = {"target": target}
+    publish(
+        "action_parsed",
+        round_number=round_number,
+        phase="night",
+        actor=actor,
+        action="werewolf_kill_vote",
+        payload={
+            "choice": target,
+            "result": result,
+            "visible_result": result,
+            "vote_round": vote_round,
+        },
+    )
+
+
+def _publish_final_werewolf_target(
+    publish: Any,
+    *,
+    target: str,
+    vote_round: int,
+    round_number: int,
+) -> None:
+    result = {"target": target}
+    publish(
+        "action_parsed",
+        round_number=round_number,
+        phase="night",
+        actor=None,
+        action="remove",
+        payload={
+            "choice": target,
+            "result": result,
+            "visible_result": result,
+            "vote_round": vote_round,
+            "final_target": True,
         },
     )
 

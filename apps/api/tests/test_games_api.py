@@ -3861,9 +3861,20 @@ def test_get_game_playback_omits_saved_voices_without_persisted_live_events(
     assert payload["voices"] == []
 
 
-def test_get_game_playback_suppresses_secret_wolf_consensus_actions() -> None:
+def test_get_game_playback_exposes_safe_wolf_votes_and_final_target() -> None:
     session_id = "game_1200abcd"
     state = sample_state(session_id, winner="好人阵营")
+    state["rounds"][0]["attacked"] = "李四"
+    state["rounds"][0]["werewolf_vote_rounds"] = [
+        {
+            "round": 1,
+            "candidates": ["李四"],
+            "votes": {"张三": "李四"},
+            "tally": {"李四": 1},
+            "unanimous": True,
+            "result": "李四",
+        }
+    ]
     logs = sample_logs()
     logs[0]["eliminate"] = {
         "actor": "张三",
@@ -3887,6 +3898,30 @@ def test_get_game_playback_suppresses_secret_wolf_consensus_actions() -> None:
             "parsed": {"protect": "张三"},
         },
     }
+    logs[0]["witch_save"] = {
+        "actor": "赵六",
+        "action": "witch_save",
+        "options": ["李四", "不使用解药"],
+        "choice": "不使用解药",
+        "lm_log": {
+            "prompt": "是否使用解药。",
+            "raw_response": '{"save":"不使用解药"}',
+            "parsed": {"save": "不使用解药"},
+        },
+    }
+    logs[0]["sheriff_run"] = [
+        {
+            "actor": "张三",
+            "action": "sheriff_run",
+            "options": ["上警", "不上警"],
+            "choice": "上警",
+            "lm_log": {
+                "prompt": "是否竞选警长。",
+                "raw_response": '{"run":"上警"}',
+                "parsed": {"run": "上警"},
+            },
+        }
+    ]
     store_game_session(session_id, state=state, logs=logs)
     override_replay_store()
 
@@ -3897,8 +3932,72 @@ def test_get_game_playback_suppresses_secret_wolf_consensus_actions() -> None:
 
     assert response.status_code == 200
     events = response.json()["events"]
-    secret_actions = {"werewolf_discuss", "werewolf_kill_vote"}
-    assert [event for event in events if event["action"] in secret_actions] == []
+    wolf_start = next(
+        event
+        for event in events
+        if event["type"] == "action_requested" and event["action"] == "remove"
+    )
+    assert wolf_start["actor"] is None
+    assert wolf_start["payload"] == {}
+    wolf_vote = next(
+        event
+        for event in events
+        if event["type"] == "action_parsed" and event["action"] == "werewolf_kill_vote"
+    )
+    assert wolf_vote["actor"] == "张三"
+    assert wolf_vote["payload"] == {
+        "choice": "李四",
+        "result": {"target": "李四"},
+        "visible_result": {"target": "李四"},
+        "vote_round": 1,
+    }
+    final_target = next(
+        event
+        for event in events
+        if event["type"] == "action_parsed"
+        and event["action"] == "remove"
+        and event["payload"].get("final_target") is True
+    )
+    assert final_target["actor"] is None
+    assert final_target["payload"]["choice"] == "李四"
+    assert events.index(wolf_start) < events.index(wolf_vote) < events.index(final_target)
+    cue_actions = [event["action"] for event in events if event["type"] == "judge_cue"]
+    assert cue_actions == [
+        "werewolves_wake",
+        "werewolves_sleep",
+        "guard_wake",
+        "guard_sleep",
+        "witch_wake",
+        "witch_death",
+        "witch_sleep",
+        "sheriff_raise_hands",
+    ]
+    witch_death = next(
+        event
+        for event in events
+        if event["type"] == "judge_cue" and event["action"] == "witch_death"
+    )
+    witch_save_request = next(
+        event
+        for event in events
+        if event["type"] == "action_requested" and event["action"] == "witch_save"
+    )
+    assert witch_death["payload"]["target"] == "李四"
+    assert events.index(witch_death) < events.index(witch_save_request)
+    sheriff_cue = next(
+        event
+        for event in events
+        if event["type"] == "judge_cue" and event["action"] == "sheriff_raise_hands"
+    )
+    sheriff_run_request = next(
+        event
+        for event in events
+        if event["type"] == "action_requested" and event["action"] == "sheriff_run"
+    )
+    assert events.index(sheriff_cue) < events.index(sheriff_run_request)
+    serialized_events = json.dumps(events, ensure_ascii=False)
+    assert "请选择今晚狼刀对象" not in serialized_events
+    assert "raw_response" not in serialized_events
     assert any(
         event["type"] == "action_parsed"
         and event["actor"] == "王五"
