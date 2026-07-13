@@ -412,9 +412,9 @@ class LiveStore(Protocol):
         run_id: str,
         *,
         expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
         expected_status: str,
         expected_started_at: str | None,
-        canonicalize_null_rule_set: bool,
         activation: LiveEvent,
         worker_id: str,
         fence_token: int,
@@ -977,6 +977,7 @@ class LiveRunRegistry:
             )
             if source.status == "running" and existing_activation is not None:
                 return existing_activation
+            expected_rule_set = _rule_set_expected_state_from_source(source)
             expected_status = source.status
             expected_started_at = source.started_at
             started_at = utc_now() if expected_started_at is None else expected_started_at
@@ -997,10 +998,6 @@ class LiveRunRegistry:
                 source,
                 activation=activation_transport,
                 started_at=started_at,
-            )
-            expected_rule_set = expected_state.fields["rule_set"]
-            canonicalize_null_rule_set = (
-                type(expected_rule_set) is dict and dict.__len__(expected_rule_set) == 0
             )
             local_activation_carrier = _clone_activation_expected_event(
                 tuple.__getitem__(expected_state.events, -1)
@@ -1026,9 +1023,9 @@ class LiveRunRegistry:
                     run,
                     source=source,
                     registry_worker_id=registry_worker_id,
+                    expected_rule_set=expected_rule_set,
                     expected_status=expected_status,
                     expected_started_at=expected_started_at,
-                    canonicalize_null_rule_set=canonicalize_null_rule_set,
                     activation=activation_transport,
                     started_at=started_at,
                 )
@@ -1043,7 +1040,10 @@ class LiveRunRegistry:
                             source=source,
                             expected_state=expected_state,
                         )
-                        if isinstance(activation_error, RunLeaseUnavailable):
+                        if isinstance(activation_error, RunLeaseUnavailable) and not isinstance(
+                            activation_error,
+                            RunRuleSetMismatch,
+                        ):
                             object.__setattr__(run, "lease_lost", True)
                         object.__setattr__(self, "_runs", runs_container)
                         dict.clear(runs_container)
@@ -1548,9 +1548,9 @@ class LiveRunRegistry:
         *,
         source: RunActivationSourceState,
         registry_worker_id: str,
+        expected_rule_set: RunRuleSetExpectedState,
         expected_status: str,
         expected_started_at: str | None,
-        canonicalize_null_rule_set: bool,
         activation: LiveEvent,
         started_at: str,
     ) -> None:
@@ -1573,14 +1573,16 @@ class LiveRunRegistry:
             activator(
                 source.run_id,
                 expected_events=source.events,
+                expected_rule_set=expected_rule_set,
                 expected_status=expected_status,
                 expected_started_at=expected_started_at,
-                canonicalize_null_rule_set=canonicalize_null_rule_set,
                 activation=activation,
                 worker_id=registry_worker_id,
                 fence_token=source.fence_token,
                 started_at=started_at,
             )
+        except RunRuleSetMismatch:
+            raise
         except RunLeaseUnavailable:
             run.lease_lost = True
             raise

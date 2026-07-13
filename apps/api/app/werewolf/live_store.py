@@ -195,14 +195,15 @@ class DatabaseLiveStore:
         run_id: str,
         *,
         expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
         expected_status: str,
         expected_started_at: str | None,
-        canonicalize_null_rule_set: bool,
         activation: LiveEvent,
         worker_id: str,
         fence_token: int,
         started_at: str,
     ) -> None:
+        expected_rule_set = clone_rule_set_expected_state(expected_rule_set)
         parsed_started_at = parse_live_datetime(started_at)
         parsed_expected_started_at = parse_live_datetime(expected_started_at)
         expected_type = "run_recovered" if expected_started_at is not None else "run_started"
@@ -216,8 +217,7 @@ class DatabaseLiveStore:
             == format_live_datetime(parsed_expected_started_at)
         )
         if (
-            type(canonicalize_null_rule_set) is not bool
-            or not status_and_start_are_canonical
+            not status_and_start_are_canonical
             or not recovery_start_is_unchanged
             or activation.id != len(expected_events) + 1
             or activation.type != expected_type
@@ -262,7 +262,10 @@ class DatabaseLiveStore:
                 or not lease_is_live
             ):
                 raise RunLeaseUnavailable(f"Run {run_id} activation was rejected by its lease")
-            if not self._lock_and_validate_complete_event_stream(record, expected_events):
+            events_match = self._lock_and_validate_complete_event_stream(record, expected_events)
+            if not self._locked_rule_set_matches(record, expected_rule_set):
+                raise RunRuleSetMismatch(f"Run {run_id} activation rule set changed")
+            if not events_match:
                 raise RunLeaseUnavailable(f"Run {run_id} activation event stream changed")
             lease_expires_at = (
                 parse_live_datetime(format_live_datetime(record.lease_expires_at))
@@ -273,9 +276,7 @@ class DatabaseLiveStore:
                 raise RunLeaseUnavailable(f"Run {run_id} activation lease expired")
             if activation.session_id != record.session_id:
                 raise ValueError(f"Run {run_id} has an invalid activation session")
-            if record.rule_set is None:
-                if not self._rule_set_is_sql_null(run_id) or not canonicalize_null_rule_set:
-                    raise RunLeaseUnavailable(f"Run {run_id} activation rule set changed")
+            if expected_rule_set.rule_set_was_sql_null:
                 record.rule_set = {}
             record.status = "running"
             record.started_at = parsed_started_at

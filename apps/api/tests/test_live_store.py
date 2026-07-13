@@ -25,9 +25,11 @@ from app.werewolf.live import (
     EventSink,
     GameRunCanceled,
     LiveEvent,
+    LiveGameRun,
     LiveRunRegistry,
     RunLeaseUnavailable,
     RunRecoveryCandidate,
+    RunRuleSetMismatch,
     RunRuleSetExpectedState,
 )
 from app.werewolf.live_store import (
@@ -76,6 +78,66 @@ def expected_rule_set(run) -> RunRuleSetExpectedState:
         rule_set=copy.deepcopy(run.rule_set),
         rule_set_was_sql_null=run.rule_set_was_sql_null,
     )
+
+
+def prepared_direct_activation(
+    db_session: Session,
+    *,
+    session_id: str,
+    sql_null_rule_set: bool = False,
+) -> tuple[
+    DatabaseLiveStore,
+    LiveGameRun,
+    RunRuleSetExpectedState,
+    LiveEvent,
+    str,
+]:
+    worker_id = "worker-direct-activation"
+    registry = LiveRunRegistry(worker_id=worker_id)
+    run = registry.prepare_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set={"storage_marker": {"preserve": ["exact", 2]}},
+    )
+    store = DatabaseLiveStore(db_session)
+    store.save_new_run(run)
+    if sql_null_rule_set:
+        db_session.execute(
+            update(LiveRunRecord).where(LiveRunRecord.run_id == run.run_id).values(rule_set=null())
+        )
+        db_session.commit()
+        loaded = store.load_run(run.run_id)
+        assert loaded is not None
+        loaded.events = store.events_after(run.run_id)
+        run = loaded
+        assert run.rule_set_was_sql_null is True
+    heartbeat_at = datetime.now(tz=UTC)
+    lease = store.acquire_lease(
+        run.run_id,
+        expected_events=tuple(run.events),
+        expected_rule_set=expected_rule_set(run),
+        worker_id=worker_id,
+        heartbeat_at=heartbeat_at.isoformat(),
+        lease_expires_at=(heartbeat_at + timedelta(seconds=30)).isoformat(),
+    )
+    assert lease is not None
+    claimed = store.load_run(run.run_id)
+    assert claimed is not None
+    claimed.events = store.events_after(run.run_id)
+    assert claimed.worker_id == worker_id
+    assert claimed.fence_token == 1
+    started_at = datetime.now(tz=UTC).isoformat()
+    activation = LiveEvent(
+        id=len(claimed.events) + 1,
+        type="run_started",
+        run_id=claimed.run_id,
+        session_id=claimed.session_id,
+        created_at=started_at,
+    )
+    return store, claimed, expected_rule_set(claimed), activation, started_at
 
 
 def test_activation_ack_inventory_covers_every_semantic_run_column() -> None:
@@ -229,6 +291,45 @@ class MutateRuleBeforeClaimSessionLiveStore(SessionLiveStore):
     def acquire_recovery_lease(self, run_id: str, **kwargs):
         self._mutate_rule(run_id)
         return super().acquire_recovery_lease(run_id, **kwargs)
+
+
+class MutateRuleBeforeActivationSessionLiveStore(SessionLiveStore):
+    def __init__(self, session_factory, *, mutation: str, changed_compiled=None) -> None:
+        super().__init__(session_factory)
+        self.mutation = mutation
+        self.changed_compiled = changed_compiled
+        self.activation_mutations = 0
+
+    def activate_run(self, run_id: str, **kwargs) -> None:
+        self.activation_mutations += 1
+        with self.session_factory() as db:
+            if self.mutation == "json-object-to-sql-null":
+                db.execute(
+                    update(LiveRunRecord)
+                    .where(LiveRunRecord.run_id == run_id)
+                    .values(rule_set=null())
+                )
+            elif self.mutation == "sql-null-to-json-object":
+                db.execute(
+                    update(LiveRunRecord).where(LiveRunRecord.run_id == run_id).values(rule_set={})
+                )
+            else:
+                assert self.mutation == "managed-rule"
+                changed = self.changed_compiled
+                assert changed is not None
+                db.execute(
+                    update(LiveRunRecord)
+                    .where(LiveRunRecord.run_id == run_id)
+                    .values(
+                        rule_set_id=changed.rule_set.id,
+                        rule_set_revision_id=changed.revision_id,
+                        rule_set_revision_no=changed.revision_no,
+                        rule_set_content_hash=changed.content_hash,
+                        rule_set=copy.deepcopy(changed.snapshot),
+                    )
+                )
+            db.commit()
+        super().activate_run(run_id, **kwargs)
 
 
 def test_session_store_read_boundaries_reject_a_zero_event_active_run(
@@ -764,6 +865,170 @@ def test_store_propagates_sql_null_provenance_query_failure(
     saved = db_session.get(LiveRunRecord, run.run_id)
     assert saved is not None
     assert saved.fence_token == 0
+
+
+def test_store_detaches_direct_activation_rule_expectation_before_row_lock(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, run, expected, activation, started_at = prepared_direct_activation(
+        db_session,
+        session_id="game_direct_detached_rule",
+    )
+    original_scalar = db_session.scalar
+
+    def mutate_caller_at_row_lock(statement, *args, **kwargs):
+        expected.rule_set["storage_marker"]["preserve"][0] = "caller-mutated"
+        return original_scalar(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "scalar", mutate_caller_at_row_lock)
+
+    store.activate_run(
+        run.run_id,
+        expected_events=tuple(run.events),
+        expected_rule_set=expected,
+        expected_status=run.status,
+        expected_started_at=run.started_at,
+        activation=activation,
+        worker_id=run.worker_id,
+        fence_token=run.fence_token,
+        started_at=started_at,
+    )
+
+    assert expected.rule_set["storage_marker"]["preserve"][0] == "caller-mutated"
+    db_session.expire_all()
+    saved = db_session.get(LiveRunRecord, run.run_id)
+    assert saved is not None
+    assert saved.status == "running"
+    assert saved.started_at is not None
+    events = list(
+        db_session.scalars(
+            select(LiveEventRecord)
+            .where(LiveEventRecord.run_id == run.run_id)
+            .order_by(LiveEventRecord.event_id)
+        )
+    )
+    assert [(event.event_id, event.type) for event in events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "malformed_provenance",
+    [1, "false", None],
+    ids=["integer", "string", "null"],
+)
+def test_store_rejects_malformed_activation_rule_provenance_before_query(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    malformed_provenance: object,
+) -> None:
+    store, run, expected, activation, started_at = prepared_direct_activation(
+        db_session,
+        session_id="game_direct_bad_provenance",
+    )
+    malformed = RunRuleSetExpectedState(
+        rule_set_id=expected.rule_set_id,
+        rule_set_revision_id=expected.rule_set_revision_id,
+        rule_set_revision_no=expected.rule_set_revision_no,
+        rule_set_content_hash=expected.rule_set_content_hash,
+        rule_set=expected.rule_set,
+        rule_set_was_sql_null=malformed_provenance,  # type: ignore[arg-type]
+    )
+    queries: list[str] = []
+
+    def unexpected_query(*_args, **_kwargs):
+        queries.append("query")
+        raise AssertionError("activation queried before validating provenance")
+
+    with monkeypatch.context() as context:
+        context.setattr(db_session, "scalar", unexpected_query)
+        context.setattr(db_session, "execute", unexpected_query)
+        with pytest.raises(ValueError, match="invalid exact JSON value"):
+            store.activate_run(
+                run.run_id,
+                expected_events=tuple(run.events),
+                expected_rule_set=malformed,
+                expected_status=run.status,
+                expected_started_at=run.started_at,
+                activation=activation,
+                worker_id=run.worker_id,
+                fence_token=run.fence_token,
+                started_at=started_at,
+            )
+
+    assert queries == []
+    db_session.expire_all()
+    saved = db_session.get(LiveRunRecord, run.run_id)
+    assert saved is not None
+    assert saved.status == "queued"
+    assert saved.started_at is None
+    assert (
+        db_session.scalar(
+            select(LiveEventRecord).where(
+                LiveEventRecord.run_id == run.run_id,
+                LiveEventRecord.event_id == 2,
+            )
+        )
+        is None
+    )
+
+
+def test_store_propagates_activation_sql_null_query_failure_and_rolls_back(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, run, expected, activation, started_at = prepared_direct_activation(
+        db_session,
+        session_id="game_direct_null_failure",
+        sql_null_rule_set=True,
+    )
+    failure = RuntimeError("activation SQL NULL provenance query failed")
+    rollback_calls = 0
+    original_rollback = db_session.rollback
+
+    def fail_provenance_query(_run_id: str) -> bool:
+        raise failure
+
+    def track_rollback() -> None:
+        nonlocal rollback_calls
+        rollback_calls += 1
+        original_rollback()
+
+    with monkeypatch.context() as context:
+        context.setattr(store, "_rule_set_is_sql_null", fail_provenance_query)
+        context.setattr(db_session, "rollback", track_rollback)
+        with pytest.raises(RuntimeError) as raised:
+            store.activate_run(
+                run.run_id,
+                expected_events=tuple(run.events),
+                expected_rule_set=expected,
+                expected_status=run.status,
+                expected_started_at=run.started_at,
+                activation=activation,
+                worker_id=run.worker_id,
+                fence_token=run.fence_token,
+                started_at=started_at,
+            )
+
+    assert raised.value is failure
+    assert rollback_calls == 1
+    assert db_session.in_transaction() is False
+    db_session.expire_all()
+    saved = db_session.get(LiveRunRecord, run.run_id)
+    assert saved is not None
+    assert saved.status == "queued"
+    assert saved.started_at is None
+    assert saved.rule_set is None
+    events = list(
+        db_session.scalars(
+            select(LiveEventRecord)
+            .where(LiveEventRecord.run_id == run.run_id)
+            .order_by(LiveEventRecord.event_id)
+        )
+    )
+    assert [(event.event_id, event.type) for event in events] == [(1, "run_created")]
 
 
 def claimed_orphan_for_durable_failure(
@@ -3861,6 +4126,153 @@ def test_legacy_null_rule_snapshot_activation_ack_canonicalizes_atomically(
             (1, "run_created"),
             (2, "run_started"),
         ]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "json-object-to-sql-null",
+        "sql-null-to-json-object",
+        "managed-rule",
+    ],
+)
+def test_activation_rejects_rule_race_after_lease(
+    db_session: Session,
+    mutation: str,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    initial_compiled = managed_official_compiled_rule_set("starter_6")
+    changed_compiled = managed_official_compiled_rule_set("classic_8")
+    session_id = {
+        "json-object-to-sql-null": "game_ar_obj_to_null",
+        "sql-null-to-json-object": "game_ar_null_to_obj",
+        "managed-rule": "game_ar_managed",
+    }[mutation]
+    assert len(session_id) <= 32
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id=f"worker-activation-race-owner-{mutation}",
+    )
+    if mutation == "managed-rule":
+        run = owner.create_run(
+            session_id=session_id,
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+            rule_set_id=initial_compiled.rule_set.id,
+            rule_set_revision_id=initial_compiled.revision_id,
+            rule_set_revision_no=initial_compiled.revision_no,
+            rule_set_content_hash=initial_compiled.content_hash,
+            rule_set=initial_compiled.snapshot,
+        )
+    else:
+        run = owner.create_run(
+            session_id=session_id,
+            villager_model="deepseek-chat",
+            werewolf_model="deepseek-chat",
+            seed=7,
+            max_rounds=8,
+            rule_set={},
+        )
+    if mutation == "sql-null-to-json-object":
+        with session_factory() as db:
+            db.execute(
+                update(LiveRunRecord)
+                .where(LiveRunRecord.run_id == run.run_id)
+                .values(rule_set=null())
+            )
+            db.commit()
+
+    store = MutateRuleBeforeActivationSessionLiveStore(
+        session_factory,
+        mutation=mutation,
+        changed_compiled=changed_compiled,
+    )
+    registry = LiveRunRegistry(
+        live_store=store,
+        worker_id=f"worker-activation-race-{mutation}",
+    )
+    claimed = registry.try_claim_stale_run(run.run_id)
+    assert claimed is not None
+    assert claimed.status == "queued"
+    assert claimed.rule_set_was_sql_null is (mutation == "sql-null-to-json-object")
+    subscriber = registry.subscribe(claimed.run_id, after_id=1)
+    queued_state = (
+        copy.deepcopy(claimed.to_summary()),
+        claimed.worker_id,
+        claimed.worker_heartbeat_at,
+        claimed.lease_expires_at,
+        claimed.fence_token,
+        claimed.lease_lost,
+        claimed.persisted_event_count,
+        claimed.next_event_id,
+        claimed.rule_set_was_sql_null,
+        claimed.control_version,
+        claimed.recovery_attempts,
+        claimed.recovery_last_attempt_at,
+        claimed.recovery_not_before,
+        claimed.recovery_last_error,
+        tuple((event.id, event.type, copy.deepcopy(event.payload)) for event in claimed.events),
+    )
+
+    with pytest.raises(RunRuleSetMismatch, match="activation rule set changed"):
+        registry.mark_running(claimed.run_id)
+
+    assert store.activation_mutations == 1
+    assert (
+        copy.deepcopy(claimed.to_summary()),
+        claimed.worker_id,
+        claimed.worker_heartbeat_at,
+        claimed.lease_expires_at,
+        claimed.fence_token,
+        claimed.lease_lost,
+        claimed.persisted_event_count,
+        claimed.next_event_id,
+        claimed.rule_set_was_sql_null,
+        claimed.control_version,
+        claimed.recovery_attempts,
+        claimed.recovery_last_attempt_at,
+        claimed.recovery_not_before,
+        claimed.recovery_last_error,
+        tuple((event.id, event.type, copy.deepcopy(event.payload)) for event in claimed.events),
+    ) == queued_state
+    assert registry._activation_events == {}
+    assert claimed.subscribers == [subscriber]
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, claimed.run_id)
+        is_sql_null = observer.scalar(
+            select(LiveRunRecord.rule_set.is_(None)).where(LiveRunRecord.run_id == claimed.run_id)
+        )
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == claimed.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "queued"
+        assert saved.started_at is None
+        assert [(event.event_id, event.type) for event in events] == [(1, "run_created")]
+        if mutation == "json-object-to-sql-null":
+            assert saved.rule_set is None
+            assert is_sql_null is True
+        elif mutation == "sql-null-to-json-object":
+            assert saved.rule_set == {}
+            assert is_sql_null is False
+        else:
+            assert saved.rule_set_id == changed_compiled.rule_set.id
+            assert saved.rule_set_revision_id == changed_compiled.revision_id
+            assert saved.rule_set_revision_no == changed_compiled.revision_no
+            assert saved.rule_set_content_hash == changed_compiled.content_hash
+            assert saved.rule_set == changed_compiled.snapshot
+            assert is_sql_null is False
 
 
 def test_legacy_null_rule_snapshot_activation_failure_rolls_back_canonicalization(
