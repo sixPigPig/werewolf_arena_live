@@ -24,7 +24,7 @@ describe("preview rule-set repository", () => {
     const created = await createPreviewRuleSet({ id: "new_rule", display_order: 8, config: standardConfig });
     expect(created).toMatchObject({ id: "new_rule", status: "draft", lock_version: 1, draft_revision: { revision_no: 1, state: "draft" } });
     const duplicate = await duplicatePreviewRuleSet("classic_9", { expected_source_lock_version: 1, new_rule_set_id: "copy_rule", new_name: "复制规则" });
-    expect(duplicate).toMatchObject({ id: "copy_rule", status: "draft", draft_revision: { config: { name: "复制规则" } } });
+    expect(duplicate).toMatchObject({ id: "copy_rule", status: "draft", display_order: 1, draft_revision: { config: { name: "复制规则" } } });
   });
 
   it("updates drafts with lock conflict protection", async () => {
@@ -57,6 +57,42 @@ describe("preview rule-set repository", () => {
     const archived = await archivePreviewRuleSet(twelve.id, { expected_rule_set_lock_version: currentTwelve.lock_version, replacement_default_rule_set_id: nine.id, replacement_expected_lock_version: currentNine.lock_version, reason: "归档并替换默认" });
     expect(archived.status).toBe("archived"); expect((await getPreviewRuleSet(nine.id)).is_default).toBe(true);
     expect((await restorePreviewRuleSet(twelve.id, { expected_rule_set_lock_version: archived.lock_version, reason: "恢复规则" })).status).toBe("published");
+  });
+
+  it("rejects replacement data for non-default archives and incomplete default replacement pairs", async () => {
+    const twelve = await getPreviewRuleSet("classic_12");
+    await expect(archivePreviewRuleSet(twelve.id, { expected_rule_set_lock_version: twelve.lock_version, replacement_default_rule_set_id: "classic_9", replacement_expected_lock_version: 1, reason: "归档非默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "rule_set_unavailable" } });
+    await expect(archivePreviewRuleSet(twelve.id, { expected_rule_set_lock_version: twelve.lock_version, replacement_default_rule_set_id: null, replacement_expected_lock_version: 1, reason: "归档非默认规则" })).rejects.toMatchObject({ problem: { status: 422, code: "admin_rule_set_validation_failed" } });
+    const nine = await getPreviewRuleSet("classic_9");
+    await expect(archivePreviewRuleSet(nine.id, { expected_rule_set_lock_version: nine.lock_version, replacement_default_rule_set_id: "classic_12", replacement_expected_lock_version: null, reason: "归档默认规则" })).rejects.toMatchObject({ problem: { status: 422, code: "admin_rule_set_validation_failed" } });
+    await expect(archivePreviewRuleSet(nine.id, { expected_rule_set_lock_version: nine.lock_version, replacement_default_rule_set_id: null, replacement_expected_lock_version: 1, reason: "归档默认规则" })).rejects.toMatchObject({ problem: { status: 422, code: "admin_rule_set_validation_failed" } });
+    await expect(archivePreviewRuleSet(nine.id, { expected_rule_set_lock_version: nine.lock_version, replacement_default_rule_set_id: null, replacement_expected_lock_version: null, reason: "归档默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "default_rule_required" } });
+  });
+
+  it("requires an exact published replacement and exact replacement lock when archiving the default", async () => {
+    const nine = await getPreviewRuleSet("classic_9");
+    await expect(archivePreviewRuleSet(nine.id, { expected_rule_set_lock_version: nine.lock_version, replacement_default_rule_set_id: nine.id, replacement_expected_lock_version: nine.lock_version, reason: "替换默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "default_rule_required" } });
+    await expect(archivePreviewRuleSet(nine.id, { expected_rule_set_lock_version: nine.lock_version, replacement_default_rule_set_id: "preview_draft", replacement_expected_lock_version: 1, reason: "替换默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "rule_set_unavailable" } });
+    await expect(archivePreviewRuleSet(nine.id, { expected_rule_set_lock_version: nine.lock_version, replacement_default_rule_set_id: "classic_12", replacement_expected_lock_version: 99, reason: "替换默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "rule_set_version_conflict" } });
+  });
+
+  it("validates previous-default versions when target is already default", async () => {
+    const nine = await getPreviewRuleSet("classic_9");
+    await expect(setDefaultPreviewRuleSet(nine.id, { expected_rule_set_lock_version: nine.lock_version, previous_default_expected_lock_version: 99, reason: "确认默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "rule_set_version_conflict" } });
+    await expect(setDefaultPreviewRuleSet(nine.id, { expected_rule_set_lock_version: nine.lock_version, previous_default_expected_lock_version: nine.lock_version, reason: "确认默认规则" })).resolves.toMatchObject({ is_default: true, lock_version: nine.lock_version });
+  });
+
+  it("requires the exact previous-default version when changing defaults", async () => {
+    const twelve = await getPreviewRuleSet("classic_12");
+    await expect(setDefaultPreviewRuleSet(twelve.id, { expected_rule_set_lock_version: twelve.lock_version, previous_default_expected_lock_version: null, reason: "切换默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "rule_set_version_conflict" } });
+    await expect(setDefaultPreviewRuleSet(twelve.id, { expected_rule_set_lock_version: twelve.lock_version, previous_default_expected_lock_version: 99, reason: "切换默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "rule_set_version_conflict" } });
+  });
+
+  it("rejects an extraneous previous-default version when no default exists", async () => {
+    resetPreviewRuleSets({ withoutDefault: true });
+    const twelve = await getPreviewRuleSet("classic_12");
+    await expect(setDefaultPreviewRuleSet(twelve.id, { expected_rule_set_lock_version: twelve.lock_version, previous_default_expected_lock_version: 1, reason: "建立默认规则" })).rejects.toMatchObject({ problem: { status: 409, code: "rule_set_version_conflict" } });
+    await expect(setDefaultPreviewRuleSet(twelve.id, { expected_rule_set_lock_version: twelve.lock_version, previous_default_expected_lock_version: null, reason: "建立默认规则" })).resolves.toMatchObject({ is_default: true });
   });
 
   it("enforces server reason length constraints", async () => {

@@ -33,7 +33,8 @@ describe("rule-set form model", () => {
   });
 
   it("maps API warning paths to fields and summary", () => {
-    expect(formErrorsFromApi({ problem: { detail: "校验失败", errors: [{ path: "config.role_counts.werewolf", message: "狼人至少一个" }, { path: "unknown", message: "未知" }] } })).toEqual({ role_counts: "狼人至少一个", form: "校验失败；未知" });
+    expect(formErrorsFromApi({ problem: { errors: [{ path: "config.name", message: "名称必填" }] } })).toEqual({ name: "名称必填", form: "名称必填" });
+    expect(formErrorsFromApi({ problem: { detail: "校验失败", errors: [{ path: "config.role_counts.werewolf", message: "狼人至少一个" }, { path: "unknown", message: "未知" }] } })).toEqual({ role_counts: "狼人至少一个", form: "校验失败；狼人至少一个；未知" });
   });
 
   it("makes cleaned values stable for dirty comparisons", () => {

@@ -44,10 +44,10 @@ export function validateRuleSetInput(input: RuleSetFormInput, options: RuleSetOp
 
 export function formErrorsFromApi(value: unknown): RuleSetFormErrors {
   const source = isRecord(value) && isRecord(value.problem) ? value.problem : isRecord(value) ? value : {};
-  const errors: RuleSetFormErrors = {}; const unmapped: string[] = [];
+  const errors: RuleSetFormErrors = {}; const messages: string[] = [];
   const issues = Array.isArray(source.errors) ? source.errors : Array.isArray(source.warnings) ? source.warnings : [];
-  for (const issue of issues) { if (!isRecord(issue) || typeof issue.message !== "string") continue; const field = fieldFromPath(typeof issue.path === "string" ? issue.path : typeof issue.field === "string" ? issue.field : ""); if (field) errors[field] ??= issue.message; else unmapped.push(issue.message); }
-  const detail = typeof source.detail === "string" ? source.detail : ""; const summary = [detail, ...unmapped].filter(Boolean); if (summary.length) errors.form = summary.join("；");
+  for (const issue of issues) { if (!isRecord(issue) || typeof issue.message !== "string") continue; messages.push(issue.message); const field = fieldFromPath(typeof issue.path === "string" ? issue.path : typeof issue.field === "string" ? issue.field : ""); if (field) errors[field] ??= issue.message; }
+  const detail = typeof source.detail === "string" ? source.detail : ""; const summary = [detail, ...messages].filter(Boolean); if (summary.length) errors.form = summary.join("；");
   return errors;
 }
 
