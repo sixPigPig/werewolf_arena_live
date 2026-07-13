@@ -290,6 +290,25 @@ def test_rule_metric_labels_and_reset_never_leak_unbounded_input() -> None:
     assert "werewolf_rule_create_conflicts_total{" not in reset_metrics
 
 
+def test_rule_metric_recorders_do_not_raise_for_unrenderable_revision_integer() -> None:
+    unrenderable_revision = 10**10000
+
+    record_rule_create_conflict("classic_8", unrenderable_revision)
+    record_legacy_rule_create("starter_6", unrenderable_revision)
+
+    with _session_factory()() as db:
+        metrics = render_rule_set_metrics(db)
+
+    assert (
+        'werewolf_rule_create_conflicts_total{rule_set_id="classic_8",revision_no="unknown"} 1'
+        in metrics
+    )
+    assert (
+        'werewolf_rule_legacy_creates_total{rule_set_id="starter_6",revision_no="unknown"} 1'
+        in metrics
+    )
+
+
 def test_metrics_endpoint_hides_database_failures() -> None:
     session = Mock()
     session.scalars.side_effect = SQLAlchemyError("secret database details")

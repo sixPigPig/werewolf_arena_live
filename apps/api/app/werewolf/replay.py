@@ -12,6 +12,7 @@ from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import LiveRunRecord
 from app.werewolf.checkpoint import (
     ResumeCheckpointError,
+    report_resume_checkpoint_error,
     resolved_rule_set_from_checkpoint,
 )
 from app.werewolf.live import validate_rule_set_revision_metadata
@@ -110,7 +111,9 @@ class DatabaseReplayStore:
         self._validate_session_id(session_id)
         payload = self.db.get(GameReplayPayload, session_id)
         if payload is None or payload.checkpoint is None:
-            raise ResumeCheckpointError("missing")
+            error = ResumeCheckpointError("missing")
+            report_resume_checkpoint_error(error)
+            raise error
         _validated_checkpoint_payload(session_id, payload.checkpoint)
         return copy.deepcopy(payload.checkpoint)
 
@@ -327,6 +330,17 @@ def _validated_checkpoint_payload(
     session_id: str,
     checkpoint: Any,
 ) -> tuple[dict[str, Any], list[Any], dict[str, Any], list[Any], CompiledRuleSet]:
+    try:
+        return _validated_checkpoint_payload_unreported(session_id, checkpoint)
+    except ResumeCheckpointError as error:
+        report_resume_checkpoint_error(error)
+        raise
+
+
+def _validated_checkpoint_payload_unreported(
+    session_id: str,
+    checkpoint: Any,
+) -> tuple[dict[str, Any], list[Any], dict[str, Any], list[Any], CompiledRuleSet]:
     if not _SESSION_PATTERN.fullmatch(session_id):
         raise ResumeCheckpointError("invalid_structure")
     if not isinstance(checkpoint, dict):
@@ -352,6 +366,8 @@ def _validated_checkpoint_payload(
 
 
 def _valid_checkpoint_or_none(session_id: str, checkpoint: Any) -> dict[str, Any] | None:
+    if checkpoint is None:
+        return None
     try:
         _state, _logs, validated_checkpoint, _rounds, _compiled = _validated_checkpoint_payload(
             session_id,

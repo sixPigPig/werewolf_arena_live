@@ -11,6 +11,7 @@ from app.werewolf.checkpoint import (
     ResumeCheckpointError,
     ResumeCheckpointManager,
     game_state_from_dict,
+    report_resume_checkpoint_error,
     resolved_rule_set_from_checkpoint,
     rng_from_json_state,
     round_logs_from_dict,
@@ -130,6 +131,7 @@ def resume_game(
     try:
         checkpoint = record_store.load_resume_checkpoint(session_id)
     except ResumeCheckpointError as exc:
+        report_resume_checkpoint_error(exc)
         message = (
             "Resume checkpoint not found"
             if exc.reason == "missing"
@@ -140,6 +142,7 @@ def resume_game(
     try:
         compiled = resolved_rule_set_from_checkpoint(checkpoint)
     except ResumeCheckpointError as exc:
+        report_resume_checkpoint_error(exc)
         raise GameRunError("Resume checkpoint is invalid", session_id) from exc
     if expected_compiled_rule_set is not None and not _compiled_rule_sets_match(
         compiled,

@@ -47,32 +47,50 @@ _LEGACY_CREATE_COUNTER: Counter[tuple[str, str]] = Counter()
 
 
 def record_rule_publish(result: str) -> None:
-    _record_bounded(_PUBLISH_COUNTER, (_fixed_label(result, _PUBLISH_RESULTS),))
+    try:
+        _record_bounded(_PUBLISH_COUNTER, (_fixed_label(result, _PUBLISH_RESULTS),))
+    except Exception:
+        return
 
 
 def record_rule_create_conflict(rule_set_id: str, revision_no: int | None) -> None:
-    _record_bounded(
-        _CREATE_CONFLICT_COUNTER,
-        (_stable_rule_set_id(rule_set_id), _revision_label(revision_no)),
-    )
+    try:
+        _record_bounded(
+            _CREATE_CONFLICT_COUNTER,
+            (_stable_rule_set_id(rule_set_id), _revision_label(revision_no)),
+        )
+    except Exception:
+        return
 
 
 def record_rule_snapshot_failure(reason: str) -> None:
-    _record_bounded(_SNAPSHOT_FAILURE_COUNTER, (_fixed_label(reason, _SNAPSHOT_REASONS),))
+    try:
+        _record_bounded(
+            _SNAPSHOT_FAILURE_COUNTER,
+            (_fixed_label(reason, _SNAPSHOT_REASONS),),
+        )
+    except Exception:
+        return
 
 
 def record_rule_checkpoint_failure(reason: str) -> None:
-    _record_bounded(
-        _CHECKPOINT_FAILURE_COUNTER,
-        (_fixed_label(reason, _CHECKPOINT_REASONS),),
-    )
+    try:
+        _record_bounded(
+            _CHECKPOINT_FAILURE_COUNTER,
+            (_fixed_label(reason, _CHECKPOINT_REASONS),),
+        )
+    except Exception:
+        return
 
 
 def record_legacy_rule_create(rule_set_id: str, revision_no: int | None) -> None:
-    _record_bounded(
-        _LEGACY_CREATE_COUNTER,
-        (_stable_rule_set_id(rule_set_id), _revision_label(revision_no)),
-    )
+    try:
+        _record_bounded(
+            _LEGACY_CREATE_COUNTER,
+            (_stable_rule_set_id(rule_set_id), _revision_label(revision_no)),
+        )
+    except Exception:
+        return
 
 
 def render_rule_set_metrics(db: Session) -> str:
@@ -221,7 +239,10 @@ def _revision_label(value: object) -> str:
     if value is None:
         return "legacy"
     if type(value) is int and value > 0:
-        return str(value)
+        try:
+            return str(value)
+        except (OverflowError, ValueError):
+            return "unknown"
     return "unknown"
 
 

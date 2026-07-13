@@ -559,6 +559,15 @@ def test_rule_metric_checkpoint_resolver_records_each_failure_once(reason: str) 
     assert f'werewolf_rule_checkpoint_failures_total{{reason="{reason}"}} 1' in _rule_metrics()
 
 
+def test_checkpoint_error_construction_has_no_telemetry_side_effect() -> None:
+    error = ResumeCheckpointError("invalid_structure")
+
+    assert error.reason == "invalid_structure"
+    assert (
+        'werewolf_rule_checkpoint_failures_total{reason="invalid_structure"} 0' in _rule_metrics()
+    )
+
+
 def test_list_rule_sets_returns_official_rules() -> None:
     response = client.get("/api/v1/games/rule-sets")
 
@@ -3503,6 +3512,9 @@ def test_get_game_detail_returns_state_and_logs() -> None:
     assert payload["status"] == "complete"
     assert payload["state"]["players"][0]["name"] == "张三"
     assert payload["logs"][0]["eliminate"]["lm_log"]["prompt"] == "请选择今晚击杀对象。"
+    assert (
+        'werewolf_rule_checkpoint_failures_total{reason="invalid_structure"} 0' in _rule_metrics()
+    )
 
 
 def test_get_game_playback_returns_complete_playback_events() -> None:

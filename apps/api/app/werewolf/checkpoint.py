@@ -56,10 +56,28 @@ class ResumeCheckpointError(Exception):
         bounded_reason = reason if reason in _CHECKPOINT_ERROR_MESSAGES else "invalid_structure"
         super().__init__(_CHECKPOINT_ERROR_MESSAGES[bounded_reason])
         self.reason = bounded_reason
-        record_rule_checkpoint_failure(bounded_reason)
+        self._telemetry_recorded = False
+
+
+def report_resume_checkpoint_error(error: ResumeCheckpointError) -> None:
+    """Record a checkpoint error once when it crosses a real failure boundary."""
+    if error._telemetry_recorded:
+        return
+    error._telemetry_recorded = True
+    record_rule_checkpoint_failure(error.reason)
 
 
 def resolved_rule_set_from_checkpoint(
+    checkpoint: Mapping[str, object],
+) -> CompiledRuleSet:
+    try:
+        return _resolved_rule_set_from_checkpoint(checkpoint)
+    except ResumeCheckpointError as error:
+        report_resume_checkpoint_error(error)
+        raise
+
+
+def _resolved_rule_set_from_checkpoint(
     checkpoint: Mapping[str, object],
 ) -> CompiledRuleSet:
     if not isinstance(checkpoint, Mapping):

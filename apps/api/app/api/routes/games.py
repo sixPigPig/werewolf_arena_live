@@ -58,6 +58,7 @@ from app.rule_sets.telemetry import (
 )
 from app.werewolf.checkpoint import (
     ResumeCheckpointError,
+    report_resume_checkpoint_error,
     resolved_rule_set_from_checkpoint,
 )
 from app.werewolf.config import choose_player_names
@@ -1148,12 +1149,14 @@ def start_resume_game_run(
     try:
         checkpoint = store.load_resume_checkpoint(session_id)
     except ResumeCheckpointError as exc:
+        report_resume_checkpoint_error(exc)
         if exc.reason == "missing":
             raise HTTPException(status_code=404, detail="Resume checkpoint not found") from exc
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
     try:
         compiled = resolved_rule_set_from_checkpoint(checkpoint)
     except ResumeCheckpointError as exc:
+        report_resume_checkpoint_error(exc)
         raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
 
     run_params = checkpoint.get("run_params")
