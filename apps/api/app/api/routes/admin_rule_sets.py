@@ -63,6 +63,7 @@ from app.rule_sets.repository import (
     get_rule_set_usage,
     list_rule_sets,
 )
+from app.rule_sets.telemetry import record_rule_publish
 from app.rule_sets.service import (
     archive_rule_set,
     create_rule_set,
@@ -497,7 +498,9 @@ def publish_admin_rule_set(
                 changed_fields=("status", "draft_revision", "published_revision"),
             ),
         )
+        record_rule_publish("success")
     except MutationFailure as exc:
+        record_rule_publish(_failure_result(exc))
         _raise_mutation_problem(
             db,
             request=request,

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
+from app.rule_sets.telemetry import render_rule_set_metrics
 from app.werewolf.worker_telemetry import render_live_run_metrics
 
 
@@ -19,6 +20,7 @@ def read_metrics(db: Session = Depends(get_db)) -> Response:
             stale_grace_seconds=settings.live_run_reaper_stale_grace_seconds,
             max_attempts=settings.live_run_reaper_max_attempts,
         )
+        content += render_rule_set_metrics(db)
     except SQLAlchemyError:
         return Response(
             content="# metrics unavailable\n",

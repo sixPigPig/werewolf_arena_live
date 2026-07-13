@@ -13,7 +13,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, select, text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
@@ -47,14 +47,20 @@ from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.rule_sets.snapshots import resolve_rule_set_snapshot
 from app.rule_sets.service import (
     archive_rule_set,
     publish_rule_set,
     resolve_published_rule_set,
     update_rule_set_draft,
 )
+from app.rule_sets.telemetry import (
+    _reset_rule_set_metrics_for_tests,
+    render_rule_set_metrics,
+)
 from app.rule_sets.types import CompiledRuleSet
 from app.rule_sets.validation import normalize_rule_set_config
+from app.werewolf.checkpoint import ResumeCheckpointError, resolved_rule_set_from_checkpoint
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.player_presets import default_personality_text
 from app.werewolf.replay import DatabaseReplayStore
@@ -107,6 +113,7 @@ def override_get_db() -> Generator[Session, None, None]:
 
 @pytest.fixture(autouse=True)
 def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    _reset_rule_set_metrics_for_tests()
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr(settings, "legacy_player_profile_content_writes_enabled", True)
     monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
@@ -125,6 +132,7 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
         seed_official_rule_sets(session)
         session.commit()
     yield
+    _reset_rule_set_metrics_for_tests()
     app.dependency_overrides.clear()
     with TestingSessionLocal() as session:
         session.query(VoiceAudioChunkRecord).delete()
@@ -469,6 +477,86 @@ def store_game_session(
         )
         if checkpoint is not None:
             store.save_resume_checkpoint(session_id, checkpoint)
+
+
+def _rule_metrics() -> str:
+    with TestingSessionLocal() as session:
+        return render_rule_set_metrics(session)
+
+
+@pytest.mark.parametrize(
+    ("corruption", "reason"),
+    [
+        ("structure", "invalid_snapshot"),
+        ("content_hash", "content_hash_mismatch"),
+        ("schema_version", "schema_version_unsupported"),
+    ],
+)
+def test_rule_metric_snapshot_parser_records_one_fixed_reason_and_reraises(
+    corruption: str,
+    reason: str,
+) -> None:
+    snapshot = copy.deepcopy(managed_official_compiled_rule_set("starter_6").snapshot)
+    if corruption == "structure":
+        snapshot.pop("name")
+    elif corruption == "content_hash":
+        snapshot["content_hash"] = "0" * 64
+    else:
+        snapshot["schema_version"] = 2
+
+    with pytest.raises(ValueError) as caught:
+        resolve_rule_set_snapshot(snapshot)
+
+    assert type(caught.value) is ValueError
+    assert f'werewolf_rule_snapshot_failures_total{{reason="{reason}"}} 1' in _rule_metrics()
+
+
+def test_rule_metric_catalog_corruption_is_counted_once_at_public_boundary() -> None:
+    with TestingSessionLocal() as session:
+        session.execute(
+            update(RuleSetRevisionRecord)
+            .where(RuleSetRevisionRecord.id == "e9fa678e-9b18-5079-91d2-f74835364fb6")
+            .values(content_hash="0" * 64)
+        )
+        session.commit()
+
+    response = client.get("/api/v1/games/rule-sets")
+
+    assert response.status_code == 503
+    assert (
+        'werewolf_rule_snapshot_failures_total{reason="content_hash_mismatch"} 1' in _rule_metrics()
+    )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "unsupported_schema",
+        "invalid_structure",
+        "invalid_rule_snapshot",
+        "rule_snapshot_mismatch",
+        "rule_metadata_mismatch",
+    ],
+)
+def test_rule_metric_checkpoint_resolver_records_each_failure_once(reason: str) -> None:
+    checkpoint = sample_checkpoint("game_1200abcd")
+    if reason == "unsupported_schema":
+        checkpoint["schema_version"] = 3
+    elif reason == "invalid_structure":
+        checkpoint.pop("schema_version")
+    elif reason == "invalid_rule_snapshot":
+        checkpoint["state_at_round_start"]["rule_set"].pop("name")
+    elif reason == "rule_snapshot_mismatch":
+        other = managed_official_compiled_rule_set("classic_8")
+        checkpoint["state_at_round_start"]["rule_set"] = copy.deepcopy(other.snapshot)
+    else:
+        checkpoint["run_params"]["content_hash"] = "0" * 64
+
+    with pytest.raises(ResumeCheckpointError) as caught:
+        resolved_rule_set_from_checkpoint(checkpoint)
+
+    assert caught.value.reason == reason
+    assert f'werewolf_rule_checkpoint_failures_total{{reason="{reason}"}} 1' in _rule_metrics()
 
 
 def test_list_rule_sets_returns_official_rules() -> None:
@@ -947,6 +1035,11 @@ def test_create_game_run_rejects_revision_changed_with_current_catalog_item(
         assert session.query(LiveRunRecord).count() == 0
         assert session.query(LiveEventRecord).count() == 0
     assert registry._runs == {}
+    with TestingSessionLocal() as session:
+        metrics = render_rule_set_metrics(session)
+    assert (
+        'werewolf_rule_create_conflicts_total{rule_set_id="classic_8",revision_no="1"} 1' in metrics
+    )
 
 
 def test_create_game_run_rejects_archived_rule(
@@ -1040,6 +1133,11 @@ def test_create_game_run_without_expected_revision_records_compatibility(
     assert record.rule_set_content_hash_prefix == response.json()["rule_set_content_hash"][:12]
     assert "包含狼人" not in record.getMessage()
     assert response.json()["rule_set"] not in record.__dict__.values()
+    with TestingSessionLocal() as session:
+        metrics = render_rule_set_metrics(session)
+    assert (
+        'werewolf_rule_legacy_creates_total{rule_set_id="classic_8",revision_no="1"} 1' in metrics
+    )
 
 
 def test_background_thread_starts_only_after_run_transaction_commits(
@@ -2359,12 +2457,17 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
 
 
 @pytest.mark.parametrize(
-    "corruption",
-    ["content-hash", "missing-schema", "untrimmed-revision-id"],
+    ("corruption", "metric_reason"),
+    [
+        ("content-hash", "rule_metadata_mismatch"),
+        ("missing-schema", "invalid_structure"),
+        ("untrimmed-revision-id", "rule_metadata_mismatch"),
+    ],
 )
 def test_invalid_resume_checkpoint_does_not_return_or_claim_active_run(
     monkeypatch: pytest.MonkeyPatch,
     corruption: str,
+    metric_reason: str,
 ) -> None:
     session_id = "game_1200abcd"
     store_game_session(
@@ -2429,6 +2532,51 @@ def test_invalid_resume_checkpoint_does_not_return_or_claim_active_run(
     assert claims == []
     assert starts == []
     assert registry.get_run(active.run_id).fence_token == active.fence_token
+    assert (
+        f'werewolf_rule_checkpoint_failures_total{{reason="{metric_reason}"}} 1' in _rule_metrics()
+    )
+
+
+def test_rule_metric_route_only_checkpoint_structure_failure_precedes_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    store_game_session(
+        session_id,
+        state=sample_state(session_id, winner="", error="Worker unavailable"),
+        checkpoint=sample_checkpoint(session_id),
+    )
+    with TestingSessionLocal() as db:
+        payload = db.get(GameReplayPayload, session_id)
+        assert payload is not None and isinstance(payload.checkpoint, dict)
+        checkpoint = copy.deepcopy(payload.checkpoint)
+        checkpoint["run_params"]["player_configs"] = "SECRET player 张三"
+        payload.checkpoint = checkpoint
+        flag_modified(payload, "checkpoint")
+        db.commit()
+
+    registry = LiveRunRegistry()
+    claims: list[str] = []
+    monkeypatch.setattr(
+        registry,
+        "try_get_active_run_for_session",
+        lambda candidate: claims.append(candidate),
+    )
+    override_replay_store()
+    override_live_registry(registry)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Resume checkpoint is invalid"
+    assert claims == []
+    metrics = _rule_metrics()
+    assert 'werewolf_rule_checkpoint_failures_total{reason="invalid_structure"} 1' in metrics
+    assert "SECRET player" not in metrics
+    assert "张三" not in metrics
 
 
 def test_resume_rejects_active_live_snapshot_mismatch_without_starting_worker(
@@ -2481,6 +2629,10 @@ def test_resume_rejects_active_live_snapshot_mismatch_without_starting_worker(
     assert claims == []
     assert starts == []
     assert registry.get_run(active.run_id).rule_set == other.snapshot
+    assert (
+        'werewolf_rule_checkpoint_failures_total{reason="rule_metadata_mismatch"} 1'
+        in _rule_metrics()
+    )
 
 
 @pytest.mark.parametrize("catalog_change", ["publish-newer", "archive"])
@@ -2967,6 +3119,7 @@ def test_resume_game_run_returns_404_without_checkpoint(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Resume checkpoint not found"
+    assert 'werewolf_rule_checkpoint_failures_total{reason="missing"} 1' in _rule_metrics()
 
 
 def test_list_games_includes_rule_set_summary(tmp_path: Path) -> None:

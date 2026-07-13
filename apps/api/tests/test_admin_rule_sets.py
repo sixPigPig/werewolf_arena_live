@@ -959,6 +959,10 @@ def test_super_admin_publishes_validated_draft_with_reason_and_success_audit(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    metric_results: list[str] = []
+    monkeypatch.setattr(route_module, "record_rule_publish", metric_results.append)
     with context.session_factory() as db:
         _seed_rule(
             db,
@@ -996,6 +1000,7 @@ def test_super_admin_publishes_validated_draft_with_reason_and_success_audit(
     assert event.before["status"] == "draft"
     assert event.after["status"] == "published"
     assert "config" not in str(event.after)
+    assert metric_results == ["success"]
 
 
 def test_publish_never_calls_operational_warnings_and_succeeds_during_shortage(
@@ -1043,6 +1048,10 @@ def test_publish_validation_failure_rolls_back_and_records_rejected_attempt(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    metric_results: list[str] = []
+    monkeypatch.setattr(route_module, "record_rule_publish", metric_results.append)
     with context.session_factory() as db:
         _seed_rule(
             db,
@@ -1079,6 +1088,7 @@ def test_publish_validation_failure_rolls_back_and_records_rejected_attempt(
     assert event.result == "rejected"
     assert event.reason == "try invalid release"
     assert "config" not in str(event.after)
+    assert metric_results == ["rejected"]
 
 
 def test_super_admin_archives_and_restores_without_changing_published_revision(

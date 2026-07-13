@@ -50,6 +50,12 @@ from app.rule_sets.snapshots import (
     resolve_rule_set_snapshot,
 )
 from app.rule_sets.types import CompiledRuleSet
+from app.rule_sets.telemetry import (
+    record_legacy_rule_create,
+    record_rule_checkpoint_failure,
+    record_rule_create_conflict,
+    record_rule_snapshot_failure,
+)
 from app.werewolf.checkpoint import (
     ResumeCheckpointError,
     resolved_rule_set_from_checkpoint,
@@ -823,6 +829,8 @@ def list_rule_sets(
         TypeError,
         ValueError,
     ) as exc:
+        if isinstance(exc, RuleSetCatalogCorrupt):
+            record_rule_snapshot_failure(exc.reason)
         _rollback_quietly(db)
         raise public_problem(
             request,
@@ -890,6 +898,9 @@ def create_game_run(
         try:
             current_item = _current_rule_set_catalog_item(db, exc.rule_set_id)
         except Exception as catalog_exc:
+            record_rule_create_conflict(exc.rule_set_id, None)
+            if isinstance(catalog_exc, RuleSetCatalogCorrupt):
+                record_rule_snapshot_failure(catalog_exc.reason)
             _rollback_quietly(db)
             raise public_problem(
                 request,
@@ -897,6 +908,7 @@ def create_game_run(
                 code="rule_set_store_unavailable",
                 detail="Rule set catalog is temporarily unavailable.",
             ) from catalog_exc
+        record_rule_create_conflict(exc.rule_set_id, current_item.revision_no)
         _rollback_quietly(db)
         raise public_problem(
             request,
@@ -912,6 +924,15 @@ def create_game_run(
             status_code=409,
             code="rule_set_unavailable",
             detail="The selected rule set is unavailable.",
+        ) from exc
+    except RuleSetCatalogCorrupt as exc:
+        record_rule_snapshot_failure(exc.reason)
+        _rollback_quietly(db)
+        raise public_problem(
+            request,
+            status_code=503,
+            code="rule_set_store_unavailable",
+            detail="Rule set data is temporarily unavailable.",
         ) from exc
     except HTTPException:
         _rollback_quietly(db)
@@ -940,6 +961,7 @@ def create_game_run(
         ) from exc
 
     if request_body.expected_rule_revision_id is None:
+        record_legacy_rule_create(compiled.rule_set.id, compiled.revision_no)
         logger.info(
             "Created a live run through the legacy revision compatibility path",
             extra={
@@ -1136,7 +1158,7 @@ def start_resume_game_run(
 
     run_params = checkpoint.get("run_params")
     if not isinstance(run_params, dict):
-        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid")
+        raise _invalid_resume_checkpoint("invalid_structure")
     max_rounds = run_params.get("max_rounds")
     seed = run_params.get("seed")
     villager_model = run_params.get("villager_model")
@@ -1150,11 +1172,11 @@ def start_resume_game_run(
         or type(werewolf_model) is not str
         or not werewolf_model
     ):
-        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid")
+        raise _invalid_resume_checkpoint("invalid_structure")
     try:
         checkpoint_player_configs = player_configs_from_serialized(run_params.get("player_configs"))
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
+        raise _invalid_resume_checkpoint("invalid_structure") from exc
 
     active_run = registry.try_get_active_run_for_session(session_id)
     if active_run is not None:
@@ -1162,7 +1184,7 @@ def start_resume_game_run(
         try:
             claimed_run = registry.try_claim_stale_run(active_run.run_id)
         except RunRuleSetMismatch as exc:
-            raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
+            raise _invalid_resume_checkpoint("rule_metadata_mismatch") from exc
         if claimed_run is None:
             return active_run, False
         active_run = claimed_run
@@ -1205,7 +1227,12 @@ def _require_live_run_matches_checkpoint(
     compiled: CompiledRuleSet,
 ) -> None:
     if not live_run_matches_compiled_rule_set(run, compiled):
-        raise HTTPException(status_code=422, detail="Resume checkpoint is invalid")
+        raise _invalid_resume_checkpoint("rule_metadata_mismatch")
+
+
+def _invalid_resume_checkpoint(reason: str) -> HTTPException:
+    record_rule_checkpoint_failure(reason)
+    return HTTPException(status_code=422, detail="Resume checkpoint is invalid")
 
 
 @router.get("/{session_id}/playback")

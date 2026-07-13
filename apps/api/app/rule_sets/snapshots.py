@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 from app.models.rule_set import RuleSetRevisionRecord
 from app.rule_sets.errors import RuleSetCatalogCorrupt
+from app.rule_sets.telemetry import record_rule_snapshot_failure
 from app.rule_sets.types import CompiledRuleSet, RuleRoleId, RuleSetConfig
 from app.rule_sets.validation import (
     RULE_ROLE_IDS,
@@ -172,8 +173,24 @@ def rule_set_config_from_snapshot(snapshot: Mapping[str, object]) -> RuleSetConf
 
 
 def resolve_rule_set_snapshot(snapshot: Mapping[str, object]) -> CompiledRuleSet:
-    compiled, _ = _resolve_snapshot(snapshot)
+    try:
+        compiled, _ = _resolve_snapshot(snapshot)
+    except Exception as exc:
+        record_rule_snapshot_failure(_snapshot_failure_reason(exc))
+        raise
     return compiled
+
+
+def _snapshot_failure_reason(exc: Exception) -> str:
+    message = str(exc)
+    if message in {
+        "snapshot content_hash does not match canonical configuration",
+        "content_hash must be 64 lowercase hexadecimal characters",
+    }:
+        return "content_hash_mismatch"
+    if message == f"schema_version must be {RULE_SCHEMA_VERSION}":
+        return "schema_version_unsupported"
+    return "invalid_snapshot"
 
 
 def admin_rule_revision_snapshot(

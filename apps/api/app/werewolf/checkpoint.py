@@ -8,6 +8,7 @@ import threading
 from collections.abc import Mapping
 from typing import Any
 
+from app.rule_sets.telemetry import record_rule_checkpoint_failure
 from app.rule_sets.types import CompiledRuleSet
 from app.werewolf.lm import LmLog, ModelProvider
 from app.werewolf.models import (
@@ -55,6 +56,7 @@ class ResumeCheckpointError(Exception):
         bounded_reason = reason if reason in _CHECKPOINT_ERROR_MESSAGES else "invalid_structure"
         super().__init__(_CHECKPOINT_ERROR_MESSAGES[bounded_reason])
         self.reason = bounded_reason
+        record_rule_checkpoint_failure(bounded_reason)
 
 
 def resolved_rule_set_from_checkpoint(
