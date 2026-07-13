@@ -1,6 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import RuleSetEditorPage from "./RuleSetEditorPage";
 import { isAdminApiError } from "@/api/problem-details";
 import { hasAdminPermission } from "@/features/auth/permissions";
 import { useAdminSession } from "@/features/auth/session-context";
@@ -68,5 +69,5 @@ function playerCounts(minimum: number, maximum: number) { return Array.from({ le
 
 function Loading() { return <div aria-live="polite" className="player-list-loading" role="status"><span /><span /><span /><p>正在读取游戏规则...</p></div>; }
 function ErrorState({ error, retry }: { error: Error; retry: () => unknown }) { return <div aria-live="assertive" className="player-list-error" role="alert"><h3>无法读取游戏规则</h3><p>{error.message}</p>{isAdminApiError(error) && error.requestId ? <small>请求编号：{error.requestId}</small> : null}<button onClick={() => void retry()} type="button">重新加载</button></div>; }
-export function RuleSetNewPage() { return <div className="admin-page"><header className="page-heading"><div><span className="page-kicker">CONTENT / RULES</span><h1>新建游戏规则</h1><p>规则编辑器将在后续任务中接入。</p></div></header></div>; }
-export function RuleSetDetailPage() { const { ruleSetId } = useParams(); return <div className="admin-page"><header className="page-heading"><div><span className="page-kicker">CONTENT / RULES</span><h1>游戏规则详情</h1><p>{ruleSetId}</p></div></header></div>; }
+export function RuleSetNewPage() { return <RuleSetEditorPage />; }
+export function RuleSetDetailPage() { return <RuleSetEditorPage />; }
