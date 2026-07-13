@@ -62,7 +62,27 @@
 - `pnpm lint`: passed with zero findings.
 - `git diff --check`: pending immediately before commit.
 
-### Remaining evidence concern
+### Resolved boundary evidence matrix
 
-- The reviewer-requested exhaustive exact-body/invalidation matrix was not fully expanded in this fix commit: exact cleaned create JSON, both update-lock bodies including the null draft lock branch, direct query invalidation spies, every individual editable-field validation invalidation category, invalid validation response/path association, and dedicated editor 404/503 cases remain represented only partially or indirectly by existing repository/parser/form/flow tests. No RED evidence is claimed for those unadded cases.
-- The earlier save/dirty/conflict tranche was not destructively removed and replayed, so its original report limitation remains: those tests first ran green after the initial implementation.
+The previously open reviewer matrix is now covered directly in `RuleSetsFlow.test.tsx`:
+
+- Exact request bodies: create asserts the complete cleaned JSON, including trimmed/deduplicated values and sheriff-off normalization from nonstandard server choices (`1.5` and `double`); update asserts both locks and the complete config/display body for a current draft (`expected_revision_lock_version: 7`) and the no-draft branch (`null`).
+- Save/cache behavior: a direct `QueryClient.invalidateQueries` spy asserts list and saved-detail invalidation, and navigation after save proves the dirty baseline no longer blocks.
+- Validation staleness: table-driven cases validate, edit, save, and revalidate for name, description, complexity, duration, tags, display order, every server role input (werewolf, villager, seer, guard, witch, hunter, idiot), win condition, sheriff enabled, sheriff weight, speech policy, self-explosion, and badge policy. Each case proves publish disables immediately after the edit, stays disabled after save, and enables only after revalidation.
+- Invalid validation: a server `valid: false` result asserts the error list, `config.name` field association and summary alert, disabled publish, and non-rendering of an opaque `compiled_snapshot` sentinel.
+- Load boundaries: dedicated editor 404 coverage asserts bounded not-found copy without server detail/request leakage; dedicated 503 coverage asserts bounded detail, opaque debug omission, retry, and recovery.
+- Navigation protection: existing explicit tests cover blocker reset (`继续编辑`), blocker proceed across pathname/query/hash (`放弃修改并离开`), and cancelable `beforeunload` prevention.
+
+### Boundary test cycle and verification
+
+- Initial focused run after adding the matrix: 22 failures. These were harness expectation failures only (the exact create body preserved the documented default self-explosion value, invalidation caused an additional legitimate detail refetch, the draft lock fixture was explicitly overridden to `7`, and the table initially targeted a published fixture without a draft). No production defect was identified, so production code was not changed.
+- Corrected focused editor/form: 2 files, 54 tests passed.
+- All rule-set tests: 6 files, 94 tests passed.
+- Full Admin suite: 22 files, 212 tests passed.
+- `pnpm build`: passed.
+- `pnpm lint`: passed after removing one unused test counter, with zero errors or warnings.
+- `git diff --check`: passed.
+
+### Remaining concern
+
+- The historical limitation remains unchanged: the original save/dirty/conflict tranche predates this coverage pass and was not destructively replayed. Every boundary requested by the latest reviewer is now directly asserted; there is no remaining Task 4 coverage item.

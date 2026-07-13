@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { routes } from "@/routes";
 import { resetPreviewRuleSets } from "./preview-repository";
-import { fixtureRuleSet, ruleSetOptions } from "./test-fixtures";
+import { fixtureRuleSet, ruleSetOptions, standardConfig } from "./test-fixtures";
 
 function renderRoute(path: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -233,6 +233,61 @@ describe("rule editor", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/content/rules/new_rule"));
   });
 
+  it("sends the exact cleaned create body, using server sheriff-off defaults", async () => {
+    useServerSession(["rules.read", "rules.write"]);
+    const options = { ...ruleSetOptions, sheriff_vote_weights: [1.5, 2], sheriff_badge_bomb_policies: [{ value: "double" as const, label: "双爆吞警徽" }] };
+    let createBody: unknown;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) return serverSession();
+      if (url.endsWith("/api/v1/admin/rule-set-options")) return json(options);
+      if (url.endsWith("/api/v1/admin/rule-sets") && init?.method === "POST") { createBody = JSON.parse(String(init.body)); return json(fixtureRuleSet("new_clean", "draft")); }
+      if (url.endsWith("/api/v1/admin/rule-sets/new_clean") && !init?.method) return json({ ...fixtureRuleSet("new_clean", "draft"), revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup(); renderRoute("/content/rules/new");
+    await user.type(await screen.findByLabelText("规则 ID"), "  new_clean  ");
+    await user.type(screen.getByLabelText("规则名称"), "  清理后的规则  ");
+    await user.type(screen.getByLabelText("规则说明"), "  说明  ");
+    await user.type(screen.getByLabelText("复杂度"), "  简单  ");
+    await user.type(screen.getByLabelText("预计时长"), "  30 分钟  ");
+    await user.type(screen.getByLabelText("规则标签"), " 标签一，标签二，标签一 ");
+    await user.clear(screen.getByLabelText("显示顺序")); await user.type(screen.getByLabelText("显示顺序"), "4");
+    await user.clear(screen.getByLabelText("村民数量")); await user.type(screen.getByLabelText("村民数量"), "5");
+    await user.click(screen.getByLabelText("启用警长"));
+    await user.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(createBody).toBeDefined());
+    expect(createBody).toEqual({ id: "new_clean", display_order: 4, config: { name: "清理后的规则", description: "说明", complexity: "简单", estimated_duration: "30 分钟", rule_tags: ["标签一", "标签二"], role_counts: { werewolf: 1, villager: 5, seer: 0, guard: 0, witch: 0, hunter: 0, idiot: 0 }, win_condition: "wolves_gte_others", sheriff_enabled: false, sheriff_vote_weight: 1.5, speech_policy: "sequential", werewolf_self_explosion_enabled: true, sheriff_badge_bomb_policy: "double" } });
+  });
+
+  it.each([
+    ["current draft", fixtureRuleSet("classic_9", "draft"), 7],
+    ["no draft", fixtureRuleSet("classic_9", "published"), null],
+  ])("sends exact update locks for %s", async (_label, baseRule, expectedRevisionLock) => {
+    useServerSession(["rules.read", "rules.write"]); let updateBody: unknown; let gets = 0;
+    const base = { ...baseRule, lock_version: 8, draft_revision: baseRule.draft_revision ? { ...baseRule.draft_revision, lock_version: 7 } : null, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] };
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input); const common = serverCommon(url); if (common) return common;
+      if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) { gets += 1; return json(base); }
+      if (url.endsWith("/api/v1/admin/rule-sets/classic_9/draft") && init?.method === "PATCH") { updateBody = JSON.parse(String(init.body)); return json(fixtureRuleSet("classic_9", "draft")); }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup(); renderRoute("/content/rules/classic_9");
+    await user.clear(await screen.findByLabelText("规则名称")); await user.type(screen.getByLabelText("规则名称"), "更新名称");
+    await user.click(screen.getByRole("button", { name: "保存草稿" })); await waitFor(() => expect(gets).toBeGreaterThanOrEqual(2));
+    expect(updateBody).toEqual({ expected_rule_set_lock_version: 8, expected_revision_lock_version: expectedRevisionLock, display_order: 1, config: { ...standardConfig, name: "更新名称" } });
+  });
+
+  it("resets the dirty baseline after save and invalidates list and detail queries", async () => {
+    useServerSession(["rules.read", "rules.write"]); const baseRule = fixtureRuleSet("classic_9", "draft"); const base = { ...baseRule, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] };
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) return json(base); if (url.endsWith("/api/v1/admin/rule-sets/classic_9/draft")) return json(baseRule); throw new Error(`Unexpected request: ${url}`); }));
+    const user = userEvent.setup(); const { router, queryClient } = renderRoute("/content/rules/classic_9"); const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    await user.type(await screen.findByLabelText("规则名称"), " saved"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "list"] })); expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "detail", "classic_9"] });
+    await act(async () => { await router.navigate("/content/rules"); });
+    expect(screen.queryByRole("dialog", { name: "未保存规则" })).not.toBeInTheDocument();
+  });
+
   it("unsaved rule changes block route navigation", async () => {
     const user = userEvent.setup(); const { router } = renderRoute("/content/rules/classic_9");
     const name = await screen.findByLabelText("规则名称"); await user.type(name, " 本地");
@@ -306,6 +361,46 @@ describe("rule editor", () => {
     expect(screen.getByText("内容哈希：abcdef123456")).toBeInTheDocument(); expect(screen.getByText("规则预览正文")).toBeInTheDocument(); expect(screen.queryByText(/opaque|secret/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发布规则" })).toBeEnabled();
     await user.type(screen.getByLabelText("规则名称"), " 修改"); expect(screen.getByRole("button", { name: "发布规则" })).toBeDisabled();
+  });
+
+  it.each([
+    ["name", "text", "规则名称", "变更名称"], ["description", "text", "规则说明", "变更说明"], ["complexity", "text", "复杂度", "困难"], ["duration", "text", "预计时长", "60 分钟"],
+    ["tags", "text", "规则标签", "新标签"], ["order", "text", "显示顺序", "9"],
+    ["werewolf count", "text", "狼人数量", "2"], ["villager count", "text", "村民数量", "4"], ["seer count", "text", "预言家数量", "0"], ["guard count", "text", "守卫数量", "1"], ["witch count", "text", "女巫数量", "0"], ["hunter count", "text", "猎人数量", "0"], ["idiot count", "text", "白痴数量", "1"],
+    ["win condition", "select", "胜利条件", "slaughter_side"], ["sheriff enabled", "check", "启用警长", ""], ["sheriff weight", "select", "警长票权", "2"], ["speech", "select", "发言规则", "sequential"], ["self explosion", "check", "允许狼人自爆", ""], ["badge policy", "select", "警徽规则", "none"],
+  ])("makes validation stale after editing %s and requires save plus revalidation", async (_name, kind, label, value) => {
+    const user = userEvent.setup(); renderRoute("/content/rules/preview_draft");
+    await user.click(await screen.findByRole("button", { name: "校验规则" })); expect(await screen.findByRole("button", { name: "发布规则" })).toBeEnabled();
+    const control = screen.getByLabelText(label);
+    if (kind === "check") await user.click(control);
+    else if (kind === "select") await user.selectOptions(control, value);
+    else { await user.clear(control); await user.type(control, value); }
+    expect(screen.getByRole("button", { name: "发布规则" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "校验规则" })).toBeEnabled()); expect(screen.getByRole("button", { name: "发布规则" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "校验规则" })); await waitFor(() => expect(screen.getByRole("button", { name: "发布规则" })).toBeEnabled());
+  });
+
+  it("renders invalid server validation with associated path error and summary, without opaque snapshot", async () => {
+    useServerSession(["rules.read", "rules.write"]); const rule = fixtureRuleSet("classic_9", "draft"); const base = { ...rule, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] };
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) return json(base); if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) return json({ valid: false, errors: [{ code: "name_invalid", path: "config.name", message: "规则名称被服务器拒绝" }], warnings: [], compiled_snapshot: { opaque_secret: "must-not-render" }, content_hash: null, rule_text_preview: null }); throw new Error(`Unexpected request: ${url}`); }));
+    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); await user.click(await screen.findByRole("button", { name: "校验规则" }));
+    expect(await screen.findByRole("heading", { name: "校验失败" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "校验错误" })).toHaveTextContent("config.name：规则名称被服务器拒绝");
+    expect(screen.getByLabelText("规则名称")).toHaveAttribute("aria-invalid", "true"); expect(screen.getByLabelText("规则名称")).toHaveAccessibleDescription("规则名称被服务器拒绝");
+    expect(screen.getAllByRole("alert").some((node) => node.textContent?.includes("规则名称被服务器拒绝"))).toBe(true);
+    expect(screen.queryByText(/opaque_secret|must-not-render/)).not.toBeInTheDocument(); expect(screen.getByRole("button", { name: "发布规则" })).toBeDisabled();
+  });
+
+  it("shows a dedicated editor 404 without leaking server detail", async () => {
+    useServerSession(["rules.read", "rules.write"]); vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/missing")) return json({ title: "Not found", status: 404, detail: "internal missing row detail", code: "not_found", request_id: "secret-request" }, 404); throw new Error(`Unexpected request: ${url}`); }));
+    renderRoute("/content/rules/missing"); expect(await screen.findByRole("heading", { name: "没有找到该游戏规则" })).toBeInTheDocument(); expect(screen.getByText("规则可能已被删除或 ID 不正确。")).toBeInTheDocument(); expect(screen.queryByText(/internal missing|secret-request/)).not.toBeInTheDocument(); expect(screen.queryByRole("button", { name: "重新加载" })).not.toBeInTheDocument();
+  });
+
+  it("shows a bounded retryable editor 503 and recovers", async () => {
+    useServerSession(["rules.read", "rules.write"]); const rule = fixtureRuleSet("classic_9", "draft"); const base = { ...rule, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let gets = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9")) { gets += 1; return gets === 1 ? json({ title: "Unavailable", status: 503, detail: "规则服务暂时不可用", code: "rules_unavailable", request_id: "req-editor-503", internal_debug: "do not show" }, 503) : json(base); } throw new Error(`Unexpected request: ${url}`); }));
+    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); expect(await screen.findByRole("heading", { name: "无法读取游戏规则" })).toBeInTheDocument(); expect(screen.getByText("规则服务暂时不可用")).toBeInTheDocument(); expect(screen.queryByText(/internal_debug|do not show/)).not.toBeInTheDocument(); await user.click(screen.getByRole("button", { name: "重新加载" })); expect(await screen.findByDisplayValue("classic_9 草稿")).toBeInTheDocument(); expect(gets).toBe(2);
   });
 });
 
