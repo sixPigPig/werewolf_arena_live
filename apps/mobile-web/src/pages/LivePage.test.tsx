@@ -620,12 +620,18 @@ describe("LivePage", () => {
 
   it("styles mobile live subtitles as a full-width single-line KTV HUD", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
+    const seatStageRule =
+      styles.match(/(?:^|\n)\.mobile-live-seat-stage\s*{[^}]+}/)?.[0] ?? "";
     const subtitleRule =
       styles.match(/(?:^|\n)\.mobile-live-subtitle\s*{[^}]+}/)?.[0] ?? "";
+    const speakerRule =
+      styles.match(/(?:^|\n)\.mobile-live-subtitle\s*>\s*strong\s*{[^}]+}/)?.[0] ?? "";
     const subtitleTextRule =
       styles.match(/(?:^|\n)\.mobile-live-subtitle-text\s*{[^}]+}/)?.[0] ?? "";
     const activeTextRule =
       styles.match(/(?:^|\n)\.mobile-live-subtitle-active\s*{[^}]+}/)?.[0] ?? "";
+    const completedTextRule =
+      styles.match(/(?:^|\n)\.mobile-live-subtitle-completed\s*{[^}]+}/)?.[0] ?? "";
     const pendingTextRule =
       styles.match(/(?:^|\n)\.mobile-live-subtitle-pending\s*{[^}]+}/)?.[0] ?? "";
     const judgeRule =
@@ -653,20 +659,26 @@ describe("LivePage", () => {
     expect(subtitleRule).toContain("position: absolute");
     expect(subtitleRule).toContain("right: 10px");
     expect(subtitleRule).toContain("left: 10px");
-    expect(subtitleRule).toContain("grid-template-columns: auto minmax(0, 1fr)");
+    expect(subtitleRule).toContain("display: flex");
+    expect(subtitleRule).toContain("justify-content: center");
+    expect(subtitleRule).toContain("min-height: 44px");
+    expect(seatStageRule).toContain("padding-bottom: 48px");
+    expect(speakerRule).toContain("font-size: 13px");
     expect(subtitleTextRule).not.toContain("-webkit-line-clamp");
+    expect(subtitleTextRule).toContain("font-size: 16px");
     expect(subtitleTextRule).toContain("text-overflow: clip");
     expect(subtitleTextRule).toContain("overflow: hidden");
     expect(subtitleTextRule).toContain("white-space: nowrap");
     expect(subtitleTextRule).toContain("word-break: normal");
     expect(activeTextRule).toContain("var(--mobile-live-subtitle-accent)");
-    expect(pendingTextRule).toContain("38%");
+    expect(completedTextRule).toContain("var(--mobile-live-subtitle-accent)");
+    expect(pendingTextRule).toContain("62%");
     expect(judgeRule).toContain("--mobile-live-subtitle-accent: #f4c76d");
     expect(playerZeroRule).toContain("--mobile-live-subtitle-accent: #8ddfd0");
     expect(styles).toContain(".mobile-live-subtitle-player-7");
     expect(playerAccents).not.toContain("");
     expect(playerAccents).not.toContain(judgeAccent);
-    expect(shortScreenRule).toContain("font-size: 12px");
+    expect(shortScreenRule).toContain("font-size: 15px");
   });
 
   it("renders the director controls with gothic icon slots", async () => {

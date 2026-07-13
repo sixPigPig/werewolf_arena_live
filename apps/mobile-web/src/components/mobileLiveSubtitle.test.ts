@@ -189,7 +189,7 @@ describe("deriveMobileLiveSubtitle", () => {
 });
 
 describe("voiceSubtitleToMobileSubtitle", () => {
-  it("preserves KTV progress while removing visible punctuation", () => {
+  it("preserves KTV progress while removing pause punctuation", () => {
     expect(
       voiceSubtitleToMobileSubtitle({
         activeText: "发",
@@ -210,6 +210,26 @@ describe("voiceSubtitleToMobileSubtitle", () => {
       speakerName: "3号玩家",
       text: "我先发言",
       tone: "player",
+    });
+  });
+
+  it("keeps question and exclamation marks that carry spoken intent", () => {
+    expect(
+      voiceSubtitleToMobileSubtitle({
+        activeText: "吗？",
+        completedText: "你确定",
+        pageIndex: 0,
+        pendingText: "我不信！",
+        speakerKind: "player",
+        speakerName: "5号玩家",
+        text: "你确定吗？我不信！",
+        utteranceId: "voice-2",
+      }),
+    ).toMatchObject({
+      activeText: "吗？",
+      completedText: "你确定",
+      pendingText: "我不信！",
+      text: "你确定吗？我不信！",
     });
   });
 });

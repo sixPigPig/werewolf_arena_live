@@ -1912,7 +1912,9 @@ textarea {
   align-items: stretch;
   gap: 6px;
   min-height: 0;
+  box-sizing: border-box;
   overflow: hidden;
+  padding-bottom: 48px;
 }
 
 .mobile-live-seat-stage::before,
@@ -2280,32 +2282,37 @@ textarea {
   position: absolute;
   z-index: 4;
   right: 10px;
-  bottom: 12px;
+  bottom: 4px;
   left: 10px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: 9px;
-  min-height: 38px;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
   box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, var(--mobile-live-subtitle-accent) 62%, transparent);
+  border: 0;
+  border-block: 1px solid color-mix(in srgb, var(--mobile-live-subtitle-accent) 52%, transparent);
   border-radius: 0;
-  padding: 8px 11px;
+  padding: 8px 10px;
   pointer-events: none;
   background:
-    linear-gradient(180deg, rgb(255 239 192 / 7%), rgb(0 0 0 / 18%)),
-    rgb(5 8 12 / 86%);
+    linear-gradient(180deg, rgb(255 239 192 / 6%), rgb(0 0 0 / 16%)),
+    rgb(5 8 12 / 90%);
   color: #fff2bf;
   box-shadow:
     inset 0 1px 0 rgb(255 245 202 / 10%),
-    0 6px 16px rgb(0 0 0 / 30%),
-    0 0 18px color-mix(in srgb, var(--mobile-live-subtitle-accent) 22%, transparent);
-  text-align: left;
+    0 6px 16px rgb(0 0 0 / 32%),
+    0 0 14px color-mix(in srgb, var(--mobile-live-subtitle-accent) 16%, transparent);
+  text-align: center;
+  backdrop-filter: blur(5px);
 }
 
 .mobile-live-subtitle > strong {
+  flex: 0 0 auto;
+  border-right: 1px solid color-mix(in srgb, var(--mobile-live-subtitle-accent) 36%, transparent);
+  padding-right: 8px;
   color: var(--mobile-live-subtitle-accent);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 900;
   line-height: 1.4;
   white-space: nowrap;
@@ -2314,12 +2321,14 @@ textarea {
 
 .mobile-live-subtitle-text {
   display: block;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   color: #fff4cf;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 800;
-  line-height: 1.25;
+  line-height: 1.35;
   text-overflow: clip;
   text-shadow: 0 2px 5px rgb(0 0 0 / 76%);
   white-space: nowrap;
@@ -2342,7 +2351,7 @@ textarea {
 }
 
 .mobile-live-subtitle-pending {
-  color: rgb(255 244 207 / 38%);
+  color: rgb(255 244 207 / 62%);
   text-shadow: 0 2px 5px rgb(0 0 0 / 70%);
 }
 
@@ -2566,6 +2575,7 @@ textarea {
   .mobile-live-seat-stage {
     grid-template-columns: 64px minmax(0, 1fr) 64px;
     gap: 4px;
+    padding-bottom: 44px;
   }
 
   .mobile-live-action-bar {
@@ -2575,14 +2585,14 @@ textarea {
 
   .mobile-live-subtitle {
     right: 6px;
-    bottom: 8px;
+    bottom: 3px;
     left: 6px;
     gap: 6px;
     padding: 7px 8px;
   }
 
   .mobile-live-subtitle-text {
-    font-size: 13px;
+    font-size: 15px;
   }
 }
 
@@ -2639,16 +2649,17 @@ textarea {
   }
 
   .mobile-live-subtitle {
-    gap: 5px;
-    padding: 5px 7px;
+    gap: 6px;
+    min-height: 42px;
+    padding: 6px 8px;
   }
 
   .mobile-live-subtitle > strong {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .mobile-live-subtitle-text {
-    font-size: 12px;
+    font-size: 15px;
   }
 
   .mobile-live-presenter {

@@ -390,8 +390,8 @@ describe("playback voice", () => {
     });
 
     expect(subtitle).toEqual({
-      activeText: "过",
-      completedText: "我先",
+      activeText: "",
+      completedText: "我先过",
       pageIndex: 0,
       pendingText: "",
       speakerKind: "player",

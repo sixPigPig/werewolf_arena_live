@@ -9,9 +9,16 @@ export const SUBTITLE_CUE_LEAD_MS = 40;
 export const SUBTITLE_PAGE_MAX_COLUMNS = 16;
 
 const MIN_BALANCED_PAGE_COLUMNS = 6;
+const MAX_STANDALONE_SHORT_PHRASE_LENGTH = 2;
+const MIN_SUBTITLE_PAGE_DURATION_MS = 830;
+const MAX_SUBTITLE_CHARACTERS_PER_SECOND = 9;
+const SUBTITLE_ACTIVE_GLOW_RATIO = 0.6;
+const SUBTITLE_FINAL_COLOR_HOLD_MS = 140;
+const SUBTITLE_MIN_ACTIVE_GLOW_MS = 60;
 const SUBTITLE_PUNCTUATION = /^(?:\p{P}|[~～])$/u;
-const STRONG_SUBTITLE_BREAK = /^[。！？!?；;.]$/u;
-const WEAK_SUBTITLE_BREAK = /^[，,、：:]$/u;
+const STRONG_SUBTITLE_BREAK = /^[。！？!?；;.…]$/u;
+const WEAK_SUBTITLE_BREAK = /^[，,、：:—–~～]$/u;
+const VISIBLE_SUBTITLE_PUNCTUATION = /^[！？!?]$/u;
 const SUBTITLE_EMOJI = /^\p{Extended_Pictographic}$/u;
 const SUBTITLE_SEGMENTER = new Intl.Segmenter("zh-CN", {
   granularity: "grapheme",
@@ -132,22 +139,43 @@ export function subtitleDisplayForElapsedMs(
   }
 
   const page = pages[pageIndex];
-  let activeUnitIndex = -1;
+  let lastStartedUnitIndex = -1;
   for (let index = 0; index < page.units.length; index += 1) {
     const unit = page.units[index];
     if (!isSubtitleWhitespace(unit.text) && unit.startMs <= targetMs) {
-      activeUnitIndex = index;
+      lastStartedUnitIndex = index;
     }
   }
 
+  const lastStartedUnit = page.units[lastStartedUnitIndex];
+  const lastSpokenUnitIndex = page.units.findLastIndex(
+    (unit) => !isSubtitleWhitespace(unit.text),
+  );
+  const activeUnitIndex =
+    lastStartedUnit &&
+    targetMs <
+      subtitleUnitSettledAtMs(
+        lastStartedUnit,
+        lastStartedUnitIndex === lastSpokenUnitIndex,
+      )
+      ? lastStartedUnitIndex
+      : -1;
+  let completedEndIndex =
+    activeUnitIndex >= 0 ? activeUnitIndex : lastStartedUnitIndex + 1;
+  while (
+    completedEndIndex < page.units.length &&
+    isSubtitleWhitespace(page.units[completedEndIndex].text)
+  ) {
+    completedEndIndex += 1;
+  }
   const completedText = page.units
-    .slice(0, Math.max(0, activeUnitIndex))
+    .slice(0, Math.max(0, completedEndIndex))
     .map((unit) => unit.text)
     .join("");
   const activeText =
     activeUnitIndex >= 0 ? page.units[activeUnitIndex].text : "";
   const pendingText = page.units
-    .slice(activeUnitIndex + 1)
+    .slice(activeUnitIndex >= 0 ? activeUnitIndex + 1 : completedEndIndex)
     .map((unit) => unit.text)
     .join("");
 
@@ -160,6 +188,28 @@ export function subtitleDisplayForElapsedMs(
   };
 }
 
+function subtitleUnitSettledAtMs(
+  unit: TimedSubtitleUnit,
+  isFinalSpokenUnit: boolean,
+) {
+  const durationMs = unit.endMs - unit.startMs;
+  const ratioSettledAtMs =
+    unit.startMs + durationMs * SUBTITLE_ACTIVE_GLOW_RATIO;
+  if (!isFinalSpokenUnit) {
+    return ratioSettledAtMs;
+  }
+
+  const minimumActiveMs = Math.min(
+    SUBTITLE_MIN_ACTIVE_GLOW_MS,
+    durationMs * SUBTITLE_ACTIVE_GLOW_RATIO,
+  );
+  const settledAtMsForColorHold = Math.max(
+    unit.startMs + minimumActiveMs,
+    unit.endMs - SUBTITLE_FINAL_COLOR_HOLD_MS,
+  );
+  return Math.min(ratioSettledAtMs, settledAtMsForColorHold);
+}
+
 export function subtitleTextForElapsedMs(
   cues: LiveVoiceSubtitleCue[],
   elapsedMs: number,
@@ -169,7 +219,11 @@ export function subtitleTextForElapsedMs(
 
 export function removeSubtitlePunctuation(value: string) {
   return splitSubtitleGraphemes(value)
-    .filter((grapheme) => !isSubtitlePunctuation(grapheme))
+    .filter(
+      (grapheme) =>
+        !isSubtitlePunctuation(grapheme) ||
+        isVisibleSubtitlePunctuation(grapheme),
+    )
     .join("");
 }
 
@@ -179,14 +233,14 @@ export function stripSubtitlePunctuation(value: string) {
 
 function subtitlePages(cues: LiveVoiceSubtitleCue[]) {
   const units = timedSubtitleUnits(cues);
-  const semanticRanges: TimedSubtitleUnit[][] = [];
+  const punctuationRanges: TimedSubtitleUnit[][] = [];
   let rangeStart = 0;
 
   for (let index = 0; index < units.length; index += 1) {
-    if (units[index].breakAfter === "strong") {
+    if (units[index].breakAfter !== "none") {
       const range = trimSubtitleUnits(units.slice(rangeStart, index + 1));
       if (range.length > 0) {
-        semanticRanges.push(range);
+        punctuationRanges.push(range);
       }
       rangeStart = index + 1;
     }
@@ -194,15 +248,133 @@ function subtitlePages(cues: LiveVoiceSubtitleCue[]) {
 
   const finalRange = trimSubtitleUnits(units.slice(rangeStart));
   if (finalRange.length > 0) {
-    semanticRanges.push(finalRange);
+    punctuationRanges.push(finalRange);
   }
 
-  return semanticRanges
+  return mergeSubtitleRangesForReadability(punctuationRanges)
     .flatMap(paginateSubtitleRange)
     .map<SubtitlePage>((page) => ({
       startMs: firstSpokenUnit(page)?.startMs ?? page[0].startMs,
       units: page,
     }));
+}
+
+function mergeSubtitleRangesForReadability(ranges: TimedSubtitleUnit[][]) {
+  const mergedRanges: TimedSubtitleUnit[][] = [];
+
+  for (let index = 0; index < ranges.length; index += 1) {
+    let range = ranges[index];
+    while (
+      index + 1 < ranges.length &&
+      shouldJoinSubtitleRangeWithNext(range, ranges[index + 1])
+    ) {
+      index += 1;
+      range = joinSubtitleRanges(range, ranges[index]);
+    }
+
+    if (
+      shouldBorrowTimeFromPreviousRange(range) &&
+      mergedRanges.length > 0
+    ) {
+      const previousRange = mergedRanges.pop();
+      if (previousRange) {
+        mergedRanges.push(joinSubtitleRanges(previousRange, range));
+      }
+      continue;
+    }
+
+    mergedRanges.push(range);
+  }
+
+  return mergedRanges;
+}
+
+function shouldJoinSubtitleRangeWithNext(
+  range: TimedSubtitleUnit[],
+  nextRange: TimedSubtitleUnit[],
+) {
+  if (
+    subtitleSpokenUnitCount(range) <= MAX_STANDALONE_SHORT_PHRASE_LENGTH ||
+    !isReadableSubtitleRange(range)
+  ) {
+    return true;
+  }
+
+  return (
+    subtitleRangeBreakStrength(range) === "weak" &&
+    subtitleJoinedRangeWidth(range, nextRange) <= SUBTITLE_PAGE_MAX_COLUMNS
+  );
+}
+
+function shouldBorrowTimeFromPreviousRange(range: TimedSubtitleUnit[]) {
+  return (
+    subtitleSpokenUnitCount(range) <= MAX_STANDALONE_SHORT_PHRASE_LENGTH ||
+    !isReadableSubtitleRange(range)
+  );
+}
+
+function isReadableSubtitleRange(range: TimedSubtitleUnit[]) {
+  const firstUnit = firstSpokenUnit(range);
+  const lastUnit = lastSpokenUnit(range);
+  if (!firstUnit || !lastUnit) {
+    return false;
+  }
+
+  const durationMs = lastUnit.endMs - firstUnit.startMs;
+  const spokenUnitCount = subtitleSpokenUnitCount(range);
+  if (durationMs < MIN_SUBTITLE_PAGE_DURATION_MS) {
+    return false;
+  }
+
+  return (
+    (spokenUnitCount * 1000) / durationMs <=
+    MAX_SUBTITLE_CHARACTERS_PER_SECOND
+  );
+}
+
+function subtitleRangeBreakStrength(range: TimedSubtitleUnit[]) {
+  return lastSpokenUnit(range)?.breakAfter ?? "none";
+}
+
+function subtitleJoinedRangeWidth(
+  leftRange: TimedSubtitleUnit[],
+  rightRange: TimedSubtitleUnit[],
+) {
+  return subtitleUnitsWidth(leftRange) + 0.5 + subtitleUnitsWidth(rightRange);
+}
+
+function joinSubtitleRanges(
+  leftRange: TimedSubtitleUnit[],
+  rightRange: TimedSubtitleUnit[],
+) {
+  const left = trimSubtitleUnits(leftRange).slice();
+  const right = trimSubtitleUnits(rightRange);
+  const leftBoundaryIndex = left.findLastIndex(
+    (unit) => !isSubtitleWhitespace(unit.text),
+  );
+  if (leftBoundaryIndex >= 0) {
+    left[leftBoundaryIndex] = {
+      ...left[leftBoundaryIndex],
+      breakAfter: "none",
+    };
+  }
+
+  const separatorMs = firstSpokenUnit(right)?.startMs ?? left.at(-1)?.endMs ?? 0;
+  return [
+    ...left,
+    {
+      breakAfter: "none" as const,
+      columnWidth: 0.5,
+      endMs: separatorMs,
+      startMs: separatorMs,
+      text: " ",
+    },
+    ...right,
+  ];
+}
+
+function subtitleSpokenUnitCount(units: TimedSubtitleUnit[]) {
+  return units.filter((unit) => !isSubtitleWhitespace(unit.text)).length;
 }
 
 function timedSubtitleUnits(cues: LiveVoiceSubtitleCue[]) {
@@ -230,6 +402,7 @@ function timedSubtitleUnits(cues: LiveVoiceSubtitleCue[]) {
         continue;
       }
       if (isSubtitlePunctuation(grapheme)) {
+        attachVisibleSubtitlePunctuation(units, grapheme);
         attachSubtitleBreak(units, subtitleBreakStrength(grapheme));
         continue;
       }
@@ -346,6 +519,25 @@ function firstSpokenUnit(units: TimedSubtitleUnit[]) {
   return units.find((unit) => !isSubtitleWhitespace(unit.text));
 }
 
+function lastSpokenUnit(units: TimedSubtitleUnit[]) {
+  return units.findLast((unit) => !isSubtitleWhitespace(unit.text));
+}
+
+function attachVisibleSubtitlePunctuation(
+  units: TimedSubtitleUnit[],
+  grapheme: string,
+) {
+  if (!isVisibleSubtitlePunctuation(grapheme)) {
+    return;
+  }
+  const unit = lastSpokenUnit(units);
+  if (!unit) {
+    return;
+  }
+  unit.text += grapheme;
+  unit.columnWidth += subtitleColumnWidth(grapheme);
+}
+
 function attachSubtitleBreak(
   units: TimedSubtitleUnit[],
   strength: SubtitleBreakStrength,
@@ -384,6 +576,10 @@ function subtitleColumnWidth(grapheme: string) {
 
 function isSubtitlePunctuation(grapheme: string) {
   return SUBTITLE_PUNCTUATION.test(grapheme);
+}
+
+function isVisibleSubtitlePunctuation(grapheme: string) {
+  return VISIBLE_SUBTITLE_PUNCTUATION.test(grapheme);
 }
 
 function isSubtitleWhitespace(grapheme: string) {
