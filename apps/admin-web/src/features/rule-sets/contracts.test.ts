@@ -1,0 +1,64 @@
+import { describe, expect, it } from "vitest";
+import {
+  parseAdminRuleSet,
+  parseAdminRuleSetDetail,
+  parseAdminRuleSetList,
+  parseRuleSetOptions,
+  parseRuleSetValidation,
+} from "./parsers";
+
+const config = {
+  name: "标准局", description: "", complexity: "中等", estimated_duration: "45 分钟",
+  rule_tags: ["标准"], role_counts: { werewolf: 3, villager: 3, seer: 1, guard: 1, witch: 1, hunter: 0, idiot: 0 },
+  win_condition: "wolves_gte_others", sheriff_enabled: true, sheriff_vote_weight: 1.5,
+  speech_policy: "sequential", werewolf_self_explosion_enabled: true, sheriff_badge_bomb_policy: "none",
+};
+const revision = {
+  id: "revision-1", rule_set_id: "standard_rule", revision_no: 1, state: "draft", schema_version: 1,
+  content_hash: null, lock_version: 1, config, player_count: 9, role_summary: "3狼6好人",
+  created_at: "2026-07-13T00:00:00Z", updated_at: "2026-07-13T00:00:00Z", published_at: null, published_by: null,
+};
+const ruleSet = {
+  id: "standard_rule", status: "draft", is_default: false, display_order: 0, lock_version: 1,
+  draft_revision: revision, published_revision: null, revisions: [revision],
+  created_at: "2026-07-13T00:00:00Z", updated_at: "2026-07-13T00:00:00Z",
+};
+const options = {
+  roles: [{ id: "werewolf", label: "狼人", min_count: 0, max_count: 12 }],
+  win_conditions: [{ value: "wolves_gte_others", label: "屠边" }], sheriff_vote_weights: [1, 1.5],
+  speech_policies: [{ value: "sequential", label: "顺序" }],
+  sheriff_badge_bomb_policies: [{ value: "none", label: "无" }], statuses: [{ value: "draft", label: "草稿" }],
+  sorts: [{ value: "display_order", label: "顺序" }],
+  constraints: { player_count_min: 6, player_count_max: 12, tags_max_items: 8, tag_max_length: 20, id_pattern: "x", reason_min_length: 3, reason_max_length: 500 },
+};
+
+describe("rule-set response contracts", () => {
+  it("accepts exact rule set, detail, list, options, and validation payloads", () => {
+    expect(parseAdminRuleSet(ruleSet)).toEqual(ruleSet);
+    expect(parseAdminRuleSetDetail({ ...ruleSet, revisions: [{ ...revision, usage: { game_count: 1, live_count: 2 } }], usage: { game_count: 3, live_count: 4 }, warnings: [] })).toMatchObject({ usage: { game_count: 3, live_count: 4 } });
+    expect(parseAdminRuleSetList({ items: [ruleSet], pagination: { page: 1, page_size: 20, total: 1, pages: 1 } })).toMatchObject({ items: [ruleSet] });
+    expect(parseRuleSetOptions(options)).toEqual(options);
+    expect(parseRuleSetValidation({ valid: true, errors: [], warnings: [], compiled_snapshot: { internal: true }, content_hash: "a".repeat(64), rule_text_preview: "preview" })).toEqual({ valid: true, errors: [], warnings: [], content_hash: "a".repeat(64), rule_text_preview: "preview" });
+  });
+
+  it.each([
+    [{ ...ruleSet, status: "deleted" }, "status"],
+    [{ ...ruleSet, draft_revision: { ...revision, state: "active" } }, "state"],
+    [{ ...ruleSet, lock_version: 0 }, "lock_version"],
+    [{ items: [], pagination: { page: 0, page_size: 20, total: 0, pages: 0 } }, "pagination"],
+    [{ ...ruleSet, draft_revision: { ...revision, config: { ...config, role_counts: { ...config.role_counts, werewolf: -1 } } } }, "role_counts"],
+  ])("rejects malformed payload %#", (payload) => {
+    const parse = "items" in payload ? parseAdminRuleSetList : parseAdminRuleSet;
+    expect(() => parse(payload)).toThrowError(expect.objectContaining({ code: "admin_invalid_rule_set_response", status: 502 }));
+  });
+
+  it.each(["compiled_snapshot", "rule_set_snapshot", "players", "sql", "raw_error"])("rejects forbidden key %s outside validation", (key) => {
+    expect(() => parseAdminRuleSet({ ...ruleSet, [key]: {} })).toThrow();
+    expect(() => parseAdminRuleSet({ ...ruleSet, draft_revision: { ...revision, config: { ...config, [key]: {} } } })).toThrow();
+  });
+
+  it("allows compiled_snapshot only at validation root", () => {
+    expect(() => parseRuleSetValidation({ valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).not.toThrow();
+    expect(() => parseRuleSetValidation({ valid: true, errors: [{ code: "x", path: "x", message: "x", compiled_snapshot: {} }], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).toThrow();
+  });
+});
