@@ -43,9 +43,7 @@ from app.api.schemas.admin_rule_sets import (
     RuleSetStatus,
 )
 from app.db.session import get_db
-from app.models.game_session import GameSessionRecord
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord
-from app.models.live import LiveRunRecord
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.rule_sets.errors import (
@@ -62,6 +60,7 @@ from app.rule_sets.errors import (
 from app.rule_sets.repository import (
     RuleSetAggregate,
     get_rule_set_aggregate,
+    get_rule_set_usage,
     list_rule_sets,
 )
 from app.rule_sets.service import (
@@ -234,7 +233,26 @@ def get_admin_rule_set(
         if aggregate is None:
             raise _not_found()
         snapshot = admin_rule_set_snapshot(aggregate)
-        usage = _usage_counts(db, rule_set_id)
+        usage_aggregate = get_rule_set_usage(
+            db,
+            rule_set_id,
+            revision_ids=tuple(revision.id for revision in aggregate.revisions),
+        )
+        usage_by_revision = {item.revision_id: item for item in usage_aggregate.revisions}
+        snapshot["revisions"] = [
+            {
+                **revision,
+                "usage": {
+                    "game_count": usage_by_revision[str(revision["id"])].game_count,
+                    "live_count": usage_by_revision[str(revision["id"])].live_count,
+                },
+            }
+            for revision in snapshot["revisions"]
+        ]
+        usage = AdminRuleSetUsage(
+            game_count=usage_aggregate.game_count,
+            live_count=usage_aggregate.live_count,
+        )
         warnings = _operational_warnings(db, aggregate)
     except AdminAPIProblem:
         raise
@@ -386,8 +404,10 @@ def validate_admin_rule_set_draft(
             expected_revision_lock_version=request_body.expected_revision_lock_version,
         )
         errors = [_issue_response(issue) for issue in result.validation.errors]
-        warnings = [_issue_response(issue) for issue in result.validation.warnings]
-        warnings.extend(_operational_warnings(db, result.aggregate))
+        warnings = (
+            [_issue_response(issue) for issue in result.validation.warnings]
+            + _operational_warnings(db, result.aggregate)
+        )[:50]
         valid = result.validation.valid
         if result.compiled is None:
             payload = AdminRuleSetValidationResponse(
@@ -743,29 +763,6 @@ def duplicate_admin_rule_set(
     return payload
 
 
-def _usage_counts(db: Session, rule_set_id: str) -> AdminRuleSetUsage:
-    live_run_count = int(
-        db.scalar(
-            select(func.count())
-            .select_from(LiveRunRecord)
-            .where(LiveRunRecord.rule_set_id == rule_set_id)
-        )
-        or 0
-    )
-    game_session_count = int(
-        db.scalar(
-            select(func.count())
-            .select_from(GameSessionRecord)
-            .where(GameSessionRecord.rule_set["id"].as_string() == rule_set_id)
-        )
-        or 0
-    )
-    return AdminRuleSetUsage(
-        game_count=game_session_count,
-        live_count=live_run_count,
-    )
-
-
 def _operational_warnings(
     db: Session,
     aggregate: RuleSetAggregate,
@@ -778,7 +775,10 @@ def _operational_warnings(
         db.scalar(
             select(func.count())
             .select_from(VirtualPlayerProfile)
-            .where(VirtualPlayerProfile.status == "published")
+            .where(
+                VirtualPlayerProfile.status == "published",
+                VirtualPlayerProfile.deleted_at.is_(None),
+            )
         )
         or 0
     )

@@ -180,6 +180,10 @@ class AdminRuleSetUsage(BaseModel):
     live_count: int = Field(ge=0)
 
 
+class AdminRuleSetHistoryRevisionResponse(AdminRuleSetRevisionResponse):
+    usage: AdminRuleSetUsage
+
+
 class AdminRuleSetWarning(BaseModel):
     code: str = Field(min_length=1, max_length=80)
     path: str = Field(min_length=1, max_length=120)
@@ -196,6 +200,7 @@ class AdminRuleSetValidationResponse(BaseModel):
 
 
 class AdminRuleSetDetailResponse(AdminRuleSetResponse):
+    revisions: list[AdminRuleSetHistoryRevisionResponse] = Field(max_length=50)
     usage: AdminRuleSetUsage
     warnings: list[AdminRuleSetWarning] = Field(max_length=10)
 

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Generator
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import DataError, IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -240,6 +240,17 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
                 deleted_at=None,
             )
         )
+        db.connection().exec_driver_sql("PRAGMA ignore_check_constraints = ON")
+        db.add(
+            VirtualPlayerProfile(
+                id="deleted-published-profile",
+                display_name="Deleted published profile",
+                model="test-model",
+                status="published",
+                published_at=now,
+                deleted_at=now,
+            )
+        )
         for seat_number in range(1, 6):
             db.add(
                 JudgeVoiceAssetRecord(
@@ -258,7 +269,34 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
                     source="generated",
                 )
             )
+        for asset_id, seat_number, size_bytes in (
+            ("duplicate-seat-01", 1, 5),
+            ("zero-seat", 0, 5),
+            ("out-of-range-seat", 9, 5),
+            ("empty-seat-06", 6, 0),
+        ):
+            db.add(
+                JudgeVoiceAssetRecord(
+                    id=asset_id,
+                    text="Coverage edge case",
+                    category="test",
+                    template_id="speech_prompt",
+                    seat_number=seat_number,
+                    audio_format="mp3",
+                    sample_rate=24000,
+                    mime_type="audio/mpeg",
+                    data=b"audio" if size_bytes else b"",
+                    sha256=f"{asset_id:0<64}"[:64],
+                    size_bytes=size_bytes,
+                    subtitle_timings=[],
+                    source="generated",
+                )
+            )
         for index, current_id in enumerate((rule_set_id, rule_set_id, "other_rule")):
+            revision_no = 56 - index if index < 2 else None
+            revision_id = (
+                f"00000000-0000-0000-0000-{revision_no:012d}" if revision_no is not None else None
+            )
             db.add(
                 LiveRunRecord(
                     run_id=f"run-{index}",
@@ -268,7 +306,12 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
                     werewolf_model="test-model",
                     max_rounds=10,
                     rule_set_id=current_id,
-                    rule_set={"id": current_id, "config": {"must": "not leak"}},
+                    rule_set_revision_id=revision_id,
+                    rule_set_revision_no=revision_no,
+                    rule_set={
+                        "id": "history_rule" if current_id == "other_rule" else "other_rule",
+                        "config": {"must": "not leak"},
+                    },
                     player_configs=[],
                     lineup_quality_warnings=[],
                 )
@@ -277,10 +320,43 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
                 GameSessionRecord(
                     session_id=f"game-session-{index}",
                     status="completed",
-                    rule_set={"id": current_id, "snapshot": {"must": "not leak"}},
+                    rule_set_id=current_id,
+                    rule_set_revision_id=revision_id,
+                    rule_set_revision_no=revision_no,
+                    rule_set={
+                        "id": "history_rule" if current_id == "other_rule" else "other_rule",
+                        "snapshot": {"must": "not leak"},
+                    },
                 )
             )
+        db.add(
+            LiveRunRecord(
+                run_id="run-legacy",
+                session_id="live-session-legacy",
+                status="completed",
+                villager_model="test-model",
+                werewolf_model="test-model",
+                max_rounds=10,
+                rule_set_id=rule_set_id,
+                rule_set_revision_id=None,
+                rule_set_revision_no=None,
+                rule_set={"id": rule_set_id, "legacy": True},
+                player_configs=[],
+                lineup_quality_warnings=[],
+            )
+        )
+        db.add(
+            GameSessionRecord(
+                session_id="game-session-legacy",
+                status="completed",
+                rule_set_id=rule_set_id,
+                rule_set_revision_id=None,
+                rule_set_revision_no=None,
+                rule_set={"id": rule_set_id, "legacy": True},
+            )
+        )
         db.commit()
+        db.connection().exec_driver_sql("PRAGMA ignore_check_constraints = OFF")
 
 
 @pytest.mark.parametrize(
@@ -701,6 +777,96 @@ def test_validate_valid_draft_returns_compiled_preview_and_success_audit(
     assert "snapshot" not in str(event.after)
 
 
+def test_validate_valid_draft_keeps_operational_shortages_advisory(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="warning_draft",
+            name="Warning Draft",
+            status="draft",
+            display_order=10,
+            player_count=8,
+        )
+        db.commit()
+    login = _login(context, monkeypatch, role="content_editor")
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets/warning_draft/validate",
+        json={"expected_revision_lock_version": 1},
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["valid"] is True
+    assert payload["errors"] == []
+    assert payload["compiled_snapshot"]["id"] == "warning_draft"
+    assert len(payload["content_hash"]) == 64
+    assert "Warning Draft" in payload["rule_text_preview"]
+    assert payload["warnings"] == [
+        {
+            "code": "published_player_shortage",
+            "path": "player_profiles",
+            "message": "Only 0 published player profiles are available for 8 seats.",
+        },
+        {
+            "code": "judge_seat_coverage",
+            "path": "judge_voice_assets",
+            "message": "Judge voice assets cover 0 of 8 required seats.",
+        },
+    ]
+
+
+def test_validation_caps_core_then_operational_warnings_at_fifty(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rule_sets import service as service_module
+    from app.rule_sets.types import RuleSetValidationResult, RuleValidationIssue
+
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="warning_cap",
+            name="Warning Cap",
+            status="draft",
+            display_order=10,
+            player_count=8,
+        )
+        db.commit()
+    core_warnings = tuple(
+        RuleValidationIssue(
+            code=f"core_warning_{index}",
+            path=f"config.field_{index}",
+            message=f"Core warning {index}",
+        )
+        for index in range(50)
+    )
+    monkeypatch.setattr(
+        service_module,
+        "validate_rule_set_config",
+        lambda _config: RuleSetValidationResult(errors=(), warnings=core_warnings),
+    )
+    login = _login(context, monkeypatch, role="content_editor")
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets/warning_cap/validate",
+        json={"expected_revision_lock_version": 1},
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["valid"] is True
+    assert len(payload["warnings"]) == 50
+    assert [warning["code"] for warning in payload["warnings"]] == [
+        f"core_warning_{index}" for index in range(50)
+    ]
+
+
 def test_validate_invalid_draft_returns_200_without_compiled_fields_and_rejected_audit(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
@@ -820,6 +986,7 @@ def test_super_admin_publishes_validated_draft_with_reason_and_success_audit(
     assert payload["status"] == "published"
     assert payload["draft_revision"] is None
     assert payload["published_revision"]["state"] == "published"
+    assert "usage" not in payload["published_revision"]
     assert len(payload["published_revision"]["content_hash"]) == 64
     with context.session_factory() as db:
         event = db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.rule_set.publish"))
@@ -829,6 +996,47 @@ def test_super_admin_publishes_validated_draft_with_reason_and_success_audit(
     assert event.before["status"] == "draft"
     assert event.after["status"] == "published"
     assert "config" not in str(event.after)
+
+
+def test_publish_never_calls_operational_warnings_and_succeeds_during_shortage(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import admin_rule_sets as route_module
+
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="advisory_publish",
+            name="Advisory Publish",
+            status="draft",
+            display_order=10,
+            player_count=8,
+        )
+        db.commit()
+
+    def forbidden_warning_lookup(*_args: object, **_kwargs: object) -> list[object]:
+        raise AssertionError("publication must not query operational warnings")
+
+    monkeypatch.setattr(route_module, "_operational_warnings", forbidden_warning_lookup)
+    login = _login(context, monkeypatch, role="super_admin")
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets/advisory_publish/publish",
+        json={
+            "expected_rule_set_lock_version": 1,
+            "expected_revision_lock_version": 1,
+            "reason": "warnings are advisory",
+        },
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "published"
+    with context.session_factory() as db:
+        record = db.get(RuleSetRecord, "advisory_publish")
+        assert record is not None
+        assert record.status == "published"
 
 
 def test_publish_validation_failure_rolls_back_and_records_rejected_attempt(
@@ -2200,7 +2408,122 @@ def test_rule_set_list_rejects_unsafe_integer_filters_before_repository_access(
         assert str(10**100) not in response.text
 
 
-def test_rule_set_detail_is_bounded_and_uses_current_storage_counts_and_warnings(
+def test_rule_set_usage_repository_is_scalar_ordered_frozen_and_query_bounded(
+    context: AdminRuleSetsContext,
+) -> None:
+    from app.rule_sets.repository import get_rule_set_usage
+
+    _seed_detail(context)
+    revision_ids = (
+        "00000000-0000-0000-0000-000000000054",
+        "00000000-0000-0000-0000-000000000056",
+        "00000000-0000-0000-0000-000000000055",
+    )
+    with context.session_factory() as db:
+        engine = db.get_bind()
+        statements: list[str] = []
+
+        def capture_statement(
+            _connection: object,
+            _cursor: object,
+            statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", capture_statement)
+        try:
+            usage = get_rule_set_usage(
+                db,
+                "history_rule",
+                revision_ids=revision_ids,
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_statement)
+
+        fifty_revision_statements: list[str] = []
+
+        def capture_fifty_revision_statement(
+            _connection: object,
+            _cursor: object,
+            statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            fifty_revision_statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", capture_fifty_revision_statement)
+        try:
+            fifty_revision_usage = get_rule_set_usage(
+                db,
+                "history_rule",
+                revision_ids=tuple(
+                    f"00000000-0000-0000-0000-{revision_no:012d}"
+                    for revision_no in range(56, 6, -1)
+                ),
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_fifty_revision_statement)
+
+    assert (usage.game_count, usage.live_count) == (3, 3)
+    assert [item.revision_id for item in usage.revisions] == list(revision_ids)
+    assert [(item.game_count, item.live_count) for item in usage.revisions] == [
+        (0, 0),
+        (1, 1),
+        (1, 1),
+    ]
+    with pytest.raises(FrozenInstanceError):
+        usage.game_count = 99  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        usage.revisions[0].game_count = 99  # type: ignore[misc]
+    assert isinstance(usage.revisions, tuple)
+    assert len(statements) <= 4
+    normalized_sql = "\n".join(statements).lower()
+    assert "json_extract" not in normalized_sql
+    assert "rule_set ->" not in normalized_sql
+    assert "game_sessions.rule_set," not in normalized_sql
+    assert "live_runs.rule_set," not in normalized_sql
+    assert len(fifty_revision_usage.revisions) == 50
+    assert len(fifty_revision_statements) == len(statements)
+
+
+def test_rule_set_usage_repository_rejects_more_than_fifty_revisions_without_querying(
+    context: AdminRuleSetsContext,
+) -> None:
+    from app.rule_sets.repository import get_rule_set_usage
+
+    with context.session_factory() as db:
+        engine = db.get_bind()
+        statements: list[str] = []
+
+        def capture_statement(
+            _connection: object,
+            _cursor: object,
+            statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", capture_statement)
+        try:
+            with pytest.raises(ValueError, match="at most 50"):
+                get_rule_set_usage(
+                    db,
+                    "history_rule",
+                    revision_ids=tuple(f"revision-{index}" for index in range(51)),
+                )
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_statement)
+
+    assert statements == []
+
+
+def test_rule_set_detail_is_bounded_and_uses_scalar_revision_counts_and_warnings(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2218,7 +2541,18 @@ def test_rule_set_detail_is_bounded_and_uses_current_storage_counts_and_warnings
     assert len(payload["revisions"]) == 50
     assert [revision["revision_no"] for revision in payload["revisions"]] == list(range(56, 6, -1))
     assert all(revision["config"] is None for revision in payload["revisions"])
-    assert payload["usage"] == {"game_count": 2, "live_count": 2}
+    assert payload["usage"] == {"game_count": 3, "live_count": 3}
+    revisions_by_number = {revision["revision_no"]: revision for revision in payload["revisions"]}
+    assert revisions_by_number[56]["usage"] == {"game_count": 1, "live_count": 1}
+    assert revisions_by_number[55]["usage"] == {"game_count": 1, "live_count": 1}
+    assert revisions_by_number[54]["usage"] == {"game_count": 0, "live_count": 0}
+    assert all(
+        set(revision["usage"]) == {"game_count", "live_count"} for revision in payload["revisions"]
+    )
+    assert all(revision["config"] is None for revision in payload["revisions"])
+    assert "usage" not in payload["published_revision"]
+    assert sum(revision["usage"]["game_count"] for revision in payload["revisions"]) == 2
+    assert sum(revision["usage"]["live_count"] for revision in payload["revisions"]) == 2
     warnings = {warning["code"]: warning for warning in payload["warnings"]}
     assert warnings["published_player_shortage"] == {
         "code": "published_player_shortage",
@@ -2234,6 +2568,59 @@ def test_rule_set_detail_is_bounded_and_uses_current_storage_counts_and_warnings
     assert all(len(warning["message"]) <= 500 for warning in payload["warnings"])
     assert "rule_set" not in payload["usage"]
     assert "snapshot" not in str(payload["usage"])
+
+
+def test_rule_set_detail_operational_capacity_prefers_draft_player_count(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 7, 12, tzinfo=UTC)
+    draft_revision_id = "10000000-0000-0000-0000-000000000002"
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="capacity_rule",
+            name="Published Eight",
+            status="published",
+            display_order=10,
+            player_count=8,
+        )
+        db.flush()
+        record = db.get(RuleSetRecord, "capacity_rule")
+        assert record is not None
+        record.draft_revision_id = draft_revision_id
+        db.add(
+            _revision(
+                revision_id=draft_revision_id,
+                rule_set_id="capacity_rule",
+                revision_no=2,
+                state="draft",
+                name="Draft Six",
+                player_count=6,
+                now=now,
+            )
+        )
+        db.commit()
+    _login(context, monkeypatch)
+
+    response = context.client.get("/api/v1/admin/rule-sets/capacity_rule")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["draft_revision"]["player_count"] == 6
+    assert payload["published_revision"]["player_count"] == 8
+    assert payload["warnings"] == [
+        {
+            "code": "published_player_shortage",
+            "path": "player_profiles",
+            "message": "Only 0 published player profiles are available for 6 seats.",
+        },
+        {
+            "code": "judge_seat_coverage",
+            "path": "judge_voice_assets",
+            "message": "Judge voice assets cover 0 of 6 required seats.",
+        },
+    ]
 
 
 def test_rule_set_detail_returns_bounded_not_found_problem(
