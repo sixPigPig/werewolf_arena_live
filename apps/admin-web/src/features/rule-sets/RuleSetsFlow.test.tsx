@@ -98,12 +98,88 @@ describe("admin rule set list flow", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/content/rules/copy_classic_9"));
     expect(await screen.findByRole("heading", { name: "游戏规则详情" })).toBeInTheDocument();
   });
+
+  it("uses fetched player and ID constraints and sends the source lock version", async () => {
+    useServerSession(["rules.read", "rules.write"]);
+    const constrainedOptions = { ...ruleSetOptions, constraints: { ...ruleSetOptions.constraints, player_count_min: 8, player_count_max: 10, id_pattern: "^x_[a-z]{3}$" } };
+    let duplicateBody: unknown;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) return serverSession();
+      if (url.endsWith("/api/v1/admin/rule-set-options")) return json(constrainedOptions);
+      if (url.includes("/api/v1/admin/rule-sets?") && !init?.method) return json({ items: [fixtureRuleSet("source_rule", "published")], pagination: { page: 1, page_size: 20, total: 1, pages: 1 } });
+      if (url.endsWith("/api/v1/admin/rule-sets/source_rule/duplicate")) { duplicateBody = JSON.parse(String(init?.body)); return json(fixtureRuleSet("x_abc", "draft")); }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup(); const { router } = renderRoute("/content/rules");
+    const playerCount = await screen.findByLabelText("玩家人数"); await waitFor(() => expect(playerCount).toHaveTextContent("8 人"));
+    expect(playerCount).toHaveTextContent("8 人"); expect(playerCount).toHaveTextContent("10 人"); expect(playerCount).not.toHaveTextContent("6 人"); expect(playerCount).not.toHaveTextContent("12 人");
+    await user.click(await screen.findByRole("button", { name: "复制 source_rule 规则" }));
+    await user.type(screen.getByLabelText("新规则 ID"), "copy_rule");
+    await user.type(screen.getByLabelText("新规则名称"), "动态约束副本");
+    await user.click(screen.getByRole("button", { name: "确认复制" }));
+    expect(screen.getByLabelText("新规则 ID")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("请输入有效的新规则 ID")).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("新规则 ID")); await user.type(screen.getByLabelText("新规则 ID"), "x_abc");
+    await user.click(screen.getByRole("button", { name: "确认复制" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/content/rules/x_abc"));
+    expect(duplicateBody).toEqual({ expected_source_lock_version: 1, new_rule_set_id: "x_abc", new_name: "动态约束副本" });
+  });
+
+  it("does not guess constraints while options are unavailable", async () => {
+    useServerSession(["rules.read", "rules.write"]);
+    const never = new Promise<Response>(() => undefined);
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) return serverSession();
+      if (url.endsWith("/api/v1/admin/rule-set-options")) return never;
+      if (url.includes("/api/v1/admin/rule-sets?")) return json({ items: [fixtureRuleSet("source_rule", "published")], pagination: { page: 1, page_size: 20, total: 1, pages: 1 } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup(); renderRoute("/content/rules");
+    expect(await screen.findByLabelText("玩家人数")).toBeDisabled();
+    await user.click(await screen.findByRole("button", { name: "复制 source_rule 规则" }));
+    expect(screen.getByRole("button", { name: "确认复制" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取规则约束");
+  });
+
+  it("keeps constraint-dependent actions disabled when options fail", async () => {
+    useServerSession(["rules.read", "rules.write"]);
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) return serverSession();
+      if (url.endsWith("/api/v1/admin/rule-set-options")) return json({ title: "Unavailable", status: 503, detail: "选项不可用", code: "options_unavailable", request_id: "req-options" }, 503);
+      if (url.includes("/api/v1/admin/rule-sets?")) return json({ items: [fixtureRuleSet("source_rule", "published")], pagination: { page: 1, page_size: 20, total: 1, pages: 1 } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup(); renderRoute("/content/rules");
+    expect(await screen.findByText("筛选选项暂时不可用，规则列表仍可浏览。")).toBeInTheDocument();
+    expect(screen.getByLabelText("玩家人数")).toBeDisabled();
+    await user.click(await screen.findByRole("button", { name: "复制 source_rule 规则" }));
+    expect(screen.getByRole("button", { name: "确认复制" })).toBeDisabled();
+    expect(screen.getByText("规则约束暂时不可用，无法复制。")).toBeInTheDocument();
+  });
+
+  it("manages duplicate dialog focus, keyboard containment, escape, and error associations", async () => {
+    const user = userEvent.setup(); renderRoute("/content/rules");
+    const opener = await screen.findByRole("button", { name: "复制 classic_9 规则" });
+    await user.click(opener);
+    const id = screen.getByLabelText("新规则 ID"); const name = screen.getByLabelText("新规则名称");
+    expect(id).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "确认复制" }));
+    expect(id).toHaveAttribute("aria-invalid", "true"); expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(id).toHaveAccessibleDescription("请输入有效的新规则 ID"); expect(name).toHaveAccessibleDescription("请输入新规则名称");
+    screen.getByRole("button", { name: "确认复制" }).focus(); await user.tab(); expect(id).toHaveFocus();
+    await user.tab({ shift: true }); expect(screen.getByRole("button", { name: "确认复制" })).toHaveFocus();
+    await user.keyboard("{Escape}"); expect(screen.queryByRole("dialog", { name: "复制游戏规则" })).not.toBeInTheDocument(); expect(opener).toHaveFocus();
+  });
 });
 
 function useServerSession(permissions: string[]) { vi.stubEnv("VITE_ADMIN_AUTH_ENABLED", "true"); vi.stubEnv("VITE_ADMIN_PREVIEW_MODE", "false"); sessionPermissions = permissions; }
 let sessionPermissions: string[] = [];
 function serverCommon(url: string) {
-  if (url.endsWith("/api/v1/admin/me")) return json({ user: { id: "1", email: "r@test", display_name: "只读", role: "viewer" }, permissions: sessionPermissions, csrf_token: "csrf", session_expires_at: "2999-01-01T00:00:00Z" });
+  if (url.endsWith("/api/v1/admin/me")) return serverSession();
   if (url.endsWith("/api/v1/admin/rule-set-options")) return json(ruleSetOptions);
 }
+function serverSession() { return json({ user: { id: "1", email: "r@test", display_name: "只读", role: "viewer" }, permissions: sessionPermissions, csrf_token: "csrf", session_expires_at: "2999-01-01T00:00:00Z" }); }
 function json(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }); }
