@@ -46,10 +46,18 @@ export function formErrorsFromApi(value: unknown): RuleSetFormErrors {
   const source = isRecord(value) && isRecord(value.problem) ? value.problem : isRecord(value) ? value : {};
   const errors: RuleSetFormErrors = {}; const messages: string[] = [];
   const issues = Array.isArray(source.errors) ? source.errors : Array.isArray(source.warnings) ? source.warnings : [];
-  for (const issue of issues) { if (!isRecord(issue) || typeof issue.message !== "string") continue; messages.push(issue.message); const field = fieldFromPath(typeof issue.path === "string" ? issue.path : typeof issue.field === "string" ? issue.field : ""); if (field) errors[field] ??= issue.message; }
-  const detail = typeof source.detail === "string" ? source.detail : ""; const summary = [detail, ...messages].filter(Boolean); if (summary.length) errors.form = summary.join("；");
+  const boundedValidationDto = !isRecord(value) || !isRecord(value.problem);
+  for (const issue of issues) {
+    if (!isRecord(issue)) continue;
+    const field = fieldFromPath(typeof issue.path === "string" ? issue.path : typeof issue.field === "string" ? issue.field : "");
+    const message = boundedValidationDto && typeof issue.message === "string" ? issue.message : field ? fieldErrorCopy(field) : "规则内容不符合要求";
+    messages.push(message); if (field) errors[field] ??= message;
+  }
+  if (messages.length) errors.form = [...new Set(messages)].join("；");
   return errors;
 }
+
+function fieldErrorCopy(field: Exclude<keyof RuleSetFormErrors, "form">): string { return ({ id: "规则 ID 不符合要求", display_order: "显示顺序不符合要求", name: "规则名称不符合要求", description: "规则说明不符合要求", complexity: "复杂度不符合要求", estimated_duration: "预计时长不符合要求", rule_tags: "规则标签不符合要求", role_counts: "角色数量不符合要求", win_condition: "胜利条件不符合要求", sheriff_vote_weight: "警长票权不符合要求", speech_policy: "发言规则不符合要求", sheriff_badge_bomb_policy: "警徽规则不符合要求" })[field]; }
 
 function fieldFromPath(path: string): Exclude<keyof RuleSetFormErrors, "form"> | null { const leaf = path.split(/[.[\]]/).filter(Boolean).at(-1) ?? ""; if (leaf in ({ id: 1, display_order: 1, name: 1, description: 1, complexity: 1, estimated_duration: 1, rule_tags: 1, role_counts: 1, win_condition: 1, sheriff_vote_weight: 1, speech_policy: 1, sheriff_badge_bomb_policy: 1 })) return leaf as Exclude<keyof RuleSetFormErrors, "form">; if (path.includes("role_counts")) return "role_counts"; return null; }
 function lengthError(errors: RuleSetFormErrors, key: "name" | "description" | "complexity" | "estimated_duration", value: string, min: number, max: number) { if (value.length < min || value.length > max) errors[key] = `${min ? `必填且` : ""}最多 ${max} 个字符`; }

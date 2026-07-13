@@ -13,8 +13,39 @@ const SORTS: readonly RuleSetOptionSort[] = ["display_order", "-display_order", 
 export function parseAdminRuleSet(value: unknown): AdminRuleSet { rejectForbidden(value); return parseRuleSetRecord(value); }
 export function parseAdminRuleSetList(value: unknown): AdminRuleSetList { rejectForbidden(value); const r = record(value); const p = record(r.pagination); return { items: array(r.items, "items").map(parseRuleSetRecord), pagination: { page: positive(p.page, "pagination.page"), page_size: positive(p.page_size, "pagination.page_size"), total: nonnegative(p.total, "pagination.total"), pages: nonnegative(p.pages, "pagination.pages") } }; }
 export function parseAdminRuleSetDetail(value: unknown): AdminRuleSetDetail { rejectForbidden(value); const r = record(value); const base = parseRuleSetRecord({ ...r, revisions: [] }); return { ...base, revisions: array(r.revisions, "revisions").map(x => ({ ...parseRevision(x), usage: parseUsage(record(x).usage) })), usage: parseUsage(r.usage), warnings: array(r.warnings, "warnings").map(parseWarning) }; }
-export function parseRuleSetOptions(value: unknown): RuleSetOptions { rejectForbidden(value); const r = record(value), c = record(r.constraints); const choices = <T extends string>(v: unknown, n: string, allowed: readonly T[]) => nonemptyArray(v,n).map(x => { const q=record(x); return { value: oneOf(q.value,allowed,n+".value"), label: string(q.label,n+".label") }; }) as NonEmptyArray<{ value: T; label: string }>; return { roles: nonemptyArray(r.roles,"roles").map(x=>{const q=record(x);return{id:oneOf(q.id,ROLE_IDS,"roles.id") as RuleRoleId,label:string(q.label,"roles.label"),min_count:nonnegative(q.min_count,"roles.min_count"),max_count:nonnegative(q.max_count,"roles.max_count")}}) as RuleSetOptions["roles"], win_conditions: choices(r.win_conditions,"win_conditions",WIN_CONDITIONS), sheriff_vote_weights: nonemptyArray(r.sheriff_vote_weights,"sheriff_vote_weights").map((x)=>number(x,"sheriff_vote_weights")) as NonEmptyArray<number>, speech_policies: choices(r.speech_policies,"speech_policies",SPEECH_POLICIES), sheriff_badge_bomb_policies: choices(r.sheriff_badge_bomb_policies,"sheriff_badge_bomb_policies",BADGE_POLICIES), statuses: choices(r.statuses,"statuses",STATUS as readonly RuleSetStatus[]), sorts: choices(r.sorts,"sorts",SORTS), constraints: { player_count_min: integer(c.player_count_min,"constraints.player_count_min"), player_count_max: integer(c.player_count_max,"constraints.player_count_max"), tags_max_items: integer(c.tags_max_items,"constraints.tags_max_items"), tag_max_length: integer(c.tag_max_length,"constraints.tag_max_length"), id_pattern:string(c.id_pattern,"constraints.id_pattern"), reason_min_length:integer(c.reason_min_length,"constraints.reason_min_length"), reason_max_length:integer(c.reason_max_length,"constraints.reason_max_length") } }; }
-export function parseRuleSetValidation(value: unknown): RuleSetValidation { rejectForbidden(value, true); const r=record(value); if (r.compiled_snapshot !== undefined && r.compiled_snapshot !== null) record(r.compiled_snapshot); return { valid:boolean(r.valid,"valid"), errors:array(r.errors,"errors").map(parseWarning), warnings:array(r.warnings,"warnings").map(parseWarning), content_hash:optionalNullableString(r.content_hash,"content_hash"), rule_text_preview:optionalNullableString(r.rule_text_preview,"rule_text_preview") }; }
+export function parseRuleSetOptions(value: unknown): RuleSetOptions {
+  rejectForbidden(value);
+  const r = record(value); const c = record(r.constraints);
+  const choices = <T extends string>(v: unknown, name: string, allowed: readonly T[]) => {
+    const parsed = nonemptyArray(v, name).map((item) => { const q = record(item); return { value: oneOf(q.value, allowed, `${name}.value`), label: string(q.label, `${name}.label`) }; });
+    unique(parsed.map((item) => item.value), name);
+    return parsed as NonEmptyArray<{ value: T; label: string }>;
+  };
+  const roles = nonemptyArray(r.roles, "roles").map((item) => {
+    const q = record(item); const min = nonnegative(q.min_count, "roles.min_count"); const max = nonnegative(q.max_count, "roles.max_count");
+    if (min > max) fail("roles.range");
+    return { id: oneOf(q.id, ROLE_IDS, "roles.id") as RuleRoleId, label: string(q.label, "roles.label"), min_count: min, max_count: max };
+  });
+  unique(roles.map((role) => role.id), "roles");
+  if (roles.length !== ROLE_IDS.length || ROLE_IDS.some((id) => !roles.some((role) => role.id === id))) fail("roles.complete");
+  const weights = nonemptyArray(r.sheriff_vote_weights, "sheriff_vote_weights").map((item) => positiveNumber(item, "sheriff_vote_weights")); unique(weights, "sheriff_vote_weights");
+  const playerMin = positive(c.player_count_min, "constraints.player_count_min"); const playerMax = positive(c.player_count_max, "constraints.player_count_max");
+  const reasonMin = positive(c.reason_min_length, "constraints.reason_min_length"); const reasonMax = positive(c.reason_max_length, "constraints.reason_max_length");
+  if (playerMin > playerMax) fail("constraints.player_count_range"); if (reasonMin > reasonMax) fail("constraints.reason_range");
+  const idPattern = string(c.id_pattern, "constraints.id_pattern"); try { new RegExp(idPattern); } catch { fail("constraints.id_pattern"); }
+  return {
+    roles: roles as RuleSetOptions["roles"], win_conditions: choices(r.win_conditions, "win_conditions", WIN_CONDITIONS), sheriff_vote_weights: weights as NonEmptyArray<number>,
+    speech_policies: choices(r.speech_policies, "speech_policies", SPEECH_POLICIES), sheriff_badge_bomb_policies: choices(r.sheriff_badge_bomb_policies, "sheriff_badge_bomb_policies", BADGE_POLICIES),
+    statuses: choices(r.statuses, "statuses", STATUS as readonly RuleSetStatus[]), sorts: choices(r.sorts, "sorts", SORTS),
+    constraints: { player_count_min: playerMin, player_count_max: playerMax, tags_max_items: positive(c.tags_max_items, "constraints.tags_max_items"), tag_max_length: positive(c.tag_max_length, "constraints.tag_max_length"), id_pattern: idPattern, reason_min_length: reasonMin, reason_max_length: reasonMax },
+  };
+}
+export function parseRuleSetValidation(value: unknown): RuleSetValidation {
+  rejectForbidden(value, true); const r = record(value); if (r.compiled_snapshot !== undefined && r.compiled_snapshot !== null) record(r.compiled_snapshot);
+  const valid = boolean(r.valid, "valid"); const contentHash = optionalNullableString(r.content_hash, "content_hash"); const preview = optionalNullableString(r.rule_text_preview, "rule_text_preview");
+  if (valid && (!contentHash || !/^[0-9a-f]{64}$/.test(contentHash) || !preview)) fail("valid validation output");
+  return { valid, errors: array(r.errors, "errors").map(parseWarning), warnings: array(r.warnings, "warnings").map(parseWarning), content_hash: contentHash, rule_text_preview: preview };
+}
 
 function parseRuleSetRecord(value: unknown): AdminRuleSet { const r=record(value); return { id:string(r.id,"id"), status:oneOf(r.status,STATUS,"status"), is_default:boolean(r.is_default,"is_default"), display_order:nonnegative(r.display_order,"display_order"), lock_version:positive(r.lock_version,"lock_version"), draft_revision:r.draft_revision===null?null:parseRevision(r.draft_revision), published_revision:r.published_revision===null?null:parseRevision(r.published_revision), revisions:array(r.revisions,"revisions").map(parseRevision), created_at:date(r.created_at,"created_at"), updated_at:date(r.updated_at,"updated_at") }; }
 function parseRevision(value: unknown): RuleSetRevision { const r=record(value); return { id:string(r.id,"revision.id"),rule_set_id:string(r.rule_set_id,"revision.rule_set_id"),revision_no:positive(r.revision_no,"revision.revision_no"),state:oneOf(r.state,STATES,"revision.state"),schema_version:positive(r.schema_version,"revision.schema_version"),content_hash:nullableString(r.content_hash,"revision.content_hash"),lock_version:positive(r.lock_version,"revision.lock_version"),config:r.config===null?null:parseConfig(r.config),player_count:nonnegative(r.player_count,"revision.player_count"),role_summary:typeof r.role_summary === "string" ? r.role_summary : fail("revision.role_summary"),created_at:date(r.created_at,"revision.created_at"),updated_at:date(r.updated_at,"revision.updated_at"),published_at:nullableDate(r.published_at,"revision.published_at"),published_by:nullableString(r.published_by,"revision.published_by") }; }
@@ -30,6 +61,7 @@ function string(v:unknown,n:string):string{return typeof v==="string"&&v.length>
 function nullableString(v:unknown,n:string):string|null{return v===null?null:string(v,n)}
 function optionalNullableString(v:unknown,n:string):string|null{return v===undefined||v===null?null:string(v,n)}
 function number(v:unknown,n:string):number{return typeof v==="number"&&Number.isFinite(v)?v:fail(n)}
+function positiveNumber(v:unknown,n:string):number{const x=number(v,n);return x>0?x:fail(n)}
 function integer(v:unknown,n:string):number{const x=number(v,n);return Number.isInteger(x)?x:fail(n)}
 function positive(v:unknown,n:string):number{const x=integer(v,n);return x>0?x:fail(n)}
 function nonnegative(v:unknown,n:string):number{const x=integer(v,n);return x>=0?x:fail(n)}
@@ -37,4 +69,5 @@ function boolean(v:unknown,n:string):boolean{return typeof v==="boolean"?v:fail(
 function oneOf<T extends string>(v:unknown,allowed:readonly T[],n:string):T{return typeof v==="string"&&allowed.includes(v as T)?v as T:fail(n)}
 function date(v:unknown,n:string):string{const x=string(v,n);return !Number.isNaN(Date.parse(x))?x:fail(n)}
 function nullableDate(v:unknown,n:string):string|null{return v===null?null:date(v,n)}
+function unique(values: readonly unknown[], name: string):void{if(new Set(values).size!==values.length)fail(`${name}.duplicate`)}
 function fail(detail:string):never{throw new AdminApiError({problem:{type:"about:blank",code:"admin_invalid_rule_set_response",title:"规则接口响应无效",status:502,detail,request_id:null}})}

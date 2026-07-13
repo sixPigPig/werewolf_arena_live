@@ -1,27 +1,30 @@
-import type { RuleSetListParams, RuleSetSortField, RuleSetStatus } from "./types";
-
-const STATUSES: readonly RuleSetStatus[] = ["draft", "published", "archived"];
-const SORTS: readonly RuleSetSortField[] = ["display_order", "updated_at", "name", "created_at"];
+import type { RuleSetListParams, RuleSetOptions, RuleSetSortField } from "./types";
 const KEYS = ["page", "page_size", "q", "status", "player_count", "sort", "direction"] as const;
 
 type RuleSetSearchKey = (typeof KEYS)[number];
 export type RuleSetSearchValues = Partial<Record<RuleSetSearchKey, string | undefined>>;
 
-export function ruleSetListParamsFromSearch(search: URLSearchParams): RuleSetListParams {
+export function ruleSetListParamsFromSearch(search: URLSearchParams, options: RuleSetOptions): RuleSetListParams {
+  const advertisedSorts = options.sorts.map(({ value }) => value);
+  const requestedSort = `${search.get("direction") === "desc" ? "-" : ""}${search.get("sort") ?? ""}`;
+  const selectedSort = advertisedSorts.includes(requestedSort as RuleSetOptions["sorts"][number]["value"])
+    ? requestedSort
+    : advertisedSorts[0];
   return {
     page: positive(search.get("page"), 1),
     page_size: pageSize(search.get("page_size")),
     q: optional(search.get("q")),
-    status: enumValue(search.get("status"), STATUSES),
+    status: enumValue(search.get("status"), options.statuses.map(({ value }) => value)),
     player_count: optionalPositive(search.get("player_count")),
-    sort: enumValue(search.get("sort"), SORTS) ?? "display_order",
-    direction: search.get("direction") === "desc" ? "desc" : "asc",
+    sort: selectedSort.replace(/^-/, "") as RuleSetSortField,
+    direction: selectedSort.startsWith("-") ? "desc" : "asc",
   };
 }
 
 export function setRuleSetSearchValues(
   current: URLSearchParams,
   values: RuleSetSearchValues,
+  options: RuleSetOptions,
 ): URLSearchParams {
   const merged = new URLSearchParams();
   for (const key of KEYS) {
@@ -29,8 +32,8 @@ export function setRuleSetSearchValues(
     if (value !== undefined && value !== null) merged.set(key, value);
   }
 
-  const before = ruleSetListParamsFromSearch(current);
-  const params = ruleSetListParamsFromSearch(merged);
+  const before = ruleSetListParamsFromSearch(current, options);
+  const params = ruleSetListParamsFromSearch(merged, options);
   const filterChanged =
     before.q !== params.q ||
     before.status !== params.status ||

@@ -24,7 +24,15 @@ const ruleSet = {
   created_at: "2026-07-13T00:00:00Z", updated_at: "2026-07-13T00:00:00Z",
 };
 const options = {
-  roles: [{ id: "werewolf", label: "狼人", min_count: 0, max_count: 12 }],
+  roles: [
+    { id: "werewolf", label: "狼人", min_count: 1, max_count: 5 },
+    { id: "villager", label: "村民", min_count: 0, max_count: 11 },
+    { id: "seer", label: "预言家", min_count: 0, max_count: 1 },
+    { id: "guard", label: "守卫", min_count: 0, max_count: 1 },
+    { id: "witch", label: "女巫", min_count: 0, max_count: 1 },
+    { id: "hunter", label: "猎人", min_count: 0, max_count: 1 },
+    { id: "idiot", label: "白痴", min_count: 0, max_count: 1 },
+  ],
   win_conditions: [{ value: "wolves_gte_others", label: "屠边" }], sheriff_vote_weights: [1, 1.5],
   speech_policies: [{ value: "sequential", label: "顺序" }],
   sheriff_badge_bomb_policies: [{ value: "none", label: "无" }], statuses: [{ value: "draft", label: "草稿" }],
@@ -69,13 +77,13 @@ describe("rule-set response contracts", () => {
   });
 
   it("allows compiled_snapshot only at validation root", () => {
-    expect(() => parseRuleSetValidation({ valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).not.toThrow();
+    expect(() => parseRuleSetValidation({ valid: false, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).not.toThrow();
     expect(() => parseRuleSetValidation({ valid: true, errors: [{ code: "x", path: "x", message: "x", compiled_snapshot: {} }], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).toThrow();
   });
 
   it("treats the validation-root compiled snapshot as opaque and omits it", () => {
     const result = parseRuleSetValidation({
-      valid: true,
+      valid: false,
       errors: [],
       warnings: [],
       compiled_snapshot: { sql: "opaque", nested: { players: [], raw_error: "opaque", compiled_snapshot: {} } },
@@ -83,7 +91,7 @@ describe("rule-set response contracts", () => {
       rule_text_preview: null,
     });
 
-    expect(result).toEqual({ valid: true, errors: [], warnings: [], content_hash: null, rule_text_preview: null });
+    expect(result).toEqual({ valid: false, errors: [], warnings: [], content_hash: null, rule_text_preview: null });
     expect(result).not.toHaveProperty("compiled_snapshot");
   });
 
@@ -112,5 +120,36 @@ describe("rule-set response contracts", () => {
     expect(() => parseRuleSetOptions({ ...options, [key]: [] })).toThrowError(
       expect.objectContaining({ code: "admin_invalid_rule_set_response", status: 502 }),
     );
+  });
+
+  it.each([
+    ["missing role", { ...options, roles: options.roles.slice(0, 6) }],
+    ["duplicate role", { ...options, roles: [...options.roles.slice(0, 6), options.roles[0]] }],
+    ["role range", { ...options, roles: options.roles.map((role) => role.id === "werewolf" ? { ...role, min_count: 6, max_count: 5 } : role) }],
+    ["duplicate choice", { ...options, statuses: [options.statuses[0], options.statuses[0]] }],
+    ["duplicate sort", { ...options, sorts: [options.sorts[0], options.sorts[0]] }],
+    ["duplicate weight", { ...options, sheriff_vote_weights: [1, 1] }],
+    ["non-positive weight", { ...options, sheriff_vote_weights: [0] }],
+    ["player range", { ...options, constraints: { ...options.constraints, player_count_min: 13, player_count_max: 12 } }],
+    ["non-positive player minimum", { ...options, constraints: { ...options.constraints, player_count_min: 0 } }],
+    ["negative tag count", { ...options, constraints: { ...options.constraints, tags_max_items: -1 } }],
+    ["zero tag count", { ...options, constraints: { ...options.constraints, tags_max_items: 0 } }],
+    ["reason range", { ...options, constraints: { ...options.constraints, reason_min_length: 501, reason_max_length: 500 } }],
+    ["invalid id regex", { ...options, constraints: { ...options.constraints, id_pattern: "[" } }],
+  ])("rejects malformed options contract: %s", (_label, payload) => {
+    expect(() => parseRuleSetOptions(payload)).toThrowError(
+      expect.objectContaining({ code: "admin_invalid_rule_set_response", status: 502 }),
+    );
+  });
+
+  it("requires bounded successful validation output", () => {
+    for (const payload of [
+      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: "preview" },
+      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "A".repeat(64), rule_text_preview: "preview" },
+      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "a".repeat(63), rule_text_preview: "preview" },
+      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "a".repeat(64), rule_text_preview: "" },
+    ]) expect(() => parseRuleSetValidation(payload)).toThrow();
+
+    expect(() => parseRuleSetValidation({ valid: false, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).not.toThrow();
   });
 });

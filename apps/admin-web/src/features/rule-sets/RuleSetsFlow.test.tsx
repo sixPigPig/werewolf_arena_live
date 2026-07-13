@@ -29,7 +29,10 @@ describe("admin rule set list flow", () => {
     expect(screen.getByRole("list", { name: "游戏规则列表" })).toBeInTheDocument();
     expect(screen.getByText("默认规则")).toBeInTheDocument();
     expect(screen.getAllByText("已发布").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/版本 1/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/草稿修订/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/发布修订/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/展示顺序/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/更新时间/).length).toBeGreaterThan(0);
     expect(screen.getAllByText("9 人").length).toBeGreaterThan(0);
     expect(screen.getAllByText("3 狼人 / 6 好人").length).toBeGreaterThan(0);
   });
@@ -41,7 +44,7 @@ describe("admin rule set list flow", () => {
     await user.click(screen.getByRole("button", { name: "搜索" }));
     await user.selectOptions(screen.getByLabelText("生命周期"), "published");
     await user.selectOptions(screen.getByLabelText("玩家人数"), "9");
-    await user.selectOptions(screen.getByLabelText("排序"), "updated_at:desc");
+    await user.selectOptions(screen.getByLabelText("排序"), "-updated_at");
     await user.selectOptions(screen.getByLabelText("每页"), "20");
     await waitFor(() => expect(router.state.location.search).toContain("q=classic"));
     for (const part of ["status=published", "player_count=9", "sort=updated_at", "direction=desc", "page_size=20"]) expect(router.state.location.search).toContain(part);
@@ -64,6 +67,8 @@ describe("admin rule set list flow", () => {
     expect(await screen.findByText("正在读取游戏规则...")).toBeInTheDocument();
     act(() => resolveList?.(json({ title: "Unavailable", status: 503, detail: "规则服务暂时不可用", code: "rules_unavailable", request_id: "req-rules" }, 503)));
     expect(await screen.findByRole("heading", { name: "无法读取游戏规则" })).toBeInTheDocument();
+    expect(screen.getByText("规则目录暂时不可用，请稍后重试。")).toBeInTheDocument();
+    expect(screen.queryByText("规则服务暂时不可用")).not.toBeInTheDocument();
     expect(screen.getByText("请求编号：req-rules")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "重新加载" }));
     expect(await screen.findByRole("heading", { name: "还没有游戏规则" })).toBeInTheDocument();
@@ -126,6 +131,12 @@ describe("admin rule set list flow", () => {
     expect(duplicateBody).toEqual({ expected_source_lock_version: 1, new_rule_set_id: "x_abc", new_name: "动态约束副本" });
   });
 
+  it("uses only custom advertised lifecycle and signed sort choices", async () => {
+    useServerSession(["rules.read"]); const customOptions = { ...ruleSetOptions, statuses: [{ value: "archived" as const, label: "仅归档" }], sorts: [{ value: "-name" as const, label: "名称倒序" }] }; let listUrl = "";
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => { const url = String(input); if (url.endsWith("/api/v1/admin/me")) return serverSession(); if (url.endsWith("/api/v1/admin/rule-set-options")) return json(customOptions); if (url.includes("/api/v1/admin/rule-sets?")) { listUrl = url; return json({ items: [], pagination: { page: 1, page_size: 20, total: 0, pages: 0 } }); } throw new Error(`Unexpected request: ${url}`); }));
+    renderRoute("/content/rules?status=published&sort=updated_at&direction=asc"); await screen.findByRole("heading", { name: "还没有游戏规则" }); const status = screen.getByLabelText("生命周期"); const sort = screen.getByLabelText("排序"); expect(status).toHaveTextContent("仅归档"); expect(status).not.toHaveTextContent("草稿"); expect(sort).toHaveValue("-name"); expect(sort).toHaveTextContent("名称倒序"); expect(listUrl).toContain("sort=-name"); expect(listUrl).not.toContain("status=published");
+  });
+
   it("does not guess constraints while options are unavailable", async () => {
     useServerSession(["rules.read", "rules.write"]);
     const never = new Promise<Response>(() => undefined);
@@ -136,28 +147,28 @@ describe("admin rule set list flow", () => {
       if (url.includes("/api/v1/admin/rule-sets?")) return json({ items: [fixtureRuleSet("source_rule", "published")], pagination: { page: 1, page_size: 20, total: 1, pages: 1 } });
       throw new Error(`Unexpected request: ${url}`);
     }));
-    const user = userEvent.setup(); renderRoute("/content/rules");
-    expect(await screen.findByLabelText("玩家人数")).toBeDisabled();
-    await user.click(await screen.findByRole("button", { name: "复制 source_rule 规则" }));
-    expect(screen.getByRole("button", { name: "确认复制" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("正在读取规则约束");
+    renderRoute("/content/rules");
+    expect(await screen.findByText("正在读取游戏规则...")).toBeInTheDocument();
+    expect(screen.queryByLabelText("玩家人数")).not.toBeInTheDocument();
+    expect(screen.queryByText("source_rule 规则")).not.toBeInTheDocument();
   });
 
   it("keeps constraint-dependent actions disabled when options fail", async () => {
     useServerSession(["rules.read", "rules.write"]);
+    let listCalls = 0;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.endsWith("/api/v1/admin/me")) return serverSession();
       if (url.endsWith("/api/v1/admin/rule-set-options")) return json({ title: "Unavailable", status: 503, detail: "选项不可用", code: "options_unavailable", request_id: "req-options" }, 503);
-      if (url.includes("/api/v1/admin/rule-sets?")) return json({ items: [fixtureRuleSet("source_rule", "published")], pagination: { page: 1, page_size: 20, total: 1, pages: 1 } });
+      if (url.includes("/api/v1/admin/rule-sets?")) { listCalls += 1; return json({ items: [fixtureRuleSet("source_rule", "published")], pagination: { page: 1, page_size: 20, total: 1, pages: 1 } }); }
       throw new Error(`Unexpected request: ${url}`);
     }));
-    const user = userEvent.setup(); renderRoute("/content/rules");
-    expect(await screen.findByText("筛选选项暂时不可用，规则列表仍可浏览。")).toBeInTheDocument();
-    expect(screen.getByLabelText("玩家人数")).toBeDisabled();
-    await user.click(await screen.findByRole("button", { name: "复制 source_rule 规则" }));
-    expect(screen.getByRole("button", { name: "确认复制" })).toBeDisabled();
-    expect(screen.getByText("规则约束暂时不可用，无法复制。")).toBeInTheDocument();
+    renderRoute("/content/rules");
+    expect(await screen.findByRole("heading", { name: "规则选项暂时不可用" })).toBeInTheDocument();
+    expect(screen.getByText("无法安全读取筛选与操作约束，暂不加载规则列表。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新加载规则选项" })).toBeInTheDocument();
+    expect(screen.queryByText("source_rule 规则")).not.toBeInTheDocument();
+    expect(listCalls).toBe(0);
   });
 
   it("manages duplicate dialog focus, keyboard containment, escape, and error associations", async () => {
@@ -209,6 +220,11 @@ describe("rule editor", () => {
     expect(screen.getByLabelText("规则 ID")).toHaveAttribute("readonly");
     expect(screen.getByText("已发布")).toBeInTheDocument();
     expect(screen.getByText("累计使用：42 场游戏 / 2 场直播")).toBeInTheDocument();
+    expect(screen.getByText(/当前草稿修订：无/)).toBeInTheDocument();
+    expect(screen.getByText(/当前发布修订：1/)).toBeInTheDocument();
+    expect(screen.getByText(/发布人：preview-super-admin/)).toBeInTheDocument();
+    expect(screen.getByText(/发布时间：2026-07-01/)).toBeInTheDocument();
+    expect(screen.getAllByText(/哈希前缀：111111111111/).length).toBeGreaterThan(0);
     expect(screen.getByRole("list", { name: "版本历史" }).children.length).toBeLessThanOrEqual(50);
     expect(screen.queryByText(/classic_9-r1/)).not.toBeInTheDocument();
   });
@@ -354,7 +370,7 @@ describe("rule editor", () => {
     useServerSession(["rules.read", "rules.write"]); const base = { ...fixtureRuleSet("classic_9", "draft"), revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let gets = 0;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) { gets += 1; return gets === 1 ? json(base) : json({ title: "Unavailable", status: 503, detail: "重载失败", code: "unavailable", request_id: "reload-1" }, 503); } if (url.endsWith("/api/v1/admin/rule-sets/classic_9/draft")) return json({ title: "Conflict", status: 412, detail: "版本变化", code: "rule_set_version_conflict", request_id: null }, 412); throw new Error(`Unexpected request: ${url}`); }));
     const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); await user.type(await screen.findByLabelText("规则名称"), " local"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
-    const reload = await screen.findByRole("button", { name: "重新加载服务器版本" }); await user.click(reload); expect(await screen.findByText("重载失败")).toBeInTheDocument(); expect(gets).toBe(2); expect(screen.getByLabelText("规则名称")).toHaveValue("classic_9 草稿 local");
+    const reload = await screen.findByRole("button", { name: "重新加载服务器版本" }); await user.click(reload); expect(await screen.findByText("规则目录暂时不可用，请稍后重试。")).toBeInTheDocument(); expect(screen.queryByText("重载失败")).not.toBeInTheDocument(); expect(gets).toBe(2); expect(screen.getByLabelText("规则名称")).toHaveValue("classic_9 草稿 local");
   });
 
   it("validation gates publish on the saved revision and omits compiled snapshot", async () => {
@@ -362,7 +378,7 @@ describe("rule editor", () => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input); const common = serverCommon(url); if (common) return common;
       if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) return json(base);
-      if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) { validateBody = JSON.parse(String(init?.body)); return json({ valid: true, errors: [], warnings: [{ code: "wording", path: "config.description", message: "建议补充说明" }], compiled_snapshot: { secret: "opaque" }, content_hash: "abcdef1234567890", rule_text_preview: "规则预览正文" }); }
+      if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) { validateBody = JSON.parse(String(init?.body)); return json({ valid: true, errors: [], warnings: [{ code: "wording", path: "config.description", message: "建议补充说明" }], compiled_snapshot: { secret: "opaque" }, content_hash: "abcdef1234567890".padEnd(64, "a"), rule_text_preview: "规则预览正文" }); }
       throw new Error(`Unexpected request: ${url}`);
     }));
     const user = userEvent.setup(); renderRoute("/content/rules/classic_9");
@@ -420,10 +436,25 @@ describe("rule editor", () => {
     const user = userEvent.setup(); const { queryClient } = renderRoute("/content/rules/candidate"); queryClient.setQueryData(["rule-sets", "list", "transition", "candidate"], { items: [staleDefault], pagination: { page: 1, page_size: 100, total: 1, pages: 1 } }); await user.click(await screen.findByRole("button", { name: "设为默认" })); await user.type(screen.getByLabelText("操作原因"), "刷新后切换"); expect(screen.getByRole("button", { name: "确认设为默认" })).toBeDisabled(); expect(body).toBeUndefined(); act(() => resolveList?.(json({ items: [freshDefault], pagination: { page: 1, page_size: 100, total: 1, pages: 1 } }))); await waitFor(() => expect(screen.getByRole("button", { name: "确认设为默认" })).toBeEnabled()); await user.click(screen.getByRole("button", { name: "确认设为默认" })); await waitFor(() => expect(body).toBeDefined()); expect(body).toEqual({ expected_rule_set_lock_version: 4, previous_default_expected_lock_version: 9, reason: "刷新后切换" });
   });
 
-  it("archive rule requires a locked replacement for the current default and preserves a dirty draft when cancelled", async () => {
+  it("set-default never queries or opens while a published rule has a dirty draft", async () => {
+    useServerSession(["rules.read", "rules.write", "rules.set_default"]); const published = fixtureRuleSet("candidate", "published"); const detail = { ...published, draft_revision: fixtureRuleSet("candidate", "draft").draft_revision, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let listCalls = 0; let transitionCalls = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/candidate") && !init?.method) return json(detail); if (url.includes("/api/v1/admin/rule-sets?")) { listCalls += 1; return json({ items: [], pagination: { page: 1, page_size: 100, total: 0, pages: 0 } }); } if (url.endsWith("/set-default")) { transitionCalls += 1; return json(detail); } throw new Error(`Unexpected request: ${url}`); }));
+    const user = userEvent.setup(); renderRoute("/content/rules/candidate"); const name = await screen.findByLabelText("规则名称"); await user.type(name, " 本地"); expect(screen.getByRole("button", { name: "设为默认" })).toBeDisabled(); expect(screen.queryByRole("dialog", { name: "设为默认规则" })).not.toBeInTheDocument(); expect(name).toHaveValue("candidate 草稿 本地"); expect(listCalls).toBe(0); expect(transitionCalls).toBe(0);
+  });
+
+  it("does not query lifecycle candidates with unadvertised status or sort values", async () => {
+    useServerSession(["rules.read", "rules.set_default", "rules.archive"]); const target = fixtureRuleSet("candidate", "published", true); const detail = { ...target, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; const customOptions = { ...ruleSetOptions, statuses: [{ value: "archived", label: "仅归档" }], sorts: [{ value: "-name", label: "名称倒序" }] }; let listCalls = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => { const url = String(input); if (url.endsWith("/api/v1/admin/me")) return serverSession(); if (url.endsWith("/api/v1/admin/rule-set-options")) return json(customOptions); if (url.endsWith("/api/v1/admin/rule-sets/candidate")) return json(detail); if (url.includes("/api/v1/admin/rule-sets?")) { listCalls += 1; return json({ items: [], pagination: { page: 1, page_size: 100, total: 0, pages: 0 } }); } throw new Error(`Unexpected request: ${url}`); }));
+    renderRoute("/content/rules/candidate"); expect(await screen.findByRole("button", { name: "归档规则" })).toBeDisabled(); expect(screen.getByText("规则选项未提供已发布规则查询，暂不能执行相关生命周期操作。")).toBeInTheDocument(); expect(listCalls).toBe(0);
+  });
+
+  it("archive rule never opens while a published rule has a dirty draft", async () => {
     useServerSession(["rules.read", "rules.write", "rules.archive"]); const current = { ...fixtureRuleSet("classic_9", "published", true), lock_version: 6, draft_revision: { ...fixtureRuleSet("classic_9", "draft").draft_revision!, lock_version: 3 }, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; const replacement = { ...fixtureRuleSet("classic_12", "published"), lock_version: 12 }; let body: unknown; let gets = 0;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) { gets += 1; return json(current); } if (url.includes("/api/v1/admin/rule-sets?") && !init?.method) return json({ items: [current, replacement], pagination: { page: 1, page_size: 100, total: 2, pages: 1 } }); if (url.endsWith("/api/v1/admin/rule-sets/classic_9/archive")) { body = JSON.parse(String(init?.body)); return json({ ...current, status: "archived", is_default: false, lock_version: 7 }); } throw new Error(`Unexpected request: ${url}`); }));
-    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); const name = await screen.findByLabelText("规则名称"); await user.type(name, " 本地草稿"); await user.click(screen.getByRole("button", { name: "归档规则" })); expect(await screen.findByRole("dialog", { name: "归档规则" })).toHaveAccessibleDescription(); await user.click(screen.getByRole("button", { name: "取消" })); expect(name).toHaveValue("classic_9 草稿 本地草稿"); await user.click(screen.getByRole("button", { name: "归档规则" })); const confirm = await screen.findByRole("button", { name: "确认归档" }); expect(confirm).toBeDisabled(); await user.selectOptions(screen.getByLabelText("替代默认规则"), "classic_12"); await user.type(screen.getByLabelText("操作原因"), "  停用旧规则  "); await user.click(confirm); await waitFor(() => expect(body).toBeDefined()); expect(body).toEqual({ expected_rule_set_lock_version: 6, replacement_default_rule_set_id: "classic_12", replacement_expected_lock_version: 12, reason: "停用旧规则" }); expect(gets).toBeGreaterThanOrEqual(2);
+    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); const name = await screen.findByLabelText("规则名称"); await user.type(name, " 本地草稿");
+    expect(screen.getByRole("button", { name: "归档规则" })).toBeDisabled();
+    expect(screen.getByText("请先保存草稿或放弃修改，再执行生命周期操作。")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "归档规则" })).not.toBeInTheDocument(); expect(body).toBeUndefined(); expect(name).toHaveValue("classic_9 草稿 本地草稿"); expect(gets).toBe(1);
   });
 
   it("archive rule exhausts published pages and uses a deterministic later-page replacement lock", async () => {
@@ -460,7 +491,7 @@ describe("rule editor", () => {
   it("archive rule sends null replacement fields for a non-default rule and maps a 422 reason error", async () => {
     useServerSession(["rules.read", "rules.archive"]); const aggregate = { ...fixtureRuleSet("old_rule", "published"), lock_version: 7 }; const detail = { ...aggregate, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let body: unknown;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/old_rule") && !init?.method) return json(detail); if (url.endsWith("/api/v1/admin/rule-sets/old_rule/archive")) { body = JSON.parse(String(init?.body)); return json({ title: "Invalid", status: 422, detail: "raw validation", code: "validation_error", request_id: null, errors: { reason: ["请说明归档原因"] } }, 422); } throw new Error(`Unexpected request: ${url}`); }));
-    const user = userEvent.setup(); renderRoute("/content/rules/old_rule"); await user.click(await screen.findByRole("button", { name: "归档规则" })); expect(screen.queryByLabelText("替代默认规则")).not.toBeInTheDocument(); await user.type(screen.getByLabelText("操作原因"), "不再使用"); await user.click(screen.getByRole("button", { name: "确认归档" })); expect(await screen.findByRole("alert")).toHaveTextContent("请说明归档原因"); expect(screen.queryByText("raw validation")).not.toBeInTheDocument(); expect(body).toEqual({ expected_rule_set_lock_version: 7, replacement_default_rule_set_id: null, replacement_expected_lock_version: null, reason: "不再使用" });
+    const user = userEvent.setup(); renderRoute("/content/rules/old_rule"); await user.click(await screen.findByRole("button", { name: "归档规则" })); expect(screen.queryByLabelText("替代默认规则")).not.toBeInTheDocument(); await user.type(screen.getByLabelText("操作原因"), "不再使用"); await user.click(screen.getByRole("button", { name: "确认归档" })); expect(await screen.findByRole("alert")).toHaveTextContent("操作原因或规则状态不符合要求"); expect(screen.queryByText(/raw validation|请说明归档原因/)).not.toBeInTheDocument(); expect(body).toEqual({ expected_rule_set_lock_version: 7, replacement_default_rule_set_id: null, replacement_expected_lock_version: null, reason: "不再使用" });
   });
 
   it("archive rule disables confirmation when a default has no published replacement", async () => {
@@ -489,11 +520,13 @@ describe("rule editor", () => {
 
   it("renders invalid server validation with associated path error and summary, without opaque snapshot", async () => {
     useServerSession(["rules.read", "rules.write", "rules.publish"]); const rule = fixtureRuleSet("classic_9", "draft"); const base = { ...rule, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] };
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) return json(base); if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) return json({ valid: false, errors: [{ code: "name_invalid", path: "config.name", message: "规则名称被服务器拒绝" }], warnings: [], compiled_snapshot: { opaque_secret: "must-not-render" }, content_hash: null, rule_text_preview: null }); throw new Error(`Unexpected request: ${url}`); }));
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) return json(base); if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) return json({ valid: false, errors: [{ code: "name_invalid", path: "config.name", message: "规则名称被服务器拒绝" }, { code: "win_invalid", path: "config.win_condition", message: "胜利条件被服务器拒绝" }, { code: "speech_invalid", path: "config.speech_policy", message: "发言规则被服务器拒绝" }], warnings: [], compiled_snapshot: { opaque_secret: "must-not-render" }, content_hash: null, rule_text_preview: null }); throw new Error(`Unexpected request: ${url}`); }));
     const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); await user.click(await screen.findByRole("button", { name: "校验规则" }));
     expect(await screen.findByRole("heading", { name: "校验失败" })).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "校验错误" })).toHaveTextContent("config.name：规则名称被服务器拒绝");
     expect(screen.getByLabelText("规则名称")).toHaveAttribute("aria-invalid", "true"); expect(screen.getByLabelText("规则名称")).toHaveAccessibleDescription("规则名称被服务器拒绝");
+    expect(screen.getByLabelText("胜利条件")).toHaveAttribute("aria-invalid", "true"); expect(screen.getByLabelText("胜利条件")).toHaveAccessibleDescription("胜利条件被服务器拒绝");
+    expect(screen.getByLabelText("发言规则")).toHaveAttribute("aria-invalid", "true"); expect(screen.getByLabelText("发言规则")).toHaveAccessibleDescription("发言规则被服务器拒绝");
     expect(screen.getAllByRole("alert").some((node) => node.textContent?.includes("规则名称被服务器拒绝"))).toBe(true);
     expect(screen.queryByText(/opaque_secret|must-not-render/)).not.toBeInTheDocument(); expect(screen.getByRole("button", { name: "发布规则" })).toBeDisabled();
   });
@@ -506,7 +539,7 @@ describe("rule editor", () => {
   it("shows a bounded retryable editor 503 and recovers", async () => {
     useServerSession(["rules.read", "rules.write"]); const rule = fixtureRuleSet("classic_9", "draft"); const base = { ...rule, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let gets = 0;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9")) { gets += 1; return gets === 1 ? json({ title: "Unavailable", status: 503, detail: "规则服务暂时不可用", code: "rules_unavailable", request_id: "req-editor-503", internal_debug: "do not show" }, 503) : json(base); } throw new Error(`Unexpected request: ${url}`); }));
-    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); expect(await screen.findByRole("heading", { name: "无法读取游戏规则" })).toBeInTheDocument(); expect(screen.getByText("规则服务暂时不可用")).toBeInTheDocument(); expect(screen.queryByText(/internal_debug|do not show/)).not.toBeInTheDocument(); await user.click(screen.getByRole("button", { name: "重新加载" })); expect(await screen.findByDisplayValue("classic_9 草稿")).toBeInTheDocument(); expect(gets).toBe(2);
+    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); expect(await screen.findByRole("heading", { name: "无法读取游戏规则" })).toBeInTheDocument(); expect(screen.getByText("规则目录暂时不可用，请稍后重试。")).toBeInTheDocument(); expect(screen.queryByText(/规则服务暂时不可用|internal_debug|do not show/)).not.toBeInTheDocument(); await user.click(screen.getByRole("button", { name: "重新加载" })); expect(await screen.findByDisplayValue("classic_9 草稿")).toBeInTheDocument(); expect(gets).toBe(2);
   });
 });
 
