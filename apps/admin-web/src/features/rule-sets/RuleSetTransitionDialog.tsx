@@ -1,4 +1,4 @@
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import type { AdminRuleSet } from "./types";
 
 type Props = {
@@ -14,14 +14,17 @@ type Props = {
   requiresReplacement?: boolean;
   candidatesPending?: boolean;
   candidatesError?: boolean;
+  opener: HTMLButtonElement | null;
   onCancel: () => void;
   onConfirm: (reason: string, replacementId: string | null) => void;
 };
 
-export default function RuleSetTransitionDialog({ title, description, confirmLabel, pendingLabel, reasonMinLength, reasonMaxLength, pending, error, candidates = [], requiresReplacement = false, candidatesPending = false, candidatesError = false, onCancel, onConfirm }: Props) {
+export default function RuleSetTransitionDialog({ title, description, confirmLabel, pendingLabel, reasonMinLength, reasonMaxLength, pending, error, candidates = [], requiresReplacement = false, candidatesPending = false, candidatesError = false, opener, onCancel, onConfirm }: Props) {
   const titleId = useId(); const descriptionId = useId(); const reasonErrorId = useId();
+  const dialog = useRef<HTMLElement>(null);
   const [reason, setReason] = useState(""); const [replacementId, setReplacementId] = useState(""); const [reasonError, setReasonError] = useState<string | null>(null);
   const noCandidate = requiresReplacement && !candidatesPending && !candidatesError && candidates.length === 0;
+  useEffect(() => { dialog.current?.querySelector<HTMLElement>('select:not([disabled]), textarea:not([disabled]), button:not([disabled])')?.focus(); return () => opener?.focus(); }, [opener]);
 
   function submit(event: FormEvent) {
     event.preventDefault(); if (pending || candidatesPending || candidatesError || noCandidate) return;
@@ -31,7 +34,16 @@ export default function RuleSetTransitionDialog({ title, description, confirmLab
     setReasonError(null); onConfirm(cleaned, replacementId || null);
   }
 
-  return <section aria-describedby={descriptionId} aria-labelledby={titleId} aria-modal="true" role="dialog">
+  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape") { event.preventDefault(); onCancel(); return; }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('select:not([disabled]), textarea:not([disabled]), button:not([disabled])') ?? []); if (!focusable.length) return;
+    const first = focusable[0]; const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+
+  return <section aria-describedby={descriptionId} aria-labelledby={titleId} aria-modal="true" onKeyDown={handleKeyDown} ref={dialog} role="dialog">
     <h2 id={titleId}>{title}</h2><p id={descriptionId}>{description}</p>
     <form onSubmit={submit}>
       {requiresReplacement ? <label><span>替代默认规则</span><select aria-label="替代默认规则" disabled={pending || candidatesPending || candidatesError || noCandidate} onChange={(event) => setReplacementId(event.target.value)} value={replacementId}><option value="">请选择已发布规则</option>{candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.draft_revision?.config?.name ?? candidate.published_revision?.config?.name ?? candidate.id}</option>)}</select></label> : null}

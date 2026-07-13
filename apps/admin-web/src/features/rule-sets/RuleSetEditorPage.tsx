@@ -31,11 +31,11 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
   const [draft, setDraft] = useState<RuleSetFormInput>(initial); const [errors, setErrors] = useState<RuleSetFormErrors>({});
   const [requestError, setRequestError] = useState<Error | null>(null); const [conflict, setConflict] = useState(false); const [validation, setValidation] = useState<ValidationView | null>(null);
   const [pending, setPending] = useState<"save" | "validate" | "reload" | null>(null); const [baseline, setBaseline] = useState(JSON.stringify(cleanRuleSetInput(initial, options))); const allowNavigation = useRef(false);
-  const [transition, setTransition] = useState<Transition | null>(null); const [transitionPending, setTransitionPending] = useState(false); const [transitionError, setTransitionError] = useState<string | null>(null); const [announcement, setAnnouncement] = useState("");
+  const [transition, setTransition] = useState<Transition | null>(null); const [transitionOpener, setTransitionOpener] = useState<HTMLButtonElement | null>(null); const [transitionPending, setTransitionPending] = useState(false); const [transitionError, setTransitionError] = useState<string | null>(null); const [announcement, setAnnouncement] = useState("");
   const cleaned = cleanRuleSetInput(draft, options); const isDirty = JSON.stringify(cleaned) !== baseline;
   const editable = canWrite && detail?.status !== "archived"; const blocker = useBlocker(({ currentLocation, nextLocation }) => !allowNavigation.current && isDirty && `${currentLocation.pathname}${currentLocation.search}${currentLocation.hash}` !== `${nextLocation.pathname}${nextLocation.search}${nextLocation.hash}`);
   useBeforeUnload(useCallback((event) => { if (isDirty) event.preventDefault(); }, [isDirty]), { capture: true });
-  const publishedRules = useQuery({ queryKey: [...ruleSetKeys.lists, "transition", detail?.id], queryFn: ({ signal }) => repository.list({ page: 1, page_size: 100, status: "published", sort: "display_order", direction: "asc" }, signal), enabled: Boolean(detail && (transition === "default" || (transition === "archive" && detail.is_default))) });
+  const publishedRules = useQuery({ queryKey: [...ruleSetKeys.lists, "transition", detail?.id], queryFn: ({ signal }) => listAllPublishedRules(repository, signal), enabled: Boolean(detail && (transition === "default" || (transition === "archive" && detail.is_default))) });
 
   function markChanged() { setValidation(null); }
   function changeConfig<K extends keyof RuleSetFormInput["config"]>(key: K, value: RuleSetFormInput["config"][K]) { setDraft((current) => ({ ...current, config: { ...current.config, [key]: value } })); setErrors((current) => ({ ...current, [key]: undefined, form: undefined })); markChanged(); }
@@ -58,7 +58,8 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
   }
   async function reload() { if (!detail || pending) return; setPending("reload"); setRequestError(null); try { const fresh = await repository.get(detail.id); setDetail(fresh); const next = inputFromRuleSet(fresh, options); setDraft(next); setBaseline(JSON.stringify(cleanRuleSetInput(next, options))); setConflict(false); setValidation(null); } catch (error) { setRequestError(error as Error); } finally { setPending(null); } }
 
-  function openTransition(next: Transition) { if (transitionPending) return; setTransitionError(null); setTransition(next); }
+  function openTransition(next: Transition, opener: HTMLButtonElement) { if (transitionPending) return; setTransitionError(null); setTransitionOpener(opener); setTransition(next); }
+  function closeTransition() { if (transitionPending) return; setTransition(null); setTransitionOpener(null); }
   async function confirmTransition(reason: string, replacementId: string | null) {
     if (!detail || !transition || transitionPending) return; setTransitionPending(true); setTransitionError(null); setAnnouncement("");
     try {
@@ -66,16 +67,18 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
         const revision = detail.draft_revision; if (!revision || !validation?.valid || validation.revision_lock_version !== revision.lock_version || isDirty) return;
         await repository.publish(detail.id, { expected_rule_set_lock_version: detail.lock_version, expected_revision_lock_version: revision.lock_version, reason });
       } else if (transition === "default") {
+        if (publishedRules.isFetching || publishedRules.isError || !publishedRules.data) return;
         const previousDefault = publishedRules.data?.items.find((rule) => rule.is_default);
         await repository.setDefault(detail.id, { expected_rule_set_lock_version: detail.lock_version, previous_default_expected_lock_version: previousDefault?.lock_version ?? null, reason });
       } else if (transition === "archive") {
+        if (detail.is_default && (publishedRules.isFetching || publishedRules.isError || !publishedRules.data)) return;
         const replacement = detail.is_default ? publishedRules.data?.items.find((rule) => rule.id === replacementId) : undefined;
         if (detail.is_default && !replacement) return;
         await repository.archive(detail.id, { expected_rule_set_lock_version: detail.lock_version, replacement_default_rule_set_id: replacement?.id ?? null, replacement_expected_lock_version: replacement?.lock_version ?? null, reason });
       } else {
         await repository.restore(detail.id, { expected_rule_set_lock_version: detail.lock_version, reason });
       }
-      const completed = transition; const fresh = await repository.get(detail.id); setDetail(fresh); const next = inputFromRuleSet(fresh, options); setDraft(next); setBaseline(JSON.stringify(cleanRuleSetInput(next, options))); setValidation(null); setConflict(false); setTransition(null);
+      const completed = transition; const fresh = await repository.get(detail.id); setDetail(fresh); const next = inputFromRuleSet(fresh, options); setDraft(next); setBaseline(JSON.stringify(cleanRuleSetInput(next, options))); setValidation(null); setConflict(false); setTransition(null); setTransitionOpener(null);
       await Promise.all([queryClient.invalidateQueries({ queryKey: ruleSetKeys.lists }), queryClient.invalidateQueries({ queryKey: ruleSetKeys.detail(detail.id) })]);
       setAnnouncement({ publish: "规则已发布", default: "已设为默认规则", archive: "规则已归档", restore: "规则已恢复" }[completed]);
     } catch (error) { setTransitionError(transitionMessage(error)); }
@@ -103,11 +106,11 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
       <Choice label="发言规则" value={draft.config.speech_policy} choices={options.speech_policies} onChange={(v) => changeConfig("speech_policy", v as typeof draft.config.speech_policy)} />
       <Check label="允许狼人自爆" checked={draft.config.werewolf_self_explosion_enabled} onChange={(v) => changeConfig("werewolf_self_explosion_enabled", v)} />
       <Field label="警徽规则" error={errors.sheriff_badge_bomb_policy}><select aria-label="警徽规则" disabled={!draft.config.sheriff_enabled} onChange={(e) => changeConfig("sheriff_badge_bomb_policy", e.target.value as typeof draft.config.sheriff_badge_bomb_policy)} value={draft.config.sheriff_enabled ? draft.config.sheriff_badge_bomb_policy : options.sheriff_badge_bomb_policies[0]?.value}>{options.sheriff_badge_bomb_policies.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}</select></Field>
-    </fieldset>{errors.form ? <p role="alert">{errors.form}</p> : null}{requestError ? <p role="alert">{requestError.message}</p> : null}{editable ? <div><button disabled={pending !== null} type="submit">保存草稿</button><button disabled={isNew || isDirty || !detail?.draft_revision || pending !== null} onClick={() => void validateSaved()} type="button">校验规则</button>{canPublish ? <button disabled={!validation?.valid || validation.revision_lock_version !== detail?.draft_revision?.lock_version || isDirty || pending !== null} onClick={() => openTransition("publish")} type="button">发布规则</button> : null}</div> : null}</form>
-    {detail && canSetDefault && detail.status === "published" && !detail.is_default ? <button disabled={transitionPending} onClick={() => openTransition("default")} type="button">设为默认</button> : null}
-    {detail && canArchive && detail.status !== "archived" ? <button disabled={transitionPending} onClick={() => openTransition("archive")} type="button">归档规则</button> : null}
-    {detail && canArchive && detail.status === "archived" ? <button disabled={transitionPending} onClick={() => openTransition("restore")} type="button">恢复规则</button> : null}
-    {transitionDialog ? <RuleSetTransitionDialog candidates={transition === "archive" && detail?.is_default ? transitionCandidates : undefined} candidatesError={publishedRules.isError} candidatesPending={publishedRules.isPending && publishedRules.fetchStatus === "fetching"} confirmLabel={transitionDialog.confirmLabel} description={transitionDialog.description} error={transitionError} onCancel={() => { if (!transitionPending) setTransition(null); }} onConfirm={(reason, replacementId) => void confirmTransition(reason, replacementId)} pending={transitionPending} pendingLabel={transitionDialog.pendingLabel} reasonMaxLength={options.constraints.reason_max_length} reasonMinLength={options.constraints.reason_min_length} requiresReplacement={transition === "archive" && detail?.is_default} title={transitionDialog.title} /> : null}
+    </fieldset>{errors.form ? <p role="alert">{errors.form}</p> : null}{requestError ? <p role="alert">{requestError.message}</p> : null}{editable ? <div><button disabled={pending !== null} type="submit">保存草稿</button><button disabled={isNew || isDirty || !detail?.draft_revision || pending !== null} onClick={() => void validateSaved()} type="button">校验规则</button>{canPublish ? <button disabled={!validation?.valid || validation.revision_lock_version !== detail?.draft_revision?.lock_version || isDirty || pending !== null} onClick={(event) => openTransition("publish", event.currentTarget)} type="button">发布规则</button> : null}</div> : null}</form>
+    {detail && canSetDefault && detail.status === "published" && !detail.is_default ? <button disabled={transitionPending} onClick={(event) => openTransition("default", event.currentTarget)} type="button">设为默认</button> : null}
+    {detail && canArchive && detail.status !== "archived" ? <button disabled={transitionPending} onClick={(event) => openTransition("archive", event.currentTarget)} type="button">归档规则</button> : null}
+    {detail && canArchive && detail.status === "archived" ? <button disabled={transitionPending} onClick={(event) => openTransition("restore", event.currentTarget)} type="button">恢复规则</button> : null}
+    {transitionDialog ? <RuleSetTransitionDialog candidates={transition === "archive" && detail?.is_default ? transitionCandidates : undefined} candidatesError={publishedRules.isError} candidatesPending={publishedRules.isFetching} confirmLabel={transitionDialog.confirmLabel} description={transitionDialog.description} error={transitionError} onCancel={closeTransition} onConfirm={(reason, replacementId) => void confirmTransition(reason, replacementId)} opener={transitionOpener} pending={transitionPending} pendingLabel={transitionDialog.pendingLabel} reasonMaxLength={options.constraints.reason_max_length} reasonMinLength={options.constraints.reason_min_length} requiresReplacement={transition === "archive" && detail?.is_default} title={transitionDialog.title} /> : null}
     {conflict ? <section role="alert"><h2>规则版本冲突</h2><p>本地草稿已保留，请重新加载服务器版本后再合并。</p><button disabled={pending !== null} onClick={() => void reload()} type="button">{pending === "reload" ? "正在重新加载..." : "重新加载服务器版本"}</button></section> : null}
     {validation ? <section aria-label="校验结果"><h2>{validation.valid ? "校验通过" : "校验失败"}</h2>{validation.errors.length ? <ul aria-label="校验错误">{validation.errors.map((warning) => <li key={`${warning.code}-${warning.path}`}><Warning warning={warning} /></li>)}</ul> : null}{validation.warnings.length ? <ul aria-label="校验警告">{validation.warnings.map((warning) => <li key={`${warning.code}-${warning.path}`}><Warning warning={warning} /></li>)}</ul> : null}{validation.content_hash ? <p>内容哈希：{validation.content_hash.slice(0, 12)}</p> : null}{validation.rule_text_preview ? <pre>{validation.rule_text_preview}</pre> : null}</section> : null}
     {blocker.state === "blocked" ? <section aria-modal="true" role="dialog" aria-label="未保存规则"><h2>有未保存的规则修改</h2><button onClick={() => blocker.reset()} type="button">继续编辑</button><button onClick={() => blocker.proceed()} type="button">放弃修改并离开</button></section> : null}
@@ -136,4 +139,12 @@ function transitionMessage(error: unknown) {
   if (isAdminApiError(error, 422)) { const reason = error.fieldErrors.find((item) => item.field === "reason" || item.field.endsWith(".reason")); return reason?.message ?? "操作原因不符合要求，请修改后重试。"; }
   if (isAdminApiError(error, 503)) return "暂时无法完成操作，请稍后重试。";
   return "无法完成操作，请检查后重试。";
+}
+
+async function listAllPublishedRules(repository: ReturnType<typeof useRuleSetRepository>, signal: AbortSignal) {
+  const params = { page_size: 100, status: "published" as const, sort: "display_order" as const, direction: "asc" as const };
+  const first = await repository.list({ ...params, page: 1 }, signal); const items = [...first.items]; let pages = first.pagination.pages;
+  for (let page = 2; page <= pages; page += 1) { const next = await repository.list({ ...params, page }, signal); items.push(...next.items); pages = Math.max(pages, next.pagination.pages); }
+  items.sort((left, right) => left.display_order - right.display_order || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  return { ...first, items };
 }
