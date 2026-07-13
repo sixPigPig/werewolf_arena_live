@@ -1,11 +1,79 @@
 import type { RuleSetListParams, RuleSetSortField, RuleSetStatus } from "./types";
-const STATUSES:RuleSetStatus[]=["draft","published","archived"];
-const SORTS:RuleSetSortField[]=["display_order","updated_at","name","created_at"];
-const FILTERS=new Set(["q","status","player_count","page_size"]);
-export function ruleSetListParamsFromSearch(q:URLSearchParams):RuleSetListParams{return{page:positive(q.get("page"),1),page_size:pageSize(q.get("page_size")),q:optional(q.get("q")),status:enumValue(q.get("status"),STATUSES),player_count:optionalPositive(q.get("player_count")),sort:enumValue(q.get("sort"),SORTS)??"display_order",direction:q.get("direction")==="desc"?"desc":"asc"}}
-export function setRuleSetSearchValues(current:URLSearchParams,values:Record<string,string|undefined>){const next=new URLSearchParams(current);let changedFilter=false;for(const[key,value]of Object.entries(values)){const normalized=value?.trim();const old=next.get(key);if(normalized)next.set(key,normalized);else next.delete(key);if(FILTERS.has(key)&&(old??"")!==(normalized??""))changedFilter=true}if(changedFilter&&!Object.prototype.hasOwnProperty.call(values,"page"))next.set("page","1");return next}
-function optional(v:string|null){const n=v?.trim();return n||undefined}
-function enumValue<T extends string>(v:string|null,a:readonly T[]){return a.includes(v as T)?v as T:undefined}
-function positive(v:string|null,f:number){const n=Number(v);return Number.isInteger(n)&&n>0?n:f}
-function optionalPositive(v:string|null){if(v===null||v.trim()==="")return undefined;const n=Number(v);return Number.isInteger(n)&&n>0?n:undefined}
-function pageSize(v:string|null){const n=positive(v,20);return[10,20,50].includes(n)?n:20}
+
+const STATUSES: readonly RuleSetStatus[] = ["draft", "published", "archived"];
+const SORTS: readonly RuleSetSortField[] = ["display_order", "updated_at", "name", "created_at"];
+const KEYS = ["page", "page_size", "q", "status", "player_count", "sort", "direction"] as const;
+
+type RuleSetSearchKey = (typeof KEYS)[number];
+export type RuleSetSearchValues = Partial<Record<RuleSetSearchKey, string | undefined>>;
+
+export function ruleSetListParamsFromSearch(search: URLSearchParams): RuleSetListParams {
+  return {
+    page: positive(search.get("page"), 1),
+    page_size: pageSize(search.get("page_size")),
+    q: optional(search.get("q")),
+    status: enumValue(search.get("status"), STATUSES),
+    player_count: optionalPositive(search.get("player_count")),
+    sort: enumValue(search.get("sort"), SORTS) ?? "display_order",
+    direction: search.get("direction") === "desc" ? "desc" : "asc",
+  };
+}
+
+export function setRuleSetSearchValues(
+  current: URLSearchParams,
+  values: RuleSetSearchValues,
+): URLSearchParams {
+  const merged = new URLSearchParams();
+  for (const key of KEYS) {
+    const value = Object.prototype.hasOwnProperty.call(values, key) ? values[key] : current.get(key);
+    if (value !== undefined && value !== null) merged.set(key, value);
+  }
+
+  const before = ruleSetListParamsFromSearch(current);
+  const params = ruleSetListParamsFromSearch(merged);
+  const filterChanged =
+    before.q !== params.q ||
+    before.status !== params.status ||
+    before.player_count !== params.player_count ||
+    before.page_size !== params.page_size;
+  if (filterChanged && !Object.prototype.hasOwnProperty.call(values, "page")) params.page = 1;
+
+  return ruleSetListParamsToSearch(params);
+}
+
+function ruleSetListParamsToSearch(params: RuleSetListParams): URLSearchParams {
+  const result = new URLSearchParams();
+  result.set("page", String(params.page));
+  result.set("page_size", String(params.page_size));
+  if (params.q) result.set("q", params.q);
+  if (params.status) result.set("status", params.status);
+  if (params.player_count !== undefined) result.set("player_count", String(params.player_count));
+  result.set("sort", params.sort);
+  result.set("direction", params.direction);
+  return result;
+}
+
+function optional(value: string | null): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+function enumValue<T extends string>(value: string | null, allowed: readonly T[]): T | undefined {
+  return allowed.includes(value as T) ? (value as T) : undefined;
+}
+
+function positive(value: string | null, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function optionalPositive(value: string | null): number | undefined {
+  if (value === null || value.trim() === "") return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function pageSize(value: string | null): number {
+  const parsed = positive(value, 20);
+  return [10, 20, 50].includes(parsed) ? parsed : 20;
+}

@@ -61,4 +61,31 @@ describe("rule-set response contracts", () => {
     expect(() => parseRuleSetValidation({ valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).not.toThrow();
     expect(() => parseRuleSetValidation({ valid: true, errors: [{ code: "x", path: "x", message: "x", compiled_snapshot: {} }], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).toThrow();
   });
+
+  it("treats the validation-root compiled snapshot as opaque and omits it", () => {
+    const result = parseRuleSetValidation({
+      valid: true,
+      errors: [],
+      warnings: [],
+      compiled_snapshot: { sql: "opaque", nested: { players: [], raw_error: "opaque", compiled_snapshot: {} } },
+      content_hash: null,
+      rule_text_preview: null,
+    });
+
+    expect(result).toEqual({ valid: true, errors: [], warnings: [], content_hash: null, rule_text_preview: null });
+    expect(result).not.toHaveProperty("compiled_snapshot");
+  });
+
+  it.each([
+    ["role", { ...options, roles: [{ ...options.roles[0], id: "unknown" }] }],
+    ["win condition", { ...options, win_conditions: [{ value: "unknown", label: "未知" }] }],
+    ["speech policy", { ...options, speech_policies: [{ value: "unknown", label: "未知" }] }],
+    ["badge policy", { ...options, sheriff_badge_bomb_policies: [{ value: "unknown", label: "未知" }] }],
+    ["status", { ...options, statuses: [{ value: "deleted", label: "已删除" }] }],
+    ["sort", { ...options, sorts: [{ value: "unknown", label: "未知" }] }],
+  ])("rejects an unknown option %s", (_name, payload) => {
+    expect(() => parseRuleSetOptions(payload)).toThrowError(
+      expect.objectContaining({ code: "admin_invalid_rule_set_response", status: 502 }),
+    );
+  });
 });

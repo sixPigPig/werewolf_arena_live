@@ -14,4 +14,19 @@ describe("rule-set list URL state", () => {
     expect(setRuleSetSearchValues(new URLSearchParams("page=7"), { sort:"name" }).get("page")).toBe("7");
     expect(setRuleSetSearchValues(new URLSearchParams("page=7"), { page:"3" }).get("page")).toBe("3");
   });
+
+  it("serializes only known fields and canonicalizes malformed values", () => {
+    const result = setRuleSetSearchValues(
+      new URLSearchParams("page=7&page_size=50&q=old&status=published&player_count=9&sort=name&direction=desc&unknown=secret"),
+      { page: "0", page_size: "17", status: "deleted", player_count: "-1", sort: "unknown", direction: "sideways" },
+    );
+
+    expect(result.toString()).toBe("page=1&page_size=20&q=old&sort=display_order&direction=asc");
+  });
+
+  it("resets the page after canonicalizing a filter update", () => {
+    expect(
+      setRuleSetSearchValues(new URLSearchParams("page=7&status=published"), { status: "deleted" }).toString(),
+    ).toBe("page=1&page_size=20&sort=display_order&direction=asc");
+  });
 });

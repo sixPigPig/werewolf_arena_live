@@ -1,7 +1,10 @@
 export type RuleSetStatus = "draft" | "published" | "archived";
 export type RuleRevisionState = "draft" | "published" | "superseded";
 export type RuleRoleId = "werewolf" | "villager" | "seer" | "guard" | "witch" | "hunter" | "idiot";
-export type RuleSetConfig = { name: string; description: string; complexity: string; estimated_duration: string; rule_tags: string[]; role_counts: Record<RuleRoleId, number>; win_condition: "wolves_gte_others" | "slaughter_side"; sheriff_enabled: boolean; sheriff_vote_weight: number; speech_policy: "sequential" | "sheriff_directed"; werewolf_self_explosion_enabled: boolean; sheriff_badge_bomb_policy: "none" | "double" };
+export type RuleWinCondition = "wolves_gte_others" | "slaughter_side";
+export type RuleSpeechPolicy = "sequential" | "sheriff_directed";
+export type RuleBadgeBombPolicy = "none" | "double";
+export type RuleSetConfig = { name: string; description: string; complexity: string; estimated_duration: string; rule_tags: string[]; role_counts: Record<RuleRoleId, number>; win_condition: RuleWinCondition; sheriff_enabled: boolean; sheriff_vote_weight: number; speech_policy: RuleSpeechPolicy; werewolf_self_explosion_enabled: boolean; sheriff_badge_bomb_policy: RuleBadgeBombPolicy };
 export type RuleSetUsage = { game_count: number; live_count: number };
 export type RuleSetWarning = { code: string; path: string; message: string };
 export type RuleSetRevision = { id: string; rule_set_id: string; revision_no: number; state: RuleRevisionState; schema_version: number; content_hash: string | null; lock_version: number; config: RuleSetConfig | null; player_count: number; role_summary: string; created_at: string; updated_at: string; published_at: string | null; published_by: string | null };
@@ -9,8 +12,8 @@ export type RuleSetHistoryRevision = RuleSetRevision & { usage: RuleSetUsage };
 export type AdminRuleSet = { id: string; status: RuleSetStatus; is_default: boolean; display_order: number; lock_version: number; draft_revision: RuleSetRevision | null; published_revision: RuleSetRevision | null; revisions: RuleSetRevision[]; created_at: string; updated_at: string };
 export type AdminRuleSetDetail = Omit<AdminRuleSet, "revisions"> & { revisions: RuleSetHistoryRevision[]; usage: RuleSetUsage; warnings: RuleSetWarning[] };
 export type AdminRuleSetList = { items: AdminRuleSet[]; pagination: { page: number; page_size: number; total: number; pages: number } };
-export type RuleChoice = { value: string; label: string };
-export type RuleSetOptions = { roles: { id: string; label: string; min_count: number; max_count: number }[]; win_conditions: RuleChoice[]; sheriff_vote_weights: number[]; speech_policies: RuleChoice[]; sheriff_badge_bomb_policies: RuleChoice[]; statuses: RuleChoice[]; sorts: RuleChoice[]; constraints: { player_count_min: number; player_count_max: number; tags_max_items: number; tag_max_length: number; id_pattern: string; reason_min_length: number; reason_max_length: number } };
+export type RuleChoice<T extends string> = { value: T; label: string };
+export type RuleSetOptions = { roles: { id: RuleRoleId; label: string; min_count: number; max_count: number }[]; win_conditions: RuleChoice<RuleWinCondition>[]; sheriff_vote_weights: number[]; speech_policies: RuleChoice<RuleSpeechPolicy>[]; sheriff_badge_bomb_policies: RuleChoice<RuleBadgeBombPolicy>[]; statuses: RuleChoice<RuleSetStatus>[]; sorts: RuleChoice<RuleSetSortField>[]; constraints: { player_count_min: number; player_count_max: number; tags_max_items: number; tag_max_length: number; id_pattern: string; reason_min_length: number; reason_max_length: number } };
 export type RuleSetValidationResponse = { valid: boolean; errors: RuleSetWarning[]; warnings: RuleSetWarning[]; compiled_snapshot: Record<string, unknown> | null; content_hash: string | null; rule_text_preview: string | null };
 export type RuleSetValidation = Omit<RuleSetValidationResponse, "compiled_snapshot">;
 
