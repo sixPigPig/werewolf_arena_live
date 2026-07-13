@@ -36,7 +36,7 @@
 
 ## Admin security boundary
 
-- Production `admin-web` builds are currently unconditionally fail closed while the formal identity provider is undecided.
+- Production `admin-web` 只有显式启用认证并完成通用 OIDC Authorization Code + PKCE 配置后才开放登录；OIDC 未启用或 issuer、callback、Web base URL 不满足 HTTPS 约束时，生产 API 启动即关闭失败。正式租户与真实账号验收完成前不得开放外网入口。
 - Local development login requires explicit frontend and backend flags, is limited to development/test, and takes identity and role only from server configuration.
 - The browser receives an HttpOnly session cookie; PostgreSQL stores only SHA-256 hashes of session and CSRF secrets.
 - `/api/v1/admin/me` returns the current user, permission set, CSRF token and expiry. Admin writes must use the server-side permission dependency and CSRF dependency.

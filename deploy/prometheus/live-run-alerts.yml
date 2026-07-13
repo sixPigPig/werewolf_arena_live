@@ -58,7 +58,7 @@ groups:
           description: The database-derived published default gauge is missing or does not equal one after deduplicating API Pod samples.
 
       - alert: WerewolfRuleSnapshotFailures
-        expr: sum(increase(werewolf_rule_snapshot_failures_total[10m])) > 0
+        expr: sum(increase(werewolf_rule_snapshot_failures_total[2m])) > 0
         for: 5m
         labels:
           severity: warning
@@ -67,7 +67,7 @@ groups:
           description: One or more API Pods have continued to report bounded rule snapshot parse or hash failures.
 
       - alert: WerewolfRuleCheckpointFailures
-        expr: sum(increase(werewolf_rule_checkpoint_failures_total[10m])) > 0
+        expr: sum(increase(werewolf_rule_checkpoint_failures_total[2m])) > 0
         for: 5m
         labels:
           severity: warning
