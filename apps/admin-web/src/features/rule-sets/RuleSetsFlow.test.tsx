@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { routes } from "@/routes";
@@ -242,6 +242,32 @@ describe("rule editor", () => {
     expect(router.state.location.pathname).toBe("/content/rules/classic_9");
   });
 
+  it("blocks dirty search/hash navigation, supports proceed, and registers beforeunload", async () => {
+    const user = userEvent.setup(); const { router } = renderRoute("/content/rules/classic_9");
+    await user.type(await screen.findByLabelText("规则名称"), " dirty");
+    const unload = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(unload); expect(unload.defaultPrevented).toBe(true);
+    await act(async () => { await router.navigate("/content/rules/classic_9?tab=history#r1"); });
+    expect(screen.getByRole("dialog", { name: "未保存规则" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "放弃修改并离开" }));
+    await waitFor(() => expect(router.state.location.search).toBe("?tab=history")); expect(router.state.location.hash).toBe("#r1");
+  });
+
+  it("resets cached editor state when navigating from rule A to rule B", async () => {
+    const user = userEvent.setup(); const { router, queryClient } = renderRoute("/content/rules/classic_9");
+    await screen.findByDisplayValue("classic_9 规则");
+    await queryClient.prefetchQuery({ queryKey: ["rule-sets", "detail", "classic_12"], queryFn: async () => ({ ...fixtureRuleSet("classic_12", "draft"), lock_version: 8, draft_revision: { ...fixtureRuleSet("classic_12", "draft").draft_revision!, lock_version: 7, config: { ...fixtureRuleSet("classic_12", "draft").draft_revision!.config!, name: "规则 B" } }, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }) });
+    await act(async () => { await router.navigate("/content/rules/classic_12"); });
+    expect(await screen.findByDisplayValue("规则 B")).toBeInTheDocument(); expect(screen.getByText(/规则锁版本 8/)).toBeInTheDocument(); expect(screen.queryByDisplayValue("classic_9 规则")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("规则名称"), " changed");
+  });
+
+  it("associates field and role-group errors with their controls", async () => {
+    renderRoute("/content/rules/new"); await screen.findByLabelText("规则 ID");
+    fireEvent.change(screen.getByLabelText("狼人数量"), { target: { value: "0" } }); fireEvent.submit(screen.getByRole("button", { name: "保存草稿" }).closest("form")!);
+    await waitFor(() => expect(screen.getByLabelText("规则 ID")).toHaveAttribute("aria-invalid", "true")); expect(screen.getByLabelText("规则 ID")).toHaveAccessibleDescription("规则 ID 格式不正确");
+    expect(screen.getByRole("group", { name: "角色数量" })).toHaveAttribute("aria-invalid", "true"); expect(screen.getByLabelText("狼人数量")).toHaveAccessibleDescription(/角色数量/);
+  });
+
   it("rule conflict keeps the local draft and offers explicit reload", async () => {
     useServerSession(["rules.read", "rules.write"]); const base = { ...fixtureRuleSet("classic_9", "draft"), revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] };
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
@@ -254,6 +280,14 @@ describe("rule editor", () => {
     await user.clear(name); await user.type(name, "保留的本地草稿"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
     expect(await screen.findByRole("heading", { name: "规则版本冲突" })).toBeInTheDocument();
     expect(name).toHaveValue("保留的本地草稿"); expect(screen.getByRole("button", { name: "重新加载服务器版本" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重新加载服务器版本" })); await waitFor(() => expect(screen.queryByRole("heading", { name: "规则版本冲突" })).not.toBeInTheDocument()); expect(name).toHaveValue("classic_9 草稿");
+  });
+
+  it("shows a bounded error when conflict reload fails and prevents duplicate reloads", async () => {
+    useServerSession(["rules.read", "rules.write"]); const base = { ...fixtureRuleSet("classic_9", "draft"), revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let gets = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) { gets += 1; return gets === 1 ? json(base) : json({ title: "Unavailable", status: 503, detail: "重载失败", code: "unavailable", request_id: "reload-1" }, 503); } if (url.endsWith("/api/v1/admin/rule-sets/classic_9/draft")) return json({ title: "Conflict", status: 412, detail: "版本变化", code: "rule_set_version_conflict", request_id: null }, 412); throw new Error(`Unexpected request: ${url}`); }));
+    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); await user.type(await screen.findByLabelText("规则名称"), " local"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
+    const reload = await screen.findByRole("button", { name: "重新加载服务器版本" }); await user.click(reload); expect(await screen.findByText("重载失败")).toBeInTheDocument(); expect(gets).toBe(2); expect(screen.getByLabelText("规则名称")).toHaveValue("classic_9 草稿 local");
   });
 
   it("validation gates publish on the saved revision and omits compiled snapshot", async () => {

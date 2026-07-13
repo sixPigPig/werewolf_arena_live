@@ -21,6 +21,16 @@ describe("rule-set form model", () => {
     expect(cleanRuleSetInput(dirty, ruleSetOptions)).toMatchObject({ id: "new_rule", display_order: 2, config: { name: "名称", rule_tags: ["标签一", "标签二"], role_counts: { werewolf: 2, villager: 0 }, sheriff_vote_weight: 1, sheriff_badge_bomb_policy: "none" } });
   });
 
+  it("normalizes sheriff-off fields only to choices supplied by the server", () => {
+    const options = { ...ruleSetOptions, sheriff_vote_weights: [1.5, 2], sheriff_badge_bomb_policies: [{ value: "double" as const, label: "双爆" }] };
+    const input = { ...defaultRuleSetInput(options), config: { ...standardConfig, sheriff_enabled: false } };
+    const clean = cleanRuleSetInput(input, options);
+    expect(clean.config.sheriff_vote_weight).toBe(1.5);
+    expect(clean.config.sheriff_badge_bomb_policy).toBe("double");
+    expect(options.sheriff_vote_weights).toContain(clean.config.sheriff_vote_weight);
+    expect(options.sheriff_badge_bomb_policies.map(({ value }) => value)).toContain(clean.config.sheriff_badge_bomb_policy);
+  });
+
   it("calculates players and localized role summary", () => {
     const input = { ...defaultRuleSetInput(ruleSetOptions), config: standardConfig };
     expect(playerCount(input)).toBe(9);
