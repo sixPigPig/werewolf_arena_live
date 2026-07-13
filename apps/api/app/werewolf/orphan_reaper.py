@@ -162,7 +162,7 @@ def _claim_and_recover(
             checkpoint = DatabaseReplayStore(db).load_resume_checkpoint(run.session_id)
             compiled = resolved_rule_set_from_checkpoint(checkpoint)
         except (ReplayNotFoundError, ResumeCheckpointError):
-            registry.mark_failed(
+            registry.mark_failed_durably(
                 run.run_id,
                 error="Orphaned live run has no valid resume checkpoint",
             )
@@ -174,7 +174,7 @@ def _claim_and_recover(
             )
 
     if not live_run_matches_compiled_rule_set(run, compiled):
-        registry.mark_failed(
+        registry.mark_failed_durably(
             run.run_id,
             error="Orphaned live run rule snapshot does not match resume checkpoint",
         )

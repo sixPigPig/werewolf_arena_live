@@ -28,13 +28,17 @@ from app.werewolf.live import (
     LiveRunRegistry,
     RunLeaseUnavailable,
     RunRecoveryCandidate,
+    RunRuleSetExpectedState,
 )
 from app.werewolf.live_store import (
     DatabaseLiveStore,
     activation_ack_schema_inventory_complete,
 )
 from app.werewolf.orphan_reaper import run_next_orphan_recovery
-from tests.rule_set_fixtures import legacy_official_compiled_rule_set
+from tests.rule_set_fixtures import (
+    legacy_official_compiled_rule_set,
+    managed_official_compiled_rule_set,
+)
 
 
 @pytest.fixture
@@ -61,6 +65,17 @@ def pinned_rule_snapshot() -> dict[str, object]:
         "content_hash": "a" * 64,
         "storage_marker": {"preserve": ["exact", 2]},
     }
+
+
+def expected_rule_set(run) -> RunRuleSetExpectedState:
+    return RunRuleSetExpectedState(
+        rule_set_id=run.rule_set_id,
+        rule_set_revision_id=run.rule_set_revision_id,
+        rule_set_revision_no=run.rule_set_revision_no,
+        rule_set_content_hash=run.rule_set_content_hash,
+        rule_set=copy.deepcopy(run.rule_set),
+        rule_set_was_sql_null=run.rule_set_was_sql_null,
+    )
 
 
 def test_activation_ack_inventory_covers_every_semantic_run_column() -> None:
@@ -177,6 +192,42 @@ class MutateEventsBeforeClaimSessionLiveStore(SessionLiveStore):
 
     def acquire_recovery_lease(self, run_id: str, **kwargs):
         self._mutate_events(run_id)
+        return super().acquire_recovery_lease(run_id, **kwargs)
+
+
+class MutateRuleBeforeClaimSessionLiveStore(SessionLiveStore):
+    def __init__(self, session_factory, *, changed_compiled, mutate_event: bool) -> None:
+        super().__init__(session_factory)
+        self.changed_compiled = changed_compiled
+        self.mutate_event = mutate_event
+        self.mutated = False
+
+    def _mutate_rule(self, run_id: str) -> None:
+        if self.mutated:
+            return
+        self.mutated = True
+        compiled = self.changed_compiled
+        with self.session_factory() as db:
+            run = db.get(LiveRunRecord, run_id)
+            assert run is not None
+            run.rule_set_id = compiled.rule_set.id
+            run.rule_set_revision_id = compiled.revision_id
+            run.rule_set_revision_no = compiled.revision_no
+            run.rule_set_content_hash = compiled.content_hash
+            run.rule_set = copy.deepcopy(compiled.snapshot)
+            if self.mutate_event:
+                event = db.get(LiveEventRecord, (run_id, 2))
+                assert event is not None
+                event.payload = {"combined-rule-event-race": True}
+                flag_modified(event, "payload")
+            db.commit()
+
+    def acquire_lease(self, run_id: str, **kwargs):
+        self._mutate_rule(run_id)
+        return super().acquire_lease(run_id, **kwargs)
+
+    def acquire_recovery_lease(self, run_id: str, **kwargs):
+        self._mutate_rule(run_id)
         return super().acquire_recovery_lease(run_id, **kwargs)
 
 
@@ -446,6 +497,1003 @@ def test_claim_rejects_a_structurally_valid_stream_changed_after_prevalidation(
         assert [event.event_id for event in events] == [1, 2]
         assert events[1].payload == {"flag": 1}
         assert type(events[1].payload["flag"]) is int
+
+
+@pytest.mark.parametrize("claim_kind", ["stale", "orphan"])
+@pytest.mark.parametrize(
+    ("rule_mode", "mutate_event"),
+    [("managed", False), ("managed", True), ("legacy-hash-only", False)],
+)
+def test_claim_rejects_rule_snapshot_changed_after_prevalidation(
+    db_session: Session,
+    claim_kind: str,
+    rule_mode: str,
+    mutate_event: bool,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    compiled = (
+        legacy_official_compiled_rule_set("starter_6")
+        if rule_mode == "legacy-hash-only"
+        else managed_official_compiled_rule_set("starter_6")
+    )
+    changed = (
+        legacy_official_compiled_rule_set("classic_8")
+        if rule_mode == "legacy-hash-only"
+        else managed_official_compiled_rule_set("classic_8")
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-rule-owner",
+    )
+    run = owner.create_run(
+        session_id="game_expected_rule",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id=compiled.rule_set.id,
+        rule_set_revision_id=compiled.revision_id,
+        rule_set_revision_no=compiled.revision_no,
+        rule_set_content_hash=compiled.content_hash,
+        rule_set=compiled.snapshot,
+    )
+    owner.mark_running(run.run_id)
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        saved.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+        saved.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+        original_fence = saved.fence_token
+        original_attempts = saved.recovery_attempts
+        db.commit()
+    claimant = LiveRunRegistry(
+        live_store=MutateRuleBeforeClaimSessionLiveStore(
+            session_factory,
+            changed_compiled=changed,
+            mutate_event=mutate_event,
+        ),
+        worker_id="worker-rule-claimant",
+    )
+
+    if claim_kind == "stale":
+        with pytest.raises(RunLeaseUnavailable):
+            claimant.try_claim_stale_run(run.run_id)
+    else:
+        now = datetime.now(tz=UTC)
+        claimed = claimant.try_claim_orphan(
+            RunRecoveryCandidate(
+                run_id=run.run_id,
+                session_id=run.session_id,
+                recovery_attempts=0,
+            ),
+            stale_before=(now - timedelta(seconds=1)).isoformat(),
+            recovery_not_before=(now + timedelta(seconds=30)).isoformat(),
+            max_attempts=3,
+        )
+        assert claimed is None
+
+    assert claimant._runs == {}
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        assert saved.rule_set_id == changed.rule_set.id
+        assert saved.rule_set_revision_id == changed.revision_id
+        assert saved.rule_set_revision_no == changed.revision_no
+        assert saved.rule_set_content_hash == changed.content_hash
+        assert saved.rule_set == changed.snapshot
+        assert saved.fence_token == original_fence
+        assert saved.recovery_attempts == original_attempts
+
+
+def test_claim_rejects_sql_null_provenance_changed_to_json_object(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-sql-null-owner",
+    )
+    run = owner.create_run(
+        session_id="game_sql_null_provenance_race",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set={},
+    )
+    with session_factory() as db:
+        db.execute(
+            update(LiveRunRecord).where(LiveRunRecord.run_id == run.run_id).values(rule_set=null())
+        )
+        db.commit()
+
+    class SqlNullToJsonObjectSessionLiveStore(SessionLiveStore):
+        def acquire_lease(self, run_id: str, **kwargs):
+            with self.session_factory() as db:
+                db.execute(
+                    update(LiveRunRecord).where(LiveRunRecord.run_id == run_id).values(rule_set={})
+                )
+                db.commit()
+            return super().acquire_lease(run_id, **kwargs)
+
+    claimant = LiveRunRegistry(
+        live_store=SqlNullToJsonObjectSessionLiveStore(session_factory),
+        worker_id="worker-sql-null-claimant",
+    )
+
+    with pytest.raises(RunLeaseUnavailable, match="activation rule set changed"):
+        claimant.try_claim_stale_run(run.run_id)
+
+    assert claimant._runs == {}
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        is_sql_null = db.scalar(
+            select(LiveRunRecord.rule_set.is_(None)).where(LiveRunRecord.run_id == run.run_id)
+        )
+        assert saved is not None
+        assert saved.rule_set == {}
+        assert is_sql_null is False
+        assert saved.fence_token == 0
+
+
+def test_store_rejects_nonboolean_rule_provenance_before_claim(
+    db_session: Session,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.prepare_run(
+        session_id="game_invalid_rule_provenance",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    DatabaseLiveStore(db_session).save_new_run(run)
+    expected = expected_rule_set(run)
+    malformed = RunRuleSetExpectedState(
+        rule_set_id=expected.rule_set_id,
+        rule_set_revision_id=expected.rule_set_revision_id,
+        rule_set_revision_no=expected.rule_set_revision_no,
+        rule_set_content_hash=expected.rule_set_content_hash,
+        rule_set=expected.rule_set,
+        rule_set_was_sql_null=1,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="invalid exact JSON value"):
+        DatabaseLiveStore(db_session).acquire_lease(
+            run.run_id,
+            expected_events=tuple(run.events),
+            expected_rule_set=malformed,
+            worker_id="worker-invalid-provenance",
+            heartbeat_at=datetime.now(tz=UTC).isoformat(),
+            lease_expires_at=(datetime.now(tz=UTC) + timedelta(seconds=30)).isoformat(),
+        )
+
+    saved = db_session.get(LiveRunRecord, run.run_id)
+    assert saved is not None
+    assert saved.fence_token == 0
+
+
+def test_store_detaches_direct_rule_expectation_before_locked_claim(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.prepare_run(
+        session_id="game_detached_rule_expectation",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    store = DatabaseLiveStore(db_session)
+    store.save_new_run(run)
+    expected = expected_rule_set(run)
+    original_lock = store._lock_and_validate_complete_event_stream
+
+    def mutate_caller_after_entry(record, expected_events):
+        expected.rule_set["name"] = "mutated while waiting for lock"
+        return original_lock(record, expected_events)
+
+    monkeypatch.setattr(
+        store, "_lock_and_validate_complete_event_stream", mutate_caller_after_entry
+    )
+
+    state = store.acquire_lease(
+        run.run_id,
+        expected_events=tuple(run.events),
+        expected_rule_set=expected,
+        worker_id="worker-detached-expectation",
+        heartbeat_at=datetime.now(tz=UTC).isoformat(),
+        lease_expires_at=(datetime.now(tz=UTC) + timedelta(seconds=30)).isoformat(),
+    )
+
+    assert state is not None
+    assert state.fence_token == 1
+    assert expected.rule_set["name"] == "mutated while waiting for lock"
+
+
+def test_store_propagates_sql_null_provenance_query_failure(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.prepare_run(
+        session_id="game_sql_null_query_failure",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set={},
+    )
+    store = DatabaseLiveStore(db_session)
+    store.save_new_run(run)
+    db_session.execute(
+        update(LiveRunRecord).where(LiveRunRecord.run_id == run.run_id).values(rule_set=null())
+    )
+    db_session.commit()
+    loaded = store.load_run(run.run_id)
+    assert loaded is not None
+    assert loaded.rule_set_was_sql_null is True
+    failure = RuntimeError("SQL NULL provenance query failed")
+
+    def fail_provenance_query(_run_id: str) -> bool:
+        raise failure
+
+    monkeypatch.setattr(store, "_rule_set_is_sql_null", fail_provenance_query)
+
+    with pytest.raises(RuntimeError) as raised:
+        store.acquire_lease(
+            run.run_id,
+            expected_events=tuple(loaded.events),
+            expected_rule_set=expected_rule_set(loaded),
+            worker_id="worker-query-failure",
+            heartbeat_at=datetime.now(tz=UTC).isoformat(),
+            lease_expires_at=(datetime.now(tz=UTC) + timedelta(seconds=30)).isoformat(),
+        )
+
+    assert raised.value is failure
+    db_session.expire_all()
+    saved = db_session.get(LiveRunRecord, run.run_id)
+    assert saved is not None
+    assert saved.fence_token == 0
+
+
+def claimed_orphan_for_durable_failure(
+    session_factory: sessionmaker[Session],
+    *,
+    session_id: str,
+) -> tuple[LiveRunRegistry, object]:
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-durable-owner",
+    )
+    run = owner.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        saved.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+        saved.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+        db.commit()
+    registry = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-durable-recovery",
+    )
+    now = datetime.now(tz=UTC)
+    claimed = registry.try_claim_orphan(
+        RunRecoveryCandidate(
+            run_id=run.run_id,
+            session_id=run.session_id,
+            recovery_attempts=0,
+        ),
+        stale_before=(now - timedelta(seconds=1)).isoformat(),
+        recovery_not_before=(now + timedelta(seconds=30)).isoformat(),
+        max_attempts=3,
+    )
+    assert claimed is not None
+    return registry, claimed
+
+
+def test_session_store_durably_fails_claimed_orphan_in_one_transition(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry, claimed = claimed_orphan_for_durable_failure(
+        session_factory,
+        session_id="game_durable_failure",
+    )
+    subscriber = registry.subscribe(claimed.run_id, after_id=2)
+    error = "Orphaned live run has no valid resume checkpoint"
+    claimed_fence = claimed.fence_token
+    claimed_worker = claimed.worker_id
+    assert claimed_worker is not None
+    with session_factory() as stale_reader:
+        stale_before_failure = DatabaseLiveStore(stale_reader).load_run(claimed.run_id)
+    assert stale_before_failure is not None
+
+    event = registry.mark_failed_durably(claimed.run_id, error=error)
+
+    assert event is claimed.events[-1]
+    assert event.type == "game_failed"
+    assert event.payload == {"error": error}
+    assert claimed.status == "failed"
+    assert claimed.error == error
+    assert claimed.recovery_last_error == error
+    assert claimed.completed_at is not None
+    assert claimed.worker_id is None
+    assert claimed.worker_heartbeat_at is None
+    assert claimed.lease_expires_at is None
+    assert claimed.fence_token == claimed_fence + 1
+    assert claimed.next_event_id == 4
+    assert [(item.id, item.type) for item in claimed.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+        (3, "game_failed"),
+    ]
+    assert subscriber.get_nowait() is event
+    assert subscriber.empty()
+    with pytest.raises(RunLeaseUnavailable):
+        registry.publish(
+            claimed.run_id,
+            "phase_started",
+            phase="day",
+            expected_fence_token=claimed.fence_token,
+        )
+    assert [(item.id, item.type) for item in claimed.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+        (3, "game_failed"),
+    ]
+    assert claimed.next_event_id == 4
+    assert subscriber.empty()
+    stale_event = LiveEvent(
+        id=claimed.next_event_id,
+        type="phase_started",
+        run_id=claimed.run_id,
+        session_id=claimed.session_id,
+        created_at=datetime.now(tz=UTC).isoformat(),
+        phase="day",
+    )
+    with session_factory() as stale_writer:
+        with pytest.raises(RunLeaseUnavailable):
+            DatabaseLiveStore(stale_writer).append_event(
+                stale_event,
+                worker_id=claimed_worker,
+                fence_token=claimed_fence,
+            )
+    stale_before_failure.recovery_last_error = None
+    with session_factory() as stale_writer:
+        with pytest.raises(RunLeaseUnavailable):
+            DatabaseLiveStore(stale_writer).save_run(stale_before_failure)
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, claimed.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == claimed.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "failed"
+        assert saved.error == error
+        assert saved.recovery_last_error == error
+        assert saved.completed_at is not None
+        assert saved.worker_id is None
+        assert saved.worker_heartbeat_at is None
+        assert saved.lease_expires_at is None
+        assert saved.fence_token == claimed_fence + 1
+        assert [(item.event_id, item.type) for item in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+            (3, "game_failed"),
+        ]
+
+    with session_factory() as stale_writer:
+        revoked = DatabaseLiveStore(stale_writer).load_run(claimed.run_id)
+        assert revoked is not None
+        revoked.recovery_last_error = None
+        with pytest.raises(RunLeaseUnavailable):
+            DatabaseLiveStore(stale_writer).save_run(revoked)
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, claimed.run_id)
+        assert saved is not None
+        assert saved.recovery_last_error == error
+
+
+@pytest.mark.parametrize("failure_stage", ["status", "event"])
+def test_session_store_durable_failure_rolls_back_precommit_and_retries_once(
+    db_session: Session,
+    failure_stage: str,
+) -> None:
+    failure = RuntimeError(f"injected durable failure {failure_stage} flush")
+    armed = False
+    injected = False
+
+    class FailingDurableFailureSession(Session):
+        def flush(self, objects=None) -> None:
+            nonlocal injected
+            failed_status = any(
+                isinstance(item, LiveRunRecord) and item.status == "failed" for item in self.dirty
+            )
+            failure_event = any(
+                isinstance(item, LiveEventRecord) and item.type == "game_failed"
+                for item in self.new
+            )
+            should_fail = (failure_stage == "status" and failed_status) or (
+                failure_stage == "event" and failure_event
+            )
+            if armed and not injected and should_fail:
+                injected = True
+                raise failure
+            super().flush(objects)
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=FailingDurableFailureSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    registry, claimed = claimed_orphan_for_durable_failure(
+        session_factory,
+        session_id=f"game_durable_precommit_{failure_stage}",
+    )
+    subscriber = registry.subscribe(claimed.run_id, after_id=2)
+    original_events = claimed.events
+    original_subscribers = claimed.subscribers
+    original_runs = registry._runs
+    original_activation_events = registry._activation_events
+    activation_key = (claimed.run_id, claimed.fence_token)
+    registry._activation_events[activation_key] = claimed.events[1]
+    original_summary = claimed.to_summary()
+    original_fence = claimed.fence_token
+    original_next_event_id = claimed.next_event_id
+    original_internal_state = (
+        claimed.worker_id,
+        claimed.worker_heartbeat_at,
+        claimed.lease_expires_at,
+        claimed.stop_requested_at,
+        claimed.control_version,
+        claimed.recovery_attempts,
+        claimed.recovery_last_attempt_at,
+        claimed.recovery_not_before,
+        claimed.recovery_last_error,
+        claimed.lease_lost,
+        claimed.persisted_event_count,
+        claimed.rule_set_was_sql_null,
+    )
+    error = "Orphaned live run has no valid resume checkpoint"
+    armed = True
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_failed_durably(claimed.run_id, error=error)
+
+    assert raised.value is failure
+    assert injected is True
+    assert claimed.events is original_events
+    assert claimed.subscribers is original_subscribers
+    assert registry._runs is original_runs
+    assert registry._activation_events is original_activation_events
+    assert registry._activation_events[activation_key] is claimed.events[1]
+    assert claimed.to_summary() == original_summary
+    assert claimed.fence_token == original_fence
+    assert claimed.next_event_id == original_next_event_id
+    assert (
+        claimed.worker_id,
+        claimed.worker_heartbeat_at,
+        claimed.lease_expires_at,
+        claimed.stop_requested_at,
+        claimed.control_version,
+        claimed.recovery_attempts,
+        claimed.recovery_last_attempt_at,
+        claimed.recovery_not_before,
+        claimed.recovery_last_error,
+        claimed.lease_lost,
+        claimed.persisted_event_count,
+        claimed.rule_set_was_sql_null,
+    ) == original_internal_state
+    assert [(item.id, item.type) for item in claimed.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, claimed.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == claimed.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.error is None
+        assert saved.recovery_last_error is None
+        assert [(item.event_id, item.type) for item in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+        ]
+
+    event = registry.mark_failed_durably(claimed.run_id, error=error)
+
+    assert event.type == "game_failed"
+    assert claimed.status == "failed"
+    assert claimed.worker_id is None
+    assert claimed.worker_heartbeat_at is None
+    assert claimed.fence_token == original_fence + 1
+    assert registry._runs is original_runs
+    assert registry._activation_events is original_activation_events
+    assert registry._activation_events[activation_key] is claimed.events[1]
+    assert subscriber.get_nowait() is event
+    assert subscriber.empty()
+    with session_factory() as observer:
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == claimed.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert [(item.event_id, item.type) for item in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+            (3, "game_failed"),
+        ]
+
+
+def test_session_store_recovers_exact_durable_failure_after_commit_ack_loss(
+    db_session: Session,
+) -> None:
+    failure = RuntimeError("durable failure commit acknowledgement lost")
+    armed = False
+    acknowledgement_lost = False
+
+    class AckLostDurableFailureSession(Session):
+        saw_failure = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type == "game_failed"
+                for item in self.new
+            ):
+                self.saw_failure = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if armed and self.saw_failure and not acknowledgement_lost:
+                acknowledgement_lost = True
+                raise failure
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=AckLostDurableFailureSession,
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class ObservedSessionLiveStore(SessionLiveStore):
+        def __init__(self) -> None:
+            super().__init__(session_factory)
+            self.load_run_calls = 0
+            self.events_after_calls = 0
+            self.failure_verification_calls = 0
+
+        def load_run(self, run_id: str):
+            self.load_run_calls += 1
+            return super().load_run(run_id)
+
+        def events_after(self, run_id: str, *, after_id=None):
+            self.events_after_calls += 1
+            return super().events_after(run_id, after_id=after_id)
+
+        def failure_was_committed(self, expected_state):
+            self.failure_verification_calls += 1
+            return super().failure_was_committed(expected_state)
+
+    store = ObservedSessionLiveStore()
+    owner = LiveRunRegistry(live_store=store, worker_id="worker-ack-owner")
+    run = owner.create_run(
+        session_id="game_durable_ack_loss",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        saved.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+        saved.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+        db.commit()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-ack-recovery")
+    now = datetime.now(tz=UTC)
+    claimed = registry.try_claim_orphan(
+        RunRecoveryCandidate(run.run_id, run.session_id, 0),
+        stale_before=(now - timedelta(seconds=1)).isoformat(),
+        recovery_not_before=(now + timedelta(seconds=30)).isoformat(),
+        max_attempts=3,
+    )
+    assert claimed is not None
+    claimed_fence = claimed.fence_token
+    subscriber = registry.subscribe(run.run_id, after_id=2)
+    load_run_calls_before = store.load_run_calls
+    events_after_calls_before = store.events_after_calls
+    armed = True
+    error = "Orphaned live run has no valid resume checkpoint"
+
+    event = registry.mark_failed_durably(run.run_id, error=error)
+
+    assert acknowledgement_lost is True
+    assert store.failure_verification_calls == 1
+    assert store.load_run_calls == load_run_calls_before
+    assert store.events_after_calls == events_after_calls_before
+    assert event is claimed.events[-1]
+    assert claimed.status == "failed"
+    assert claimed.worker_id is None
+    assert claimed.worker_heartbeat_at is None
+    assert claimed.fence_token == claimed_fence + 1
+    assert subscriber.get_nowait() is event
+    assert subscriber.empty()
+    with session_factory() as observer:
+        saved = observer.get(LiveRunRecord, run.run_id)
+        events = list(
+            observer.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "failed"
+        assert saved.error == error
+        assert saved.worker_id is None
+        assert saved.worker_heartbeat_at is None
+        assert saved.fence_token == claimed_fence + 1
+        assert [(item.event_id, item.type) for item in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+            (3, "game_failed"),
+        ]
+
+
+@pytest.mark.parametrize("tamper", ["row", "event"])
+def test_durable_failure_ack_rejects_changed_full_state_and_rethrows_original(
+    db_session: Session,
+    tamper: str,
+) -> None:
+    failure = RuntimeError("durable failure commit acknowledgement lost")
+    armed = False
+    acknowledgement_lost = False
+
+    class AckLostDurableFailureSession(Session):
+        saw_failure = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type == "game_failed"
+                for item in self.new
+            ):
+                self.saw_failure = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if armed and self.saw_failure and not acknowledgement_lost:
+                acknowledgement_lost = True
+                raise failure
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=AckLostDurableFailureSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    plain_session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class TamperingVerifierSessionLiveStore(SessionLiveStore):
+        verification_calls = 0
+
+        def failure_was_committed(self, expected_state):
+            self.verification_calls += 1
+            with plain_session_factory() as db:
+                if tamper == "row":
+                    saved = db.get(LiveRunRecord, expected_state.run_id)
+                    assert saved is not None
+                    saved.control_version += 1
+                else:
+                    event = db.get(
+                        LiveEventRecord,
+                        (expected_state.run_id, expected_state.event_count),
+                    )
+                    assert event is not None
+                    event.payload = {"error": "tampered-after-commit"}
+                    flag_modified(event, "payload")
+                db.commit()
+            return super().failure_was_committed(expected_state)
+
+    store = TamperingVerifierSessionLiveStore(session_factory)
+    owner = LiveRunRegistry(live_store=store, worker_id="worker-negative-ack-owner")
+    run = owner.create_run(
+        session_id=f"game_negative_failure_ack_{tamper}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    owner.mark_running(run.run_id)
+    with plain_session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        saved.worker_heartbeat_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+        saved.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+        db.commit()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-negative-ack-recovery")
+    now = datetime.now(tz=UTC)
+    claimed = registry.try_claim_orphan(
+        RunRecoveryCandidate(run.run_id, run.session_id, 0),
+        stale_before=(now - timedelta(seconds=1)).isoformat(),
+        recovery_not_before=(now + timedelta(seconds=30)).isoformat(),
+        max_attempts=3,
+    )
+    assert claimed is not None
+    subscriber = registry.subscribe(run.run_id, after_id=2)
+    original_summary = claimed.to_summary()
+    original_events = claimed.events
+    original_subscribers = claimed.subscribers
+    armed = True
+
+    with pytest.raises(RuntimeError) as raised:
+        registry.mark_failed_durably(
+            run.run_id,
+            error="Orphaned live run has no valid resume checkpoint",
+        )
+
+    assert raised.value is failure
+    assert acknowledgement_lost is True
+    assert store.verification_calls == 1
+    assert claimed.to_summary() == original_summary
+    assert claimed.events is original_events
+    assert claimed.subscribers is original_subscribers
+    assert [(event.id, event.type) for event in claimed.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
+    assert subscriber.empty()
+    with plain_session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        events = list(
+            db.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "failed"
+        assert len(events) == 3
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["owner", "fence", "lease", "status", "stop", "event"],
+)
+def test_durable_failure_rejects_changed_fence_control_and_event_stream(
+    db_session: Session,
+    mutation: str,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry, claimed = claimed_orphan_for_durable_failure(
+        session_factory,
+        session_id=f"game_durable_guard_{mutation}",
+    )
+    subscriber = registry.subscribe(claimed.run_id, after_id=2)
+    original_summary = claimed.to_summary()
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, claimed.run_id)
+        assert saved is not None
+        if mutation == "owner":
+            saved.worker_id = "worker-other"
+        elif mutation == "fence":
+            saved.fence_token += 1
+        elif mutation == "lease":
+            saved.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        elif mutation == "status":
+            saved.status = "canceled"
+        elif mutation == "stop":
+            saved.stop_requested_at = datetime.now(tz=UTC)
+        else:
+            event = db.get(LiveEventRecord, (claimed.run_id, 2))
+            assert event is not None
+            event.payload = {"changed-before-failure": True}
+            flag_modified(event, "payload")
+        db.commit()
+
+    with pytest.raises(RunLeaseUnavailable):
+        registry.mark_failed_durably(
+            claimed.run_id,
+            error="Orphaned live run has no valid resume checkpoint",
+        )
+
+    assert claimed.to_summary() == original_summary
+    assert [(event.id, event.type) for event in claimed.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
+    assert subscriber.empty()
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == claimed.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert len(events) == 2
+        assert all(event.type != "game_failed" for event in events)
+
+
+@pytest.mark.parametrize("ack_mode", ["success", "ack-loss", "provenance-change"])
+def test_durable_failure_preserves_legacy_sql_null_provenance(
+    db_session: Session,
+    ack_mode: str,
+) -> None:
+    failure = RuntimeError("legacy durable failure acknowledgement lost")
+    armed = False
+    acknowledgement_lost = False
+
+    class AckLostFailureSession(Session):
+        saw_failure = False
+
+        def flush(self, objects=None) -> None:
+            if armed and any(
+                isinstance(item, LiveEventRecord) and item.type == "game_failed"
+                for item in self.new
+            ):
+                self.saw_failure = True
+            super().flush(objects)
+
+        def commit(self) -> None:
+            nonlocal acknowledgement_lost
+            super().commit()
+            if ack_mode != "success" and armed and self.saw_failure and not acknowledgement_lost:
+                acknowledgement_lost = True
+                raise failure
+
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        class_=AckLostFailureSession,
+        autoflush=False,
+        autocommit=False,
+    )
+    plain_session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+
+    class ProvenanceAwareSessionLiveStore(SessionLiveStore):
+        verification_calls = 0
+
+        def failure_was_committed(self, expected_state):
+            self.verification_calls += 1
+            if ack_mode == "provenance-change":
+                with plain_session_factory() as db:
+                    db.execute(
+                        update(LiveRunRecord)
+                        .where(LiveRunRecord.run_id == expected_state.run_id)
+                        .values(rule_set={})
+                    )
+                    db.commit()
+            return super().failure_was_committed(expected_state)
+
+    store = ProvenanceAwareSessionLiveStore(session_factory)
+    owner = LiveRunRegistry(live_store=store, worker_id="worker-legacy-failure-owner")
+    run = owner.create_run(
+        session_id=f"game_legacy_durable_failure_{ack_mode}",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    stale_at = datetime.now(tz=UTC) - timedelta(minutes=2)
+    with plain_session_factory() as db:
+        db.execute(
+            update(LiveRunRecord)
+            .where(LiveRunRecord.run_id == run.run_id)
+            .values(rule_set=null(), created_at=stale_at)
+        )
+        db.commit()
+    registry = LiveRunRegistry(live_store=store, worker_id="worker-legacy-failure-recovery")
+    now = datetime.now(tz=UTC)
+    claimed = registry.try_claim_orphan(
+        RunRecoveryCandidate(run.run_id, run.session_id, 0),
+        stale_before=(now - timedelta(seconds=1)).isoformat(),
+        recovery_not_before=(now + timedelta(seconds=30)).isoformat(),
+        max_attempts=3,
+    )
+    assert claimed is not None
+    assert claimed.rule_set == {}
+    assert claimed.rule_set_was_sql_null is True
+    claimed_fence = claimed.fence_token
+    subscriber = registry.subscribe(run.run_id, after_id=1)
+    original_summary = claimed.to_summary()
+    armed = True
+    error = "Orphaned live run has no valid resume checkpoint"
+
+    if ack_mode == "provenance-change":
+        with pytest.raises(RuntimeError) as raised:
+            registry.mark_failed_durably(run.run_id, error=error)
+        assert raised.value is failure
+        assert claimed.to_summary() == original_summary
+        assert claimed.rule_set_was_sql_null is True
+        assert [(event.id, event.type) for event in claimed.events] == [(1, "run_created")]
+        assert subscriber.empty()
+    else:
+        event = registry.mark_failed_durably(run.run_id, error=error)
+        assert event.type == "game_failed"
+        assert claimed.status == "failed"
+        assert claimed.rule_set_was_sql_null is True
+        assert claimed.worker_id is None
+        assert claimed.worker_heartbeat_at is None
+        assert claimed.fence_token == claimed_fence + 1
+        assert subscriber.get_nowait() is event
+        assert subscriber.empty()
+
+    assert acknowledgement_lost is (ack_mode != "success")
+    assert store.verification_calls == (0 if ack_mode == "success" else 1)
+    with plain_session_factory() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        is_sql_null = db.scalar(
+            select(LiveRunRecord.rule_set.is_(None)).where(LiveRunRecord.run_id == run.run_id)
+        )
+        events = list(
+            db.scalars(
+                select(LiveEventRecord)
+                .where(LiveEventRecord.run_id == run.run_id)
+                .order_by(LiveEventRecord.event_id)
+            )
+        )
+        assert saved is not None
+        assert saved.status == "failed"
+        assert saved.worker_id is None
+        assert saved.worker_heartbeat_at is None
+        assert saved.fence_token == claimed_fence + 1
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "game_failed"),
+        ]
+        assert is_sql_null is (ack_mode != "provenance-change")
 
 
 def test_live_store_round_trips_pinned_rule_metadata_exactly(db_session: Session) -> None:
@@ -742,6 +1790,178 @@ def test_two_registries_converge_on_one_complete_database_winner() -> None:
         assert saved_events[0].event_id == 1
         assert saved_events[0].type == "run_created"
     finally:
+        scoped_engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()
+
+
+@pytest.mark.parametrize("write_kind", ["event", "save"])
+@pytest.mark.skipif(
+    not os.getenv("TEST_POSTGRESQL_URL"),
+    reason="requires an explicitly disposable PostgreSQL URL",
+)
+def test_durable_failure_revokes_serialized_post_terminal_writes(write_kind: str) -> None:
+    database_url = os.environ["TEST_POSTGRESQL_URL"]
+    schema = f"task5_durable_failure_fence_{uuid4().hex}"
+    admin_engine = create_engine(database_url)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    scoped_engine = create_engine(
+        database_url,
+        connect_args={"options": f"-csearch_path={schema}"},
+    )
+    ScopedSession = sessionmaker(bind=scoped_engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(scoped_engine)
+    failure_locked = threading.Event()
+    release_failure = threading.Event()
+    writer_entered = threading.Event()
+    writer_pid: list[int] = []
+    failure_results: list[LiveEvent] = []
+    failure_errors: list[BaseException] = []
+    writer_errors: list[BaseException] = []
+    armed = False
+
+    class PausingFailureDatabaseStore(DatabaseLiveStore):
+        def _lock_and_validate_complete_event_stream(self, record, expected_events):
+            matches = super()._lock_and_validate_complete_event_stream(record, expected_events)
+            if armed:
+                failure_locked.set()
+                if not release_failure.wait(timeout=5):
+                    raise RuntimeError("timed out waiting to release durable failure")
+            return matches
+
+    class PausingFailureSessionStore(SessionLiveStore):
+        def fail_run(self, run_id: str, **kwargs) -> None:
+            db = self.session_factory()
+            try:
+                PausingFailureDatabaseStore(db).fail_run(run_id, **kwargs)
+            finally:
+                db.close()
+
+    failure_thread: threading.Thread | None = None
+    writer_thread: threading.Thread | None = None
+    try:
+        registry, claimed = claimed_orphan_for_durable_failure(
+            ScopedSession,
+            session_id=f"game_pg_durable_{write_kind}",
+        )
+        old_worker_id = claimed.worker_id
+        old_fence_token = claimed.fence_token
+        assert old_worker_id is not None
+        with ScopedSession() as db:
+            stale_run = DatabaseLiveStore(db).load_run(claimed.run_id)
+        assert stale_run is not None
+        stale_run.recovery_last_error = None
+        stale_event = LiveEvent(
+            id=claimed.next_event_id + 1,
+            type="phase_started",
+            run_id=claimed.run_id,
+            session_id=claimed.session_id,
+            created_at=datetime.now(tz=UTC).isoformat(),
+            phase="day",
+        )
+        registry.set_live_store(PausingFailureSessionStore(ScopedSession))
+        armed = True
+
+        def fail_durably() -> None:
+            try:
+                failure_results.append(
+                    registry.mark_failed_durably(
+                        claimed.run_id,
+                        error="Orphaned live run has no valid resume checkpoint",
+                    )
+                )
+            except BaseException as exc:
+                failure_errors.append(exc)
+                failure_locked.set()
+
+        def write_after_terminal_lock() -> None:
+            with ScopedSession() as db:
+                pid = db.scalar(text("SELECT pg_backend_pid()"))
+                assert isinstance(pid, int)
+                writer_pid.append(pid)
+                writer_entered.set()
+                store = DatabaseLiveStore(db)
+                try:
+                    if write_kind == "event":
+                        store.append_event(
+                            stale_event,
+                            worker_id=old_worker_id,
+                            fence_token=old_fence_token,
+                        )
+                    else:
+                        store.save_run(stale_run)
+                except BaseException as exc:
+                    writer_errors.append(exc)
+
+        failure_thread = threading.Thread(target=fail_durably)
+        failure_thread.start()
+        assert failure_locked.wait(timeout=5)
+        assert failure_errors == []
+
+        writer_thread = threading.Thread(target=write_after_terminal_lock)
+        writer_thread.start()
+        assert writer_entered.wait(timeout=5)
+        assert writer_pid
+
+        deadline = time.monotonic() + 5
+        observed_lock_wait = False
+        while time.monotonic() < deadline:
+            with admin_engine.connect() as observer:
+                activity = observer.execute(
+                    text("SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = :pid"),
+                    {"pid": writer_pid[0]},
+                ).one_or_none()
+            if activity is not None and activity.wait_event_type == "Lock":
+                assert "live_runs" in activity.query.lower()
+                observed_lock_wait = True
+                break
+            time.sleep(0.01)
+        assert observed_lock_wait
+        assert failure_results == []
+        assert writer_errors == []
+
+        release_failure.set()
+        failure_thread.join(timeout=5)
+        writer_thread.join(timeout=5)
+        assert not failure_thread.is_alive()
+        assert not writer_thread.is_alive()
+
+        assert failure_errors == []
+        assert len(failure_results) == 1
+        assert len(writer_errors) == 1
+        assert isinstance(writer_errors[0], RunLeaseUnavailable)
+        assert claimed.status == "failed"
+        assert claimed.worker_id is None
+        assert claimed.worker_heartbeat_at is None
+        assert claimed.fence_token == old_fence_token + 1
+        with ScopedSession() as observer:
+            saved = observer.get(LiveRunRecord, claimed.run_id)
+            events = list(
+                observer.scalars(
+                    select(LiveEventRecord)
+                    .where(LiveEventRecord.run_id == claimed.run_id)
+                    .order_by(LiveEventRecord.event_id)
+                )
+            )
+            assert saved is not None
+            assert saved.status == "failed"
+            assert saved.worker_id is None
+            assert saved.worker_heartbeat_at is None
+            assert saved.fence_token == old_fence_token + 1
+            assert saved.recovery_last_error == ("Orphaned live run has no valid resume checkpoint")
+            assert [(event.event_id, event.type) for event in events] == [
+                (1, "run_created"),
+                (2, "run_started"),
+                (3, "game_failed"),
+            ]
+    finally:
+        release_failure.set()
+        if failure_thread is not None:
+            failure_thread.join(timeout=5)
+        if writer_thread is not None:
+            writer_thread.join(timeout=5)
         scoped_engine.dispose()
         with admin_engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
@@ -1122,6 +2342,7 @@ def test_activation_waits_for_event_lock_then_rejects_a_changed_expected_stream(
         lease_state = store.acquire_lease(
             run.run_id,
             expected_events=tuple(run.events),
+            expected_rule_set=expected_rule_set(run),
             worker_id=registry.worker_id,
             heartbeat_at=heartbeat_at.isoformat(),
             lease_expires_at=(heartbeat_at + timedelta(seconds=30)).isoformat(),
@@ -2546,8 +3767,10 @@ def test_json_null_rule_snapshot_is_not_canonicalized_during_activation(
         assert [(event.event_id, event.type) for event in events] == [(1, "run_created")]
 
 
+@pytest.mark.parametrize("ack_lost", [False, True], ids=("success", "ack-loss"))
 def test_legacy_null_rule_snapshot_activation_ack_canonicalizes_atomically(
     db_session: Session,
+    ack_lost: bool,
 ) -> None:
     failure = RuntimeError("legacy activation commit acknowledgement lost")
     armed = False
@@ -2567,7 +3790,7 @@ def test_legacy_null_rule_snapshot_activation_ack_canonicalizes_atomically(
         def commit(self) -> None:
             nonlocal acknowledgement_lost
             super().commit()
-            if armed and self.saw_activation and not acknowledgement_lost:
+            if ack_lost and armed and self.saw_activation and not acknowledgement_lost:
                 acknowledgement_lost = True
                 raise failure
 
@@ -2613,10 +3836,11 @@ def test_legacy_null_rule_snapshot_activation_ack_canonicalizes_atomically(
     activation = recovery.mark_running(run.run_id)
     repeated = recovery.mark_running(run.run_id)
 
-    assert acknowledgement_lost is True
+    assert acknowledgement_lost is ack_lost
     assert activation is repeated is claimed.events[1]
     assert claimed.status == "running"
     assert claimed.rule_set == {}
+    assert claimed.rule_set_was_sql_null is False
     assert claimed.fence_token == 1
     assert claimed.next_event_id == 3
     assert subscriber.get_nowait() is activation
@@ -3097,6 +4321,7 @@ def test_two_registries_share_run_events_lease_and_stop_signal(
         competing_lease = DatabaseLiveStore(db).acquire_lease(
             run.run_id,
             expected_events=tuple(run.events),
+            expected_rule_set=expected_rule_set(run),
             worker_id="worker-observer",
             heartbeat_at="2026-07-11T08:00:00Z",
             lease_expires_at="2026-07-11T08:00:05Z",

@@ -67,6 +67,8 @@ from app.werewolf.live import (
     RunLeaseState,
     RunLeaseUnavailable,
     RunRecoveryCandidate,
+    RunRuleSetExpectedState,
+    RunRuleSetMismatch,
     format_sse,
     live_run_matches_compiled_rule_set,
 )
@@ -223,6 +225,45 @@ class SessionLiveStore:
         finally:
             db.close()
 
+    def fail_run(
+        self,
+        run_id: str,
+        *,
+        expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
+        expected_status: str,
+        failure: LiveEvent,
+        worker_id: str,
+        fence_token: int,
+        completed_at: str,
+        error: str,
+    ) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseLiveStore(db).fail_run(
+                run_id,
+                expected_events=expected_events,
+                expected_rule_set=expected_rule_set,
+                expected_status=expected_status,
+                failure=failure,
+                worker_id=worker_id,
+                fence_token=fence_token,
+                completed_at=completed_at,
+                error=error,
+            )
+        finally:
+            db.close()
+
+    def failure_was_committed(
+        self,
+        expected_state: RunActivationExpectedState,
+    ) -> bool:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).failure_was_committed(expected_state)
+        finally:
+            db.close()
+
     def append_event(
         self,
         event: LiveEvent,
@@ -266,6 +307,7 @@ class SessionLiveStore:
         run_id: str,
         *,
         expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
@@ -275,6 +317,7 @@ class SessionLiveStore:
             return DatabaseLiveStore(db).acquire_lease(
                 run_id,
                 expected_events=expected_events,
+                expected_rule_set=expected_rule_set,
                 worker_id=worker_id,
                 heartbeat_at=heartbeat_at,
                 lease_expires_at=lease_expires_at,
@@ -327,6 +370,7 @@ class SessionLiveStore:
         run_id: str,
         *,
         expected_events: tuple[LiveEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
         worker_id: str,
         expected_attempts: int,
         max_attempts: int,
@@ -340,6 +384,7 @@ class SessionLiveStore:
             return DatabaseLiveStore(db).acquire_recovery_lease(
                 run_id,
                 expected_events=expected_events,
+                expected_rule_set=expected_rule_set,
                 worker_id=worker_id,
                 expected_attempts=expected_attempts,
                 max_attempts=max_attempts,
@@ -1114,7 +1159,10 @@ def start_resume_game_run(
     active_run = registry.try_get_active_run_for_session(session_id)
     if active_run is not None:
         _require_live_run_matches_checkpoint(active_run, compiled)
-        claimed_run = registry.try_claim_stale_run(active_run.run_id)
+        try:
+            claimed_run = registry.try_claim_stale_run(active_run.run_id)
+        except RunRuleSetMismatch as exc:
+            raise HTTPException(status_code=422, detail="Resume checkpoint is invalid") from exc
         if claimed_run is None:
             return active_run, False
         active_run = claimed_run

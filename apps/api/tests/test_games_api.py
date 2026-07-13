@@ -2863,6 +2863,95 @@ def test_resume_game_run_claims_a_stale_active_run_instead_of_creating_a_duplica
         assert saved.fence_token == run.fence_token + 1
 
 
+def test_resume_stale_claim_rejects_locked_rule_snapshot_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_1200abcd"
+    checkpoint_compiled = managed_official_compiled_rule_set("starter_6")
+    changed_compiled = managed_official_compiled_rule_set("classic_8")
+    store_game_session(
+        session_id,
+        state=sample_state(session_id, winner="", error="Worker unavailable"),
+        checkpoint=sample_checkpoint(session_id),
+    )
+    owner = LiveRunRegistry(
+        live_store=SessionLiveStore(TestingSessionLocal),
+        worker_id="worker-rule-owner",
+    )
+    run = owner.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        rule_set_id=checkpoint_compiled.rule_set.id,
+        rule_set_revision_id=checkpoint_compiled.revision_id,
+        rule_set_revision_no=checkpoint_compiled.revision_no,
+        rule_set_content_hash=checkpoint_compiled.content_hash,
+        rule_set=checkpoint_compiled.snapshot,
+    )
+    owner.mark_running(run.run_id)
+    with TestingSessionLocal() as db:
+        record = db.get(LiveRunRecord, run.run_id)
+        assert record is not None
+        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        original_fence = record.fence_token
+        original_attempts = record.recovery_attempts
+        db.commit()
+
+    class RuleRaceSessionLiveStore(SessionLiveStore):
+        mutated = False
+
+        def acquire_lease(self, run_id: str, **kwargs):
+            if not self.mutated:
+                self.mutated = True
+                with TestingSessionLocal() as db:
+                    record = db.get(LiveRunRecord, run_id)
+                    assert record is not None
+                    record.rule_set_id = changed_compiled.rule_set.id
+                    record.rule_set_revision_id = changed_compiled.revision_id
+                    record.rule_set_revision_no = changed_compiled.revision_no
+                    record.rule_set_content_hash = changed_compiled.content_hash
+                    record.rule_set = copy.deepcopy(changed_compiled.snapshot)
+                    event = db.get(LiveEventRecord, (run_id, 2))
+                    assert event is not None
+                    event.payload = {"combined-rule-event-race": True}
+                    flag_modified(event, "payload")
+                    db.commit()
+            return super().acquire_lease(run_id, **kwargs)
+
+    recovery = LiveRunRegistry(
+        live_store=RuleRaceSessionLiveStore(TestingSessionLocal),
+        worker_id="worker-rule-recovery",
+    )
+    starts: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "app.api.routes.games._resume_game_in_background",
+        lambda **kwargs: starts.append(kwargs),
+    )
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+    override_replay_store()
+    override_live_registry(recovery)
+
+    try:
+        response = client.post(f"/api/v1/games/{session_id}/resume")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Resume checkpoint is invalid"
+    assert starts == []
+    assert recovery._runs == {}
+    with TestingSessionLocal() as db:
+        saved = db.get(LiveRunRecord, run.run_id)
+        assert saved is not None
+        assert saved.rule_set_id == changed_compiled.rule_set.id
+        assert saved.rule_set == changed_compiled.snapshot
+        assert saved.worker_id == "worker-rule-owner"
+        assert saved.fence_token == original_fence
+        assert saved.recovery_attempts == original_attempts
+
+
 def test_resume_game_run_returns_404_without_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

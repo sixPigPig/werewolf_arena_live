@@ -20,6 +20,12 @@ from app.werewolf.live import (
     RunLeaseState,
     RunLeaseUnavailable,
     RunRecoveryCandidate,
+    RunRuleSetExpectedState,
+    RunRuleSetMismatch,
+    clone_live_event,
+    clone_run_expected_events,
+    clone_run_expected_state,
+    clone_rule_set_expected_state,
     strict_json_equal,
     validate_prepared_run,
     validate_rule_set_revision_metadata,
@@ -129,6 +135,7 @@ class DatabaseLiveStore:
                 update(LiveRunRecord)
                 .where(
                     LiveRunRecord.run_id == run.run_id,
+                    LiveRunRecord.worker_id.is_not(None),
                     LiveRunRecord.worker_id == run.worker_id,
                     LiveRunRecord.fence_token == run.fence_token,
                     or_(
@@ -323,6 +330,156 @@ class DatabaseLiveStore:
             return False
         return matches
 
+    def fail_run(
+        self,
+        run_id: str,
+        *,
+        expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
+        expected_status: str,
+        failure: LiveEvent,
+        worker_id: str,
+        fence_token: int,
+        completed_at: str,
+        error: str,
+    ) -> None:
+        expected_events_snapshot = clone_run_expected_events(expected_events)
+        expected_rule_set = clone_rule_set_expected_state(expected_rule_set)
+        failure = clone_live_event(failure)
+        if (
+            type(run_id) is not str
+            or type(expected_status) is not str
+            or expected_status not in {"queued", "running"}
+            or type(worker_id) is not str
+            or type(fence_token) is not int
+            or fence_token <= 0
+            or type(completed_at) is not str
+            or type(error) is not str
+            or failure.id != len(expected_events_snapshot) + 1
+            or failure.type != "game_failed"
+            or failure.run_id != run_id
+            or failure.round is not None
+            or failure.phase is not None
+            or failure.actor is not None
+            or failure.action is not None
+            or not strict_json_equal(failure._payload, {"error": error})
+        ):
+            raise ValueError(f"Run {run_id} has an invalid durable failure transition")
+        parsed_completed_at = parse_live_datetime(completed_at)
+        if (
+            parsed_completed_at is None
+            or parse_live_datetime(failure.created_at) != parsed_completed_at
+        ):
+            raise ValueError(f"Run {run_id} has an invalid durable failure timestamp")
+        try:
+            record = self.db.scalar(
+                select(LiveRunRecord)
+                .where(LiveRunRecord.run_id == run_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if record is None:
+                raise RunLeaseUnavailable(f"Run {run_id} no longer exists")
+            lease_expires_at = (
+                parse_live_datetime(format_live_datetime(record.lease_expires_at))
+                if record.lease_expires_at is not None
+                else None
+            )
+            if (
+                record.status != expected_status
+                or record.status not in {"queued", "running"}
+                or record.worker_id != worker_id
+                or record.fence_token != fence_token
+                or record.stop_requested_at is not None
+                or lease_expires_at is None
+                or lease_expires_at <= datetime.now(tz=UTC)
+            ):
+                raise RunLeaseUnavailable(f"Run {run_id} durable failure was rejected by its lease")
+            events_match = self._lock_and_validate_complete_event_stream(
+                record,
+                expected_events_snapshot,
+            )
+            if not self._locked_rule_set_matches(record, expected_rule_set):
+                raise RunRuleSetMismatch(f"Run {run_id} durable failure rule set changed")
+            lease_expires_at = (
+                parse_live_datetime(format_live_datetime(record.lease_expires_at))
+                if record.lease_expires_at is not None
+                else None
+            )
+            if (
+                not events_match
+                or lease_expires_at is None
+                or lease_expires_at <= datetime.now(tz=UTC)
+            ):
+                raise RunLeaseUnavailable(
+                    f"Run {run_id} durable failure event stream or lease changed"
+                )
+            if failure.session_id != record.session_id:
+                raise ValueError(f"Run {run_id} has an invalid durable failure session")
+            record.status = "failed"
+            record.error = error
+            record.completed_at = parsed_completed_at
+            record.worker_id = None
+            record.worker_heartbeat_at = None
+            record.lease_expires_at = None
+            record.fence_token += 1
+            record.recovery_last_error = error
+            self.db.flush([record])
+            event_record = _event_record(failure)
+            self.db.add(event_record)
+            self.db.flush([event_record])
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def failure_was_committed(
+        self,
+        expected_state: RunActivationExpectedState,
+    ) -> bool:
+        expected_state = clone_run_expected_state(expected_state)
+        matches = False
+        try:
+            with self.db.no_autoflush:
+                inventory_is_complete = activation_ack_schema_inventory_complete()
+                expectation_is_complete = (
+                    expected_state.fields.keys() == ACTIVATION_ACK_RUN_FIELD_NAMES
+                    and expected_state.timestamps.keys() == ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
+                )
+                if inventory_is_complete and expectation_is_complete:
+                    record = self.db.scalar(
+                        select(LiveRunRecord)
+                        .where(LiveRunRecord.run_id == expected_state.run_id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                    if record is not None:
+                        events = tuple(
+                            self.db.scalars(
+                                select(LiveEventRecord)
+                                .where(LiveEventRecord.run_id == expected_state.run_id)
+                                .order_by(LiveEventRecord.event_id.asc())
+                                .with_for_update()
+                                .execution_options(populate_existing=True)
+                            )
+                        )
+                        matches = _stored_failure_state_matches(
+                            record,
+                            events,
+                            expected_state,
+                            rule_set_is_sql_null=(
+                                record.rule_set is None
+                                and self._rule_set_is_sql_null(record.run_id)
+                            ),
+                        )
+        except Exception:
+            matches = False
+        try:
+            self.db.rollback()
+        except Exception:
+            return False
+        return matches
+
     def load_run(self, run_id: str) -> LiveGameRun | None:
         record = self.db.get(LiveRunRecord, run_id)
         return self._run_from_record(record) if record is not None else None
@@ -344,10 +501,12 @@ class DatabaseLiveStore:
         run_id: str,
         *,
         expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
     ) -> RunLeaseState | None:
+        expected_rule_set = clone_rule_set_expected_state(expected_rule_set)
         heartbeat = parse_live_datetime(heartbeat_at)
         expires = parse_live_datetime(lease_expires_at)
         try:
@@ -366,10 +525,13 @@ class DatabaseLiveStore:
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
-            if record is None or not self._lock_and_validate_complete_event_stream(
-                record,
-                expected_events,
-            ):
+            if record is None:
+                self.db.rollback()
+                return None
+            events_match = self._lock_and_validate_complete_event_stream(record, expected_events)
+            if not self._locked_rule_set_matches(record, expected_rule_set):
+                raise RunRuleSetMismatch(f"Run {run_id} activation rule set changed")
+            if not events_match:
                 self.db.rollback()
                 return None
             record.worker_id = worker_id
@@ -530,6 +692,7 @@ class DatabaseLiveStore:
         run_id: str,
         *,
         expected_events: tuple[LiveEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
         worker_id: str,
         expected_attempts: int,
         max_attempts: int,
@@ -538,6 +701,7 @@ class DatabaseLiveStore:
         lease_expires_at: str,
         recovery_not_before: str,
     ) -> RunLeaseState | None:
+        expected_rule_set = clone_rule_set_expected_state(expected_rule_set)
         stale = parse_live_datetime(stale_before)
         heartbeat = parse_live_datetime(heartbeat_at)
         try:
@@ -563,10 +727,13 @@ class DatabaseLiveStore:
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
-            if record is None or not self._lock_and_validate_complete_event_stream(
-                record,
-                expected_events,
-            ):
+            if record is None:
+                self.db.rollback()
+                return None
+            events_match = self._lock_and_validate_complete_event_stream(record, expected_events)
+            if not self._locked_rule_set_matches(record, expected_rule_set):
+                raise RunRuleSetMismatch(f"Run {run_id} activation rule set changed")
+            if not events_match:
                 self.db.rollback()
                 return None
             record.worker_id = worker_id
@@ -613,6 +780,41 @@ class DatabaseLiveStore:
             )
         )
 
+    def _locked_rule_set_matches(
+        self,
+        record: LiveRunRecord,
+        expected: RunRuleSetExpectedState,
+    ) -> bool:
+        if type(expected) is not RunRuleSetExpectedState:
+            return False
+        if expected.rule_set_was_sql_null:
+            if record.rule_set is not None:
+                return False
+            stored_rule_set: object = {}
+            stored_rule_set_was_sql_null = self._rule_set_is_sql_null(record.run_id)
+        else:
+            if record.rule_set is None:
+                return False
+            stored_rule_set = record.rule_set
+            stored_rule_set_was_sql_null = False
+        stored = {
+            "rule_set_id": record.rule_set_id,
+            "rule_set_revision_id": record.rule_set_revision_id,
+            "rule_set_revision_no": record.rule_set_revision_no,
+            "rule_set_content_hash": record.rule_set_content_hash,
+            "rule_set": stored_rule_set,
+            "rule_set_was_sql_null": stored_rule_set_was_sql_null,
+        }
+        wanted = {
+            "rule_set_id": expected.rule_set_id,
+            "rule_set_revision_id": expected.rule_set_revision_id,
+            "rule_set_revision_no": expected.rule_set_revision_no,
+            "rule_set_content_hash": expected.rule_set_content_hash,
+            "rule_set": expected.rule_set,
+            "rule_set_was_sql_null": expected.rule_set_was_sql_null,
+        }
+        return strict_json_equal(stored, wanted)
+
     def _run_from_record(self, record: LiveRunRecord) -> LiveGameRun:
         event_count = int(
             self.db.scalar(
@@ -622,10 +824,12 @@ class DatabaseLiveStore:
             )
             or 0
         )
+        rule_set_was_sql_null = False
         if record.rule_set is None:
             if not self._rule_set_is_sql_null(record.run_id):
                 raise ValueError(f"Run {record.run_id} has an invalid JSON null rule set")
             rule_set: dict[str, Any] = {}
+            rule_set_was_sql_null = True
         else:
             rule_set = copy.deepcopy(record.rule_set)
         return LiveGameRun(
@@ -640,6 +844,7 @@ class DatabaseLiveStore:
             rule_set_revision_no=record.rule_set_revision_no,
             rule_set_content_hash=record.rule_set_content_hash,
             rule_set=rule_set,
+            rule_set_was_sql_null=rule_set_was_sql_null,
             player_configs=copy.deepcopy(record.player_configs or []),
             lineup_quality_warnings=copy.deepcopy(record.lineup_quality_warnings or []),
             status=record.status,
@@ -677,11 +882,14 @@ class DatabaseLiveStore:
         worker_id: str,
         fence_token: int,
     ) -> None:
+        if type(worker_id) is not str or type(fence_token) is not int:
+            raise RunLeaseUnavailable(f"Run {event.run_id} event has invalid write authority")
         now = datetime.now(tz=UTC)
         guard = self.db.execute(
             update(LiveRunRecord)
             .where(
                 LiveRunRecord.run_id == event.run_id,
+                LiveRunRecord.worker_id.is_not(None),
                 LiveRunRecord.worker_id == worker_id,
                 LiveRunRecord.fence_token == fence_token,
                 or_(
@@ -771,7 +979,62 @@ def _stored_activation_state_matches(
     events: tuple[LiveEventRecord, ...],
     expected: RunActivationExpectedState,
 ) -> bool:
+    lease_expires_at = (
+        parse_live_datetime(format_live_datetime(record.lease_expires_at))
+        if record.lease_expires_at is not None
+        else None
+    )
+    return bool(
+        _stored_expected_state_matches(
+            record,
+            events,
+            expected,
+            rule_set_is_sql_null=False,
+        )
+        and record.status == "running"
+        and record.stop_requested_at is None
+        and record.worker_id is not None
+        and record.fence_token > 0
+        and lease_expires_at is not None
+        and lease_expires_at > datetime.now(tz=UTC)
+    )
+
+
+def _stored_failure_state_matches(
+    record: LiveRunRecord,
+    events: tuple[LiveEventRecord, ...],
+    expected: RunActivationExpectedState,
+    *,
+    rule_set_is_sql_null: bool,
+) -> bool:
+    return bool(
+        _stored_expected_state_matches(
+            record,
+            events,
+            expected,
+            rule_set_is_sql_null=rule_set_is_sql_null,
+        )
+        and record.status == "failed"
+        and record.error is not None
+        and record.error == record.recovery_last_error
+        and record.completed_at is not None
+        and record.lease_expires_at is None
+        and events[-1].type == "game_failed"
+        and strict_json_equal(events[-1].payload, {"error": record.error})
+    )
+
+
+def _stored_expected_state_matches(
+    record: LiveRunRecord,
+    events: tuple[LiveEventRecord, ...],
+    expected: RunActivationExpectedState,
+    *,
+    rule_set_is_sql_null: bool,
+) -> bool:
     try:
+        if type(rule_set_is_sql_null) is not bool:
+            return False
+        stored_rule_set = {} if rule_set_is_sql_null else record.rule_set
         stored_fields = {
             "run_id": record.run_id,
             "session_id": record.session_id,
@@ -784,7 +1047,7 @@ def _stored_activation_state_matches(
             "rule_set_revision_id": record.rule_set_revision_id,
             "rule_set_revision_no": record.rule_set_revision_no,
             "rule_set_content_hash": record.rule_set_content_hash,
-            "rule_set": record.rule_set,
+            "rule_set": stored_rule_set,
             "player_configs": record.player_configs,
             "lineup_quality_warnings": record.lineup_quality_warnings,
             "winner": record.winner,
@@ -805,11 +1068,6 @@ def _stored_activation_state_matches(
             "recovery_last_attempt_at": record.recovery_last_attempt_at,
             "recovery_not_before": record.recovery_not_before,
         }
-        lease_expires_at = (
-            parse_live_datetime(format_live_datetime(record.lease_expires_at))
-            if record.lease_expires_at is not None
-            else None
-        )
         return bool(
             stored_fields.keys() == ACTIVATION_ACK_RUN_FIELD_NAMES
             and stored_timestamps.keys() == ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
@@ -818,12 +1076,7 @@ def _stored_activation_state_matches(
                 _stored_timestamp_matches(stored_timestamps[name], expected.timestamps[name])
                 for name in ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
             )
-            and record.status == "running"
-            and record.stop_requested_at is None
-            and record.worker_id is not None
-            and record.fence_token > 0
-            and lease_expires_at is not None
-            and lease_expires_at > datetime.now(tz=UTC)
+            and expected.rule_set_was_sql_null is rule_set_is_sql_null
             and expected.event_count == len(expected.events)
             and expected.next_event_id == expected.event_count + 1
             and len(events) == expected.event_count

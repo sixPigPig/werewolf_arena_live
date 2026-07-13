@@ -70,6 +70,10 @@ class RunLeaseUnavailable(RuntimeError):
     """Raised when another API worker owns the live run lease."""
 
 
+class RunRuleSetMismatch(RunLeaseUnavailable):
+    """Raised when a locked live run no longer matches its rule expectation."""
+
+
 @dataclass(frozen=True)
 class RunLeaseState:
     worker_id: str | None
@@ -90,6 +94,16 @@ class RunRecoveryCandidate:
     run_id: str
     session_id: str
     recovery_attempts: int
+
+
+@dataclass(frozen=True)
+class RunRuleSetExpectedState:
+    rule_set_id: str
+    rule_set_revision_id: str | None
+    rule_set_revision_no: int | None
+    rule_set_content_hash: str | None
+    rule_set: dict[str, object]
+    rule_set_was_sql_null: bool = False
 
 
 def utc_now() -> str:
@@ -260,6 +274,7 @@ class LiveGameRun:
     rule_set: dict[str, Any] = field(
         default_factory=lambda: rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
     )
+    rule_set_was_sql_null: bool = field(default=False, repr=False)
     player_configs: list[dict[str, Any]] = field(default_factory=list)
     lineup_quality_warnings: list[dict[str, str]] = field(default_factory=list)
     status: RunStatus = "queued"
@@ -367,6 +382,7 @@ class RunActivationSourceState:
     lease_expires_at: str | None
     next_event_id: int
     persisted_event_count: int
+    rule_set_was_sql_null: bool
     fields: dict[str, object]
     timestamps: dict[str, str | None]
     events: tuple[RunActivationExpectedEvent, ...]
@@ -383,6 +399,7 @@ class RunActivationExpectedState:
     events: tuple[RunActivationExpectedEvent, ...]
     event_count: int
     next_event_id: int
+    rule_set_was_sql_null: bool = False
 
 
 class LiveStore(Protocol):
@@ -409,6 +426,25 @@ class LiveStore(Protocol):
         expected_state: RunActivationExpectedState,
     ) -> bool: ...
 
+    def fail_run(
+        self,
+        run_id: str,
+        *,
+        expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
+        expected_status: str,
+        failure: LiveEvent,
+        worker_id: str,
+        fence_token: int,
+        completed_at: str,
+        error: str,
+    ) -> None: ...
+
+    def failure_was_committed(
+        self,
+        expected_state: RunActivationExpectedState,
+    ) -> bool: ...
+
     def append_event(
         self,
         event: LiveEvent,
@@ -428,6 +464,7 @@ class LiveStore(Protocol):
         run_id: str,
         *,
         expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
         worker_id: str,
         heartbeat_at: str,
         lease_expires_at: str,
@@ -457,6 +494,7 @@ class LiveStore(Protocol):
         run_id: str,
         *,
         expected_events: tuple[LiveEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
         worker_id: str,
         expected_attempts: int,
         max_attempts: int,
@@ -725,9 +763,11 @@ class LiveRunRegistry:
                 if run is None:
                     return None
             expected_run = run if run is not None else persisted
+            expected_rule_set = _capture_rule_set_expected_state(expected_run)
             lease_state = self._acquire_lease(
                 run_id,
                 expected_events=tuple(expected_run.events),
+                expected_rule_set=expected_rule_set,
                 worker_id=self.worker_id,
             )
             if lease_state is None:
@@ -790,17 +830,23 @@ class LiveRunRegistry:
                 )
                 if local_run is None:
                     return None
-            state = acquire(
-                candidate.run_id,
-                expected_events=tuple((local_run if local_run is not None else persisted).events),
-                worker_id=self.worker_id,
-                expected_attempts=candidate.recovery_attempts,
-                max_attempts=max_attempts,
-                stale_before=stale_before,
-                heartbeat_at=heartbeat_at,
-                lease_expires_at=lease_expires_at,
-                recovery_not_before=recovery_not_before,
-            )
+            expected_run = local_run if local_run is not None else persisted
+            expected_rule_set = _capture_rule_set_expected_state(expected_run)
+            try:
+                state = acquire(
+                    candidate.run_id,
+                    expected_events=tuple(expected_run.events),
+                    expected_rule_set=expected_rule_set,
+                    worker_id=self.worker_id,
+                    expected_attempts=candidate.recovery_attempts,
+                    max_attempts=max_attempts,
+                    stale_before=stale_before,
+                    heartbeat_at=heartbeat_at,
+                    lease_expires_at=lease_expires_at,
+                    recovery_not_before=recovery_not_before,
+                )
+            except RunRuleSetMismatch:
+                return None
             if state is None:
                 return None
             if local_run is None:
@@ -897,6 +943,7 @@ class LiveRunRegistry:
                 else self._acquire_lease(
                     source.run_id,
                     expected_events=source.events,
+                    expected_rule_set=_rule_set_expected_state_from_source(source),
                     worker_id=registry_worker_id,
                 )
             )
@@ -1028,6 +1075,11 @@ class LiveRunRegistry:
                 object.__setattr__(run, "status", "running")
                 object.__setattr__(run, "started_at", started_at)
                 object.__setattr__(run, "lease_lost", False)
+                object.__setattr__(
+                    run,
+                    "rule_set_was_sql_null",
+                    expected_state.rule_set_was_sql_null,
+                )
                 object.__setattr__(run, "next_event_id", expected_state.next_event_id)
                 list.append(source.events_container, local_activation)
             else:
@@ -1087,6 +1139,129 @@ class LiveRunRegistry:
                 "game_failed",
                 payload={"error": error},
             )
+
+    def mark_failed_durably(self, run_id: str, *, error: str) -> LiveEvent:
+        _require_exact_str(run_id)
+        _require_exact_str(error)
+        with self._lock:
+            registry_worker_id = self.worker_id
+            _require_exact_str(registry_worker_id)
+            run = dict.__getitem__(self._runs, run_id)
+            source = _capture_activation_source_state(run)
+            if (
+                source.run_id != run_id
+                or source.status not in {"queued", "running"}
+                or source.worker_id != registry_worker_id
+                or source.fence_token <= 0
+                or source.stop_requested_at is not None
+                or not _activation_source_has_current_lease(
+                    source,
+                    registry_worker_id=registry_worker_id,
+                    has_live_store=True,
+                )
+            ):
+                raise RunLeaseUnavailable(f"Run {run_id} durable failure was rejected by its lease")
+            failer = getattr(self._live_store, "fail_run", None)
+            verifier = getattr(self._live_store, "failure_was_committed", None)
+            if not callable(failer) or not callable(verifier):
+                raise RuntimeError(
+                    "Persistent live store does not support atomic durable failure persistence"
+                )
+            completed_at = utc_now()
+            failure_transport = LiveEvent(
+                id=source.next_event_id,
+                type="game_failed",
+                run_id=source.run_id,
+                session_id=source.session_id,
+                created_at=completed_at,
+                payload={"error": error},
+            )
+            expected_state = _failure_expected_state(
+                source,
+                failure=failure_transport,
+                completed_at=completed_at,
+                error=error,
+            )
+            failure_carrier = _clone_activation_expected_event(expected_state.events[-1])
+            expected_rule_set = _rule_set_expected_state_from_source(source)
+            runs_container = self._runs
+            activation_events_container = self._activation_events
+            if (
+                type(runs_container) is not dict
+                or dict.get(runs_container, source.run_id) is not run
+                or type(activation_events_container) is not dict
+            ):
+                _raise_invalid_exact_json_value()
+            runs_snapshot = dict.copy(runs_container)
+            activation_events_snapshot = dict.copy(activation_events_container)
+            activation_cache_event_indexes = _capture_activation_cache_event_indexes(
+                activation_events_snapshot,
+                run_id=source.run_id,
+                events_container=source.events_container,
+                expected_events=source.events,
+            )
+            try:
+                failer(
+                    source.run_id,
+                    expected_events=source.events,
+                    expected_rule_set=clone_rule_set_expected_state(expected_rule_set),
+                    expected_status=source.status,
+                    failure=_live_event_from_expected_event(failure_carrier),
+                    worker_id=registry_worker_id,
+                    fence_token=source.fence_token,
+                    completed_at=completed_at,
+                    error=error,
+                )
+            except Exception:
+                if not self._failure_was_committed_locked(
+                    expected_state,
+                    registry_worker_id=registry_worker_id,
+                ):
+                    try:
+                        _restore_rejected_activation_state(
+                            run,
+                            source=source,
+                            expected_state=expected_state,
+                        )
+                        object.__setattr__(self, "_runs", runs_container)
+                        dict.clear(runs_container)
+                        dict.update(runs_container, runs_snapshot)
+                        object.__setattr__(
+                            self,
+                            "_activation_events",
+                            activation_events_container,
+                        )
+                        _restore_activation_cache_snapshot(
+                            activation_events_container,
+                            snapshot=activation_events_snapshot,
+                            event_indexes=activation_cache_event_indexes,
+                            events_container=source.events_container,
+                        )
+                    except Exception:
+                        pass
+                    raise
+            local_failure = _live_event_from_expected_event(failure_carrier)
+            _restore_committed_activation_state(
+                run,
+                source=source,
+                expected_state=expected_state,
+                local_activation=local_failure,
+                rule_set_was_sql_null=source.rule_set_was_sql_null,
+            )
+            object.__setattr__(self, "_runs", runs_container)
+            dict.clear(runs_container)
+            dict.update(runs_container, runs_snapshot)
+            dict.__setitem__(runs_container, source.run_id, run)
+            object.__setattr__(self, "_activation_events", activation_events_container)
+            _restore_activation_cache_snapshot(
+                activation_events_container,
+                snapshot=activation_events_snapshot,
+                event_indexes=activation_cache_event_indexes,
+                events_container=source.events_container,
+            )
+            for subscriber in source.subscribers:
+                subscriber.put(local_failure)
+            return local_failure
 
     def request_stop(self, run_id: str) -> LiveEvent:
         with self._lock:
@@ -1219,6 +1394,8 @@ class LiveRunRegistry:
     ) -> LiveEvent:
         with self._lock:
             run = self._runs[run_id]
+            if run.status in {"completed", "failed", "canceled"}:
+                raise RunLeaseUnavailable(f"Run {run_id} is terminal and cannot publish events")
             self._raise_if_fence_changed_locked(run, expected_fence_token)
             return self._publish_locked(
                 run,
@@ -1435,7 +1612,30 @@ class LiveRunRegistry:
             )
             if not callable(verifier):
                 return False
-            committed = verifier(_clone_activation_expected_state(expected_state)) is True
+            committed = verifier(clone_run_expected_state(expected_state)) is True
+            _require_unchanged_registry_worker_id(
+                self.worker_id,
+                captured=registry_worker_id,
+            )
+            return committed
+        except Exception:
+            return False
+
+    def _failure_was_committed_locked(
+        self,
+        expected_state: RunActivationExpectedState,
+        *,
+        registry_worker_id: str,
+    ) -> bool:
+        try:
+            verifier = getattr(self._live_store, "failure_was_committed", None)
+            _require_unchanged_registry_worker_id(
+                self.worker_id,
+                captured=registry_worker_id,
+            )
+            if not callable(verifier):
+                return False
+            committed = verifier(clone_run_expected_state(expected_state)) is True
             _require_unchanged_registry_worker_id(
                 self.worker_id,
                 captured=registry_worker_id,
@@ -1587,6 +1787,7 @@ class LiveRunRegistry:
         run_id: str,
         *,
         expected_events: tuple[LiveEvent | RunActivationExpectedEvent, ...],
+        expected_rule_set: RunRuleSetExpectedState,
         worker_id: str,
     ) -> RunLeaseState | None:
         _require_exact_str(worker_id)
@@ -1601,6 +1802,7 @@ class LiveRunRegistry:
         state = acquire(
             run_id,
             expected_events=expected_events,
+            expected_rule_set=clone_rule_set_expected_state(expected_rule_set),
             worker_id=worker_id,
             heartbeat_at=heartbeat_at,
             lease_expires_at=lease_expires_at,
@@ -1753,15 +1955,56 @@ def _activation_expected_state(
         events=events,
         event_count=len(events),
         next_event_id=source.next_event_id + 1,
+        rule_set_was_sql_null=False,
     )
 
 
-def _clone_activation_expected_state(value: object) -> RunActivationExpectedState:
+def _failure_expected_state(
+    source: RunActivationSourceState,
+    *,
+    failure: LiveEvent,
+    completed_at: str,
+    error: str,
+) -> RunActivationExpectedState:
+    fields = _strict_json_snapshot(source.fields)
+    timestamps = _strict_json_snapshot(source.timestamps)
+    if type(fields) is not dict or type(timestamps) is not dict:
+        _raise_invalid_exact_json_value()
+    dict.__setitem__(fields, "status", "failed")
+    dict.__setitem__(fields, "error", error)
+    dict.__setitem__(fields, "worker_id", None)
+    dict.__setitem__(fields, "fence_token", source.fence_token + 1)
+    dict.__setitem__(fields, "recovery_last_error", error)
+    dict.__setitem__(timestamps, "completed_at", completed_at)
+    dict.__setitem__(timestamps, "worker_heartbeat_at", None)
+    dict.__setitem__(timestamps, "lease_expires_at", None)
+    events = tuple(_clone_activation_expected_event(event) for event in source.events) + (
+        _activation_expected_event(failure),
+    )
+    if (
+        fields.keys() != ACTIVATION_ACK_RUN_FIELD_NAMES
+        or timestamps.keys() != ACTIVATION_ACK_RUN_TIMESTAMP_NAMES
+    ):
+        raise RuntimeError("Failure acknowledgement state inventory is incomplete")
+    return RunActivationExpectedState(
+        run_id=source.run_id,
+        fields=fields,
+        timestamps=timestamps,
+        events=events,
+        event_count=len(events),
+        next_event_id=source.next_event_id + 1,
+        rule_set_was_sql_null=source.rule_set_was_sql_null,
+    )
+
+
+def clone_run_expected_state(value: object) -> RunActivationExpectedState:
     if type(value) is not RunActivationExpectedState:
         _raise_invalid_exact_json_value()
     _require_exact_str(value.run_id)
     _require_exact_int(value.event_count)
     _require_exact_int(value.next_event_id)
+    if type(value.rule_set_was_sql_null) is not bool:
+        _raise_invalid_exact_json_value()
     if type(value.fields) is not dict or type(value.timestamps) is not dict:
         _raise_invalid_exact_json_value()
     if type(value.events) is not tuple:
@@ -1785,6 +2028,7 @@ def _clone_activation_expected_state(value: object) -> RunActivationExpectedStat
         events=events,
         event_count=value.event_count,
         next_event_id=value.next_event_id,
+        rule_set_was_sql_null=value.rule_set_was_sql_null,
     )
 
 
@@ -1816,6 +2060,8 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
     if run.persisted_event_count < 0:
         _raise_invalid_exact_json_value()
     if type(run.lease_lost) is not bool:
+        _raise_invalid_exact_json_value()
+    if type(run.rule_set_was_sql_null) is not bool:
         _raise_invalid_exact_json_value()
     if type(run.rule_set) is not dict:
         _raise_invalid_exact_json_value()
@@ -1896,6 +2142,7 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
         lease_expires_at=run.lease_expires_at,
         next_event_id=run.next_event_id,
         persisted_event_count=run.persisted_event_count,
+        rule_set_was_sql_null=run.rule_set_was_sql_null,
         fields=fields,
         timestamps=timestamps,
         events=events,
@@ -1926,6 +2173,7 @@ def _activation_source_continuity_preserved(
             and current.lease_lost is source.lease_lost
             and current.next_event_id == source.next_event_id
             and current.persisted_event_count == source.persisted_event_count
+            and current.rule_set_was_sql_null is source.rule_set_was_sql_null
             and _activation_expected_events_equal(current.events, expected_events)
             and _subscriber_sequences_identical(current.subscribers, source.subscribers)
         )
@@ -1939,10 +2187,11 @@ def _restore_committed_activation_state(
     source: RunActivationSourceState,
     expected_state: RunActivationExpectedState,
     local_activation: LiveEvent,
+    rule_set_was_sql_null: bool = False,
 ) -> None:
     if type(run) is not LiveGameRun or type(local_activation) is not LiveEvent:
         _raise_invalid_exact_json_value()
-    trusted = _clone_activation_expected_state(expected_state)
+    trusted = clone_run_expected_state(expected_state)
     fields = trusted.fields
     timestamps = trusted.timestamps
     for name, value in dict.items(fields):
@@ -1966,6 +2215,7 @@ def _restore_committed_activation_state(
 
     object.__setattr__(run, "lease_lost", False)
     object.__setattr__(run, "persisted_event_count", source.persisted_event_count)
+    object.__setattr__(run, "rule_set_was_sql_null", rule_set_was_sql_null)
     object.__setattr__(run, "events", source.events_container)
     object.__setattr__(run, "subscribers", source.subscribers_container)
     object.__setattr__(run, "next_event_id", trusted.next_event_id)
@@ -1979,7 +2229,7 @@ def _restore_rejected_activation_state(
 ) -> None:
     if type(run) is not LiveGameRun:
         _raise_invalid_exact_json_value()
-    trusted = _clone_activation_expected_state(expected_state)
+    trusted = clone_run_expected_state(expected_state)
     fields = _strict_json_snapshot(source.fields)
     timestamps = _strict_json_snapshot(source.timestamps)
     if type(fields) is not dict or type(timestamps) is not dict:
@@ -2004,6 +2254,11 @@ def _restore_rejected_activation_state(
 
     object.__setattr__(run, "lease_lost", source.lease_lost)
     object.__setattr__(run, "persisted_event_count", source.persisted_event_count)
+    object.__setattr__(
+        run,
+        "rule_set_was_sql_null",
+        source.rule_set_was_sql_null,
+    )
     object.__setattr__(run, "events", source.events_container)
     object.__setattr__(run, "subscribers", source.subscribers_container)
     object.__setattr__(run, "next_event_id", source.next_event_id)
@@ -2300,6 +2555,88 @@ def _live_event_from_expected_event(event: object) -> LiveEvent:
     object.__setattr__(local, "action", cloned.action)
     object.__setattr__(local, "_payload", cloned.payload)
     return local
+
+
+def clone_live_event(event: object) -> LiveEvent:
+    return _live_event_from_expected_event(_activation_expected_event(event))
+
+
+def clone_run_expected_events(
+    events: object,
+) -> tuple[RunActivationExpectedEvent, ...]:
+    if type(events) is not tuple:
+        _raise_invalid_exact_json_value()
+    return tuple(
+        _clone_activation_expected_event(tuple.__getitem__(events, index))
+        for index in range(tuple.__len__(events))
+    )
+
+
+def _capture_rule_set_expected_state(run: object) -> RunRuleSetExpectedState:
+    if type(run) is not LiveGameRun:
+        _raise_invalid_exact_json_value()
+    _require_exact_str(run.rule_set_id)
+    _require_exact_optional_str(run.rule_set_revision_id)
+    _require_exact_optional_int(run.rule_set_revision_no)
+    _require_exact_optional_str(run.rule_set_content_hash)
+    if type(run.rule_set) is not dict or type(run.rule_set_was_sql_null) is not bool:
+        _raise_invalid_exact_json_value()
+    snapshot = _strict_json_snapshot(run.rule_set)
+    if type(snapshot) is not dict:
+        _raise_invalid_exact_json_value()
+    return RunRuleSetExpectedState(
+        rule_set_id=run.rule_set_id,
+        rule_set_revision_id=run.rule_set_revision_id,
+        rule_set_revision_no=run.rule_set_revision_no,
+        rule_set_content_hash=run.rule_set_content_hash,
+        rule_set=snapshot,
+        rule_set_was_sql_null=run.rule_set_was_sql_null,
+    )
+
+
+def _rule_set_expected_state_from_source(
+    source: RunActivationSourceState,
+) -> RunRuleSetExpectedState:
+    if type(source) is not RunActivationSourceState:
+        _raise_invalid_exact_json_value()
+    fields = source.fields
+    if type(fields) is not dict:
+        _raise_invalid_exact_json_value()
+    snapshot = dict.__getitem__(fields, "rule_set")
+    if type(snapshot) is not dict:
+        _raise_invalid_exact_json_value()
+    return clone_rule_set_expected_state(
+        RunRuleSetExpectedState(
+            rule_set_id=dict.__getitem__(fields, "rule_set_id"),
+            rule_set_revision_id=dict.__getitem__(fields, "rule_set_revision_id"),
+            rule_set_revision_no=dict.__getitem__(fields, "rule_set_revision_no"),
+            rule_set_content_hash=dict.__getitem__(fields, "rule_set_content_hash"),
+            rule_set=snapshot,
+            rule_set_was_sql_null=source.rule_set_was_sql_null,
+        )
+    )
+
+
+def clone_rule_set_expected_state(value: object) -> RunRuleSetExpectedState:
+    if type(value) is not RunRuleSetExpectedState:
+        _raise_invalid_exact_json_value()
+    _require_exact_str(value.rule_set_id)
+    _require_exact_optional_str(value.rule_set_revision_id)
+    _require_exact_optional_int(value.rule_set_revision_no)
+    _require_exact_optional_str(value.rule_set_content_hash)
+    if type(value.rule_set_was_sql_null) is not bool or type(value.rule_set) is not dict:
+        _raise_invalid_exact_json_value()
+    snapshot = _strict_json_snapshot(value.rule_set)
+    if type(snapshot) is not dict:
+        _raise_invalid_exact_json_value()
+    return RunRuleSetExpectedState(
+        rule_set_id=value.rule_set_id,
+        rule_set_revision_id=value.rule_set_revision_id,
+        rule_set_revision_no=value.rule_set_revision_no,
+        rule_set_content_hash=value.rule_set_content_hash,
+        rule_set=snapshot,
+        rule_set_was_sql_null=value.rule_set_was_sql_null,
+    )
 
 
 def _require_exact_str(value: object) -> None:

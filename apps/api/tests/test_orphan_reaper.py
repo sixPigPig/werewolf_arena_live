@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.routes.games import SessionLiveStore
 from app.db.base import Base
 from app.models.game_session import GameReplayPayload
-from app.models.live import LiveRunRecord
+from app.models.live import LiveEventRecord, LiveRunRecord
 from app.rule_sets.types import CompiledRuleSet
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.orphan_reaper import (
@@ -183,6 +183,133 @@ def test_reaper_rejects_tampered_checkpoint_before_executor() -> None:
         assert saved.recovery_last_error == ("Orphaned live run has no valid resume checkpoint")
 
 
+def test_reaper_failure_bypasses_legacy_split_save_and_append_hooks() -> None:
+    session_factory = _session_factory()
+    _owner, run_id = _seed_orphan(
+        session_factory,
+        session_id="game_6750abcd",
+    )
+    with session_factory() as db:
+        payload = db.get(GameReplayPayload, "game_6750abcd")
+        assert payload is not None
+        assert payload.checkpoint is not None
+        tampered = copy.deepcopy(payload.checkpoint)
+        tampered["run_params"]["content_hash"] = "0" * 64
+        payload.checkpoint = tampered
+        db.commit()
+
+    class SplitProbeSessionLiveStore(SessionLiveStore):
+        save_run_calls = 0
+        append_event_calls = 0
+
+        def save_run(self, run) -> None:
+            if run.status == "failed":
+                self.save_run_calls += 1
+                raise RuntimeError("terminal run save failed")
+            super().save_run(run)
+
+        def append_event(self, event, **kwargs) -> None:
+            if event.type == "game_failed":
+                self.append_event_calls += 1
+            super().append_event(event, **kwargs)
+
+    store = SplitProbeSessionLiveStore(session_factory)
+    reaper = LiveRunRegistry(live_store=store, worker_id="worker-split-probe")
+    executor_calls: list[str] = []
+
+    result = run_next_orphan_recovery(
+        session_factory,
+        reaper,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=lambda run, _registry: executor_calls.append(run.run_id),
+    )
+
+    assert result is not None
+    assert result.outcome == "failed"
+    assert executor_calls == []
+    assert store.save_run_calls == 0
+    assert store.append_event_calls == 0
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run_id)
+        events = list(
+            db.query(LiveEventRecord)
+            .filter(LiveEventRecord.run_id == run_id)
+            .order_by(LiveEventRecord.event_id)
+        )
+        assert saved is not None
+        assert saved.status == "failed"
+        assert saved.error == "Orphaned live run has no valid resume checkpoint"
+        assert saved.recovery_last_error == saved.error
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+            (3, "game_failed"),
+        ]
+
+
+@pytest.mark.parametrize("missing_method", ["fail_run", "failure_was_committed"])
+def test_reaper_missing_durable_failure_capability_fails_closed(
+    missing_method: str,
+) -> None:
+    session_factory = _session_factory()
+    _owner, run_id = _seed_orphan(
+        session_factory,
+        session_id="game_6760abcd",
+    )
+    with session_factory() as db:
+        payload = db.get(GameReplayPayload, "game_6760abcd")
+        assert payload is not None
+        assert payload.checkpoint is not None
+        tampered = copy.deepcopy(payload.checkpoint)
+        tampered["run_params"]["content_hash"] = "0" * 64
+        payload.checkpoint = tampered
+        db.commit()
+
+    class MissingCapabilitySessionLiveStore(SessionLiveStore):
+        def __getattribute__(self, name: str):
+            if name == missing_method:
+                return None
+            return super().__getattribute__(name)
+
+    registry = LiveRunRegistry(
+        live_store=MissingCapabilitySessionLiveStore(session_factory),
+        worker_id="worker-missing-durable-capability",
+    )
+
+    with pytest.raises(RuntimeError, match="atomic durable failure"):
+        run_next_orphan_recovery(
+            session_factory,
+            registry,
+            stale_grace_seconds=0,
+            backoff_seconds=30,
+            max_attempts=3,
+        )
+
+    local = registry.get_run(run_id)
+    assert local.status == "running"
+    assert [(event.id, event.type) for event in local.events] == [
+        (1, "run_created"),
+        (2, "run_started"),
+    ]
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run_id)
+        events = list(
+            db.query(LiveEventRecord)
+            .filter(LiveEventRecord.run_id == run_id)
+            .order_by(LiveEventRecord.event_id)
+        )
+        assert saved is not None
+        assert saved.status == "running"
+        assert saved.error is None
+        assert saved.recovery_last_error is None
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+        ]
+
+
 def test_reaper_rejects_live_checkpoint_rule_mismatch_before_executor() -> None:
     session_factory = _session_factory()
     live_compiled = managed_official_compiled_rule_set("starter_6")
@@ -219,6 +346,102 @@ def test_reaper_rejects_live_checkpoint_rule_mismatch_before_executor() -> None:
         assert saved.recovery_last_error == (
             "Orphaned live run rule snapshot does not match resume checkpoint"
         )
+
+
+def test_reaper_rule_race_has_no_false_winner_then_stably_fails_mismatch() -> None:
+    session_factory = _session_factory()
+    checkpoint_compiled = managed_official_compiled_rule_set("starter_6")
+    changed_compiled = managed_official_compiled_rule_set("classic_8")
+    _owner, run_id = _seed_orphan(
+        session_factory,
+        session_id="game_6900abcd",
+        live_compiled=checkpoint_compiled,
+        checkpoint_compiled=checkpoint_compiled,
+    )
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run_id)
+        assert saved is not None
+        original_worker = saved.worker_id
+        original_fence = saved.fence_token
+        original_attempts = saved.recovery_attempts
+
+    class RuleRaceSessionLiveStore(SessionLiveStore):
+        mutated = False
+
+        def acquire_recovery_lease(self, target_run_id: str, **kwargs):
+            if not self.mutated:
+                self.mutated = True
+                with session_factory() as db:
+                    saved = db.get(LiveRunRecord, target_run_id)
+                    assert saved is not None
+                    saved.rule_set_id = changed_compiled.rule_set.id
+                    saved.rule_set_revision_id = changed_compiled.revision_id
+                    saved.rule_set_revision_no = changed_compiled.revision_no
+                    saved.rule_set_content_hash = changed_compiled.content_hash
+                    saved.rule_set = copy.deepcopy(changed_compiled.snapshot)
+                    event = db.get(LiveEventRecord, (target_run_id, 2))
+                    assert event is not None
+                    event.payload = {"combined-rule-event-race": True}
+                    db.commit()
+            return super().acquire_recovery_lease(target_run_id, **kwargs)
+
+    raced_registry = LiveRunRegistry(
+        live_store=RuleRaceSessionLiveStore(session_factory),
+        worker_id="worker-rule-race",
+    )
+    executor_calls: list[str] = []
+
+    raced = run_next_orphan_recovery(
+        session_factory,
+        raced_registry,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=lambda run, _registry: executor_calls.append(run.run_id),
+    )
+
+    assert raced is None
+    assert executor_calls == []
+    assert raced_registry._runs == {}
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run_id)
+        assert saved is not None
+        assert saved.rule_set_id == changed_compiled.rule_set.id
+        assert saved.rule_set == changed_compiled.snapshot
+        assert saved.worker_id == original_worker
+        assert saved.fence_token == original_fence
+        assert saved.recovery_attempts == original_attempts
+
+    stable_registry = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-rule-stable",
+    )
+    stable = run_next_orphan_recovery(
+        session_factory,
+        stable_registry,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=lambda run, _registry: executor_calls.append(run.run_id),
+    )
+
+    assert stable is not None
+    assert stable.outcome == "failed"
+    assert executor_calls == []
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run_id)
+        events = list(
+            db.query(LiveEventRecord)
+            .filter(LiveEventRecord.run_id == run_id)
+            .order_by(LiveEventRecord.event_id)
+        )
+        assert saved is not None
+        assert saved.status == "failed"
+        assert saved.worker_id is None
+        assert saved.worker_heartbeat_at is None
+        assert saved.fence_token == original_fence + 2
+        assert saved.recovery_attempts == original_attempts + 1
+        assert [(event.event_id, event.type) for event in events][-1] == (3, "game_failed")
 
 
 def test_incomplete_rows_cannot_starve_a_valid_recovery_candidate_page() -> None:
