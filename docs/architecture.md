@@ -24,10 +24,12 @@
 6. Admin 对局列表与详情只调用 `/api/v1/admin/games*`；普通详情返回白名单诊断摘要，受限错误摘要必须在 `games.debug.read` 下由用户显式请求独立 `/debug`。
 7. Admin 运行监控只调用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要；第 1 页存在 queued/running 记录时每 5 秒轮询，否则每 30 秒发现新记录，其他页不自动轮询。
 8. Admin 法官语音资产只调用 `/api/v1/admin/judge-voice-lines*`；列表返回安全元数据，音频通过同权限的受认证 endpoint 按需读取。
+9. 授权运营人员从 Admin“内容资产 → 游戏规则”调用 `/api/v1/admin/rule-sets*` 管理结构化草稿、修订和生命周期；发布、设为默认和归档携带版本锁与操作原因，服务端校验并记录审计。
 
 ## Versioned rule catalog and recovery
 
 - PostgreSQL `rule_sets` 保存稳定规则身份，`rule_set_revisions` 保存不可变的已发布修订。生产使用 `RULE_SET_CATALOG_SOURCE=database`，数据库失败时关闭失败并返回 503，不回退到当前静态规则。`static` 仅允许 staging 紧急兼容，不是 fallback 链。
+- Admin 规则管理入口位于“内容资产 → 游戏规则”。浏览器只编辑结构化字段；服务端仍是发布校验、并发版本、生命周期约束和审计的最终边界。
 - 公开目录只返回 published、未归档修订。revision-aware Mobile 在开局时提交 `expected_rule_revision_id`；API 在事务内重新读取并精确匹配修订，冲突时返回当前目录项且不启动 worker。
 - 成功开局将稳定 ID、revision ID/number、content hash 和完整 snapshot 同时固定到 Live run、game session 和 checkpoint。引擎和 prompt 只使用该快照；后续发布、归档、改名或默认切换不会改变历史局。
 - checkpoint-v2 验证 revision/schema/hash 和运行来源；checkpoint-v1 仍必须携带可完整解析的旧 snapshot。legacy snapshot parser 与 checkpoint-v1 reader 是永久历史数据合约，不随 revision-aware 客户端切换而删除。

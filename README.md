@@ -43,6 +43,8 @@ Admin 服务端会话、固定角色和审计基础表由
 `apps/api/alembic/versions/20260710_01_create_admin_auth_tables.py` 创建。Admin 联调前同样必须先执行
 `alembic upgrade head`。
 
+拥有规则权限的运营人员在 Admin 的“内容资产 → 游戏规则”通过结构化表单管理规则。发布、设为默认和归档操作继续携带版本锁和操作原因，由服务端完成权限、状态与规则校验并写入审计。
+
 玩家草稿、发布、归档、推荐位和乐观锁字段由
 `apps/api/alembic/versions/20260710_02_expand_virtual_player_profile_lifecycle.py` 创建。迁移会把历史档案回填为已发布，
 并把原 `favorite` 同步到后台 `featured`；上线 API 前必须先完成该迁移。

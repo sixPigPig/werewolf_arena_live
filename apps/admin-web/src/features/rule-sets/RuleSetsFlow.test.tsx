@@ -197,6 +197,10 @@ describe("rule editor", () => {
     await user.click(screen.getByLabelText("启用警长"));
     expect(screen.getByLabelText("警长票权")).toBeDisabled();
     expect(screen.getByLabelText("警徽规则")).toBeDisabled();
+    const editor = screen.getByRole("group", { name: "结构化规则配置" }).closest("form")!;
+    for (const control of editor.querySelectorAll("button, input, select, textarea")) {
+      expect(control).toHaveAccessibleName();
+    }
   });
 
   it("makes the persisted ID read-only and shows status usage warnings and bounded history", async () => {
@@ -285,16 +289,21 @@ describe("rule editor", () => {
     const user = userEvent.setup(); const { router, queryClient } = renderRoute("/content/rules/classic_9"); const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     await user.type(await screen.findByLabelText("规则名称"), " saved"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "list"] })); expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "detail", "classic_9"] });
+    expect(screen.getByRole("status")).toHaveTextContent("草稿已保存");
     await act(async () => { await router.navigate("/content/rules"); });
     expect(screen.queryByRole("dialog", { name: "未保存规则" })).not.toBeInTheDocument();
   });
 
   it("unsaved rule changes block route navigation", async () => {
     const user = userEvent.setup(); const { router } = renderRoute("/content/rules/classic_9");
-    const name = await screen.findByLabelText("规则名称"); await user.type(name, " 本地");
+    const name = await screen.findByLabelText("规则名称"); await user.type(name, " 本地"); name.focus();
     await act(async () => { await router.navigate("/content/rules"); });
-    expect(screen.getByRole("dialog", { name: "未保存规则" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "继续编辑" }));
+    const dialog = screen.getByRole("dialog", { name: "未保存规则" });
+    const continueEditing = screen.getByRole("button", { name: "继续编辑" });
+    const discard = screen.getByRole("button", { name: "放弃修改并离开" });
+    expect(dialog).toHaveAccessibleDescription(); expect(continueEditing).toHaveFocus();
+    discard.focus(); await user.tab(); expect(continueEditing).toHaveFocus();
+    await user.keyboard("{Escape}"); expect(dialog).not.toBeInTheDocument(); expect(name).toHaveFocus();
     expect(router.state.location.pathname).toBe("/content/rules/classic_9");
   });
 

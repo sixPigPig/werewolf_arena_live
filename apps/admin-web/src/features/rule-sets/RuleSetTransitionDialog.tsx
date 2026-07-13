@@ -43,7 +43,7 @@ export default function RuleSetTransitionDialog({ title, description, confirmLab
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
 
-  return <section aria-describedby={descriptionId} aria-labelledby={titleId} aria-modal="true" onKeyDown={handleKeyDown} ref={dialog} role="dialog">
+  return <div className="rule-set-dialog-backdrop"><section aria-describedby={descriptionId} aria-labelledby={titleId} aria-modal="true" className="rule-set-dialog" onKeyDown={handleKeyDown} ref={dialog} role="dialog">
     <h2 id={titleId}>{title}</h2><p id={descriptionId}>{description}</p>
     <form onSubmit={submit}>
       {requiresReplacement ? <label><span>替代默认规则</span><select aria-label="替代默认规则" disabled={pending || candidatesPending || candidatesError || noCandidate} onChange={(event) => setReplacementId(event.target.value)} value={replacementId}><option value="">请选择已发布规则</option>{candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.draft_revision?.config?.name ?? candidate.published_revision?.config?.name ?? candidate.id}</option>)}</select></label> : null}
@@ -53,8 +53,8 @@ export default function RuleSetTransitionDialog({ title, description, confirmLab
       <label><span>操作原因</span><textarea aria-describedby={reasonError ? reasonErrorId : undefined} aria-invalid={Boolean(reasonError)} aria-label="操作原因" disabled={pending} maxLength={reasonMaxLength} minLength={reasonMinLength} onChange={(event) => { setReason(event.target.value); setReasonError(null); }} value={reason} /></label>
       {reasonError ? <p id={reasonErrorId} role="alert">{reasonError}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
-      <button disabled={pending} onClick={onCancel} type="button">取消</button>
-      <button disabled={pending || candidatesPending || candidatesError || noCandidate || (requiresReplacement && !replacementId)} type="submit">{pending ? pendingLabel : confirmLabel}</button>
+      <div className="rule-set-dialog-actions"><button disabled={pending} onClick={onCancel} type="button">取消</button>
+      <button disabled={pending || candidatesPending || candidatesError || noCandidate || (requiresReplacement && !replacementId)} type="submit">{pending ? pendingLabel : confirmLabel}</button></div>
     </form>
-  </section>;
+  </section></div>;
 }

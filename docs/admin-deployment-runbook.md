@@ -8,6 +8,7 @@
 2. PostgreSQL 已创建独立数据库和最小权限账号，数据库与对象备份已验证可恢复。
 3. API、Admin 和 Mobile 使用 HTTPS 同源或明确的 HTTPS allowlist；反向代理保留 Cookie、Origin 和 WebSocket/SSE 语义。
 4. `apps/api/resources/judge-voice-seed` 随 API 镜像保留，作为数据库语音资产的初始化与回滚输入。
+5. 至少准备一个拥有相应规则权限的正式测试账号，用于验收 Admin“内容资产 → 游戏规则”；发布、设为默认和归档必须携带版本锁与操作原因，由服务端校验并产生审计记录。
 
 生产配置必须显式设置：
 
@@ -255,6 +256,7 @@ Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告�
 9. 确认 API Pod 的 `RULE_SET_CATALOG_SOURCE=database`，公开规则目录返回 revision ID/number/hash，Mobile 开局提交 `expected_rule_revision_id` 并能处理冲突。
 10. 检查 `werewolf_rule_published_defaults 1`，并确认 publish/conflict/snapshot/checkpoint/legacy/game/failure-ratio-delta 指标家族全部存在且不含原始数据。
 11. 用一个 checkpoint-v1 和一个 checkpoint-v2 完成恢复冒烟，并验证发布新修订后历史局仍使用旧 snapshot。
+12. 使用授权账号进入“内容资产 → 游戏规则”，保存结构化草稿并完成发布、设为默认和归档验收；确认每次操作的版本冲突由服务端拒绝、操作原因必填，且审计日志记录操作者、资源和结果。
 
 ## 回滚
 
