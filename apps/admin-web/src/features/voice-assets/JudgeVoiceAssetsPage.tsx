@@ -83,7 +83,7 @@ export default function JudgeVoiceAssetsPage() {
         <div>
           <span className="page-kicker">VOICE LIBRARY</span>
           <h1>法官语音资产</h1>
-          <p>核对固定法官台词的生成覆盖率、文件状态与受认证试听。</p>
+          <p>核对固定法官台词的使用状态、生成覆盖率与受认证试听。</p>
         </div>
         <div className="voice-assets-heading-actions">
           <span className="page-readiness-badge">只读资产</span>
@@ -309,6 +309,9 @@ function VoiceLineCard({ line }: { line: AdminJudgeVoiceLine }) {
         {line.template_id ? <small>模板：{line.template_id}</small> : null}
       </div>
       <div className="voice-line-metadata">
+        <span className={`voice-usage-state ${line.used ? "is-used" : "is-unused"}`}>
+          {line.used ? "已使用" : "未使用"}
+        </span>
         <span className={`voice-file-state ${line.available ? "is-ready" : "is-missing"}`}>
           {line.available ? "已生成" : "缺失"}
         </span>

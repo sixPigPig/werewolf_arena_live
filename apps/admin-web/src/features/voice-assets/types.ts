@@ -5,6 +5,7 @@ export type AdminJudgeVoiceLine = {
   id: string;
   text: string;
   category: string;
+  used: boolean;
   available: boolean;
   byte_size: number | null;
   template_id: string | null;

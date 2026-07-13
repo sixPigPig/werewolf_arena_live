@@ -12,6 +12,7 @@ from app.werewolf.judge_voice_assets import (
     list_judge_voice_assets,
     list_judge_voice_line_definitions,
 )
+from app.werewolf.voice import is_static_judge_voice_asset_used
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class AdminJudgeVoiceAsset:
     id: str
     text: str
     category: str
+    used: bool
     exists: bool
     byte_size: int | None
     template_id: str | None
@@ -161,6 +163,10 @@ def _database_assets(db: Session) -> list[AdminJudgeVoiceAsset]:
             id=str(row.id),
             text=str(row.text),
             category=str(row.category),
+            used=is_static_judge_voice_asset_used(
+                str(row.id),
+                template_id=str(row.template_id) if row.template_id is not None else None,
+            ),
             exists=True,
             byte_size=max(0, int(row.size_bytes)),
             template_id=str(row.template_id) if row.template_id is not None else None,
@@ -176,6 +182,10 @@ def _database_assets(db: Session) -> list[AdminJudgeVoiceAsset]:
                 id=line.id,
                 text=line.text,
                 category=line.category,
+                used=is_static_judge_voice_asset_used(
+                    line.id,
+                    template_id=line.template_id,
+                ),
                 exists=False,
                 byte_size=None,
                 template_id=line.template_id,
@@ -192,6 +202,10 @@ def _legacy_asset(asset: JudgeVoiceAsset) -> AdminJudgeVoiceAsset:
         id=asset.id,
         text=asset.text,
         category=asset.category,
+        used=is_static_judge_voice_asset_used(
+            asset.id,
+            template_id=asset.template_id,
+        ),
         exists=asset.exists,
         byte_size=asset.byte_size,
         template_id=asset.template_id,

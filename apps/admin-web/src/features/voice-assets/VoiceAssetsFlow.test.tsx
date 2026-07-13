@@ -71,11 +71,17 @@ describe("admin voice asset flow", () => {
     expect(within(navigation).queryByText("虚拟玩家")).toBeNull();
     expect(await screen.findByText("game_intro")).toBeInTheDocument();
     expect(screen.getByText("night_start")).toBeInTheDocument();
+    expect(
+      within(screen.getByText("game_intro").closest("li")!).getByText("已使用"),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByText("werewolves_confirm").closest("li")!).getByText("未使用"),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("试听 game_intro")).toHaveAttribute(
       "src",
       "/api/v1/admin/judge-voice-lines/game_intro/audio",
     );
-    expect(screen.getByText("等待后续生成任务")).toBeInTheDocument();
+    expect(screen.getAllByText("等待后续生成任务")).toHaveLength(2);
     expect(
       screen.queryByRole("button", { name: /生成缺失|重新生成|删除/ }),
     ).toBeNull();

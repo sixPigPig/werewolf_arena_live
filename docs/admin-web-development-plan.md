@@ -508,7 +508,7 @@ draft -> published -> archived
 
 - `/content/voice-assets` 连接真实 `/api/v1/admin/judge-voice-lines`，提供覆盖率、文件体积、分类、缺失状态、搜索、排序、分页和手动刷新；
 - `voice.read` 同时保护列表与 `/judge-voice-lines/:id/audio`，试听音频不会回退旧匿名 public URL；
-- 普通 DTO 只返回台词 ID、展示文本、分类、文件存在状态、大小、模板/席位、安全试听 URL 和字幕计数，不返回服务器路径、filename、manifest、字幕内容或音频块；
+- 普通 DTO 只返回台词 ID、展示文本、分类、运行时使用状态、文件存在状态、大小、模板/席位、安全试听 URL 和字幕计数，不返回服务器路径、filename、manifest、字幕内容或音频块；
 - 页面显示当前数据库或旧目录双读状态，且不提供生成、覆盖、删除按钮；
 - 旧 Web 匿名语音生成 POST 默认关闭，production 配置校验禁止重新开启。
 

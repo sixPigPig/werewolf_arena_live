@@ -149,7 +149,7 @@ http://127.0.0.1:5175
 
 直播 orphan 自动恢复由独立进程 `.venv/bin/python -m app.cli run-live-run-reaper`（本地可用 `make live-run-reaper`）执行，不随每个 API 副本重复启动。它在租约过期并超过宽限期后原子认领运行：有停止请求则取消，有有效 checkpoint 则恢复，否则标记失败；认领使用指数退避并受最大次数限制。`--once` 可做单次部署验收。恢复次数、最近认领时间、退避截止时间和“自动恢复已耗尽”告警会显示在 Admin 运行监控中。
 
-法官语音资产使用 `/api/v1/admin/judge-voice-lines*` 提供 `voice.read` 保护的覆盖率、分类筛选、缺失项和受认证试听；普通 DTO 不返回文件路径、public URL、manifest、字幕内容或音频字节。迁移 `20260711_06` 建立 PostgreSQL 独立资产表，`.venv/bin/python -m app.cli import-judge-voice-assets` 可从 `apps/api/resources/judge-voice-seed` 幂等导入种子资产；Admin、实时法官语音和回放均数据库优先、API 自有种子目录回退。
+法官语音资产使用 `/api/v1/admin/judge-voice-lines*` 提供 `voice.read` 保护的覆盖率、分类筛选、运行时使用状态、缺失项和受认证试听；普通 DTO 不返回文件路径、public URL、manifest、字幕内容或音频字节。迁移 `20260711_06` 建立 PostgreSQL 独立资产表，`.venv/bin/python -m app.cli import-judge-voice-assets` 可从 `apps/api/resources/judge-voice-seed` 幂等导入种子资产；Admin、实时法官语音和回放均数据库优先、API 自有种子目录回退。
 
 迁移 `20260711_07` 建立持久语音生成任务。Admin 使用 CSRF、`voice.generate_missing` / `voice.regenerate_all` 和 `Idempotency-Key` 排队，独立 worker 通过 `.venv/bin/python -m app.cli run-judge-voice-worker` 持续领取任务；`--once` 仅用于单次运维检查，API 或 worker 重启不会丢失 queued job。
 

@@ -228,6 +228,7 @@ def _line_item(asset) -> AdminJudgeVoiceLineItem:
         id=asset.id,
         text=asset.text,
         category=asset.category,
+        used=asset.used,
         available=asset.exists,
         byte_size=asset.byte_size if asset.exists else None,
         template_id=asset.template_id,

@@ -139,6 +139,7 @@ function parseLine(value: unknown): AdminJudgeVoiceLine {
     id,
     text: requiredString(record.text, "line.text"),
     category: requiredString(record.category, "line.category"),
+    used: booleanValue(record.used, "line.used"),
     available,
     byte_size: byteSize,
     template_id: nullableString(record.template_id, "line.template_id"),

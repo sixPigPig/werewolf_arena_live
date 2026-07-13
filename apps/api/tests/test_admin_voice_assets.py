@@ -125,6 +125,7 @@ def test_admin_voice_assets_return_safe_inventory_and_coverage(
             "id": "game_intro",
             "text": "本局游戏开始，请所有玩家确认自己的身份牌。",
             "category": "开局",
+            "used": True,
             "available": True,
             "byte_size": len(b"intro-audio"),
             "template_id": None,
@@ -142,6 +143,22 @@ def test_admin_voice_assets_return_safe_inventory_and_coverage(
         "manifest_path",
     ):
         assert forbidden not in serialized
+
+
+def test_admin_voice_assets_mark_runtime_usage(voice_client) -> None:
+    client, _asset_dir, _session_factory = voice_client
+    _login(client)
+
+    response = client.get(
+        "/api/v1/admin/judge-voice-lines",
+        params={"page_size": 100},
+    )
+
+    assert response.status_code == 200
+    items = {item["id"]: item for item in response.json()["items"]}
+    assert items["game_intro"]["used"] is True
+    assert items["speech_prompt_seat_01"]["used"] is True
+    assert items["werewolves_confirm"]["used"] is False
 
 
 def test_admin_voice_assets_filter_missing_and_paginate(

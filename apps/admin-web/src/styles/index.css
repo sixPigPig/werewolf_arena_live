@@ -3403,11 +3403,22 @@ a {
   line-height: 1.45;
 }
 
-.voice-file-state {
+.voice-file-state,
+.voice-usage-state {
   padding: 4px 8px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 750;
+}
+
+.voice-usage-state.is-used {
+  color: #175cd3;
+  background: #eff8ff;
+}
+
+.voice-usage-state.is-unused {
+  color: #667085;
+  background: #f2f4f7;
 }
 
 .voice-file-state.is-ready {

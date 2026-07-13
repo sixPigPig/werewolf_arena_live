@@ -37,7 +37,7 @@ describe("admin judge voice asset contract", () => {
     expect(() =>
       parseAdminJudgeVoiceList({
         ...contractJudgeVoiceList,
-        coverage: { ...contractJudgeVoiceList.coverage, total: 4 },
+        coverage: { ...contractJudgeVoiceList.coverage, total: 5 },
       }),
     ).toThrow(/分类之和/);
     expect(() =>

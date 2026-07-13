@@ -29,6 +29,7 @@ class AdminJudgeVoiceLineItem(BaseModel):
     id: str = Field(max_length=80)
     text: str = Field(max_length=500)
     category: str = Field(max_length=80)
+    used: bool
     available: bool
     byte_size: int | None = Field(default=None, ge=0)
     template_id: str | None = Field(default=None, max_length=80)

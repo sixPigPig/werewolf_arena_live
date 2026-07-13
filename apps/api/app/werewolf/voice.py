@@ -16,6 +16,30 @@ PUBLIC_WINNER_ASSETS = {
     "狼人阵营": ("游戏结束，狼人阵营获胜。", "game_over_wolves"),
     "第三方阵营": ("游戏结束，第三方阵营获胜。", "game_over_third_party"),
 }
+USED_STATIC_JUDGE_VOICE_ASSET_IDS = frozenset(
+    {
+        "badge_destroyed",
+        "dawn_peaceful",
+        "dawn_start",
+        "exile_vote_start",
+        "game_intro",
+        "game_over_third_party",
+        "game_over_villagers",
+        "game_over_wolves",
+        "night_start",
+    }
+)
+USED_STATIC_JUDGE_VOICE_ASSET_TEMPLATE_IDS = frozenset(
+    {
+        "badge_transfer",
+        "exile_result",
+        "hunter_shot_result",
+        "idiot_reveal",
+        "sheriff_result",
+        "speech_prompt",
+        "werewolf_self_explosion",
+    }
+)
 SENTENCE_PATTERN = re.compile(r"[^，。！？；,.!?;]+[，。！？；,.!?;]?")
 
 
@@ -44,6 +68,18 @@ class VoiceUtterance:
 class JudgeVoiceCue:
     text: str
     static_asset_id: str | None = None
+
+
+def is_static_judge_voice_asset_used(
+    asset_id: str,
+    *,
+    template_id: str | None = None,
+) -> bool:
+    """Return whether live game narration can request this static asset."""
+    return (
+        asset_id in USED_STATIC_JUDGE_VOICE_ASSET_IDS
+        or template_id in USED_STATIC_JUDGE_VOICE_ASSET_TEMPLATE_IDS
+    )
 
 
 def is_public_speech_event(event: LiveEvent) -> bool:
