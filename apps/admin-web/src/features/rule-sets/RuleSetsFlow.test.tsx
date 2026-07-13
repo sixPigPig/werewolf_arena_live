@@ -106,7 +106,7 @@ describe("admin rule set list flow", () => {
 
   it("uses fetched player and ID constraints and sends the source lock version", async () => {
     useServerSession(["rules.read", "rules.write"]);
-    const constrainedOptions = { ...ruleSetOptions, constraints: { ...ruleSetOptions.constraints, player_count_min: 8, player_count_max: 10, id_pattern: "^x_[a-z]{3}$" } };
+    const constrainedOptions = { ...ruleSetOptions, roles: ruleSetOptions.roles.map((role) => role.id === "villager" ? { ...role, max_count: 10 } : role) as typeof ruleSetOptions.roles, constraints: { ...ruleSetOptions.constraints, player_count_min: 8, player_count_max: 10, id_pattern: "^x_[a-z]{3}$" } };
     let duplicateBody: unknown;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
@@ -368,9 +368,15 @@ describe("rule editor", () => {
 
   it("shows a bounded error when conflict reload fails and prevents duplicate reloads", async () => {
     useServerSession(["rules.read", "rules.write"]); const base = { ...fixtureRuleSet("classic_9", "draft"), revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let gets = 0;
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) { gets += 1; return gets === 1 ? json(base) : json({ title: "Unavailable", status: 503, detail: "重载失败", code: "unavailable", request_id: "reload-1" }, 503); } if (url.endsWith("/api/v1/admin/rule-sets/classic_9/draft")) return json({ title: "Conflict", status: 412, detail: "版本变化", code: "rule_set_version_conflict", request_id: null }, 412); throw new Error(`Unexpected request: ${url}`); }));
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) { gets += 1; return gets === 1 ? json(base) : json({ title: "driver failure", status: 500, detail: "SELECT raw_reload FROM players", code: "driver_raw", request_id: "reload-1" }, 500); } if (url.endsWith("/api/v1/admin/rule-sets/classic_9/draft")) return json({ title: "Conflict", status: 412, detail: "版本变化", code: "rule_set_version_conflict", request_id: null }, 412); throw new Error(`Unexpected request: ${url}`); }));
     const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); await user.type(await screen.findByLabelText("规则名称"), " local"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
-    const reload = await screen.findByRole("button", { name: "重新加载服务器版本" }); await user.click(reload); expect(await screen.findByText("规则目录暂时不可用，请稍后重试。")).toBeInTheDocument(); expect(screen.queryByText("重载失败")).not.toBeInTheDocument(); expect(gets).toBe(2); expect(screen.getByLabelText("规则名称")).toHaveValue("classic_9 草稿 local");
+    const reload = await screen.findByRole("button", { name: "重新加载服务器版本" }); await user.click(reload); expect(await screen.findByText("无法重新加载游戏规则，请稍后重试。")).toBeInTheDocument(); expect(screen.queryByText(/SELECT raw_reload|players|driver failure/)).not.toBeInTheDocument(); expect(gets).toBe(2); expect(screen.getByLabelText("规则名称")).toHaveValue("classic_9 草稿 local");
+  });
+
+  it("keeps validation error context after pending clears without exposing raw detail", async () => {
+    useServerSession(["rules.read", "rules.write"]); const base = { ...fixtureRuleSet("classic_9", "draft"), revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] };
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) return json(base); if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) return json({ title: "driver failure", status: 500, detail: "SELECT raw_validate FROM players", code: "driver_raw", request_id: null }, 500); throw new Error(`Unexpected request: ${url}`); }));
+    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); await user.click(await screen.findByRole("button", { name: "校验规则" })); expect(await screen.findByText("无法校验游戏规则，请稍后重试。")).toBeInTheDocument(); expect(screen.queryByText(/SELECT raw_validate|players|driver failure/)).not.toBeInTheDocument();
   });
 
   it("validation gates publish on the saved revision and omits compiled snapshot", async () => {

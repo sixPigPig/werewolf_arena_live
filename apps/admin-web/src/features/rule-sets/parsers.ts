@@ -32,6 +32,9 @@ export function parseRuleSetOptions(value: unknown): RuleSetOptions {
   const playerMin = positive(c.player_count_min, "constraints.player_count_min"); const playerMax = positive(c.player_count_max, "constraints.player_count_max");
   const reasonMin = positive(c.reason_min_length, "constraints.reason_min_length"); const reasonMax = positive(c.reason_max_length, "constraints.reason_max_length");
   if (playerMin > playerMax) fail("constraints.player_count_range"); if (reasonMin > reasonMax) fail("constraints.reason_range");
+  if (roles.some((role) => role.max_count > playerMax)) fail("roles.max_count.player_count_max");
+  if (roles.reduce((sum, role) => sum + role.min_count, 0) > playerMax) fail("roles.minima.player_count_max");
+  if (roles.reduce((sum, role) => sum + role.max_count, 0) < playerMin) fail("roles.maxima.player_count_min");
   const idPattern = string(c.id_pattern, "constraints.id_pattern"); try { new RegExp(idPattern); } catch { fail("constraints.id_pattern"); }
   return {
     roles: roles as RuleSetOptions["roles"], win_conditions: choices(r.win_conditions, "win_conditions", WIN_CONDITIONS), sheriff_vote_weights: weights as NonEmptyArray<number>,
