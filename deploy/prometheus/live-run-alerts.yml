@@ -45,3 +45,59 @@ groups:
         annotations:
           summary: Live-run reaper scan errors detected
           description: The reaper recorded one or more scan or telemetry errors in the last ten minutes.
+
+  - name: werewolf-rule-catalog
+    rules:
+      - alert: WerewolfRulePublishedDefaultInvalid
+        expr: absent(werewolf_rule_published_defaults) or max(werewolf_rule_published_defaults) != 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Published rule default count is not exactly one
+          description: The database-derived published default gauge is missing or does not equal one after deduplicating API Pod samples.
+
+      - alert: WerewolfRuleSnapshotFailures
+        expr: sum(increase(werewolf_rule_snapshot_failures_total[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rule snapshot failures are sustained
+          description: One or more API Pods have continued to report bounded rule snapshot parse or hash failures.
+
+      - alert: WerewolfRuleCheckpointFailures
+        expr: sum(increase(werewolf_rule_checkpoint_failures_total[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rule checkpoint failures are sustained
+          description: One or more API Pods have continued to report bounded checkpoint validation or restore failures.
+
+      - alert: WerewolfRuleRevisionFailureRateHigh
+        expr: |
+          max by (rule_set_id, revision_no) (
+            werewolf_rule_game_failure_ratio_delta
+          ) > 0.10
+          and on (rule_set_id, revision_no)
+          sum by (rule_set_id, revision_no) (
+            max by (rule_set_id, revision_no, status) (
+              werewolf_rule_games{status=~"complete|partial"}
+            )
+          ) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rule revision failure rate regressed
+          description: A stable rule revision has at least twenty terminal games and its failure ratio is more than ten percentage points above the preceding available revision.
+
+      - alert: WerewolfLegacyRuleCreates
+        expr: sum(increase(werewolf_rule_legacy_creates_total[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Legacy no-revision game creates continue
+          description: Compatibility clients are still creating games without a revision precondition; inhibit only during the documented client cutover window.

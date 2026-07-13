@@ -30,6 +30,7 @@ services:
     environment: &api-environment
       APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/app
+      RULE_SET_CATALOG_SOURCE: ${RULE_SET_CATALOG_SOURCE:-database}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:8081,http://localhost:5174}
       PUBLIC_CORS_ORIGINS: ${PUBLIC_CORS_ORIGINS:-http://localhost:8081,http://localhost:5174}
       ADMIN_DEV_AUTH_ENABLED: ${ADMIN_DEV_AUTH_ENABLED:-true}

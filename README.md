@@ -26,14 +26,14 @@ pnpm install
 
 `uv` 只用于首次同步 Python 依赖。如果本机没有 `uv`，请先安装 `uv`，或者使用已经存在的 `apps/api/.venv` 运行后端；`make api` 会直接调用项目内的 `.venv/bin/python`。
 
-PostgreSQL 是虚拟玩家档案的唯一运行时数据源。使用玩家库或发起对局前，启动数据库并执行迁移：
+PostgreSQL 是虚拟玩家档案和生产规则目录的唯一运行时数据源。使用玩家库或发起对局前，启动数据库并执行迁移：
 
 ```bash
 docker compose up -d db
 cd apps/api && uv run alembic upgrade head
 ```
 
-数据库不可用时，玩家档案 CRUD 和依赖玩家库的开局请求会返回 `503`，不会回退到本地 JSON 文件。
+数据库不可用时，玩家档案 CRUD、公开规则目录和依赖这些数据的开局请求会返回 `503`，不会回退到本地 JSON 或静态规则表。生产必须显式设置 `RULE_SET_CATALOG_SOURCE=database`；`static` 仅是 staging 紧急兼容模式，不是自动 fallback。
 
 实时观战 run、SSE 事件、语音 utterance 和语音音频 chunk 也会写入 PostgreSQL。语音和实时事件相关表由
 `apps/api/alembic/versions/20260708_01_create_live_voice_tables.py` 创建；如果刚拉到新代码，务必先执行
@@ -58,6 +58,8 @@ Admin 运行监控使用的四个查询索引由
 `apps/api/alembic/versions/20260711_05_add_admin_live_run_query_indexes.py` 创建，分别覆盖运行更新时间分页
 `(updated_at DESC, run_id DESC)`、运行创建时间分页 `(created_at DESC, run_id DESC)`、状态加更新时间分页
 `(status, updated_at DESC, run_id DESC)` 和语音状态聚合 `(run_id, status)`；`make api` 会随其他迁移一起应用。
+
+版本化规则目录由 `20260712_15_create_rule_set_catalog.py` 创建，并写入四个官方规则的 published revision 1；`20260712_16_add_rule_revision_references.py` 为 Live run 和 game session 增加稳定规则 ID、revision 和 hash，且只对精确匹配的历史快照回填 revision。应用上线前必须先迁移至少 `20260712_16`；精确发布、验证与回滚步骤见 `docs/admin-deployment-runbook.md`。
 
 如果旧版本曾在 `apps/api/logs/player_profiles.json` 写入玩家档案，可在数据库迁移完成后执行一次幂等导入：
 
@@ -227,6 +229,8 @@ chunk 的 utterance，然后再订阅后续实时事件。移动端首次开启�
 4. 实时观战页会展示玩家、阶段、字幕和语音状态。
 5. 对局结束后进入 `/games/<session_id>/replay` 查看完整复盘。
 
+revision-aware 客户端在开局时提交 `expected_rule_revision_id`。服务端在同一数据库事务中选定 published revision，将完整 snapshot 固定到 run、game 和 checkpoint；后续发布或归档不会改变旧局规则。未提交 revision 的兼容客户端会被计量，但 legacy snapshot parser 和 checkpoint-v1 reader 会永久保留，保证历史局可恢复。
+
 新对局的历史记录、完整复盘和恢复检查点保存在 PostgreSQL。旧版 `apps/api/logs/game_*` 文件记录不会再被读取；完成迁移后可执行：
 
 ```bash
@@ -234,8 +238,7 @@ cd apps/api
 .venv/bin/python -m app.cli purge-legacy-game-records --logs-dir logs --yes
 ```
 
-实时 run 和 SSE 事件会写入 PostgreSQL，同时活动订阅、正在运行的模型任务和内存队列仍由当前 API
-进程管理，当前部署应使用单个 API worker。同一进程内重复恢复同一对局会复用已有活动 run，不会重复启动模型任务；跨进程排他需要后续引入共享任务存储。
+实时 run、SSE 事件、运行租约、fencing token 和控制信号会写入 PostgreSQL。可运行多个 API 副本；每个副本只执行自己持有有效租约的模型任务，丢失租约的写入会被 fence 拒绝。独立 reaper 从数据库原子认领 orphan，不依赖 API 单副本部署。
 
 运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。当前内置
 DeepSeek 和 MiniMax；如果 `WEREWOLF_DEFAULT_MODEL` 为空，后端会从已配置 API key 的

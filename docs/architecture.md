@@ -25,6 +25,15 @@
 7. Admin 运行监控只调用 `/api/v1/admin/live-runs*` 读取 PostgreSQL 持久化摘要；第 1 页存在 queued/running 记录时每 5 秒轮询，否则每 30 秒发现新记录，其他页不自动轮询。
 8. Admin 法官语音资产只调用 `/api/v1/admin/judge-voice-lines*`；列表返回安全元数据，音频通过同权限的受认证 endpoint 按需读取。
 
+## Versioned rule catalog and recovery
+
+- PostgreSQL `rule_sets` 保存稳定规则身份，`rule_set_revisions` 保存不可变的已发布修订。生产使用 `RULE_SET_CATALOG_SOURCE=database`，数据库失败时关闭失败并返回 503，不回退到当前静态规则。`static` 仅允许 staging 紧急兼容，不是 fallback 链。
+- 公开目录只返回 published、未归档修订。revision-aware Mobile 在开局时提交 `expected_rule_revision_id`；API 在事务内重新读取并精确匹配修订，冲突时返回当前目录项且不启动 worker。
+- 成功开局将稳定 ID、revision ID/number、content hash 和完整 snapshot 同时固定到 Live run、game session 和 checkpoint。引擎和 prompt 只使用该快照；后续发布、归档、改名或默认切换不会改变历史局。
+- checkpoint-v2 验证 revision/schema/hash 和运行来源；checkpoint-v1 仍必须携带可完整解析的旧 snapshot。legacy snapshot parser 与 checkpoint-v1 reader 是永久历史数据合约，不随 revision-aware 客户端切换而删除。
+- 迁移 `20260712_15` 创建目录并写入四个官方 revision 1；`20260712_16` 为 Live/game 增加 nullable 规则来源列，且仅对 canonical hash 精确匹配的快照回填 revision。迁移 15 的 downgrade 会删除整个规则目录，用户规则存在时未先导出不得执行。
+- `/api/v1/metrics` 的规则 counter 是进程本地的有界序列，Prometheus 必须直接抓取每个 API Pod，并在查询中聚合 counter。`werewolf_rule_games`、`werewolf_rule_game_failure_ratio_delta` 和 `werewolf_rule_published_defaults` 是每个 Pod 都会渲染的数据库 gauge；delta 表示当前数字修订相对同一稳定规则前一个可用修订的失败率变化。跨 Pod 查询必须去重，不能直接求和。标签和日志只允许稳定 ID、revision number、schema version 和 12 位 hash 前缀，不记录快照、description、玩家、SQL 或原始错误。
+
 ## Admin security boundary
 
 - Production `admin-web` builds are currently unconditionally fail closed while the formal identity provider is undecided.
@@ -61,6 +70,8 @@
 - Legacy `player_profiles.json` files are migration inputs only and can be imported with `python -m app.cli import-player-profiles --source <path>`.
 - Game checkpoints and completed replays are stored in PostgreSQL in `game_sessions` and `game_replay_payloads`.
 - Live runs, live SSE events, voice utterances, and voice audio chunks are persisted in PostgreSQL for replay/recovery support.
+- Versioned rule parents and immutable revisions are persisted in `rule_sets` and `rule_set_revisions`; production catalog reads never fall back to static definitions.
+- Live runs and game sessions retain scalar rule revision provenance plus the pinned snapshot. NULL revision identifies compatible legacy history and is never remapped to the current revision at read time.
 - Migration `20260711_05` adds four Admin monitoring indexes: live-run updated pagination, created pagination, status plus updated pagination, and voice counts by run/status.
 - Admin sessions and redacted audit events are persisted in PostgreSQL; raw session and CSRF secrets are never stored in the database.
 - Public Guest sessions and per-user player favorites are persisted in PostgreSQL. Guest Cookie 丢失后不能跨设备恢复。
