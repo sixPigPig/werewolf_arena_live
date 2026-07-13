@@ -4,6 +4,7 @@ export type RuleRoleId = "werewolf" | "villager" | "seer" | "guard" | "witch" | 
 export type RuleWinCondition = "wolves_gte_others" | "slaughter_side";
 export type RuleSpeechPolicy = "sequential" | "sheriff_directed";
 export type RuleBadgeBombPolicy = "none" | "double";
+export type RuleSetOptionSort = RuleSetSortField | `-${RuleSetSortField}`;
 export type RuleSetConfig = { name: string; description: string; complexity: string; estimated_duration: string; rule_tags: string[]; role_counts: Record<RuleRoleId, number>; win_condition: RuleWinCondition; sheriff_enabled: boolean; sheriff_vote_weight: number; speech_policy: RuleSpeechPolicy; werewolf_self_explosion_enabled: boolean; sheriff_badge_bomb_policy: RuleBadgeBombPolicy };
 export type RuleSetUsage = { game_count: number; live_count: number };
 export type RuleSetWarning = { code: string; path: string; message: string };
@@ -13,7 +14,7 @@ export type AdminRuleSet = { id: string; status: RuleSetStatus; is_default: bool
 export type AdminRuleSetDetail = Omit<AdminRuleSet, "revisions"> & { revisions: RuleSetHistoryRevision[]; usage: RuleSetUsage; warnings: RuleSetWarning[] };
 export type AdminRuleSetList = { items: AdminRuleSet[]; pagination: { page: number; page_size: number; total: number; pages: number } };
 export type RuleChoice<T extends string> = { value: T; label: string };
-export type RuleSetOptions = { roles: { id: RuleRoleId; label: string; min_count: number; max_count: number }[]; win_conditions: RuleChoice<RuleWinCondition>[]; sheriff_vote_weights: number[]; speech_policies: RuleChoice<RuleSpeechPolicy>[]; sheriff_badge_bomb_policies: RuleChoice<RuleBadgeBombPolicy>[]; statuses: RuleChoice<RuleSetStatus>[]; sorts: RuleChoice<RuleSetSortField>[]; constraints: { player_count_min: number; player_count_max: number; tags_max_items: number; tag_max_length: number; id_pattern: string; reason_min_length: number; reason_max_length: number } };
+export type RuleSetOptions = { roles: { id: RuleRoleId; label: string; min_count: number; max_count: number }[]; win_conditions: RuleChoice<RuleWinCondition>[]; sheriff_vote_weights: number[]; speech_policies: RuleChoice<RuleSpeechPolicy>[]; sheriff_badge_bomb_policies: RuleChoice<RuleBadgeBombPolicy>[]; statuses: RuleChoice<RuleSetStatus>[]; sorts: RuleChoice<RuleSetOptionSort>[]; constraints: { player_count_min: number; player_count_max: number; tags_max_items: number; tag_max_length: number; id_pattern: string; reason_min_length: number; reason_max_length: number } };
 export type RuleSetValidationResponse = { valid: boolean; errors: RuleSetWarning[]; warnings: RuleSetWarning[]; compiled_snapshot: Record<string, unknown> | null; content_hash: string | null; rule_text_preview: string | null };
 export type RuleSetValidation = Omit<RuleSetValidationResponse, "compiled_snapshot">;
 

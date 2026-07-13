@@ -28,7 +28,16 @@ const options = {
   win_conditions: [{ value: "wolves_gte_others", label: "屠边" }], sheriff_vote_weights: [1, 1.5],
   speech_policies: [{ value: "sequential", label: "顺序" }],
   sheriff_badge_bomb_policies: [{ value: "none", label: "无" }], statuses: [{ value: "draft", label: "草稿" }],
-  sorts: [{ value: "display_order", label: "顺序" }],
+  sorts: [
+    { value: "display_order", label: "顺序升序" },
+    { value: "-display_order", label: "顺序降序" },
+    { value: "updated_at", label: "更新时间升序" },
+    { value: "-updated_at", label: "更新时间降序" },
+    { value: "name", label: "名称升序" },
+    { value: "-name", label: "名称降序" },
+    { value: "created_at", label: "创建时间升序" },
+    { value: "-created_at", label: "创建时间降序" },
+  ],
   constraints: { player_count_min: 6, player_count_max: 12, tags_max_items: 8, tag_max_length: 20, id_pattern: "x", reason_min_length: 3, reason_max_length: 500 },
 };
 
@@ -82,7 +91,7 @@ describe("rule-set response contracts", () => {
     ["speech policy", { ...options, speech_policies: [{ value: "unknown", label: "未知" }] }],
     ["badge policy", { ...options, sheriff_badge_bomb_policies: [{ value: "unknown", label: "未知" }] }],
     ["status", { ...options, statuses: [{ value: "deleted", label: "已删除" }] }],
-    ["sort", { ...options, sorts: [{ value: "unknown", label: "未知" }] }],
+    ["sort", { ...options, sorts: [{ value: "-unknown", label: "未知" }] }],
   ])("rejects an unknown option %s", (_name, payload) => {
     expect(() => parseRuleSetOptions(payload)).toThrowError(
       expect.objectContaining({ code: "admin_invalid_rule_set_response", status: 502 }),

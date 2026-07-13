@@ -1,5 +1,5 @@
 import { AdminApiError } from "@/api/problem-details";
-import type { AdminRuleSet, AdminRuleSetDetail, AdminRuleSetList, RuleBadgeBombPolicy, RuleRoleId, RuleSetConfig, RuleSetOptions, RuleSetRevision, RuleSetSortField, RuleSetStatus, RuleSetUsage, RuleSetValidation, RuleSetWarning, RuleSpeechPolicy, RuleWinCondition } from "./types";
+import type { AdminRuleSet, AdminRuleSetDetail, AdminRuleSetList, RuleBadgeBombPolicy, RuleRoleId, RuleSetConfig, RuleSetOptions, RuleSetOptionSort, RuleSetRevision, RuleSetStatus, RuleSetUsage, RuleSetValidation, RuleSetWarning, RuleSpeechPolicy, RuleWinCondition } from "./types";
 
 const FORBIDDEN = new Set(["compiled_snapshot", "rule_set_snapshot", "players", "sql", "raw_error"]);
 const ROLE_IDS = ["werewolf", "villager", "seer", "guard", "witch", "hunter", "idiot"] as const;
@@ -8,7 +8,7 @@ const STATES = ["draft", "published", "superseded"] as const;
 const WIN_CONDITIONS: readonly RuleWinCondition[] = ["wolves_gte_others", "slaughter_side"];
 const SPEECH_POLICIES: readonly RuleSpeechPolicy[] = ["sequential", "sheriff_directed"];
 const BADGE_POLICIES: readonly RuleBadgeBombPolicy[] = ["none", "double"];
-const SORTS: readonly RuleSetSortField[] = ["display_order", "updated_at", "name", "created_at"];
+const SORTS: readonly RuleSetOptionSort[] = ["display_order", "-display_order", "updated_at", "-updated_at", "name", "-name", "created_at", "-created_at"];
 
 export function parseAdminRuleSet(value: unknown): AdminRuleSet { rejectForbidden(value); return parseRuleSetRecord(value); }
 export function parseAdminRuleSetList(value: unknown): AdminRuleSetList { rejectForbidden(value); const r = record(value); const p = record(r.pagination); return { items: array(r.items, "items").map(parseRuleSetRecord), pagination: { page: positive(p.page, "pagination.page"), page_size: positive(p.page_size, "pagination.page_size"), total: nonnegative(p.total, "pagination.total"), pages: nonnegative(p.pages, "pagination.pages") } }; }
