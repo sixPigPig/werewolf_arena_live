@@ -5,7 +5,7 @@ export type RuleSetFormErrors = Partial<Record<"id" | "display_order" | "name" |
 
 export function defaultRuleSetInput(options: RuleSetOptions): RuleSetFormInput {
   const roleCounts = Object.fromEntries(options.roles.map((role) => [role.id, role.min_count])) as Record<RuleRoleId, number>;
-  return { id: "", display_order: 0, config: { name: "", description: "", complexity: "", estimated_duration: "", rule_tags: [], role_counts: roleCounts, win_condition: options.win_conditions[0]?.value ?? "wolves_gte_others", sheriff_enabled: true, sheriff_vote_weight: options.sheriff_vote_weights[0] ?? 1, speech_policy: options.speech_policies[0]?.value ?? "sequential", werewolf_self_explosion_enabled: true, sheriff_badge_bomb_policy: options.sheriff_badge_bomb_policies[0]?.value ?? "none" } };
+  return { id: "", display_order: 0, config: { name: "", description: "", complexity: "", estimated_duration: "", rule_tags: [], role_counts: roleCounts, win_condition: options.win_conditions[0].value, sheriff_enabled: true, sheriff_vote_weight: options.sheriff_vote_weights[0], speech_policy: options.speech_policies[0].value, werewolf_self_explosion_enabled: true, sheriff_badge_bomb_policy: options.sheriff_badge_bomb_policies[0].value } };
 }
 
 export function inputFromRuleSet(detail: AdminRuleSetDetail, options: RuleSetOptions): RuleSetFormInput {
@@ -18,7 +18,7 @@ export function cleanRuleSetInput(input: RuleSetFormInput, options: RuleSetOptio
   const roles = Object.fromEntries(Object.entries(input.config.role_counts).filter(([id]) => roleIds.has(id as RuleRoleId)).map(([id, count]) => [id, Math.max(0, Math.trunc(finite(count)))])) as Record<RuleRoleId, number>;
   const tags = [...new Set(input.config.rule_tags.flatMap((tag) => tag.split(/[,，]/)).map((tag) => tag.trim()).filter(Boolean))];
   const sheriffEnabled = Boolean(input.config.sheriff_enabled);
-  return { id: input.id.trim(), display_order: Math.max(0, Math.trunc(finite(input.display_order))), config: { ...input.config, name: input.config.name.trim(), description: input.config.description.trim(), complexity: input.config.complexity.trim(), estimated_duration: input.config.estimated_duration.trim(), rule_tags: tags, role_counts: roles, sheriff_enabled: sheriffEnabled, sheriff_vote_weight: sheriffEnabled ? finite(input.config.sheriff_vote_weight) : options.sheriff_vote_weights[0], sheriff_badge_bomb_policy: sheriffEnabled ? input.config.sheriff_badge_bomb_policy : options.sheriff_badge_bomb_policies[0]?.value } };
+  return { id: input.id.trim(), display_order: Math.max(0, Math.trunc(finite(input.display_order))), config: { ...input.config, name: input.config.name.trim(), description: input.config.description.trim(), complexity: input.config.complexity.trim(), estimated_duration: input.config.estimated_duration.trim(), rule_tags: tags, role_counts: roles, sheriff_enabled: sheriffEnabled, sheriff_vote_weight: sheriffEnabled ? finite(input.config.sheriff_vote_weight) : options.sheriff_vote_weights[0], sheriff_badge_bomb_policy: sheriffEnabled ? input.config.sheriff_badge_bomb_policy : options.sheriff_badge_bomb_policies[0].value } };
 }
 
 export function playerCount(input: RuleSetFormInput) { return Object.values(input.config.role_counts).reduce((sum, count) => sum + Math.max(0, Math.trunc(finite(count))), 0); }

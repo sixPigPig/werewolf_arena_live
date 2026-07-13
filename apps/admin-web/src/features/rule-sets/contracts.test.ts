@@ -99,4 +99,18 @@ describe("rule-set response contracts", () => {
       expect.objectContaining({ code: "admin_invalid_rule_set_response", status: 502 }),
     );
   });
+
+  it.each([
+    "roles",
+    "win_conditions",
+    "sheriff_vote_weights",
+    "speech_policies",
+    "sheriff_badge_bomb_policies",
+    "statuses",
+    "sorts",
+  ] as const)("rejects an empty required options array: %s", (key) => {
+    expect(() => parseRuleSetOptions({ ...options, [key]: [] })).toThrowError(
+      expect.objectContaining({ code: "admin_invalid_rule_set_response", status: 502 }),
+    );
+  });
 });

@@ -11,7 +11,7 @@ export const ruleSetOptions: RuleSetOptions = {
   sheriff_vote_weights: [1, 1.5, 2], speech_policies: [{ value: "sequential", label: "顺序发言" }, { value: "sheriff_directed", label: "警长指定" }],
   sheriff_badge_bomb_policies: [{ value: "none", label: "不撕警徽" }, { value: "double", label: "双爆吞警徽" }],
   statuses: [{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "archived", label: "已归档" }],
-  sorts: ["display_order", "-display_order", "updated_at", "-updated_at", "name", "-name", "created_at", "-created_at"].map((value) => ({ value: value as RuleSetOptions["sorts"][number]["value"], label: value })),
+  sorts: ["display_order", "-display_order", "updated_at", "-updated_at", "name", "-name", "created_at", "-created_at"].map((value) => ({ value: value as RuleSetOptions["sorts"][number]["value"], label: value })) as RuleSetOptions["sorts"],
   constraints: { player_count_min: 6, player_count_max: 12, tags_max_items: 8, tag_max_length: 20, id_pattern: "^[a-z][a-z0-9_]{2,79}$", reason_min_length: 3, reason_max_length: 500 },
 };
 

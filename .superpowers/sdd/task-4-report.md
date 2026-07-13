@@ -86,3 +86,14 @@ The previously open reviewer matrix is now covered directly in `RuleSetsFlow.tes
 ### Remaining concern
 
 - The historical limitation remains unchanged: the original save/dirty/conflict tranche predates this coverage pass and was not destructively replayed. Every boundary requested by the latest reviewer is now directly asserted; there is no remaining Task 4 coverage item.
+
+### Nonempty options assumption resolved
+
+- RED: `pnpm test --run src/features/rule-sets/contracts.test.ts` exited 1; 7 new cases failed because every required options collection accepted an empty array.
+- Task 1 now models and parses `roles`, `win_conditions`, `sheriff_vote_weights`, `speech_policies`, `sheriff_badge_bomb_policies`, `statuses`, and `sorts` as nonempty.
+- Task 4 defaults and disabled normalization no longer use hard-coded choice literals. A nonstandard-options form test proves win condition `slaughter_side`, sheriff weight `1.5`, speech policy `sheriff_directed`, and badge policy `double` are selected solely because the server supplies them first.
+- Contracts/form: 2 files, 34 tests passed. Editor: 1 file, 46 tests passed. All rule-set: 6 files, 101 tests passed. Full Admin: 22 files, 219 tests passed.
+- `pnpm build`: exit 0 (`tsc -b && vite build`). `pnpm lint`: exit 0. `git diff --check`: exit 0.
+- Commit: `fix(admin): enforce nonempty rule set options` (final hash returned in the task handoff).
+- Reviewer assumption resolved: nonempty server options are now an enforced parser/type invariant rather than an unchecked editor assumption.
+- Concerns: None.

@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { cleanRuleSetInput, defaultRuleSetInput, formErrorsFromApi, inputFromRuleSet, playerCount, roleSummary, validateRuleSetInput } from "./form";
 import { fixtureDetail, fixtureRevision, fixtureRuleSet, ruleSetOptions, standardConfig } from "./test-fixtures";
+import type { RuleSetOptions } from "./types";
 
 describe("rule-set form model", () => {
   it("derives defaults from server options", () => {
-    const input = defaultRuleSetInput(ruleSetOptions);
-    expect(input).toMatchObject({ id: "", display_order: 0, config: { win_condition: "wolves_gte_others", sheriff_vote_weight: 1, speech_policy: "sequential", sheriff_badge_bomb_policy: "none" } });
+    const nonstandardOptions: RuleSetOptions = {
+      ...ruleSetOptions,
+      win_conditions: [{ value: "slaughter_side", label: "屠边" }],
+      sheriff_vote_weights: [1.5, 2],
+      speech_policies: [{ value: "sheriff_directed", label: "警长指定" }],
+      sheriff_badge_bomb_policies: [{ value: "double", label: "双爆" }],
+    };
+    const input = defaultRuleSetInput(nonstandardOptions);
+    expect(input).toMatchObject({ id: "", display_order: 0, config: { win_condition: "slaughter_side", sheriff_vote_weight: 1.5, speech_policy: "sheriff_directed", sheriff_badge_bomb_policy: "double" } });
     expect(input.config.role_counts).toEqual({ werewolf: 1, villager: 0, seer: 0, guard: 0, witch: 0, hunter: 0, idiot: 0 });
   });
 
@@ -22,7 +30,7 @@ describe("rule-set form model", () => {
   });
 
   it("normalizes sheriff-off fields only to choices supplied by the server", () => {
-    const options = { ...ruleSetOptions, sheriff_vote_weights: [1.5, 2], sheriff_badge_bomb_policies: [{ value: "double" as const, label: "双爆" }] };
+    const options: RuleSetOptions = { ...ruleSetOptions, sheriff_vote_weights: [1.5, 2], sheriff_badge_bomb_policies: [{ value: "double", label: "双爆" }] };
     const input = { ...defaultRuleSetInput(options), config: { ...standardConfig, sheriff_enabled: false } };
     const clean = cleanRuleSetInput(input, options);
     expect(clean.config.sheriff_vote_weight).toBe(1.5);
