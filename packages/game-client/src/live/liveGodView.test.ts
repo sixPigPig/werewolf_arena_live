@@ -196,6 +196,7 @@ describe("deriveGodViewState", () => {
     expect(exiled).toMatchObject({
       isSpeaking: false,
       isAlive: false,
+      exitKind: "day-exile",
       statusLabel: "白天放逐",
       stageStatus: { kind: "out", label: "白天放逐" },
     });
@@ -305,6 +306,7 @@ describe("deriveGodViewState", () => {
     expect(state.winnerLabel).toBe("狼人阵营");
     expect(state.players.find((player) => player.name === "4号 平民")).toMatchObject({
       isAlive: false,
+      exitKind: "night",
       statusLabel: "夜晚出局",
       receivedVotes: 0,
     });

@@ -174,6 +174,34 @@ const dayPhaseEvent: LiveGameEvent = {
   payload: { active_players: ["阿青", "白石", "南风", "木子"] },
 };
 
+const nightEliminationEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "state_updated",
+  round: 1,
+  phase: "night",
+  actor: null,
+  action: null,
+  payload: {
+    active_players: ["白石", "南风", "木子"],
+    eliminated: "阿青",
+  },
+};
+
+const dayExileEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 3,
+  type: "state_updated",
+  round: 1,
+  phase: "day",
+  actor: null,
+  action: null,
+  payload: {
+    active_players: ["南风", "木子"],
+    exiled: "白石",
+  },
+};
+
 const failedEvent: LiveGameEvent = {
   ...gameStartedEvent,
   id: 2,
@@ -290,7 +318,7 @@ describe("LivePage", () => {
     );
   });
 
-  it("renders live seats as gothic HUD medals with separate nameplates", async () => {
+  it("renders live seats as compact gothic HUD medals without names or status text", async () => {
     renderLiveRoute();
 
     const seat = await screen.findByRole("article", {
@@ -298,8 +326,38 @@ describe("LivePage", () => {
     });
 
     expect(seat.querySelector(".mobile-live-seat-medal")).not.toBeNull();
-    expect(seat.querySelector(".mobile-live-seat-nameplate")).not.toBeNull();
-    expect(seat.querySelector(".mobile-live-seat-status")).toHaveTextContent("存活");
+    expect(seat.querySelector(".mobile-live-seat-nameplate")).toBeNull();
+    expect(seat.querySelector(".mobile-live-seat-status")).toBeNull();
+    expect(seat).not.toHaveTextContent("阿青");
+    expect(seat).not.toHaveTextContent("存活");
+  });
+
+  it("marks night eliminations and daytime exiles over grayscale avatars", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, nightEliminationEvent, dayExileEvent],
+      latestEvent: dayExileEvent,
+    });
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const nightSeat = await screen.findByRole("article", {
+      name: "1号 阿青 平民 夜晚出局",
+    });
+    const daySeat = screen.getByRole("article", {
+      name: "2号 白石 狼人 白天放逐",
+    });
+
+    expect(nightSeat).toHaveClass("mobile-live-seat-out");
+    expect(daySeat).toHaveClass("mobile-live-seat-out");
+    expect(within(nightSeat).getByRole("img", { name: "夜晚出局" })).toHaveClass(
+      "mobile-live-seat-outcome-night",
+    );
+    expect(within(daySeat).getByRole("img", { name: "白天驱逐" })).toHaveClass(
+      "mobile-live-seat-outcome-day-exile",
+    );
   });
 
   it("stagger-reveals live seats from paired left and right first positions", async () => {
@@ -798,8 +856,10 @@ describe("LivePage", () => {
         .find((rule) => rule.includes("radial-gradient(ellipse at 50% 88%")) ?? "";
     const seatMedalRule =
       styles.match(/(?:^|\n)\.mobile-live-seat-medal\s*{[^}]+}/)?.[0] ?? "";
-    const nameplateRule =
-      styles.match(/(?:^|\n)\.mobile-live-seat-nameplate\s*{[^}]+}/)?.[0] ?? "";
+    const nightOutcomeRule =
+      styles.match(/(?:^|\n)\.mobile-live-seat-outcome-night\s*{[^}]+}/)?.[0] ?? "";
+    const outAvatarRule =
+      styles.match(/(?:^|\n)\.mobile-live-seat-out \.mobile-live-seat-avatar\s*{[^}]+}/)?.[0] ?? "";
     const actionBarRule =
       styles.match(/(?:^|\n)\.mobile-live-action-bar\s*{[^}]+}/)?.[0] ?? "";
     const actionButtonRule =
@@ -828,7 +888,8 @@ describe("LivePage", () => {
     expect(dayBannerRule).toContain("rgb(106 15 24 / 44%)");
     expect(seatStageAfterRule).toContain("radial-gradient(ellipse at 50% 88%");
     expect(seatMedalRule).toContain("lobby-profile-card-light-frame-alpha.png");
-    expect(nameplateRule).toContain("lobby-settings-field-bg.png");
+    expect(nightOutcomeRule).toContain("color: #f23d47");
+    expect(outAvatarRule).toContain("filter: grayscale(1)");
     expect(actionBarRule).toContain("lobby-action-bar-bg.png");
     expect(actionBarRule).toContain("grid-template-columns: repeat(5, minmax(0, 1fr))");
     expect(actionButtonRule).toContain("border-radius: 0");

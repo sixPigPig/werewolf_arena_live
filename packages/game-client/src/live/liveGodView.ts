@@ -27,6 +27,7 @@ export type GodViewPlayer = {
   camp: "狼人阵营" | "好人阵营";
   identityGroup: GodViewIdentityGroup;
   isAlive: boolean;
+  exitKind: LivePlayer["exitKind"];
   statusLabel: string;
   stageStatus: GodViewPlayerStageStatus;
   isSheriff: boolean;
@@ -689,6 +690,7 @@ function toGodViewPlayer(
     camp: roleCamp(role),
     identityGroup: identityGroup(role),
     isAlive: player.isAlive,
+    exitKind: player.exitKind,
     statusLabel: statusLabel(player, stageStatus),
     stageStatus,
     isSheriff: view.sheriff.current === player.name,
@@ -1253,6 +1255,12 @@ function stageStatusForPlayer(
   focus: GodViewStageFocus,
 ): GodViewPlayerStageStatus {
   if (!player.isAlive) {
+    if (player.exitKind === "night") {
+      return { kind: "out", label: "夜晚出局" };
+    }
+    if (player.exitKind === "day-exile") {
+      return { kind: "out", label: "白天放逐" };
+    }
     return { kind: "out", label: player.lastDetail || "出局" };
   }
 

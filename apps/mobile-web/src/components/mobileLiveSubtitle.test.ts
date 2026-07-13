@@ -57,6 +57,7 @@ function player(overrides: TestPlayer): GodViewPlayer {
     camp: "好人阵营",
     identityGroup: "未知",
     isAlive: true,
+    exitKind: null,
     statusLabel: "",
     stageStatus: {
       kind: "idle",

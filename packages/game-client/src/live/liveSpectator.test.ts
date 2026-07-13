@@ -173,8 +173,113 @@ describe("deriveLiveSpectatorState", () => {
 
     expect(state.players.find((player) => player.name === "李四")).toMatchObject({
       isAlive: false,
+      exitKind: "night",
       lastAction: "",
       lastDetail: "夜晚出局",
+    });
+  });
+
+  it("keeps exit kinds after an eliminated player acts again", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "猎人", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        payload: { active_players: ["张三"], eliminated: "李四" },
+      }),
+      event({
+        id: 3,
+        type: "action_parsed",
+        actor: "李四",
+        action: "hunter_shot",
+        round: 1,
+        phase: "day",
+        payload: { choice: "张三" },
+      }),
+    ]);
+
+    expect(state.players.find((player) => player.name === "李四")).toMatchObject({
+      isAlive: false,
+      exitKind: "night",
+      lastDetail: "张三",
+    });
+  });
+
+  it("marks every announced night death with the night exit kind", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "村民", model: "deepseek-chat" },
+            { name: "王五", role: "预言家", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        payload: {
+          active_players: ["张三"],
+          eliminated: "李四",
+          night_deaths: [
+            { player: "李四", cause: "werewolf_attack" },
+            { player: "王五", cause: "witch_poison" },
+          ],
+        },
+      }),
+    ]);
+
+    expect(
+      state.players
+        .filter((player) => !player.isAlive)
+        .map((player) => [player.name, player.exitKind]),
+    ).toEqual([
+      ["李四", "night"],
+      ["王五", "night"],
+    ]);
+  });
+
+  it("records daytime exile as a distinct persistent exit kind", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "张三", role: "狼人", model: "deepseek-chat" },
+            { name: "李四", role: "村民", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        payload: { active_players: ["张三"], exiled: "李四" },
+      }),
+    ]);
+
+    expect(state.players.find((player) => player.name === "李四")).toMatchObject({
+      isAlive: false,
+      exitKind: "day-exile",
+      lastDetail: "白天放逐",
     });
   });
 

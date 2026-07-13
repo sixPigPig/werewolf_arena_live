@@ -1,6 +1,16 @@
 import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
-import { Gauge, Mic, Pause, Play, Radio, RotateCcw, Volume2 } from "lucide-react";
+import {
+  Gauge,
+  Gavel,
+  Mic,
+  PawPrint,
+  Pause,
+  Play,
+  Radio,
+  RotateCcw,
+  Volume2,
+} from "lucide-react";
 
 import {
   actionLabel,
@@ -214,6 +224,7 @@ export function LiveSeatAvatar({
 }: LiveSeatAvatarProps) {
   const roleLabel = roleShortLabel(player.role);
   const statusLabel = player.isSpeaking ? "发言中" : player.stageStatus.label;
+  const exitMarker = liveSeatExitMarker(player);
   const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}`;
   const avatarImageUrl = resolveAvatarImageUrl({
     avatar_image_url: player.avatarImageUrl,
@@ -241,14 +252,41 @@ export function LiveSeatAvatar({
             <span>{avatarInitial(player.name, player.seatNumber)}</span>
           )}
         </span>
+        {exitMarker === "night" ? (
+          <span
+            aria-label="夜晚出局"
+            className="mobile-live-seat-outcome mobile-live-seat-outcome-night"
+            role="img"
+          >
+            <PawPrint aria-hidden="true" strokeWidth={1.8} />
+          </span>
+        ) : null}
+        {exitMarker === "day-exile" ? (
+          <span
+            aria-label="白天驱逐"
+            className="mobile-live-seat-outcome mobile-live-seat-outcome-day-exile"
+            role="img"
+          >
+            <Gavel aria-hidden="true" strokeWidth={2.2} />
+          </span>
+        ) : null}
         <span className="mobile-live-seat-role">{roleLabel}</span>
-      </span>
-      <span className="mobile-live-seat-nameplate">
-        <strong>{player.name}</strong>
-        <small className="mobile-live-seat-status">{statusLabel}</small>
       </span>
     </article>
   );
+}
+
+type LiveSeatExitMarker = "night" | "day-exile" | null;
+
+function liveSeatExitMarker(player: GodViewPlayer): LiveSeatExitMarker {
+  if (!player.isAlive && player.exitKind === "night") {
+    return "night";
+  }
+  if (!player.isAlive && player.exitKind === "day-exile") {
+    return "day-exile";
+  }
+
+  return null;
 }
 
 type LiveCenterStageProps = {

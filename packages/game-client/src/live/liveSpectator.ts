@@ -9,6 +9,8 @@ export type LivePlayerStatus =
   | "acted"
   | "out";
 
+export type LivePlayerExitKind = "night" | "day-exile";
+
 export type LivePlayer = {
   name: string;
   role: string;
@@ -22,6 +24,7 @@ export type LivePlayer = {
   tags: string[];
   status: LivePlayerStatus;
   isAlive: boolean;
+  exitKind: LivePlayerExitKind | null;
   lastAction: string;
   lastDetail: string;
   activeRequestId: string | null;
@@ -208,6 +211,9 @@ function applyStateUpdate(
     for (const player of state.playersByName.values()) {
       player.isAlive =
         player.name === protectedSurvival || activeNames.has(player.name);
+      if (player.isAlive) {
+        player.exitKind = null;
+      }
       if (!player.isAlive) {
         player.status = "out";
         player.activeRequestId = null;
@@ -224,6 +230,7 @@ function applyStateUpdate(
     const player = ensurePlayer(state, protectedSurvival);
     player.isAlive = true;
     player.status = "waiting";
+    player.exitKind = null;
     player.lastAction = "remove";
     player.lastDetail = "被守护，未出局";
     player.hasVisibleStreamText = false;
@@ -233,9 +240,26 @@ function applyStateUpdate(
     const player = ensurePlayer(state, eliminated);
     player.isAlive = false;
     player.status = "out";
+    player.exitKind = "night";
     player.lastAction = "";
     player.lastDetail = "夜晚出局";
     player.hasVisibleStreamText = false;
+  }
+
+  const nightDeaths = payload.night_deaths;
+  if (Array.isArray(nightDeaths)) {
+    for (const death of nightDeaths) {
+      if (!isRecord(death) || typeof death.player !== "string") {
+        continue;
+      }
+      const player = ensurePlayer(state, death.player);
+      player.isAlive = false;
+      player.status = "out";
+      player.exitKind = "night";
+      player.lastAction = "";
+      player.lastDetail = "夜晚出局";
+      player.hasVisibleStreamText = false;
+    }
   }
 
   const exiled = payload.exiled;
@@ -243,6 +267,7 @@ function applyStateUpdate(
     const player = ensurePlayer(state, exiled);
     player.isAlive = false;
     player.status = "out";
+    player.exitKind = "day-exile";
     player.lastAction = "";
     player.lastDetail = "白天放逐";
     player.hasVisibleStreamText = false;
@@ -297,6 +322,7 @@ function ensurePlayer(
     tags: [],
     status: "waiting",
     isAlive: true,
+    exitKind: null,
     lastAction: "",
     lastDetail: "",
     activeRequestId: null,
