@@ -50,14 +50,16 @@ describe("rule-set response contracts", () => {
     expect(parseRuleSetValidation({ valid: true, errors: [], warnings: [], compiled_snapshot: { internal: true }, content_hash: "a".repeat(64), rule_text_preview: "preview" })).toEqual({ valid: true, errors: [], warnings: [], content_hash: "a".repeat(64), rule_text_preview: "preview" });
   });
 
-  it.each([
-    [{ ...ruleSet, status: "deleted" }, "status"],
-    [{ ...ruleSet, draft_revision: { ...revision, state: "active" } }, "state"],
-    [{ ...ruleSet, lock_version: 0 }, "lock_version"],
-    [{ items: [], pagination: { page: 0, page_size: 20, total: 0, pages: 0 } }, "pagination"],
-    [{ ...ruleSet, draft_revision: { ...revision, config: { ...config, role_counts: { ...config.role_counts, werewolf: -1 } } } }, "role_counts"],
-  ])("rejects malformed payload %#", (payload) => {
-    const parse = "items" in payload ? parseAdminRuleSetList : parseAdminRuleSet;
+  it.each<{ payload: unknown; label: string }>([
+    { payload: { ...ruleSet, status: "deleted" }, label: "status" },
+    { payload: { ...ruleSet, draft_revision: { ...revision, state: "active" } }, label: "state" },
+    { payload: { ...ruleSet, lock_version: 0 }, label: "lock_version" },
+    { payload: { items: [], pagination: { page: 0, page_size: 20, total: 0, pages: 0 } }, label: "pagination" },
+    { payload: { ...ruleSet, draft_revision: { ...revision, config: { ...config, role_counts: { ...config.role_counts, werewolf: -1 } } } }, label: "role_counts" },
+  ])("rejects malformed payload $label", ({ payload }) => {
+    const parse = typeof payload === "object" && payload !== null && "items" in payload
+      ? parseAdminRuleSetList
+      : parseAdminRuleSet;
     expect(() => parse(payload)).toThrowError(expect.objectContaining({ code: "admin_invalid_rule_set_response", status: 502 }));
   });
 
