@@ -6,7 +6,17 @@ import json
 from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
@@ -49,7 +59,6 @@ from app.models.live import LiveRunRecord, VoiceUtteranceRecord
 from app.api.routes.games import get_live_registry, start_resume_game_run
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.replay import DatabaseReplayStore
-from app.werewolf.rules import get_rule_set
 
 
 router = APIRouter()
@@ -71,13 +80,21 @@ def list_live_runs(
     q: Annotated[str | None, Query(max_length=120)] = None,
     status: AdminLiveRunStatus | None = None,
     rule_set_id: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
+    rule_set_revision_id: Annotated[
+        str | None,
+        Query(min_length=1, max_length=36),
+    ] = None,
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     sort: AdminLiveRunSort = "-updated_at",
 ) -> AdminLiveRunListResponse:
     normalized_from = _query_datetime(created_from, "created_from")
     normalized_to = _query_datetime(created_to, "created_to")
-    if normalized_from is not None and normalized_to is not None and normalized_from > normalized_to:
+    if (
+        normalized_from is not None
+        and normalized_to is not None
+        and normalized_from > normalized_to
+    ):
         raise _invalid_filter("created_from must be earlier than or equal to created_to.")
     try:
         result = list_admin_live_runs(
@@ -87,6 +104,7 @@ def list_live_runs(
             query_text=q,
             status=status,
             rule_set_id=rule_set_id,
+            rule_set_revision_id=rule_set_revision_id,
             created_from=normalized_from,
             created_to=normalized_to,
             sort=sort,
@@ -168,21 +186,39 @@ def stop_live_run(
         record = db.get(LiveRunRecord, run_id)
         if record is None:
             _control_rejection(
-                db, request=request, principal=principal, action="stop", run_id=run_id,
-                reason=request_body.reason, code="admin_live_run_not_found",
-                detail="The requested live run does not exist.", status_code=404,
+                db,
+                request=request,
+                principal=principal,
+                action="stop",
+                run_id=run_id,
+                reason=request_body.reason,
+                code="admin_live_run_not_found",
+                detail="The requested live run does not exist.",
+                status_code=404,
             )
         if record.status not in {"queued", "running"}:
             _control_rejection(
-                db, request=request, principal=principal, action="stop", run_id=run_id,
-                reason=request_body.reason, code="admin_live_run_not_active",
-                detail="Only queued or running live runs can be stopped.", status_code=409,
+                db,
+                request=request,
+                principal=principal,
+                action="stop",
+                run_id=run_id,
+                reason=request_body.reason,
+                code="admin_live_run_not_active",
+                detail="Only queued or running live runs can be stopped.",
+                status_code=409,
             )
         if record.stop_requested_at is not None:
             _control_rejection(
-                db, request=request, principal=principal, action="stop", run_id=run_id,
-                reason=request_body.reason, code="admin_live_run_stop_already_requested",
-                detail="A stop request is already pending for this run.", status_code=409,
+                db,
+                request=request,
+                principal=principal,
+                action="stop",
+                run_id=run_id,
+                reason=request_body.reason,
+                code="admin_live_run_stop_already_requested",
+                detail="A stop request is already pending for this run.",
+                status_code=409,
             )
         requested_at = datetime.now(tz=UTC)
         record.stop_requested_at = requested_at
@@ -193,16 +229,25 @@ def stop_live_run(
             and _as_utc(record.lease_expires_at) <= requested_at
         )
         control = AdminRunControlRequest(
-            id=str(uuid4()), actor_user_id=principal.user.id,
-            idempotency_key=idempotency_key, request_hash=request_hash,
-            action="stop", target_run_id=run_id, result_run_id=run_id,
+            id=str(uuid4()),
+            actor_user_id=principal.user.id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            action="stop",
+            target_run_id=run_id,
+            result_run_id=run_id,
             session_id=record.session_id,
         )
         db.add(control)
         record_audit_event(
-            db, request=request, actor_user_id=principal.user.id,
-            action="admin.live_run.stop", resource_type="live_run", resource_id=run_id,
-            result="success", reason=request_body.reason,
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.live_run.stop",
+            resource_type="live_run",
+            resource_id=run_id,
+            result="success",
+            reason=request_body.reason,
             before={"status": record.status},
             after={
                 "status": record.status,
@@ -274,9 +319,15 @@ def resume_live_run(
         record = db.get(LiveRunRecord, run_id)
         if record is None:
             _control_rejection(
-                db, request=request, principal=principal, action="resume", run_id=run_id,
-                reason=request_body.reason, code="admin_live_run_not_found",
-                detail="The requested live run does not exist.", status_code=404,
+                db,
+                request=request,
+                principal=principal,
+                action="resume",
+                run_id=run_id,
+                reason=request_body.reason,
+                code="admin_live_run_not_found",
+                detail="The requested live run does not exist.",
+                status_code=404,
             )
         game = db.get(GameSessionRecord, record.session_id)
         now = datetime.now(tz=UTC)
@@ -288,8 +339,13 @@ def resume_live_run(
         resumable_status = record.status in {"failed", "canceled"} or stale_active
         if not resumable_status or game is None or not game.resumable:
             _control_rejection(
-                db, request=request, principal=principal, action="resume", run_id=run_id,
-                reason=request_body.reason, code="admin_live_run_not_resumable",
+                db,
+                request=request,
+                principal=principal,
+                action="resume",
+                run_id=run_id,
+                reason=request_body.reason,
+                code="admin_live_run_not_resumable",
                 detail=(
                     "Only failed, canceled, or stale active runs with a persistent "
                     "checkpoint can be resumed."
@@ -302,16 +358,25 @@ def resume_live_run(
             registry=registry,
         )
         control = AdminRunControlRequest(
-            id=str(uuid4()), actor_user_id=principal.user.id,
-            idempotency_key=idempotency_key, request_hash=request_hash,
-            action="resume", target_run_id=run_id, result_run_id=resumed.run_id,
+            id=str(uuid4()),
+            actor_user_id=principal.user.id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            action="resume",
+            target_run_id=run_id,
+            result_run_id=resumed.run_id,
             session_id=record.session_id,
         )
         db.add(control)
         record_audit_event(
-            db, request=request, actor_user_id=principal.user.id,
-            action="admin.live_run.resume", resource_type="live_run", resource_id=run_id,
-            result="success", reason=request_body.reason,
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.live_run.resume",
+            resource_type="live_run",
+            resource_id=run_id,
+            result="success",
+            reason=request_body.reason,
             before={"status": record.status, "resumable": True},
             after={"run_id": resumed.run_id, "status": resumed.status, "created": created},
         )
@@ -352,9 +417,7 @@ def get_live_run_debug(
 ) -> AdminLiveRunDebugResponse:
     try:
         run_row = db.execute(
-            select(LiveRunRecord.run_id, LiveRunRecord.error).where(
-                LiveRunRecord.run_id == run_id
-            )
+            select(LiveRunRecord.run_id, LiveRunRecord.error).where(LiveRunRecord.run_id == run_id)
         ).one_or_none()
         if run_row is None:
             raise _not_found()
@@ -369,9 +432,7 @@ def get_live_run_debug(
         )
         voice_error_total = int(
             db.scalar(
-                select(func.count())
-                .select_from(VoiceUtteranceRecord)
-                .where(*failed_voice_filter)
+                select(func.count()).select_from(VoiceUtteranceRecord).where(*failed_voice_filter)
             )
             or 0
         )
@@ -461,7 +522,7 @@ def _list_item(
         villager_model=_optional_text(record.villager_model, max_length=120),
         werewolf_model=_optional_text(record.werewolf_model, max_length=120),
         max_rounds=max(0, int(record.max_rounds or 0)),
-        rule_set=_rule_set_summary(record.rule_set_id),
+        rule_set=_rule_set_summary(record),
         created_at=_as_utc(record.created_at),
         started_at=_optional_utc(record.started_at),
         completed_at=_optional_utc(record.completed_at),
@@ -472,8 +533,7 @@ def _list_item(
         recovery_last_attempt_at=_optional_utc(record.recovery_last_attempt_at),
         recovery_not_before=_optional_utc(record.recovery_not_before),
         recovery_exhausted=(
-            worker_state == "stale"
-            and recovery_attempts >= settings.live_run_reaper_max_attempts
+            worker_state == "stale" and recovery_attempts >= settings.live_run_reaper_max_attempts
         ),
         updated_at=_as_utc(record.updated_at),
         event_count=max(0, event_count),
@@ -507,22 +567,36 @@ def _game_summary(record: AdminLiveRunRow) -> AdminLiveRunGameSummary | None:
     )
 
 
-def _rule_set_summary(rule_set_id_value: Any) -> AdminLiveRunRuleSetSummary | None:
-    rule_set_id = _optional_text(rule_set_id_value, max_length=80)
+def _rule_set_summary(record: AdminLiveRunRow) -> AdminLiveRunRuleSetSummary | None:
+    rule_set_id = _optional_text(record.rule_set_id, max_length=80)
     if rule_set_id is None:
         return None
-    try:
-        rule_set = get_rule_set(rule_set_id)
-    except KeyError:
-        return AdminLiveRunRuleSetSummary(
-            id=rule_set_id,
-            name=rule_set_id,
-            player_count=None,
-        )
+    revision_id = _optional_text(record.rule_set_revision_id, max_length=36)
+    revision_no = record.rule_set_revision_no
+    player_count = record.rule_set_player_count
     return AdminLiveRunRuleSetSummary(
-        id=rule_set.id,
-        name=rule_set.name,
-        player_count=rule_set.player_count,
+        id=rule_set_id,
+        name=(
+            _optional_text(record.rule_set_name, max_length=120) or rule_set_id
+            if revision_id is not None
+            else rule_set_id
+        ),
+        player_count=(
+            max(0, player_count)
+            if revision_id is not None
+            and isinstance(player_count, int)
+            and not isinstance(player_count, bool)
+            else None
+        ),
+        revision_id=revision_id,
+        revision_no=(
+            revision_no
+            if isinstance(revision_no, int)
+            and not isinstance(revision_no, bool)
+            and revision_no >= 1
+            else None
+        ),
+        content_hash=_optional_text(record.rule_set_content_hash, max_length=64),
     )
 
 

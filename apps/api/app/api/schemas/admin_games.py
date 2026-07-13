@@ -22,6 +22,9 @@ class AdminGameRuleSetSummary(BaseModel):
     id: str
     name: str
     player_count: int | None
+    revision_id: str | None
+    revision_no: int | None
+    content_hash: str | None
 
 
 class AdminGameRunSummary(BaseModel):

@@ -29,8 +29,16 @@ from app.models.live import (
     VoiceAudioChunkRecord,
     VoiceUtteranceRecord,
 )
+from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.api.routes.games import SessionLiveStore, get_live_registry
 from app.werewolf.live import LiveRunRegistry
+
+
+HISTORY_RULE_ID = "history_rule"
+HISTORY_REVISION_1_ID = "30000000-0000-0000-0000-000000000001"
+HISTORY_REVISION_2_ID = "30000000-0000-0000-0000-000000000002"
+OTHER_RULE_ID = "other_rule"
+OTHER_REVISION_ID = "40000000-0000-0000-0000-000000000001"
 
 
 @dataclass(frozen=True)
@@ -110,6 +118,9 @@ def _seed_run(
     voice_statuses: list[str] | None = None,
     run_error: str | None = None,
     voice_error_count: int = 0,
+    rule_set_revision_id: str | None = None,
+    rule_set_revision_no: int | None = None,
+    rule_set_content_hash: str | None = None,
 ) -> None:
     resolved_updated_at = updated_at or created_at + timedelta(minutes=2)
     resolved_event_types = event_types or []
@@ -123,6 +134,10 @@ def _seed_run(
                     status=game_status,
                     winner=winner,
                     round_count=2,
+                    rule_set_id=rule_set_id,
+                    rule_set_revision_id=rule_set_revision_id,
+                    rule_set_revision_no=rule_set_revision_no,
+                    rule_set_content_hash=rule_set_content_hash,
                     rule_set={
                         "id": rule_set_id,
                         "name": "SENTINEL_GAME_RULE_NAME",
@@ -143,6 +158,9 @@ def _seed_run(
                 seed=8675309,
                 max_rounds=8,
                 rule_set_id=rule_set_id,
+                rule_set_revision_id=rule_set_revision_id,
+                rule_set_revision_no=rule_set_revision_no,
+                rule_set_content_hash=rule_set_content_hash,
                 rule_set={
                     "id": rule_set_id,
                     "name": "SENTINEL_RUN_RULE_NAME",
@@ -231,6 +249,101 @@ def _seed_run(
                     created_at=created_at,
                 )
             )
+        db.commit()
+
+
+def _revision(
+    *,
+    revision_id: str,
+    rule_set_id: str,
+    revision_no: int,
+    state: str,
+    name: str,
+    player_count: int,
+    content_hash: str,
+    now: datetime,
+) -> RuleSetRevisionRecord:
+    return RuleSetRevisionRecord(
+        id=revision_id,
+        rule_set_id=rule_set_id,
+        revision_no=revision_no,
+        state=state,
+        schema_version=1,
+        content_hash=content_hash,
+        lock_version=1,
+        name=name,
+        description=f"{name} description",
+        player_count=player_count,
+        role_summary=f"{player_count} player history rule",
+        complexity="history",
+        estimated_duration="medium",
+        config={"name": name},
+        created_at=now,
+        updated_at=now,
+        published_at=now,
+    )
+
+
+def _seed_historical_revisions(context: AdminLiveRunsContext) -> None:
+    now = datetime(2026, 7, 10, tzinfo=UTC)
+    with context.session_factory() as db:
+        db.add_all(
+            [
+                RuleSetRecord(
+                    id=HISTORY_RULE_ID,
+                    status="archived",
+                    current_published_revision_id=HISTORY_REVISION_2_ID,
+                    draft_revision_id=None,
+                    is_default=False,
+                    display_order=10,
+                    lock_version=3,
+                    created_at=now,
+                    updated_at=now + timedelta(days=2),
+                    archived_at=now + timedelta(days=2),
+                ),
+                RuleSetRecord(
+                    id=OTHER_RULE_ID,
+                    status="published",
+                    current_published_revision_id=OTHER_REVISION_ID,
+                    draft_revision_id=None,
+                    is_default=False,
+                    display_order=20,
+                    lock_version=1,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                _revision(
+                    revision_id=HISTORY_REVISION_1_ID,
+                    rule_set_id=HISTORY_RULE_ID,
+                    revision_no=1,
+                    state="superseded",
+                    name="Historical Live Revision One",
+                    player_count=6,
+                    content_hash="5" * 64,
+                    now=now,
+                ),
+                _revision(
+                    revision_id=HISTORY_REVISION_2_ID,
+                    rule_set_id=HISTORY_RULE_ID,
+                    revision_no=2,
+                    state="published",
+                    name="Current Live Revision Two",
+                    player_count=8,
+                    content_hash="6" * 64,
+                    now=now + timedelta(days=1),
+                ),
+                _revision(
+                    revision_id=OTHER_REVISION_ID,
+                    rule_set_id=OTHER_RULE_ID,
+                    revision_no=1,
+                    state="published",
+                    name="Other Live Rule",
+                    player_count=10,
+                    content_hash="8" * 64,
+                    now=now,
+                ),
+            ]
+        )
         db.commit()
 
 
@@ -617,12 +730,15 @@ def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelist
     assert all("live_runs.seed" not in sql for sql in statements)
     assert all("live_runs.lineup_quality_warnings" not in sql for sql in statements)
     assert all("live_runs.rule_set," not in sql for sql in statements)
+    assert all("rule_set_revisions.config" not in sql for sql in statements)
+    assert all("rule_set_revisions.description" not in sql for sql in statements)
     assert all("live_events.payload" not in sql for sql in statements)
     assert all("voice_utterances.text" not in sql for sql in statements)
     assert all("voice_utterances.error_message" not in sql for sql in statements)
     assert all("voice_audio_chunks" not in sql for sql in statements)
     count_sql = data_statements[0]
     assert "join game_sessions" not in count_sql
+    assert "join rule_set_revisions" not in count_sql
     assert "live_runs.villager_model" not in count_sql
 
     first = context.client.get(
@@ -644,8 +760,11 @@ def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelist
     }
     assert first["rule_set"] == {
         "id": "classic_8",
-        "name": "经典 8 人局",
-        "player_count": 8,
+        "name": "classic_8",
+        "player_count": None,
+        "revision_id": None,
+        "revision_no": None,
+        "content_hash": None,
     }
 
     assert (
@@ -702,6 +821,147 @@ def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelist
         "SENTINEL_RUN_RULE_NAME",
     ):
         assert marker not in serialized
+
+
+def test_admin_live_runs_filter_and_render_exact_historical_rule_revisions(
+    context: AdminLiveRunsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_historical_revisions(context)
+    base = datetime(2026, 7, 11, tzinfo=UTC)
+    _seed_run(
+        context,
+        run_id="run_000000000201",
+        session_id="game_00000201",
+        created_at=base,
+        rule_set_id=HISTORY_RULE_ID,
+        rule_set_revision_id=HISTORY_REVISION_1_ID,
+        rule_set_revision_no=1,
+        rule_set_content_hash="5" * 64,
+    )
+    _seed_run(
+        context,
+        run_id="run_000000000202",
+        session_id="game_00000202",
+        created_at=base + timedelta(hours=1),
+        rule_set_id=HISTORY_RULE_ID,
+        rule_set_revision_id=HISTORY_REVISION_2_ID,
+        rule_set_revision_no=2,
+        rule_set_content_hash="6" * 64,
+    )
+    _seed_run(
+        context,
+        run_id="run_000000000203",
+        session_id="game_00000203",
+        created_at=base + timedelta(hours=2),
+        rule_set_id=HISTORY_RULE_ID,
+        rule_set_content_hash="7" * 64,
+    )
+    _seed_run(
+        context,
+        run_id="run_000000000204",
+        session_id="game_00000204",
+        created_at=base + timedelta(hours=3),
+        rule_set_id=OTHER_RULE_ID,
+        rule_set_revision_id=OTHER_REVISION_ID,
+        rule_set_revision_no=1,
+        rule_set_content_hash="8" * 64,
+    )
+
+    monkeypatch.setattr(
+        live_run_routes,
+        "get_rule_set",
+        lambda _rule_set_id: (_ for _ in ()).throw(
+            AssertionError("Admin history must not use the static rule catalog")
+        ),
+        raising=False,
+    )
+    _login(context, monkeypatch, role="viewer")
+
+    statements: list[str] = []
+
+    def capture_sql(_conn, _cursor, statement, _parameters, _context, _executemany) -> None:
+        statements.append(statement.lower())
+
+    event.listen(context.engine, "before_cursor_execute", capture_sql)
+    try:
+        stable = context.client.get(
+            "/api/v1/admin/live-runs",
+            params={"rule_set_id": HISTORY_RULE_ID, "sort": "created_at"},
+        )
+    finally:
+        event.remove(context.engine, "before_cursor_execute", capture_sql)
+    exact = context.client.get(
+        "/api/v1/admin/live-runs",
+        params={"rule_set_revision_id": HISTORY_REVISION_1_ID},
+    )
+    impossible_pair = context.client.get(
+        "/api/v1/admin/live-runs",
+        params={
+            "rule_set_id": HISTORY_RULE_ID,
+            "rule_set_revision_id": OTHER_REVISION_ID,
+        },
+    )
+    detail = context.client.get("/api/v1/admin/live-runs/run_000000000201")
+
+    assert stable.status_code == 200, stable.text
+    by_run = {item["run_id"]: item for item in stable.json()["items"]}
+    assert list(by_run) == [
+        "run_000000000201",
+        "run_000000000202",
+        "run_000000000203",
+    ]
+    assert by_run["run_000000000201"]["rule_set"] == {
+        "id": HISTORY_RULE_ID,
+        "name": "Historical Live Revision One",
+        "player_count": 6,
+        "revision_id": HISTORY_REVISION_1_ID,
+        "revision_no": 1,
+        "content_hash": "5" * 64,
+    }
+    assert by_run["run_000000000202"]["rule_set"] == {
+        "id": HISTORY_RULE_ID,
+        "name": "Current Live Revision Two",
+        "player_count": 8,
+        "revision_id": HISTORY_REVISION_2_ID,
+        "revision_no": 2,
+        "content_hash": "6" * 64,
+    }
+    assert by_run["run_000000000203"]["rule_set"] == {
+        "id": HISTORY_RULE_ID,
+        "name": HISTORY_RULE_ID,
+        "player_count": None,
+        "revision_id": None,
+        "revision_no": None,
+        "content_hash": "7" * 64,
+    }
+    assert exact.status_code == 200
+    assert [item["run_id"] for item in exact.json()["items"]] == ["run_000000000201"]
+    assert impossible_pair.status_code == 200
+    assert impossible_pair.json()["items"] == []
+    assert detail.status_code == 200
+    assert detail.json()["rule_set"] == by_run["run_000000000201"]["rule_set"]
+    assert (
+        len(
+            [
+                sql
+                for sql in statements
+                if any(
+                    table in sql
+                    for table in (
+                        "live_runs",
+                        "live_events",
+                        "voice_utterances",
+                        "rule_set_revisions",
+                    )
+                )
+            ]
+        )
+        == 4
+    )
+    assert all("live_runs.rule_set," not in sql for sql in statements)
+    assert all("rule_set_revisions.config" not in sql for sql in statements)
+    assert all("rule_set_revisions.description" not in sql for sql in statements)
 
 
 def test_admin_live_runs_rejects_invalid_pagination_status_and_time_range(
@@ -807,6 +1067,8 @@ def test_completed_terminal_detail_returns_only_bounded_safe_event_metadata(
     assert all("live_runs.player_configs" not in sql for sql in statements)
     assert all("live_runs.seed" not in sql for sql in statements)
     assert all("live_runs.rule_set," not in sql for sql in statements)
+    assert all("rule_set_revisions.config" not in sql for sql in statements)
+    assert all("rule_set_revisions.description" not in sql for sql in statements)
     assert all("voice_audio_chunks" not in sql for sql in statements)
 
 
@@ -1089,10 +1351,10 @@ def test_admin_games_do_not_expose_or_probe_partial_or_historical_run_metadata(
     assert model_probe.json()["items"] == []
     assert winner_probe.json()["items"] == []
     assert winner_filter.json()["items"] == []
-    assert historical_rule_filter.json()["items"] == []
-    assert [entry["session_id"] for entry in record_rule_filter.json()["items"]] == [
+    assert [entry["session_id"] for entry in historical_rule_filter.json()["items"]] == [
         "game_00000050"
     ]
+    assert record_rule_filter.json()["items"] == []
 
 
 def test_admin_live_run_query_indexes_are_registered_and_migrated(

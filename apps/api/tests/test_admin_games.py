@@ -23,6 +23,14 @@ from app.main import create_application
 from app.models.admin import AuditEvent
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import LiveEventRecord, LiveRunRecord, VoiceUtteranceRecord
+from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
+
+
+HISTORY_RULE_ID = "history_rule"
+HISTORY_REVISION_1_ID = "10000000-0000-0000-0000-000000000001"
+HISTORY_REVISION_2_ID = "10000000-0000-0000-0000-000000000002"
+OTHER_RULE_ID = "other_rule"
+OTHER_REVISION_ID = "20000000-0000-0000-0000-000000000001"
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,9 @@ def _seed_game(
     run_error: str | None = None,
     game_error: str = "",
     adversarial_unfinished: bool = False,
+    rule_set_revision_id: str | None = None,
+    rule_set_revision_no: int | None = None,
+    rule_set_content_hash: str | None = None,
 ) -> None:
     resolved_wolf_model = wolf_model or model
     state = {
@@ -136,9 +147,7 @@ def _seed_game(
                     {
                         "player": "李四",
                         "cause": "witch_poison" if adversarial_unfinished else "wolf_attack",
-                        "source": (
-                            "SENTINEL_POISON_SOURCE" if adversarial_unfinished else None
-                        ),
+                        "source": ("SENTINEL_POISON_SOURCE" if adversarial_unfinished else None),
                     },
                     {"player": {"SENTINEL_DEATH": "hidden"}, "cause": "invalid"},
                 ],
@@ -155,15 +164,11 @@ def _seed_game(
                 ],
                 "sheriff_elected": "张三",
                 "werewolf_self_exploded": None,
-                "protected": (
-                    "SENTINEL_PROTECTED_TARGET" if adversarial_unfinished else None
-                ),
+                "protected": ("SENTINEL_PROTECTED_TARGET" if adversarial_unfinished else None),
                 "investigated": (
                     "SENTINEL_INVESTIGATED_TARGET" if adversarial_unfinished else None
                 ),
-                "poisoned": (
-                    "SENTINEL_POISONED_TARGET" if adversarial_unfinished else None
-                ),
+                "poisoned": ("SENTINEL_POISONED_TARGET" if adversarial_unfinished else None),
             }
         ],
         "winner": winner or "",
@@ -195,6 +200,10 @@ def _seed_game(
                 status=status,
                 winner=winner,
                 round_count=1,
+                rule_set_id=rule_set_id,
+                rule_set_revision_id=rule_set_revision_id,
+                rule_set_revision_no=rule_set_revision_no,
+                rule_set_content_hash=rule_set_content_hash,
                 rule_set=rule_set,
                 resumable=status == "partial",
                 created_at=created_at,
@@ -230,6 +239,9 @@ def _seed_game(
                 seed=42,
                 max_rounds=8,
                 rule_set_id=rule_set_id,
+                rule_set_revision_id=rule_set_revision_id,
+                rule_set_revision_no=rule_set_revision_no,
+                rule_set_content_hash=rule_set_content_hash,
                 rule_set=rule_set,
                 player_configs=[],
                 lineup_quality_warnings=[],
@@ -301,6 +313,101 @@ def _seed_game(
                     updated_at=created_at,
                 )
             )
+        db.commit()
+
+
+def _revision(
+    *,
+    revision_id: str,
+    rule_set_id: str,
+    revision_no: int,
+    state: str,
+    name: str,
+    player_count: int,
+    content_hash: str,
+    now: datetime,
+) -> RuleSetRevisionRecord:
+    return RuleSetRevisionRecord(
+        id=revision_id,
+        rule_set_id=rule_set_id,
+        revision_no=revision_no,
+        state=state,
+        schema_version=1,
+        content_hash=content_hash,
+        lock_version=1,
+        name=name,
+        description=f"{name} description",
+        player_count=player_count,
+        role_summary=f"{player_count} player history rule",
+        complexity="history",
+        estimated_duration="medium",
+        config={"name": name},
+        created_at=now,
+        updated_at=now,
+        published_at=now,
+    )
+
+
+def _seed_historical_revisions(context: AdminGamesContext) -> None:
+    now = datetime(2026, 7, 9, tzinfo=UTC)
+    with context.session_factory() as db:
+        db.add_all(
+            [
+                RuleSetRecord(
+                    id=HISTORY_RULE_ID,
+                    status="archived",
+                    current_published_revision_id=HISTORY_REVISION_2_ID,
+                    draft_revision_id=None,
+                    is_default=False,
+                    display_order=10,
+                    lock_version=3,
+                    created_at=now,
+                    updated_at=now + timedelta(days=2),
+                    archived_at=now + timedelta(days=2),
+                ),
+                RuleSetRecord(
+                    id=OTHER_RULE_ID,
+                    status="published",
+                    current_published_revision_id=OTHER_REVISION_ID,
+                    draft_revision_id=None,
+                    is_default=False,
+                    display_order=20,
+                    lock_version=1,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                _revision(
+                    revision_id=HISTORY_REVISION_1_ID,
+                    rule_set_id=HISTORY_RULE_ID,
+                    revision_no=1,
+                    state="superseded",
+                    name="Historical Revision One",
+                    player_count=6,
+                    content_hash="1" * 64,
+                    now=now,
+                ),
+                _revision(
+                    revision_id=HISTORY_REVISION_2_ID,
+                    rule_set_id=HISTORY_RULE_ID,
+                    revision_no=2,
+                    state="published",
+                    name="Current Revision Two",
+                    player_count=8,
+                    content_hash="2" * 64,
+                    now=now + timedelta(days=1),
+                ),
+                _revision(
+                    revision_id=OTHER_REVISION_ID,
+                    rule_set_id=OTHER_RULE_ID,
+                    revision_no=1,
+                    state="published",
+                    name="Other Rule",
+                    player_count=10,
+                    content_hash="4" * 64,
+                    now=now,
+                ),
+            ]
+        )
         db.commit()
 
 
@@ -392,6 +499,17 @@ def test_admin_games_list_paginates_sorts_and_filters_without_loading_replay_pay
         "pages": 2,
     }
     assert all("game_replay_payloads" not in statement for statement in statements)
+    assert all("game_sessions.rule_set as" not in statement for statement in statements)
+    assert all("live_runs.rule_set," not in statement for statement in statements)
+    assert all("rule_set_revisions.config" not in statement for statement in statements)
+    assert all("rule_set_revisions.description" not in statement for statement in statements)
+    assert all("live_events.payload" not in statement for statement in statements)
+    data_statements = [
+        statement
+        for statement in statements
+        if any(table in statement for table in ("game_sessions", "live_runs", "live_events"))
+    ]
+    assert len(data_statements) == 4
 
     query_match = context.client.get("/api/v1/admin/games", params={"q": "model-alpha"})
     combined_filters = context.client.get(
@@ -408,17 +526,197 @@ def test_admin_games_list_paginates_sorts_and_filters_without_loading_replay_pay
         params={"created_from": "2026-07-10T10:30:00+00:00"},
     )
 
-    assert [item["session_id"] for item in query_match.json()["items"]] == [
-        "game_00000001"
-    ]
-    assert [item["session_id"] for item in combined_filters.json()["items"]] == [
-        "game_00000003"
-    ]
+    assert [item["session_id"] for item in query_match.json()["items"]] == ["game_00000001"]
+    assert [item["session_id"] for item in combined_filters.json()["items"]] == ["game_00000003"]
     assert {item["session_id"] for item in time_filter.json()["items"]} == {
         "game_00000002",
         "game_00000003",
     }
     assert combined_filters.json()["items"][0]["latest_run"]["status"] == "running"
+
+
+def test_admin_games_filter_and_render_exact_historical_rule_revisions(
+    context: AdminGamesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_historical_revisions(context)
+    base = datetime(2026, 7, 10, tzinfo=UTC)
+    _seed_game(
+        context,
+        session_id="game_00000101",
+        run_id="run_000000000101",
+        created_at=base,
+        rule_set_id=HISTORY_RULE_ID,
+        rule_set_revision_id=HISTORY_REVISION_1_ID,
+        rule_set_revision_no=1,
+        rule_set_content_hash="1" * 64,
+    )
+    _seed_game(
+        context,
+        session_id="game_00000102",
+        run_id="run_000000000102",
+        created_at=base + timedelta(hours=1),
+        rule_set_id=HISTORY_RULE_ID,
+        rule_set_revision_id=HISTORY_REVISION_2_ID,
+        rule_set_revision_no=2,
+        rule_set_content_hash="2" * 64,
+    )
+    _seed_game(
+        context,
+        session_id="game_00000103",
+        run_id="run_000000000103",
+        created_at=base + timedelta(hours=2),
+        rule_set_id=HISTORY_RULE_ID,
+        rule_set_content_hash="3" * 64,
+    )
+    _seed_game(
+        context,
+        session_id="game_00000104",
+        run_id="run_000000000104",
+        created_at=base + timedelta(hours=3),
+        rule_set_id=OTHER_RULE_ID,
+        rule_set_revision_id=OTHER_REVISION_ID,
+        rule_set_revision_no=1,
+        rule_set_content_hash="4" * 64,
+    )
+    _seed_game(
+        context,
+        session_id="game_00000105",
+        run_id="run_000000000105",
+        created_at=base + timedelta(hours=4),
+        rule_set_id=HISTORY_RULE_ID,
+        rule_set_revision_id=HISTORY_REVISION_1_ID,
+        rule_set_revision_no=1,
+        rule_set_content_hash="1" * 64,
+    )
+    with context.session_factory() as db:
+        revision_one = db.get(GameSessionRecord, "game_00000101")
+        revision_two = db.get(GameSessionRecord, "game_00000102")
+        legacy = db.get(GameSessionRecord, "game_00000103")
+        fallback = db.get(GameSessionRecord, "game_00000105")
+        assert revision_one is not None
+        assert revision_two is not None
+        assert legacy is not None
+        assert fallback is not None
+        revision_one.rule_set = {
+            "id": HISTORY_RULE_ID,
+            "name": "Saved Revision One Snapshot",
+            "player_count": 7,
+        }
+        revision_two.rule_set = {
+            "id": OTHER_RULE_ID,
+            "name": "SENTINEL_DISAGREEING_JSON_NAME",
+            "player_count": 12,
+        }
+        legacy.rule_set = {
+            "id": HISTORY_RULE_ID,
+            "name": "SENTINEL_LEGACY_SNAPSHOT_NAME",
+            "player_count": 9,
+        }
+        fallback.rule_set_id = None
+        fallback.rule_set_revision_id = None
+        fallback.rule_set_revision_no = None
+        fallback.rule_set_content_hash = None
+        fallback.rule_set = None
+        db.commit()
+
+    import app.werewolf.rules as static_rules
+
+    monkeypatch.setattr(
+        static_rules,
+        "get_rule_set",
+        lambda _rule_set_id: pytest.fail("Admin history must not use the static rule catalog"),
+    )
+    _login(context, monkeypatch, role="viewer")
+
+    stable = context.client.get(
+        "/api/v1/admin/games",
+        params={"rule_set_id": HISTORY_RULE_ID, "sort": "created_at"},
+    )
+    exact = context.client.get(
+        "/api/v1/admin/games",
+        params={"rule_set_revision_id": HISTORY_REVISION_1_ID},
+    )
+    impossible_pair = context.client.get(
+        "/api/v1/admin/games",
+        params={
+            "rule_set_id": HISTORY_RULE_ID,
+            "rule_set_revision_id": OTHER_REVISION_ID,
+        },
+    )
+    json_id_probe = context.client.get(
+        "/api/v1/admin/games",
+        params={"rule_set_id": OTHER_RULE_ID},
+    )
+    detail = context.client.get("/api/v1/admin/games/game_00000101")
+    mismatch_detail = context.client.get("/api/v1/admin/games/game_00000102")
+    fallback_page = context.client.get(
+        "/api/v1/admin/games",
+        params={"sort": "created_at", "page_size": 100},
+    )
+
+    assert stable.status_code == 200, stable.text
+    by_session = {item["session_id"]: item for item in stable.json()["items"]}
+    assert list(by_session) == ["game_00000101", "game_00000102", "game_00000103"]
+    assert by_session["game_00000101"]["rule_set"] == {
+        "id": HISTORY_RULE_ID,
+        "name": "Historical Revision One",
+        "player_count": 6,
+        "revision_id": HISTORY_REVISION_1_ID,
+        "revision_no": 1,
+        "content_hash": "1" * 64,
+    }
+    assert by_session["game_00000102"]["rule_set"] == {
+        "id": HISTORY_RULE_ID,
+        "name": "Current Revision Two",
+        "player_count": 8,
+        "revision_id": HISTORY_REVISION_2_ID,
+        "revision_no": 2,
+        "content_hash": "2" * 64,
+    }
+    assert by_session["game_00000103"]["rule_set"] == {
+        "id": HISTORY_RULE_ID,
+        "name": HISTORY_RULE_ID,
+        "player_count": None,
+        "revision_id": None,
+        "revision_no": None,
+        "content_hash": "3" * 64,
+    }
+    assert exact.status_code == 200
+    assert [item["session_id"] for item in exact.json()["items"]] == ["game_00000101"]
+    assert impossible_pair.status_code == 200
+    assert impossible_pair.json()["items"] == []
+    assert json_id_probe.status_code == 200
+    assert [item["session_id"] for item in json_id_probe.json()["items"]] == ["game_00000104"]
+    assert detail.status_code == 200
+    assert detail.json()["rule_set"] == {
+        "id": HISTORY_RULE_ID,
+        "name": "Saved Revision One Snapshot",
+        "player_count": 7,
+        "revision_id": HISTORY_REVISION_1_ID,
+        "revision_no": 1,
+        "content_hash": "1" * 64,
+    }
+    assert mismatch_detail.status_code == 200
+    assert mismatch_detail.json()["rule_set"] == {
+        "id": HISTORY_RULE_ID,
+        "name": "Current Revision Two",
+        "player_count": 8,
+        "revision_id": HISTORY_REVISION_2_ID,
+        "revision_no": 2,
+        "content_hash": "2" * 64,
+    }
+    fallback_item = next(
+        item for item in fallback_page.json()["items"] if item["session_id"] == "game_00000105"
+    )
+    assert fallback_item["rule_set"] == {
+        "id": HISTORY_RULE_ID,
+        "name": "Historical Revision One",
+        "player_count": 6,
+        "revision_id": HISTORY_REVISION_1_ID,
+        "revision_no": 1,
+        "content_hash": "1" * 64,
+    }
 
 
 def test_admin_games_rejects_invalid_pagination_status_and_time_range(
@@ -763,9 +1061,7 @@ def test_game_debug_requires_debug_permission_returns_safe_summaries_and_audits(
     assert payload["session_id"] == "game_00000020"
     assert payload["game_error"] == "Model response validation failed"
     assert len(payload["run_errors"]) == 20
-    assert {item["error"] for item in payload["run_errors"]} == {
-        "Upstream request timed out"
-    }
+    assert {item["error"] for item in payload["run_errors"]} == {"Upstream request timed out"}
     serialized = json.dumps(payload)
     assert "SENTINEL" not in serialized
     assert "Bearer" not in serialized
@@ -773,9 +1069,7 @@ def test_game_debug_requires_debug_permission_returns_safe_summaries_and_audits(
     assert response.headers["x-request-id"] == "game-debug-1"
 
     with context.session_factory() as db:
-        audit = db.scalar(
-            select(AuditEvent).where(AuditEvent.action == "admin.game.debug.read")
-        )
+        audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.game.debug.read"))
     assert audit is not None
     assert audit.resource_type == "game_session"
     assert audit.resource_id == "game_00000020"
@@ -835,18 +1129,13 @@ def test_admin_game_query_index_migration_creates_and_drops_latest_run_index(
     )
     assert latest_created[1] == "live_runs"
     assert len(latest_created[2]) == 3
-    assert any(
-        item == ("ix_live_runs_session_created_run_desc", "live_runs")
-        for item in dropped
-    )
+    assert any(item == ("ix_live_runs_session_created_run_desc", "live_runs") for item in dropped)
 
 
 def _all_keys(value: object) -> set[str]:
     if isinstance(value, dict):
         return set(value) | {
-            child_key
-            for child in value.values()
-            for child_key in _all_keys(child)
+            child_key for child in value.values() for child_key in _all_keys(child)
         }
     if isinstance(value, list):
         return {child_key for child in value for child_key in _all_keys(child)}

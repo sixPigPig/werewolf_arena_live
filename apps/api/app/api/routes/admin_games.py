@@ -12,6 +12,7 @@ from app.admin.audit import record_audit_event
 from app.admin.games import (
     AdminGameDetailData,
     AdminGameEventRow,
+    AdminGameRow,
     AdminGameRunRow,
     get_admin_game_detail,
     list_admin_games,
@@ -55,6 +56,10 @@ def list_games(
     status: AdminGameStatus | None = None,
     winner: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
     rule_set_id: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
+    rule_set_revision_id: Annotated[
+        str | None,
+        Query(min_length=1, max_length=36),
+    ] = None,
     run_status: AdminGameRunStatus | None = None,
     created_from: datetime | None = None,
     created_to: datetime | None = None,
@@ -62,7 +67,11 @@ def list_games(
 ) -> AdminGameListResponse:
     normalized_from = _query_datetime(created_from, "created_from")
     normalized_to = _query_datetime(created_to, "created_to")
-    if normalized_from is not None and normalized_to is not None and normalized_from > normalized_to:
+    if (
+        normalized_from is not None
+        and normalized_to is not None
+        and normalized_from > normalized_to
+    ):
         raise _invalid_filter("created_from must be earlier than or equal to created_to.")
     try:
         result = list_admin_games(
@@ -73,6 +82,7 @@ def list_games(
             status=status,
             winner=winner,
             rule_set_id=rule_set_id,
+            rule_set_revision_id=rule_set_revision_id,
             run_status=run_status,
             created_from=normalized_from,
             created_to=normalized_to,
@@ -229,23 +239,17 @@ def _detail_response(detail: AdminGameDetailData) -> AdminGameDetailResponse:
 
 
 def _list_item(
-    record: GameSessionRecord,
+    record: AdminGameRow,
     *,
     latest_run: AdminGameRunRow | None,
     event_counts: dict[str, int],
 ) -> AdminGameListItem:
-    rule_set = _rule_set_summary(record.rule_set)
-    if rule_set is None and latest_run is not None:
-        rule_set = _rule_set_summary(
-            {"id": latest_run.rule_set_id, "name": latest_run.rule_set_id}
-        )
+    rule_set = _rule_set_summary(record, latest_run=latest_run)
     return AdminGameListItem(
         session_id=record.session_id,
         status=_safe_text(record.status, max_length=20),
         winner=(
-            _optional_text(record.winner, max_length=80)
-            if _is_terminal_game(record)
-            else None
+            _optional_text(record.winner, max_length=80) if _is_terminal_game(record) else None
         ),
         round_count=max(0, int(record.round_count or 0)),
         resumable=bool(record.resumable),
@@ -264,7 +268,7 @@ def _list_item(
     )
 
 
-def _is_terminal_game(record: GameSessionRecord) -> bool:
+def _is_terminal_game(record: AdminGameRow) -> bool:
     return record.status == "complete" and not record.resumable
 
 
@@ -397,23 +401,16 @@ def _death_summaries(
         return []
     result: list[dict[str, str | None]] = []
     for item in value[:24]:
-        if (
-            not isinstance(item, dict)
-            or not isinstance(item.get("player"), str)
-        ):
+        if not isinstance(item, dict) or not isinstance(item.get("player"), str):
             continue
         result.append(
             {
                 "player": _safe_text(item.get("player"), max_length=120),
                 "cause": (
-                    _optional_text(item.get("cause"), max_length=80)
-                    if reveal_causes
-                    else None
+                    _optional_text(item.get("cause"), max_length=80) if reveal_causes else None
                 ),
                 "source": (
-                    _optional_text(item.get("source"), max_length=120)
-                    if reveal_causes
-                    else None
+                    _optional_text(item.get("source"), max_length=120) if reveal_causes else None
                 ),
             }
         )
@@ -433,22 +430,58 @@ def _votes_summary(value: Any) -> dict[str, str]:
     }
 
 
-def _rule_set_summary(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
+def _rule_set_summary(
+    record: AdminGameRow,
+    *,
+    latest_run: AdminGameRunRow | None,
+) -> dict[str, Any] | None:
+    snapshot = record.rule_set_snapshot
+    snapshot_id = (
+        _optional_text(snapshot.get("id"), max_length=80) if isinstance(snapshot, dict) else None
+    )
+    rule_set_id = _optional_text(record.rule_set_id, max_length=80) or snapshot_id
+    revision_id = _optional_text(record.rule_set_revision_id, max_length=36)
+    revision_no = record.rule_set_revision_no
+    content_hash = _optional_text(record.rule_set_content_hash, max_length=64)
+    projected_name = _optional_text(record.rule_set_name, max_length=120)
+    projected_player_count = record.rule_set_player_count
+    if rule_set_id is None and latest_run is not None:
+        rule_set_id = _optional_text(latest_run.rule_set_id, max_length=80)
+        revision_id = _optional_text(latest_run.rule_set_revision_id, max_length=36)
+        revision_no = latest_run.rule_set_revision_no
+        content_hash = _optional_text(latest_run.rule_set_content_hash, max_length=64)
+        projected_name = _optional_text(latest_run.rule_set_name, max_length=120)
+        projected_player_count = latest_run.rule_set_player_count
+    if rule_set_id is None:
         return None
-    rule_set_id = _optional_text(value.get("id"), max_length=80)
-    name = _optional_text(value.get("name"), max_length=120)
-    if rule_set_id is None and name is None:
-        return None
-    player_count = value.get("player_count")
+
+    snapshot_matches = isinstance(snapshot, dict) and snapshot_id == rule_set_id
+    if snapshot_matches:
+        name = _optional_text(snapshot.get("name"), max_length=120) or rule_set_id
+        player_count = snapshot.get("player_count")
+    elif revision_id is not None:
+        name = projected_name or rule_set_id
+        player_count = projected_player_count
+    else:
+        name = rule_set_id
+        player_count = None
     return {
-        "id": rule_set_id or "",
-        "name": name or rule_set_id or "",
+        "id": rule_set_id,
+        "name": name,
         "player_count": (
             max(0, player_count)
             if isinstance(player_count, int) and not isinstance(player_count, bool)
             else None
         ),
+        "revision_id": revision_id,
+        "revision_no": (
+            revision_no
+            if isinstance(revision_no, int)
+            and not isinstance(revision_no, bool)
+            and revision_no >= 1
+            else None
+        ),
+        "content_hash": content_hash,
     }
 
 

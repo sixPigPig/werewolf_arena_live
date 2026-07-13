@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.game_session import GameSessionRecord
 from app.models.live import LiveEventRecord, LiveRunRecord, VoiceUtteranceRecord
+from app.models.rule_set import RuleSetRevisionRecord
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,11 @@ class AdminLiveRunRow:
     werewolf_model: str | None
     max_rounds: int
     rule_set_id: str
+    rule_set_revision_id: str | None
+    rule_set_revision_no: int | None
+    rule_set_content_hash: str | None
+    rule_set_name: str | None
+    rule_set_player_count: int | None
     winner: str | None
     created_at: datetime
     started_at: datetime | None
@@ -99,6 +105,7 @@ def list_admin_live_runs(
     query_text: str | None,
     status: str | None,
     rule_set_id: str | None,
+    rule_set_revision_id: str | None,
     created_from: datetime | None,
     created_to: datetime | None,
     sort: str,
@@ -118,20 +125,18 @@ def list_admin_live_runs(
         filters.append(LiveRunRecord.status == status)
     if rule_set_id is not None:
         filters.append(LiveRunRecord.rule_set_id == rule_set_id.strip())
+    if rule_set_revision_id is not None:
+        filters.append(LiveRunRecord.rule_set_revision_id == rule_set_revision_id.strip())
     if created_from is not None:
         filters.append(LiveRunRecord.created_at >= created_from)
     if created_to is not None:
         filters.append(LiveRunRecord.created_at <= created_to)
 
     query = query.where(*filters)
-    total = int(
-        db.scalar(select(func.count()).select_from(LiveRunRecord).where(*filters)) or 0
-    )
+    total = int(db.scalar(select(func.count()).select_from(LiveRunRecord).where(*filters)) or 0)
     pages = (total + page_size - 1) // page_size if total else 0
     rows = db.execute(
-        query.order_by(*_run_sort_columns(sort))
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+        query.order_by(*_run_sort_columns(sort)).offset((page - 1) * page_size).limit(page_size)
     )
     records = [AdminLiveRunRow(*row) for row in rows]
     run_ids = [record.run_id for record in records]
@@ -200,46 +205,58 @@ def _base_run_query() -> Select[Any]:
         GameSessionRecord.status == "complete",
         GameSessionRecord.resumable.is_(False),
     )
-    return select(
-        LiveRunRecord.run_id,
-        LiveRunRecord.session_id,
-        LiveRunRecord.status,
-        case(
-            (reveal_terminal_metadata, LiveRunRecord.villager_model),
-            else_=None,
-        ).label("villager_model"),
-        case(
-            (reveal_terminal_metadata, LiveRunRecord.werewolf_model),
-            else_=None,
-        ).label("werewolf_model"),
-        LiveRunRecord.max_rounds,
-        LiveRunRecord.rule_set_id,
-        case(
-            (reveal_terminal_metadata, LiveRunRecord.winner),
-            else_=None,
-        ).label("winner"),
-        LiveRunRecord.created_at,
-        LiveRunRecord.started_at,
-        LiveRunRecord.completed_at,
-        LiveRunRecord.stop_requested_at,
-        LiveRunRecord.worker_heartbeat_at,
-        LiveRunRecord.lease_expires_at,
-        LiveRunRecord.recovery_attempts,
-        LiveRunRecord.recovery_last_attempt_at,
-        LiveRunRecord.recovery_not_before,
-        LiveRunRecord.updated_at,
-        case(
-            (
-                and_(LiveRunRecord.error.is_not(None), LiveRunRecord.error != ""),
-                True,
-            ),
-            else_=False,
-        ).label("has_error"),
-        GameSessionRecord.status.label("game_status"),
-        GameSessionRecord.resumable.label("game_resumable"),
-    ).outerjoin(
-        GameSessionRecord,
-        GameSessionRecord.session_id == LiveRunRecord.session_id,
+    return (
+        select(
+            LiveRunRecord.run_id,
+            LiveRunRecord.session_id,
+            LiveRunRecord.status,
+            case(
+                (reveal_terminal_metadata, LiveRunRecord.villager_model),
+                else_=None,
+            ).label("villager_model"),
+            case(
+                (reveal_terminal_metadata, LiveRunRecord.werewolf_model),
+                else_=None,
+            ).label("werewolf_model"),
+            LiveRunRecord.max_rounds,
+            LiveRunRecord.rule_set_id,
+            LiveRunRecord.rule_set_revision_id,
+            LiveRunRecord.rule_set_revision_no,
+            LiveRunRecord.rule_set_content_hash,
+            RuleSetRevisionRecord.name.label("rule_set_name"),
+            RuleSetRevisionRecord.player_count.label("rule_set_player_count"),
+            case(
+                (reveal_terminal_metadata, LiveRunRecord.winner),
+                else_=None,
+            ).label("winner"),
+            LiveRunRecord.created_at,
+            LiveRunRecord.started_at,
+            LiveRunRecord.completed_at,
+            LiveRunRecord.stop_requested_at,
+            LiveRunRecord.worker_heartbeat_at,
+            LiveRunRecord.lease_expires_at,
+            LiveRunRecord.recovery_attempts,
+            LiveRunRecord.recovery_last_attempt_at,
+            LiveRunRecord.recovery_not_before,
+            LiveRunRecord.updated_at,
+            case(
+                (
+                    and_(LiveRunRecord.error.is_not(None), LiveRunRecord.error != ""),
+                    True,
+                ),
+                else_=False,
+            ).label("has_error"),
+            GameSessionRecord.status.label("game_status"),
+            GameSessionRecord.resumable.label("game_resumable"),
+        )
+        .outerjoin(
+            GameSessionRecord,
+            GameSessionRecord.session_id == LiveRunRecord.session_id,
+        )
+        .outerjoin(
+            RuleSetRevisionRecord,
+            RuleSetRevisionRecord.id == LiveRunRecord.rule_set_revision_id,
+        )
     )
 
 
@@ -303,10 +320,7 @@ def _voice_aggregates(
         normalized_status = status if isinstance(status, str) else ""
         bucket = normalized_status if normalized_status in known_statuses else "other"
         counts[bucket] += normalized_count
-    return {
-        run_id: AdminVoiceCounts(**counts)
-        for run_id, counts in grouped.items()
-    }
+    return {run_id: AdminVoiceCounts(**counts) for run_id, counts in grouped.items()}
 
 
 def _run_sort_columns(sort: str) -> tuple[Any, Any]:

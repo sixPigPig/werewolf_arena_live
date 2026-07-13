@@ -4,16 +4,35 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, and_, case, exists, func, or_, select
+from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import LiveEventRecord, LiveRunRecord, VoiceUtteranceRecord
+from app.models.rule_set import RuleSetRevisionRecord
+
+
+@dataclass(frozen=True)
+class AdminGameRow:
+    session_id: str
+    status: str
+    winner: str | None
+    round_count: int
+    resumable: bool
+    rule_set_id: str | None
+    rule_set_revision_id: str | None
+    rule_set_revision_no: int | None
+    rule_set_content_hash: str | None
+    rule_set_name: str | None
+    rule_set_player_count: int | None
+    created_at: datetime
+    updated_at: datetime
+    rule_set_snapshot: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class AdminGameListResult:
-    records: list[GameSessionRecord]
+    records: list[AdminGameRow]
     latest_runs: dict[str, AdminGameRunRow]
     event_counts: dict[str, int]
     page: int
@@ -24,7 +43,7 @@ class AdminGameListResult:
 
 @dataclass(frozen=True)
 class AdminGameDetailData:
-    record: GameSessionRecord
+    record: AdminGameRow
     state: dict[str, Any]
     runs: list[AdminGameRunRow]
     event_counts: dict[str, int]
@@ -43,6 +62,11 @@ class AdminGameRunRow:
     werewolf_model: str
     max_rounds: int
     rule_set_id: str
+    rule_set_revision_id: str | None
+    rule_set_revision_no: int | None
+    rule_set_content_hash: str | None
+    rule_set_name: str | None
+    rule_set_player_count: int | None
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
@@ -70,12 +94,13 @@ def list_admin_games(
     status: str | None,
     winner: str | None,
     rule_set_id: str | None,
+    rule_set_revision_id: str | None,
     run_status: str | None,
     created_from: datetime | None,
     created_to: datetime | None,
     sort: str,
 ) -> AdminGameListResult:
-    query: Select[tuple[GameSessionRecord]] = select(GameSessionRecord)
+    filters: list[Any] = []
     terminal_game = and_(
         GameSessionRecord.status == "complete",
         GameSessionRecord.resumable.is_(False),
@@ -98,7 +123,7 @@ def list_admin_games(
                 ),
             )
         )
-        query = query.where(
+        filters.append(
             or_(
                 GameSessionRecord.session_id.ilike(pattern, escape="\\"),
                 and_(
@@ -109,17 +134,13 @@ def list_admin_games(
             )
         )
     if status is not None:
-        query = query.where(GameSessionRecord.status == status)
+        filters.append(GameSessionRecord.status == status)
     if winner is not None:
-        query = query.where(
-            terminal_game,
-            GameSessionRecord.winner == winner.strip(),
-        )
+        filters.extend((terminal_game, GameSessionRecord.winner == winner.strip()))
     if rule_set_id is not None:
-        normalized_rule_set_id = rule_set_id.strip()
-        query = query.where(
-            GameSessionRecord.rule_set["id"].as_string() == normalized_rule_set_id
-        )
+        filters.append(GameSessionRecord.rule_set_id == rule_set_id.strip())
+    if rule_set_revision_id is not None:
+        filters.append(GameSessionRecord.rule_set_revision_id == rule_set_revision_id.strip())
     if run_status is not None:
         latest_run_status = (
             select(LiveRunRecord.status)
@@ -129,16 +150,40 @@ def list_admin_games(
             .correlate(GameSessionRecord)
             .scalar_subquery()
         )
-        query = query.where(latest_run_status == run_status)
+        filters.append(latest_run_status == run_status)
     if created_from is not None:
-        query = query.where(GameSessionRecord.created_at >= created_from)
+        filters.append(GameSessionRecord.created_at >= created_from)
     if created_to is not None:
-        query = query.where(GameSessionRecord.created_at <= created_to)
+        filters.append(GameSessionRecord.created_at <= created_to)
 
-    total = int(db.scalar(select(func.count()).select_from(query.subquery())) or 0)
+    total = int(db.scalar(select(func.count()).select_from(GameSessionRecord).where(*filters)) or 0)
     pages = (total + page_size - 1) // page_size if total else 0
-    query = query.order_by(*_game_sort_columns(sort)).offset((page - 1) * page_size).limit(page_size)
-    records = list(db.scalars(query))
+    query = (
+        select(
+            GameSessionRecord.session_id,
+            GameSessionRecord.status,
+            GameSessionRecord.winner,
+            GameSessionRecord.round_count,
+            GameSessionRecord.resumable,
+            GameSessionRecord.rule_set_id,
+            GameSessionRecord.rule_set_revision_id,
+            GameSessionRecord.rule_set_revision_no,
+            GameSessionRecord.rule_set_content_hash,
+            RuleSetRevisionRecord.name.label("rule_set_name"),
+            RuleSetRevisionRecord.player_count.label("rule_set_player_count"),
+            GameSessionRecord.created_at,
+            GameSessionRecord.updated_at,
+        )
+        .outerjoin(
+            RuleSetRevisionRecord,
+            RuleSetRevisionRecord.id == GameSessionRecord.rule_set_revision_id,
+        )
+        .where(*filters)
+        .order_by(*_game_sort_columns(sort))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    records = [AdminGameRow(*row) for row in db.execute(query)]
 
     session_ids = [record.session_id for record in records]
     latest_runs = _latest_runs_for_sessions(db, session_ids)
@@ -156,9 +201,21 @@ def list_admin_games(
 
 
 def get_admin_game_detail(db: Session, session_id: str) -> AdminGameDetailData | None:
-    record = db.get(GameSessionRecord, session_id)
-    if record is None:
+    record_row = db.execute(
+        select(
+            GameSessionRecord,
+            RuleSetRevisionRecord.name.label("rule_set_name"),
+            RuleSetRevisionRecord.player_count.label("rule_set_player_count"),
+        )
+        .outerjoin(
+            RuleSetRevisionRecord,
+            RuleSetRevisionRecord.id == GameSessionRecord.rule_set_revision_id,
+        )
+        .where(GameSessionRecord.session_id == session_id)
+    ).one_or_none()
+    if record_row is None:
         return None
+    record = record_row[0]
     state = db.scalar(
         select(GameReplayPayload.state).where(GameReplayPayload.session_id == session_id)
     )
@@ -175,8 +232,11 @@ def get_admin_game_detail(db: Session, session_id: str) -> AdminGameDetailData |
     runs = [
         _run_row(row)
         for row in db.execute(
-            select(LiveRunRecord)
-            .with_only_columns(*_run_summary_columns())
+            select(*_run_summary_columns())
+            .outerjoin(
+                RuleSetRevisionRecord,
+                RuleSetRevisionRecord.id == LiveRunRecord.rule_set_revision_id,
+            )
             .where(LiveRunRecord.session_id == session_id)
             .order_by(LiveRunRecord.created_at.desc(), LiveRunRecord.run_id.desc())
             .limit(100)
@@ -229,7 +289,11 @@ def get_admin_game_detail(db: Session, session_id: str) -> AdminGameDetailData |
         or 0
     )
     return AdminGameDetailData(
-        record=record,
+        record=_game_row_from_record(
+            record,
+            rule_set_name=record_row.rule_set_name,
+            rule_set_player_count=record_row.rule_set_player_count,
+        ),
         state=state,
         runs=runs,
         event_counts=event_counts,
@@ -264,6 +328,10 @@ def _latest_runs_for_sessions(
         for row in db.execute(
             select(*_run_summary_columns())
             .join(ranked_runs, ranked_runs.c.run_id == LiveRunRecord.run_id)
+            .outerjoin(
+                RuleSetRevisionRecord,
+                RuleSetRevisionRecord.id == LiveRunRecord.rule_set_revision_id,
+            )
             .where(ranked_runs.c.run_rank == 1)
             .order_by(LiveRunRecord.session_id.asc())
         )
@@ -280,6 +348,11 @@ def _run_summary_columns() -> tuple[Any, ...]:
         LiveRunRecord.werewolf_model,
         LiveRunRecord.max_rounds,
         LiveRunRecord.rule_set_id,
+        LiveRunRecord.rule_set_revision_id,
+        LiveRunRecord.rule_set_revision_no,
+        LiveRunRecord.rule_set_content_hash,
+        RuleSetRevisionRecord.name.label("rule_set_name"),
+        RuleSetRevisionRecord.player_count.label("rule_set_player_count"),
         LiveRunRecord.created_at,
         LiveRunRecord.started_at,
         LiveRunRecord.completed_at,
@@ -302,10 +375,39 @@ def _run_row(row: Any) -> AdminGameRunRow:
         werewolf_model=row.werewolf_model,
         max_rounds=row.max_rounds,
         rule_set_id=row.rule_set_id,
+        rule_set_revision_id=row.rule_set_revision_id,
+        rule_set_revision_no=row.rule_set_revision_no,
+        rule_set_content_hash=row.rule_set_content_hash,
+        rule_set_name=row.rule_set_name,
+        rule_set_player_count=row.rule_set_player_count,
         created_at=row.created_at,
         started_at=row.started_at,
         completed_at=row.completed_at,
         has_error=bool(row.has_error),
+    )
+
+
+def _game_row_from_record(
+    record: GameSessionRecord,
+    *,
+    rule_set_name: str | None,
+    rule_set_player_count: int | None,
+) -> AdminGameRow:
+    return AdminGameRow(
+        session_id=record.session_id,
+        status=record.status,
+        winner=record.winner,
+        round_count=record.round_count,
+        resumable=record.resumable,
+        rule_set_id=record.rule_set_id,
+        rule_set_revision_id=record.rule_set_revision_id,
+        rule_set_revision_no=record.rule_set_revision_no,
+        rule_set_content_hash=record.rule_set_content_hash,
+        rule_set_name=rule_set_name,
+        rule_set_player_count=rule_set_player_count,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        rule_set_snapshot=(record.rule_set if isinstance(record.rule_set, dict) else None),
     )
 
 
