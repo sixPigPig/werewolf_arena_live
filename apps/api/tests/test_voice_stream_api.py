@@ -787,6 +787,78 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
     assert witch_chunk["data"] == "c3RhdGljLXdpdGNo"
 
 
+def test_voice_stream_service_plays_static_sheriff_direction_prompt(tmp_path) -> None:
+    RecordingTtsClient.instances.clear()
+    asset_dir = tmp_path / "judge-voice"
+    asset_dir.mkdir()
+    (asset_dir / "sheriff_choose_badge_side.mp3").write_bytes(b"static-direction")
+    (asset_dir / "game_over_villagers.mp3").write_bytes(b"static-end")
+    (asset_dir / "manifest.json").write_text(
+        """
+        {
+          "audio_format": "mp3",
+          "sample_rate": 24000,
+          "mime_type": "audio/mpeg",
+          "lines": [
+            {
+              "id": "sheriff_choose_badge_side",
+              "filename": "sheriff_choose_badge_side.mp3",
+              "exists": true
+            },
+            {
+              "id": "game_over_villagers",
+              "filename": "game_over_villagers.mp3",
+              "exists": true
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=replace(BASE_TTS_CONFIG, audio_format="mp3"),
+        client_factory=RecordingTtsClient,
+        judge_voice_asset_dir=asset_dir,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "action_requested",
+            round_number=1,
+            phase="day",
+            actor="阿青",
+            action="speech_order",
+            payload={"options": ["警左发言", "警右发言"]},
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    assert RecordingTtsClient.instances == []
+    assert [message["type"] for message in websocket.messages] == [
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+    ]
+    direction_start, direction_chunk, direction_end = websocket.messages[:3]
+    assert direction_start["speaker_kind"] == "judge"
+    assert direction_start["speaker_name"] == "法官"
+    assert direction_start["audio_format"] == "mp3"
+    assert direction_chunk["data"] == "c3RhdGljLWRpcmVjdGlvbg=="
+    assert direction_end["utterance_id"] == direction_start["utterance_id"]
+
+
 def test_voice_stream_service_uses_static_judge_assets_when_format_differs_from_live_config(
     tmp_path,
 ) -> None:

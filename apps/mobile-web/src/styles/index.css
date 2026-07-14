@@ -2020,6 +2020,40 @@ textarea {
   box-shadow: 0 3px 8px rgb(0 0 0 / 45%);
 }
 
+.mobile-live-seat-sheriff-badge {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  z-index: 4;
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  border: 1px solid rgb(255 231 159 / 88%);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 36% 24%, rgb(255 245 201 / 42%), transparent 34%),
+    linear-gradient(145deg, #8d5a16, #3f2109);
+  color: #ffe8a8;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 248 213 / 14%),
+    0 2px 5px rgb(0 0 0 / 72%),
+    0 0 9px rgb(236 184 72 / 48%);
+  transform: translateX(-50%);
+}
+
+.mobile-live-seat-sheriff-badge svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mobile-live-seat-sheriff .mobile-live-seat-avatar {
+  border-color: #f1c76e;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 241 196 / 18%),
+    0 0 0 2px rgb(241 199 110 / 24%);
+}
+
 .mobile-live-seat-avatar {
   display: grid;
   width: calc(100% - 13px);

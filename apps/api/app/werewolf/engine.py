@@ -1571,6 +1571,22 @@ class GameEngine:
             "sheriff",
             f"第{round_state.number}轮：警长竞选，{sheriff}当选警长，投票计为{self.rule_set.sheriff_vote_weight:g}票。",
         )
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="day",
+            actor=sheriff,
+            payload={
+                "sheriff": sheriff,
+                "sheriff_elected": sheriff,
+                "sheriff_candidates": round_state.sheriff_candidates.copy(),
+                "sheriff_final_candidates": round_state.sheriff_final_candidates.copy(),
+                "sheriff_voters": round_state.sheriff_voters.copy(),
+                "sheriff_votes": round_state.sheriff_votes.copy(),
+                "sheriff_runoff_votes": round_state.sheriff_runoff_votes.copy(),
+                "sheriff_badge_lost": False,
+                "active_players": active_players.copy(),
+            },
+        )
 
     def _lose_sheriff_badge(
         self,

@@ -378,6 +378,46 @@ describe("deriveGodViewState", () => {
     expect(state.speakerFlow.modeLabel).toBe("顺序发言");
   });
 
+  it("marks the elected sheriff and exposes the election result in the event rail", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "阿青", role: "villager", model: "deepseek-chat" },
+            { name: "白石", role: "seer", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        actor: "白石",
+        payload: {
+          sheriff: "白石",
+          sheriff_elected: "白石",
+          sheriff_votes: { 阿青: "白石" },
+          active_players: ["阿青", "白石"],
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "警长竞选测试");
+
+    expect(state.sheriff.current).toBe("白石");
+    expect(state.players.find((player) => player.name === "白石")?.isSheriff).toBe(
+      true,
+    );
+    expect(state.eventLines[0]).toMatchObject({
+      text: "2号 当选警长",
+      detail: "2号 当选警长并获得警徽",
+      tone: "success",
+    });
+  });
+
   it("derives peaceful night resolution and visible night action order", () => {
     const events = [
       event({

@@ -202,6 +202,27 @@ const dayExileEvent: LiveGameEvent = {
   },
 };
 
+const sheriffElectedEvent: LiveGameEvent = {
+  ...gameStartedEvent,
+  id: 2,
+  type: "state_updated",
+  round: 1,
+  phase: "day",
+  actor: "南风",
+  action: null,
+  payload: {
+    sheriff: "南风",
+    sheriff_elected: "南风",
+    sheriff_candidates: ["白石", "南风"],
+    sheriff_final_candidates: ["白石", "南风"],
+    sheriff_voters: ["阿青", "木子"],
+    sheriff_votes: { 阿青: "南风", 木子: "南风" },
+    sheriff_runoff_votes: {},
+    sheriff_badge_lost: false,
+    active_players: ["阿青", "白石", "南风", "木子"],
+  },
+};
+
 const failedEvent: LiveGameEvent = {
   ...gameStartedEvent,
   id: 2,
@@ -389,6 +410,31 @@ describe("LivePage", () => {
     expect(seat.querySelector(".mobile-live-seat-status")).toBeNull();
     expect(seat).not.toHaveTextContent("阿青");
     expect(seat).not.toHaveTextContent("存活");
+  });
+
+  it("shows the sheriff election result and marks the elected player's avatar", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, sheriffElectedEvent],
+      latestEvent: sheriffElectedEvent,
+    });
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const stage = screen.getByRole("status", { name: "当前舞台" });
+    expect(stage.querySelector("strong")).toHaveTextContent("3号 当选警长");
+    expect(stage.querySelector(".mobile-live-action-detail")).toHaveTextContent(
+      "2票当选 · 获得警徽",
+    );
+    const sheriffSeat = screen.getByRole("article", {
+      name: /3号 南风 预言家 .* 警长/,
+    });
+    expect(sheriffSeat).toHaveClass("mobile-live-seat-sheriff");
+    expect(
+      within(sheriffSeat).getByRole("img", { name: "警长，持有警徽" }),
+    ).toHaveClass("mobile-live-seat-sheriff-badge");
   });
 
   it("marks night eliminations and daytime exiles over grayscale avatars", async () => {

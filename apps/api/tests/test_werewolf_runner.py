@@ -3684,7 +3684,14 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
     )
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
 
     engine._run_day_phase(round_state, round_log, active_players)
 
@@ -3698,6 +3705,29 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
     assert round_log.sheriff_run
     assert round_log.sheriff_votes
     assert round_log.speech_order is not None
+    election_event = next(
+        event
+        for event in sink.events
+        if event["type"] == "state_updated" and event["payload"].get("sheriff_elected") == sheriff
+    )
+    direction_request = next(
+        event
+        for event in sink.events
+        if event["type"] == "action_requested" and event["action"] == "speech_order"
+    )
+    assert election_event["actor"] == sheriff
+    assert election_event["payload"] == {
+        "sheriff": sheriff,
+        "sheriff_elected": sheriff,
+        "sheriff_candidates": [sheriff, second_candidate],
+        "sheriff_final_candidates": [sheriff, second_candidate],
+        "sheriff_voters": active_players[2:],
+        "sheriff_votes": {name: sheriff for name in active_players[2:]},
+        "sheriff_runoff_votes": {},
+        "sheriff_badge_lost": False,
+        "active_players": active_players,
+    }
+    assert sink.events.index(election_event) < sink.events.index(direction_request)
 
 
 def test_sheriff_candidate_speeches_use_random_start_and_direction() -> None:

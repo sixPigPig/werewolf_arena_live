@@ -554,6 +554,7 @@ function collectSheriff(view: MutableGodView, payload: Record<string, unknown>) 
     view.sheriff.badgeFlow = `移交 ${badgeTarget}`;
   }
   if (payload.sheriff_badge_lost === true) {
+    view.sheriff.current = null;
     view.sheriff.badgeFlow = "警徽撕毁";
   }
 
@@ -987,6 +988,10 @@ function stateUpdatedReplayText(
   if (exiled) {
     return `${seatLabel(exiled, nameToSeat)} 被放逐`;
   }
+  const sheriffElected = stringField(payload, "sheriff_elected");
+  if (sheriffElected) {
+    return `${seatLabel(sheriffElected, nameToSeat)} 当选警长`;
+  }
   if (isNightResolution(event, payload)) {
     return nightResolutionText(payload, nameToSeat);
   }
@@ -1032,6 +1037,10 @@ function stateUpdatedReplayDetail(
   const exiled = stringField(payload, "exiled");
   if (exiled) {
     return `${seatLabel(exiled, nameToSeat)} 被投票放逐`;
+  }
+  const sheriffElected = stringField(payload, "sheriff_elected");
+  if (sheriffElected) {
+    return `${seatLabel(sheriffElected, nameToSeat)} 当选警长并获得警徽`;
   }
   if (isNightResolution(event, payload)) {
     return nightResolutionDetail(payload, nameToSeat);
@@ -1203,6 +1212,9 @@ function seatNumberFromReference(value: string): number | null {
 function stateUpdatedReplayTone(
   payload: Record<string, unknown>,
 ): GodViewEventLine["tone"] {
+  if (stringField(payload, "sheriff_elected")) {
+    return "success";
+  }
   if (stringField(payload, "exiled") || stringField(payload, "eliminated")) {
     return "danger";
   }

@@ -105,6 +105,51 @@ describe("deriveMobileLiveFocusPresentation", () => {
     expect(presentation.detail).toBe("白天流程");
   });
 
+  it("shows the elected sheriff and winning vote count", () => {
+    const { state, presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        actor: "4号 预言家",
+        payload: {
+          sheriff: "4号 预言家",
+          sheriff_elected: "4号 预言家",
+          sheriff_votes: {
+            "2号 女巫": "4号 预言家",
+            "3号 平民A": "4号 预言家",
+            "5号 守卫": "4号 预言家",
+          },
+          active_players: [
+            "1号 狼人A",
+            "2号 女巫",
+            "3号 平民A",
+            "4号 预言家",
+            "5号 守卫",
+            "6号 平民B",
+            "7号 平民C",
+            "8号 猎人",
+          ],
+        },
+      }),
+    ]);
+
+    expect(presentation).toMatchObject({
+      kind: "skill",
+      tone: "success",
+      actorName: "4号 预言家",
+      actorSeat: 4,
+      eyebrow: "警长竞选",
+      title: "4号 当选警长",
+      detail: "3票当选 · 获得警徽",
+    });
+    expect(state.players.find((player) => player.name === "4号 预言家")?.isSheriff).toBe(
+      true,
+    );
+  });
+
   it("describes a night phase start as a night-action focus", () => {
     const { presentation } = focusFor([
       STARTED,

@@ -618,6 +618,28 @@ function stateUpdatedPresentation(
   state: GodViewState,
   payload: Record<string, unknown>,
 ): MobileLiveFocusPresentation {
+  const sheriffElected = stringField(payload, "sheriff_elected");
+  if (sheriffElected) {
+    const sheriff = findPlayer(state, sheriffElected);
+    const seat = seatLabel(sheriffElected, state);
+    const electionVotes = sheriffElectionVotes(payload, sheriffElected);
+    const voteDetail = electionVotes > 0 ? `${electionVotes}票当选 · ` : "";
+    return {
+      eventId: event.id,
+      kind: "skill",
+      tone: "success",
+      actorName: sheriff?.name ?? sheriffElected,
+      actorSeat: sheriff?.seatNumber ?? null,
+      actorRole: sheriff?.role ?? null,
+      targetName: null,
+      eyebrow: "警长竞选",
+      title: `${seat}号 当选警长`,
+      detail: `${voteDetail}获得警徽`,
+      progress: null,
+      accessibleText: `${seat}号玩家当选警长，${voteDetail}获得警徽`,
+    };
+  }
+
   const exiled = stringField(payload, "exiled");
   if (exiled) {
     const seat = seatLabel(exiled, state);
@@ -691,6 +713,22 @@ function stateUpdatedPresentation(
   }
 
   return waitingPresentation(event.id, "局势更新");
+}
+
+function sheriffElectionVotes(
+  payload: Record<string, unknown>,
+  sheriff: string,
+): number {
+  const runoffVotes = recordField(payload, "sheriff_runoff_votes");
+  const firstRoundVotes = recordField(payload, "sheriff_votes");
+  const votes =
+    runoffVotes && Object.keys(runoffVotes).length > 0
+      ? runoffVotes
+      : firstRoundVotes;
+  if (!votes) {
+    return 0;
+  }
+  return Object.values(votes).filter((target) => target === sheriff).length;
 }
 
 function nightResultPresentation(

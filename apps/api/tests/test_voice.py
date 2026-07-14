@@ -350,6 +350,28 @@ def test_speech_order_request_prompts_sheriff_with_managed_static_asset() -> Non
     assert is_static_judge_voice_asset_used("sheriff_choose_badge_side") is True
 
 
+def test_sheriff_election_result_uses_managed_seat_asset() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    event = live_event(
+        16,
+        "state_updated",
+        actor="阿青",
+        phase="day",
+        payload={"sheriff": "阿青", "sheriff_elected": "阿青"},
+    )
+
+    utterance = event_to_voice_utterance(
+        event,
+        config,
+        player_seats={"阿青": 3},
+    )
+
+    assert utterance is not None
+    assert utterance.speaker_kind == "judge"
+    assert utterance.text == "3号玩家 当选警长，获得警徽。"
+    assert utterance.static_asset_id == "sheriff_result_seat_03"
+
+
 def test_summary_phase_judge_voice_prompts_sequential_speech() -> None:
     config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
     event = live_event(16, "phase_started", phase="summary")

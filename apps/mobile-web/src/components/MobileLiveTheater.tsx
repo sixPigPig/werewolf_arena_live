@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import {
+  BadgeCheck,
   Gauge,
   Gavel,
   PawPrint,
@@ -253,13 +254,14 @@ export function LiveSeatAvatar({
   const statusLabel = player.isSpeaking ? "发言中" : player.stageStatus.label;
   const exitMarker = liveSeatExitMarker(player);
   const modifier = seatModifierFor(player, presentation);
-  const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}`;
+  const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}${player.isSheriff ? " 警长" : ""}`;
   const avatarImageUrl = resolveAvatarImageUrl({
     avatar_image_url: player.avatarImageUrl,
   });
   const className = [
     "mobile-live-seat",
     `mobile-live-seat-reveal-${revealSide}`,
+    player.isSheriff ? "mobile-live-seat-sheriff" : "",
     player.isSpeaking ? "mobile-live-seat-speaking" : "",
     player.isAlive ? "" : "mobile-live-seat-out",
     modifier.acting ? "mobile-live-seat-acting" : "",
@@ -276,6 +278,15 @@ export function LiveSeatAvatar({
     <article aria-label={seatLabel} className={className} style={revealStyle}>
       <span className="mobile-live-seat-medal">
         <span className="mobile-live-seat-number">{player.seatNumber}</span>
+        {player.isSheriff ? (
+          <span
+            aria-label="警长，持有警徽"
+            className="mobile-live-seat-sheriff-badge"
+            role="img"
+          >
+            <BadgeCheck aria-hidden="true" strokeWidth={2.4} />
+          </span>
+        ) : null}
         <span className="mobile-live-seat-avatar">
           {avatarImageUrl ? (
             <img alt="" src={avatarImageUrl} />
