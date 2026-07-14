@@ -3,9 +3,11 @@ from __future__ import annotations
 import copy
 import random
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from app.core.config import settings
 from app.rule_sets.types import CompiledRuleSet
+from app.admin.p2_diagnostics import build_run_p2_diagnostics
 from app.werewolf.checkpoint import (
     ReplayThenLiveProvider,
     ResumeCheckpointError,
@@ -18,6 +20,7 @@ from app.werewolf.checkpoint import (
 )
 from app.werewolf.config import DEFAULT_MAX_ROUNDS
 from app.werewolf.engine import GameEngine, initialize_game_state
+from app.werewolf.execution_budget import ActionExecutionBudgetV1
 from app.werewolf.live import GameRunCanceled, NullEventSink, strict_json_equal
 from app.werewolf.lm import ModelProvider
 from app.werewolf.player_configs import PlayerConfig
@@ -29,6 +32,7 @@ from app.werewolf.replay import GameRecordStore, ReplayWriteFencedError
 class RunGameResult:
     winner: str
     session_id: str
+    p2_diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 class GameRunError(RuntimeError):
@@ -95,6 +99,10 @@ def run_game(
             event_sink=event_sink or NullEventSink(),
             rng=engine_rng,
             checkpoint_manager=checkpoint_manager,
+            speech_quality_retry_enabled=settings.werewolf_speech_quality_retry_enabled,
+            action_budgets_enabled=settings.werewolf_action_budgets_enabled,
+            action_execution_budget=_action_execution_budget(),
+            fallback_seed=seed,
         )
         logs = engine.run()
     except ReplayWriteFencedError:
@@ -117,6 +125,13 @@ def run_game(
     return RunGameResult(
         winner=state.winner,
         session_id=session_id,
+        p2_diagnostics=build_run_p2_diagnostics(
+            logs=[log.to_dict() for log in logs],
+            status="completed",
+            diagnostic_events=[],
+            started_at=None,
+            completed_at=None,
+        ),
     )
 
 
@@ -157,6 +172,8 @@ def resume_game(
     if type(max_rounds_value) is not int or max_rounds_value <= 0:
         raise GameRunError("Resume checkpoint is invalid", session_id)
     max_rounds = max_rounds_value
+    raw_seed = run_params.get("seed")
+    fallback_seed = raw_seed if type(raw_seed) is int else None
     try:
         state = game_state_from_dict(checkpoint["state_at_round_start"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -191,6 +208,10 @@ def resume_game(
             rng=rng,
             starting_active_players=active_players,
             checkpoint_manager=checkpoint_manager,
+            speech_quality_retry_enabled=settings.werewolf_speech_quality_retry_enabled,
+            action_budgets_enabled=settings.werewolf_action_budgets_enabled,
+            action_execution_budget=_action_execution_budget(),
+            fallback_seed=fallback_seed,
         )
         logs_after_resume = engine.run()
     except ReplayWriteFencedError:
@@ -214,6 +235,13 @@ def resume_game(
     return RunGameResult(
         winner=state.winner,
         session_id=session_id,
+        p2_diagnostics=build_run_p2_diagnostics(
+            logs=[log.to_dict() for log in logs],
+            status="completed",
+            diagnostic_events=[],
+            started_at=None,
+            completed_at=None,
+        ),
     )
 
 
@@ -227,6 +255,28 @@ def _compiled_rule_sets_match(
         and first.revision_no == second.revision_no
         and first.content_hash == second.content_hash
         and strict_json_equal(first.snapshot, second.snapshot)
+    )
+
+
+def _action_execution_budget() -> ActionExecutionBudgetV1:
+    return ActionExecutionBudgetV1(
+        required_request_seconds=settings.werewolf_required_action_request_seconds,
+        required_total_seconds=settings.werewolf_required_action_total_seconds,
+        required_batch_seconds=settings.werewolf_required_action_batch_seconds,
+        optional_request_seconds=settings.werewolf_optional_action_request_seconds,
+        optional_total_seconds=settings.werewolf_optional_action_total_seconds,
+        optional_batch_seconds=settings.werewolf_optional_action_batch_seconds,
+        public_speech_request_seconds=settings.werewolf_public_speech_total_seconds,
+        public_speech_total_seconds=settings.werewolf_public_speech_total_seconds,
+        public_speech_first_token_seconds=(
+            settings.werewolf_public_speech_first_token_seconds
+        ),
+        private_text_request_seconds=settings.werewolf_private_text_total_seconds,
+        private_text_total_seconds=settings.werewolf_private_text_total_seconds,
+        private_text_batch_seconds=settings.werewolf_private_text_batch_seconds,
+        private_text_first_token_seconds=(
+            settings.werewolf_private_text_first_token_seconds
+        ),
     )
 
 

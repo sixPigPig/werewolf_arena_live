@@ -39,6 +39,8 @@ ACTIVATION_ACK_RUN_FIELD_NAMES = frozenset(
         "rule_set",
         "player_configs",
         "lineup_quality_warnings",
+        "lineup_quality_report",
+        "p2_diagnostics",
         "winner",
         "error",
         "worker_id",
@@ -277,6 +279,8 @@ class LiveGameRun:
     rule_set_was_sql_null: bool = field(default=False, repr=False)
     player_configs: list[dict[str, Any]] = field(default_factory=list)
     lineup_quality_warnings: list[dict[str, str]] = field(default_factory=list)
+    lineup_quality_report: dict[str, Any] = field(default_factory=dict)
+    p2_diagnostics: dict[str, Any] = field(default_factory=dict, repr=False)
     status: RunStatus = "queued"
     created_at: str = field(default_factory=utc_now)
     started_at: str | None = None
@@ -326,6 +330,7 @@ class LiveGameRun:
             "rule_set": _copy_json_payload(self.rule_set),
             "player_configs": _copy_json_payload(self.player_configs),
             "lineup_quality_warnings": _copy_json_payload(self.lineup_quality_warnings),
+            "lineup_quality_report": _copy_json_payload(self.lineup_quality_report),
             "status": self.status,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -540,6 +545,7 @@ class LiveRunRegistry:
         rule_set: dict[str, Any] | None = None,
         player_configs: list[PlayerConfig] | None = None,
         lineup_quality_warnings: list[dict[str, str]] | None = None,
+        lineup_quality_report: dict[str, object] | None = None,
     ) -> LiveGameRun:
         run = self.prepare_run(
             session_id=session_id,
@@ -554,6 +560,7 @@ class LiveRunRegistry:
             rule_set=rule_set,
             player_configs=player_configs,
             lineup_quality_warnings=lineup_quality_warnings,
+            lineup_quality_report=lineup_quality_report,
         )
         try:
             return self._persist_and_attach_prepared_run(run)
@@ -578,6 +585,7 @@ class LiveRunRegistry:
         rule_set: dict[str, Any] | None = None,
         player_configs: list[PlayerConfig] | None = None,
         lineup_quality_warnings: list[dict[str, str]] | None = None,
+        lineup_quality_report: dict[str, object] | None = None,
     ) -> LiveGameRun:
         rule_set_data = (
             _copy_json_payload(rule_set)
@@ -592,6 +600,7 @@ class LiveRunRegistry:
         )
         player_config_data = [config.to_dict() for config in player_configs or []]
         lineup_warning_data = _copy_json_payload(lineup_quality_warnings or [])
+        lineup_report_data = _copy_json_payload(lineup_quality_report or {})
         run = LiveGameRun(
             run_id=f"run_{uuid.uuid4().hex[:12]}",
             session_id=session_id,
@@ -606,6 +615,7 @@ class LiveRunRegistry:
             rule_set=rule_set_data,
             player_configs=player_config_data,
             lineup_quality_warnings=lineup_warning_data,
+            lineup_quality_report=lineup_report_data,
             worker_id=self.worker_id,
         )
         run.events.append(
@@ -628,6 +638,7 @@ class LiveRunRegistry:
                     "rule_set": rule_set_data,
                     "player_configs": player_config_data,
                     "lineup_quality_warnings": lineup_warning_data,
+                    "lineup_quality_report": lineup_report_data,
                 },
             )
         )
@@ -1105,11 +1116,18 @@ class LiveRunRegistry:
                 subscriber.put(local_activation)
             return local_activation
 
-    def mark_completed(self, run_id: str, *, winner: str) -> LiveEvent:
+    def mark_completed(
+        self,
+        run_id: str,
+        *,
+        winner: str,
+        p2_diagnostics: dict[str, Any] | None = None,
+    ) -> LiveEvent:
         with self._lock:
             run = self._runs[run_id]
             run.status = "completed"
             run.winner = winner
+            run.p2_diagnostics = _copy_json_payload(p2_diagnostics or {})
             run.completed_at = utc_now()
             run.lease_expires_at = None
             run.recovery_last_error = None
@@ -2071,6 +2089,10 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
         _raise_invalid_exact_json_value()
     if type(run.lineup_quality_warnings) is not list:
         _raise_invalid_exact_json_value()
+    if type(run.lineup_quality_report) is not dict:
+        _raise_invalid_exact_json_value()
+    if type(run.p2_diagnostics) is not dict:
+        _raise_invalid_exact_json_value()
     if type(run.events) is not list or type(run.subscribers) is not list:
         _raise_invalid_exact_json_value()
 
@@ -2089,6 +2111,8 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
         "rule_set": run.rule_set,
         "player_configs": run.player_configs,
         "lineup_quality_warnings": run.lineup_quality_warnings,
+        "lineup_quality_report": run.lineup_quality_report,
+        "p2_diagnostics": run.p2_diagnostics,
         "winner": run.winner,
         "error": run.error,
         "worker_id": run.worker_id,
@@ -2772,6 +2796,8 @@ def _raw_prepared_run_state(run: LiveGameRun) -> dict[str, object]:
         "rule_set": run.rule_set,
         "player_configs": run.player_configs,
         "lineup_quality_warnings": run.lineup_quality_warnings,
+        "lineup_quality_report": run.lineup_quality_report,
+        "p2_diagnostics": run.p2_diagnostics,
         "status": run.status,
         "created_at": run.created_at,
         "started_at": run.started_at,

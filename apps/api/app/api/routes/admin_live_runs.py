@@ -31,6 +31,7 @@ from app.admin.live_runs import (
     list_admin_live_runs,
 )
 from app.admin.rbac import AdminPermission
+from app.admin.p2_diagnostics import build_run_p2_diagnostics
 from app.api.admin.dependencies import (
     AdminPrincipal,
     require_admin_csrf,
@@ -497,6 +498,14 @@ def _detail_response(detail: AdminLiveRunDetailData) -> AdminLiveRunDetailRespon
     return AdminLiveRunDetailResponse(
         **item.model_dump(),
         recent_events=[_event_summary(event) for event in detail.recent_events],
+        p2_diagnostics=build_run_p2_diagnostics(
+            logs=[],
+            status=detail.record.status,
+            diagnostic_events=detail.diagnostic_events,
+            started_at=detail.record.started_at,
+            completed_at=detail.record.completed_at,
+            safe_diagnostics=detail.p2_diagnostics,
+        ),
     )
 
 

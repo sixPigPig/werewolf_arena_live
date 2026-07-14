@@ -98,6 +98,7 @@ export type AdminLiveRunEvent = {
 
 export type AdminLiveRunDetail = AdminLiveRunListItem & {
   recent_events: AdminLiveRunEvent[];
+  p2_diagnostics: AdminRunP2Diagnostics;
 };
 
 export type AdminLiveRunDebug = {
@@ -122,3 +123,4 @@ export type AdminLiveRunControlResult = {
   stop_requested_at: string | null;
   replayed: boolean;
 };
+import type { AdminRunP2Diagnostics } from "@/features/p2-quality/types";

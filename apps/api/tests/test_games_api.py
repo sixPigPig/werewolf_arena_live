@@ -254,8 +254,33 @@ def clear_overrides() -> None:
     app.dependency_overrides.clear()
 
 
-def add_virtual_profiles(count: int, *, prefix: str = "profile") -> list[str]:
+def add_virtual_profiles(
+    count: int,
+    *,
+    prefix: str = "profile",
+    diverse: bool = True,
+) -> list[str]:
     profile_ids = [f"{prefix}-{index}" for index in range(1, count + 1)]
+    personalities = ["balanced", "aggressive", "cautious", "deceptive", "analytical"]
+    strategies = [
+        "balanced",
+        "pressure_attacker",
+        "cautious_observer",
+        "shadow_wolf",
+        "logic_leader",
+        "social_reader",
+    ]
+    appearances = [
+        "default",
+        "crimson",
+        "moonlit",
+        "ember",
+        "verdant",
+        "gothic-male-1",
+        "gothic-male-2",
+        "gothic-female-1",
+        "gothic-female-2",
+    ]
     with TestingSessionLocal() as session:
         session.add_all(
             [
@@ -263,9 +288,23 @@ def add_virtual_profiles(count: int, *, prefix: str = "profile") -> list[str]:
                     id=profile_id,
                     display_name=f"虚拟玩家{index}",
                     model="profile-model",
-                    personality_id="balanced",
-                    personality_text="稳健推进。",
-                    appearance_id="default",
+                    personality_id=(
+                        personalities[(index - 1) % len(personalities)]
+                        if diverse
+                        else "balanced"
+                    ),
+                    personality_text=f"稳健推进。\n常用表达: 表达{index if diverse else 1}",
+                    strategy_profile=(
+                        strategies[(index - 1) % len(strategies)]
+                        if diverse
+                        else "balanced"
+                    ),
+                    catchphrases=[f"表达{index if diverse else 1}"],
+                    appearance_id=(
+                        appearances[(index - 1) % len(appearances)]
+                        if diverse
+                        else "default"
+                    ),
                     avatar_prompt="",
                     tags=[],
                 )
@@ -1963,13 +2002,140 @@ def test_create_game_run_randomly_fills_profiles_when_no_lineup_selected(
     }
     assert len({config["name"] for config in configs}) == 6
     assert [config.to_dict() for config in captured[0]["player_configs"]] == configs
+    report = response.json()["lineup_quality_report"]
+    assert report["schema_version"] == 1
+    assert report["is_blocked"] is False
+    assert report["was_repaired"] is True
+    assert report["style_bucket_count"] >= 3
+
+
+def test_lineup_preview_is_deterministic_and_preserves_locked_seats() -> None:
+    add_virtual_profiles(8)
+    payload = {
+        "rule_set_id": "starter_6",
+        "seed": 42,
+        "player_configs": [{"seat": 2, "profile_id": "profile-2"}],
+        "locked_seats": [2],
+        "repair_scope": "unlocked_all",
+    }
+
+    first = client.post("/api/v1/games/lineup-preview", json=payload)
+    second = client.post("/api/v1/games/lineup-preview", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    configs = first.json()["player_configs"]
+    assert len(configs) == 6
+    assert next(config for config in configs if config["seat"] == 2)["profile_id"] == "profile-2"
+    assert len({config["profile_id"] for config in configs}) == 6
+    assert first.json()["lineup_quality_report"]["is_blocked"] is False
+
+
+def test_lineup_preview_returns_explainable_failure_when_repair_is_unsatisfied() -> None:
+    add_virtual_profiles(6, diverse=False)
+
+    response = client.post(
+        "/api/v1/games/lineup-preview",
+        json={"rule_set_id": "starter_6", "seed": 42},
+    )
+
+    assert response.status_code == 422
+    problem = response.json()["detail"]
+    assert problem["code"] == "lineup_quality_unsatisfied"
+    assert problem["lineup_quality_report"]["is_blocked"] is True
+    assert "insufficient_style_buckets" in problem["missing_dimensions"]
+
+
+def test_lineup_preview_reports_locked_manual_risk_for_confirmation() -> None:
+    profile_ids = add_virtual_profiles(6, diverse=False)
+    player_configs = [
+        {"seat": seat, "profile_id": profile_id}
+        for seat, profile_id in enumerate(profile_ids, start=1)
+    ]
+
+    response = client.post(
+        "/api/v1/games/lineup-preview",
+        json={
+            "rule_set_id": "starter_6",
+            "seed": 42,
+            "player_configs": player_configs,
+            "locked_seats": list(range(1, 7)),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["lineup_quality_report"]["is_blocked"] is True
+
+
+def test_create_game_run_allows_explicit_manual_quality_override_in_repair_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_ids = add_virtual_profiles(6, diverse=False)
+    registry = LiveRunRegistry()
+    override_replay_store()
+    override_live_registry(registry)
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", lambda **_kwargs: None)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "starter_6",
+                "seed": 21,
+                "max_rounds": 1,
+                "allow_lineup_quality_warnings": True,
+                "player_configs": [
+                    {"seat": seat, "profile_id": profile_id}
+                    for seat, profile_id in enumerate(profile_ids, start=1)
+                ],
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 201
+    assert response.json()["lineup_quality_report"]["is_blocked"] is True
+
+
+def test_enforce_mode_rejects_manual_quality_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_ids = add_virtual_profiles(6, diverse=False)
+    registry = LiveRunRegistry()
+    override_replay_store()
+    override_live_registry(registry)
+    monkeypatch.setattr(settings, "werewolf_lineup_quality_mode", "enforce")
+    monkeypatch.setattr("app.api.routes.games._run_game_in_background", lambda **_kwargs: None)
+    monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={
+                "rule_set_id": "starter_6",
+                "seed": 21,
+                "max_rounds": 1,
+                "allow_lineup_quality_warnings": True,
+                "player_configs": [
+                    {"seat": seat, "profile_id": profile_id}
+                    for seat, profile_id in enumerate(profile_ids, start=1)
+                ],
+            },
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "lineup_quality_gate_failed"
 
 
 def test_create_game_run_returns_lineup_quality_warnings_for_homogeneous_profiles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    add_virtual_profiles(6)
+    add_virtual_profiles(6, diverse=False)
     registry = LiveRunRegistry()
     override_replay_store()
     override_live_registry(registry)
@@ -1988,11 +2154,14 @@ def test_create_game_run_returns_lineup_quality_warnings_for_homogeneous_profile
     finally:
         clear_overrides()
 
-    assert response.status_code == 201
-    warnings = response.json()["lineup_quality_warnings"]
-    assert warnings
-    assert all(set(warning) == {"code", "detail"} for warning in warnings)
-    assert "homogeneous_personality_lineup" in {warning["code"] for warning in warnings}
+    assert response.status_code == 422
+    problem = response.json()["detail"]
+    assert problem["code"] == "lineup_quality_gate_failed"
+    assert problem["lineup_quality_report"]["is_blocked"] is True
+    assert "personality_overrepresented" in {
+        violation["code"]
+        for violation in problem["lineup_quality_report"]["violations"]
+    }
 
 
 def test_create_game_run_rejects_when_player_library_is_too_small(
@@ -2175,9 +2344,12 @@ def test_create_game_run_resolves_profile_configs(
         "personality_id": "aggressive",
         "personality": expected_personality,
         "appearance_id": "crimson",
-        "avatar_prompt": "silver moon portrait",
-        "avatar_image_url": "/api/v1/player-profiles/avatar-assets/system-gothic-female-2",
-        "tags": ["压迫", "控场"],
+            "avatar_prompt": "silver moon portrait",
+            "avatar_image_url": "/api/v1/player-profiles/avatar-assets/system-gothic-female-2",
+            "avatar_asset_id": "system-gothic-female-2",
+            "catchphrases": [],
+            "strategy_profile": "balanced",
+            "tags": ["压迫", "控场"],
     }
     background_configs = captured[0]["player_configs"]
     assert len(background_configs) == 8
@@ -2404,6 +2576,9 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
                 "appearance_id": "moonlit",
                 "avatar_prompt": "silver moon portrait",
                 "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
+                "avatar_asset_id": None,
+                "catchphrases": [],
+                "strategy_profile": "balanced",
                 "tags": ["控场"],
             }
         ],
@@ -2466,6 +2641,9 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
             "appearance_id": "moonlit",
             "avatar_prompt": "silver moon portrait",
             "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
+            "avatar_asset_id": None,
+            "catchphrases": [],
+            "strategy_profile": "balanced",
             "tags": ["控场"],
         }
     ]

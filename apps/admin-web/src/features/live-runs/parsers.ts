@@ -1,4 +1,5 @@
 import { AdminApiError } from "@/api/problem-details";
+import { parseAdminRunP2Diagnostics } from "@/features/p2-quality/parsers";
 import type {
   AdminLiveRunDebug,
   AdminLiveRunControlResult,
@@ -39,6 +40,9 @@ const SENSITIVE_KEYS = new Set([
   "stack",
   "prompt",
   "raw_response",
+  "raw_choice",
+  "rejected_draft",
+  "private_candidates",
   "token",
   "secret",
   "seed",
@@ -128,7 +132,11 @@ export function parseAdminLiveRunDetail(value: unknown): AdminLiveRunDetail {
       throw invalidContract("活跃或未终局运行包含未归类的事件元数据");
     }
   }
-  return { ...item, recent_events: recentEvents };
+  return {
+    ...item,
+    recent_events: recentEvents,
+    p2_diagnostics: parseAdminRunP2Diagnostics(record.p2_diagnostics),
+  };
 }
 
 export function parseAdminLiveRunDebug(value: unknown): AdminLiveRunDebug {

@@ -1,9 +1,13 @@
 from app.werewolf.debate_realism import (
+    SpeechMissionV1,
+    assign_speech_mission,
     catchphrases_from_personality,
     debate_guidance_for_turn,
     dialogue_quality_warnings,
+    evaluate_speech_quality,
     lineup_quality_warnings,
     lineup_quality_warnings_from_players,
+    proposition_signatures,
     repeated_phrase_candidates,
 )
 from app.werewolf.player_configs import PlayerConfig
@@ -146,6 +150,141 @@ def test_debate_guidance_for_turn_uses_known_speaker_position() -> None:
 
     assert any("第 3/3 位" in line for line in guidance)
     assert any("明确票口" in line for line in guidance)
+
+
+def test_speech_mission_scheduler_is_deterministic_and_spreads_round_tasks() -> None:
+    order = [f"玩家{seat}" for seat in range(1, 7)]
+    first = [
+        assign_speech_mission(
+            round_number=2,
+            stage="debate",
+            speaker=speaker,
+            speech_order=order,
+            personality_id="balanced",
+        )
+        for speaker in order
+    ]
+    second = [
+        assign_speech_mission(
+            round_number=2,
+            stage="debate",
+            speaker=speaker,
+            speech_order=order,
+            personality_id="balanced",
+        )
+        for speaker in order
+    ]
+
+    assert [mission.to_dict() for mission in first] == [
+        mission.to_dict() for mission in second
+    ]
+    assert len({mission.kind for mission in first}) == 6
+
+
+def test_speech_mission_scheduler_inserts_counterpoint_after_unsupported_agreement() -> None:
+    mission = assign_speech_mission(
+        round_number=1,
+        stage="debate",
+        speaker="玩家3",
+        speech_order=["玩家1", "玩家2", "玩家3"],
+        prior_messages=[
+            "我同意前面，今天也投5号玩家。",
+            "我赞同这个方向，继续跟票5号玩家。",
+        ],
+    )
+
+    assert mission.kind == "devil_advocate"
+    assert mission.reason_code == "consecutive_agreement_without_evidence"
+
+
+def test_speech_mission_uses_consolidator_when_public_evidence_is_missing() -> None:
+    missions = [
+        assign_speech_mission(
+            round_number=round_number,
+            stage="sheriff_speech",
+            speaker="玩家1",
+            speech_order=["玩家1"],
+            has_public_evidence=False,
+        )
+        for round_number in range(1, 20)
+    ]
+
+    assert any(mission.reason_code == "limited_public_evidence" for mission in missions)
+    assert all(
+        mission.kind == "consolidator"
+        for mission in missions
+        if mission.reason_code == "limited_public_evidence"
+    )
+
+
+def test_proposition_signatures_capture_vote_identity_and_polarity() -> None:
+    signatures = proposition_signatures(
+        "3号玩家改票5号玩家，我不投7号玩家；8号玩家不像狼人。",
+        actor="seat:2",
+    )
+    semantic_keys = {signature.semantic_key() for signature in signatures}
+
+    assert ("seat:3", "vote", "seat:5", "positive") in semantic_keys
+    assert ("seat:2", "vote", "seat:7", "negative") in semantic_keys
+    assert ("seat:8", "identity", "狼人", "negative") in semantic_keys
+
+
+def test_speech_quality_requires_rewrite_for_copy_without_new_proposition() -> None:
+    mission = SpeechMissionV1(
+        schema_version=1,
+        kind="contradiction_hunter",
+        instruction="指出具体矛盾。",
+        reason_code="test",
+    )
+    report = evaluate_speech_quality(
+        text="第一轮全票挂警徽定狼，所以我仍然保持这个判断。",
+        prior_texts=["第一轮全票挂警徽定狼，所以先把他放进狼坑。"],
+        mission=mission,
+    )
+
+    assert report.requires_rewrite is True
+    assert "repeated_debate_phrase" in report.hard_failure_codes
+    assert report.new_proposition_count == 0
+    assert report.to_dict()["schema_version"] == 1
+
+
+def test_speech_quality_allows_similar_opening_with_new_public_fact() -> None:
+    mission = SpeechMissionV1(
+        schema_version=1,
+        kind="vote_analyst",
+        instruction="解释票型变化。",
+        reason_code="test",
+    )
+    report = evaluate_speech_quality(
+        text="我也先盘票型，但3号玩家刚刚改票5号玩家，这个变化需要解释。",
+        prior_texts=["我先盘票型，目前重点听5号玩家的发言。"],
+        mission=mission,
+    )
+
+    assert report.new_proposition_count >= 1
+    assert report.requires_rewrite is False
+    assert report.mission_completed is True
+
+
+def test_speech_quality_flags_group_agreement_for_counterpoint_mission() -> None:
+    mission = SpeechMissionV1(
+        schema_version=1,
+        kind="devil_advocate",
+        instruction="提出反例。",
+        reason_code="consecutive_agreement_without_evidence",
+    )
+    report = evaluate_speech_quality(
+        text="我同意前面，今天继续跟票5号玩家。",
+        prior_texts=["我赞同这个方向，今天也投5号玩家。"],
+        mission=mission,
+    )
+
+    assert "group_agreement_without_evidence" in report.hard_failure_codes
+    assert all(
+        0 <= start <= end <= len("我同意前面，今天继续跟票5号玩家。")
+        for issue in report.issues
+        for start, end in issue.evidence_spans
+    )
 
 
 def test_lineup_quality_warnings_detects_homogeneous_profiles() -> None:

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.werewolf.execution_budget import ModelCallOptions, ModelDeadlineExceeded
 from app.werewolf.streaming import extract_openai_chat_delta
 
 Transport = Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]]
@@ -26,10 +28,24 @@ class StreamStalledError(RuntimeError):
 
 
 class ProviderLike(Protocol):
-    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+    def complete_json(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        temperature: float,
+        call_options: ModelCallOptions | None = None,
+    ) -> str:
         pass
 
-    def stream_json(self, *, model: str, prompt: str, temperature: float) -> Any:
+    def stream_json(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        temperature: float,
+        call_options: ModelCallOptions | None = None,
+    ) -> Any:
         pass
 
 
@@ -139,19 +155,60 @@ class OpenAICompatibleProvider:
         self.max_retries = max_retries
         self.sleep = sleep
 
-    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        payload = self._chat_payload(model=model, prompt=prompt, temperature=temperature)
+    def complete_json(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        temperature: float,
+        call_options: ModelCallOptions | None = None,
+    ) -> str:
+        payload = self._chat_payload(
+            model=model,
+            prompt=prompt,
+            temperature=temperature,
+            call_options=call_options,
+        )
         headers = self._headers()
-        response = self._send_with_retries(f"{self.base_url}/chat/completions", headers, payload)
+        response = self._send_with_retries(
+            f"{self.base_url}/chat/completions",
+            headers,
+            payload,
+            call_options=call_options,
+        )
         return response["choices"][0]["message"]["content"]
 
-    def stream_json(self, *, model: str, prompt: str, temperature: float) -> Any:
-        payload = self._chat_payload(model=model, prompt=prompt, temperature=temperature)
+    def stream_json(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        temperature: float,
+        call_options: ModelCallOptions | None = None,
+    ) -> Any:
+        payload = self._chat_payload(
+            model=model,
+            prompt=prompt,
+            temperature=temperature,
+            call_options=call_options,
+        )
         payload["stream"] = True
         headers = self._headers()
-        return self._stream_with_retries(f"{self.base_url}/chat/completions", headers, payload)
+        return self._stream_with_retries(
+            f"{self.base_url}/chat/completions",
+            headers,
+            payload,
+            call_options=call_options,
+        )
 
-    def _chat_payload(self, *, model: str, prompt: str, temperature: float) -> dict[str, Any]:
+    def _chat_payload(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        temperature: float,
+        call_options: ModelCallOptions | None,
+    ) -> dict[str, Any]:
         payload = {
             "model": self.config.model_aliases.get(model.lower(), model),
             "messages": [
@@ -166,6 +223,8 @@ class OpenAICompatibleProvider:
         }
         if self.config.response_format is not None:
             payload["response_format"] = self.config.response_format
+        if call_options is not None and call_options.max_output_tokens is not None:
+            payload["max_tokens"] = call_options.max_output_tokens
         payload.update(self.config.extra_payload)
         return payload
 
@@ -181,19 +240,38 @@ class OpenAICompatibleProvider:
         url: str,
         headers: dict[str, str],
         payload: dict[str, Any],
+        *,
+        call_options: ModelCallOptions | None,
     ) -> dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                return self.transport(url, headers, payload)
+                attempt_options = (
+                    call_options.for_attempt(time.monotonic())
+                    if call_options
+                    else None
+                )
+                return _call_transport(
+                    self.transport,
+                    url,
+                    headers,
+                    payload,
+                    call_options=attempt_options,
+                )
+            except ModelDeadlineExceeded:
+                raise
             except urllib.error.HTTPError as exc:
                 raise RuntimeError(_http_error_message(self.config, url, exc)) from exc
             except (urllib.error.URLError, TimeoutError, ConnectionResetError, OSError) as exc:
                 last_error = exc
                 if attempt == self.max_retries:
                     break
-                self.sleep(min(2.0, 0.25 * attempt))
+                self._sleep_before_retry(attempt, call_options)
 
+        if call_options is not None and _is_timeout_error(last_error):
+            raise ModelDeadlineExceeded(
+                "model action deadline exceeded during provider request"
+            ) from last_error
         raise RuntimeError(
             f"{self.config.name} network request failed after "
             f"{self.max_retries} attempts: {last_error}"
@@ -204,15 +282,31 @@ class OpenAICompatibleProvider:
         url: str,
         headers: dict[str, str],
         payload: dict[str, Any],
+        *,
+        call_options: ModelCallOptions | None,
     ) -> Any:
         last_error: Exception | None = None
         yielded_any = False
         for attempt in range(1, self.max_retries + 1):
             try:
-                for chunk in self.stream_transport(url, headers, payload):
+                attempt_options = (
+                    call_options.for_attempt(time.monotonic())
+                    if call_options
+                    else None
+                )
+                stream = _call_transport(
+                    self.stream_transport,
+                    url,
+                    headers,
+                    payload,
+                    call_options=attempt_options,
+                )
+                for chunk in stream:
                     yielded_any = True
                     yield chunk
                 return
+            except ModelDeadlineExceeded:
+                raise
             except urllib.error.HTTPError as exc:
                 raise RuntimeError(_http_error_message(self.config, url, exc)) from exc
             except (urllib.error.URLError, TimeoutError, ConnectionResetError, OSError) as exc:
@@ -223,12 +317,38 @@ class OpenAICompatibleProvider:
                     ) from exc
                 if attempt == self.max_retries:
                     break
-                self.sleep(min(2.0, 0.25 * attempt))
+                self._sleep_before_retry(attempt, call_options)
 
+        if call_options is not None and _is_timeout_error(last_error):
+            raise ModelDeadlineExceeded(
+                "model action deadline exceeded during provider stream"
+            ) from last_error
         raise RuntimeError(
             f"{self.config.name} streaming request failed after "
             f"{self.max_retries} attempts: {last_error}"
         ) from last_error
+
+    def _sleep_before_retry(
+        self,
+        attempt: int,
+        call_options: ModelCallOptions | None,
+    ) -> None:
+        delay = min(2.0, 0.25 * attempt)
+        if call_options is not None:
+            remaining = call_options.remaining_seconds(time.monotonic())
+            if remaining <= delay:
+                raise ModelDeadlineExceeded(
+                    "model action deadline exhausted before provider retry"
+                )
+        self.sleep(delay)
+
+
+def _is_timeout_error(error: Exception | None) -> bool:
+    if isinstance(error, TimeoutError):
+        return True
+    if isinstance(error, urllib.error.URLError):
+        return isinstance(error.reason, TimeoutError)
+    return False
 
 
 class DeepSeekProvider(OpenAICompatibleProvider):
@@ -316,16 +436,42 @@ class RoutingModelProvider:
         self.registrations = registrations
         self._providers: dict[str, ProviderLike] = {}
 
-    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+    def complete_json(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        temperature: float,
+        call_options: ModelCallOptions | None = None,
+    ) -> str:
         provider = self._provider_for_model(model)
-        return provider.complete_json(model=model, prompt=prompt, temperature=temperature)
+        return _call_provider(
+            provider.complete_json,
+            model=model,
+            prompt=prompt,
+            temperature=temperature,
+            call_options=call_options,
+        )
 
-    def stream_json(self, *, model: str, prompt: str, temperature: float) -> Any:
+    def stream_json(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        temperature: float,
+        call_options: ModelCallOptions | None = None,
+    ) -> Any:
         provider = self._provider_for_model(model)
         stream_json = getattr(provider, "stream_json", None)
         if not callable(stream_json):
             raise RuntimeError(f"Provider for model {model} does not support stream_json.")
-        return stream_json(model=model, prompt=prompt, temperature=temperature)
+        return _call_provider(
+            stream_json,
+            model=model,
+            prompt=prompt,
+            temperature=temperature,
+            call_options=call_options,
+        )
 
     def _provider_for_model(self, model: str) -> ProviderLike:
         registration = self._registration_for_model(model)
@@ -534,12 +680,53 @@ def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
         return str(exc)
 
 
+def _call_provider(
+    method: Callable[..., Any],
+    *,
+    model: str,
+    prompt: str,
+    temperature: float,
+    call_options: ModelCallOptions | None,
+) -> Any:
+    if "call_options" in inspect.signature(method).parameters:
+        return method(
+            model=model,
+            prompt=prompt,
+            temperature=temperature,
+            call_options=call_options,
+        )
+    return method(model=model, prompt=prompt, temperature=temperature)
+
+
+def _call_transport(
+    transport: Callable[..., Any],
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    *,
+    call_options: ModelCallOptions | None,
+) -> Any:
+    if "call_options" in inspect.signature(transport).parameters:
+        return transport(
+            url,
+            headers,
+            payload,
+            call_options=call_options,
+        )
+    return transport(url, headers, payload)
+
+
 def _urlopen_transport(
-    url: str, headers: dict[str, str], payload: dict[str, Any]
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    *,
+    call_options: ModelCallOptions | None = None,
 ) -> dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=120) as response:
+    timeout = call_options.request_timeout_seconds if call_options else 120
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -547,20 +734,47 @@ def _urlopen_stream_transport(
     url: str,
     headers: dict[str, str],
     payload: dict[str, Any],
+    *,
+    call_options: ModelCallOptions | None = None,
 ) -> Any:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     started_at = time.monotonic()
     last_content_at = started_at
-    with urllib.request.urlopen(request, timeout=STREAM_SOCKET_TIMEOUT_SECONDS) as response:
+    received_content = False
+    socket_timeout = STREAM_SOCKET_TIMEOUT_SECONDS
+    if call_options is not None:
+        attempt_options = call_options.for_attempt(started_at)
+        socket_timeout = min(
+            socket_timeout,
+            attempt_options.request_timeout_seconds,
+            attempt_options.first_token_timeout_seconds
+            or attempt_options.request_timeout_seconds,
+        )
+    with urllib.request.urlopen(request, timeout=socket_timeout) as response:
         for line in response:
             now = time.monotonic()
-            if now - started_at > STREAM_TOTAL_TIMEOUT_SECONDS:
+            total_timeout = (
+                call_options.remaining_seconds(started_at)
+                if call_options
+                else STREAM_TOTAL_TIMEOUT_SECONDS
+            )
+            if now - started_at > total_timeout:
+                raise ModelDeadlineExceeded("model streaming deadline exceeded")
+            if (
+                call_options is not None
+                and not received_content
+                and call_options.first_token_timeout_seconds is not None
+                and now - started_at > call_options.first_token_timeout_seconds
+            ):
+                raise ModelDeadlineExceeded("model first token deadline exceeded")
+            if call_options is None and now - started_at > STREAM_TOTAL_TIMEOUT_SECONDS:
                 raise StreamStalledError(
                     f"streaming response exceeded {STREAM_TOTAL_TIMEOUT_SECONDS} seconds"
                 )
             delta = extract_openai_chat_delta(line)
             if delta is not None:
+                received_content = True
                 last_content_at = now
                 yield delta
                 continue

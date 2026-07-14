@@ -1,4 +1,5 @@
 import { AdminApiError } from "@/api/problem-details";
+import { parseAdminGameP2Quality } from "@/features/p2-quality/parsers";
 import type {
   AdminGameDebug,
   AdminGameDetail,
@@ -29,6 +30,9 @@ const SENSITIVE_RESPONSE_KEYS = new Set([
   "payload",
   "prompt",
   "raw_response",
+  "raw_choice",
+  "rejected_draft",
+  "private_candidates",
   "observations",
   "known_roles",
   "gamestate",
@@ -81,21 +85,21 @@ export function parseAdminGameDetail(value: unknown): AdminGameDetail {
   );
   const diagnostics = parseDiagnostics(record.diagnostics);
   const runs = arrayValue(record.runs, "runs").map(parseRun);
+  if (
+    rounds.some((round) =>
+      [...round.night_deaths, ...round.day_deaths].some(
+        (death) => death.cause !== null || death.source !== null,
+      ),
+    )
+  ) {
+    throw invalidContract("普通对局详情不得公开内部死亡原因或来源");
+  }
   if (base.status !== "complete" || base.resumable) {
     if (base.winner !== null) {
       throw invalidContract("未完成或可恢复对局不得公开胜方");
     }
     if (players.some((player) => player.role !== null || player.model !== null)) {
       throw invalidContract("未完成或可恢复对局不得公开玩家角色或模型");
-    }
-    if (
-      rounds.some((round) =>
-        [...round.night_deaths, ...round.day_deaths].some(
-          (death) => death.cause !== null || death.source !== null,
-        ),
-      )
-    ) {
-      throw invalidContract("未完成或可恢复对局不得公开死亡原因或来源");
     }
     if (recentEvents.length > 0 || diagnostics.last_event !== null) {
       throw invalidContract("未完成或可恢复对局不得公开事件元数据");
@@ -120,6 +124,7 @@ export function parseAdminGameDetail(value: unknown): AdminGameDetail {
     runs,
     recent_events: recentEvents,
     diagnostics,
+    p2_quality: parseAdminGameP2Quality(record.p2_quality),
   };
 }
 

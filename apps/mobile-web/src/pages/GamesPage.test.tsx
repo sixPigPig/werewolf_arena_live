@@ -16,6 +16,8 @@ import { RouterProvider, createMemoryRouter } from "react-router-dom";
 
 import type {
   GameRun,
+  LineupPreviewRequest,
+  LineupPreviewResponse,
   PublicPlayerProfile,
   RuleSetSummary,
 } from "@werewolf-arena/game-client";
@@ -27,6 +29,7 @@ const gameClientMocks = vi.hoisted(() => ({
   listPlayerProfileFavorites: vi.fn(),
   listPublicPlayerProfiles: vi.fn(),
   listRuleSets: vi.fn(),
+  previewGameLineup: vi.fn(),
   unfavoritePlayerProfile: vi.fn(),
 }));
 
@@ -42,6 +45,7 @@ vi.mock("@werewolf-arena/game-client", async () => {
     listPlayerProfileFavorites: gameClientMocks.listPlayerProfileFavorites,
     listPublicPlayerProfiles: gameClientMocks.listPublicPlayerProfiles,
     listRuleSets: gameClientMocks.listRuleSets,
+    previewGameLineup: gameClientMocks.previewGameLineup,
     unfavoritePlayerProfile: gameClientMocks.unfavoritePlayerProfile,
   };
 });
@@ -119,6 +123,60 @@ function buildRun(overrides: Partial<GameRun> = {}): GameRun {
     error: null,
     event_count: 0,
     ...overrides,
+  };
+}
+
+function buildLineupPreview(
+  request: LineupPreviewRequest,
+  overrides: Partial<LineupPreviewResponse["lineup_quality_report"]> = {},
+): LineupPreviewResponse {
+  const playerCount =
+    request.rule_set_id === "starter_6"
+      ? 6
+      : request.rule_set_id === "classic_12_seer_witch_hunter_idiot"
+        ? 12
+        : 2;
+  const configsBySeat = new Map(
+    (request.player_configs ?? []).map((config) => [config.seat, config]),
+  );
+  const usedProfileIds = new Set(
+    [...configsBySeat.values()]
+      .map((config) => config.profile_id)
+      .filter((profileId): profileId is string => Boolean(profileId)),
+  );
+  const candidateProfileIds = Array.from(
+    { length: playerCount },
+    (_, index) => `profile-${index + 1}`,
+  );
+
+  for (let seat = 1; seat <= playerCount; seat += 1) {
+    if (configsBySeat.get(seat)?.profile_id) continue;
+    const profileId = candidateProfileIds.find(
+      (candidateId) => !usedProfileIds.has(candidateId),
+    );
+    if (!profileId) continue;
+    configsBySeat.set(seat, { seat, profile_id: profileId });
+    usedProfileIds.add(profileId);
+  }
+
+  const requiredStyleBucketCount = playerCount >= 8 ? 4 : playerCount >= 6 ? 3 : 2;
+  return {
+    player_configs: [...configsBySeat.values()].sort(
+      (left, right) => left.seat - right.seat,
+    ),
+    lineup_quality_report: {
+      schema_version: 1,
+      policy_mode: "repair",
+      player_count: playerCount,
+      configured_count: configsBySeat.size,
+      is_blocked: false,
+      was_repaired: request.repair_scope === "unlocked_all",
+      style_bucket_count: requiredStyleBucketCount,
+      required_style_bucket_count: requiredStyleBucketCount,
+      violations: [],
+      ...overrides,
+    },
+    rule_set_revision_id: null,
   };
 }
 
@@ -277,6 +335,9 @@ describe("GamesPage", () => {
       profile_ids: ["profile-1"],
     });
     gameClientMocks.createGameRun.mockResolvedValue(buildRun());
+    gameClientMocks.previewGameLineup.mockImplementation(
+      (request: LineupPreviewRequest) => Promise.resolve(buildLineupPreview(request)),
+    );
     gameClientMocks.favoritePlayerProfile.mockImplementation((profileId: string) =>
       Promise.resolve({ profile_id: profileId, is_favorite: true }),
     );
@@ -703,6 +764,8 @@ describe("GamesPage", () => {
         rule_set_id: "classic_8",
         seed: null,
         max_rounds: 8,
+        lineup_quality_policy_version: 1,
+        allow_lineup_quality_warnings: false,
         player_configs: [
           { seat: 1, profile_id: expect.any(String) },
           { seat: 2, profile_id: expect.any(String) },
@@ -769,6 +832,119 @@ describe("GamesPage", () => {
     expect(
       screen.getByRole("button", { name: "阵容更多操作" }),
     ).toBeDisabled();
+  });
+
+  it("shows repair guidance and requires explicit confirmation for a blocked lineup", async () => {
+    const user = userEvent.setup();
+    renderGamesPage();
+
+    await user.click(await screen.findByRole("button", { name: "智能补齐" }));
+    await user.click(screen.getByRole("button", { name: "随机补齐" }));
+    expect(
+      await screen.findAllByText("已选 2/2 · 阵容已就绪"),
+    ).toHaveLength(2);
+
+    gameClientMocks.previewGameLineup
+      .mockImplementationOnce((request: LineupPreviewRequest) =>
+        Promise.resolve(
+          buildLineupPreview(request, {
+            is_blocked: true,
+            style_bucket_count: 1,
+            violations: [
+              {
+                code: "strategy_profile_overrepresented",
+                severity: "error",
+                key: "balanced",
+                count: 2,
+                limit: 1,
+                seat_numbers: [1, 2],
+              },
+            ],
+          }),
+        ),
+      )
+      .mockImplementationOnce((request: LineupPreviewRequest) =>
+        Promise.resolve(
+          buildLineupPreview(request, {
+            is_blocked: true,
+            style_bucket_count: 1,
+            violations: [
+              {
+                code: "strategy_profile_overrepresented",
+                severity: "error",
+                key: "balanced",
+                count: 2,
+                limit: 1,
+                seat_numbers: [1, 2],
+              },
+            ],
+          }),
+        ),
+      );
+
+    await user.click(screen.getByRole("button", { name: "开始对局" }));
+    const qualityPanel = await screen.findByRole("region", { name: "阵容质量" });
+    expect(within(qualityPanel).getByText("阵容需要调整")).toBeVisible();
+    expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
+
+    await user.click(
+      within(qualityPanel).getByRole("button", { name: "仍使用当前阵容" }),
+    );
+    await user.click(screen.getByRole("button", { name: "开始对局" }));
+
+    await waitFor(() =>
+      expect(gameClientMocks.createGameRun).toHaveBeenCalledWith(
+        expect.objectContaining({ allow_lineup_quality_warnings: true }),
+      ),
+    );
+  });
+
+  it("requests a full deterministic reshuffle from the lineup menu", async () => {
+    const user = userEvent.setup();
+    renderGamesPage();
+
+    await user.click(await screen.findByRole("button", { name: "智能补齐" }));
+    await user.click(screen.getByRole("button", { name: "一键打散" }));
+
+    await waitFor(() =>
+      expect(gameClientMocks.previewGameLineup).toHaveBeenCalledWith(
+        expect.objectContaining({
+          locked_seats: [],
+          repair_scope: "unlocked_all",
+          lineup_quality_policy_version: 1,
+        }),
+      ),
+    );
+    expect(await screen.findByText("阵容质量通过")).toBeVisible();
+    expect(screen.getByText(/已智能调整/)).toBeVisible();
+  });
+
+  it("preserves selected seats when the final quality preview fails", async () => {
+    const user = userEvent.setup();
+    renderGamesPage();
+
+    await user.click(await screen.findByRole("button", { name: "智能补齐" }));
+    await user.click(screen.getByRole("button", { name: "随机补齐" }));
+    expect(
+      await screen.findAllByText("已选 2/2 · 阵容已就绪"),
+    ).toHaveLength(2);
+    gameClientMocks.previewGameLineup.mockRejectedValueOnce(
+      new Error("preview unavailable"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "开始对局" }));
+
+    const qualityPanel = await screen.findByRole("region", { name: "阵容质量" });
+    expect(qualityPanel).toHaveTextContent(
+      "阵容质量检查失败，请保留当前阵容后重试。",
+    );
+    expect(
+      screen.getByRole("button", { name: "选择 1 号座位，当前为 阿青" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "选择 2 号座位，当前为 白石" }),
+    ).toBeVisible();
+    expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
   });
 
   it("blocks creation when the player library cannot fill the selected rule set", async () => {
@@ -871,6 +1047,9 @@ describe("GamesPage", () => {
       await screen.findByRole("button", {
         name: "选择 1 号座位，当前为 待选择",
       }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("searchbox", { name: "搜索玩家" })).toHaveFocus(),
     );
 
     const favoriteButton = screen.getByRole("button", { name: "收藏 白石" });

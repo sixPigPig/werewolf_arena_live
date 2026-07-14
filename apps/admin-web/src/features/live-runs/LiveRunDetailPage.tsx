@@ -21,6 +21,7 @@ import type {
   AdminLiveRunControlAction,
   AdminLiveRunVoiceCounts,
 } from "@/features/live-runs/types";
+import type { AdminRunP2Diagnostics } from "@/features/p2-quality/types";
 
 export default function LiveRunDetailPage() {
   const { runId } = useParams();
@@ -198,6 +199,8 @@ export default function LiveRunDetailPage() {
         </article>
       </section>
 
+      <RunP2QualityPanel diagnostics={run.p2_diagnostics} />
+
       {run.has_error || run.voice_counts.failed > 0 || canReadDebug ? (
         <RunDebugPanel
           canReadDebug={canReadDebug}
@@ -316,6 +319,92 @@ export default function LiveRunDetailPage() {
       </section>
     </div>
   );
+}
+
+function RunP2QualityPanel({
+  diagnostics,
+}: {
+  diagnostics: AdminRunP2Diagnostics;
+}) {
+  const performance = diagnostics.performance;
+  return (
+    <section aria-labelledby="live-run-p2-title" className="game-detail-panel">
+      <PanelHeading
+        eyebrow="P2 QUALITY"
+        id="live-run-p2-title"
+        meta={p2DataStatusLabel(diagnostics.data_status)}
+        title="P2 运行质量"
+      />
+      {diagnostics.data_status === "unavailable" ||
+      diagnostics.data_status === "legacy" ? (
+        <p className="game-panel-empty">
+          {diagnostics.data_status === "legacy"
+            ? "旧运行未采集 P2 指标，不能判定为通过。"
+            : "当前没有可用的 P2 运行指标。"}
+        </p>
+      ) : (
+        <div className="game-detail-metrics">
+          <article>
+            <span>模型请求 / 活动请求</span>
+            <strong>
+              {performance.request_count} / {performance.active_request_count}
+            </strong>
+            <small>活跃运行随详情刷新，不额外轮询 Debug</small>
+          </article>
+          <article>
+            <span>离散动作耗时</span>
+            <strong>{formatP95(performance.discrete_action_p95_ms)}</strong>
+            <small>
+              样本 {performance.discrete_action_sample_count} · 最大值{" "}
+              {formatMilliseconds(performance.discrete_action_max_ms)}
+            </small>
+          </article>
+          <article>
+            <span>公开发言首 token</span>
+            <strong>{formatP95(performance.speech_first_token_p95_ms)}</strong>
+            <small>
+              样本 {performance.speech_first_token_sample_count} · 最大值{" "}
+              {formatMilliseconds(performance.speech_first_token_max_ms)}
+            </small>
+          </article>
+          <article>
+            <span>超时 / 降级</span>
+            <strong>
+              {performance.timeout_count} / {performance.fallback_count}
+            </strong>
+            <small>
+              发言重写 {diagnostics.speech_quality.retry_count} · 耗尽{" "}
+              {diagnostics.speech_quality.exhausted_count}
+            </small>
+          </article>
+          <article>
+            <span>选择规范化</span>
+            <strong>{diagnostics.choice_normalization.seat_alias_count}</strong>
+            <small>
+              seat alias · 无效 {diagnostics.choice_normalization.invalid_count}
+            </small>
+          </article>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function p2DataStatusLabel(status: AdminRunP2Diagnostics["data_status"]) {
+  return {
+    available: "数据可用",
+    collecting: "采集中",
+    legacy: "旧数据",
+    unavailable: "不可用",
+  }[status];
+}
+
+function formatP95(value: number | null) {
+  return value === null ? "样本不足" : `P95 ${formatMilliseconds(value)}`;
+}
+
+function formatMilliseconds(value: number | null) {
+  return value === null ? "—" : `${value} ms`;
 }
 
 function RunControlPanel({

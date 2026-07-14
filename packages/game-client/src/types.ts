@@ -585,12 +585,52 @@ export type PlayerConfig = {
   appearance_id?: string;
   avatar_prompt?: string;
   avatar_image_url?: string;
+  avatar_asset_id?: string | null;
+  catchphrases?: string[];
+  strategy_profile?: string;
   tags?: string[];
 };
 
 export type LineupQualityWarning = {
   code: string;
   detail: string;
+};
+
+export type LineupQualityViolation = {
+  code: string;
+  severity: "warning" | "error";
+  key: string;
+  count: number;
+  limit: number;
+  seat_numbers: number[];
+};
+
+export type LineupQualityReport = {
+  schema_version: 1;
+  policy_mode: "observe" | "repair" | "enforce";
+  player_count: number;
+  configured_count: number;
+  is_blocked: boolean;
+  was_repaired: boolean;
+  style_bucket_count: number;
+  required_style_bucket_count: number;
+  violations: LineupQualityViolation[];
+};
+
+export type LineupPreviewRequest = {
+  rule_set_id: string;
+  expected_rule_revision_id?: string | null;
+  seed?: number | null;
+  player_configs?: PlayerConfig[];
+  locked_seats?: number[];
+  repair_scope?: "empty_only" | "unlocked_all";
+  lineup_quality_policy_version?: 1;
+};
+
+export type LineupPreviewResponse = {
+  player_configs: PlayerConfig[];
+  lineup_quality_report: LineupQualityReport;
+  rule_set_revision_id: string | null;
 };
 
 export type GameRun = {
@@ -610,6 +650,7 @@ export type GameRun = {
   event_count: number;
   player_configs?: PlayerConfig[];
   lineup_quality_warnings?: LineupQualityWarning[];
+  lineup_quality_report?: LineupQualityReport;
 };
 
 export type CreateGameRunRequest = {
@@ -619,6 +660,8 @@ export type CreateGameRunRequest = {
   seed?: number | null;
   max_rounds?: number;
   player_configs?: PlayerConfig[];
+  lineup_quality_policy_version?: 1;
+  allow_lineup_quality_warnings?: boolean;
 };
 
 export type LiveGameEvent = {

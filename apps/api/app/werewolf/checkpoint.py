@@ -6,7 +6,7 @@ import random
 import re
 import threading
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from app.rule_sets.telemetry import record_rule_checkpoint_failure
 from app.rule_sets.types import CompiledRuleSet
@@ -18,11 +18,16 @@ from app.werewolf.models import (
     GameState,
     GameView,
     Player,
+    PublicOutcomeEventV1,
     RoundLog,
     RoundState,
     SheriffBadgeResolution,
     SheriffElectionResolution,
     StageInterruption,
+)
+from app.werewolf.public_outcomes import (
+    conservative_legacy_outcomes,
+    public_outcome_event_from_dict,
 )
 
 RESUME_CHECKPOINT_FILE = "resume_checkpoint.json"
@@ -392,6 +397,7 @@ def game_view_from_dict(data: dict[str, Any]) -> GameView:
 
 
 def round_state_from_dict(data: dict[str, Any]) -> RoundState:
+    public_outcome_events = _public_outcomes_from_round_dict(data)
     return RoundState(
         number=int(data["number"]),
         players=[str(player) for player in data.get("players", [])],
@@ -444,8 +450,30 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
         sheriff_badge_resolution=sheriff_badge_resolution_from_dict(
             data.get("sheriff_badge_resolution")
         ),
+        public_outcome_events=public_outcome_events,
+        public_outcome_next_sequence=max(
+            int(data.get("public_outcome_next_sequence") or 1),
+            max(
+                (event.sequence for event in public_outcome_events),
+                default=0,
+            )
+            + 1,
+        ),
         success=bool(data.get("success", False)),
     )
+
+
+def _public_outcomes_from_round_dict(
+    data: dict[str, Any],
+) -> list[PublicOutcomeEventV1]:
+    raw_events = data.get("public_outcome_events")
+    if isinstance(raw_events, list):
+        return [
+            public_outcome_event_from_dict(item)
+            for item in raw_events
+            if isinstance(item, dict)
+        ]
+    return conservative_legacy_outcomes(data)
 
 
 def sheriff_election_resolution_from_dict(
@@ -570,6 +598,8 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
             result=lm_log_data.get("result", lm_log_data.get("parsed")),
             request_id=lm_log_data.get("request_id"),
             invalid_attempts=copy.deepcopy(lm_log_data.get("invalid_attempts", [])),
+            raw_choice=lm_log_data.get("raw_choice"),
+            choice_normalization_kind=lm_log_data.get("choice_normalization_kind"),
         ),
         invalid_value=data.get("invalid_value"),
         fallback_choice=data.get("fallback_choice"),
@@ -585,7 +615,39 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
             if isinstance(data.get("decision_audit"), dict)
             else None
         ),
+        raw_choice=data.get("raw_choice"),
+        choice_normalization_kind=data.get("choice_normalization_kind"),
+        speech_mission=copy.deepcopy(data.get("speech_mission")),
+        speech_quality_report=copy.deepcopy(data.get("speech_quality_report")),
+        speech_quality_attempt_count=int(data.get("speech_quality_attempt_count") or 0),
+        speech_quality_retry_exhausted=bool(
+            data.get("speech_quality_retry_exhausted", False)
+        ),
+        speech_quality_initial_codes=[
+            str(item) for item in data.get("speech_quality_initial_codes", [])
+        ],
+        execution_status=_execution_status_from_dict(data),
+        duration_ms=max(0, int(data.get("duration_ms") or 0)),
+        budget_ms=(
+            max(0, int(data["budget_ms"]))
+            if data.get("budget_ms") is not None
+            else None
+        ),
+        first_token_ms=(
+            max(0, int(data["first_token_ms"]))
+            if data.get("first_token_ms") is not None
+            else None
+        ),
     )
+
+
+def _execution_status_from_dict(
+    data: dict[str, Any],
+) -> Literal["completed", "timed_out", "fallback", "failed"]:
+    value = str(data.get("execution_status") or "completed")
+    if value in {"completed", "timed_out", "fallback", "failed"}:
+        return value  # type: ignore[return-value]
+    return "completed"
 
 
 def death_event_from_dict(data: dict[str, Any]) -> DeathEvent:

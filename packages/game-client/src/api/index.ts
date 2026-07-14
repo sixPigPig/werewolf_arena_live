@@ -11,6 +11,7 @@ export * from "./listModelOptions";
 export * from "./listPlayerProfiles";
 export * from "./listRuleSets";
 export * from "./playerProfileFavorites";
+export * from "./previewGameLineup";
 export * from "./publicPlayerProfiles";
 export * from "./publicSession";
 export * from "./resumeGameRun";

@@ -85,6 +85,8 @@ class DatabaseLiveStore:
             rule_set=copy.deepcopy(run.rule_set),
             player_configs=copy.deepcopy(run.player_configs),
             lineup_quality_warnings=copy.deepcopy(run.lineup_quality_warnings),
+            lineup_quality_report=copy.deepcopy(run.lineup_quality_report),
+            p2_diagnostics=copy.deepcopy(run.p2_diagnostics),
             winner=run.winner,
             error=run.error,
             created_at=parse_live_datetime(run.created_at) or datetime.now(tz=UTC),
@@ -179,6 +181,8 @@ class DatabaseLiveStore:
         record.rule_set = copy.deepcopy(run.rule_set)
         record.player_configs = copy.deepcopy(run.player_configs)
         record.lineup_quality_warnings = copy.deepcopy(run.lineup_quality_warnings)
+        record.lineup_quality_report = copy.deepcopy(run.lineup_quality_report)
+        record.p2_diagnostics = copy.deepcopy(run.p2_diagnostics)
         if is_new or run.control_version >= record.control_version:
             record.stop_requested_at = parse_live_datetime(run.stop_requested_at)
             record.control_version = run.control_version
@@ -853,6 +857,8 @@ class DatabaseLiveStore:
             rule_set_was_sql_null=rule_set_was_sql_null,
             player_configs=copy.deepcopy(record.player_configs or []),
             lineup_quality_warnings=copy.deepcopy(record.lineup_quality_warnings or []),
+            lineup_quality_report=copy.deepcopy(record.lineup_quality_report or {}),
+            p2_diagnostics=copy.deepcopy(record.p2_diagnostics or {}),
             status=record.status,
             created_at=format_live_datetime(record.created_at),
             started_at=_format_optional_datetime(record.started_at),
@@ -1093,6 +1099,8 @@ def _stored_expected_state_matches(
             "rule_set": stored_rule_set,
             "player_configs": record.player_configs,
             "lineup_quality_warnings": record.lineup_quality_warnings,
+            "lineup_quality_report": record.lineup_quality_report,
+            "p2_diagnostics": record.p2_diagnostics,
             "winner": record.winner,
             "error": record.error,
             "worker_id": record.worker_id,

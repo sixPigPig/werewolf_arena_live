@@ -485,6 +485,8 @@ def test_live_run_table_matches_expected_schema() -> None:
         "rule_set",
         "player_configs",
         "lineup_quality_warnings",
+        "lineup_quality_report",
+        "p2_diagnostics",
         "winner",
         "error",
         "created_at",
@@ -515,6 +517,8 @@ def test_live_run_table_matches_expected_schema() -> None:
     _assert_json_column(table.c.rule_set, nullable=True)
     _assert_json_column(table.c.player_configs, nullable=False)
     _assert_json_column(table.c.lineup_quality_warnings, nullable=False)
+    _assert_json_column(table.c.lineup_quality_report, nullable=False)
+    _assert_json_column(table.c.p2_diagnostics, nullable=False)
     _assert_string_column(table.c.winner, length=80, nullable=True)
     _assert_text_column(table.c.error, nullable=True)
     assert table.c.created_at.nullable is False

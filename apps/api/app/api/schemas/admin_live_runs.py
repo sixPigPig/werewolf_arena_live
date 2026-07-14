@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.schemas.common import PaginationResponse
+from app.api.schemas.admin_p2 import AdminRunP2DiagnosticsV1
 
 
 AdminLiveRunStatus = Literal["queued", "running", "completed", "failed", "canceled"]
@@ -88,6 +89,7 @@ class AdminLiveRunEventSummary(BaseModel):
 
 class AdminLiveRunDetailResponse(AdminLiveRunListItem):
     recent_events: list[AdminLiveRunEventSummary] = Field(max_length=50)
+    p2_diagnostics: AdminRunP2DiagnosticsV1
 
 
 class AdminLiveRunControlRequest(BaseModel):

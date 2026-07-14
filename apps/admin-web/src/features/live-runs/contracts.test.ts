@@ -108,6 +108,29 @@ describe("admin live runs contract", () => {
     ).toThrow(/模型/);
   });
 
+  it("accepts explicit P2 empty states and rejects private diagnostic fields", () => {
+    for (const dataStatus of ["legacy", "unavailable"] as const) {
+      expect(
+        parseAdminLiveRunDetail({
+          ...contractLiveRunDetail,
+          p2_diagnostics: {
+            ...contractLiveRunDetail.p2_diagnostics,
+            data_status: dataStatus,
+          },
+        }).p2_diagnostics.data_status,
+      ).toBe(dataStatus);
+    }
+    expect(() =>
+      parseAdminLiveRunDetail({
+        ...contractLiveRunDetail,
+        p2_diagnostics: {
+          ...contractLiveRunDetail.p2_diagnostics,
+          raw_choice: "private-seat-sentinel",
+        },
+      }),
+    ).toThrow(/不允许/);
+  });
+
   it("enforces stale, voice totals, event caps and debug truncation invariants", () => {
     expect(() =>
       parseAdminLiveRunList({

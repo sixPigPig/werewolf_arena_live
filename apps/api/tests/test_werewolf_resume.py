@@ -898,6 +898,104 @@ def test_action_log_serializes_invalid_and_fallback_metadata() -> None:
     assert payload["lm_log"]["invalid_attempts"][0]["value"] == "10号玩家"
 
 
+def test_action_log_round_trips_choice_normalization_metadata() -> None:
+    source = ActionLog(
+        actor="4号玩家",
+        action="hunter_shoot",
+        options=["3号玩家", "5号玩家", "不发动技能"],
+        choice="5号玩家",
+        lm_log=LmLog(
+            prompt="prompt",
+            raw_response='{"shoot":5}',
+            result={"shoot": 5},
+            raw_choice=5,
+            choice_normalization_kind="seat_alias",
+        ),
+        raw_choice=5,
+        choice_normalization_kind="seat_alias",
+    )
+
+    restored = action_log_from_dict(source.to_dict())
+
+    assert restored.choice == "5号玩家"
+    assert restored.raw_choice == 5
+    assert restored.choice_normalization_kind == "seat_alias"
+    assert restored.lm_log.raw_choice == 5
+    assert restored.lm_log.choice_normalization_kind == "seat_alias"
+
+
+def test_action_log_round_trips_speech_quality_metadata_without_rejected_draft() -> None:
+    source = ActionLog(
+        actor="2号玩家",
+        action="debate",
+        options=[],
+        choice="3号玩家改票5号玩家，这个变化需要解释。",
+        lm_log=LmLog(
+            prompt="final prompt",
+            raw_response='{"say":"3号玩家改票5号玩家，这个变化需要解释。"}',
+            result={"say": "3号玩家改票5号玩家，这个变化需要解释。"},
+        ),
+        speech_mission={
+            "schema_version": 1,
+            "kind": "vote_analyst",
+            "instruction": "解释票型变化。",
+            "reason_code": "round_robin",
+        },
+        speech_quality_report={
+            "schema_version": 1,
+            "mission_kind": "vote_analyst",
+            "mission_completed": True,
+            "novelty_score": 1.0,
+            "lexical_similarity": 0.0,
+            "new_proposition_count": 1,
+            "proposition_signatures": [],
+            "issues": [],
+            "requires_rewrite": False,
+        },
+        speech_quality_attempt_count=2,
+        speech_quality_retry_exhausted=False,
+        speech_quality_initial_codes=["repeated_debate_phrase"],
+    )
+
+    payload = source.to_dict()
+    restored = action_log_from_dict(payload)
+
+    assert "被拒绝的第一版草稿" not in str(payload)
+    assert restored.speech_mission == source.speech_mission
+    assert restored.speech_quality_report == source.speech_quality_report
+    assert restored.speech_quality_attempt_count == 2
+    assert restored.speech_quality_retry_exhausted is False
+    assert restored.speech_quality_initial_codes == ["repeated_debate_phrase"]
+
+
+def test_action_log_round_trips_execution_budget_metadata() -> None:
+    source = ActionLog(
+        actor="4号玩家",
+        action="vote",
+        options=["2号玩家", "3号玩家"],
+        choice="3号玩家",
+        lm_log=LmLog(
+            prompt="prompt",
+            raw_response='{"vote":"3号玩家"}',
+            result={"vote": "3号玩家"},
+        ),
+        fallback_choice="3号玩家",
+        fallback_reason="batch_deadline_deterministic_legal_choice",
+        execution_status="fallback",
+        duration_ms=15000,
+        budget_ms=15000,
+        first_token_ms=840,
+    )
+
+    restored = action_log_from_dict(source.to_dict())
+
+    assert restored.execution_status == "fallback"
+    assert restored.duration_ms == 15000
+    assert restored.budget_ms == 15000
+    assert restored.first_token_ms == 840
+    assert restored.fallback_reason == "batch_deadline_deterministic_legal_choice"
+
+
 def test_action_log_from_dict_defaults_invalid_and_fallback_metadata() -> None:
     action_log = action_log_from_dict(
         {
@@ -918,6 +1016,10 @@ def test_action_log_from_dict_defaults_invalid_and_fallback_metadata() -> None:
     assert action_log.fallback_reason is None
     assert action_log.attempt_count == 1
     assert action_log.lm_log.invalid_attempts == []
+    assert action_log.execution_status == "completed"
+    assert action_log.duration_ms == 0
+    assert action_log.budget_ms is None
+    assert action_log.first_token_ms is None
 
 
 def test_action_log_from_dict_restores_invalid_attempts_with_deep_copy() -> None:

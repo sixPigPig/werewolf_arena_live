@@ -26,6 +26,10 @@ from app.werewolf.engine import (
     WEREWOLF_SELF_EXPLODE,
     initialize_game_state,
 )
+from app.werewolf.execution_budget import (
+    ActionExecutionBudgetV1,
+    ModelDeadlineExceeded,
+)
 from app.werewolf.live import NullEventSink
 from app.werewolf.lm import FakeProvider
 from app.werewolf.models import DeathEvent, DebateEntry, RoundLog, RoundState
@@ -35,6 +39,7 @@ from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.rules import (
     ACTION_DEBATE,
+    ACTION_SHERIFF_PK_SPEECH,
     ACTION_SHERIFF_SPEECH,
     ACTION_WEREWOLF_SELF_EXPLOSION,
     ACTION_WITCH_POISON,
@@ -3736,6 +3741,400 @@ def test_invalid_eligibility_draft_is_buffered_and_only_valid_retry_is_public() 
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
 
 
+@pytest.mark.parametrize(
+    "action",
+    [ACTION_DEBATE, ACTION_SHERIFF_SPEECH, ACTION_SHERIFF_PK_SPEECH],
+)
+def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
+    action: str,
+) -> None:
+    class SpeechQualityRetryProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.prompts: list[str] = []
+
+        def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+            del model, temperature
+            self.calls += 1
+            self.prompts.append(prompt)
+            speech = (
+                "第一轮全票挂警徽定狼，所以我仍然保持这个判断。"
+                if self.calls == 1
+                else "3号玩家刚刚改票5号玩家，这个变化需要解释，我今天暂不跟票。"
+            )
+            return ['{"reasoning":"质量检查",', f'"say":"{speech}"', "}"]
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            return "".join(
+                self.stream_json(model=model, prompt=prompt, temperature=temperature)
+            )
+
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id=f"session_test_speech_quality_{action}",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=63,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    speaker = state.players[1]
+    round_state = RoundState(number=1, players=active_players.copy())
+    prior_message = "第一轮全票挂警徽定狼，所以先把目标放进狼坑。"
+    if action == ACTION_DEBATE:
+        round_state.speech_order = active_players.copy()
+        round_state.debate = [DebateEntry(speaker=active_players[0], message=prior_message)]
+    elif action == ACTION_SHERIFF_SPEECH:
+        round_state.sheriff_candidates = active_players.copy()
+        round_state.sheriff_speech_order = active_players.copy()
+        round_state.sheriff_speeches = [
+            {"speaker": active_players[0], "message": prior_message}
+        ]
+    else:
+        round_state.sheriff_pk_candidates = active_players.copy()
+        round_state.sheriff_pk_speeches = [
+            {"speaker": active_players[0], "message": prior_message}
+        ]
+    provider = SpeechQualityRetryProvider()
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        speech_quality_retry_enabled=True,
+    )
+
+    message, action_log = engine._player_action(
+        player=speaker,
+        action=action,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert provider.calls == 2
+    assert "本次发言质量任务" in provider.prompts[0]
+    assert "不要复述已有长句" in provider.prompts[1]
+    assert message == "3号玩家刚刚改票5号玩家，这个变化需要解释，我今天暂不跟票。"
+    public_blob = str(sink.events)
+    assert "所以我仍然保持这个判断" not in public_blob
+    assert "3号玩家刚刚改票5号玩家" in public_blob
+    assert [event["type"] for event in sink.events].count("action_parsed") == 1
+    assert action_log.speech_quality_attempt_count == 2
+    assert action_log.speech_quality_retry_exhausted is False
+    assert "repeated_debate_phrase" in action_log.speech_quality_initial_codes
+    assert action_log.speech_quality_report is not None
+    assert action_log.speech_quality_report["requires_rewrite"] is False
+    assert "所以我仍然保持这个判断" not in str(action_log.to_dict())
+
+
+def test_public_speech_quality_retry_exhaustion_publishes_only_second_draft() -> None:
+    class ExhaustedSpeechProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+            del model, prompt, temperature
+            self.calls += 1
+            speech = (
+                "第一轮全票挂警徽定狼，所以我保持原判断。"
+                if self.calls == 1
+                else "第一轮全票挂警徽定狼，我还是不改判断。"
+            )
+            return ['{"reasoning":"质量检查",', f'"say":"{speech}"', "}"]
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            return "".join(
+                self.stream_json(model=model, prompt=prompt, temperature=temperature)
+            )
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_speech_quality_exhausted",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=64,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    speaker = state.players[1]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.speech_order = active_players.copy()
+    round_state.debate = [
+        DebateEntry(
+            speaker=active_players[0],
+            message="第一轮全票挂警徽定狼，所以先把目标放进狼坑。",
+        )
+    ]
+    provider = ExhaustedSpeechProvider()
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        speech_quality_retry_enabled=True,
+    )
+
+    message, action_log = engine._player_action(
+        player=speaker,
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert provider.calls == 2
+    assert message == "第一轮全票挂警徽定狼，我还是不改判断。"
+    public_blob = str(sink.events)
+    assert "所以我保持原判断" not in public_blob
+    assert "我还是不改判断" in public_blob
+    assert [event["type"] for event in sink.events].count("action_parsed") == 1
+    assert all(
+        event["type"] != "speech_quality_retry_exhausted" for event in sink.events
+    )
+    assert action_log.speech_quality_attempt_count == 2
+    assert action_log.speech_quality_retry_exhausted is True
+    assert action_log.speech_quality_report is not None
+    assert action_log.speech_quality_report["requires_rewrite"] is True
+
+
+def test_optional_action_timeout_uses_safe_abstain_and_records_execution() -> None:
+    class TimeoutProvider:
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            del model, prompt, temperature
+            raise ModelDeadlineExceeded("test timeout")
+
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_optional_timeout",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=65,
+        rule_set=rule_set,
+    )
+    round_state = RoundState(
+        number=1,
+        players=[player.name for player in state.players],
+    )
+    engine = GameEngine(
+        state=state,
+        provider=TimeoutProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        action_budgets_enabled=True,
+        fallback_seed=65,
+    )
+
+    choice, action_log = engine._player_action(
+        player=state.players[0],
+        action=ACTION_WITCH_POISON,
+        options=[state.players[1].name, NO_WITCH_POISON],
+        result_key="poison",
+        round_state=round_state,
+        phase="night",
+    )
+
+    assert choice == NO_WITCH_POISON
+    assert action_log.execution_status == "fallback"
+    assert action_log.fallback_choice == NO_WITCH_POISON
+    assert action_log.fallback_reason == "timeout_optional_abstain"
+    assert action_log.budget_ms == 12000
+
+
+def test_required_timeout_choice_is_deterministic_and_order_independent() -> None:
+    class TimeoutProvider:
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            del model, prompt, temperature
+            raise ModelDeadlineExceeded("test timeout")
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_required_timeout",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=66,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    engine = GameEngine(
+        state=state,
+        provider=TimeoutProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        action_budgets_enabled=True,
+        fallback_seed=66,
+    )
+    candidates = active_players[1:]
+
+    first, first_log = engine._player_action(
+        player=state.players[0],
+        action="vote",
+        options=candidates,
+        result_key="vote",
+        round_state=round_state,
+        phase="day",
+    )
+    second, _second_log = engine._player_action(
+        player=state.players[0],
+        action="vote",
+        options=list(reversed(candidates)),
+        result_key="vote",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert first == second
+    assert first in candidates
+    assert first_log.fallback_reason == "timeout_deterministic_legal_choice"
+    assert first_log.execution_status == "fallback"
+
+
+def test_public_speech_timeout_uses_neutral_text_without_hidden_claims() -> None:
+    class TimeoutProvider:
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            del model, prompt, temperature
+            raise ModelDeadlineExceeded("test timeout")
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_speech_timeout",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=67,
+        rule_set=rule_set,
+    )
+    round_state = RoundState(
+        number=1,
+        players=[player.name for player in state.players],
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=TimeoutProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        action_budgets_enabled=True,
+        speech_quality_retry_enabled=True,
+        fallback_seed=67,
+    )
+
+    speech, action_log = engine._player_action(
+        player=state.players[0],
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert speech == "本轮暂不追加判断，投票时我会给出明确选择。"
+    assert action_log.fallback_reason == "timeout_neutral_public_speech"
+    assert "查验" not in str(action_log.to_dict())
+    assert "狼人" not in str(action_log.lm_log.result)
+    assert "test timeout" not in str(sink.events)
+
+
+def test_batch_deadline_falls_back_in_request_order_and_drops_late_events() -> None:
+    class SlowFirstProvider:
+        def __init__(self, slow_actor: str) -> None:
+            self.slow_actor = slow_actor
+            self.release = threading.Event()
+            self.finished = threading.Event()
+
+        def stream_json(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            temperature: float,
+            call_options: object | None = None,
+        ) -> Generator[str, None, None]:
+            del model, temperature, call_options
+            actor = _extract_actor_name(prompt)
+            if actor == self.slow_actor:
+                self.release.wait(timeout=1.0)
+                yield json.dumps(
+                    {"reasoning": "LATE_SENTINEL", "vote": "3号玩家"},
+                    ensure_ascii=False,
+                )
+                self.finished.set()
+                return
+            yield json.dumps(
+                {"reasoning": "快速合法选择", "vote": "3号玩家"},
+                ensure_ascii=False,
+            )
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_batch_deadline",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=68,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    provider = SlowFirstProvider(active_players[0])
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        action_budgets_enabled=True,
+        action_execution_budget=ActionExecutionBudgetV1(
+            required_request_seconds=1.0,
+            required_total_seconds=1.0,
+            required_batch_seconds=0.05,
+        ),
+        fallback_seed=68,
+    )
+    requests = [
+        engine._build_player_action_request(
+            player=player,
+            action="vote",
+            options=active_players[2:],
+            result_key="vote",
+            round_state=round_state,
+            phase="day",
+        )
+        for player in state.players[:2]
+    ]
+
+    results = engine._player_actions_batch(requests)
+
+    assert not provider.finished.is_set()
+    assert results[0][0] in active_players[2:]
+    assert results[0][1].fallback_reason == "batch_deadline_deterministic_legal_choice"
+    assert results[1][0] == active_players[2]
+    assert [action_log.actor for _, action_log in results] == active_players[:2]
+    parsed_actors = [
+        event["actor"]
+        for event in sink.events
+        if event["type"] == "action_parsed" and event["action"] == "vote"
+    ]
+    assert parsed_actors == active_players[:2]
+    assert "LATE_SENTINEL" not in str(sink.events)
+
+    provider.release.set()
+    assert provider.finished.wait(timeout=1.0)
+    assert "LATE_SENTINEL" not in str(sink.events)
+    assert [
+        event["actor"]
+        for event in sink.events
+        if event["type"] == "action_parsed" and event["action"] == "vote"
+    ] == active_players[:2]
+
+
 def test_12_player_wolf_world_state_lists_all_living_teammates() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -6052,6 +6451,51 @@ def test_hunter_invalid_shot_falls_back_to_no_shot() -> None:
     assert round_log.hunter_shoot is not None
     assert round_log.hunter_shoot.choice == NO_HUNTER_SHOT
     assert round_log.hunter_shoot.fallback_choice == NO_HUNTER_SHOT
+
+
+def test_hunter_numeric_seat_alias_is_normalized_without_retry() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="hunter_numeric_alias",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=2026071401,
+        rule_set=rule_set,
+    )
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    hunter.hunter_can_shoot = True
+    candidates = [player for player in state.players if player is not hunter][:2]
+    target = candidates[0]
+    target_seat = state.players.index(target) + 1
+    provider = FakeProvider(
+        [{"reasoning": "直接返回座位数字", "shoot": target_seat}]
+    )
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        rng=random.Random(1),
+    )
+    active_players = [hunter.name, *(player.name for player in candidates)]
+    round_state = RoundState(number=5, players=active_players.copy())
+    round_log = RoundLog(number=5)
+
+    engine._maybe_run_hunter_shot(
+        dead_player=hunter.name,
+        death_cause="vote_exile",
+        round_state=round_state,
+        round_log=round_log,
+        active_players=active_players,
+        phase="day",
+    )
+
+    assert provider.calls == 1
+    assert round_state.hunter_shot == target.name
+    assert round_log.hunter_shoot is not None
+    assert round_log.hunter_shoot.choice == target.name
+    assert round_log.hunter_shoot.raw_choice == target_seat
+    assert round_log.hunter_shoot.choice_normalization_kind == "seat_alias"
 
 
 def test_secret_self_explosion_invalid_choice_falls_back_without_public_leak() -> None:

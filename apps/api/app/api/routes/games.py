@@ -1,9 +1,8 @@
 from collections.abc import Callable
 import logging
 import queue
-import random
 import threading
-from typing import Annotated, Any, Iterator
+from typing import Annotated, Any, Iterator, Literal
 
 from fastapi import (
     APIRouter,
@@ -63,6 +62,11 @@ from app.werewolf.checkpoint import (
 )
 from app.werewolf.config import choose_player_names
 from app.werewolf.debate_realism import lineup_quality_warnings
+from app.werewolf.lineup_quality import (
+    LineupQualityPolicyV1,
+    evaluate_lineup_quality,
+    plan_diverse_lineup,
+)
 from app.werewolf.live import (
     EventSink,
     GameRunCanceled,
@@ -177,6 +181,18 @@ class CreateGameRunRequest(BaseModel):
     rule_set_id: str = DEFAULT_RULE_SET_ID
     expected_rule_revision_id: str | None = Field(default=None, max_length=36)
     player_configs: list[CreatePlayerConfigRequest] = Field(default_factory=list)
+    lineup_quality_policy_version: int = Field(default=1, ge=1, le=1)
+    allow_lineup_quality_warnings: bool = False
+
+
+class LineupPreviewRequest(BaseModel):
+    rule_set_id: str = DEFAULT_RULE_SET_ID
+    expected_rule_revision_id: str | None = Field(default=None, max_length=36)
+    seed: int | None = None
+    player_configs: list[CreatePlayerConfigRequest] = Field(default_factory=list)
+    locked_seats: list[int] = Field(default_factory=list, max_length=24)
+    repair_scope: Literal["empty_only", "unlocked_all"] = "empty_only"
+    lineup_quality_policy_version: int = Field(default=1, ge=1, le=1)
 
 
 def get_replay_store(db: Annotated[Session, Depends(get_db)]) -> DatabaseReplayStore:
@@ -653,54 +669,45 @@ def complete_player_configs_from_library(
     player_count: int,
     seed: int | None,
     db: Session,
+    repair_scope: Literal["empty_only", "unlocked_all"] = "empty_only",
+    locked_seats: list[int] | tuple[int, ...] = (),
+    policy: LineupQualityPolicyV1 | None = None,
 ) -> list[PlayerConfig]:
     configs = normalize_player_config_requests(
         requests,
         player_count,
         db,
     )
-    configs_by_seat = {config.seat: config for config in configs}
-    missing_profile_seats = [
-        seat
-        for seat in range(1, player_count + 1)
-        if not configs_by_seat.get(seat) or not configs_by_seat[seat].profile_id
-    ]
-    if not missing_profile_seats:
-        return sorted(configs, key=lambda config: config.seat)
-
-    used_profile_ids = {config.profile_id for config in configs if config.profile_id is not None}
-    available_profiles = [
-        profile
-        for profile in list_available_player_profiles(db)
-        if clean_optional_string(getattr(profile, "id", None)) not in used_profile_ids
-    ]
-    available_count = len(used_profile_ids) + len(available_profiles)
-    if len(available_profiles) < len(missing_profile_seats):
+    available_profiles = list_available_player_profiles(db)
+    if len(available_profiles) < player_count:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"Player profile library has {available_count} available players, "
+                f"Player profile library has {len(available_profiles)} available players, "
                 f"but {player_count} seats require virtual players"
             ),
         )
-
-    rng = random.Random(f"{seed}:player-profiles") if seed is not None else random.Random()
-    selected_profiles = rng.sample(available_profiles, len(missing_profile_seats))
-    next_configs = list(configs)
-    for seat, profile in zip(missing_profile_seats, selected_profiles, strict=True):
-        existing = configs_by_seat.get(seat)
-        overrides = existing.to_dict() if existing is not None else {"seat": seat}
-        if existing is not None and existing.profile_id is None:
-            overrides.pop("name", None)
-        overrides["profile_id"] = str(getattr(profile, "id"))
-        next_config = player_config_from_profile(
-            seat=seat,
+    candidates = [
+        player_config_from_profile(
+            seat=0,
             profile=profile,
-            overrides=overrides,
+            overrides={"profile_id": str(getattr(profile, "id"))},
         )
-        next_configs = [config for config in next_configs if config.seat != seat] + [next_config]
+        for profile in available_profiles
+    ]
+    return plan_diverse_lineup(
+        configs,
+        candidates,
+        player_count=player_count,
+        seed=seed,
+        repair_scope=repair_scope,
+        locked_seats=locked_seats,
+        policy=policy or _lineup_quality_policy(),
+    )
 
-    return sorted(next_configs, key=lambda config: config.seat)
+
+def _lineup_quality_policy() -> LineupQualityPolicyV1:
+    return LineupQualityPolicyV1(mode=settings.werewolf_lineup_quality_mode)
 
 
 def list_available_player_profiles(
@@ -856,6 +863,107 @@ def list_model_options() -> dict:
     return {"models": configured_model_options()}
 
 
+@router.post("/lineup-preview")
+def preview_game_lineup(
+    request_body: LineupPreviewRequest,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    try:
+        compiled = _resolve_selected_rule_set(
+            db,
+            rule_set_id=request_body.rule_set_id,
+            expected_revision_id=request_body.expected_rule_revision_id,
+        )
+        player_count = compiled.rule_set.player_count
+        locked_seats = set(request_body.locked_seats)
+        if len(locked_seats) != len(request_body.locked_seats) or any(
+            seat < 1 or seat > player_count for seat in locked_seats
+        ):
+            raise HTTPException(status_code=422, detail="locked_seats are invalid")
+        policy = _lineup_quality_policy()
+        player_configs = complete_player_configs_from_library(
+            requests=request_body.player_configs,
+            player_count=player_count,
+            seed=request_body.seed,
+            db=db,
+            repair_scope=request_body.repair_scope,
+            locked_seats=tuple(sorted(locked_seats)),
+            policy=policy,
+        )
+        requested_profiles = {
+            item.seat: clean_optional_string(item.profile_id)
+            for item in request_body.player_configs
+        }
+        resolved_profiles = {
+            config.seat: config.profile_id for config in player_configs
+        }
+        report = evaluate_lineup_quality(
+            player_configs,
+            player_count=player_count,
+            policy=policy,
+            was_repaired=requested_profiles != resolved_profiles,
+        )
+        is_locked_manual_lineup = (
+            len(requested_profiles) == player_count
+            and all(requested_profiles.values())
+            and locked_seats == set(requested_profiles)
+        )
+        if (
+            policy.mode == "repair"
+            and report.is_blocked
+            and not is_locked_manual_lineup
+        ):
+            raise public_problem(
+                request,
+                status_code=422,
+                code="lineup_quality_unsatisfied",
+                detail="The available player profiles cannot satisfy the active quality policy.",
+                extensions={
+                    "lineup_quality_report": report.to_dict(),
+                    "missing_dimensions": sorted(
+                        {
+                            violation.code
+                            for violation in report.violations
+                            if violation.severity == "error"
+                        }
+                    ),
+                },
+            )
+        return {
+            "player_configs": [config.to_dict() for config in player_configs],
+            "lineup_quality_report": report.to_dict(),
+            "rule_set_revision_id": compiled.revision_id,
+        }
+    except RuleRevisionChanged as exc:
+        _rollback_quietly(db)
+        raise public_problem(
+            request,
+            status_code=409,
+            code="rule_revision_changed",
+            detail="The selected rule revision has changed.",
+        ) from exc
+    except (RuleSetNotFound, RuleSetUnavailable) as exc:
+        _rollback_quietly(db)
+        raise public_problem(
+            request,
+            status_code=409,
+            code="rule_set_unavailable",
+            detail="The selected rule set is unavailable.",
+        ) from exc
+    except HTTPException:
+        _rollback_quietly(db)
+        raise
+    except Exception as exc:
+        _rollback_quietly(db)
+        raise public_problem(
+            request,
+            status_code=503,
+            code="lineup_preview_unavailable",
+            detail="The lineup preview is temporarily unavailable.",
+        ) from exc
+
+
 @router.post("/runs", status_code=201)
 def create_game_run(
     request_body: CreateGameRunRequest,
@@ -871,12 +979,44 @@ def create_game_run(
             rule_set_id=request_body.rule_set_id,
             expected_revision_id=request_body.expected_rule_revision_id,
         )
+        policy = _lineup_quality_policy()
         player_configs = complete_player_configs_from_library(
             requests=request_body.player_configs,
             player_count=compiled.rule_set.player_count,
             seed=request_body.seed,
             db=db,
+            policy=policy,
         )
+        requested_profiles = {
+            item.seat: clean_optional_string(item.profile_id)
+            for item in request_body.player_configs
+        }
+        resolved_profiles = {
+            config.seat: config.profile_id for config in player_configs
+        }
+        lineup_report = evaluate_lineup_quality(
+            player_configs,
+            player_count=compiled.rule_set.player_count,
+            policy=policy,
+            was_repaired=requested_profiles != resolved_profiles,
+        )
+        manual_complete = (
+            len(requested_profiles) == compiled.rule_set.player_count
+            and all(requested_profiles.values())
+        )
+        override_allowed = (
+            policy.mode == "repair"
+            and manual_complete
+            and request_body.allow_lineup_quality_warnings
+        )
+        if lineup_report.is_blocked and policy.mode != "observe" and not override_allowed:
+            raise public_problem(
+                request,
+                status_code=422,
+                code="lineup_quality_gate_failed",
+                detail="The selected lineup does not satisfy the active quality policy.",
+                extensions={"lineup_quality_report": lineup_report.to_dict()},
+            )
         try:
             validate_unique_effective_player_names(
                 default_names=choose_player_names(
@@ -900,6 +1040,7 @@ def create_game_run(
             rule_set=compiled.snapshot,
             player_configs=player_configs,
             lineup_quality_warnings=lineup_quality_warnings(player_configs),
+            lineup_quality_report=lineup_report.to_dict(),
         )
         DatabaseLiveStore(db).stage_new_run(run)
         staged = True
@@ -1417,7 +1558,11 @@ def _run_game_in_background(
     finally:
         db.close()
 
-    registry.mark_completed(run_id, winner=result.winner)
+    registry.mark_completed(
+        run_id,
+        winner=result.winner,
+        p2_diagnostics=getattr(result, "p2_diagnostics", None),
+    )
 
 
 def _resume_game_in_background(
@@ -1463,7 +1608,11 @@ def _resume_game_in_background(
     finally:
         db.close()
 
-    registry.mark_completed(run_id, winner=result.winner)
+    registry.mark_completed(
+        run_id,
+        winner=result.winner,
+        p2_diagnostics=getattr(result, "p2_diagnostics", None),
+    )
 
 
 def _event_stream(

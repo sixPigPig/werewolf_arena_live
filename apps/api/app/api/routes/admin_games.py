@@ -18,6 +18,7 @@ from app.admin.games import (
     list_admin_games,
 )
 from app.admin.rbac import AdminPermission
+from app.admin.p2_diagnostics import build_game_p2_quality
 from app.api.admin.dependencies import AdminPrincipal, require_admin_permission
 from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.api.schemas.admin_games import (
@@ -235,6 +236,17 @@ def _detail_response(detail: AdminGameDetailData) -> AdminGameDetailResponse:
             "failed_voice_count": detail.failed_voice_count,
             "last_event": recent_events[-1] if recent_events else None,
         },
+        p2_quality=build_game_p2_quality(
+            state=state,
+            logs=[],
+            lineup_quality_report=detail.lineup_quality_report,
+            status=detail.record.status,
+            terminal=reveal_terminal_metadata,
+            diagnostic_events=detail.diagnostic_events,
+            started_at=latest_run.started_at if latest_run else None,
+            completed_at=latest_run.completed_at if latest_run else None,
+            safe_run_diagnostics=detail.run_p2_diagnostics,
+        ),
     )
 
 
@@ -371,11 +383,11 @@ def _round_summaries(
                 "public_summary": _safe_text(item.get("public_summary"), max_length=2000),
                 "night_deaths": _death_summaries(
                     item.get("night_deaths"),
-                    reveal_causes=reveal_terminal_metadata,
+                    reveal_causes=False,
                 ),
                 "day_deaths": _death_summaries(
                     item.get("day_deaths"),
-                    reveal_causes=reveal_terminal_metadata,
+                    reveal_causes=False,
                 ),
                 "exiled": _optional_text(item.get("exiled"), max_length=120),
                 "hunter_shot": _optional_text(item.get("hunter_shot"), max_length=120),

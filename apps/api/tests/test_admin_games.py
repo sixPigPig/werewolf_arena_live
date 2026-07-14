@@ -879,7 +879,7 @@ def test_admin_game_detail_is_strictly_whitelisted_bounded_and_hides_partial_rol
     assert payload["players"][1]["avatar_image_url"] == ""
     assert payload["rounds"][0]["votes"] == {"张三": "李四"}
     assert payload["rounds"][0]["night_deaths"] == [
-        {"player": "李四", "cause": "wolf_attack", "source": None}
+        {"player": "李四", "cause": None, "source": None}
     ]
     assert len(payload["recent_events"]) == 50
     assert payload["recent_events"][0]["event_id"] == 6

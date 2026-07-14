@@ -78,6 +78,37 @@ export const contractLiveRunDetail: AdminLiveRunDetail = {
       created_at: "2026-07-10T01:03:00Z",
     },
   ],
+  p2_diagnostics: {
+    schema_version: 1,
+    data_status: "available",
+    performance: {
+      request_count: 24,
+      discrete_action_sample_count: 18,
+      discrete_action_p50_ms: 4200,
+      discrete_action_p95_ms: null,
+      discrete_action_max_ms: 13200,
+      speech_first_token_sample_count: 8,
+      speech_first_token_p95_ms: null,
+      speech_first_token_max_ms: 7800,
+      timeout_count: 1,
+      fallback_count: 1,
+      active_request_count: 0,
+      game_duration_ms: 179000,
+    },
+    speech_quality: {
+      checked_count: 8,
+      retry_count: 2,
+      exhausted_count: 0,
+      low_novelty_window_count: 1,
+    },
+    choice_normalization: {
+      exact_count: 20,
+      seat_alias_count: 1,
+      public_label_count: 3,
+      invalid_count: 0,
+      other_count: 0,
+    },
+  },
 };
 
 export const contractActiveLiveRunDetail: AdminLiveRunDetail = {
@@ -93,6 +124,16 @@ export const contractActiveLiveRunDetail: AdminLiveRunDetail = {
       created_at: "2026-07-10T01:01:00Z",
     },
   ],
+  p2_diagnostics: {
+    ...contractLiveRunDetail.p2_diagnostics,
+    data_status: "collecting",
+    performance: {
+      ...contractLiveRunDetail.p2_diagnostics.performance,
+      request_count: 2,
+      active_request_count: 1,
+      game_duration_ms: null,
+    },
+  },
 };
 
 export const contractLiveRunDebug: AdminLiveRunDebug = {

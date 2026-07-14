@@ -95,6 +95,8 @@ class AdminLiveRunDetailData:
     last_event_at: datetime | None
     voice_counts: AdminVoiceCounts
     recent_events: list[AdminLiveRunEventRow]
+    p2_diagnostics: dict[str, Any]
+    diagnostic_events: list[dict[str, Any]]
 
 
 def list_admin_live_runs(
@@ -190,12 +192,30 @@ def get_admin_live_run_detail(db: Session, run_id: str) -> AdminLiveRunDetailDat
         list(reversed(recent_desc)),
         reveal_terminal_metadata=record.can_reveal_event_identity,
     )
+    p2_diagnostics = db.scalar(
+        select(LiveRunRecord.p2_diagnostics).where(
+            LiveRunRecord.run_id == record.run_id
+        )
+    )
+    diagnostic_events = [
+        {"type": event_type, "payload": {}}
+        for (event_type,) in db.execute(
+            select(LiveEventRecord.type)
+            .where(LiveEventRecord.run_id == run_id)
+            .order_by(LiveEventRecord.event_id.asc())
+            .limit(5000)
+        )
+    ]
     return AdminLiveRunDetailData(
         record=record,
         event_count=event_counts.get(run_id, 0),
         last_event_at=last_event_at.get(run_id),
         voice_counts=voice_counts.get(run_id, AdminVoiceCounts()),
         recent_events=recent_events,
+        p2_diagnostics=(
+            p2_diagnostics if isinstance(p2_diagnostics, dict) else {}
+        ),
+        diagnostic_events=diagnostic_events,
     )
 
 

@@ -49,6 +49,12 @@ class LiveRunRecord(Base):
     lineup_quality_warnings: Mapped[list[dict[str, str]]] = mapped_column(
         JSON, nullable=False, default=list
     )
+    lineup_quality_report: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    p2_diagnostics: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
     winner: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

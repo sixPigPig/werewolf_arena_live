@@ -16,6 +16,33 @@ class DeathEvent:
         return {"player": self.player, "cause": self.cause, "source": self.source}
 
 
+PublicOutcomeKind = Literal[
+    "night_death",
+    "hunter_shot",
+    "self_explosion",
+    "exile",
+    "idiot_reveal",
+    "badge_transferred",
+    "badge_lost",
+]
+
+
+@dataclass(frozen=True)
+class PublicOutcomeEventV1:
+    schema_version: Literal[1]
+    event_id: str
+    sequence: int
+    kind: PublicOutcomeKind
+    actor_player_id: str | None
+    target_player_id: str | None
+    outcome: str
+    caused_by_event_id: str | None
+    occurred_phase: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass
 class ActionLog:
     actor: str
@@ -29,6 +56,19 @@ class ActionLog:
     attempt_count: int = 1
     decision_schema: str | None = None
     decision_audit: dict[str, str] | None = None
+    raw_choice: object | None = None
+    choice_normalization_kind: str | None = None
+    speech_mission: dict[str, object] | None = None
+    speech_quality_report: dict[str, object] | None = None
+    speech_quality_attempt_count: int = 0
+    speech_quality_retry_exhausted: bool = False
+    speech_quality_initial_codes: list[str] = field(default_factory=list)
+    execution_status: Literal["completed", "timed_out", "fallback", "failed"] = (
+        "completed"
+    )
+    duration_ms: int = 0
+    budget_ms: int | None = None
+    first_token_ms: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -42,10 +82,33 @@ class ActionLog:
             "fallback_reason": self.fallback_reason,
             "attempt_count": self.attempt_count,
         }
+        if (
+            self.execution_status != "completed"
+            or self.duration_ms > 0
+            or self.budget_ms is not None
+            or self.first_token_ms is not None
+        ):
+            payload["execution_status"] = self.execution_status
+            payload["duration_ms"] = self.duration_ms
+            payload["budget_ms"] = self.budget_ms
+            payload["first_token_ms"] = self.first_token_ms
         if self.decision_schema is not None:
             payload["decision_schema"] = self.decision_schema
         if self.decision_audit is not None:
             payload["decision_audit"] = self.decision_audit.copy()
+        if self.choice_normalization_kind is not None:
+            payload["raw_choice"] = self.raw_choice
+            payload["choice_normalization_kind"] = self.choice_normalization_kind
+        if self.speech_quality_report is not None:
+            payload["speech_mission"] = self.speech_mission
+            payload["speech_quality_report"] = self.speech_quality_report
+            payload["speech_quality_attempt_count"] = self.speech_quality_attempt_count
+            payload["speech_quality_retry_exhausted"] = (
+                self.speech_quality_retry_exhausted
+            )
+            payload["speech_quality_initial_codes"] = (
+                self.speech_quality_initial_codes.copy()
+            )
         return payload
 
 
@@ -298,6 +361,8 @@ class RoundState:
     sheriff_badge_lost_reason: str | None = None
     sheriff_election_resolution: SheriffElectionResolution | None = None
     sheriff_badge_resolution: SheriffBadgeResolution | None = None
+    public_outcome_events: list[PublicOutcomeEventV1] = field(default_factory=list)
+    public_outcome_next_sequence: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -354,6 +419,10 @@ class RoundState:
             "sheriff_badge_resolution": (
                 self.sheriff_badge_resolution.to_dict() if self.sheriff_badge_resolution else None
             ),
+            "public_outcome_events": [
+                event.to_dict() for event in self.public_outcome_events
+            ],
+            "public_outcome_next_sequence": self.public_outcome_next_sequence,
             "success": self.success,
         }
 

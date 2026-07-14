@@ -4,6 +4,7 @@ import { createGameRun } from "./createGameRun";
 import { getGamePlayback } from "./getGamePlayback";
 import { listGames } from "./listGames";
 import { listPlayerProfiles } from "./listPlayerProfiles";
+import { previewGameLineup } from "./previewGameLineup";
 import { resumeGameRun } from "./resumeGameRun";
 
 function jsonResponse(body: unknown) {
@@ -71,6 +72,48 @@ describe("game API endpoints", () => {
         rule_set_id: "classic_8",
         max_rounds: 8,
         player_configs: [{ seat: 1, profile_id: "profile-1" }],
+      }),
+    });
+  });
+
+  it("previews a diverse lineup before creation", async () => {
+    const preview = {
+      player_configs: [{ seat: 1, profile_id: "profile-1" }],
+      lineup_quality_report: {
+        schema_version: 1,
+        policy_mode: "repair",
+        player_count: 1,
+        configured_count: 1,
+        is_blocked: false,
+        was_repaired: true,
+        style_bucket_count: 1,
+        required_style_bucket_count: 1,
+        violations: [],
+      },
+      rule_set_revision_id: "revision-1",
+    } as const;
+    const fetchMock = vi.fn(async () => jsonResponse(preview));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      previewGameLineup({
+        rule_set_id: "starter_6",
+        seed: 21,
+        player_configs: [],
+        locked_seats: [],
+        repair_scope: "empty_only",
+      }),
+    ).resolves.toEqual(preview);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/games/lineup-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rule_set_id: "starter_6",
+        seed: 21,
+        player_configs: [],
+        locked_seats: [],
+        repair_scope: "empty_only",
       }),
     });
   });

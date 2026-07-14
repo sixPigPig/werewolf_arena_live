@@ -190,9 +190,11 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
     if action not in SCHEMAS:
         raise ValueError(f"Unsupported action: {action}")
 
-    debate_guidance_sections = []
+    speech_guidance_sections = []
+    if action in {"debate", "sheriff_speech", "sheriff_pk_speech"}:
+        speech_guidance_sections.append(_render_speech_mission(world_state))
     if action == "debate":
-        debate_guidance_sections = [_render_debate_guidance(world_state)]
+        speech_guidance_sections.append(_render_debate_guidance(world_state))
 
     sections = [
         _render_base(world_state),
@@ -205,7 +207,7 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
         _render_public_action_eligibility(world_state),
         _render_quality_feedback(world_state),
         _render_debate(world_state),
-        *debate_guidance_sections,
+        *speech_guidance_sections,
         _render_instruction(action, world_state),
         "请只输出合法 JSON，不要输出 Markdown，不要添加解释性前后缀。",
         _render_json_example(action),
@@ -320,6 +322,17 @@ def _render_debate_guidance(world_state: dict[str, Any]) -> str:
     if not guidance:
         return ""
     return "本轮发言任务：\n" + "\n".join(f"- {line}" for line in guidance)
+
+
+def _render_speech_mission(world_state: dict[str, Any]) -> str:
+    mission = world_state.get("speech_mission")
+    if not isinstance(mission, dict):
+        return ""
+    kind = str(mission.get("kind") or "").strip()
+    instruction = str(mission.get("instruction") or "").strip()
+    if not kind or not instruction:
+        return ""
+    return f"本次发言质量任务（{kind}）：\n- {instruction}"
 
 
 def _render_quality_feedback(world_state: dict[str, Any]) -> str:

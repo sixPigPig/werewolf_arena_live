@@ -202,12 +202,49 @@ describe("admin live run flow", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("可能失联")).toBeInTheDocument();
     expect(screen.getByText(/活动已归类以保护未终局身份/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "P2 运行质量" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("采集中")).toBeInTheDocument();
+    expect(screen.getByText("2 / 1")).toBeInTheDocument();
+    expect(screen.getAllByText("样本不足")).toHaveLength(2);
+    expect(screen.getByText(/样本 18 · 最大值 13200 ms/)).toBeInTheDocument();
     expect(screen.getByText(/需要 runs.debug.read 权限/)).toBeInTheDocument();
     expect(screen.getAllByText("终局后显示")).toHaveLength(2);
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).endsWith("/debug")),
     ).toBe(false);
     expect(screen.queryByRole("button", { name: /停止|恢复|重试运行/ })).toBeNull();
+  });
+
+  it("renders an explicit legacy P2 empty state without fake metrics", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["runs.read"]));
+      }
+      if (url.endsWith("/api/v1/admin/live-runs/run_1234abcd")) {
+        return jsonResponse({
+          ...contractLiveRunDetail,
+          p2_diagnostics: {
+            ...contractLiveRunDetail.p2_diagnostics,
+            data_status: "legacy",
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/operations/runs/run_1234abcd");
+
+    expect(
+      await screen.findByRole("heading", { name: "P2 运行质量" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("旧数据")).toBeInTheDocument();
+    expect(
+      screen.getByText("旧运行未采集 P2 指标，不能判定为通过。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("P95 0 ms")).not.toBeInTheDocument();
   });
 
   it("stops an active run with reason, csrf and idempotency protection", async () => {

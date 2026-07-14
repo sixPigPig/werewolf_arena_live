@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   resolveAvatarImageUrl,
+  type LineupQualityReport,
   type PublicPlayerProfileWithFavorite,
 } from "@werewolf-arena/game-client";
 
@@ -14,8 +15,13 @@ type LobbyLineupSectionProps = {
   favoritesAvailable: boolean;
   isBusy: boolean;
   launchStatus: LineupLaunchStatus;
+  qualityError: string | null;
+  qualityOverrideConfirmed: boolean;
+  qualityReport: LineupQualityReport | null;
   onClear: () => void;
+  onConfirmQualityOverride: () => void;
   onFill: (options?: FillOptions) => void;
+  onReshuffle: () => void;
   onSelectSeat: (seat: number, trigger: HTMLButtonElement) => void;
   playerCount: number;
   profilesBySeat: ReadonlyMap<
@@ -30,8 +36,13 @@ export function LobbyLineupSection({
   favoritesAvailable,
   isBusy,
   launchStatus,
+  qualityError,
+  qualityOverrideConfirmed,
+  qualityReport,
   onClear,
+  onConfirmQualityOverride,
   onFill,
+  onReshuffle,
   onSelectSeat,
   playerCount,
   profilesBySeat,
@@ -89,6 +100,15 @@ export function LobbyLineupSection({
           role="group"
         >
           <button
+            onClick={() => {
+              onReshuffle();
+              setOpenMenu(null);
+            }}
+            type="button"
+          >
+            一键打散
+          </button>
+          <button
             disabled={!favoritesAvailable}
             onClick={() => {
               onFill({ favoritesOnly: true });
@@ -107,6 +127,64 @@ export function LobbyLineupSection({
           >
             随机补齐
           </button>
+        </div>
+      ) : null}
+
+      {qualityReport || qualityError ? (
+        <div
+          aria-label="阵容质量"
+          className={[
+            "mobile-lobby-lineup-quality",
+            qualityReport?.is_blocked
+              ? "mobile-lobby-lineup-quality-blocked"
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          role="region"
+        >
+          {qualityError ? (
+            <p>{qualityError}</p>
+          ) : qualityReport ? (
+            <>
+              <div>
+                <strong>
+                  {qualityReport.is_blocked ? "阵容需要调整" : "阵容质量通过"}
+                </strong>
+                <span>
+                  风格 {qualityReport.style_bucket_count}/
+                  {qualityReport.required_style_bucket_count}
+                  {qualityReport.was_repaired ? " · 已智能调整" : ""}
+                </span>
+              </div>
+              {qualityReport.violations.length > 0 ? (
+                <ul>
+                  {qualityReport.violations.map((violation) => (
+                    <li key={`${violation.code}:${violation.key}`}>
+                      {lineupViolationLabel(violation.code)}：{violation.count}/
+                      {violation.limit}
+                      {violation.seat_numbers.length > 0
+                        ? `（${violation.seat_numbers.join("、")}号）`
+                        : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {qualityReport.is_blocked &&
+              qualityReport.policy_mode === "repair" &&
+              !qualityOverrideConfirmed ? (
+                <button
+                  className="mobile-lobby-lineup-quality-override"
+                  disabled={isBusy}
+                  onClick={onConfirmQualityOverride}
+                  type="button"
+                >
+                  仍使用当前阵容
+                </button>
+              ) : null}
+              {qualityOverrideConfirmed ? <small>已确认承担阵容同质化风险</small> : null}
+            </>
+          ) : null}
         </div>
       ) : null}
 
@@ -182,4 +260,17 @@ export function LobbyLineupSection({
       </div>
     </section>
   );
+}
+
+function lineupViolationLabel(code: string) {
+  const labels: Record<string, string> = {
+    lineup_incomplete: "阵容未完整",
+    personality_overrepresented: "同人格过多",
+    strategy_profile_overrepresented: "同策略过多",
+    catchphrase_overrepresented: "同口头禅过多",
+    avatar_overrepresented: "同头像过多",
+    tag_overrepresented: "同标签较多",
+    insufficient_style_buckets: "风格覆盖不足",
+  };
+  return labels[code] ?? code;
 }

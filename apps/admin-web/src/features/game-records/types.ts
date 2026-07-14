@@ -130,4 +130,6 @@ export type AdminGameDetail = AdminGameListItem & {
   runs: AdminGameRun[];
   diagnostics: AdminGameDiagnostics;
   recent_events: AdminGameEvent[];
+  p2_quality: AdminGameP2Quality;
 };
+import type { AdminGameP2Quality } from "@/features/p2-quality/types";

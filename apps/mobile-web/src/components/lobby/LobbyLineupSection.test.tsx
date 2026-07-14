@@ -24,8 +24,13 @@ describe("LobbyLineupSection", () => {
         favoritesAvailable
         isBusy={false}
         launchStatus={emptyStatus}
+        qualityError={null}
+        qualityOverrideConfirmed={false}
+        qualityReport={null}
         onClear={vi.fn()}
+        onConfirmQualityOverride={vi.fn()}
         onFill={vi.fn()}
+        onReshuffle={vi.fn()}
         onSelectSeat={onSelectSeat}
         playerCount={8}
         profilesBySeat={new Map()}
@@ -52,8 +57,13 @@ describe("LobbyLineupSection", () => {
         favoritesAvailable
         isBusy={false}
         launchStatus={emptyStatus}
+        qualityError={null}
+        qualityOverrideConfirmed={false}
+        qualityReport={null}
         onClear={onClear}
+        onConfirmQualityOverride={vi.fn()}
         onFill={onFill}
+        onReshuffle={vi.fn()}
         onSelectSeat={vi.fn()}
         playerCount={8}
         profilesBySeat={new Map()}
@@ -74,5 +84,80 @@ describe("LobbyLineupSection", () => {
       screen.getByRole("button", { name: "确认清空阵容" }),
     );
     expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders structured quality risk and only offers repair-mode override", async () => {
+    const user = userEvent.setup();
+    const onConfirmQualityOverride = vi.fn();
+    const qualityReport = {
+      schema_version: 1 as const,
+      policy_mode: "repair" as const,
+      player_count: 8,
+      configured_count: 8,
+      is_blocked: true,
+      was_repaired: false,
+      style_bucket_count: 2,
+      required_style_bucket_count: 4,
+      violations: [
+        {
+          code: "personality_overrepresented",
+          severity: "error" as const,
+          key: "balanced",
+          count: 5,
+          limit: 3,
+          seat_numbers: [1, 2, 3, 4, 5],
+        },
+      ],
+    };
+    const { rerender } = render(
+      <LobbyLineupSection
+        activeSeat={1}
+        canFillSeats={false}
+        favoritesAvailable
+        isBusy={false}
+        launchStatus={emptyStatus}
+        qualityError={null}
+        qualityOverrideConfirmed={false}
+        qualityReport={qualityReport}
+        onClear={vi.fn()}
+        onConfirmQualityOverride={onConfirmQualityOverride}
+        onFill={vi.fn()}
+        onReshuffle={vi.fn()}
+        onSelectSeat={vi.fn()}
+        playerCount={8}
+        profilesBySeat={new Map()}
+      />,
+    );
+
+    const quality = screen.getByRole("region", { name: "阵容质量" });
+    expect(within(quality).getByText("阵容需要调整")).toBeVisible();
+    expect(within(quality).getByText("同人格过多：5/3（1、2、3、4、5号）")).toBeVisible();
+    await user.click(
+      within(quality).getByRole("button", { name: "仍使用当前阵容" }),
+    );
+    expect(onConfirmQualityOverride).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <LobbyLineupSection
+        activeSeat={1}
+        canFillSeats={false}
+        favoritesAvailable
+        isBusy={false}
+        launchStatus={emptyStatus}
+        qualityError={null}
+        qualityOverrideConfirmed={false}
+        qualityReport={{ ...qualityReport, policy_mode: "enforce" }}
+        onClear={vi.fn()}
+        onConfirmQualityOverride={vi.fn()}
+        onFill={vi.fn()}
+        onReshuffle={vi.fn()}
+        onSelectSeat={vi.fn()}
+        playerCount={8}
+        profilesBySeat={new Map()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "仍使用当前阵容" }),
+    ).not.toBeInTheDocument();
   });
 });

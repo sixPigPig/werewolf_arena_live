@@ -277,6 +277,20 @@ describe("admin game record flow", () => {
       ).getByText("模型未公开"),
     ).toBeInTheDocument();
     expect(screen.getByText("雾灯听风")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "P2 对局质量" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("repair")).toBeInTheDocument();
+    expect(screen.getByText("样本不足")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "P2 质量门槛" }).children).toHaveLength(5);
+    expect(
+      screen.getByRole("heading", { name: "公开结算链" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/2号玩家夜间出局/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/2号玩家发动猎人技能带走5号玩家/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("因果来源 outcome_fixture_1")).toBeInTheDocument();
     expect(screen.queryByText("werewolf_attack")).not.toBeInTheDocument();
     expect(
       screen.getByText("对局未终局或仍可恢复，事件元数据暂不公开。"),
@@ -288,6 +302,44 @@ describe("admin game record flow", () => {
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).endsWith("/debug")),
     ).toBe(false);
+  });
+
+  it("renders unavailable P2 quality and outcome empty states", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["games.read"]));
+      }
+      if (url.endsWith("/api/v1/admin/games/game_1234abcd")) {
+        return jsonResponse({
+          ...contractGameDetail,
+          p2_quality: {
+            ...contractGameDetail.p2_quality,
+            data_status: "unavailable",
+            public_outcomes: [],
+            quality_gates: contractGameDetail.p2_quality.quality_gates.map(
+              (gate) => ({
+                ...gate,
+                status: "unavailable",
+                code: `${gate.gate}_data_unavailable`,
+                actual: null,
+              }),
+            ),
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/operations/games/game_1234abcd");
+
+    expect(
+      await screen.findByText("该对局没有可用的 P2 质量数据。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("旧对局没有结构化公开结算链。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/lineup · 通过/)).not.toBeInTheDocument();
   });
 
   it("requests audited debug only after an authorized explicit click", async () => {

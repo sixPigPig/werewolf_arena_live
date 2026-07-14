@@ -18,7 +18,6 @@ from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.orm import Session
 
 from app.models.game_session import GameSessionRecord
-from app.models.live import LiveRunRecord
 
 
 MIGRATIONS_DIR = Path(__file__).parents[1] / "alembic" / "versions"
@@ -920,13 +919,23 @@ def test_backfill_links_only_exact_official_legacy_snapshots(
             assert record.rule_set_content_hash == match["content_hash"]
 
         for run_id, rule_set_id in exact_run_ids.items():
-            record = db.get(LiveRunRecord, run_id)
+            record = db.execute(
+                text(
+                    """
+                    SELECT rule_set_id, rule_set_revision_id,
+                           rule_set_revision_no, rule_set_content_hash
+                    FROM live_runs
+                    WHERE run_id = :run_id
+                    """
+                ),
+                {"run_id": run_id},
+            ).mappings().one_or_none()
             assert record is not None
             match = FROZEN_MATCHES[rule_set_id]
-            assert record.rule_set_id == rule_set_id
-            assert record.rule_set_revision_id == match["revision_id"]
-            assert record.rule_set_revision_no == 1
-            assert record.rule_set_content_hash == match["content_hash"]
+            assert record["rule_set_id"] == rule_set_id
+            assert record["rule_set_revision_id"] == match["revision_id"]
+            assert record["rule_set_revision_no"] == 1
+            assert record["rule_set_content_hash"] == match["content_hash"]
 
         unmatched_games = {
             "game_changed1": "classic_8",
@@ -956,12 +965,22 @@ def test_backfill_links_only_exact_official_legacy_snapshots(
             "run_null_snap": "preserved_null",
         }
         for run_id, expected_rule_set_id in unmatched_runs.items():
-            record = db.get(LiveRunRecord, run_id)
+            record = db.execute(
+                text(
+                    """
+                    SELECT rule_set_id, rule_set_revision_id,
+                           rule_set_revision_no, rule_set_content_hash
+                    FROM live_runs
+                    WHERE run_id = :run_id
+                    """
+                ),
+                {"run_id": run_id},
+            ).mappings().one_or_none()
             assert record is not None
-            assert record.rule_set_id == expected_rule_set_id
-            assert record.rule_set_revision_id is None
-            assert record.rule_set_revision_no is None
-            assert record.rule_set_content_hash is None
+            assert record["rule_set_id"] == expected_rule_set_id
+            assert record["rule_set_revision_id"] is None
+            assert record["rule_set_revision_no"] is None
+            assert record["rule_set_content_hash"] is None
 
 
 def test_backfill_tolerates_malformed_and_non_object_raw_json(

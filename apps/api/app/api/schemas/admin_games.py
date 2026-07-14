@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.api.schemas.common import PaginationResponse
+from app.api.schemas.admin_p2 import AdminGameP2QualityV1
 
 
 AdminGameStatus = Literal["complete", "partial"]
@@ -115,6 +116,7 @@ class AdminGameDetailResponse(AdminGameListItem):
     runs: list[AdminGameRunSummary]
     recent_events: list[AdminGameEventSummary] = Field(max_length=50)
     diagnostics: AdminGameDiagnostics
+    p2_quality: AdminGameP2QualityV1
 
 
 class AdminGameRunErrorSummary(BaseModel):

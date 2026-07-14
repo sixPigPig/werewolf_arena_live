@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import inspect
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from app.werewolf.action_choice import normalize_action_choice
+from app.werewolf.execution_budget import ModelCallOptions, ModelDeadlineExceeded
+from app.werewolf.execution_telemetry import record_model_progress_event
 from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.streaming import (
     ModelEventContext,
@@ -24,7 +28,14 @@ PUBLIC_MODEL_FAILURE_MESSAGE = "模型请求失败，正在中止本次行动"
 
 
 class ModelProvider(Protocol):
-    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+    def complete_json(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        temperature: float,
+        call_options: ModelCallOptions | None = None,
+    ) -> str:
         pass
 
 
@@ -35,6 +46,14 @@ class LmLog:
     result: dict[str, Any] | None
     request_id: str | None = None
     invalid_attempts: list[dict[str, Any]] = field(default_factory=list)
+    raw_choice: object | None = None
+    choice_normalization_kind: str | None = None
+    speech_mission: dict[str, object] | None = field(default=None, repr=False)
+    speech_quality_report: dict[str, object] | None = field(default=None, repr=False)
+    speech_quality_attempt_count: int = field(default=0, repr=False)
+    speech_quality_retry_exhausted: bool = field(default=False, repr=False)
+    speech_quality_initial_codes: list[str] = field(default_factory=list, repr=False)
+    first_token_ms: int | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         value = {
@@ -46,6 +65,9 @@ class LmLog:
             value["request_id"] = self.request_id
         if self.invalid_attempts:
             value["invalid_attempts"] = self.invalid_attempts
+        if self.choice_normalization_kind is not None:
+            value["raw_choice"] = self.raw_choice
+            value["choice_normalization_kind"] = self.choice_normalization_kind
         return value
 
 
@@ -72,20 +94,28 @@ def generate_action(
     allowed_values: list[Any] | None = None,
     result_key: str | None = None,
     retries: int = DEFAULT_RETRIES,
+    call_options: ModelCallOptions | None = None,
 ) -> tuple[Any | None, LmLog]:
     base_prompt, _schema = build_prompt(action, world_state)
     raw_responses: list[str] = []
     invalid_attempts: list[dict[str, Any]] = []
     last_result: dict[str, Any] | None = None
+    last_raw_choice: object | None = None
+    last_normalization_kind: str | None = None
     current_prompt = base_prompt
 
     for attempt in range(retries):
         if invalid_attempts:
             current_prompt = _prompt_with_invalid_feedback(base_prompt, invalid_attempts[-1])
-        raw_response = provider.complete_json(
+        attempt_options = (
+            call_options.for_attempt(time.monotonic()) if call_options else None
+        )
+        raw_response = _call_provider_method(
+            provider.complete_json,
             model=model,
             prompt=current_prompt,
             temperature=min(1.0, 0.4 + attempt * 0.2),
+            call_options=attempt_options,
         )
         raw_responses.append(raw_response)
         try:
@@ -95,17 +125,28 @@ def generate_action(
 
         last_result = result
         value = result.get(result_key) if result_key else result
-        normalized_value = _normalize_allowed_value(value, allowed_values)
+        normalization = (
+            normalize_action_choice(value, allowed_values)
+            if allowed_values is not None
+            else None
+        )
+        last_raw_choice = value if normalization is not None else None
+        last_normalization_kind = normalization.kind if normalization is not None else None
+        normalized_value = normalization.canonical_value if normalization else value
         if allowed_values is None or normalized_value in allowed_values:
             return normalized_value, LmLog(
                 prompt=current_prompt,
                 raw_response=raw_response,
                 result=result,
                 invalid_attempts=invalid_attempts.copy(),
+                raw_choice=value if normalization is not None else None,
+                choice_normalization_kind=(
+                    normalization.kind if normalization is not None else None
+                ),
             )
         invalid_attempts.append(
             _invalid_attempt(
-                value=normalized_value,
+                value=value,
                 allowed_values=allowed_values,
                 result_key=result_key,
             )
@@ -116,6 +157,8 @@ def generate_action(
         raw_response="\n--- retry ---\n".join(raw_responses),
         result=last_result,
         invalid_attempts=invalid_attempts.copy(),
+        raw_choice=last_raw_choice,
+        choice_normalization_kind=last_normalization_kind,
     )
 
 
@@ -132,12 +175,16 @@ def generate_action_with_events(
     event_context: dict[str, Any],
     request_id_factory: Callable[[], str] | None = None,
     enable_progress_ticks: bool = True,
+    call_options: ModelCallOptions | None = None,
 ) -> tuple[Any | None, LmLog]:
     base_prompt, _schema = build_prompt(action, world_state)
     raw_responses: list[str] = []
     invalid_attempts: list[dict[str, Any]] = []
     last_result: dict[str, Any] | None = None
+    last_raw_choice: object | None = None
+    last_normalization_kind: str | None = None
     last_request_id: str | None = None
+    last_first_token_ms: int | None = None
     current_prompt = base_prompt
     context = ModelEventContext(
         round_number=event_context.get("round_number"),
@@ -182,7 +229,10 @@ def generate_action_with_events(
 
         progress_stopped = False
         try:
-            raw_response = _complete_json_with_optional_stream(
+            attempt_options = (
+                call_options.for_attempt(time.monotonic()) if call_options else None
+            )
+            raw_response, last_first_token_ms = _complete_json_with_optional_stream(
                 provider=provider,
                 model=model,
                 prompt=current_prompt,
@@ -192,6 +242,7 @@ def generate_action_with_events(
                 context=context,
                 request_id=request_id,
                 progress=progress,
+                call_options=attempt_options,
             )
         except Exception:
             progress.stop()
@@ -219,7 +270,14 @@ def generate_action_with_events(
 
         last_result = result
         value = result.get(result_key) if result_key else result
-        normalized_value = _normalize_allowed_value(value, allowed_values)
+        normalization = (
+            normalize_action_choice(value, allowed_values)
+            if allowed_values is not None
+            else None
+        )
+        last_raw_choice = value if normalization is not None else None
+        last_normalization_kind = normalization.kind if normalization is not None else None
+        normalized_value = normalization.canonical_value if normalization else value
         if allowed_values is None or normalized_value in allowed_values:
             return normalized_value, LmLog(
                 prompt=current_prompt,
@@ -227,10 +285,15 @@ def generate_action_with_events(
                 result=result,
                 request_id=request_id,
                 invalid_attempts=invalid_attempts.copy(),
+                raw_choice=value if normalization is not None else None,
+                choice_normalization_kind=(
+                    normalization.kind if normalization is not None else None
+                ),
+                first_token_ms=last_first_token_ms,
             )
         invalid_attempts.append(
             _invalid_attempt(
-                value=normalized_value,
+                value=value,
                 allowed_values=allowed_values,
                 result_key=result_key,
             )
@@ -244,7 +307,7 @@ def generate_action_with_events(
                     "request_id": request_id,
                     "model": model,
                     "attempt": attempt + 2,
-                    "invalid_value": normalized_value,
+                    "invalid_value": value,
                     "allowed_values": allowed_values.copy(),
                     "result_key": result_key,
                     "message": "模型选择不在候选项中，正在带反馈重试。",
@@ -257,6 +320,9 @@ def generate_action_with_events(
         result=last_result,
         request_id=last_request_id,
         invalid_attempts=invalid_attempts.copy(),
+        raw_choice=last_raw_choice,
+        choice_normalization_kind=last_normalization_kind,
+        first_token_ms=last_first_token_ms,
     )
 
 
@@ -271,7 +337,9 @@ def _complete_json_with_optional_stream(
     context: ModelEventContext,
     request_id: str,
     progress: ModelRequestProgress,
-) -> str:
+    call_options: ModelCallOptions | None,
+) -> tuple[str, int | None]:
+    response_started_at = time.monotonic()
     stream_json = getattr(provider, "stream_json", None)
     if callable(stream_json):
         raw_chunks: list[str] = []
@@ -279,8 +347,31 @@ def _complete_json_with_optional_stream(
         extractor = VisibleJsonFieldExtractor(visible_field) if visible_field else None
         pending_visible_text = ""
         last_delta_published_at = time.monotonic()
+        stream_started_at = last_delta_published_at
+        received_first_token = False
+        first_token_ms: int | None = None
         try:
-            for chunk in stream_json(model=model, prompt=prompt, temperature=temperature):
+            stream = _call_provider_method(
+                stream_json,
+                model=model,
+                prompt=prompt,
+                temperature=temperature,
+                call_options=call_options,
+            )
+            for chunk in stream:
+                now = time.monotonic()
+                _ensure_call_within_deadline(
+                    call_options,
+                    now=now,
+                    stream_started_at=stream_started_at,
+                    received_first_token=received_first_token,
+                )
+                if not received_first_token:
+                    first_token_ms = max(
+                        0,
+                        round((now - response_started_at) * 1000),
+                    )
+                received_first_token = True
                 raw_chunks.append(chunk)
                 if extractor is None or visible_field is None:
                     continue
@@ -290,7 +381,6 @@ def _complete_json_with_optional_stream(
                     continue
                 progress.record_delta()
                 pending_visible_text += visible_text
-                now = time.monotonic()
                 if (
                     len(pending_visible_text) >= STREAM_DELTA_FLUSH_CHARS
                     or now - last_delta_published_at >= STREAM_DELTA_FLUSH_SECONDS
@@ -305,10 +395,24 @@ def _complete_json_with_optional_stream(
                     )
                     pending_visible_text = ""
                     last_delta_published_at = now
-        except Exception:
-            if raw_chunks:
+        except Exception as exc:
+            if raw_chunks or isinstance(exc, ModelDeadlineExceeded):
                 raise
-            return provider.complete_json(model=model, prompt=prompt, temperature=temperature)
+            complete_response = _call_provider_method(
+                provider.complete_json,
+                model=model,
+                prompt=prompt,
+                temperature=temperature,
+                call_options=(
+                    call_options.for_attempt(time.monotonic())
+                    if call_options
+                    else None
+                ),
+            )
+            return complete_response, max(
+                0,
+                round((time.monotonic() - response_started_at) * 1000),
+            )
 
         if pending_visible_text and visible_field is not None:
             _publish_visible_delta(
@@ -320,9 +424,60 @@ def _complete_json_with_optional_stream(
                 visible_text=pending_visible_text,
             )
         if raw_chunks:
-            return "".join(raw_chunks)
+            return "".join(raw_chunks), first_token_ms
 
-    return provider.complete_json(model=model, prompt=prompt, temperature=temperature)
+    complete_response = _call_provider_method(
+        provider.complete_json,
+        model=model,
+        prompt=prompt,
+        temperature=temperature,
+        call_options=(
+            call_options.for_attempt(time.monotonic()) if call_options else None
+        ),
+    )
+    return complete_response, max(
+        0,
+        round((time.monotonic() - response_started_at) * 1000),
+    )
+
+
+def _call_provider_method(
+    method: Callable[..., Any],
+    *,
+    model: str,
+    prompt: str,
+    temperature: float,
+    call_options: ModelCallOptions | None,
+) -> Any:
+    parameters = inspect.signature(method).parameters
+    if "call_options" in parameters:
+        return method(
+            model=model,
+            prompt=prompt,
+            temperature=temperature,
+            call_options=call_options,
+        )
+    return method(model=model, prompt=prompt, temperature=temperature)
+
+
+def _ensure_call_within_deadline(
+    call_options: ModelCallOptions | None,
+    *,
+    now: float,
+    stream_started_at: float,
+    received_first_token: bool,
+) -> None:
+    if call_options is None:
+        return
+    if call_options.remaining_seconds(now) <= 0:
+        raise ModelDeadlineExceeded("model streaming deadline exceeded")
+    first_token_timeout = call_options.first_token_timeout_seconds
+    if (
+        not received_first_token
+        and first_token_timeout is not None
+        and now - stream_started_at > first_token_timeout
+    ):
+        raise ModelDeadlineExceeded("model first token deadline exceeded")
 
 
 def _publish_visible_delta(
@@ -356,6 +511,7 @@ def _publish_model_event(
     context: ModelEventContext,
     payload: dict[str, Any],
 ) -> None:
+    record_model_progress_event(event_type)
     event_sink.publish(
         event_type,
         round_number=context.round_number,
@@ -364,16 +520,6 @@ def _publish_model_event(
         action=context.action,
         payload=payload,
     )
-
-
-def _normalize_allowed_value(value: Any, allowed_values: list[Any] | None) -> Any:
-    if allowed_values is None:
-        return value
-    if value in allowed_values:
-        return value
-    if all(isinstance(item, str) for item in allowed_values) and value is not None:
-        return str(value)
-    return value
 
 
 def _invalid_attempt(

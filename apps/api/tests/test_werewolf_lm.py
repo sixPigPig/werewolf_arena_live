@@ -1,9 +1,11 @@
 import json
 import os
+import time
 import urllib.error
 
 import pytest
 
+from app.werewolf.execution_budget import ModelCallOptions, ModelDeadlineExceeded
 from app.werewolf.lm import (
     FakeProvider,
     LmLog,
@@ -1110,6 +1112,31 @@ def test_generate_action_accepts_numeric_value_for_string_allowed_values() -> No
 
     assert value == "2"
     assert log.result == {"reasoning": "我选择 2 号", "vote": 2}
+    assert log.raw_choice == 2
+    assert log.choice_normalization_kind == "string_exact"
+
+
+@pytest.mark.parametrize("raw_choice", [5, "5", "05", "5号", "玩家5号"])
+def test_generate_action_normalizes_seat_alias_without_retry(raw_choice: object) -> None:
+    provider = FakeProvider([{"reasoning": "选择五号", "shoot": raw_choice}])
+
+    value, log = generate_action(
+        provider=provider,
+        action="hunter_shoot",
+        world_state=_world_state_for_special_action(
+            "猎人",
+            "3号玩家、5号玩家、不发动技能",
+        ),
+        model="deepseek-chat",
+        allowed_values=["3号玩家", "5号玩家", "不发动技能"],
+        result_key="shoot",
+    )
+
+    assert value == "5号玩家"
+    assert provider.calls == 1
+    assert log.raw_choice == raw_choice
+    assert log.choice_normalization_kind == "seat_alias"
+    assert log.invalid_attempts == []
 
 
 def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> None:
@@ -1137,6 +1164,161 @@ def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> Non
     assert requests[0]["headers"]["Authorization"] == "Bearer test-key"
     assert requests[0]["payload"]["model"] == "deepseek-chat"
     assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
+
+
+def test_provider_applies_remaining_budget_and_max_output_tokens(monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(
+        url: str,
+        headers: dict[str, str],
+        payload: dict,
+        *,
+        call_options: ModelCallOptions | None,
+    ) -> dict:
+        requests.append(
+            {
+                "url": url,
+                "headers": headers,
+                "payload": payload,
+                "call_options": call_options,
+            }
+        )
+        return {
+            "choices": [
+                {"message": {"content": '{"reasoning":"ok","vote":"1号玩家"}'}}
+            ]
+        }
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    provider = DeepSeekProvider(transport=fake_transport)
+    options = ModelCallOptions(
+        deadline_at_monotonic=time.monotonic() + 2,
+        request_timeout_seconds=1.5,
+        max_output_tokens=96,
+    )
+
+    provider.complete_json(
+        model="deepseek-chat",
+        prompt="{}",
+        temperature=0.3,
+        call_options=options,
+    )
+
+    applied = requests[0]["call_options"]
+    assert isinstance(applied, ModelCallOptions)
+    assert 0 < applied.request_timeout_seconds <= 1.5
+    assert applied.deadline_at_monotonic == options.deadline_at_monotonic
+    assert requests[0]["payload"]["max_tokens"] == 96
+
+
+def test_format_retries_share_one_model_deadline() -> None:
+    class DeadlineCapturingProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.options: list[ModelCallOptions | None] = []
+
+        def complete_json(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            temperature: float,
+            call_options: ModelCallOptions | None = None,
+        ) -> str:
+            del model, prompt, temperature
+            self.calls += 1
+            self.options.append(call_options)
+            choice = "9号玩家" if self.calls == 1 else "2号玩家"
+            return json.dumps({"reasoning": "test", "vote": choice})
+
+    provider = DeadlineCapturingProvider()
+    deadline = time.monotonic() + 5
+
+    value, _log = generate_action(
+        provider=provider,
+        action="vote",
+        world_state=_world_state_for_special_action("村民", "1号玩家、2号玩家"),
+        model="test-model",
+        allowed_values=["1号玩家", "2号玩家"],
+        result_key="vote",
+        call_options=ModelCallOptions(
+            deadline_at_monotonic=deadline,
+            request_timeout_seconds=4,
+        ),
+    )
+
+    assert value == "2号玩家"
+    assert provider.calls == 2
+    assert all(option is not None for option in provider.options)
+    assert {option.deadline_at_monotonic for option in provider.options if option} == {
+        deadline
+    }
+
+
+def test_expired_model_deadline_fails_before_provider_call() -> None:
+    provider = FakeProvider([{"reasoning": "test", "vote": "1号玩家"}])
+
+    with pytest.raises(ModelDeadlineExceeded):
+        generate_action(
+            provider=provider,
+            action="vote",
+            world_state=_world_state_for_special_action("村民", "1号玩家"),
+            model="test-model",
+            allowed_values=["1号玩家"],
+            result_key="vote",
+            call_options=ModelCallOptions(
+                deadline_at_monotonic=0,
+                request_timeout_seconds=1,
+            ),
+        )
+
+    assert provider.calls == 0
+
+
+def test_non_stream_first_token_timing_uses_monotonic_clock(monkeypatch) -> None:
+    moments = iter([0.0, 10.0, 10.125])
+    monkeypatch.setattr("app.werewolf.lm.time.monotonic", lambda: next(moments))
+
+    value, log = generate_action_with_events(
+        provider=FakeProvider([{"reasoning": "test", "vote": "1号玩家"}]),
+        action="vote",
+        world_state=_world_state_for_special_action("村民", "1号玩家"),
+        model="test-model",
+        allowed_values=["1号玩家"],
+        result_key="vote",
+        event_sink=CapturingLmEventSink(),
+        event_context={
+            "round_number": 1,
+            "phase": "day",
+            "actor": "Alice",
+            "action": "vote",
+        },
+        enable_progress_ticks=False,
+    )
+
+    assert value == "1号玩家"
+    assert log.first_token_ms == 125
+
+
+def test_provider_transport_timeout_becomes_action_deadline(monkeypatch) -> None:
+    def timeout_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        del url, headers, payload
+        raise TimeoutError("socket timeout with SENTINEL_PRIVATE_BODY")
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    provider = DeepSeekProvider(transport=timeout_transport, max_retries=1)
+
+    with pytest.raises(ModelDeadlineExceeded):
+        provider.complete_json(
+            model="deepseek-chat",
+            prompt="{}",
+            temperature=0.3,
+            call_options=ModelCallOptions(
+                deadline_at_monotonic=time.monotonic() + 1,
+                request_timeout_seconds=1,
+            ),
+        )
 
 
 def test_openai_compatible_provider_streams_chat_deltas(monkeypatch) -> None:

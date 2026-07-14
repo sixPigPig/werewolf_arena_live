@@ -51,6 +51,9 @@ class AdminGameDetailData:
     run_count: int
     event_count: int
     failed_voice_count: int
+    run_p2_diagnostics: dict[str, Any]
+    lineup_quality_report: dict[str, Any]
+    diagnostic_events: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -217,7 +220,9 @@ def get_admin_game_detail(db: Session, session_id: str) -> AdminGameDetailData |
         return None
     record = record_row[0]
     state = db.scalar(
-        select(GameReplayPayload.state).where(GameReplayPayload.session_id == session_id)
+        select(GameReplayPayload.state).where(
+            GameReplayPayload.session_id == session_id
+        )
     )
     if not isinstance(state, dict):
         state = {}
@@ -288,6 +293,38 @@ def get_admin_game_detail(db: Session, session_id: str) -> AdminGameDetailData |
         )
         or 0
     )
+    lineup_quality_report: dict[str, Any] = {}
+    run_p2_diagnostics: dict[str, Any] = {}
+    if runs:
+        safe_run_data = db.execute(
+            select(
+                LiveRunRecord.lineup_quality_report,
+                LiveRunRecord.p2_diagnostics,
+            ).where(
+                LiveRunRecord.run_id == runs[0].run_id
+            )
+        ).one_or_none()
+        report = safe_run_data[0] if safe_run_data is not None else None
+        if isinstance(report, dict):
+            lineup_quality_report = report
+        diagnostics = safe_run_data[1] if safe_run_data is not None else None
+        if isinstance(diagnostics, dict):
+            run_p2_diagnostics = diagnostics
+    diagnostic_events: list[dict[str, Any]] = []
+    if reveal_terminal_metadata:
+        diagnostic_events = [
+            {"type": event_type, "payload": {}}
+            for (event_type,) in db.execute(
+                select(LiveEventRecord.type)
+                .where(LiveEventRecord.session_id == session_id)
+                .order_by(
+                    LiveEventRecord.created_at.asc(),
+                    LiveEventRecord.run_id.asc(),
+                    LiveEventRecord.event_id.asc(),
+                )
+                .limit(5000)
+            )
+        ]
     return AdminGameDetailData(
         record=_game_row_from_record(
             record,
@@ -301,6 +338,9 @@ def get_admin_game_detail(db: Session, session_id: str) -> AdminGameDetailData |
         run_count=run_count,
         event_count=event_count,
         failed_voice_count=failed_voice_count,
+        run_p2_diagnostics=run_p2_diagnostics,
+        lineup_quality_report=lineup_quality_report,
+        diagnostic_events=diagnostic_events,
     )
 
 

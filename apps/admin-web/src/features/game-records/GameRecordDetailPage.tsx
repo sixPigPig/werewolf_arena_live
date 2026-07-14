@@ -21,6 +21,10 @@ import type {
   AdminGameRound,
   AdminGameRun,
 } from "@/features/game-records/types";
+import type {
+  AdminGameP2Quality,
+  AdminPublicOutcome,
+} from "@/features/p2-quality/types";
 
 export default function GameRecordDetailPage() {
   const { sessionId } = useParams();
@@ -134,6 +138,8 @@ export default function GameRecordDetailPage() {
         </article>
       </section>
 
+      <GameP2QualityPanel quality={game.p2_quality} />
+
       {containsErrors || canReadDebug ? (
         <DebugPanel
           canReadDebug={canReadDebug}
@@ -223,6 +229,8 @@ export default function GameRecordDetailPage() {
         )}
       </section>
 
+      <PublicOutcomePanel quality={game.p2_quality} />
+
       <section aria-labelledby="game-events-title" className="game-detail-panel">
         <PanelHeading
           eyebrow="RECENT EVENTS"
@@ -253,6 +261,174 @@ export default function GameRecordDetailPage() {
       </section>
     </div>
   );
+}
+
+function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
+  return (
+    <section aria-labelledby="game-p2-title" className="game-detail-panel">
+      <PanelHeading
+        eyebrow="P2 QUALITY"
+        id="game-p2-title"
+        meta={p2StatusLabel(quality.data_status)}
+        title="P2 对局质量"
+      />
+      {quality.data_status === "legacy" ||
+      quality.data_status === "unavailable" ? (
+        <PanelEmpty
+          text={
+            quality.data_status === "legacy"
+              ? "旧对局没有完整 P2 数据，质量门槛显示为不可用而不是通过。"
+              : "该对局没有可用的 P2 质量数据。"
+          }
+        />
+      ) : (
+        <>
+          <div className="game-detail-metrics">
+            <article>
+              <span>阵容模式 / 修复</span>
+              <strong>{quality.lineup_quality.policy_mode ?? "—"}</strong>
+              <small>
+                {quality.lineup_quality.was_repaired ? "已自动修复" : "未自动修复"}
+                {" · "}风格桶 {quality.lineup_quality.style_bucket_count ?? "—"}/
+                {quality.lineup_quality.required_style_bucket_count ?? "—"}
+              </small>
+            </article>
+            <article>
+              <span>发言检查 / 重写</span>
+              <strong>
+                {quality.speech_quality.checked_count} / {quality.speech_quality.retry_count}
+              </strong>
+              <small>
+                耗尽 {quality.speech_quality.exhausted_count} · 低新颖度窗口{" "}
+                {quality.speech_quality.low_novelty_window_count}
+              </small>
+            </article>
+            <article>
+              <span>离散动作 P95</span>
+              <strong>
+                {quality.performance.discrete_action_p95_ms === null
+                  ? "样本不足"
+                  : `${quality.performance.discrete_action_p95_ms} ms`}
+              </strong>
+              <small>
+                样本 {quality.performance.discrete_action_sample_count} · 最大值{" "}
+                {quality.performance.discrete_action_max_ms ?? "—"} ms
+              </small>
+            </article>
+            <article>
+              <span>规范化 / 无效</span>
+              <strong>
+                {quality.choice_normalization.seat_alias_count} /{" "}
+                {quality.choice_normalization.invalid_count}
+              </strong>
+              <small>不展示原始选择，只展示安全聚合</small>
+            </article>
+          </div>
+          {quality.lineup_quality.violations.length > 0 ? (
+            <ul aria-label="阵容质量违规" className="game-event-list">
+              {quality.lineup_quality.violations.map((violation, index) => (
+                <li key={`${violation.code}-${index}`}>
+                  <strong>{violation.code}</strong>
+                  <span>
+                    {violation.severity} · {violation.count}/{violation.limit} · 座位{" "}
+                    {violation.seat_numbers.join("、") || "—"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <ul aria-label="P2 质量门槛" className="game-event-list">
+            {quality.quality_gates.map((gate) => (
+              <li key={gate.gate}>
+                <strong>
+                  {gate.gate} · {gateStatusLabel(gate.status)}
+                </strong>
+                <span>
+                  {gate.code} · 阈值 {gate.threshold ?? "—"} · 实际 {gate.actual ?? "—"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+function PublicOutcomePanel({ quality }: { quality: AdminGameP2Quality }) {
+  return (
+    <section aria-labelledby="game-outcomes-title" className="game-detail-panel">
+      <PanelHeading
+        eyebrow="PUBLIC OUTCOMES"
+        id="game-outcomes-title"
+        meta={`${quality.public_outcomes.length} 条`}
+        title="公开结算链"
+      />
+      {quality.public_outcomes.length > 0 ? (
+        <ol aria-label="公开结算链" className="game-event-list">
+          {quality.public_outcomes.map((outcome) => (
+            <li key={outcome.event_id}>
+              <strong>
+                第 {outcome.round_number} 轮 · #{outcome.sequence} ·{" "}
+                {publicOutcomeLabel(outcome)}
+              </strong>
+              <span>
+                {outcome.caused_by_event_id
+                  ? `因果来源 ${outcome.caused_by_event_id}`
+                  : "独立公开结算"}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <PanelEmpty
+          text={
+            quality.data_status === "collecting"
+              ? "对局尚未终局，暂不展示公开结算链。"
+              : "旧对局没有结构化公开结算链。"
+          }
+        />
+      )}
+      {quality.public_outcome_summary_mismatch_count > 0 ? (
+        <p className="game-events-boundary">
+          检测到 {quality.public_outcome_summary_mismatch_count} 轮摘要与结算链不一致。
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function publicOutcomeLabel(outcome: AdminPublicOutcome) {
+  const actor = outcome.actor_player_id ?? "系统";
+  const target = outcome.target_player_id ?? "无目标";
+  const labels: Record<AdminPublicOutcome["kind"], string> = {
+    night_death: `${target}夜间出局`,
+    hunter_shot: `${actor}发动猎人技能带走${target}`,
+    self_explosion: `${actor}自爆`,
+    exile: `${target}被放逐`,
+    idiot_reveal: `${actor}翻牌免死`,
+    badge_transferred: `警徽由${actor}移交给${target}`,
+    badge_lost: `${actor}警徽流失`,
+  };
+  return labels[outcome.kind];
+}
+
+function p2StatusLabel(status: AdminGameP2Quality["data_status"]) {
+  return {
+    available: "数据可用",
+    collecting: "采集中",
+    legacy: "旧数据",
+    unavailable: "不可用",
+  }[status];
+}
+
+function gateStatusLabel(status: AdminGameP2Quality["quality_gates"][number]["status"]) {
+  return {
+    pass: "通过",
+    warn: "警告",
+    fail: "失败",
+    unavailable: "不可用",
+  }[status];
 }
 
 function DebugPanel({

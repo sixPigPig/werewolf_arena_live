@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.werewolf.execution_telemetry import record_model_progress_event
+
 PUBLIC_STREAM_FIELD_BY_ACTION = {
     "debate": "say",
     "sheriff_speech": "say",
@@ -44,7 +46,8 @@ class ModelRequestProgress:
         request_id: str,
         model: str,
         message: str,
-        tick_interval: float = 2.0,
+        milestones_seconds: tuple[float, ...] = (3.0, 8.0, 15.0, 30.0),
+        repeat_interval_seconds: float = 15.0,
         delta_suppression_seconds: float = 1.0,
     ) -> None:
         self.event_sink = event_sink
@@ -52,7 +55,8 @@ class ModelRequestProgress:
         self.request_id = request_id
         self.model = model
         self.message = message
-        self.tick_interval = tick_interval
+        self.milestones_seconds = milestones_seconds
+        self.repeat_interval_seconds = repeat_interval_seconds
         self.delta_suppression_seconds = delta_suppression_seconds
         self._started_at = time.monotonic()
         self._last_delta_at: float | None = None
@@ -74,26 +78,36 @@ class ModelRequestProgress:
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread is not None:
-            self._thread.join(timeout=max(0.1, self.tick_interval + 0.1))
+            self._thread.join(timeout=0.2)
 
     def _run(self) -> None:
-        while not self._stop_event.wait(self.tick_interval):
-            now = time.monotonic()
-            if self._should_suppress_tick(now):
-                continue
-            self.event_sink.publish(
-                "model_thinking_tick",
-                round_number=self.context.round_number,
-                phase=self.context.phase,
-                actor=self.context.actor,
-                action=self.context.action,
-                payload={
-                    "request_id": self.request_id,
-                    "model": self.model,
-                    "elapsed_ms": int((now - self._started_at) * 1000),
-                    "message": self.message,
-                },
-            )
+        previous_milestone = 0.0
+        for milestone in self.milestones_seconds:
+            if self._stop_event.wait(max(0.0, milestone - previous_milestone)):
+                return
+            self._publish_tick()
+            previous_milestone = milestone
+        while not self._stop_event.wait(self.repeat_interval_seconds):
+            self._publish_tick()
+
+    def _publish_tick(self) -> None:
+        now = time.monotonic()
+        if self._should_suppress_tick(now):
+            return
+        record_model_progress_event("model_thinking_tick")
+        self.event_sink.publish(
+            "model_thinking_tick",
+            round_number=self.context.round_number,
+            phase=self.context.phase,
+            actor=self.context.actor,
+            action=self.context.action,
+            payload={
+                "request_id": self.request_id,
+                "model": self.model,
+                "elapsed_ms": int((now - self._started_at) * 1000),
+                "message": self.message,
+            },
+        )
 
     def _should_suppress_tick(self, now: float) -> bool:
         with self._lock:

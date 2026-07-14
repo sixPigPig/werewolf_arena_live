@@ -1051,6 +1051,7 @@ def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
         "rule_set",
         "player_configs",
         "lineup_quality_warnings",
+        "lineup_quality_report",
         "created_at",
         "started_at",
         "completed_at",
@@ -1072,9 +1073,12 @@ def test_registry_summary_and_initial_event_use_public_run_fields() -> None:
         "rule_set",
         "player_configs",
         "lineup_quality_warnings",
+        "lineup_quality_report",
     }
     assert summary["lineup_quality_warnings"] == []
+    assert summary["lineup_quality_report"] == {}
     assert run.events[0].payload["lineup_quality_warnings"] == []
+    assert run.events[0].payload["lineup_quality_report"] == {}
     assert summary["rule_set_revision_id"] == "revision-2"
     assert summary["rule_set_revision_no"] == 2
     assert summary["rule_set_content_hash"] == "a" * 64

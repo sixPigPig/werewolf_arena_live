@@ -130,6 +130,41 @@ describe("admin game records contract", () => {
     ).toThrow(/胜方/);
   });
 
+  it("validates P2 empty states, privacy and public outcome uniqueness", () => {
+    for (const dataStatus of ["legacy", "unavailable"] as const) {
+      expect(
+        parseAdminGameDetail({
+          ...contractGameDetail,
+          p2_quality: {
+            ...contractGameDetail.p2_quality,
+            data_status: dataStatus,
+          },
+        }).p2_quality.data_status,
+      ).toBe(dataStatus);
+    }
+    expect(() =>
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        p2_quality: {
+          ...contractGameDetail.p2_quality,
+          rejected_draft: "private-speech-sentinel",
+        },
+      }),
+    ).toThrow(/不允许/);
+    expect(() =>
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        p2_quality: {
+          ...contractGameDetail.p2_quality,
+          public_outcomes: [
+            contractGameDetail.p2_quality.public_outcomes[0],
+            contractGameDetail.p2_quality.public_outcomes[0],
+          ],
+        },
+      }),
+    ).toThrow(/重复 event_id/);
+  });
+
   it("rejects sensitive partial detail fields if the server regresses", () => {
     const redacted = {
       ...contractGameDetail,
@@ -168,7 +203,13 @@ describe("admin game records contract", () => {
     expect(() =>
       parseAdminGameDetail({
         ...redacted,
-        rounds: contractGameDetail.rounds,
+        rounds: contractGameDetail.rounds.map((round) => ({
+          ...round,
+          night_deaths: round.night_deaths.map((death) => ({
+            ...death,
+            cause: "werewolf_attack",
+          })),
+        })),
       }),
     ).toThrow(/死亡原因/);
     expect(() =>
