@@ -10,7 +10,6 @@ PUBLIC_STREAM_FIELD_BY_ACTION = {
     "debate": "say",
     "sheriff_speech": "say",
     "sheriff_pk_speech": "say",
-    "summarize": "summary",
 }
 
 

@@ -10,7 +10,7 @@ from typing import Any, Literal
 from app.werewolf.live import LiveEvent
 
 SpeakerKind = Literal["player", "judge"]
-PUBLIC_SPEECH_ACTIONS = {"debate", "sheriff_speech", "sheriff_pk_speech", "summarize"}
+PUBLIC_SPEECH_ACTIONS = {"debate", "sheriff_speech", "sheriff_pk_speech"}
 PUBLIC_WINNER_ASSETS = {
     "好人阵营": ("游戏结束，好人阵营获胜。", "game_over_villagers"),
     "狼人阵营": ("游戏结束，狼人阵营获胜。", "game_over_wolves"),
@@ -270,7 +270,7 @@ def _judge_cue_for_event(
     if event.type == "phase_started" and event.phase == "vote":
         return JudgeVoiceCue("发言结束，进入放逐投票。", "exile_vote_start")
     if event.type == "phase_started" and event.phase == "summary":
-        return JudgeVoiceCue("现在开始依次发言。")
+        return JudgeVoiceCue("现在公布本轮结算。")
     if event.type == "judge_cue" and event.phase == "night":
         role_cue = NIGHT_ROLE_JUDGE_CUES.get(event.action or "")
         if role_cue is not None:

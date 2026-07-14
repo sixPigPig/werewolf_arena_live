@@ -13,6 +13,7 @@ from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.orphan_reaper import OrphanRecoveryResult
+from app.werewolf.private_memory_cleanup import PrivateMemoryCleanupResult
 from app.werewolf.runner import GameRunError, RunGameResult
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
 
@@ -154,6 +155,92 @@ def test_purge_legacy_game_records_deletes_only_matching_directories(tmp_path, c
     assert (tmp_path / "player_profiles.json").exists()
     assert (tmp_path / "game_ffffffff").is_symlink()
     assert target.exists()
+
+
+def test_redact_private_round_memory_defaults_to_dry_run(capsys, monkeypatch) -> None:
+    calls: list[bool] = []
+
+    class CleanupSession:
+        def __init__(self) -> None:
+            self.commits = 0
+            self.rollbacks = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+    db = CleanupSession()
+
+    def fake_cleanup(_db: object, *, apply: bool) -> PrivateMemoryCleanupResult:
+        calls.append(apply)
+        return PrivateMemoryCleanupResult(
+            applied=apply,
+            run_count=2,
+            event_count=3,
+            voice_count=1,
+            audio_chunk_count=4,
+        )
+
+    monkeypatch.setattr(cli, "SessionLocal", lambda: db)
+    monkeypatch.setattr(cli, "cleanup_private_round_memory", fake_cleanup)
+
+    exit_code = main(["redact-private-round-memory"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert calls == [False]
+    assert db.commits == 0
+    assert db.rollbacks == 1
+    assert "模式=dry-run run=2 事件=3 语音=1 音频块=4 失败=0" in output
+    assert "数据库未修改" in output
+
+
+def test_redact_private_round_memory_apply_commits(capsys, monkeypatch) -> None:
+    class CleanupSession:
+        def __init__(self) -> None:
+            self.commits = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def rollback(self) -> None:
+            pass
+
+    db = CleanupSession()
+    monkeypatch.setattr(cli, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        cli,
+        "cleanup_private_round_memory",
+        lambda _db, *, apply: PrivateMemoryCleanupResult(
+            applied=apply,
+            run_count=1,
+            event_count=1,
+            voice_count=1,
+            audio_chunk_count=1,
+        ),
+    )
+
+    exit_code = main(["redact-private-round-memory", "--apply"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert db.commits == 1
+    assert "模式=apply" in output
+    assert "数据库未修改" not in output
 
 
 def test_serve_command_starts_uvicorn(monkeypatch) -> None:

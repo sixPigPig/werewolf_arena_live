@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from app.werewolf.lm import LmLog
 
@@ -120,6 +120,31 @@ class Player:
         }
 
 
+InterruptionTiming = Literal["before_stage", "before_actor", "after_actor"]
+
+
+@dataclass(frozen=True)
+class StageInterruption:
+    stage: str
+    interrupted_by: str
+    actor: str
+    timing: InterruptionTiming
+    last_completed_speaker: str | None = None
+    completed_actors: list[str] = field(default_factory=list)
+    pending_actors: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "interrupted_by": self.interrupted_by,
+            "actor": self.actor,
+            "timing": self.timing,
+            "last_completed_speaker": self.last_completed_speaker,
+            "completed_actors": self.completed_actors.copy(),
+            "pending_actors": self.pending_actors.copy(),
+        }
+
+
 @dataclass
 class RoundState:
     number: int
@@ -164,6 +189,7 @@ class RoundState:
     success: bool = False
     werewolf_self_exploded: str | None = None
     day_ended_by_self_explosion: bool = False
+    interruption: StageInterruption | None = None
     sheriff_pre_election_bomb_count: int = 0
     sheriff_election_pending: bool = False
     sheriff_badge_lost_reason: str | None = None
@@ -211,6 +237,7 @@ class RoundState:
             "sheriff_badge_lost": self.sheriff_badge_lost,
             "werewolf_self_exploded": self.werewolf_self_exploded,
             "day_ended_by_self_explosion": self.day_ended_by_self_explosion,
+            "interruption": self.interruption.to_dict() if self.interruption else None,
             "sheriff_pre_election_bomb_count": self.sheriff_pre_election_bomb_count,
             "sheriff_election_pending": self.sheriff_election_pending,
             "sheriff_badge_lost_reason": self.sheriff_badge_lost_reason,

@@ -1109,7 +1109,7 @@ def test_voice_stream_service_persists_successful_utterance_chunks_and_completio
     assert voice_store.failed == []
 
 
-def test_voice_stream_service_persists_coalesced_summary_last_event_id(
+def test_voice_stream_service_ignores_private_summary_deltas(
     db_session: Session,
 ) -> None:
     RecordingTtsClient.instances.clear()
@@ -1127,7 +1127,7 @@ def test_voice_stream_service_persists_coalesced_summary_last_event_id(
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        first_event = registry.publish(
+        registry.publish(
             run.run_id,
             "model_response_delta",
             actor="阿青",
@@ -1139,7 +1139,7 @@ def test_voice_stream_service_persists_coalesced_summary_last_event_id(
                 "is_public": True,
             },
         )
-        second_event = registry.publish(
+        registry.publish(
             run.run_id,
             "model_response_delta",
             actor="阿青",
@@ -1154,12 +1154,11 @@ def test_voice_stream_service_persists_coalesced_summary_last_event_id(
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
 
-        utterance_id = websocket.messages[0]["utterance_id"]
-        loaded = store.load_utterance(utterance_id)
-        assert loaded is not None
-        assert loaded["source_event_id"] == first_event.id
-        assert loaded["last_source_event_id"] == second_event.id
-        assert loaded["text"] == "这一轮先看票型，再听下一轮发言。"
+        saved_text = "\n".join(
+            str(voice.get("text") or "") for voice in store.list_playback_voices()
+        )
+        assert "这一轮先看票型" not in saved_text
+        assert "再听下一轮发言" not in saved_text
 
     asyncio.run(stream_live_events())
 

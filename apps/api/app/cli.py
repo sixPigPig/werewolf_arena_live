@@ -32,6 +32,7 @@ from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.providers import default_model_name
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.orphan_reaper import OrphanRecoveryResult, run_live_run_reaper
+from app.werewolf.private_memory_cleanup import cleanup_private_round_memory
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.runner import GameRunError, run_game
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
@@ -196,6 +197,17 @@ def _build_parser() -> argparse.ArgumentParser:
     purge_records_parser.add_argument("--yes", action="store_true")
     purge_records_parser.set_defaults(func=_purge_legacy_game_records_command)
 
+    redact_private_memory_parser = subparsers.add_parser(
+        "redact-private-round-memory",
+        help="Dry-run or apply redaction of leaked private round-memory events and voices.",
+    )
+    redact_private_memory_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply the cleanup in one transaction. Without this flag the command is a dry-run.",
+    )
+    redact_private_memory_parser.set_defaults(func=_redact_private_round_memory_command)
+
     evaluate_parser = subparsers.add_parser(
         "evaluate-replay",
         help="Evaluate a game_complete.json replay for realism issues.",
@@ -236,6 +248,30 @@ def _purge_legacy_game_records_command(args: argparse.Namespace) -> int:
     print(f"匹配={result.matched_count} 删除={result.deleted_count} 跳过={result.skipped_count}")
     if not args.yes and result.matched_count:
         print("未传入 --yes，未删除旧对局目录。")
+    return 0
+
+
+def _redact_private_round_memory_command(args: argparse.Namespace) -> int:
+    with SessionLocal() as db:
+        try:
+            result = cleanup_private_round_memory(db, apply=args.apply)
+            if args.apply:
+                db.commit()
+            else:
+                db.rollback()
+        except Exception as exc:
+            db.rollback()
+            print(f"私密回合记忆清理失败: {exc}", file=sys.stderr)
+            return 1
+
+    mode = "apply" if result.applied else "dry-run"
+    print(
+        f"模式={mode} run={result.run_count} 事件={result.event_count} "
+        f"语音={result.voice_count} 音频块={result.audio_chunk_count} "
+        f"失败={result.failure_count}"
+    )
+    if not result.applied and (result.event_count or result.voice_count):
+        print("未传入 --apply，数据库未修改。")
     return 0
 
 

@@ -182,6 +182,8 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
         _render_base(world_state),
         _render_observations(world_state),
         _render_public_facts(world_state),
+        _render_public_self_history(world_state),
+        _render_stage_interruptions(world_state),
         _render_endgame_context(world_state),
         _render_sheriff_election(world_state),
         _render_debate(world_state),
@@ -221,6 +223,22 @@ def _render_public_facts(world_state: dict[str, Any]) -> str:
     if not facts:
         return "公开事实记录：暂无。"
     return "公开事实记录：\n" + "\n".join(f"- {fact}" for fact in facts)
+
+
+def _render_public_self_history(world_state: dict[str, Any]) -> str:
+    history = world_state.get("public_self_history") or []
+    if not history:
+        return ""
+    return "你的公开发言历史：\n" + "\n".join(f"- {line}" for line in history)
+
+
+def _render_stage_interruptions(world_state: dict[str, Any]) -> str:
+    interruptions = world_state.get("stage_interruptions") or []
+    if not interruptions:
+        return ""
+    return "公开流程中断记录：\n" + "\n".join(
+        f"- {line}" for line in interruptions
+    )
 
 
 def _render_endgame_context(world_state: dict[str, Any]) -> str:

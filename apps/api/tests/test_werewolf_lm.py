@@ -155,6 +155,22 @@ def test_prompt_renders_public_facts() -> None:
     assert "7号玩家警上声明6号玩家为好人。" in prompt
 
 
+def test_prompt_renders_public_self_history() -> None:
+    prompt, _schema = build_prompt(
+        "debate",
+        {
+            **_world_state_for_special_action("预言家", ""),
+            "public_self_history": [
+                "第1轮警长PK发言：5号玩家：我5号，预言家，昨晚验6号好人。"
+            ],
+        },
+    )
+
+    assert "你的公开发言历史" in prompt
+    assert "第1轮警长PK发言" in prompt
+    assert "昨晚验6号好人" in prompt
+
+
 def test_debate_prompt_renders_turn_guidance_and_quality_feedback() -> None:
     prompt, _schema = build_prompt(
         "debate",
@@ -535,7 +551,7 @@ def test_action_visible_stream_field_only_allows_public_actions() -> None:
     assert action_visible_stream_field("debate") == "say"
     assert action_visible_stream_field("sheriff_speech") == "say"
     assert action_visible_stream_field("sheriff_pk_speech") == "say"
-    assert action_visible_stream_field("summarize") == "summary"
+    assert action_visible_stream_field("summarize") is None
     assert action_visible_stream_field("vote") is None
     assert action_visible_stream_field("remove") is None
 

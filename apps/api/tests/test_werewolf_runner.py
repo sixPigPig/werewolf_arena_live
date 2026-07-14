@@ -21,6 +21,7 @@ from app.werewolf.engine import (
     MaxRoundsExceeded,
     NO_HUNTER_SHOT,
     NO_WITCH_POISON,
+    PublicStageCursor,
     WEREWOLF_NO_SELF_EXPLODE,
     WEREWOLF_SELF_EXPLODE,
     initialize_game_state,
@@ -1323,9 +1324,338 @@ def test_summary_phase_does_not_publish_private_summaries() -> None:
         for event in sink.events
         if event["type"] == "state_updated" and event.get("phase") == "summary"
     ]
-    assert summary_events
+    assert len(summary_events) == 1
+    assert summary_events[0]["action"] == "public_round_brief"
+    assert summary_events[0]["payload"]["public_summary"] == "第1轮；没有公开出局。"
     assert all("private_summaries" not in (event.get("payload") or {}) for event in summary_events)
     assert all("summaries" not in (event.get("payload") or {}) for event in summary_events)
+
+
+def test_terminal_exile_skips_private_round_memories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="terminal_exile_skips_memories",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260714,
+        rule_set=rule_set,
+    )
+    wolf = next(player.name for player in state.players if player.role == WEREWOLF)
+    target = next(player.name for player in state.players if player.role == "村民")
+    other_good = next(
+        player.name
+        for player in state.players
+        if player.role != WEREWOLF and player.name != target
+    )
+    active_players = [wolf, target, other_good]
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    provider = FakeProvider(
+        [{"reasoning": "不应调用", "summary": "SENTINEL_PRIVATE_SUMMARY"}]
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    votes = {wolf: target, target: other_good, other_good: target}
+    monkeypatch.setattr(engine, "_run_sheriff_election_if_needed", lambda *_: False)
+    monkeypatch.setattr(engine, "_run_debate_phase", lambda *_: False)
+    monkeypatch.setattr(engine, "_run_voting", lambda *_: (votes, []))
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert state.winner == "狼人阵营"
+    assert provider.calls == 0
+    assert round_log.summaries == []
+    assert round_state.private_summaries == {}
+    assert round_state.public_summary == f"第2轮；{target}被放逐。"
+    assert any(
+        event["type"] == "state_updated" and event["action"] == "public_round_brief"
+        for event in sink.events
+    )
+    assert all(event.get("action") != "summarize" for event in sink.events)
+
+
+def test_terminal_hunter_shot_waits_for_shot_then_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="terminal_hunter_shot",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260714,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, hunter.name, civilian.name]
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    provider = HunterShotProvider(
+        remove_target=hunter.name,
+        save_choice="不使用解药",
+        poison_choice="不使用毒药",
+        shoot_choice=wolf.name,
+    )
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+    votes = {
+        wolf.name: hunter.name,
+        hunter.name: wolf.name,
+        civilian.name: hunter.name,
+    }
+    monkeypatch.setattr(engine, "_run_sheriff_election_if_needed", lambda *_: False)
+    monkeypatch.setattr(engine, "_run_debate_phase", lambda *_: False)
+    monkeypatch.setattr(engine, "_run_voting", lambda *_: (votes, []))
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.exiled == hunter.name
+    assert round_state.hunter_shot == wolf.name
+    assert [death.player for death in round_state.day_deaths] == [hunter.name, wolf.name]
+    assert active_players == [civilian.name]
+    assert state.winner == "好人阵营"
+    assert provider.actions == ["hunter_shoot"]
+    assert round_log.summaries == []
+    assert round_state.private_summaries == {}
+
+
+def test_terminal_self_explosion_skips_remaining_day_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="terminal_self_explosion",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260714,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    seer = next(player for player in state.players if player.role == SEER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, seer.name, civilian.name]
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    provider = SelfExplosionProvider(self_exploders=[wolf.name], candidates=set())
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+    monkeypatch.setattr(engine, "_run_sheriff_election_if_needed", lambda *_: False)
+    monkeypatch.setattr(
+        engine,
+        "_run_voting",
+        lambda *_: pytest.fail("a terminal self-explosion must skip voting"),
+    )
+
+    engine._run_day_phase(round_state, round_log, active_players)
+
+    assert round_state.werewolf_self_exploded == wolf.name
+    assert active_players == [seer.name, civilian.name]
+    assert state.winner == "好人阵营"
+    assert round_state.votes == []
+    assert round_log.summaries == []
+    assert round_state.private_summaries == {}
+
+
+def test_terminal_deferred_night_deaths_skip_debate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="terminal_deferred_night_deaths",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260714,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    seer = next(player for player in state.players if player.role == SEER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, seer.name, civilian.name]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    provider = FakeProvider([{"reasoning": "不应调用", "say": "不应发言"}])
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+    monkeypatch.setattr(engine, "_run_sheriff_election_if_needed", lambda *_: False)
+    monkeypatch.setattr(
+        engine,
+        "_run_debate_phase",
+        lambda *_: pytest.fail("terminal deferred deaths must skip debate"),
+    )
+
+    engine._run_day_phase(
+        round_state,
+        round_log,
+        active_players,
+        [DeathEvent(seer.name, "werewolf_attack", "狼人")],
+    )
+
+    assert [death.player for death in round_state.night_deaths] == [seer.name]
+    assert active_players == [wolf.name, civilian.name]
+    assert state.winner == "狼人阵营"
+    assert provider.calls == 0
+
+
+def test_terminal_witch_multi_death_resolves_all_deaths_before_win_check() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="terminal_witch_multi_death",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260714,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    seer = next(player for player in state.players if player.role == SEER)
+    witch = next(player for player in state.players if player.role == WITCH)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, seer.name, witch.name, civilian.name]
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    provider = WitchChoiceProvider(
+        remove_target=seer.name,
+        save_choice="不使用解药",
+        poison_choice=civilian.name,
+    )
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+
+    assert pending_deaths is None
+    assert [(death.player, death.cause) for death in round_state.night_deaths] == [
+        (seer.name, "werewolf_attack"),
+        (civilian.name, "witch_poison"),
+    ]
+    assert active_players == [wolf.name, witch.name]
+    assert state.winner == "狼人阵营"
+
+
+def test_decisive_state_precedes_game_completed_without_model_events_between(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="terminal_event_order",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260714,
+        rule_set=rule_set,
+    )
+    wolf = next(player.name for player in state.players if player.role == WEREWOLF)
+    target = next(player.name for player in state.players if player.role == "村民")
+    other_good = next(
+        player.name
+        for player in state.players
+        if player.role != WEREWOLF and player.name != target
+    )
+    active_players = [wolf, target, other_good]
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=FakeProvider([]),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    votes = {wolf: target, target: other_good, other_good: target}
+    monkeypatch.setattr(engine, "_run_sheriff_election_if_needed", lambda *_: False)
+    monkeypatch.setattr(engine, "_run_debate_phase", lambda *_: False)
+    monkeypatch.setattr(engine, "_run_voting", lambda *_: (votes, []))
+
+    engine._run_day_phase(round_state, round_log, active_players)
+    sink.publish("game_completed", payload={"winner": state.winner})
+
+    decisive_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated"
+        and event.get("phase") == "vote"
+        and (event.get("payload") or {}).get("exiled") == target
+    )
+    completed_index = next(
+        index for index, event in enumerate(sink.events) if event["type"] == "game_completed"
+    )
+    model_event_types = {
+        "action_requested",
+        "model_request_started",
+        "model_thinking_tick",
+        "model_thinking_delta",
+        "model_response_delta",
+        "model_response_received",
+        "action_parsed",
+    }
+
+    assert decisive_index < completed_index
+    assert not any(
+        event["type"] in model_event_types
+        for event in sink.events[decisive_index + 1 : completed_index]
+    )
+
+
+def test_player_action_is_rejected_after_winner_is_set() -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="terminal_action_guard",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260714,
+        rule_set=rule_set,
+    )
+    provider = FakeProvider([{"reasoning": "不应调用", "say": "不应发言"}])
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=1, players=[player.name for player in state.players])
+    state.winner = "狼人阵营"
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot request player action after game is terminal",
+    ):
+        engine._player_action(
+            player=state.players[0],
+            action="debate",
+            options=[],
+            result_key="say",
+            round_state=round_state,
+            phase="day",
+        )
+
+    assert provider.calls == 0
+    assert sink.events == []
 
 
 def test_world_state_includes_public_facts_for_late_day_actions() -> None:
@@ -2794,7 +3124,11 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
         round_state,
         round_log,
         active_players,
-        "并发自爆测试",
+        PublicStageCursor(
+            stage="debate",
+            ordered_actors=tuple(active_players),
+            timing="before_stage",
+        ),
     )
 
     assert interrupted is True
@@ -2804,6 +3138,11 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     assert round_state.werewolf_self_exploded == exploding_wolf
     assert round_log.werewolf_self_explosion is not None
     assert round_log.werewolf_self_explosion.actor == exploding_wolf
+    assert round_state.interruption is not None
+    assert round_state.interruption.stage == "debate"
+    assert round_state.interruption.timing == "before_stage"
+    assert round_state.interruption.completed_actors == []
+    assert round_state.interruption.pending_actors == [player.name for player in state.players]
     private_decision_events = [
         event
         for event in sink.events
@@ -2831,6 +3170,7 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     assert public_updates
     assert public_updates[-1]["actor"] == exploding_wolf
     assert public_updates[-1]["payload"]["werewolf_self_exploded"] == exploding_wolf
+    assert public_updates[-1]["payload"]["interruption"] == round_state.interruption.to_dict()
 
 
 def test_first_pre_sheriff_self_explosion_ends_day_without_losing_badge() -> None:
@@ -3035,6 +3375,69 @@ def test_werewolves_can_self_explode_after_day_debate_speech() -> None:
     assert round_state.votes == []
     assert round_log.summaries == []
     assert exploding_wolf not in active_players
+
+
+def test_self_explosion_before_actor_records_pending_speakers_and_reaches_prompt() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_interruption_before_actor",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260714,
+        rule_set=rule_set,
+    )
+    exploding_wolf = next(player.name for player in state.players if player.role == WEREWOLF)
+    first_speaker = next(player.name for player in state.players if player.role != WEREWOLF)
+    remaining = [
+        player.name
+        for player in state.players
+        if player.name not in {first_speaker, exploding_wolf}
+    ]
+    speech_order = [first_speaker, exploding_wolf, *remaining]
+    active_players = speech_order.copy()
+    provider = StageTriggeredSelfExplosionProvider(
+        exploding_wolf=exploding_wolf,
+        trigger_stage=f"{exploding_wolf} 发言前",
+        candidates=set(),
+    )
+    round_state = RoundState(number=3, players=active_players.copy())
+    round_log = RoundLog(number=3)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    interrupted = engine._run_debate_phase(round_state, round_log, active_players)
+
+    assert interrupted is True
+    assert round_state.interruption is not None
+    assert round_state.interruption.stage == "debate"
+    assert round_state.interruption.interrupted_by == "werewolf_self_explosion"
+    assert round_state.interruption.actor == exploding_wolf
+    assert round_state.interruption.timing == "before_actor"
+    assert round_state.interruption.last_completed_speaker == first_speaker
+    assert round_state.interruption.completed_actors == [first_speaker]
+    assert round_state.interruption.pending_actors == speech_order[1:]
+    interruption_fact = next(
+        fact for fact in state.public_facts if fact["category"] == "interruption"
+    )
+    assert interruption_fact["retention"] == "critical"
+    assert interruption_fact["details"] == round_state.interruption.to_dict()
+
+    state.rounds.append(round_state)
+    future_round = RoundState(number=4, players=active_players.copy())
+    viewer = state.player_by_name()[remaining[0]]
+    future_world_state = engine._world_state(viewer, [], future_round)
+    interruption_lines = future_world_state["stage_interruptions"]
+    assert isinstance(interruption_lines, list)
+    assert any("尚未获得发言机会" in line for line in interruption_lines)
+    assert any("不能将其视为主动沉默" in line for line in interruption_lines)
+    future_prompt, _schema = build_prompt("debate", future_world_state)
+    assert "公开流程中断记录" in future_prompt
+    assert "尚未获得发言机会" in future_prompt
+    assert "不能将其视为主动沉默" in future_prompt
 
 
 def test_post_sheriff_self_explosion_ends_day_without_consuming_badge() -> None:
@@ -3491,6 +3894,8 @@ def test_idiot_reveals_and_survives_first_exile() -> None:
     assert idiot.name in active_players
     assert idiot.can_vote is False
     assert idiot.revealed_role is True
+    assert engine._refresh_winner(active_players) is False
+    assert state.winner == ""
 
 
 def test_revealed_idiot_is_exiled_if_voted_out_again() -> None:
@@ -3604,28 +4009,21 @@ def test_round_summaries_request_active_players_sequentially() -> None:
 
     engine._run_summaries(round_state, round_log, active_players)
 
-    summary_timeline = [
-        (event["type"], event.get("actor"))
+    summary_events = [
+        event
         for event in sink.events
         if event.get("action") == "summarize"
         and event["type"]
         in {
             "action_requested",
             "model_request_started",
+            "model_thinking_tick",
+            "model_response_delta",
             "model_response_received",
             "action_parsed",
         }
     ]
-    assert summary_timeline == [
-        (event_type, actor)
-        for actor in active_players
-        for event_type in (
-            "action_requested",
-            "model_request_started",
-            "model_response_received",
-            "action_parsed",
-        )
-    ]
+    assert summary_events == []
     assert list(round_state.private_summaries) == active_players
     assert round_state.summaries == {}
     assert round_state.public_summary == "第1轮；没有公开出局。"
@@ -4223,6 +4621,26 @@ def test_sheriff_election_runs_pk_and_runoff_when_first_vote_ties() -> None:
     assert round_state.sheriff_runoff_votes == runoff_votes
     assert round_state.sheriff_elected == first_candidate
     assert state.sheriff == first_candidate
+    pk_facts = [
+        fact
+        for fact in state.public_facts
+        if fact.get("stage") == "sheriff_pk_speech"
+    ]
+    assert [fact["actor"] for fact in pk_facts] == [first_candidate, second_candidate]
+    assert all(fact["retention"] == "critical" for fact in pk_facts)
+    assert all(fact["fact_id"].startswith("r1:sheriff_pk_speech:") for fact in pk_facts)
+    future_round = RoundState(number=4, players=active_players.copy())
+    future_world_state = engine._world_state(
+        state.player_by_name()[first_candidate],
+        [],
+        future_round,
+    )
+    self_history = future_world_state["public_self_history"]
+    assert isinstance(self_history, list)
+    assert any("第1轮警长PK发言" in line for line in self_history)
+    future_prompt, _schema = build_prompt("debate", future_world_state)
+    assert "你的公开发言历史" in future_prompt
+    assert "第1轮警长PK发言" in future_prompt
 
 
 def test_sheriff_badge_is_lost_and_all_players_are_off_sheriff_when_no_one_runs() -> None:

@@ -99,7 +99,14 @@ from app.werewolf.replay import (
     ReplayWriteFencedError,
     SESSION_ID_RE,
 )
-from app.werewolf.replay_playback import build_replay_playback
+from app.werewolf.replay_playback import (
+    PRIVATE_ROUND_MEMORY_ACTION,
+    build_public_game_session,
+    build_replay_playback,
+    filter_public_playback_events,
+    filter_public_playback_voices,
+    private_round_memory_event_ids,
+)
 from app.werewolf.rules import (
     DEFAULT_RULE_SET_ID,
     OFFICIAL_RULE_SETS,
@@ -1259,12 +1266,19 @@ def get_game_playback(
 
     saved_voices: list[dict[str, Any]] = []
     if persisted_events:
-        playback["events"] = persisted_events
+        private_event_ids = private_round_memory_event_ids(persisted_events)
+        playback["events"] = filter_public_playback_events(persisted_events)
         try:
             saved_voices = DatabaseVoiceStore(
                 db,
                 session_id=session_id,
-            ).list_playback_voices()
+            ).list_playback_voices(
+                excluded_actions=frozenset({PRIVATE_ROUND_MEMORY_ACTION})
+            )
+            saved_voices = filter_public_playback_voices(
+                saved_voices,
+                private_event_ids=private_event_ids,
+            )
         except RecoverableDatabaseError:
             saved_voices = []
 
@@ -1311,7 +1325,7 @@ def get_game(
     store: Annotated[GameRecordStore, Depends(get_replay_store)],
 ) -> dict:
     try:
-        return store.load_session(session_id)
+        return build_public_game_session(store.load_session(session_id))
     except ReplayNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Game session not found") from exc
 

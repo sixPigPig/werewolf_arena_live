@@ -20,6 +20,7 @@ from app.werewolf.models import (
     Player,
     RoundLog,
     RoundState,
+    StageInterruption,
 )
 
 RESUME_CHECKPOINT_FILE = "resume_checkpoint.json"
@@ -431,10 +432,32 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
         sheriff_badge_lost=bool(data.get("sheriff_badge_lost", False)),
         werewolf_self_exploded=data.get("werewolf_self_exploded"),
         day_ended_by_self_explosion=bool(data.get("day_ended_by_self_explosion", False)),
+        interruption=stage_interruption_from_dict(data.get("interruption")),
         sheriff_pre_election_bomb_count=int(data.get("sheriff_pre_election_bomb_count", 0)),
         sheriff_election_pending=bool(data.get("sheriff_election_pending", False)),
         sheriff_badge_lost_reason=data.get("sheriff_badge_lost_reason"),
         success=bool(data.get("success", False)),
+    )
+
+
+def stage_interruption_from_dict(data: object) -> StageInterruption | None:
+    if not isinstance(data, dict):
+        return None
+    timing = str(data.get("timing") or "before_stage")
+    if timing not in {"before_stage", "before_actor", "after_actor"}:
+        timing = "before_stage"
+    return StageInterruption(
+        stage=str(data.get("stage") or ""),
+        interrupted_by=str(data.get("interrupted_by") or ""),
+        actor=str(data.get("actor") or ""),
+        timing=timing,  # type: ignore[arg-type]
+        last_completed_speaker=(
+            str(data["last_completed_speaker"])
+            if data.get("last_completed_speaker") is not None
+            else None
+        ),
+        completed_actors=[str(item) for item in data.get("completed_actors", [])],
+        pending_actors=[str(item) for item in data.get("pending_actors", [])],
     )
 
 

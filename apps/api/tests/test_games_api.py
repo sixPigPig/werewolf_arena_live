@@ -3498,7 +3498,21 @@ def test_list_games_returns_complete_and_partial_sessions() -> None:
 
 def test_get_game_detail_returns_state_and_logs() -> None:
     session_id = "game_05095066"
-    store_game_session(session_id, state=sample_state(session_id), logs=sample_logs())
+    state = sample_state(session_id)
+    state["rounds"][0]["private_summaries"] = {
+        "张三": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号"
+    }
+    logs = sample_logs()
+    logs[0]["summaries"] = [
+        {
+            "actor": "张三",
+            "action": "summarize",
+            "options": [],
+            "choice": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号",
+            "lm_log": {"prompt": "私密总结", "raw_response": "私密总结", "parsed": {}},
+        }
+    ]
+    store_game_session(session_id, state=state, logs=logs)
     override_replay_store()
 
     try:
@@ -3512,6 +3526,10 @@ def test_get_game_detail_returns_state_and_logs() -> None:
     assert payload["status"] == "complete"
     assert payload["state"]["players"][0]["name"] == "张三"
     assert payload["logs"][0]["eliminate"]["lm_log"]["prompt"] == "请选择今晚击杀对象。"
+    assert "summaries" not in payload["state"]["rounds"][0]
+    assert "private_summaries" not in payload["state"]["rounds"][0]
+    assert "summaries" not in payload["logs"][0]
+    assert "SENTINEL_WOLF_PRIVATE_PLAN" not in response.text
     assert (
         'werewolf_rule_checkpoint_failures_total{reason="invalid_structure"} 0' in _rule_metrics()
     )
@@ -3537,6 +3555,21 @@ def test_get_game_playback_returns_complete_playback_events() -> None:
         "choice": "李四",
         "reasoning": "secret chain",
     }
+    logs[0]["summaries"] = [
+        {
+            "actor": "张三",
+            "action": "summarize",
+            "options": [],
+            "choice": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号",
+            "lm_log": {
+                "prompt": "私密总结",
+                "raw_response": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号",
+                "parsed": {
+                    "summary": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号"
+                },
+            },
+        }
+    ]
     store_game_session(session_id, state=state, logs=logs)
     override_replay_store()
 
@@ -3571,6 +3604,8 @@ def test_get_game_playback_returns_complete_playback_events() -> None:
     assert "round_started" in event_types
     assert "action_requested" in event_types
     assert "action_parsed" in event_types
+    assert all(event.get("action") != "summarize" for event in events)
+    assert "SENTINEL_WOLF_PRIVATE_PLAN" not in response.text
     requested_event = next(
         event
         for event in events
@@ -3691,6 +3726,66 @@ def test_get_game_playback_returns_persisted_events_and_saved_voices() -> None:
             "chunks": [{"chunk_index": 0, "data": "YWJj"}],
         }
     ]
+
+
+def test_historical_summary_event_and_voice_are_filtered_on_read() -> None:
+    session_id = "game_a110e099"
+    sentinel = "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号"
+    store_game_session(session_id)
+    registry = LiveRunRegistry(live_store=RecordingSessionLiveStore())
+    run = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    private_event = registry.publish(
+        run.run_id,
+        "model_response_delta",
+        actor="10号玩家",
+        action="summarize",
+        payload={
+            "request_id": "req-private-summary",
+            "visible_text": sentinel,
+            "is_public": True,
+        },
+    )
+    public_event = registry.publish(
+        run.run_id,
+        "state_updated",
+        action="public_round_brief",
+        payload={"public_summary": "第4轮；1号玩家被放逐。"},
+    )
+    with TestingSessionLocal() as session:
+        voice_store = DatabaseVoiceStore(session, session_id=session_id)
+        voice_store.upsert_utterance(
+            VoiceUtterance(
+                utterance_id="voice_private_summary",
+                run_id=run.run_id,
+                source_event_id=private_event.id,
+                request_id="req-private-summary",
+                speaker_kind="player",
+                speaker_name="10号玩家",
+                speaker="player",
+                text=sentinel,
+                action=None,
+            ),
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
+        voice_store.append_chunk("voice_private_summary", chunk_index=0, audio=b"secret")
+        voice_store.complete_utterance("voice_private_summary", duration_ms=100)
+
+    response = client.get(f"/api/v1/games/{session_id}/playback")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert all(event.get("action") != "summarize" for event in payload["events"])
+    assert any(event["id"] == public_event.id for event in payload["events"])
+    assert payload["voices"] == []
+    assert sentinel not in response.text
 
 
 def test_get_game_playback_repairs_incomplete_saved_subtitle_timings() -> None:
@@ -4082,6 +4177,15 @@ def test_get_game_playback_preserves_public_day_stage_fields() -> None:
             "sheriff_badge_lost": False,
             "werewolf_self_exploded": "李四",
             "day_ended_by_self_explosion": True,
+            "interruption": {
+                "stage": "sheriff_speech",
+                "interrupted_by": "werewolf_self_explosion",
+                "actor": "李四",
+                "timing": "before_actor",
+                "last_completed_speaker": "张三",
+                "completed_actors": ["张三"],
+                "pending_actors": ["李四"],
+            },
             "sheriff_pre_election_bomb_count": 1,
             "sheriff_election_pending": True,
             "sheriff_badge_lost_reason": "首爆中断警长竞选",
@@ -4105,8 +4209,6 @@ def test_get_game_playback_preserves_public_day_stage_fields() -> None:
         "debate": [],
         "bids": [{"张三": 3}],
         "votes": {"张三": "李四"},
-        "summaries": {"张三": "我会隐藏身份。"},
-        "private_summaries": {},
         "public_summary": "",
         "exiled": None,
         "day_deaths": [],
@@ -4132,6 +4234,15 @@ def test_get_game_playback_preserves_public_day_stage_fields() -> None:
         "sheriff_badge_lost": False,
         "werewolf_self_exploded": "李四",
         "day_ended_by_self_explosion": True,
+        "interruption": {
+            "stage": "sheriff_speech",
+            "interrupted_by": "werewolf_self_explosion",
+            "actor": "李四",
+            "timing": "before_actor",
+            "last_completed_speaker": "张三",
+            "completed_actors": ["张三"],
+            "pending_actors": ["李四"],
+        },
         "sheriff_pre_election_bomb_count": 1,
         "sheriff_election_pending": True,
         "sheriff_badge_lost_reason": "首爆中断警长竞选",

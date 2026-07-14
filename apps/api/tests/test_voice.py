@@ -45,7 +45,7 @@ def test_public_speech_event_matches_supported_actions() -> None:
     assert is_public_speech_event(event) is True
 
 
-def test_public_summary_delta_is_voice_speech_event() -> None:
+def test_private_summary_delta_is_never_a_voice_speech_event() -> None:
     event = live_event(
         14,
         "model_response_delta",
@@ -65,11 +65,8 @@ def test_public_summary_delta_is_voice_speech_event() -> None:
         player_seats={"阿青": 1},
     )
 
-    assert is_public_speech_event(event) is True
-    assert utterance is not None
-    assert utterance.speaker_kind == "player"
-    assert utterance.speaker_name == "1号玩家"
-    assert utterance.text == "这一轮重点复盘票型。"
+    assert is_public_speech_event(event) is False
+    assert utterance is None
 
 
 def test_private_or_non_speech_event_is_not_public_speech() -> None:
@@ -372,7 +369,7 @@ def test_sheriff_election_result_uses_managed_seat_asset() -> None:
     assert utterance.static_asset_id == "sheriff_result_seat_03"
 
 
-def test_summary_phase_judge_voice_prompts_sequential_speech() -> None:
+def test_summary_phase_judge_voice_announces_public_resolution() -> None:
     config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
     event = live_event(16, "phase_started", phase="summary")
 
@@ -381,7 +378,7 @@ def test_summary_phase_judge_voice_prompts_sequential_speech() -> None:
     assert utterance is not None
     assert utterance.speaker_kind == "judge"
     assert utterance.speaker_name == "法官"
-    assert utterance.text == "现在开始依次发言。"
+    assert utterance.text == "现在公布本轮结算。"
     assert utterance.static_asset_id is None
 
 

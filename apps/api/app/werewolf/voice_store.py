@@ -160,7 +160,11 @@ class DatabaseVoiceStore:
         )
         return [row.audio for row in rows]
 
-    def list_playback_voices(self) -> list[dict[str, Any]]:
+    def list_playback_voices(
+        self,
+        *,
+        excluded_actions: frozenset[str] = frozenset(),
+    ) -> list[dict[str, Any]]:
         rows = (
             self.db.query(VoiceUtteranceRecord, VoiceAudioChunkRecord)
             .join(
@@ -183,6 +187,8 @@ class DatabaseVoiceStore:
 
         voices_by_id: dict[str, dict[str, Any]] = {}
         for utterance, chunk in rows:
+            if utterance.action in excluded_actions:
+                continue
             voice = voices_by_id.setdefault(
                 utterance.utterance_id,
                 {

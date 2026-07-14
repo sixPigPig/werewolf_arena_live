@@ -6,7 +6,7 @@ import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from app.werewolf.action_quality import action_quality_warnings
 from app.werewolf.config import (
@@ -33,12 +33,14 @@ from app.werewolf.models import (
     Player,
     RoundLog,
     RoundState,
+    StageInterruption,
 )
 from app.werewolf.player_configs import (
     PlayerConfig,
     validate_unique_effective_player_names,
 )
 from app.werewolf.public_facts import (
+    FactRetention,
     PublicFact,
     compressed_public_facts,
     public_fact_from_dict,
@@ -76,6 +78,7 @@ from app.werewolf.rules import (
 
 
 MAX_WEREWOLF_KILL_VOTE_ROUNDS = 8
+EventVisibility = Literal["public", "private"]
 
 
 class MaxRoundsExceeded(RuntimeError):
@@ -129,7 +132,7 @@ class PlayerActionRequest:
     round_state: RoundState
     phase: str
     world_state: dict[str, object]
-    is_secret_wolf_action: bool
+    event_visibility: EventVisibility
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,20 @@ class PlayerActionResult:
     request: PlayerActionRequest
     value: object | None
     lm_log: LmLog
+
+
+@dataclass(frozen=True)
+class PublicStageCursor:
+    stage: str
+    ordered_actors: tuple[str, ...] = ()
+    completed_actors: tuple[str, ...] = ()
+    current_actor: str | None = None
+    timing: Literal["before_stage", "before_actor", "after_actor"] = "before_stage"
+
+    @property
+    def pending_actors(self) -> list[str]:
+        completed = set(self.completed_actors)
+        return [actor for actor in self.ordered_actors if actor not in completed]
 
 
 class _OrderedBatchProvider:
@@ -322,7 +339,7 @@ class GameEngine:
             if self.starting_active_players is not None
             else [player.name for player in self.state.players]
         )
-        self.state.winner = self._get_winner(active_players)
+        self._refresh_winner(active_players)
         self._publish(
             "game_started",
             payload={
@@ -353,14 +370,12 @@ class GameEngine:
             )
 
             pending_deaths = self._run_night_phase(round_state, round_log, active_players)
-            if round_state.night_deaths:
-                self.state.winner = self._get_winner(active_players)
-                if self.state.winner:
-                    round_state.success = True
-                    break
+            if self.state.winner:
+                round_state.success = True
+                break
 
             self._run_day_phase(round_state, round_log, active_players, pending_deaths)
-            self.state.winner = self._get_winner(active_players)
+            self._refresh_winner(active_players)
             round_state.success = True
 
         return logs
@@ -473,6 +488,11 @@ class GameEngine:
                 round_state.number,
                 "death",
                 f"第{round_state.number}轮：夜晚，{eliminated_names}出局。",
+                stage="night_resolution",
+                retention="critical",
+                details={
+                    "players": [death.player for death in round_state.night_deaths],
+                },
             )
         else:
             self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
@@ -490,6 +510,7 @@ class GameEngine:
                 "active_players": active_players.copy(),
             },
         )
+        self._refresh_winner(active_players)
 
         return None
 
@@ -916,6 +937,15 @@ class GameEngine:
                 round_state.night_deaths.append(death)
             else:
                 round_state.day_deaths.append(death)
+            self._add_public_fact(
+                round_state.number,
+                "death",
+                f"第{round_state.number}轮：{hunter.name}发动猎人技能，{shot_player}出局。",
+                stage="hunter_shot",
+                actor=hunter.name,
+                retention="critical",
+                details={"target": shot_player},
+            )
             if transfer_sheriff_badge:
                 self._maybe_transfer_sheriff_badge(
                     dead_player=shot_player,
@@ -977,6 +1007,9 @@ class GameEngine:
                 "vote",
                 f"第{round_state.number}轮票型："
                 + "；".join(f"{voter}->{target}" for voter, target in votes.items()),
+                stage="vote",
+                retention="important",
+                details={"votes": votes.copy()},
             )
         self._publish_state_updated(
             round_state=round_state,
@@ -1003,8 +1036,11 @@ class GameEngine:
                 "active_players": active_players.copy(),
             },
         )
-
-        self._run_summaries(round_state, round_log, active_players)
+        is_terminal = self._refresh_winner(active_players)
+        self._publish_public_round_brief(round_state, active_players)
+        if is_terminal:
+            return
+        self._run_private_round_memories(round_state, round_log, active_players)
 
     def _finish_deferred_night_deaths_if_needed(
         self,
@@ -1038,6 +1074,11 @@ class GameEngine:
                 round_state.number,
                 "death",
                 f"第{round_state.number}轮：夜晚，{eliminated_names}出局。",
+                stage="night_resolution",
+                retention="critical",
+                details={
+                    "players": [death.player for death in round_state.night_deaths],
+                },
             )
         else:
             self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
@@ -1067,7 +1108,7 @@ class GameEngine:
                 "active_players": active_players.copy(),
             },
         )
-        self.state.winner = self._get_winner(active_players)
+        self._refresh_winner(active_players)
 
     def _publish_self_explosion_update(
         self,
@@ -1087,6 +1128,9 @@ class GameEngine:
                 "sheriff_election_pending": round_state.sheriff_election_pending,
                 "sheriff_badge_lost": round_state.sheriff_badge_lost,
                 "sheriff_badge_lost_reason": round_state.sheriff_badge_lost_reason,
+                "interruption": (
+                    round_state.interruption.to_dict() if round_state.interruption else None
+                ),
                 "active_players": active_players.copy(),
             },
         )
@@ -1100,13 +1144,20 @@ class GameEngine:
         speech_order = self._speech_order(round_state, round_log, active_players)
         round_state.speech_order = speech_order
         players_by_name = self.state.player_by_name()
+        completed_speakers: list[str] = []
 
         for speaker in speech_order:
             if self._maybe_run_werewolf_self_explosion(
                 round_state,
                 round_log,
                 active_players,
-                f"{speaker} 发言前",
+                PublicStageCursor(
+                    stage="debate",
+                    ordered_actors=tuple(speech_order),
+                    completed_actors=tuple(completed_speakers),
+                    current_actor=speaker,
+                    timing="before_actor",
+                ),
             ):
                 return True
             player = players_by_name[speaker]
@@ -1133,6 +1184,7 @@ class GameEngine:
             entry = DebateEntry(speaker=speaker, message=message)
             round_state.debate.append(entry)
             round_log.debate.append(action_log)
+            completed_speakers.append(speaker)
             self._record_public_debate(active_players, entry)
             self._publish_state_updated(
                 round_state=round_state,
@@ -1149,7 +1201,13 @@ class GameEngine:
                 round_state,
                 round_log,
                 active_players,
-                f"{speaker} 发言后",
+                PublicStageCursor(
+                    stage="debate",
+                    ordered_actors=tuple(speech_order),
+                    completed_actors=tuple(completed_speakers),
+                    current_actor=speaker,
+                    timing="after_actor",
+                ),
             ):
                 return True
         return False
@@ -1173,7 +1231,7 @@ class GameEngine:
         round_state: RoundState,
         round_log: RoundLog,
         active_players: list[str],
-        stage: str,
+        cursor: PublicStageCursor,
     ) -> bool:
         if not self.rule_set.werewolf_self_explosion_enabled:
             return False
@@ -1192,7 +1250,16 @@ class GameEngine:
                 result_key="self_explode",
                 round_state=round_state,
                 phase="day",
-                extra_world_state={"self_explosion_stage": stage},
+                extra_world_state={
+                    "self_explosion_stage": self._self_explosion_stage_description(cursor),
+                    "self_explosion_stage_context": {
+                        "stage": cursor.stage,
+                        "timing": cursor.timing,
+                        "current_actor": cursor.current_actor,
+                        "completed_actors": list(cursor.completed_actors),
+                        "pending_actors": cursor.pending_actors,
+                    },
+                },
             )
             for name in active_wolves
         ]
@@ -1205,14 +1272,107 @@ class GameEngine:
                 continue
 
             round_log.werewolf_self_explosion = action_log
+            round_state.interruption = self._stage_interruption_from_cursor(
+                cursor,
+                actor=name,
+            )
             self._resolve_werewolf_self_explosion(
                 wolf=name,
                 round_state=round_state,
                 round_log=round_log,
                 active_players=active_players,
             )
+            interruption_text = self._stage_interruption_text(
+                round_state.number,
+                round_state.interruption,
+            )
+            self._add_public_fact(
+                round_state.number,
+                "interruption",
+                interruption_text,
+                stage=cursor.stage,
+                actor=name,
+                retention="critical",
+                details=round_state.interruption.to_dict(),
+            )
+            self._refresh_winner(active_players)
             return True
         return False
+
+    def _stage_interruption_from_cursor(
+        self,
+        cursor: PublicStageCursor,
+        *,
+        actor: str,
+    ) -> StageInterruption:
+        speech_stages = {"debate", "sheriff_speech", "sheriff_pk_speech"}
+        last_completed_speaker = (
+            cursor.completed_actors[-1]
+            if cursor.stage in speech_stages and cursor.completed_actors
+            else None
+        )
+        return StageInterruption(
+            stage=cursor.stage,
+            interrupted_by="werewolf_self_explosion",
+            actor=actor,
+            timing=cursor.timing,
+            last_completed_speaker=last_completed_speaker,
+            completed_actors=list(cursor.completed_actors),
+            pending_actors=cursor.pending_actors,
+        )
+
+    def _stage_interruption_text(
+        self,
+        round_number: int,
+        interruption: StageInterruption,
+    ) -> str:
+        stage_labels = {
+            "debate": "白天发言",
+            "sheriff_speech": "警上发言",
+            "sheriff_withdraw": "退水",
+            "sheriff_vote": "警下投票",
+            "sheriff_pk_speech": "警长PK发言",
+            "sheriff_runoff_vote": "二轮警下投票",
+        }
+        label = stage_labels.get(interruption.stage, interruption.stage)
+        parts = [
+            f"第{round_number}轮{label}因{interruption.actor}自爆而中断"
+        ]
+        is_speech = interruption.stage in {
+            "debate",
+            "sheriff_speech",
+            "sheriff_pk_speech",
+        }
+        if interruption.completed_actors:
+            completed_label = "已完成发言" if is_speech else "已完成动作"
+            parts.append(f"{completed_label}：{'、'.join(interruption.completed_actors)}")
+        if interruption.pending_actors:
+            if is_speech:
+                parts.append(
+                    f"{'、'.join(interruption.pending_actors)}尚未获得发言机会，"
+                    "不能将其视为主动沉默"
+                )
+            else:
+                parts.append(
+                    f"尚未完成动作：{'、'.join(interruption.pending_actors)}"
+                )
+        return "；".join(parts) + "。"
+
+    def _self_explosion_stage_description(self, cursor: PublicStageCursor) -> str:
+        stage_labels = {
+            "debate": "发言",
+            "sheriff_speech": "警上发言",
+            "sheriff_withdraw": "退水",
+            "sheriff_vote": "警下投票",
+            "sheriff_pk_speech": "PK 发言",
+            "sheriff_runoff_vote": "二轮警下投票",
+        }
+        label = stage_labels.get(cursor.stage, cursor.stage)
+        if cursor.timing == "before_actor" and cursor.current_actor:
+            return f"{cursor.current_actor} {label}前"
+        if cursor.timing == "after_actor" and cursor.current_actor:
+            return f"{cursor.current_actor} {label}后"
+        return f"{label}前"
 
     def _resolve_werewolf_self_explosion(
         self,
@@ -1235,6 +1395,10 @@ class GameEngine:
             round_state.number,
             "reveal",
             f"第{round_state.number}轮：{wolf}自爆为狼人，白天立即结束。",
+            stage="werewolf_self_explosion",
+            actor=wolf,
+            retention="critical",
+            details={"player": wolf},
         )
 
         if self.state.sheriff == wolf:
@@ -1328,10 +1492,15 @@ class GameEngine:
             round_state,
             round_log,
             active_players,
-            "警上发言前",
+            PublicStageCursor(
+                stage="sheriff_speech",
+                ordered_actors=tuple(sheriff_speech_order),
+                timing="before_stage",
+            ),
         ):
             return True
 
+        completed_sheriff_speakers: list[str] = []
         for name in sheriff_speech_order:
             message, action_log = self._player_action(
                 player=players_by_name[name],
@@ -1356,12 +1525,22 @@ class GameEngine:
                 round_state.number,
                 "claim",
                 f"第{round_state.number}轮警上发言：{name}：{message}",
+                stage="sheriff_speech",
+                actor=name,
+                retention="important",
             )
+            completed_sheriff_speakers.append(name)
             if self._maybe_run_werewolf_self_explosion(
                 round_state,
                 round_log,
                 active_players,
-                f"{name} 警上发言后",
+                PublicStageCursor(
+                    stage="sheriff_speech",
+                    ordered_actors=tuple(sheriff_speech_order),
+                    completed_actors=tuple(completed_sheriff_speakers),
+                    current_actor=name,
+                    timing="after_actor",
+                ),
             ):
                 return True
 
@@ -1369,7 +1548,11 @@ class GameEngine:
             round_state,
             round_log,
             active_players,
-            "退水前",
+            PublicStageCursor(
+                stage="sheriff_withdraw",
+                ordered_actors=tuple(candidates),
+                timing="before_stage",
+            ),
         ):
             return True
 
@@ -1414,7 +1597,11 @@ class GameEngine:
             round_state,
             round_log,
             active_players,
-            "警下投票前",
+            PublicStageCursor(
+                stage="sheriff_vote",
+                ordered_actors=tuple(voters),
+                timing="before_stage",
+            ),
         ):
             return True
 
@@ -1455,10 +1642,15 @@ class GameEngine:
             round_state,
             round_log,
             active_players,
-            "PK 发言前",
+            PublicStageCursor(
+                stage="sheriff_pk_speech",
+                ordered_actors=tuple(pk_candidates),
+                timing="before_stage",
+            ),
         ):
             return True
 
+        completed_pk_speakers: list[str] = []
         for name in pk_candidates:
             message, action_log = self._player_action(
                 player=players_by_name[name],
@@ -1472,11 +1664,26 @@ class GameEngine:
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{name} did not return a valid sheriff PK speech.")
             round_state.sheriff_pk_speeches.append({"speaker": name, "message": message})
+            self._add_public_fact(
+                round_state.number,
+                "claim",
+                f"第{round_state.number}轮警长PK发言：{name}：{message}",
+                stage="sheriff_pk_speech",
+                actor=name,
+                retention="critical",
+            )
+            completed_pk_speakers.append(name)
             if self._maybe_run_werewolf_self_explosion(
                 round_state,
                 round_log,
                 active_players,
-                f"{name} PK 发言后",
+                PublicStageCursor(
+                    stage="sheriff_pk_speech",
+                    ordered_actors=tuple(pk_candidates),
+                    completed_actors=tuple(completed_pk_speakers),
+                    current_actor=name,
+                    timing="after_actor",
+                ),
             ):
                 return True
 
@@ -1484,7 +1691,11 @@ class GameEngine:
             round_state,
             round_log,
             active_players,
-            "二轮警下投票前",
+            PublicStageCursor(
+                stage="sheriff_runoff_vote",
+                ordered_actors=tuple(voters),
+                timing="before_stage",
+            ),
         ):
             return True
 
@@ -1570,6 +1781,13 @@ class GameEngine:
             round_state.number,
             "sheriff",
             f"第{round_state.number}轮：警长竞选，{sheriff}当选警长，投票计为{self.rule_set.sheriff_vote_weight:g}票。",
+            stage="sheriff_elected",
+            actor=sheriff,
+            retention="critical",
+            details={
+                "sheriff": sheriff,
+                "vote_weight": self.rule_set.sheriff_vote_weight,
+            },
         )
         self._publish_state_updated(
             round_state=round_state,
@@ -1601,7 +1819,16 @@ class GameEngine:
         round_state.sheriff_badge_lost = True
         round_state.sheriff_election_pending = False
         round_state.sheriff_badge_lost_reason = reason
-        self._announce(active_players, f"第{round_state.number}轮：{reason}，警徽流失。")
+        text = f"第{round_state.number}轮：{reason}，警徽流失。"
+        self._announce(active_players, text)
+        self._add_public_fact(
+            round_state.number,
+            "sheriff",
+            text,
+            stage="sheriff_badge_lost",
+            retention="critical",
+            details={"reason": reason},
+        )
 
     def _sheriff_directed_speech_order(
         self,
@@ -1709,7 +1936,17 @@ class GameEngine:
         round_state.exiled = exiled
         self._remove_player(active_players, exiled)
         round_state.day_deaths.append(DeathEvent(exiled, "vote_exile", "投票"))
-        self._announce(active_players, f"第{round_state.number}轮：白天投票，{exiled}被放逐。")
+        exile_text = f"第{round_state.number}轮：白天投票，{exiled}被放逐。"
+        self._announce(active_players, exile_text)
+        self._add_public_fact(
+            round_state.number,
+            "death",
+            exile_text,
+            stage="vote_exile",
+            actor=exiled,
+            retention="critical",
+            details={"player": exiled},
+        )
         self._maybe_run_hunter_shot(
             dead_player=exiled,
             death_cause="vote_exile",
@@ -1750,6 +1987,15 @@ class GameEngine:
             self.state.sheriff_badge_lost = True
             round_state.sheriff_badge_lost = True
             round_state.sheriff = None
+            self._add_public_fact(
+                round_state.number,
+                "sheriff",
+                f"第{round_state.number}轮：{dead_player}出局，无可移交目标，警徽流失。",
+                stage="sheriff_badge_lost",
+                actor=dead_player,
+                retention="critical",
+                details={"reason": "no_eligible_target"},
+            )
             return
 
         excluded_badge_targets = excluded_badge_targets or set()
@@ -1769,9 +2015,18 @@ class GameEngine:
             self._set_sheriff(choice)
             round_state.sheriff_badge_target = choice
             round_state.sheriff = choice
-            self._announce(
-                active_players,
-                f"第{round_state.number}轮：{dead_player}出局，将警徽移交给{choice}。",
+            transfer_text = (
+                f"第{round_state.number}轮：{dead_player}出局，将警徽移交给{choice}。"
+            )
+            self._announce(active_players, transfer_text)
+            self._add_public_fact(
+                round_state.number,
+                "sheriff",
+                transfer_text,
+                stage="sheriff_badge_transfer",
+                actor=dead_player,
+                retention="critical",
+                details={"target": choice},
             )
             return
 
@@ -1779,7 +2034,17 @@ class GameEngine:
         self.state.sheriff_badge_lost = True
         round_state.sheriff_badge_lost = True
         round_state.sheriff = None
-        self._announce(active_players, f"第{round_state.number}轮：{dead_player}出局，警徽被撕毁。")
+        destroy_text = f"第{round_state.number}轮：{dead_player}出局，警徽被撕毁。"
+        self._announce(active_players, destroy_text)
+        self._add_public_fact(
+            round_state.number,
+            "sheriff",
+            destroy_text,
+            stage="sheriff_badge_destroyed",
+            actor=dead_player,
+            retention="critical",
+            details={"reason": "destroyed"},
+        )
 
     def _is_recorded_round_death(self, player: str, round_state: RoundState) -> bool:
         return any(
@@ -1792,12 +2057,34 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
     ) -> None:
+        self._publish_public_round_brief(round_state, active_players)
+        self._run_private_round_memories(round_state, round_log, active_players)
+
+    def _publish_public_round_brief(
+        self,
+        round_state: RoundState,
+        active_players: list[str],
+    ) -> None:
         self._publish(
             "phase_started",
             round_number=round_state.number,
             phase="summary",
             payload={"active_players": active_players.copy()},
         )
+        round_state.public_summary = self._public_round_brief(round_state)
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="summary",
+            action="public_round_brief",
+            payload={"public_summary": round_state.public_summary},
+        )
+
+    def _run_private_round_memories(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
         players_by_name = self.state.player_by_name()
         for name in active_players:
             player = players_by_name[name]
@@ -1813,14 +2100,6 @@ class GameEngine:
                 round_state.private_summaries[name] = summary
                 player.add_observation(f"第{round_state.number}轮总结：{summary}")
             round_log.summaries.append(action_log)
-
-        round_state.public_summary = self._public_round_brief(round_state)
-        self._publish_state_updated(
-            round_state=round_state,
-            phase="summary",
-            action="summarize",
-            payload={"public_summary": round_state.public_summary},
-        )
 
     def _public_round_brief(self, round_state: RoundState) -> str:
         parts = [f"第{round_state.number}轮"]
@@ -1876,6 +2155,7 @@ class GameEngine:
         phase: str,
         extra_world_state: dict[str, object] | None = None,
     ) -> PlayerActionRequest:
+        self._require_non_terminal_player_action()
         options_snapshot = options.copy()
         public_options = [self._public_player_reference(option) for option in options_snapshot]
         public_choice_to_internal = dict(zip(public_options, options_snapshot, strict=True))
@@ -1884,7 +2164,7 @@ class GameEngine:
             world_state.update(extra_world_state)
         world_state = self._public_model_world_state(copy.deepcopy(world_state))
         world_state["options"] = "、".join(public_options)
-        is_secret_wolf_action = self._is_secret_werewolf_action(phase, action)
+        event_visibility = self._player_action_event_visibility(phase, action)
         return PlayerActionRequest(
             player=player,
             action=action,
@@ -1895,7 +2175,7 @@ class GameEngine:
             round_state=round_state,
             phase=phase,
             world_state=world_state,
-            is_secret_wolf_action=is_secret_wolf_action,
+            event_visibility=event_visibility,
         )
 
     def _execute_player_action_request(
@@ -1903,6 +2183,7 @@ class GameEngine:
         request: PlayerActionRequest,
         provider: ModelProvider | None = None,
     ) -> PlayerActionResult:
+        self._require_non_terminal_player_action()
         action_provider = provider or self.provider
         try:
             value, lm_log = generate_action_with_events(
@@ -1912,7 +2193,11 @@ class GameEngine:
                 model=request.player.model,
                 allowed_values=request.public_options if request.public_options else None,
                 result_key=request.result_key,
-                event_sink=NullEventSink() if request.is_secret_wolf_action else self.event_sink,
+                event_sink=(
+                    self.event_sink
+                    if request.event_visibility == "public"
+                    else NullEventSink()
+                ),
                 event_context={
                     "round_number": request.round_state.number,
                     "phase": request.phase,
@@ -1960,13 +2245,13 @@ class GameEngine:
             action_log.fallback_choice = fallback_choice
             action_log.fallback_reason = "optional_action_invalid"
             action_log.attempt_count = max(1, len(lm_log.invalid_attempts))
-            if not request.is_secret_wolf_action:
+            if request.event_visibility == "public":
                 self._publish_optional_fallback_warning(
                     request=request,
                     invalid_value=invalid_value,
                     fallback_choice=fallback_choice,
                 )
-        if not request.is_secret_wolf_action:
+        if request.event_visibility == "public":
             self._publish(
                 "model_response_received",
                 round_number=request.round_state.number,
@@ -2013,6 +2298,7 @@ class GameEngine:
     ) -> list[tuple[object | None, ActionLog]]:
         if not requests:
             return []
+        self._require_non_terminal_player_action()
         if len(requests) == 1:
             return [self._player_action_single(requests[0])]
 
@@ -2068,6 +2354,7 @@ class GameEngine:
         self,
         request: PlayerActionRequest,
     ) -> tuple[object | None, ActionLog]:
+        self._require_non_terminal_player_action()
         self._publish_player_action_requested(request)
         try:
             result = self._execute_player_action_request(request)
@@ -2100,7 +2387,7 @@ class GameEngine:
                 self._checkpoint_player_action_success(result)
 
     def _publish_player_action_requested(self, request: PlayerActionRequest) -> None:
-        if request.is_secret_wolf_action:
+        if request.event_visibility == "private":
             return
         self._publish(
             "action_requested",
@@ -2110,6 +2397,10 @@ class GameEngine:
             action=request.action,
             payload={"options": request.public_options.copy(), "result_key": request.result_key},
         )
+
+    def _require_non_terminal_player_action(self) -> None:
+        if self.state.winner:
+            raise RuntimeError("Cannot request player action after game is terminal")
 
     def _checkpoint_player_action_failure(
         self,
@@ -2323,6 +2614,15 @@ class GameEngine:
             return True
         return False
 
+    def _player_action_event_visibility(
+        self,
+        phase: str,
+        action: str,
+    ) -> EventVisibility:
+        if action == "summarize" or self._is_secret_werewolf_action(phase, action):
+            return "private"
+        return "public"
+
     def _world_state(
         self,
         player: Player,
@@ -2339,6 +2639,8 @@ class GameEngine:
             "round": round_state.number,
             "observations": player.observations,
             "public_facts": self._public_fact_lines(),
+            "public_self_history": self._public_self_history(player.name),
+            "stage_interruptions": self._stage_interruption_lines(round_state),
             "endgame_context": self._endgame_context(active_players),
             "remaining_players": "、".join(active_players),
             "debate": debate,
@@ -2417,18 +2719,61 @@ class GameEngine:
             personality=player.personality,
         )
 
-    def _add_public_fact(self, round_number: int, category: str, text: str) -> None:
+    def _add_public_fact(
+        self,
+        round_number: int,
+        category: str,
+        text: str,
+        *,
+        stage: str | None = None,
+        actor: str | None = None,
+        retention: FactRetention | None = None,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        ordinal = len(self.state.public_facts)
+        fact_stage = stage or category
+        fact_actor = actor or "system"
         self.state.public_facts.append(
             PublicFact(
                 round_number=round_number,
                 category=category,
                 text=text,
+                fact_id=f"r{round_number}:{fact_stage}:{fact_actor}:{ordinal}",
+                stage=stage,
+                actor=actor,
+                retention=retention,
+                details=details or {},
             ).to_dict()
         )
 
     def _public_fact_lines(self) -> list[str]:
         facts = [public_fact_from_dict(item) for item in self.state.public_facts]
         return compressed_public_facts(facts)
+
+    def _public_self_history(self, player_name: str) -> list[str]:
+        public_speech_stages = {"sheriff_speech", "sheriff_pk_speech", "debate"}
+        facts = [
+            public_fact_from_dict(item)
+            for item in self.state.public_facts
+            if isinstance(item, dict)
+        ]
+        own_public_speech = [
+            fact
+            for fact in facts
+            if fact.actor == player_name
+            and (fact.stage in public_speech_stages or fact.category in {"claim", "speech"})
+        ]
+        return compressed_public_facts(own_public_speech, max_lines=12)
+
+    def _stage_interruption_lines(self, round_state: RoundState) -> list[str]:
+        rounds = list(self.state.rounds)
+        if all(existing is not round_state for existing in rounds):
+            rounds.append(round_state)
+        return [
+            self._stage_interruption_text(existing.number, existing.interruption)
+            for existing in rounds
+            if existing.interruption is not None
+        ]
 
     def _endgame_context(self, active_players: list[str]) -> list[str]:
         total_wolves = sum(
@@ -2534,6 +2879,15 @@ class GameEngine:
         if len(active_wolves) >= len(active_villagers):
             return WINNER_WEREWOLVES
         return ""
+
+    def _refresh_winner(self, active_players: list[str]) -> bool:
+        if self.state.winner:
+            return True
+        winner = self._get_winner(active_players)
+        if not winner:
+            return False
+        self.state.winner = winner
+        return True
 
     def _is_werewolf(self, player: Player) -> bool:
         return _role_team(self.rule_set, player.role) == TEAM_WEREWOLVES

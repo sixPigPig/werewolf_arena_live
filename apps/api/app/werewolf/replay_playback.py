@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import copy
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 
 DEFAULT_PLAYBACK_CREATED_AT = "1970-01-01T00:00:00Z"
+PRIVATE_ROUND_MEMORY_ACTION = "summarize"
 DAY_ACTION_KEYS = (
     "sheriff_run",
     "sheriff_speech",
@@ -20,7 +22,6 @@ DAY_ACTION_KEYS = (
     "votes",
     "hunter_shoot",
     "werewolf_self_explosion",
-    "summaries",
 )
 DAY_STAGE_STATE_KEYS = (
     "sheriff",
@@ -43,6 +44,7 @@ DAY_STAGE_STATE_KEYS = (
     "sheriff_badge_lost",
     "werewolf_self_exploded",
     "day_ended_by_self_explosion",
+    "interruption",
     "sheriff_pre_election_bomb_count",
     "sheriff_election_pending",
     "sheriff_badge_lost_reason",
@@ -59,6 +61,49 @@ PUBLIC_PLAYER_KEYS = (
     "profile_id",
     "tags",
 )
+
+
+def private_round_memory_event_ids(events: list[dict[str, Any]]) -> set[int]:
+    """Return historical event ids that belong to the private round-memory action."""
+    event_ids: set[int] = set()
+    for event in events:
+        if event.get("action") != PRIVATE_ROUND_MEMORY_ACTION:
+            continue
+        event_id = event.get("id")
+        if isinstance(event_id, int):
+            event_ids.add(event_id)
+    return event_ids
+
+
+def filter_public_playback_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop legacy private round-memory events before public playback serialization."""
+    return [
+        event
+        for event in events
+        if event.get("action") != PRIVATE_ROUND_MEMORY_ACTION
+    ]
+
+
+def filter_public_playback_voices(
+    voices: list[dict[str, Any]],
+    *,
+    private_event_ids: set[int],
+) -> list[dict[str, Any]]:
+    """Drop legacy audio sourced from a private round-memory event range."""
+    if not private_event_ids:
+        return voices
+
+    public_voices: list[dict[str, Any]] = []
+    for voice in voices:
+        first_event_id = voice.get("source_event_id")
+        last_event_id = voice.get("last_source_event_id", first_event_id)
+        if not isinstance(first_event_id, int) or not isinstance(last_event_id, int):
+            public_voices.append(voice)
+            continue
+        if any(first_event_id <= event_id <= last_event_id for event_id in private_event_ids):
+            continue
+        public_voices.append(voice)
+    return public_voices
 
 
 def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
@@ -205,6 +250,27 @@ def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
         "resumable": bool(session.get("resumable")),
         "events": events,
     }
+
+
+def build_public_game_session(session: dict[str, Any]) -> dict[str, Any]:
+    """Return the stored game payload without private round-memory fields."""
+    public_session = copy.deepcopy(session)
+    state = public_session.get("state")
+    if isinstance(state, dict):
+        rounds = state.get("rounds")
+        if isinstance(rounds, list):
+            for round_state in rounds:
+                if not isinstance(round_state, dict):
+                    continue
+                round_state.pop("summaries", None)
+                round_state.pop("private_summaries", None)
+
+    logs = public_session.get("logs")
+    if isinstance(logs, list):
+        for round_log in logs:
+            if isinstance(round_log, dict):
+                round_log.pop("summaries", None)
+    return public_session
 
 
 def _publish_action_events(
@@ -541,8 +607,6 @@ def _day_state_payload(round_state: dict[str, Any], active_players: list[Any]) -
         "debate": _list_or_empty(round_state.get("debate")),
         "bids": _list_or_empty(round_state.get("bids")),
         "votes": _latest_mapping(round_state.get("votes")),
-        "summaries": _dict_or_empty(round_state.get("summaries")),
-        "private_summaries": _dict_or_empty(round_state.get("private_summaries")),
         "public_summary": str(round_state.get("public_summary") or ""),
         "exiled": round_state.get("exiled"),
         "day_deaths": _list_or_empty(round_state.get("day_deaths")),

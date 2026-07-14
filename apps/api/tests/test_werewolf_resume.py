@@ -23,7 +23,14 @@ from app.werewolf.checkpoint import (
 )
 from app.werewolf.engine import initialize_game_state
 from app.werewolf.lm import LmLog
-from app.werewolf.models import ActionLog, GameState, Player, RoundLog, RoundState
+from app.werewolf.models import (
+    ActionLog,
+    GameState,
+    Player,
+    RoundLog,
+    RoundState,
+    StageInterruption,
+)
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.rules import get_rule_set
 from app.werewolf.runner import GameRunError, resume_game, run_game
@@ -789,6 +796,28 @@ def test_round_state_from_dict_defaults_new_summary_fields() -> None:
 
     assert round_state.public_summary == ""
     assert round_state.private_summaries == {}
+    assert round_state.interruption is None
+
+
+def test_round_state_interruption_round_trips_through_checkpoint_payload() -> None:
+    interruption = StageInterruption(
+        stage="sheriff_speech",
+        interrupted_by="werewolf_self_explosion",
+        actor="9号玩家",
+        timing="before_actor",
+        last_completed_speaker="10号玩家",
+        completed_actors=["4号玩家", "3号玩家", "10号玩家"],
+        pending_actors=["9号玩家", "5号玩家"],
+    )
+    source = RoundState(
+        number=3,
+        players=["4号玩家", "3号玩家", "10号玩家", "9号玩家", "5号玩家"],
+        interruption=interruption,
+    )
+
+    restored = round_state_from_dict(source.to_dict())
+
+    assert restored.interruption == interruption
 
 
 def test_action_log_serializes_invalid_and_fallback_metadata() -> None:
