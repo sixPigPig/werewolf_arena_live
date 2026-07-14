@@ -40,11 +40,35 @@ class OpenAICompatibleProviderConfig:
     default_base_url: str
     default_model: str
     model_prefixes: tuple[str, ...]
+    available_models: tuple[str, ...] = ()
+    api_key_env_aliases: tuple[str, ...] = ()
     api_host_base_path: str = ""
     model_aliases: dict[str, str] = field(default_factory=dict)
     response_format: dict[str, str] | None = None
     extra_payload: dict[str, Any] = field(default_factory=dict)
 
+
+ARK_AGENT_PLAN_MODELS = (
+    "doubao-seed-2-0-pro-260215",
+    "doubao-seed-2-0-lite-260215",
+    "glm-5-2-260617",
+    "kimi-k2.7-code",
+    "minimax-m3",
+    "minimax-m2.7",
+    "kimi-k2.6",
+)
+
+ARK_AGENT_PLAN_CONFIG = OpenAICompatibleProviderConfig(
+    name="火山方舟 Agent Plan",
+    env_prefix="ARK_AGENT_PLAN",
+    default_base_url="https://ark.cn-beijing.volces.com/api/plan/v3",
+    default_model=ARK_AGENT_PLAN_MODELS[0],
+    model_prefixes=(),
+    available_models=ARK_AGENT_PLAN_MODELS,
+    api_key_env_aliases=("ARK_API_KEY",),
+    api_host_base_path="/api/plan/v3",
+    model_aliases={"minimax-m2.7": "minimax-m2.7"},
+)
 
 DEEPSEEK_CONFIG = OpenAICompatibleProviderConfig(
     name="DeepSeek",
@@ -53,16 +77,6 @@ DEEPSEEK_CONFIG = OpenAICompatibleProviderConfig(
     default_model="deepseek-v4-flash",
     model_prefixes=("deepseek-",),
     response_format={"type": "json_object"},
-)
-
-MINIMAX_CONFIG = OpenAICompatibleProviderConfig(
-    name="MiniMax",
-    env_prefix="MINIMAX",
-    default_base_url="https://api.minimax.io/v1",
-    default_model="MiniMax-M2.7",
-    model_prefixes=("minimax-",),
-    api_host_base_path="/v1",
-    extra_payload={"reasoning_split": True},
 )
 
 QWEN_CONFIG = OpenAICompatibleProviderConfig(
@@ -78,7 +92,11 @@ QWEN_CONFIG = OpenAICompatibleProviderConfig(
     },
 )
 
-OPENAI_COMPATIBLE_PROVIDER_CONFIGS = (DEEPSEEK_CONFIG, MINIMAX_CONFIG, QWEN_CONFIG)
+OPENAI_COMPATIBLE_PROVIDER_CONFIGS = (
+    ARK_AGENT_PLAN_CONFIG,
+    DEEPSEEK_CONFIG,
+    QWEN_CONFIG,
+)
 
 
 class OpenAICompatibleProvider:
@@ -93,15 +111,20 @@ class OpenAICompatibleProvider:
         max_retries: int = 3,
         sleep: Sleep = time.sleep,
     ) -> None:
-        dotenv = _load_dotenv(Path(".env"), prefixes=(config.env_prefix,))
+        dotenv = _load_dotenv(Path(".env"), prefixes=_dotenv_prefixes(config))
         api_key_name = f"{config.env_prefix}_API_KEY"
         base_url_name = f"{config.env_prefix}_BASE_URL"
         api_host_name = f"{config.env_prefix}_API_HOST"
 
         self.config = config
-        self.api_key = api_key or os.getenv(api_key_name) or dotenv.get(api_key_name)
+        api_key_env_names = (api_key_name, *config.api_key_env_aliases)
+        self.api_key = api_key or next(
+            (value for name in api_key_env_names if (value := os.getenv(name) or dotenv.get(name))),
+            None,
+        )
         if not self.api_key:
-            raise RuntimeError(f"{api_key_name} is required to call {config.name}.")
+            accepted_names = " or ".join(api_key_env_names)
+            raise RuntimeError(f"{accepted_names} is required to call {config.name}.")
 
         api_host = os.getenv(api_host_name) or dotenv.get(api_host_name)
         self.base_url = (
@@ -230,7 +253,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         )
 
 
-class MiniMaxProvider(OpenAICompatibleProvider):
+class ArkAgentPlanProvider(OpenAICompatibleProvider):
     def __init__(
         self,
         *,
@@ -242,7 +265,7 @@ class MiniMaxProvider(OpenAICompatibleProvider):
         sleep: Sleep = time.sleep,
     ) -> None:
         super().__init__(
-            config=MINIMAX_CONFIG,
+            config=ARK_AGENT_PLAN_CONFIG,
             api_key=api_key,
             base_url=base_url,
             transport=transport,
@@ -379,30 +402,42 @@ def _registration_for_config(
         name=config.name,
         factory=factory,
         model_prefixes=config.model_prefixes,
-        model_names=_configured_model_names(config.env_prefix),
+        model_names=_configured_model_names(config),
     )
 
 
-def _configured_model_names(env_prefix: str) -> tuple[str, ...]:
-    dotenv = _load_dotenv(Path(".env"), prefixes=(env_prefix,))
-    model_name = os.getenv(f"{env_prefix}_MODEL") or dotenv.get(f"{env_prefix}_MODEL")
-    return (model_name,) if model_name else ()
+def _configured_model_names(config: OpenAICompatibleProviderConfig) -> tuple[str, ...]:
+    dotenv = _load_dotenv(Path(".env"), prefixes=(config.env_prefix,))
+    models_name = f"{config.env_prefix}_MODELS"
+    model_name = f"{config.env_prefix}_MODEL"
+    configured_models = os.getenv(models_name) or dotenv.get(models_name)
+    if configured_models:
+        return _split_model_names(configured_models)
+
+    configured_model = os.getenv(model_name) or dotenv.get(model_name)
+    if configured_model:
+        return (configured_model,)
+    return config.available_models
+
+
+def _split_model_names(value: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(name.strip() for name in value.split(",") if name.strip()))
 
 
 def configured_model_options() -> list[dict[str, str]]:
     default_model = default_model_name()
     configured_options: list[dict[str, str]] = []
     for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS:
-        if not _has_api_key(config.env_prefix):
+        if not _has_api_key(config):
             continue
 
-        configured_names = _configured_model_names(config.env_prefix)
-        model_name = configured_names[0] if configured_names else config.default_model
-        configured_options.append(
+        configured_names = _configured_model_names(config) or (config.default_model,)
+        configured_options.extend(
             {
                 "id": model_name,
                 "label": f"{config.name} · {model_name}",
             }
+            for model_name in configured_names
         )
 
     options_by_id = {option["id"]: option for option in configured_options}
@@ -424,20 +459,35 @@ def default_model_name() -> str:
     dotenv = _load_dotenv(Path(".env"), prefixes=("WEREWOLF",))
     explicit_default = os.getenv("WEREWOLF_DEFAULT_MODEL") or dotenv.get("WEREWOLF_DEFAULT_MODEL")
     if explicit_default:
-        return explicit_default
+        return _canonical_model_name(explicit_default)
 
     for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS:
-        if _has_api_key(config.env_prefix):
-            configured_names = _configured_model_names(config.env_prefix)
+        if _has_api_key(config):
+            configured_names = _configured_model_names(config)
+            if config.default_model in configured_names:
+                return config.default_model
             return configured_names[0] if configured_names else config.default_model
 
     return DEEPSEEK_CONFIG.default_model
 
 
-def _has_api_key(env_prefix: str) -> bool:
-    dotenv = _load_dotenv(Path(".env"), prefixes=(env_prefix,))
-    api_key_name = f"{env_prefix}_API_KEY"
-    return bool(os.getenv(api_key_name) or dotenv.get(api_key_name))
+def _canonical_model_name(model: str) -> str:
+    normalized_model = model.lower()
+    for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS:
+        if canonical_name := config.model_aliases.get(normalized_model):
+            return canonical_name
+    return model
+
+
+def _has_api_key(config: OpenAICompatibleProviderConfig) -> bool:
+    dotenv = _load_dotenv(Path(".env"), prefixes=_dotenv_prefixes(config))
+    api_key_env_names = (f"{config.env_prefix}_API_KEY", *config.api_key_env_aliases)
+    return any(os.getenv(name) or dotenv.get(name) for name in api_key_env_names)
+
+
+def _dotenv_prefixes(config: OpenAICompatibleProviderConfig) -> tuple[str, ...]:
+    alias_prefixes = tuple(name.removesuffix("_API_KEY") for name in config.api_key_env_aliases)
+    return tuple(dict.fromkeys((config.env_prefix, *alias_prefixes)))
 
 
 def _base_url_from_api_host(api_host: str | None, base_path: str) -> str | None:
@@ -461,11 +511,11 @@ def _http_error_message(
 ) -> str:
     body = _read_http_error_body(exc)
     message = f"{config.name} request failed with HTTP {exc.code}: {body}"
-    if config.env_prefix == "MINIMAX" and exc.code == 401:
+    if config.env_prefix == "ARK_AGENT_PLAN" and exc.code == 401:
         message += (
-            " Check MINIMAX_API_KEY and make sure MINIMAX_BASE_URL/MINIMAX_API_HOST "
-            "matches the key region: Global=https://api.minimax.io/v1, "
-            "Mainland=https://api.minimaxi.com/v1."
+            " Check ARK_AGENT_PLAN_API_KEY/ARK_API_KEY and make sure "
+            "ARK_AGENT_PLAN_BASE_URL/ARK_AGENT_PLAN_API_HOST points to the Agent Plan "
+            "data plane, for example https://ark.cn-beijing.volces.com/api/plan/v3."
         )
     if config.env_prefix == "DASHSCOPE" and exc.code == 401:
         message += (
@@ -484,7 +534,9 @@ def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
         return str(exc)
 
 
-def _urlopen_transport(url: str, headers: dict[str, str], payload: dict[str, Any]) -> dict[str, Any]:
+def _urlopen_transport(
+    url: str, headers: dict[str, str], payload: dict[str, Any]
+) -> dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(request, timeout=120) as response:

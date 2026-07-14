@@ -63,6 +63,7 @@ from app.rule_sets.validation import normalize_rule_set_config
 from app.werewolf.checkpoint import ResumeCheckpointError, resolved_rule_set_from_checkpoint
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.player_presets import default_personality_text
+from app.werewolf.providers import ARK_AGENT_PLAN_MODELS
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.voice import VoiceUtterance
 from app.werewolf.voice_store import DatabaseVoiceStore
@@ -780,10 +781,12 @@ def test_public_problem_extensions_cannot_override_core_problem_fields() -> None
 
 def test_list_model_options_returns_configured_models(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "agent-plan-key")
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_MODEL", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_MODELS", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-test")
-    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
-    monkeypatch.setenv("MINIMAX_MODEL", "MiniMax-Test")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
     monkeypatch.setenv("DASHSCOPE_MODEL", "qwen-test")
 
@@ -792,19 +795,24 @@ def test_list_model_options_returns_configured_models(monkeypatch: pytest.Monkey
     assert response.status_code == 200
     assert response.json() == {
         "models": [
+            *[
+                {"id": model, "label": f"火山方舟 Agent Plan · {model}"}
+                for model in ARK_AGENT_PLAN_MODELS
+            ],
             {"id": "deepseek-test", "label": "DeepSeek · deepseek-test"},
-            {"id": "MiniMax-Test", "label": "MiniMax · MiniMax-Test"},
             {"id": "qwen-test", "label": "Qwen · qwen-test"},
         ]
     }
 
 
 def test_list_model_options_prefers_default_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("WEREWOLF_DEFAULT_MODEL", "MiniMax-Test")
+    monkeypatch.setenv("WEREWOLF_DEFAULT_MODEL", "minimax-m3")
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "agent-plan-key")
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_MODEL", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_MODELS", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-test")
-    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
-    monkeypatch.setenv("MINIMAX_MODEL", "MiniMax-Test")
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
     response = client.get("/api/v1/games/model-options")
@@ -812,7 +820,12 @@ def test_list_model_options_prefers_default_model(monkeypatch: pytest.MonkeyPatc
     assert response.status_code == 200
     assert response.json() == {
         "models": [
-            {"id": "MiniMax-Test", "label": "MiniMax · MiniMax-Test"},
+            {"id": "minimax-m3", "label": "火山方舟 Agent Plan · minimax-m3"},
+            *[
+                {"id": model, "label": f"火山方舟 Agent Plan · {model}"}
+                for model in ARK_AGENT_PLAN_MODELS
+                if model != "minimax-m3"
+            ],
             {"id": "deepseek-test", "label": "DeepSeek · deepseek-test"},
         ]
     }
@@ -824,8 +837,9 @@ def test_list_model_options_falls_back_to_default_without_keys(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
     response = client.get("/api/v1/games/model-options")
@@ -2012,7 +2026,7 @@ def test_create_game_run_rejects_when_player_library_is_too_small(
     assert captured == []
 
 
-def test_create_game_run_defaults_to_minimax_when_only_minimax_key_is_configured(
+def test_create_game_run_defaults_to_agent_plan_when_plan_key_is_configured(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2020,14 +2034,14 @@ def test_create_game_run_defaults_to_minimax_when_only_minimax_key_is_configured
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
         "DEEPSEEK_MODEL=deepseek-v4-flash\n"
-        "MINIMAX_API_KEY=minimax-key\n"
-        "MINIMAX_MODEL=MiniMax-M2.7\n",
+        "ARK_AGENT_PLAN_API_KEY=agent-plan-key\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
 
     registry = LiveRunRegistry()
     override_live_registry(registry)
@@ -2046,10 +2060,10 @@ def test_create_game_run_defaults_to_minimax_when_only_minimax_key_is_configured
 
     assert response.status_code == 201
     payload = response.json()
-    assert payload["villager_model"] == "MiniMax-M2.7"
-    assert payload["werewolf_model"] == "MiniMax-M2.7"
-    assert captured[0]["villager_model"] == "MiniMax-M2.7"
-    assert captured[0]["werewolf_model"] == "MiniMax-M2.7"
+    assert payload["villager_model"] == "doubao-seed-2-0-pro-260215"
+    assert payload["werewolf_model"] == "doubao-seed-2-0-pro-260215"
+    assert captured[0]["villager_model"] == "doubao-seed-2-0-pro-260215"
+    assert captured[0]["werewolf_model"] == "doubao-seed-2-0-pro-260215"
 
 
 def test_create_game_run_rejects_unknown_rule_set(
@@ -3499,9 +3513,7 @@ def test_list_games_returns_complete_and_partial_sessions() -> None:
 def test_get_game_detail_returns_state_and_logs() -> None:
     session_id = "game_05095066"
     state = sample_state(session_id)
-    state["rounds"][0]["private_summaries"] = {
-        "张三": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号"
-    }
+    state["rounds"][0]["private_summaries"] = {"张三": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号"}
     logs = sample_logs()
     logs[0]["summaries"] = [
         {
@@ -3564,9 +3576,7 @@ def test_get_game_playback_returns_complete_playback_events() -> None:
             "lm_log": {
                 "prompt": "私密总结",
                 "raw_response": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号",
-                "parsed": {
-                    "summary": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号"
-                },
+                "parsed": {"summary": "SENTINEL_WOLF_PRIVATE_PLAN_刀10号_嫁祸12号"},
             },
         }
     ]
@@ -4251,11 +4261,7 @@ def test_get_game_playback_preserves_public_day_stage_fields() -> None:
         "active_players": ["张三", "李四"],
     }
 
-    cue_events = [
-        event
-        for event in response.json()["events"]
-        if event["type"] == "judge_cue"
-    ]
+    cue_events = [event for event in response.json()["events"] if event["type"] == "judge_cue"]
     assert [event["action"] for event in cue_events[-5:]] == [
         "sheriff_result",
         "werewolf_self_explosion",

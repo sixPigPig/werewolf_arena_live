@@ -242,16 +242,28 @@ cd apps/api
 
 实时 run、SSE 事件、运行租约、fencing token 和控制信号会写入 PostgreSQL。可运行多个 API 副本；每个副本只执行自己持有有效租约的模型任务，丢失租约的写入会被 fence 拒绝。独立 reaper 从数据库原子认领 orphan，不依赖 API 单副本部署。
 
-运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。当前内置
-DeepSeek 和 MiniMax；如果 `WEREWOLF_DEFAULT_MODEL` 为空，后端会从已配置 API key 的
-provider 中选择默认模型。只配置 MiniMax key 时，默认对局模型会自动使用
-`MINIMAX_MODEL`，也可以在 CLI 或 API 请求中显式传入 `MiniMax-M2.7` 这类模型名。
-DeepSeek 默认模型为 `deepseek-v4-flash`。
-MiniMax key 需要和 host 区域匹配：大陆 key 使用 `https://api.minimaxi.com/v1`，Global
-key 使用 `https://api.minimax.io/v1`。Qwen 使用阿里云百炼 DashScope OpenAI 兼容接口，
-默认模型为 `qwen3.6-plus`，也支持在对局参数中传入 `Qwen3.6-Plus`；北京地域默认
-base URL 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`。新增 OpenAI-compatible
-厂商时，优先在 `apps/api/app/werewolf/providers.py` 增加 provider config。
+运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。火山方舟
+Agent Plan 使用 `ARK_AGENT_PLAN_API_KEY`（也兼容标准变量 `ARK_API_KEY`）和
+`https://ark.cn-beijing.volces.com/api/plan/v3`，一把套餐 Key 可选择以下模型：
+
+- `doubao-seed-2-0-pro-260215`
+- `doubao-seed-2-0-lite-260215`
+- `glm-5-2-260617`
+- `kimi-k2.7-code`
+- `minimax-m3`
+- `minimax-m2.7`
+- `kimi-k2.6`
+
+如果 `WEREWOLF_DEFAULT_MODEL` 为空且配置了 Agent Plan Key，默认模型为
+`doubao-seed-2-0-pro-260215`。历史配置中的 `MiniMax-M2.7` 仍可作为兼容模型名传入，
+但会归一化为 `minimax-m2.7` 并通过火山 Agent Plan 调用；项目不再读取
+`MINIMAX_API_KEY`，也不再请求 MiniMax 官方接口。
+
+DeepSeek 默认模型为 `deepseek-v4-flash`。Qwen 使用阿里云百炼 DashScope OpenAI 兼容
+接口，默认模型为 `qwen3.6-plus`，也支持在对局参数中传入 `Qwen3.6-Plus`；北京地域
+默认 base URL 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`。新增
+OpenAI-compatible 厂商时，优先在 `apps/api/app/werewolf/providers.py` 增加 provider
+config。
 
 ## 质量检查
 

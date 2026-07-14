@@ -1346,16 +1346,12 @@ def test_terminal_exile_skips_private_round_memories(
     wolf = next(player.name for player in state.players if player.role == WEREWOLF)
     target = next(player.name for player in state.players if player.role == "村民")
     other_good = next(
-        player.name
-        for player in state.players
-        if player.role != WEREWOLF and player.name != target
+        player.name for player in state.players if player.role != WEREWOLF and player.name != target
     )
     active_players = [wolf, target, other_good]
     round_state = RoundState(number=2, players=active_players.copy())
     round_log = RoundLog(number=2)
-    provider = FakeProvider(
-        [{"reasoning": "不应调用", "summary": "SENTINEL_PRIVATE_SUMMARY"}]
-    )
+    provider = FakeProvider([{"reasoning": "不应调用", "summary": "SENTINEL_PRIVATE_SUMMARY"}])
     sink = CapturingEventSink()
     engine = GameEngine(
         state=state,
@@ -1571,9 +1567,7 @@ def test_decisive_state_precedes_game_completed_without_model_events_between(
     wolf = next(player.name for player in state.players if player.role == WEREWOLF)
     target = next(player.name for player in state.players if player.role == "村民")
     other_good = next(
-        player.name
-        for player in state.players
-        if player.role != WEREWOLF and player.name != target
+        player.name for player in state.players if player.role != WEREWOLF and player.name != target
     )
     active_players = [wolf, target, other_good]
     round_state = RoundState(number=2, players=active_players.copy())
@@ -2495,7 +2489,7 @@ def test_run_game_rejects_the_removed_rule_set_id_only_contract(
         )
 
 
-def test_run_game_defaults_to_minimax_when_only_minimax_key_is_configured(
+def test_run_game_defaults_to_agent_plan_when_plan_key_is_configured(
     tmp_path,
     monkeypatch,
     record_store: DatabaseReplayStore,
@@ -2503,14 +2497,14 @@ def test_run_game_defaults_to_minimax_when_only_minimax_key_is_configured(
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
         "DEEPSEEK_MODEL=deepseek-v4-flash\n"
-        "MINIMAX_API_KEY=minimax-key\n"
-        "MINIMAX_MODEL=MiniMax-M2.7\n",
+        "ARK_AGENT_PLAN_API_KEY=agent-plan-key\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
 
     result = run_game(
         record_store=record_store,
@@ -2522,7 +2516,7 @@ def test_run_game_defaults_to_minimax_when_only_minimax_key_is_configured(
 
     state = record_store.load_session(result.session_id)["state"]
 
-    assert {player["model"] for player in state["players"]} == {"MiniMax-M2.7"}
+    assert {player["model"] for player in state["players"]} == {"doubao-seed-2-0-pro-260215"}
 
 
 def test_run_game_is_reproducible_for_same_seed(
@@ -3209,8 +3203,7 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     assert round_state.sheriff_election_resolution is not None
     assert round_state.sheriff_election_resolution.outcome == "postponed"
     assert (
-        round_state.sheriff_election_resolution.reason_code
-        == "first_pre_election_self_explosion"
+        round_state.sheriff_election_resolution.reason_code == "first_pre_election_self_explosion"
     )
     assert round_log.werewolf_self_explosion.actor == exploding_wolf
     assert round_state.interruption is not None
@@ -3318,8 +3311,7 @@ def test_second_pre_sheriff_self_explosion_loses_badge() -> None:
     assert round_state.sheriff_election_resolution is not None
     assert round_state.sheriff_election_resolution.outcome == "badge_lost"
     assert (
-        round_state.sheriff_election_resolution.reason_code
-        == "double_pre_election_self_explosion"
+        round_state.sheriff_election_resolution.reason_code == "double_pre_election_self_explosion"
     )
 
 
@@ -3674,10 +3666,7 @@ def test_empty_sheriff_voters_and_withdrawn_candidate_are_explicit_in_prompt() -
     eligibility = world_state["public_action_eligibility"]
     assert isinstance(eligibility, dict)
     assert eligibility["actor_can_sheriff_vote"] is False
-    assert (
-        eligibility["sheriff_vote_reason"]
-        == "withdrew_candidate_not_original_voter"
-    )
+    assert eligibility["sheriff_vote_reason"] == "withdrew_candidate_not_original_voter"
 
 
 def test_invalid_eligibility_draft_is_buffered_and_only_valid_retry_is_public() -> None:
@@ -4325,10 +4314,7 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
     assert election_event["payload"]["sheriff_voters"] == active_players[2:]
     assert election_event["payload"]["active_players"] == active_players
     assert election_event["payload"]["sheriff_election"]["outcome"] == "elected"
-    assert (
-        election_event["payload"]["sheriff_election"]["reason_code"]
-        == "first_vote_winner"
-    )
+    assert election_event["payload"]["sheriff_election"]["reason_code"] == "first_vote_winner"
     assert sink.events.index(election_event) < sink.events.index(direction_request)
 
 
@@ -4852,11 +4838,7 @@ def test_sheriff_election_runs_pk_and_runoff_when_first_vote_ties() -> None:
         and event["action"]
         in {"sheriff_tie", "sheriff_pk_start", "sheriff_runoff_vote", "sheriff_result"}
     ] == ["sheriff_tie", "sheriff_pk_start", "sheriff_runoff_vote", "sheriff_result"]
-    pk_facts = [
-        fact
-        for fact in state.public_facts
-        if fact.get("stage") == "sheriff_pk_speech"
-    ]
+    pk_facts = [fact for fact in state.public_facts if fact.get("stage") == "sheriff_pk_speech"]
     assert [fact["actor"] for fact in pk_facts] == [first_candidate, second_candidate]
     assert all(fact["retention"] == "critical" for fact in pk_facts)
     assert all(fact["fact_id"].startswith("r1:sheriff_pk_speech:") for fact in pk_facts)
@@ -5106,13 +5088,14 @@ def test_dead_sheriff_can_transfer_badge() -> None:
     assert round_log.sheriff_badge is not None
     assert round_state.sheriff_badge_resolution is not None
     assert round_state.sheriff_badge_resolution.outcome == "transferred"
-    badge_event = next(event for event in sink.events if event["action"] == "sheriff_badge_resolved")
+    badge_event = next(
+        event for event in sink.events if event["action"] == "sheriff_badge_resolved"
+    )
     assert badge_event["payload"]["sheriff"] == new_sheriff
     assert [
         event["action"]
         for event in sink.events
-        if event["type"] == "judge_cue"
-        and event["action"] in {"badge_owner_out", "badge_transfer"}
+        if event["type"] == "judge_cue" and event["action"] in {"badge_owner_out", "badge_transfer"}
     ] == ["badge_owner_out", "badge_transfer"]
 
 
@@ -5971,11 +5954,7 @@ def test_witch_poison_invalid_choice_falls_back_to_no_poison() -> None:
 
     engine._run_witch_phase(round_state, round_log, active_players)
 
-    witch_cues = [
-        event
-        for event in sink.events
-        if event["type"] == "judge_cue"
-    ]
+    witch_cues = [event for event in sink.events if event["type"] == "judge_cue"]
     assert [event["action"] for event in witch_cues] == [
         "witch_wake",
         "witch_death",

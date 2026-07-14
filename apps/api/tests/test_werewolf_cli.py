@@ -36,8 +36,9 @@ def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
     calls = {}
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
 
     def fake_run_game(**kwargs) -> RunGameResult:
         calls.update(kwargs)
@@ -69,7 +70,7 @@ def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
     )
 
 
-def test_run_game_command_defaults_to_minimax_when_only_minimax_key_is_configured(
+def test_run_game_command_defaults_to_agent_plan_when_plan_key_is_configured(
     tmp_path,
     capsys,
     monkeypatch,
@@ -77,14 +78,14 @@ def test_run_game_command_defaults_to_minimax_when_only_minimax_key_is_configure
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
         "DEEPSEEK_MODEL=deepseek-v4-flash\n"
-        "MINIMAX_API_KEY=minimax-key\n"
-        "MINIMAX_MODEL=MiniMax-M2.7\n",
+        "ARK_AGENT_PLAN_API_KEY=agent-plan-key\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     calls = {}
 
     def fake_run_game(**kwargs) -> RunGameResult:
@@ -100,8 +101,8 @@ def test_run_game_command_defaults_to_minimax_when_only_minimax_key_is_configure
 
     assert exit_code == 0
     assert "record_store" in calls
-    assert calls["villager_model"] == "MiniMax-M2.7"
-    assert calls["werewolf_model"] == "MiniMax-M2.7"
+    assert calls["villager_model"] == "doubao-seed-2-0-pro-260215"
+    assert calls["werewolf_model"] == "doubao-seed-2-0-pro-260215"
 
 
 def test_run_game_command_returns_nonzero_on_engine_failure(capsys, monkeypatch) -> None:

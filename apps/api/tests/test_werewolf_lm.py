@@ -13,8 +13,9 @@ from app.werewolf.lm import (
 )
 from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.providers import (
+    ARK_AGENT_PLAN_MODELS,
+    ArkAgentPlanProvider,
     DeepSeekProvider,
-    MiniMaxProvider,
     QwenProvider,
     create_model_provider,
     default_model_name,
@@ -160,9 +161,7 @@ def test_prompt_renders_public_self_history() -> None:
         "debate",
         {
             **_world_state_for_special_action("预言家", ""),
-            "public_self_history": [
-                "第1轮警长PK发言：5号玩家：我5号，预言家，昨晚验6号好人。"
-            ],
+            "public_self_history": ["第1轮警长PK发言：5号玩家：我5号，预言家，昨晚验6号好人。"],
         },
     )
 
@@ -1177,11 +1176,11 @@ def test_openai_compatible_provider_stream_wraps_http_error_with_guidance(monkey
             fp=None,
         )
 
-    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
-    provider = MiniMaxProvider(stream_transport=failing_stream_transport)
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "agent-plan-key")
+    provider = ArkAgentPlanProvider(stream_transport=failing_stream_transport)
 
-    with pytest.raises(RuntimeError, match="MINIMAX_BASE_URL"):
-        list(provider.stream_json(model="MiniMax-M2.7", prompt="{}", temperature=0.3))
+    with pytest.raises(RuntimeError, match="ARK_AGENT_PLAN_BASE_URL"):
+        list(provider.stream_json(model="minimax-m2.7", prompt="{}", temperature=0.3))
 
 
 def test_openai_compatible_provider_stream_retries_pre_yield_network_error(monkeypatch) -> None:
@@ -1380,7 +1379,10 @@ def test_deepseek_provider_raises_clear_error_after_network_retries(monkeypatch)
         )
 
 
-def test_minimax_provider_uses_env_and_reasoning_split(tmp_path, monkeypatch) -> None:
+def test_ark_agent_plan_provider_uses_plan_endpoint_and_model_name(
+    tmp_path,
+    monkeypatch,
+) -> None:
     requests = []
 
     def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
@@ -1392,26 +1394,27 @@ def test_minimax_provider_uses_env_and_reasoning_split(tmp_path, monkeypatch) ->
         }
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
-    monkeypatch.delenv("MINIMAX_API_HOST", raising=False)
-    monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
-    provider = MiniMaxProvider(transport=fake_transport)
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "agent-plan-key")
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_HOST", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_BASE_URL", raising=False)
+    provider = ArkAgentPlanProvider(transport=fake_transport)
 
     raw = provider.complete_json(
-        model="MiniMax-M2.7",
+        model="minimax-m3",
         prompt='请输出 json：{"vote":"老周"}',
         temperature=0.3,
     )
 
     assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
-    assert requests[0]["url"] == "https://api.minimax.io/v1/chat/completions"
-    assert requests[0]["headers"]["Authorization"] == "Bearer minimax-key"
-    assert requests[0]["payload"]["model"] == "MiniMax-M2.7"
-    assert requests[0]["payload"]["reasoning_split"] is True
+    assert requests[0]["url"] == ("https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions")
+    assert requests[0]["headers"]["Authorization"] == "Bearer agent-plan-key"
+    assert requests[0]["payload"]["model"] == "minimax-m3"
+    assert "reasoning_split" not in requests[0]["payload"]
     assert "response_format" not in requests[0]["payload"]
 
 
-def test_minimax_provider_accepts_mainland_api_host(monkeypatch) -> None:
+def test_ark_agent_plan_provider_accepts_standard_ark_key_and_api_host(monkeypatch) -> None:
     requests = []
 
     def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
@@ -1422,36 +1425,37 @@ def test_minimax_provider_accepts_mainland_api_host(monkeypatch) -> None:
             ]
         }
 
-    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
-    monkeypatch.setenv("MINIMAX_API_HOST", "https://api.minimaxi.com")
-    monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
-    provider = MiniMaxProvider(transport=fake_transport)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.setenv("ARK_API_KEY", "agent-plan-key")
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_HOST", "https://ark.cn-beijing.volces.com")
+    monkeypatch.delenv("ARK_AGENT_PLAN_BASE_URL", raising=False)
+    provider = ArkAgentPlanProvider(transport=fake_transport)
 
     provider.complete_json(
-        model="MiniMax-M2.7",
+        model="kimi-k2.6",
         prompt='请输出 json：{"vote":"老周"}',
         temperature=0.3,
     )
 
-    assert requests[0]["url"] == "https://api.minimaxi.com/v1/chat/completions"
+    assert requests[0]["url"] == ("https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions")
 
 
-def test_minimax_provider_explains_invalid_key_region_mismatch(monkeypatch) -> None:
+def test_ark_agent_plan_provider_explains_invalid_plan_key(monkeypatch) -> None:
     def failing_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
         del url, headers, payload
         raise urllib.error.HTTPError(
-            url="https://api.minimax.io/v1/chat/completions",
+            url="https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions",
             code=401,
             msg="Unauthorized",
             hdrs={},
             fp=None,
         )
 
-    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
-    provider = MiniMaxProvider(transport=failing_transport)
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "agent-plan-key")
+    provider = ArkAgentPlanProvider(transport=failing_transport)
 
-    with pytest.raises(RuntimeError, match="MINIMAX_BASE_URL"):
-        provider.complete_json(model="MiniMax-M2.7", prompt="{}", temperature=0.3)
+    with pytest.raises(RuntimeError, match="ARK_AGENT_PLAN_BASE_URL"):
+        provider.complete_json(model="minimax-m2.7", prompt="{}", temperature=0.3)
 
 
 def test_qwen_provider_uses_dashscope_env_and_model_alias(tmp_path, monkeypatch) -> None:
@@ -1513,7 +1517,10 @@ def test_qwen_provider_accepts_dashscope_api_host(tmp_path, monkeypatch) -> None
     )
 
 
-def test_model_provider_router_routes_minimax_without_deepseek_key(tmp_path, monkeypatch) -> None:
+def test_model_provider_router_routes_legacy_minimax_name_to_agent_plan(
+    tmp_path,
+    monkeypatch,
+) -> None:
     requests = []
 
     def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
@@ -1526,9 +1533,10 @@ def test_model_provider_router_routes_minimax_without_deepseek_key(tmp_path, mon
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
-    monkeypatch.delenv("MINIMAX_API_HOST", raising=False)
-    monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "agent-plan-key")
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_HOST", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_BASE_URL", raising=False)
 
     provider = create_model_provider(transport=fake_transport)
     raw = provider.complete_json(
@@ -1538,8 +1546,47 @@ def test_model_provider_router_routes_minimax_without_deepseek_key(tmp_path, mon
     )
 
     assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
-    assert requests[0]["url"] == "https://api.minimax.io/v1/chat/completions"
-    assert requests[0]["headers"]["Authorization"] == "Bearer minimax-key"
+    assert requests[0]["url"] == ("https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions")
+    assert requests[0]["headers"]["Authorization"] == "Bearer agent-plan-key"
+    assert requests[0]["payload"]["model"] == "minimax-m2.7"
+
+
+def test_model_provider_router_routes_all_agent_plan_models(tmp_path, monkeypatch) -> None:
+    requests = []
+
+    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return {"choices": [{"message": {"content": "{}"}}]}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "agent-plan-key")
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_MODEL", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_MODELS", raising=False)
+
+    provider = create_model_provider(transport=fake_transport)
+    for model in ARK_AGENT_PLAN_MODELS:
+        provider.complete_json(model=model, prompt="{}", temperature=0.3)
+
+    assert [request["payload"]["model"] for request in requests] == list(ARK_AGENT_PLAN_MODELS)
+    assert {request["url"] for request in requests} == {
+        "https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions"
+    }
+
+
+def test_official_minimax_key_no_longer_enables_legacy_minimax_route(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINIMAX_API_KEY", "legacy-official-key")
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+
+    provider = create_model_provider(transport=lambda _url, _headers, _payload: {})
+
+    with pytest.raises(RuntimeError, match="ARK_AGENT_PLAN_API_KEY or ARK_API_KEY"):
+        provider.complete_json(model="MiniMax-M2.7", prompt="{}", temperature=0.3)
 
 
 def test_model_provider_router_routes_qwen_alias_without_other_keys(tmp_path, monkeypatch) -> None:
@@ -1555,7 +1602,8 @@ def test_model_provider_router_routes_qwen_alias_without_other_keys(tmp_path, mo
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
     monkeypatch.delenv("DASHSCOPE_API_HOST", raising=False)
     monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
@@ -1631,23 +1679,29 @@ def test_model_provider_router_stream_reports_unknown_models(monkeypatch) -> Non
         provider.stream_json(model="unknown-model", prompt="{}", temperature=0.3)
 
 
-def test_default_model_name_uses_minimax_when_only_minimax_key_is_configured(
+def test_default_model_name_uses_agent_plan_pro_when_plan_key_is_configured(
     tmp_path,
     monkeypatch,
 ) -> None:
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
         "DEEPSEEK_MODEL=deepseek-v4-flash\n"
-        "MINIMAX_API_KEY=minimax-key\n"
-        "MINIMAX_MODEL=MiniMax-M2.7\n",
+        "ARK_AGENT_PLAN_API_KEY=agent-plan-key\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
 
-    assert default_model_name() == "MiniMax-M2.7"
+    assert default_model_name() == "doubao-seed-2-0-pro-260215"
+
+
+def test_default_model_name_normalizes_legacy_minimax_name(monkeypatch) -> None:
+    monkeypatch.setenv("WEREWOLF_DEFAULT_MODEL", "MiniMax-M2.7")
+
+    assert default_model_name() == "minimax-m2.7"
 
 
 def test_default_model_name_uses_qwen_when_only_dashscope_key_is_configured(
@@ -1656,7 +1710,7 @@ def test_default_model_name_uses_qwen_when_only_dashscope_key_is_configured(
 ) -> None:
     (tmp_path / ".env").write_text(
         "#DEEPSEEK_API_KEY=\n"
-        "#MINIMAX_API_KEY=\n"
+        "#ARK_AGENT_PLAN_API_KEY=\n"
         "DASHSCOPE_API_KEY=dashscope-key\n"
         "DASHSCOPE_MODEL=qwen3.6-plus\n",
         encoding="utf-8",
@@ -1664,7 +1718,8 @@ def test_default_model_name_uses_qwen_when_only_dashscope_key_is_configured(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
     assert default_model_name() == "qwen3.6-plus"
@@ -1677,7 +1732,8 @@ def test_default_model_name_falls_back_to_deepseek_flash_without_configured_keys
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
     assert default_model_name() == "deepseek-v4-flash"
@@ -1690,7 +1746,10 @@ def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
         contents = file.read()
 
     assert "WEREWOLF_DEFAULT_MODEL=\n" in contents
+    assert "ARK_AGENT_PLAN_API_KEY=\n" in contents
+    assert "ARK_AGENT_PLAN_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3\n" in contents
+    assert f"ARK_AGENT_PLAN_MODELS={','.join(ARK_AGENT_PLAN_MODELS)}\n" in contents
     assert "DEEPSEEK_API_KEY=\n" in contents
     assert "DEEPSEEK_MODEL=deepseek-v4-flash\n" in contents
-    assert "MINIMAX_API_KEY=\n" in contents
+    assert "MINIMAX_API_KEY" not in contents
     assert "DASHSCOPE_API_KEY=\n" in contents
