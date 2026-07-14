@@ -84,7 +84,9 @@ from app.werewolf.player_configs import (
 from app.werewolf.public_facts import (
     FactRetention,
     PublicFact,
+    PublicFactOpportunityV1,
     compressed_public_facts,
+    fact_prompt_coverage,
     public_fact_from_dict,
 )
 from app.werewolf.public_outcomes import (
@@ -202,6 +204,7 @@ class PlayerActionRequest:
     phase: str
     world_state: dict[str, object]
     event_visibility: EventVisibility
+    fact_prompt_coverage: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -2827,6 +2830,15 @@ class GameEngine:
             world_state["speech_prior_texts"] = public_prior_speeches
         world_state = self._public_model_world_state(copy.deepcopy(world_state))
         world_state["options"] = "、".join(public_options)
+        facts = [
+            public_fact_from_dict(item)
+            for item in self.state.public_facts
+            if isinstance(item, dict)
+        ]
+        coverage = fact_prompt_coverage(
+            facts,
+            [str(item) for item in world_state.get("public_facts", [])],
+        )
         event_visibility = self._player_action_event_visibility(phase, action)
         return PlayerActionRequest(
             player=player,
@@ -2839,6 +2851,7 @@ class GameEngine:
             phase=phase,
             world_state=world_state,
             event_visibility=event_visibility,
+            fact_prompt_coverage=coverage,
         )
 
     def _execute_player_action_request(
@@ -3237,6 +3250,7 @@ class GameEngine:
             first_token_ms=(
                 lm_log.first_token_ms if self.action_budgets_enabled else None
             ),
+            fact_prompt_coverage=copy.deepcopy(request.fact_prompt_coverage),
         )
         if result.fallback_reason is not None:
             action_log.fallback_reason = result.fallback_reason
@@ -3909,18 +3923,82 @@ class GameEngine:
         ordinal = len(self.state.public_facts)
         fact_stage = stage or category
         fact_actor = actor or "system"
+        opportunity_id = (
+            f"op:r{round_number}:{fact_stage}:{fact_actor}:"
+            f"{len(self.state.public_fact_opportunities)}"
+        )
+        opportunity = PublicFactOpportunityV1(
+            opportunity_id=opportunity_id,
+            round_number=round_number,
+            stage=fact_stage,
+            category=category,
+            retention=retention or ("important" if category in {"claim", "sheriff", "death", "vote", "reveal", "interruption"} else "recent"),
+            status="expected",
+        ).to_dict()
+        self.state.public_fact_opportunities.append(opportunity)
+        fact_id = f"r{round_number}:{fact_stage}:{fact_actor}:{ordinal}"
         self.state.public_facts.append(
             PublicFact(
                 round_number=round_number,
                 category=category,
                 text=text,
-                fact_id=f"r{round_number}:{fact_stage}:{fact_actor}:{ordinal}",
+                fact_id=fact_id,
                 stage=stage,
                 actor=actor,
                 retention=retention,
+                source_opportunity_id=opportunity_id,
                 details=details or {},
             ).to_dict()
         )
+        opportunity["status"] = "recorded"
+        opportunity["fact_id"] = fact_id
+        self.state.public_fact_propositions.extend(
+            self._public_fact_propositions(
+                round_number=round_number,
+                category=category,
+                stage=fact_stage,
+                details=details or {},
+            )
+        )
+
+    def _public_fact_propositions(
+        self,
+        *,
+        round_number: int,
+        category: str,
+        stage: str,
+        details: dict[str, object],
+    ) -> list[dict[str, object]]:
+        propositions: list[dict[str, object]] = []
+        if category == "death":
+            raw_players = details.get("players")
+            players = raw_players if isinstance(raw_players, list) else [details.get("target")]
+            for player in players:
+                if isinstance(player, str) and player:
+                    propositions.append(
+                        {
+                            "subject": player,
+                            "predicate": "alive",
+                            "object": "",
+                            "scope": "game",
+                            "polarity": False,
+                            "round_number": round_number,
+                            "stage": stage,
+                        }
+                    )
+        if category == "reveal" and isinstance(details.get("player"), str):
+            propositions.append(
+                {
+                    "subject": details["player"],
+                    "predicate": "role_revealed",
+                    "object": "werewolf" if stage == "werewolf_self_explosion" else "public",
+                    "scope": "game",
+                    "polarity": True,
+                    "round_number": round_number,
+                    "stage": stage,
+                }
+            )
+        return propositions
 
     def _public_fact_lines(self) -> list[str]:
         facts = [public_fact_from_dict(item) for item in self.state.public_facts]

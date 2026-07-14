@@ -523,6 +523,14 @@ def test_options_and_role_permission_matrix(
     assert options.json()["personalities"]
     assert options.json()["appearances"]
     assert options.json()["strategies"]
+    assert {option["id"]: option["label"] for option in options.json()["strategies"]} == {
+        "balanced": "均衡观察",
+        "logic_leader": "逻辑带队",
+        "shadow_wolf": "阴影潜伏",
+        "social_reader": "社交阅读",
+        "pressure_attacker": "强压进攻",
+        "cautious_observer": "谨慎观察",
+    }
     assert all(
         isinstance(option["avatar_image_url"], str)
         for option in options.json()["appearances"]

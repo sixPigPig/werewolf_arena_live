@@ -27,15 +27,21 @@ _FALLBACK_REASONS = frozenset(
 _PROGRESS_STAGES = frozenset(
     {"started", "thinking", "delta", "received", "retry", "failed"}
 )
+ACTION_DURATION_BUCKETS = (0.5, 1, 2, 3, 5, 8, 10, 12, 15, 20, 30, 45, 60)
+FIRST_TOKEN_BUCKETS = (0.25, 0.5, 1, 2, 3, 5, 8, 10, 15, 20)
+BATCH_DURATION_BUCKETS = ACTION_DURATION_BUCKETS
 _LOCK = Lock()
 _ACTION_DURATION_SUM: Counter[tuple[str, str, str]] = Counter()
 _ACTION_DURATION_COUNT: Counter[tuple[str, str, str]] = Counter()
+_ACTION_DURATION_BUCKET: Counter[tuple[str, str, str, float]] = Counter()
 _FIRST_TOKEN_SUM: Counter[tuple[str, str, str]] = Counter()
 _FIRST_TOKEN_COUNT: Counter[tuple[str, str, str]] = Counter()
+_FIRST_TOKEN_BUCKET: Counter[tuple[str, str, str, float]] = Counter()
 _TIMEOUT_COUNTER: Counter[tuple[str, str]] = Counter()
 _FALLBACK_COUNTER: Counter[tuple[str, str]] = Counter()
 _BATCH_DURATION_SUM: Counter[tuple[str, str]] = Counter()
 _BATCH_DURATION_COUNT: Counter[tuple[str, str]] = Counter()
+_BATCH_DURATION_BUCKET: Counter[tuple[str, str, float]] = Counter()
 _PROGRESS_COUNTER: Counter[tuple[str]] = Counter()
 
 
@@ -56,9 +62,16 @@ def record_action_execution(
         key = (kind, provider, result_label)
         _ACTION_DURATION_SUM[key] += duration_seconds
         _ACTION_DURATION_COUNT[key] += 1
+        for boundary in ACTION_DURATION_BUCKETS:
+            if duration_seconds <= boundary:
+                _ACTION_DURATION_BUCKET[(*key, boundary)] += 1
         if first_token_ms is not None:
-            _FIRST_TOKEN_SUM[key] += max(0, first_token_ms) / 1000
+            first_token_seconds = max(0, first_token_ms) / 1000
+            _FIRST_TOKEN_SUM[key] += first_token_seconds
             _FIRST_TOKEN_COUNT[key] += 1
+            for boundary in FIRST_TOKEN_BUCKETS:
+                if first_token_seconds <= boundary:
+                    _FIRST_TOKEN_BUCKET[(*key, boundary)] += 1
         if fallback_reason and (
             fallback_reason.startswith("timeout_")
             or fallback_reason.startswith("batch_deadline_")
@@ -83,8 +96,12 @@ def record_action_batch(
     result_label = result if result in _BATCH_RESULTS else "failed"
     key = (kind, result_label)
     with _LOCK:
-        _BATCH_DURATION_SUM[key] += max(0, duration_ms) / 1000
+        duration_seconds = max(0, duration_ms) / 1000
+        _BATCH_DURATION_SUM[key] += duration_seconds
         _BATCH_DURATION_COUNT[key] += 1
+        for boundary in BATCH_DURATION_BUCKETS:
+            if duration_seconds <= boundary:
+                _BATCH_DURATION_BUCKET[(*key, boundary)] += 1
 
 
 def record_model_progress_event(event_type: str) -> None:
@@ -107,25 +124,42 @@ def render_action_execution_metrics() -> str:
     with _LOCK:
         action_sum = _ACTION_DURATION_SUM.copy()
         action_count = _ACTION_DURATION_COUNT.copy()
+        action_bucket = _ACTION_DURATION_BUCKET.copy()
         first_sum = _FIRST_TOKEN_SUM.copy()
         first_count = _FIRST_TOKEN_COUNT.copy()
+        first_bucket = _FIRST_TOKEN_BUCKET.copy()
         timeouts = _TIMEOUT_COUNTER.copy()
         fallbacks = _FALLBACK_COUNTER.copy()
         batch_sum = _BATCH_DURATION_SUM.copy()
         batch_count = _BATCH_DURATION_COUNT.copy()
+        batch_bucket = _BATCH_DURATION_BUCKET.copy()
         progress = _PROGRESS_COUNTER.copy()
     lines = [
         "# HELP werewolf_model_action_duration_seconds Model action duration.",
-        "# TYPE werewolf_model_action_duration_seconds summary",
+        "# TYPE werewolf_model_action_duration_seconds histogram",
     ]
-    _append_summary(lines, "werewolf_model_action_duration_seconds", action_sum, action_count)
+    _append_action_histogram(
+        lines,
+        "werewolf_model_action_duration_seconds",
+        action_sum,
+        action_count,
+        action_bucket,
+        ACTION_DURATION_BUCKETS,
+    )
     lines.extend(
         [
             "# HELP werewolf_model_first_token_seconds Model first token latency.",
-            "# TYPE werewolf_model_first_token_seconds summary",
+            "# TYPE werewolf_model_first_token_seconds histogram",
         ]
     )
-    _append_summary(lines, "werewolf_model_first_token_seconds", first_sum, first_count)
+    _append_action_histogram(
+        lines,
+        "werewolf_model_first_token_seconds",
+        first_sum,
+        first_count,
+        first_bucket,
+        FIRST_TOKEN_BUCKETS,
+    )
     lines.extend(
         [
             "# HELP werewolf_model_timeout_total Model action timeouts.",
@@ -151,12 +185,22 @@ def render_action_execution_metrics() -> str:
     lines.extend(
         [
             "# HELP werewolf_action_batch_duration_seconds Action batch duration.",
-            "# TYPE werewolf_action_batch_duration_seconds summary",
+            "# TYPE werewolf_action_batch_duration_seconds histogram",
         ]
     )
     for key in sorted(batch_count):
         kind, result = key
         labels = f'action_kind="{kind}",result="{result}"'
+        for boundary in BATCH_DURATION_BUCKETS:
+            count = batch_bucket[(kind, result, boundary)]
+            lines.append(
+                "werewolf_action_batch_duration_seconds_bucket"
+                f'{{{labels},le="{boundary:g}"}} {count}'
+            )
+        lines.append(
+            "werewolf_action_batch_duration_seconds_bucket"
+            f'{{{labels},le="+Inf"}} {batch_count[key]}'
+        )
         lines.append(
             f"werewolf_action_batch_duration_seconds_sum{{{labels}}} {batch_sum[key]}"
         )
@@ -182,12 +226,15 @@ def reset_action_execution_metrics_for_tests() -> None:
     with _LOCK:
         _ACTION_DURATION_SUM.clear()
         _ACTION_DURATION_COUNT.clear()
+        _ACTION_DURATION_BUCKET.clear()
         _FIRST_TOKEN_SUM.clear()
         _FIRST_TOKEN_COUNT.clear()
+        _FIRST_TOKEN_BUCKET.clear()
         _TIMEOUT_COUNTER.clear()
         _FALLBACK_COUNTER.clear()
         _BATCH_DURATION_SUM.clear()
         _BATCH_DURATION_COUNT.clear()
+        _BATCH_DURATION_BUCKET.clear()
         _PROGRESS_COUNTER.clear()
 
 
@@ -202,16 +249,24 @@ def _provider_label(model: str) -> str:
     return "other"
 
 
-def _append_summary(
+def _append_action_histogram(
     lines: list[str],
     metric: str,
     sums: Counter[tuple[str, str, str]],
     counts: Counter[tuple[str, str, str]],
+    buckets: Counter[tuple[str, str, str, float]],
+    boundaries: tuple[float, ...],
 ) -> None:
     for key in sorted(counts):
         kind, provider, result = key
         labels = (
             f'action_kind="{kind}",provider="{provider}",result="{result}"'
         )
+        for boundary in boundaries:
+            lines.append(
+                f"{metric}_bucket"
+                f'{{{labels},le="{boundary:g}"}} {buckets[(*key, boundary)]}'
+            )
+        lines.append(f'{metric}_bucket{{{labels},le="+Inf"}} {counts[key]}')
         lines.append(f"{metric}_sum{{{labels}}} {sums[key]}")
         lines.append(f"{metric}_count{{{labels}}} {counts[key]}")

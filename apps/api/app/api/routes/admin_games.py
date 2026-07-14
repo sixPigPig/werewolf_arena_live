@@ -17,9 +17,17 @@ from app.admin.games import (
     get_admin_game_detail,
     list_admin_games,
 )
+from app.admin.quality_evaluations import (
+    build_admin_quality_issues,
+    build_admin_quality_summary,
+)
 from app.admin.rbac import AdminPermission
 from app.admin.p2_diagnostics import build_game_p2_quality
-from app.api.admin.dependencies import AdminPrincipal, require_admin_permission
+from app.api.admin.dependencies import (
+    AdminPrincipal,
+    require_admin_csrf,
+    require_admin_permission,
+)
 from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.api.schemas.admin_games import (
     AdminGameDebugResponse,
@@ -31,10 +39,20 @@ from app.api.schemas.admin_games import (
     AdminGameRunStatus,
     AdminGameSort,
     AdminGameStatus,
+    AdminGameQualityEvaluationResponse,
+    AdminGameQualityIssuesResponse,
+    AdminGameQualityRetryResponse,
 )
 from app.db.session import get_db
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import LiveRunRecord
+from app.models.quality_evaluation import GameQualityEvaluationRecord
+from app.werewolf.quality_evaluation import DEFAULT_EVALUATOR_VERSION
+from app.werewolf.quality_store import (
+    QualityEvaluationSourceUnavailable,
+    enqueue_quality_evaluation,
+    latest_quality_evaluation,
+)
 from app.werewolf.replay import SESSION_ID_RE
 
 
@@ -123,12 +141,170 @@ def get_game(
 ) -> AdminGameDetailResponse:
     try:
         detail = get_admin_game_detail(db, session_id)
+        quality_record = latest_quality_evaluation(db, session_id=session_id)
     except RecoverableDatabaseError as exc:
         raise _database_unavailable() from exc
     if detail is None:
         raise _not_found()
     _set_private_headers(request, response)
-    return _detail_response(detail)
+    return _detail_response(detail, quality_record=quality_record)
+
+
+@router.get(
+    "/games/{session_id}/quality-evaluation",
+    response_model=AdminGameQualityEvaluationResponse,
+)
+def get_game_quality_evaluation(
+    session_id: Annotated[str, Path(pattern=SESSION_ID_RE)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    _principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.GAMES_READ)),
+    ],
+) -> AdminGameQualityEvaluationResponse:
+    try:
+        game = db.get(GameSessionRecord, session_id)
+        if game is None:
+            raise _not_found()
+        quality_record = latest_quality_evaluation(db, session_id=session_id)
+        result = AdminGameQualityEvaluationResponse(
+            session_id=session_id,
+            quality_evaluation=build_admin_quality_summary(
+                quality_record,
+                terminal=_is_terminal_game(game),
+            ),
+        )
+    except AdminAPIProblem:
+        raise
+    except RecoverableDatabaseError as exc:
+        raise _database_unavailable() from exc
+    _set_private_headers(request, response)
+    return result
+
+
+@router.get(
+    "/games/{session_id}/quality-evaluation/issues",
+    response_model=AdminGameQualityIssuesResponse,
+)
+def get_game_quality_evaluation_issues(
+    session_id: Annotated[str, Path(pattern=SESSION_ID_RE)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.GAMES_DEBUG_READ)),
+    ],
+) -> AdminGameQualityIssuesResponse:
+    try:
+        if db.get(GameSessionRecord, session_id) is None:
+            raise _not_found()
+        quality_record = latest_quality_evaluation(db, session_id=session_id)
+        items = build_admin_quality_issues(quality_record)
+        result = AdminGameQualityIssuesResponse(
+            session_id=session_id,
+            evaluation_id=quality_record.id if quality_record is not None else None,
+            items=items,
+        )
+        record_audit_event(
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.game.quality_issues.read",
+            resource_type="game_session",
+            resource_id=session_id,
+            result="success",
+            after={"evaluation_id": result.evaluation_id, "issue_count": len(items)},
+        )
+        db.commit()
+    except AdminAPIProblem:
+        raise
+    except RecoverableDatabaseError as exc:
+        db.rollback()
+        raise _database_unavailable() from exc
+    _set_private_headers(request, response)
+    return result
+
+
+@router.post(
+    "/games/{session_id}/quality-evaluation/retry",
+    response_model=AdminGameQualityRetryResponse,
+    status_code=202,
+)
+def retry_game_quality_evaluation(
+    session_id: Annotated[str, Path(pattern=SESSION_ID_RE)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
+) -> AdminGameQualityRetryResponse:
+    _require_quality_debug_permission(principal)
+    try:
+        game = db.get(GameSessionRecord, session_id)
+        if game is None:
+            raise _not_found()
+        if not _is_terminal_game(game):
+            raise _quality_retry_conflict(
+                "Only terminal games can be scheduled for quality evaluation."
+            )
+        current = latest_quality_evaluation(db, session_id=session_id)
+        if current is not None and current.status in {"pending", "processing"}:
+            raise _quality_retry_conflict("A quality evaluation is already active.")
+        eligible = (
+            current is None
+            or current.status == "failed"
+            or current.data_status == "partial"
+            or current.evaluator_version != DEFAULT_EVALUATOR_VERSION
+        )
+        if not eligible:
+            raise _quality_retry_conflict(
+                "Only failed, partial, missing, or outdated evaluations can be retried."
+            )
+        previous_id = current.id if current is not None else None
+        previous_status = current.status if current is not None else "missing"
+        try:
+            queued = enqueue_quality_evaluation(
+                db,
+                session_id=session_id,
+                run_id=current.run_id if current is not None else None,
+                evaluator_version=DEFAULT_EVALUATOR_VERSION,
+            )
+        except QualityEvaluationSourceUnavailable as exc:
+            raise _quality_retry_conflict(
+                "The replay sources required for evaluation are unavailable."
+            ) from exc
+        if queued.status != "pending":
+            _reset_quality_evaluation_for_retry(queued)
+        record_audit_event(
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.game.quality_evaluation.retry",
+            resource_type="game_session",
+            resource_id=session_id,
+            result="success",
+            before={
+                "evaluation_id": previous_id,
+                "status": previous_status,
+            },
+            after={"evaluation_id": queued.id, "status": "pending"},
+        )
+        db.commit()
+        result = AdminGameQualityRetryResponse(
+            session_id=session_id,
+            evaluation_id=queued.id,
+            status="pending",
+        )
+    except AdminAPIProblem:
+        db.rollback()
+        raise
+    except RecoverableDatabaseError as exc:
+        db.rollback()
+        raise _database_unavailable() from exc
+    _set_private_headers(request, response)
+    return result
 
 
 @router.get("/games/{session_id}/debug", response_model=AdminGameDebugResponse)
@@ -197,7 +373,11 @@ def get_game_debug(
     return result
 
 
-def _detail_response(detail: AdminGameDetailData) -> AdminGameDetailResponse:
+def _detail_response(
+    detail: AdminGameDetailData,
+    *,
+    quality_record: GameQualityEvaluationRecord | None,
+) -> AdminGameDetailResponse:
     state = detail.state
     reveal_terminal_metadata = _is_terminal_game(detail.record)
     latest_run = detail.runs[0] if detail.runs else None
@@ -247,7 +427,35 @@ def _detail_response(detail: AdminGameDetailData) -> AdminGameDetailResponse:
             completed_at=latest_run.completed_at if latest_run else None,
             safe_run_diagnostics=detail.run_p2_diagnostics,
         ),
+        quality_evaluation=build_admin_quality_summary(
+            quality_record,
+            terminal=reveal_terminal_metadata,
+        ),
     )
+
+
+def _reset_quality_evaluation_for_retry(record: GameQualityEvaluationRecord) -> None:
+    record.status = "pending"
+    record.data_status = "collecting"
+    record.verdict = "unavailable"
+    record.safe_summary = {}
+    record.duration_ms = None
+    record.attempt_count = 0
+    record.not_before = datetime.now(tz=UTC)
+    record.worker_id = None
+    record.lease_expires_at = None
+    record.last_error_code = None
+    record.completed_at = None
+
+
+def _require_quality_debug_permission(principal: AdminPrincipal) -> None:
+    if AdminPermission.GAMES_DEBUG_READ not in principal.permissions:
+        raise AdminAPIProblem(
+            status_code=403,
+            code="admin_permission_denied",
+            title="Permission denied",
+            detail="The 'games.debug.read' permission is required.",
+        )
 
 
 def _list_item(
@@ -582,6 +790,15 @@ def _invalid_filter(detail: str) -> AdminAPIProblem:
         status_code=422,
         code="admin_game_filter_invalid",
         title="Invalid game filter",
+        detail=detail,
+    )
+
+
+def _quality_retry_conflict(detail: str) -> AdminAPIProblem:
+    return AdminAPIProblem(
+        status_code=409,
+        code="admin_quality_evaluation_retry_conflict",
+        title="Quality evaluation cannot be retried",
         detail=detail,
     )
 

@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.admin.rbac import AdminPermission
+from app.admin.quality_evaluations import build_admin_quality_overview
 from app.api.admin.dependencies import AdminPrincipal, require_admin_permission
 from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.api.schemas.admin_dashboard import (
@@ -19,6 +20,7 @@ from app.api.schemas.admin_dashboard import (
     AdminOverviewGames,
     AdminOverviewJobs,
     AdminOverviewProfiles,
+    AdminOverviewQuality,
     AdminOverviewResponse,
     AdminOverviewRuns,
     AdminSearchResponse,
@@ -98,6 +100,7 @@ def get_admin_overview(
             GameSessionRecord,
             GameSessionRecord.resumable.is_(True),
         )
+        quality = build_admin_quality_overview(db, now=now)
     except SQLAlchemyError as exc:
         raise _dashboard_unavailable() from exc
 
@@ -107,6 +110,7 @@ def get_admin_overview(
         exhausted_total=exhausted_total,
         failed_jobs=job_counts.get("failed", 0),
         queued_jobs=job_counts.get("queued", 0),
+        quality=quality,
     )
     _set_private_headers(request, response)
     return AdminOverviewResponse(
@@ -142,6 +146,7 @@ def get_admin_overview(
             completed=job_counts.get("completed", 0),
             failed=job_counts.get("failed", 0),
         ),
+        quality=AdminOverviewQuality(**quality),
         reaper_up=reaper_up,
         alerts=alerts,
     )
@@ -358,6 +363,7 @@ def _overview_alerts(
     exhausted_total: int,
     failed_jobs: int,
     queued_jobs: int,
+    quality: dict[str, object],
 ) -> list[AdminOverviewAlert]:
     alerts: list[AdminOverviewAlert] = []
     if not reaper_up:
@@ -413,6 +419,42 @@ def _overview_alerts(
                 detail="持续 worker 启动后会按创建时间领取任务。",
                 count=queued_jobs,
                 href="/system/jobs?status=queued",
+            )
+        )
+    p0_game_count = int(quality.get("p0_game_count") or 0)
+    if p0_game_count:
+        alerts.append(
+            AdminOverviewAlert(
+                code="quality_p0_detected",
+                severity="critical",
+                title="近期对局检出 P0 质量问题",
+                detail="只展示安全问题码和坐标；请进入对局详情显式读取。",
+                count=p0_game_count,
+                href="/operations/games",
+            )
+        )
+    pending_count = int(quality.get("pending_count") or 0)
+    if pending_count and not bool(quality.get("worker_up")):
+        alerts.append(
+            AdminOverviewAlert(
+                code="quality_evaluator_backlog",
+                severity="critical",
+                title="质量评估积压且 Worker 心跳异常",
+                detail="对局终局不受影响，但质量结论会延迟生成。",
+                count=pending_count,
+                href="/operations/games",
+            )
+        )
+    failed_count = int(quality.get("worker_failed_count") or 0)
+    if failed_count:
+        alerts.append(
+            AdminOverviewAlert(
+                code="quality_evaluation_failed",
+                severity="warning",
+                title="存在执行失败的质量评估",
+                detail="可在对应对局详情中显式重试，失败不会伪装为通过。",
+                count=failed_count,
+                href="/operations/games",
             )
         )
     return alerts

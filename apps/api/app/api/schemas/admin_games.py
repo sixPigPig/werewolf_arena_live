@@ -11,6 +11,22 @@ from app.api.schemas.admin_p2 import AdminGameP2QualityV1
 
 AdminGameStatus = Literal["complete", "partial"]
 AdminGameRunStatus = Literal["queued", "running", "completed", "failed", "canceled"]
+AdminQualityEvaluationStatus = Literal[
+    "not_scheduled",
+    "pending",
+    "processing",
+    "completed",
+    "failed",
+    "superseded",
+]
+AdminQualityDataStatus = Literal[
+    "collecting",
+    "available",
+    "partial",
+    "legacy",
+    "unavailable",
+]
+AdminQualityVerdict = Literal["pass", "warn", "fail", "unavailable"]
 AdminGameSort = Literal[
     "created_at",
     "-created_at",
@@ -110,6 +126,123 @@ class AdminGameDiagnostics(BaseModel):
     last_event: AdminGameEventSummary | None
 
 
+class AdminQualitySourceCoverage(BaseModel):
+    state: str = Field(max_length=20)
+    logs: str = Field(max_length=20)
+    events: str = Field(max_length=20)
+    voice: str = Field(max_length=20)
+    subtitles: str = Field(max_length=20)
+    pending_voice_count: int = Field(ge=0)
+    failed_voice_count: int = Field(ge=0)
+
+
+class AdminQualityIssueCounts(BaseModel):
+    P0: int = Field(ge=0)
+    P1: int = Field(ge=0)
+    P2: int = Field(ge=0)
+
+
+class AdminQualityFacts(BaseModel):
+    critical_opportunity_count: int = Field(ge=0)
+    critical_recorded_count: int = Field(ge=0)
+    critical_fact_write_rate: float | None = Field(default=None, ge=0, le=1)
+    prompt_expected_critical_count: int = Field(ge=0)
+    prompt_included_critical_count: int = Field(ge=0)
+    prompt_missing_critical_count: int = Field(ge=0)
+    critical_fact_prompt_coverage_rate: float | None = Field(default=None, ge=0, le=1)
+    deterministic_contradiction_count: int = Field(ge=0)
+
+
+class AdminQualityStructure(BaseModel):
+    max_consecutive_self_explosions: int = Field(ge=0)
+    chain_three_count: int = Field(ge=0)
+    normal_day_debate_round_count: int = Field(ge=0)
+    sheriff_model_request_count: int = Field(ge=0)
+    public_model_request_count: int = Field(ge=0)
+    sheriff_model_request_rate: float | None = Field(default=None, ge=0, le=1)
+
+
+class AdminQualityVoice(BaseModel):
+    narratable_event_count: int = Field(ge=0)
+    effective_voice_event_count: int = Field(ge=0)
+    missing_narratable_event_count: int = Field(ge=0)
+    voice_coverage_rate: float | None = Field(default=None, ge=0, le=1)
+    voice_source_event_lag: int | None = Field(default=None, ge=0)
+    terminal_judge_voice_coverage: bool | None
+    pending_voice_count: int = Field(ge=0)
+    failed_voice_count: int = Field(ge=0)
+    interruption_count: int = Field(ge=0)
+    replay_count: int = Field(ge=0)
+
+
+class AdminQualityPerformance(BaseModel):
+    action_count: int = Field(ge=0)
+    action_duration_ms_max: int | None = Field(default=None, ge=0)
+    action_duration_p95_ms: int | None = Field(default=None, ge=0)
+    first_token_count: int = Field(ge=0)
+    first_token_ms_max: int | None = Field(default=None, ge=0)
+    first_token_p95_ms: int | None = Field(default=None, ge=0)
+    game_duration_ms: int | None = Field(default=None, ge=0)
+    timeout_count: int = Field(ge=0)
+    retry_count: int = Field(ge=0)
+    fallback_count: int = Field(ge=0)
+
+
+class AdminQualityContent(BaseModel):
+    speech_check_count: int = Field(ge=0)
+    repeated_speech_count: int = Field(ge=0)
+    repeated_speech_rate: float | None = Field(default=None, ge=0, le=1)
+    speech_rewrite_count: int = Field(ge=0)
+    speech_rewrite_recovered_count: int = Field(ge=0)
+    speech_retry_exhausted_count: int = Field(ge=0)
+    privacy_p0_issue_count: int = Field(ge=0)
+    lineup_warning_count: int = Field(ge=0)
+
+
+class AdminGameQualityEvaluationSummary(BaseModel):
+    schema_version: Literal[1] = 1
+    evaluator_version: str = Field(max_length=40)
+    evaluation_status: AdminQualityEvaluationStatus
+    data_status: AdminQualityDataStatus
+    verdict: AdminQualityVerdict
+    source_coverage: AdminQualitySourceCoverage
+    issue_counts: AdminQualityIssueCounts
+    facts: AdminQualityFacts
+    structure: AdminQualityStructure
+    voice: AdminQualityVoice
+    performance: AdminQualityPerformance
+    content: AdminQualityContent
+    evaluated_at: datetime | None
+
+
+class AdminGameQualityEvaluationResponse(BaseModel):
+    session_id: str = Field(max_length=32)
+    quality_evaluation: AdminGameQualityEvaluationSummary
+
+
+class AdminGameQualityIssue(BaseModel):
+    issue_id: str = Field(max_length=40)
+    code: str = Field(max_length=80)
+    severity: Literal["P0", "P1", "P2"]
+    channel: str = Field(max_length=40)
+    round_number: int | None = Field(default=None, ge=0)
+    event_id: int | None = Field(default=None, ge=0)
+    utterance_id: str | None = Field(default=None, max_length=80)
+    first_detected_at: datetime
+
+
+class AdminGameQualityIssuesResponse(BaseModel):
+    session_id: str = Field(max_length=32)
+    evaluation_id: str | None = Field(default=None, max_length=40)
+    items: list[AdminGameQualityIssue] = Field(max_length=200)
+
+
+class AdminGameQualityRetryResponse(BaseModel):
+    session_id: str = Field(max_length=32)
+    evaluation_id: str = Field(max_length=40)
+    status: Literal["pending"]
+
+
 class AdminGameDetailResponse(AdminGameListItem):
     players: list[AdminGamePlayerSummary]
     rounds: list[AdminGameRoundSummary]
@@ -117,6 +250,7 @@ class AdminGameDetailResponse(AdminGameListItem):
     recent_events: list[AdminGameEventSummary] = Field(max_length=50)
     diagnostics: AdminGameDiagnostics
     p2_quality: AdminGameP2QualityV1
+    quality_evaluation: AdminGameQualityEvaluationSummary
 
 
 class AdminGameRunErrorSummary(BaseModel):

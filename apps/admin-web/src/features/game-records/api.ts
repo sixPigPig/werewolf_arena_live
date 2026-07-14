@@ -3,12 +3,16 @@ import {
   parseAdminGameDebug,
   parseAdminGameDetail,
   parseAdminGameList,
+  parseAdminGameQualityIssues,
+  parseAdminGameQualityRetry,
 } from "@/features/game-records/parsers";
 import type {
   AdminGameDebug,
   AdminGameDetail,
   AdminGameList,
   AdminGameListParams,
+  AdminGameQualityIssues,
+  AdminGameQualityRetry,
 } from "@/features/game-records/types";
 
 const ADMIN_GAMES_PATH = "/api/v1/admin/games";
@@ -64,6 +68,31 @@ export async function getAdminGameDebug(
     { signal },
   );
   return parseAdminGameDebug(value);
+}
+
+export async function getAdminGameQualityIssues(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<AdminGameQualityIssues> {
+  const value = await adminApiFetch<unknown>(
+    `${ADMIN_GAMES_PATH}/${encodeURIComponent(sessionId)}/quality-evaluation/issues`,
+    { signal },
+  );
+  return parseAdminGameQualityIssues(value);
+}
+
+export async function retryAdminGameQualityEvaluation(
+  sessionId: string,
+  csrfToken: string,
+): Promise<AdminGameQualityRetry> {
+  const value = await adminApiFetch<unknown>(
+    `${ADMIN_GAMES_PATH}/${encodeURIComponent(sessionId)}/quality-evaluation/retry`,
+    {
+      method: "POST",
+      headers: { "X-CSRF-Token": csrfToken },
+    },
+  );
+  return parseAdminGameQualityRetry(value);
 }
 
 function appendOptional(

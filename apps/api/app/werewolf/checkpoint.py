@@ -347,6 +347,12 @@ def game_state_from_dict(data: dict[str, Any]) -> GameState:
         sheriff_pre_election_bomb_count=int(data.get("sheriff_pre_election_bomb_count", 0)),
         sheriff_election_pending=bool(data.get("sheriff_election_pending", False)),
         public_facts=copy.deepcopy(data.get("public_facts", [])),
+        public_fact_opportunities=copy.deepcopy(
+            data.get("public_fact_opportunities", [])
+        ),
+        public_fact_propositions=copy.deepcopy(
+            data.get("public_fact_propositions", [])
+        ),
     )
 
 
@@ -636,6 +642,11 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
         first_token_ms=(
             max(0, int(data["first_token_ms"]))
             if data.get("first_token_ms") is not None
+            else None
+        ),
+        fact_prompt_coverage=(
+            copy.deepcopy(data["fact_prompt_coverage"])
+            if isinstance(data.get("fact_prompt_coverage"), dict)
             else None
         ),
     )

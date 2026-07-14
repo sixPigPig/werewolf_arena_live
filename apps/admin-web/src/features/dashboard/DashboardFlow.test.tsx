@@ -33,6 +33,36 @@ const overview = {
     recovery_exhausted: 0,
   },
   jobs: { total: 4, queued: 0, running: 1, completed: 2, failed: 1 },
+  quality: {
+    cohort_days: 7,
+    sample_count: 12,
+    pass_count: 8,
+    warn_count: 2,
+    fail_count: 1,
+    unavailable_count: 1,
+    partial_count: 2,
+    legacy_count: 3,
+    p0_game_count: 1,
+    latest_p0_at: "2026-07-11T12:00:00Z",
+    pending_count: 2,
+    processing_count: 1,
+    worker_failed_count: 1,
+    expired_lease_count: 0,
+    oldest_pending_seconds: 42,
+    worker_up: true,
+    critical_fact_expected: 40,
+    critical_fact_recorded: 38,
+    prompt_fact_expected: 100,
+    prompt_fact_included: 96,
+    voice_expected: 80,
+    voice_covered: 76,
+    action_sample_count: 120,
+    action_p95_ms: 5000,
+    speech_check_count: 60,
+    repeated_speech_count: 3,
+    speech_retry_exhausted_count: 1,
+    lineup_warning_count: 2,
+  },
   reaper_up: true,
   alerts: [
     {
@@ -156,6 +186,9 @@ describe("admin dashboard flow", () => {
     renderRoute("/overview");
     expect(await screen.findByRole("heading", { name: "运营总览" })).toBeInTheDocument();
     expect(screen.getByText("运行心跳失联")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "对局质量健康" })).toBeInTheDocument();
+    expect(screen.getByText("95.0% (38/40)")).toBeInTheDocument();
+    expect(screen.getByText("5000 ms")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "1 项异常" })).toBeInTheDocument();
     expect(screen.getAllByText("STAGING").length).toBeGreaterThan(0);
   });

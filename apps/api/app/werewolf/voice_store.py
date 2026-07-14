@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,10 +10,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.live import LiveEventRecord, VoiceAudioChunkRecord, VoiceUtteranceRecord
+from app.core.config import settings
 from app.werewolf.voice import VoiceUtterance, chunk_text_for_tts
 
 TERMINAL_STATUSES = {"complete", "failed", "canceled"}
 PCM_BYTES_PER_SAMPLE = 2
+logger = logging.getLogger(__name__)
 
 
 def text_hash_for_voice(
@@ -130,6 +133,7 @@ class DatabaseVoiceStore:
         record.error_message = None
         record.completed_at = datetime.now(tz=UTC)
         self._commit()
+        self._enqueue_quality_refresh()
 
     def fail_utterance(self, utterance_id: str, *, message: str) -> None:
         record = self.db.get(VoiceUtteranceRecord, utterance_id)
@@ -141,6 +145,7 @@ class DatabaseVoiceStore:
         record.error_message = message
         record.completed_at = datetime.now(tz=UTC)
         self._commit()
+        self._enqueue_quality_refresh()
 
     def update_subtitle_timings(
         self,
@@ -301,6 +306,28 @@ class DatabaseVoiceStore:
         except SQLAlchemyError:
             self.db.rollback()
             raise
+
+    def _enqueue_quality_refresh(self) -> None:
+        if not settings.quality_evaluation_enabled:
+            return
+        try:
+            from app.werewolf.quality_store import enqueue_quality_evaluation
+
+            enqueue_quality_evaluation(
+                self.db,
+                session_id=self.session_id,
+                evaluator_version=settings.quality_evaluation_version,
+            )
+            self.db.commit()
+        except Exception as exc:
+            self.db.rollback()
+            logger.warning(
+                "Quality evaluation refresh enqueue failed after voice terminal state",
+                extra={
+                    "session_id": self.session_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
 
 
 def _utterance_record_to_dict(record: VoiceUtteranceRecord) -> dict[str, Any]:

@@ -44,3 +44,10 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 3
+  - target:
+      kind: Deployment
+      name: werewolf-quality-evaluator
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0

@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 
 PINNED_CATEGORIES = {"claim", "sheriff", "death", "vote", "reveal", "interruption"}
-PUBLIC_FACT_SCHEMA_VERSION = 2
+PUBLIC_FACT_SCHEMA_VERSION = 3
 FactRetention = Literal["critical", "important", "recent"]
 FACT_RETENTION_LEVELS = frozenset({"critical", "important", "recent"})
 PRIVATE_DETAIL_KEYS = frozenset(
@@ -41,6 +41,7 @@ class PublicFact:
     stage: str | None = None
     actor: str | None = None
     retention: FactRetention | None = None
+    source_opportunity_id: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -68,6 +69,7 @@ class PublicFact:
             "stage": self.stage,
             "actor": self.actor,
             "retention": self.effective_retention,
+            "source_opportunity_id": self.source_opportunity_id,
             "details": copy.deepcopy(self.details),
         }
 
@@ -88,8 +90,61 @@ def public_fact_from_dict(data: dict[str, Any]) -> PublicFact:
         stage=str(data["stage"]) if data.get("stage") is not None else None,
         actor=str(data["actor"]) if data.get("actor") is not None else None,
         retention=retention,
+        source_opportunity_id=(
+            str(data["source_opportunity_id"])
+            if data.get("source_opportunity_id") is not None
+            else None
+        ),
         details=copy.deepcopy(details) if isinstance(details, dict) else {},
     )
+
+
+@dataclass(frozen=True)
+class PublicFactOpportunityV1:
+    opportunity_id: str
+    round_number: int
+    stage: str
+    category: str
+    retention: FactRetention
+    status: Literal["expected", "recorded", "superseded", "not_applicable"]
+    fact_id: str | None = None
+    reason_code: str | None = None
+    schema_version: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "opportunity_id": self.opportunity_id,
+            "round_number": self.round_number,
+            "stage": self.stage,
+            "category": self.category,
+            "retention": self.retention,
+            "status": self.status,
+            "fact_id": self.fact_id,
+            "reason_code": self.reason_code,
+        }
+
+
+def fact_prompt_coverage(
+    facts: list[PublicFact],
+    rendered_lines: list[str],
+) -> dict[str, Any]:
+    critical = [fact for fact in facts if fact.effective_retention == "critical"]
+    rendered = set(rendered_lines)
+    included = [
+        fact
+        for fact in critical
+        if _project_fact_text(fact, PublicFactBudget().max_fact_chars) in rendered
+    ]
+    missing = [fact for fact in critical if fact not in included]
+    return {
+        "schema_version": 1,
+        "expected_critical_count": len(critical),
+        "included_critical_count": len(included),
+        "missing_critical_count": len(missing),
+        "coverage_status": "available",
+        "missing_reason_counts": ({"assembly_error": len(missing)} if missing else {}),
+    }
 
 
 def compressed_public_facts(

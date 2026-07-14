@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -7,6 +7,8 @@ import { useAdminSession } from "@/features/auth/session-context";
 import {
   getAdminGame,
   getAdminGameDebug,
+  getAdminGameQualityIssues,
+  retryAdminGameQualityEvaluation,
 } from "@/features/game-records/api";
 import {
   displayValue,
@@ -18,6 +20,8 @@ import { adminGameKeys } from "@/features/game-records/query-keys";
 import type {
   AdminGameDeath,
   AdminGameEvent,
+  AdminGameQualityEvaluation,
+  AdminGameQualityIssues,
   AdminGameRound,
   AdminGameRun,
 } from "@/features/game-records/types";
@@ -28,11 +32,18 @@ import type {
 
 export default function GameRecordDetailPage() {
   const { sessionId } = useParams();
+  const queryClient = useQueryClient();
   const [debugRequestedFor, setDebugRequestedFor] = useState<string | null>(
     null,
   );
   const debugRequested = Boolean(
     sessionId && debugRequestedFor === sessionId,
+  );
+  const [qualityIssuesRequestedFor, setQualityIssuesRequestedFor] = useState<
+    string | null
+  >(null);
+  const qualityIssuesRequested = Boolean(
+    sessionId && qualityIssuesRequestedFor === sessionId,
   );
   const { session } = useAdminSession();
   const canReadDebug = Boolean(
@@ -58,6 +69,33 @@ export default function GameRecordDetailPage() {
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
+  });
+  const qualityIssuesQuery = useQuery({
+    enabled: Boolean(
+      sessionId &&
+        canReadDebug &&
+        gameQuery.isSuccess &&
+        qualityIssuesRequested,
+    ),
+    queryFn: ({ signal }) => getAdminGameQualityIssues(sessionId!, signal),
+    queryKey: adminGameKeys.qualityIssues(sessionId ?? "missing"),
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const qualityRetry = useMutation({
+    mutationFn: () =>
+      retryAdminGameQualityEvaluation(
+        sessionId!,
+        session?.csrf_token ?? "",
+      ),
+    onSuccess: async () => {
+      setQualityIssuesRequestedFor(null);
+      await queryClient.invalidateQueries({
+        queryKey: adminGameKeys.detail(sessionId ?? "missing"),
+      });
+    },
   });
 
   if (gameQuery.isPending) {
@@ -139,6 +177,22 @@ export default function GameRecordDetailPage() {
       </section>
 
       <GameP2QualityPanel quality={game.p2_quality} />
+
+      <GameP3QualityPanel
+        canReadDebug={canReadDebug}
+        issues={qualityIssuesQuery.data ?? null}
+        issuesError={qualityIssuesQuery.isError}
+        issuesPending={
+          qualityIssuesQuery.isPending && qualityIssuesQuery.fetchStatus !== "idle"
+        }
+        issuesRequested={qualityIssuesRequested}
+        onRequestIssues={() => setQualityIssuesRequestedFor(sessionId ?? null)}
+        onRetryEvaluation={() => qualityRetry.mutate()}
+        onRetryIssues={() => void qualityIssuesQuery.refetch()}
+        quality={game.quality_evaluation}
+        retryError={qualityRetry.isError}
+        retryPending={qualityRetry.isPending}
+      />
 
       {containsErrors || canReadDebug ? (
         <DebugPanel
@@ -353,6 +407,210 @@ function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
       )}
     </section>
   );
+}
+
+function GameP3QualityPanel({
+  canReadDebug,
+  issues,
+  issuesError,
+  issuesPending,
+  issuesRequested,
+  onRequestIssues,
+  onRetryEvaluation,
+  onRetryIssues,
+  quality,
+  retryError,
+  retryPending,
+}: {
+  canReadDebug: boolean;
+  issues: AdminGameQualityIssues | null;
+  issuesError: boolean;
+  issuesPending: boolean;
+  issuesRequested: boolean;
+  onRequestIssues: () => void;
+  onRetryEvaluation: () => void;
+  onRetryIssues: () => void;
+  quality: AdminGameQualityEvaluation;
+  retryError: boolean;
+  retryPending: boolean;
+}) {
+  const canRetry =
+    canReadDebug &&
+    (quality.evaluation_status === "failed" ||
+      quality.evaluation_status === "not_scheduled" ||
+      quality.data_status === "partial" ||
+      quality.data_status === "legacy");
+  return (
+    <section aria-labelledby="game-p3-title" className="game-detail-panel">
+      <div className="dashboard-panel-heading">
+        <div>
+          <span className="page-kicker">P3 QUALITY EVALUATION</span>
+          <h2 id="game-p3-title">P3 质量评估</h2>
+          <p>
+            {p3EvaluationStatusLabel(quality.evaluation_status)} · 数据
+            {p3DataStatusLabel(quality.data_status)} · 版本 {quality.evaluator_version}
+          </p>
+        </div>
+        <span className={`game-status-badge is-${quality.verdict}`}>
+          {p3VerdictLabel(quality.verdict)}
+        </span>
+      </div>
+
+      <dl className="dashboard-breakdown" aria-label="P3 来源覆盖">
+        <div><dt>状态 / 日志</dt><dd>{quality.source_coverage.state} / {quality.source_coverage.logs}</dd></div>
+        <div><dt>事件</dt><dd>{quality.source_coverage.events}</dd></div>
+        <div><dt>语音 / 字幕</dt><dd>{quality.source_coverage.voice} / {quality.source_coverage.subtitles}</dd></div>
+        <div><dt>待处理 / 失败语音</dt><dd>{quality.source_coverage.pending_voice_count} / {quality.source_coverage.failed_voice_count}</dd></div>
+      </dl>
+
+      {quality.evaluation_status === "completed" ? (
+        <div className="game-detail-metrics">
+          <article>
+            <span>事实</span>
+            <strong>{ratioLabel(quality.facts.critical_recorded_count, quality.facts.critical_opportunity_count)}</strong>
+            <small>
+              Prompt {ratioLabel(quality.facts.prompt_included_critical_count, quality.facts.prompt_expected_critical_count)} · 矛盾 {quality.facts.deterministic_contradiction_count}
+            </small>
+          </article>
+          <article>
+            <span>结构</span>
+            <strong>最长连续自爆 {quality.structure.max_consecutive_self_explosions}</strong>
+            <small>
+              正常辩论 {quality.structure.normal_day_debate_round_count} 轮 · 警长请求 {ratioLabel(quality.structure.sheriff_model_request_count, quality.structure.public_model_request_count)}
+            </small>
+          </article>
+          <article>
+            <span>语音</span>
+            <strong>{ratioLabel(quality.voice.effective_voice_event_count, quality.voice.narratable_event_count)}</strong>
+            <small>
+              尾段差 {quality.voice.voice_source_event_lag ?? "—"} · 中断/补播 {quality.voice.interruption_count}/{quality.voice.replay_count}
+            </small>
+          </article>
+          <article>
+            <span>性能</span>
+            <strong>
+              {quality.performance.action_duration_p95_ms === null
+                ? `样本不足 (${quality.performance.action_count}/20)`
+                : `P95 ${quality.performance.action_duration_p95_ms} ms`}
+            </strong>
+            <small>
+              整局 {durationLabel(quality.performance.game_duration_ms)} · 超时 {quality.performance.timeout_count} · 重试 {quality.performance.retry_count}
+            </small>
+          </article>
+          <article>
+            <span>内容</span>
+            <strong>重复 {quality.content.repeated_speech_count}/{quality.content.speech_check_count}</strong>
+            <small>
+              重写 {quality.content.speech_rewrite_count} · 耗尽 {quality.content.speech_retry_exhausted_count} · 阵容告警 {quality.content.lineup_warning_count}
+            </small>
+          </article>
+          <article>
+            <span>安全问题</span>
+            <strong>P0 {quality.issue_counts.P0} · P1 {quality.issue_counts.P1} · P2 {quality.issue_counts.P2}</strong>
+            <small>问题正文和私密证据不会进入 Admin 响应</small>
+          </article>
+        </div>
+      ) : (
+        <PanelEmpty text={p3UnavailableMessage(quality)} />
+      )}
+
+      {canReadDebug ? (
+        <div className="game-debug-actions">
+          <button
+            className="admin-secondary-button"
+            disabled={issuesPending}
+            onClick={onRequestIssues}
+            type="button"
+          >
+            {issuesPending ? "读取中" : "加载安全问题坐标"}
+          </button>
+          {canRetry ? (
+            <button
+              className="admin-secondary-button"
+              disabled={retryPending}
+              onClick={onRetryEvaluation}
+              type="button"
+            >
+              {retryPending ? "正在提交重试" : "重试质量评估"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {retryError ? <p role="alert">质量评估重试失败，请刷新状态后再试。</p> : null}
+
+      {issuesRequested ? (
+        <div aria-live="polite" className="game-debug-result">
+          <h3>安全问题坐标</h3>
+          <p>仅展示问题码、级别、渠道和坐标；读取行为会进入审计日志。</p>
+          {issuesPending ? <PanelEmpty text="正在读取安全问题坐标..." /> : null}
+          {issuesError ? (
+            <div>
+              <p role="alert">安全问题坐标暂时不可读取。</p>
+              <button className="admin-secondary-button" onClick={onRetryIssues} type="button">重新读取</button>
+            </div>
+          ) : null}
+          {issues && !issuesPending && !issuesError ? (
+            issues.items.length > 0 ? (
+              <ul aria-label="P3 安全问题坐标" className="game-event-list">
+                {issues.items.map((issue) => (
+                  <li key={issue.issue_id}>
+                    <strong>{issue.severity} · {issue.code}</strong>
+                    <span>
+                      {issue.channel} · 轮次 {issue.round_number ?? "—"} · event {issue.event_id ?? "—"} · utterance {issue.utterance_id ?? "—"} · {issue.issue_id}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <PanelEmpty text="当前评估没有安全问题坐标。" />
+            )
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function p3EvaluationStatusLabel(status: AdminGameQualityEvaluation["evaluation_status"]) {
+  return {
+    not_scheduled: "未调度",
+    pending: "排队中",
+    processing: "评估中",
+    completed: "已完成",
+    failed: "执行失败",
+    superseded: "已被新版本替代",
+  }[status];
+}
+
+function p3DataStatusLabel(status: AdminGameQualityEvaluation["data_status"]) {
+  return {
+    collecting: "收集中",
+    available: "完整",
+    partial: "部分可用",
+    legacy: "旧数据",
+    unavailable: "不可用",
+  }[status];
+}
+
+function p3VerdictLabel(verdict: AdminGameQualityEvaluation["verdict"]) {
+  return { pass: "通过", warn: "警告", fail: "失败", unavailable: "无结论" }[verdict];
+}
+
+function p3UnavailableMessage(quality: AdminGameQualityEvaluation) {
+  if (quality.evaluation_status === "pending") return "质量评估正在等待 Worker 处理。";
+  if (quality.evaluation_status === "processing") return "质量评估正在执行。";
+  if (quality.evaluation_status === "failed") return "质量评估执行失败，不会伪装为通过。";
+  if (quality.data_status === "legacy") return "旧对局尚未生成 P3 质量评估。";
+  return "当前没有可用的 P3 质量评估。";
+}
+
+function ratioLabel(numerator: number, denominator: number) {
+  if (denominator === 0) return "无样本";
+  return `${((numerator / denominator) * 100).toFixed(1)}% (${numerator}/${denominator})`;
+}
+
+function durationLabel(value: number | null) {
+  return value === null ? "—" : `${Math.round(value / 1000)} 秒`;
 }
 
 function PublicOutcomePanel({ quality }: { quality: AdminGameP2Quality }) {

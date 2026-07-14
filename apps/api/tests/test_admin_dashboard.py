@@ -16,6 +16,7 @@ from app.main import create_application
 from app.models.game_session import GameSessionRecord
 from app.models.judge_voice_asset import JudgeVoiceGenerationJob
 from app.models.live import LiveRunRecord
+from app.models.quality_evaluation import GameQualityEvaluationRecord
 from app.models.runtime_worker import RuntimeWorkerRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 
@@ -198,6 +199,129 @@ def test_overview_returns_real_counts_and_actionable_alerts(dashboard_client) ->
         "voice_jobs_queued",
     }
     assert "api_key" not in response.text.lower()
+
+
+def test_overview_quality_uses_bounded_safe_aggregates_and_small_sample_semantics(
+    dashboard_client,
+) -> None:
+    client, session_factory = dashboard_client
+    _seed_dashboard(session_factory)
+    now = datetime.now(tz=UTC)
+    marker = "SENTINEL_PRIVATE_QUALITY_TEXT"
+    with session_factory() as db:
+        db.add_all(
+            [
+                GameSessionRecord(
+                    session_id="game-quality-failed",
+                    status="complete",
+                    round_count=1,
+                    resumable=False,
+                    updated_at=now,
+                ),
+                GameSessionRecord(
+                    session_id="game-quality-legacy",
+                    status="complete",
+                    round_count=1,
+                    resumable=False,
+                    updated_at=now,
+                ),
+                GameQualityEvaluationRecord(
+                    id="quality-dashboard-fail",
+                    session_id="game-session-alpha",
+                    evaluator_version="p3-v1",
+                    source_revision="a" * 64,
+                    status="completed",
+                    data_status="partial",
+                    verdict="fail",
+                    completed_at=now,
+                    safe_summary={
+                        "issue_counts": {"P0": 1, "P1": 0, "P2": 0},
+                        "facts": {
+                            "critical_opportunity_count": 4,
+                            "critical_recorded_count": 3,
+                            "prompt_expected_critical_count": 8,
+                            "prompt_included_critical_count": 7,
+                        },
+                        "voice": {
+                            "narratable_event_count": 5,
+                            "effective_voice_event_count": 4,
+                        },
+                        "performance": {
+                            "action_count": 10,
+                            "action_duration_histogram": {
+                                "count": 10,
+                                "buckets": {"1": 2, "5": 10, "+Inf": 10},
+                            },
+                        },
+                        "content": {
+                            "speech_check_count": 6,
+                            "repeated_speech_count": 1,
+                            "speech_retry_exhausted_count": 1,
+                            "lineup_warning_count": 2,
+                        },
+                        "private_text": marker,
+                    },
+                ),
+                GameQualityEvaluationRecord(
+                    id="quality-dashboard-pending",
+                    session_id="game-session-retry",
+                    evaluator_version="p3-v1",
+                    source_revision="b" * 64,
+                    status="pending",
+                    data_status="collecting",
+                    verdict="unavailable",
+                    created_at=now - timedelta(minutes=2),
+                    not_before=now - timedelta(minutes=2),
+                ),
+                GameQualityEvaluationRecord(
+                    id="quality-dashboard-worker-failed",
+                    session_id="game-quality-failed",
+                    evaluator_version="p3-v1",
+                    source_revision="c" * 64,
+                    status="failed",
+                    data_status="unavailable",
+                    verdict="unavailable",
+                    completed_at=now,
+                ),
+                RuntimeWorkerRecord(
+                    worker_id="dashboard-quality-worker",
+                    worker_type="quality_evaluation",
+                    status="running",
+                    started_at=now,
+                    heartbeat_at=now,
+                ),
+            ]
+        )
+        db.commit()
+    _login(client)
+
+    response = client.get("/api/v1/admin/overview")
+
+    assert response.status_code == 200, response.text
+    quality = response.json()["quality"]
+    assert quality["cohort_days"] == 7
+    assert quality["sample_count"] == 1
+    assert quality["fail_count"] == 1
+    assert quality["partial_count"] == 1
+    assert quality["legacy_count"] == 1
+    assert quality["p0_game_count"] == 1
+    assert quality["pending_count"] == 1
+    assert quality["worker_failed_count"] == 1
+    assert quality["worker_up"] is True
+    assert quality["oldest_pending_seconds"] >= 119
+    assert quality["critical_fact_expected"] == 4
+    assert quality["critical_fact_recorded"] == 3
+    assert quality["prompt_fact_expected"] == 8
+    assert quality["prompt_fact_included"] == 7
+    assert quality["voice_expected"] == 5
+    assert quality["voice_covered"] == 4
+    assert quality["action_sample_count"] == 10
+    assert quality["action_p95_ms"] is None
+    assert {alert["code"] for alert in response.json()["alerts"]} >= {
+        "quality_p0_detected",
+        "quality_evaluation_failed",
+    }
+    assert marker not in response.text
 
 
 def test_jobs_list_filters_paginates_and_hides_request_payload(dashboard_client) -> None:

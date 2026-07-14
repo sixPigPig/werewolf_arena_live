@@ -98,6 +98,18 @@ class Settings(BaseSettings):
     live_voice_materializer_probe_max_age_seconds: float = Field(
         default=45.0, ge=5.0, le=300.0
     )
+    quality_evaluation_enabled: bool = False
+    quality_evaluation_version: str = "p3-v1"
+    quality_evaluation_hmac_key: str = ""
+    quality_evaluation_poll_seconds: float = Field(default=0.5, ge=0.1, le=60.0)
+    quality_evaluation_lease_seconds: float = Field(default=120.0, ge=10.0, le=600.0)
+    quality_evaluation_max_attempts: int = Field(default=5, ge=1, le=10)
+    quality_evaluation_backoff_seconds: float = Field(default=5.0, ge=1.0, le=3600.0)
+    quality_evaluation_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
+    quality_evaluation_probe_max_age_seconds: float = Field(
+        default=45.0, ge=5.0, le=300.0
+    )
+    quality_evaluation_retention_days: int = Field(default=90, ge=7, le=3650)
     live_run_lease_seconds: float = Field(default=15.0, ge=5.0, le=120.0)
     live_run_heartbeat_seconds: float = Field(default=3.0, ge=0.5, le=30.0)
     live_run_event_poll_seconds: float = Field(default=0.25, ge=0.05, le=5.0)
@@ -156,6 +168,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "LIVE_VOICE_MATERIALIZER_HEARTBEAT_SECONDS must be shorter than "
                 "LIVE_VOICE_MATERIALIZER_LEASE_SECONDS"
+            )
+        if self.quality_evaluation_heartbeat_seconds >= self.quality_evaluation_lease_seconds:
+            raise ValueError(
+                "QUALITY_EVALUATION_HEARTBEAT_SECONDS must be shorter than "
+                "QUALITY_EVALUATION_LEASE_SECONDS"
+            )
+        if (
+            self.quality_evaluation_heartbeat_seconds
+            >= self.quality_evaluation_probe_max_age_seconds
+        ):
+            raise ValueError(
+                "QUALITY_EVALUATION_HEARTBEAT_SECONDS must be shorter than "
+                "QUALITY_EVALUATION_PROBE_MAX_AGE_SECONDS"
+            )
+        if self.quality_evaluation_enabled and not self.quality_evaluation_hmac_key.strip():
+            raise ValueError(
+                "QUALITY_EVALUATION_HMAC_KEY is required when quality evaluation is enabled"
             )
         auth_cookie_names = {
             self.admin_session_cookie_name,

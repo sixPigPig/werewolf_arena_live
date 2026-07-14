@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import argparse
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +12,8 @@ from app.werewolf.debate_realism import (
     dialogue_quality_warnings,
     lineup_quality_warnings_from_players,
 )
+from app.werewolf.evaluation_bundle import build_quality_evaluation_bundle
+from app.werewolf.quality_evaluation import evaluate_quality_bundle
 
 PRIVATE_LEAK_PATTERNS = (
     "我作为",
@@ -228,6 +232,45 @@ def evaluate_replay(path: Path) -> ReplayEvaluationReport:
         session_id=str(data.get("session_id") or ""),
         issues=issues,
     )
+
+
+def evaluate_quality_fixture(path: Path, *, hmac_key: str) -> dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("quality fixture must be a JSON object")
+    state = data.get("state")
+    logs = data.get("logs", [])
+    events = data.get("live_events", [])
+    voices = data.get("voice_utterances", [])
+    if not isinstance(state, dict) or not isinstance(logs, list):
+        raise ValueError("quality fixture requires object state and list logs")
+    if not isinstance(events, list) or not isinstance(voices, list):
+        raise ValueError("quality fixture event and voice sources must be lists")
+    bundle = build_quality_evaluation_bundle(
+        state=state,
+        logs=[item for item in logs if isinstance(item, dict)],
+        live_events=[item for item in events if isinstance(item, dict)],
+        voice_utterances=[item for item in voices if isinstance(item, dict)],
+        run_id=str(data.get("run_id") or "") or None,
+    )
+    return evaluate_quality_bundle(bundle, hmac_key=hmac_key).to_dict()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Evaluate a deterministic werewolf fixture")
+    parser.add_argument("--fixture", type=Path, required=True)
+    parser.add_argument("--strict-p0", action="store_true")
+    parser.add_argument("--hmac-key", default="fixture-quality-evaluation-key")
+    args = parser.parse_args(argv)
+    try:
+        report = evaluate_quality_fixture(args.fixture, hmac_key=args.hmac_key)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(json.dumps({"error_code": type(exc).__name__}, sort_keys=True))
+        return 2
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    if args.strict_p0 and int(report.get("issue_counts", {}).get("P0", 0)) > 0:
+        return 1
+    return 0
 
 
 def evaluate_self_explosion_benchmark(
@@ -529,3 +572,7 @@ def _player_aliases(player: str) -> tuple[str, str]:
 
 def _normalize_player_ref(player: str) -> str:
     return player.replace("玩家", "")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

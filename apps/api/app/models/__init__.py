@@ -15,6 +15,7 @@ from app.models.live import (
 )
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.public import PublicSession, UserFavoritePlayerProfile
+from app.models.quality_evaluation import GameQualityEvaluationRecord
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.runtime_worker import RuntimeWorkerRecord
 from app.models.user import User
@@ -27,6 +28,7 @@ __all__ = [
     "AuditEvent",
     "GameReplayPayload",
     "GameSessionRecord",
+    "GameQualityEvaluationRecord",
     "JudgeVoiceAssetRecord",
     "JudgeVoiceGenerationJob",
     "LiveEventRecord",

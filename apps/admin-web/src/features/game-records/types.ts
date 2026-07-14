@@ -124,6 +124,115 @@ export type AdminGameDebug = {
   run_errors: Array<{ run_id: string; error: string }>;
 };
 
+export type AdminQualityEvaluationStatus =
+  | "not_scheduled"
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "superseded";
+
+export type AdminQualityDataStatus =
+  | "collecting"
+  | "available"
+  | "partial"
+  | "legacy"
+  | "unavailable";
+
+export type AdminGameQualityEvaluation = {
+  schema_version: 1;
+  evaluator_version: string;
+  evaluation_status: AdminQualityEvaluationStatus;
+  data_status: AdminQualityDataStatus;
+  verdict: "pass" | "warn" | "fail" | "unavailable";
+  source_coverage: {
+    state: string;
+    logs: string;
+    events: string;
+    voice: string;
+    subtitles: string;
+    pending_voice_count: number;
+    failed_voice_count: number;
+  };
+  issue_counts: { P0: number; P1: number; P2: number };
+  facts: {
+    critical_opportunity_count: number;
+    critical_recorded_count: number;
+    critical_fact_write_rate: number | null;
+    prompt_expected_critical_count: number;
+    prompt_included_critical_count: number;
+    prompt_missing_critical_count: number;
+    critical_fact_prompt_coverage_rate: number | null;
+    deterministic_contradiction_count: number;
+  };
+  structure: {
+    max_consecutive_self_explosions: number;
+    chain_three_count: number;
+    normal_day_debate_round_count: number;
+    sheriff_model_request_count: number;
+    public_model_request_count: number;
+    sheriff_model_request_rate: number | null;
+  };
+  voice: {
+    narratable_event_count: number;
+    effective_voice_event_count: number;
+    missing_narratable_event_count: number;
+    voice_coverage_rate: number | null;
+    voice_source_event_lag: number | null;
+    terminal_judge_voice_coverage: boolean | null;
+    pending_voice_count: number;
+    failed_voice_count: number;
+    interruption_count: number;
+    replay_count: number;
+  };
+  performance: {
+    action_count: number;
+    action_duration_ms_max: number | null;
+    action_duration_p95_ms: number | null;
+    first_token_count: number;
+    first_token_ms_max: number | null;
+    first_token_p95_ms: number | null;
+    game_duration_ms: number | null;
+    timeout_count: number;
+    retry_count: number;
+    fallback_count: number;
+  };
+  content: {
+    speech_check_count: number;
+    repeated_speech_count: number;
+    repeated_speech_rate: number | null;
+    speech_rewrite_count: number;
+    speech_rewrite_recovered_count: number;
+    speech_retry_exhausted_count: number;
+    privacy_p0_issue_count: number;
+    lineup_warning_count: number;
+  };
+  evaluated_at: string | null;
+};
+
+export type AdminGameQualityIssue = {
+  issue_id: string;
+  code: string;
+  severity: "P0" | "P1" | "P2";
+  channel: string;
+  round_number: number | null;
+  event_id: number | null;
+  utterance_id: string | null;
+  first_detected_at: string;
+};
+
+export type AdminGameQualityIssues = {
+  session_id: string;
+  evaluation_id: string | null;
+  items: AdminGameQualityIssue[];
+};
+
+export type AdminGameQualityRetry = {
+  session_id: string;
+  evaluation_id: string;
+  status: "pending";
+};
+
 export type AdminGameDetail = AdminGameListItem & {
   players: AdminGamePlayer[];
   rounds: AdminGameRound[];
@@ -131,5 +240,6 @@ export type AdminGameDetail = AdminGameListItem & {
   diagnostics: AdminGameDiagnostics;
   recent_events: AdminGameEvent[];
   p2_quality: AdminGameP2Quality;
+  quality_evaluation: AdminGameQualityEvaluation;
 };
 import type { AdminGameP2Quality } from "@/features/p2-quality/types";

@@ -33,6 +33,65 @@ export default function OverviewPage() {
         <MetricCard href="/system/jobs" label="后台任务" value={data.jobs.queued + data.jobs.running} detail={`${data.jobs.failed} 失败 · ${data.jobs.completed} 完成`} />
       </section>
 
+      <section className="dashboard-panel" aria-labelledby="dashboard-quality-title">
+        <div className="dashboard-panel-heading">
+          <div>
+            <span className="page-kicker">GAME QUALITY / LAST {data.quality.cohort_days} DAYS</span>
+            <h2 id="dashboard-quality-title">对局质量健康</h2>
+          </div>
+          <span className={`dashboard-health ${data.quality.worker_up ? "is-healthy" : "is-critical"}`}>
+            Evaluator {data.quality.worker_up ? "正常" : "异常"}
+          </span>
+        </div>
+        {data.quality.sample_count === 0 ? (
+          <div className="dashboard-empty-signal">
+            <strong>暂无已完成评估样本</strong>
+            <span>不会把空数据展示为 100% 通过；当前有 {data.quality.legacy_count} 局旧数据。</span>
+          </div>
+        ) : (
+          <div className="game-detail-metrics">
+            <article>
+              <span>评估结论</span>
+              <strong>{data.quality.pass_count} 通过 / {data.quality.fail_count} 失败</strong>
+              <small>
+                样本 {data.quality.sample_count} · 警告 {data.quality.warn_count} · 不可用 {data.quality.unavailable_count}
+              </small>
+            </article>
+            <article>
+              <span>P0 对局</span>
+              <strong>{data.quality.p0_game_count}</strong>
+              <small>部分数据 {data.quality.partial_count} · 旧数据 {data.quality.legacy_count}</small>
+            </article>
+            <article>
+              <span>关键事实写入率</span>
+              <strong>{ratioLabel(data.quality.critical_fact_recorded, data.quality.critical_fact_expected)}</strong>
+              <small>Prompt 覆盖 {ratioLabel(data.quality.prompt_fact_included, data.quality.prompt_fact_expected)}</small>
+            </article>
+            <article>
+              <span>有效语音覆盖</span>
+              <strong>{ratioLabel(data.quality.voice_covered, data.quality.voice_expected)}</strong>
+              <small>阵容告警 {data.quality.lineup_warning_count} · 发言耗尽 {data.quality.speech_retry_exhausted_count}</small>
+            </article>
+            <article>
+              <span>动作 P95</span>
+              <strong>
+                {data.quality.action_p95_ms === null
+                  ? `样本不足 (${data.quality.action_sample_count}/20)`
+                  : `${data.quality.action_p95_ms} ms`}
+              </strong>
+              <small>动作样本 {data.quality.action_sample_count}</small>
+            </article>
+            <article>
+              <span>评估队列</span>
+              <strong>{data.quality.pending_count} 等待 / {data.quality.processing_count} 处理中</strong>
+              <small>
+                执行失败 {data.quality.worker_failed_count} · 过期租约 {data.quality.expired_lease_count}
+              </small>
+            </article>
+          </div>
+        )}
+      </section>
+
       <div className="dashboard-detail-grid">
         <section className="dashboard-panel" aria-labelledby="dashboard-alerts-title">
           <div className="dashboard-panel-heading">
@@ -80,4 +139,9 @@ function MetricCard({ href, label, value, detail }: { href: string; label: strin
 
 function PageState({ message, retry }: { message: string; retry?: () => void }) {
   return <div className="dashboard-page-state" role="status"><span>{message}</span>{retry ? <button onClick={retry} type="button">重试</button> : null}</div>;
+}
+
+function ratioLabel(numerator: number, denominator: number) {
+  if (denominator === 0) return "无样本";
+  return `${((numerator / denominator) * 100).toFixed(1)}% (${numerator}/${denominator})`;
 }

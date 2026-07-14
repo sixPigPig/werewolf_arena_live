@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import LiveRunRecord
+from app.core.config import settings
 from app.werewolf.checkpoint import (
     ResumeCheckpointError,
     report_resume_checkpoint_error,
@@ -18,6 +20,10 @@ from app.werewolf.checkpoint import (
 from app.werewolf.live import validate_rule_set_revision_metadata
 from app.werewolf.models import GameState, RoundLog
 from app.rule_sets.types import CompiledRuleSet
+from app.werewolf.quality_store import enqueue_quality_evaluation
+
+
+logger = logging.getLogger(__name__)
 
 SESSION_ID_RE = r"^game_[0-9a-f]{8}$"
 _SESSION_PATTERN = re.compile(SESSION_ID_RE)
@@ -152,6 +158,24 @@ class DatabaseReplayStore:
         except Exception:
             self.db.rollback()
             raise
+        if status == "complete" and settings.quality_evaluation_enabled:
+            try:
+                enqueue_quality_evaluation(
+                    self.db,
+                    session_id=session_id,
+                    run_id=self.run_id,
+                    evaluator_version=settings.quality_evaluation_version,
+                )
+                self.db.commit()
+            except Exception as exc:
+                self.db.rollback()
+                logger.warning(
+                    "Quality evaluation enqueue failed after terminal replay commit",
+                    extra={
+                        "session_id": session_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
 
     def save_resume_checkpoint(self, session_id: str, checkpoint: dict[str, Any]) -> None:
         self._validate_session_id(session_id)

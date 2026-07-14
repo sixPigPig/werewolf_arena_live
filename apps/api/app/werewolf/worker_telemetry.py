@@ -15,6 +15,7 @@ from app.werewolf.orphan_reaper import OrphanRecoveryResult
 logger = logging.getLogger(__name__)
 REAPER_WORKER_TYPE = "live_run_reaper"
 JUDGE_VOICE_WORKER_TYPE = "judge_voice_generation"
+QUALITY_EVALUATION_WORKER_TYPE = "quality_evaluation"
 
 
 class RuntimeWorkerTelemetry:

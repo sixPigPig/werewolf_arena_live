@@ -23,7 +23,9 @@ from app.main import create_application
 from app.models.admin import AuditEvent
 from app.models.game_session import GameReplayPayload, GameSessionRecord
 from app.models.live import LiveEventRecord, LiveRunRecord, VoiceUtteranceRecord
+from app.models.quality_evaluation import GameQualityEvaluationRecord
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
+from app.werewolf.quality_store import build_database_quality_bundle
 
 
 HISTORY_RULE_ID = "history_rule"
@@ -968,7 +970,6 @@ def test_admin_game_detail_is_strictly_whitelisted_bounded_and_hides_partial_rol
         assert marker not in serialized
     forbidden_keys = {
         "payload",
-        "logs",
         "checkpoint",
         "prompt",
         "raw_response",
@@ -1077,6 +1078,205 @@ def test_game_debug_requires_debug_permission_returns_safe_summaries_and_audits(
     assert audit.after == {"game_error_present": True, "run_error_count": 20}
 
 
+def test_quality_summary_is_safe_and_issues_require_explicit_debug_read(
+    context: AdminGamesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_at = datetime(2026, 7, 14, 9, tzinfo=UTC)
+    session_id = "game_00000030"
+    _seed_game(
+        context,
+        session_id=session_id,
+        run_id="run_000000000030",
+        created_at=created_at,
+    )
+    marker = "SENTINEL_PRIVATE_WOLF_PLAN"
+    with context.session_factory() as db:
+        db.add(
+            GameQualityEvaluationRecord(
+                id="quality_admin_safe_30",
+                session_id=session_id,
+                run_id="run_000000000030",
+                evaluator_version="p3-v1",
+                source_revision="3" * 64,
+                status="completed",
+                data_status="available",
+                verdict="fail",
+                safe_summary={
+                    "schema_version": 1,
+                    "source_coverage": {
+                        "state": "complete",
+                        "logs": "complete",
+                        "events": "complete",
+                        "voice": "complete",
+                        "subtitles": "complete",
+                        "pending_voice_count": 0,
+                        "failed_voice_count": 0,
+                        "private_text": marker,
+                    },
+                    "issue_counts": {"P0": 1, "P1": 0, "P2": 0},
+                    "facts": {
+                        "critical_opportunity_count": 4,
+                        "critical_recorded_count": 3,
+                        "critical_fact_write_rate": 0.75,
+                        "prompt_expected_critical_count": 8,
+                        "prompt_included_critical_count": 7,
+                        "prompt_missing_critical_count": 1,
+                        "critical_fact_prompt_coverage_rate": 0.875,
+                        "deterministic_contradiction_count": 0,
+                    },
+                    "safe_issues": [
+                        {
+                            "issue_id": "quality_0123456789abcdef01234567",
+                            "code": "private_voice_materialized",
+                            "severity": "P0",
+                            "channel": "voice",
+                            "round_number": 1,
+                            "event_id": 7,
+                            "utterance_id": "utterance_safe_30",
+                            "first_detected_at": created_at.isoformat(),
+                            "text": marker,
+                            "payload": {"target": marker},
+                        }
+                    ],
+                    "private_evidence": marker,
+                },
+                completed_at=created_at + timedelta(minutes=3),
+            )
+        )
+        db.commit()
+
+    _login(context, monkeypatch, role="viewer")
+    detail = context.client.get(f"/api/v1/admin/games/{session_id}")
+    summary = context.client.get(
+        f"/api/v1/admin/games/{session_id}/quality-evaluation"
+    )
+    forbidden = context.client.get(
+        f"/api/v1/admin/games/{session_id}/quality-evaluation/issues"
+    )
+
+    assert detail.status_code == 200, detail.text
+    assert summary.status_code == 200, summary.text
+    quality = detail.json()["quality_evaluation"]
+    assert quality["verdict"] == "fail"
+    assert quality["issue_counts"] == {"P0": 1, "P1": 0, "P2": 0}
+    assert quality["facts"]["critical_fact_write_rate"] == 0.75
+    assert summary.json()["quality_evaluation"] == quality
+    assert forbidden.status_code == 403
+    assert "safe_issues" not in detail.text
+    assert marker not in detail.text
+    assert marker not in summary.text
+
+    _login(context, monkeypatch, role="operator")
+    issues = context.client.get(
+        f"/api/v1/admin/games/{session_id}/quality-evaluation/issues",
+        headers={"X-Request-ID": "quality-issues-30"},
+    )
+
+    assert issues.status_code == 200, issues.text
+    assert issues.json()["items"] == [
+        {
+            "issue_id": "quality_0123456789abcdef01234567",
+            "code": "private_voice_materialized",
+            "severity": "P0",
+            "channel": "voice",
+            "round_number": 1,
+            "event_id": 7,
+            "utterance_id": "utterance_safe_30",
+            "first_detected_at": created_at.isoformat().replace("+00:00", "Z"),
+        }
+    ]
+    assert marker not in issues.text
+    assert "text" not in issues.json()["items"][0]
+    with context.session_factory() as db:
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "admin.game.quality_issues.read"
+            )
+        )
+    assert audit is not None
+    assert audit.after == {
+        "evaluation_id": "quality_admin_safe_30",
+        "issue_count": 1,
+    }
+
+
+def test_quality_retry_requires_csrf_and_requeues_only_eligible_results(
+    context: AdminGamesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_at = datetime(2026, 7, 14, 10, tzinfo=UTC)
+    session_id = "game_00000031"
+    _seed_game(
+        context,
+        session_id=session_id,
+        run_id="run_000000000031",
+        created_at=created_at,
+    )
+    with context.session_factory() as db:
+        source_revision = build_database_quality_bundle(
+            db, session_id=session_id
+        ).source_revision
+        db.add(
+            GameQualityEvaluationRecord(
+                id="quality_admin_retry_31",
+                session_id=session_id,
+                run_id="run_000000000031",
+                evaluator_version="p3-v1",
+                source_revision=source_revision,
+                status="failed",
+                data_status="unavailable",
+                verdict="unavailable",
+                safe_summary={"unsafe": "SENTINEL_RETRY_PRIVATE"},
+                attempt_count=3,
+                last_error_code="evaluation_failed",
+                completed_at=created_at + timedelta(minutes=3),
+            )
+        )
+        db.commit()
+    login = _login(context, monkeypatch, role="operator")
+
+    missing_csrf = context.client.post(
+        f"/api/v1/admin/games/{session_id}/quality-evaluation/retry"
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["code"] == "admin_csrf_invalid"
+
+    response = context.client.post(
+        f"/api/v1/admin/games/{session_id}/quality-evaluation/retry",
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+    assert response.status_code == 202, response.text
+    assert response.json() == {
+        "session_id": session_id,
+        "evaluation_id": "quality_admin_retry_31",
+        "status": "pending",
+    }
+
+    duplicate = context.client.post(
+        f"/api/v1/admin/games/{session_id}/quality-evaluation/retry",
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+    assert duplicate.status_code == 409
+    with context.session_factory() as db:
+        record = db.get(GameQualityEvaluationRecord, "quality_admin_retry_31")
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "admin.game.quality_evaluation.retry"
+            )
+        )
+    assert record is not None
+    assert record.status == "pending"
+    assert record.safe_summary == {}
+    assert record.attempt_count == 0
+    assert record.last_error_code is None
+    assert audit is not None
+    assert audit.after == {
+        "evaluation_id": "quality_admin_retry_31",
+        "status": "pending",
+    }
+
+
 def test_admin_game_query_indexes_are_registered_in_model_metadata() -> None:
     indexes = {index.name: index for index in GameSessionRecord.__table__.indexes}
 
@@ -1091,6 +1291,40 @@ def test_admin_game_query_indexes_are_registered_in_model_metadata() -> None:
     assert latest_run_index.expressions[0].name == "session_id"
     assert str(latest_run_index.expressions[1]).endswith("created_at DESC")
     assert str(latest_run_index.expressions[2]).endswith("run_id DESC")
+
+    quality_indexes = {
+        index.name: index
+        for index in GameQualityEvaluationRecord.__table__.indexes
+    }
+    latest_quality_index = quality_indexes[
+        "ix_game_quality_evaluations_session_created"
+    ]
+    assert len(latest_quality_index.expressions) == 3
+    assert latest_quality_index.expressions[0].name == "session_id"
+
+
+def test_admin_quality_query_plans_use_bounded_cohort_indexes(
+    context: AdminGamesContext,
+) -> None:
+    with context.engine.connect() as connection:
+        latest_plan = connection.exec_driver_sql(
+            "EXPLAIN QUERY PLAN SELECT id FROM game_quality_evaluations "
+            "WHERE session_id = 'game_plan' "
+            "ORDER BY CASE WHEN status IN ('pending', 'processing') "
+            "THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1"
+        ).all()
+        overview_plan = connection.exec_driver_sql(
+            "EXPLAIN QUERY PLAN SELECT id FROM game_quality_evaluations "
+            "WHERE status = 'completed' AND completed_at >= '2026-07-07' "
+            "ORDER BY completed_at DESC LIMIT 5000"
+        ).all()
+
+    assert "ix_game_quality_evaluations_session_created" in " ".join(
+        str(row) for row in latest_plan
+    )
+    assert "ix_game_quality_evaluations_status_completed" in " ".join(
+        str(row) for row in overview_plan
+    )
 
 
 def test_admin_game_query_index_migration_creates_and_drops_latest_run_index(

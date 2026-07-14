@@ -1,13 +1,16 @@
 import {
   getAdminGame,
   getAdminGameDebug,
+  getAdminGameQualityIssues,
   listAdminGames,
+  retryAdminGameQualityEvaluation,
 } from "@/features/game-records/api";
 import { gameListParamsFromSearch } from "@/features/game-records/list-state";
 import {
   parseAdminGameDebug,
   parseAdminGameDetail,
   parseAdminGameList,
+  parseAdminGameQualityIssues,
 } from "@/features/game-records/parsers";
 import {
   contractGameDebug,
@@ -128,6 +131,34 @@ describe("admin game records contract", () => {
         pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
       }),
     ).toThrow(/胜方/);
+    expect(() =>
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        quality_evaluation: {
+          ...contractGameDetail.quality_evaluation,
+          prompt: "private quality sentinel",
+        },
+      }),
+    ).toThrow(/prompt/);
+    expect(() =>
+      parseAdminGameQualityIssues({
+        session_id: contractGameDetail.session_id,
+        evaluation_id: "quality_contract",
+        items: [
+          {
+            issue_id: "quality_issue_contract",
+            code: "private_voice_materialized",
+            severity: "P0",
+            channel: "voice",
+            round_number: 1,
+            event_id: 5,
+            utterance_id: "utterance_contract",
+            first_detected_at: "2026-07-10T01:04:00Z",
+            text: "private quality sentinel",
+          },
+        ],
+      }),
+    ).toThrow(/text/);
   });
 
   it("validates P2 empty states, privacy and public outcome uniqueness", () => {
@@ -288,6 +319,41 @@ describe("admin game records contract", () => {
     );
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
       "/api/v1/admin/games/game%2Funsafe/debug",
+    );
+  });
+
+  it("uses independent quality issues and CSRF retry endpoints", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          session_id: "game/unsafe",
+          evaluation_id: "quality_contract",
+          items: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          session_id: "game/unsafe",
+          evaluation_id: "quality_contract",
+          status: "pending",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getAdminGameQualityIssues("game/unsafe");
+    await retryAdminGameQualityEvaluation("game/unsafe", "csrf-quality");
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "/api/v1/admin/games/game%2Funsafe/quality-evaluation/issues",
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      "/api/v1/admin/games/game%2Funsafe/quality-evaluation/retry",
+    );
+    const options = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(options.method).toBe("POST");
+    expect(new Headers(options.headers).get("X-CSRF-Token")).toBe(
+      "csrf-quality",
     );
   });
 

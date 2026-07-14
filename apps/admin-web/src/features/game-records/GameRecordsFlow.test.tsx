@@ -388,6 +388,109 @@ describe("admin game record flow", () => {
     ).toHaveLength(1);
   });
 
+  it("loads only safe P3 issue coordinates after an explicit authorized click", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["games.read", "games.debug.read"]));
+      }
+      if (url.endsWith("/api/v1/admin/games/game_1234abcd")) {
+        return jsonResponse(contractGameDetail);
+      }
+      if (url.endsWith("/quality-evaluation/issues")) {
+        return jsonResponse({
+          session_id: "game_1234abcd",
+          evaluation_id: "quality_fixture_1",
+          items: [
+            {
+              issue_id: "quality_issue_fixture_1",
+              code: "private_voice_materialized",
+              severity: "P0",
+              channel: "voice",
+              round_number: 1,
+              event_id: 5,
+              utterance_id: "utterance_fixture_1",
+              first_detected_at: "2026-07-10T01:04:00Z",
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/operations/games/game_1234abcd");
+
+    expect(
+      await screen.findByRole("heading", { name: "P3 质量评估" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("100.0% (4/4)")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith("/quality-evaluation/issues"),
+      ),
+    ).toBe(false);
+
+    await user.click(
+      screen.getByRole("button", { name: "加载安全问题坐标" }),
+    );
+    expect(
+      await screen.findByText("P0 · private_voice_materialized"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/voice · 轮次 1 · event 5/)).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).endsWith("/quality-evaluation/issues"),
+      ),
+    ).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("private wolf plan");
+  });
+
+  it("retries eligible P3 evaluation with the admin CSRF token", async () => {
+    let detailCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["games.read", "games.debug.read"]));
+      }
+      if (url.endsWith("/api/v1/admin/games/game_1234abcd")) {
+        detailCalls += 1;
+        return jsonResponse({
+          ...contractGameDetail,
+          quality_evaluation: {
+            ...contractGameDetail.quality_evaluation,
+            data_status: "partial",
+          },
+        });
+      }
+      if (url.endsWith("/quality-evaluation/retry")) {
+        expect(init?.method).toBe("POST");
+        expect(new Headers(init?.headers).get("X-CSRF-Token")).toBe(
+          "csrf-games",
+        );
+        return jsonResponse({
+          session_id: "game_1234abcd",
+          evaluation_id: "quality_fixture_retry",
+          status: "pending",
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/operations/games/game_1234abcd");
+
+    await user.click(
+      await screen.findByRole("button", { name: "重试质量评估" }),
+    );
+    await waitFor(() => expect(detailCalls).toBeGreaterThan(1));
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).endsWith("/quality-evaluation/retry"),
+      ),
+    ).toHaveLength(1);
+  });
+
   it("keeps base detail available when the optional debug request fails", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

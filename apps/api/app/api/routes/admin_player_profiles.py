@@ -61,6 +61,7 @@ from app.werewolf.player_avatar_assets import SYSTEM_AVATAR_ASSET_IDS, avatar_as
 from app.werewolf.player_presets import (
     APPEARANCE_PRESETS,
     PERSONALITY_PRESETS,
+    STRATEGY_LABELS,
     STRATEGY_PRESETS,
 )
 from app.werewolf.providers import configured_model_options
@@ -226,7 +227,11 @@ def get_profile_options(
             for preset in APPEARANCE_PRESETS.values()
         ],
         strategies=[
-            {"id": strategy_id, "label": strategy_id, "description": description}
+            {
+                "id": strategy_id,
+                "label": STRATEGY_LABELS[strategy_id],
+                "description": description,
+            }
             for strategy_id, description in STRATEGY_PRESETS.items()
         ],
         constraints={

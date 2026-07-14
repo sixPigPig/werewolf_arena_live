@@ -10,4 +10,6 @@ export const adminGameKeys = {
     [...adminGameKeys.details(), sessionId] as const,
   debug: (sessionId: string) =>
     [...adminGameKeys.detail(sessionId), "debug"] as const,
+  qualityIssues: (sessionId: string) =>
+    [...adminGameKeys.detail(sessionId), "quality-issues"] as const,
 };

@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "run_id": "run_05aa0b0f2b92",
+  "state": {
+    "session_id": "game_0c46d70d",
+    "winner": "狼人阵营",
+    "rounds": [
+      {
+        "number": 4,
+        "private_summaries": {
+          "11号玩家": "P3_PRIVATE_SENTINEL_11号计划刀10号并嫁祸12号"
+        },
+        "public_summary": "P3_PRIVATE_SENTINEL_11号计划刀10号并嫁祸12号",
+        "debate": [],
+        "summaries": {},
+        "public_outcome_events": []
+      }
+    ],
+    "public_facts": [
+      {
+        "schema_version": 2,
+        "fact_id": "fixture-public-leak",
+        "round_number": 4,
+        "category": "event",
+        "text": "P3_PRIVATE_SENTINEL_11号计划刀10号并嫁祸12号"
+      }
+    ]
+  },
+  "logs": [
+    {
+      "number": 4,
+      "summaries": [
+        {
+          "actor": "11号玩家",
+          "action": "summarize",
+          "options": [],
+          "choice": "P3_PRIVATE_SENTINEL_11号计划刀10号并嫁祸12号",
+          "lm_log": {
+            "result": {
+              "summary": "P3_PRIVATE_SENTINEL_11号计划刀10号并嫁祸12号"
+            },
+            "raw_responses": []
+          }
+        }
+      ]
+    }
+  ],
+  "live_events": [
+    {
+      "id": 641,
+      "type": "model_response_delta",
+      "run_id": "run_05aa0b0f2b92",
+      "session_id": "game_0c46d70d",
+      "created_at": "2026-07-14T00:00:00Z",
+      "round": 4,
+      "phase": "summary",
+      "actor": "11号玩家",
+      "action": "summarize",
+      "payload": {
+        "visible_text": "P3_PRIVATE_SENTINEL_11号计划刀10号并嫁祸12号",
+        "is_public": true
+      }
+    }
+  ],
+  "voice_utterances": [
+    {
+      "utterance_id": "voice_p3_leak",
+      "run_id": "run_05aa0b0f2b92",
+      "session_id": "game_0c46d70d",
+      "source_event_id": 641,
+      "speaker_kind": "player",
+      "action": "summarize",
+      "status": "complete",
+      "text": "P3_PRIVATE_SENTINEL_11号计划刀10号并嫁祸12号",
+      "subtitle_timings": [
+        {
+          "text": "P3_PRIVATE_SENTINEL_11号计划刀10号并嫁祸12号",
+          "start_ms": 0,
+          "end_ms": 1800
+        }
+      ]
+    }
+  ]
+}

@@ -39,6 +39,15 @@ STRATEGY_PRESETS = {
     "cautious_observer": "谨慎慢热，先收集信息，再给出明确判断。",
 }
 
+STRATEGY_LABELS = {
+    "balanced": "均衡观察",
+    "logic_leader": "逻辑带队",
+    "shadow_wolf": "阴影潜伏",
+    "social_reader": "社交阅读",
+    "pressure_attacker": "强压进攻",
+    "cautious_observer": "谨慎观察",
+}
+
 
 def default_personality_text(personality_id: str) -> str:
     return PERSONALITY_PRESETS[personality_id].description

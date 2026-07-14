@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -69,6 +70,7 @@ class ActionLog:
     duration_ms: int = 0
     budget_ms: int | None = None
     first_token_ms: int | None = None
+    fact_prompt_coverage: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -109,6 +111,8 @@ class ActionLog:
             payload["speech_quality_initial_codes"] = (
                 self.speech_quality_initial_codes.copy()
             )
+        if self.fact_prompt_coverage is not None:
+            payload["fact_prompt_coverage"] = copy.deepcopy(self.fact_prompt_coverage)
         return payload
 
 
@@ -496,6 +500,8 @@ class GameState:
     sheriff_pre_election_bomb_count: int = 0
     sheriff_election_pending: bool = False
     public_facts: list[dict[str, Any]] = field(default_factory=list)
+    public_fact_opportunities: list[dict[str, Any]] = field(default_factory=list)
+    public_fact_propositions: list[dict[str, Any]] = field(default_factory=list)
 
     def player_by_name(self) -> dict[str, Player]:
         return {player.name: player for player in self.players}
@@ -513,4 +519,6 @@ class GameState:
             "sheriff_pre_election_bomb_count": self.sheriff_pre_election_bomb_count,
             "sheriff_election_pending": self.sheriff_election_pending,
             "public_facts": self.public_facts,
+            "public_fact_opportunities": self.public_fact_opportunities,
+            "public_fact_propositions": self.public_fact_propositions,
         }

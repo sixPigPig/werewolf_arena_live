@@ -11,6 +11,11 @@ import type {
   AdminGameRound,
   AdminGameRuleSet,
   AdminGameRun,
+  AdminGameQualityEvaluation,
+  AdminGameQualityIssues,
+  AdminGameQualityRetry,
+  AdminQualityDataStatus,
+  AdminQualityEvaluationStatus,
   GameSessionStatus,
   LiveRunStatus,
 } from "@/features/game-records/types";
@@ -22,6 +27,12 @@ const RUN_STATUSES: LiveRunStatus[] = [
   "completed",
   "failed",
   "canceled",
+];
+const QUALITY_EVALUATION_STATUSES: AdminQualityEvaluationStatus[] = [
+  "not_scheduled", "pending", "processing", "completed", "failed", "superseded",
+];
+const QUALITY_DATA_STATUSES: AdminQualityDataStatus[] = [
+  "collecting", "available", "partial", "legacy", "unavailable",
 ];
 const SENSITIVE_RESPONSE_KEYS = new Set([
   "state",
@@ -125,6 +136,132 @@ export function parseAdminGameDetail(value: unknown): AdminGameDetail {
     recent_events: recentEvents,
     diagnostics,
     p2_quality: parseAdminGameP2Quality(record.p2_quality),
+    quality_evaluation: parseAdminGameQualityEvaluation(
+      record.quality_evaluation,
+    ),
+  };
+}
+
+export function parseAdminGameQualityEvaluation(
+  value: unknown,
+): AdminGameQualityEvaluation {
+  rejectSensitiveFields(value, "quality_evaluation");
+  const record = recordValue(value);
+  const coverage = recordValue(record.source_coverage);
+  const issueCounts = recordValue(record.issue_counts);
+  const facts = recordValue(record.facts);
+  const structure = recordValue(record.structure);
+  const voice = recordValue(record.voice);
+  const performance = recordValue(record.performance);
+  const content = recordValue(record.content);
+  if (record.schema_version !== 1) {
+    throw invalidContract("quality_evaluation.schema_version 不受支持");
+  }
+  return {
+    schema_version: 1,
+    evaluator_version: requiredString(record.evaluator_version, "quality_evaluation.evaluator_version"),
+    evaluation_status: enumValue(record.evaluation_status, QUALITY_EVALUATION_STATUSES, "quality_evaluation.evaluation_status"),
+    data_status: enumValue(record.data_status, QUALITY_DATA_STATUSES, "quality_evaluation.data_status"),
+    verdict: enumValue(record.verdict, ["pass", "warn", "fail", "unavailable"] as const, "quality_evaluation.verdict"),
+    source_coverage: {
+      state: requiredString(coverage.state, "quality_evaluation.source_coverage.state"),
+      logs: requiredString(coverage.logs, "quality_evaluation.source_coverage.logs"),
+      events: requiredString(coverage.events, "quality_evaluation.source_coverage.events"),
+      voice: requiredString(coverage.voice, "quality_evaluation.source_coverage.voice"),
+      subtitles: requiredString(coverage.subtitles, "quality_evaluation.source_coverage.subtitles"),
+      pending_voice_count: nonNegativeInteger(coverage.pending_voice_count, "quality_evaluation.source_coverage.pending_voice_count"),
+      failed_voice_count: nonNegativeInteger(coverage.failed_voice_count, "quality_evaluation.source_coverage.failed_voice_count"),
+    },
+    issue_counts: {
+      P0: nonNegativeInteger(issueCounts.P0, "quality_evaluation.issue_counts.P0"),
+      P1: nonNegativeInteger(issueCounts.P1, "quality_evaluation.issue_counts.P1"),
+      P2: nonNegativeInteger(issueCounts.P2, "quality_evaluation.issue_counts.P2"),
+    },
+    facts: {
+      critical_opportunity_count: nonNegativeInteger(facts.critical_opportunity_count, "quality_evaluation.facts.critical_opportunity_count"),
+      critical_recorded_count: nonNegativeInteger(facts.critical_recorded_count, "quality_evaluation.facts.critical_recorded_count"),
+      critical_fact_write_rate: nullableRate(facts.critical_fact_write_rate, "quality_evaluation.facts.critical_fact_write_rate"),
+      prompt_expected_critical_count: nonNegativeInteger(facts.prompt_expected_critical_count, "quality_evaluation.facts.prompt_expected_critical_count"),
+      prompt_included_critical_count: nonNegativeInteger(facts.prompt_included_critical_count, "quality_evaluation.facts.prompt_included_critical_count"),
+      prompt_missing_critical_count: nonNegativeInteger(facts.prompt_missing_critical_count, "quality_evaluation.facts.prompt_missing_critical_count"),
+      critical_fact_prompt_coverage_rate: nullableRate(facts.critical_fact_prompt_coverage_rate, "quality_evaluation.facts.critical_fact_prompt_coverage_rate"),
+      deterministic_contradiction_count: nonNegativeInteger(facts.deterministic_contradiction_count, "quality_evaluation.facts.deterministic_contradiction_count"),
+    },
+    structure: {
+      max_consecutive_self_explosions: nonNegativeInteger(structure.max_consecutive_self_explosions, "quality_evaluation.structure.max_consecutive_self_explosions"),
+      chain_three_count: nonNegativeInteger(structure.chain_three_count, "quality_evaluation.structure.chain_three_count"),
+      normal_day_debate_round_count: nonNegativeInteger(structure.normal_day_debate_round_count, "quality_evaluation.structure.normal_day_debate_round_count"),
+      sheriff_model_request_count: nonNegativeInteger(structure.sheriff_model_request_count, "quality_evaluation.structure.sheriff_model_request_count"),
+      public_model_request_count: nonNegativeInteger(structure.public_model_request_count, "quality_evaluation.structure.public_model_request_count"),
+      sheriff_model_request_rate: nullableRate(structure.sheriff_model_request_rate, "quality_evaluation.structure.sheriff_model_request_rate"),
+    },
+    voice: {
+      narratable_event_count: nonNegativeInteger(voice.narratable_event_count, "quality_evaluation.voice.narratable_event_count"),
+      effective_voice_event_count: nonNegativeInteger(voice.effective_voice_event_count, "quality_evaluation.voice.effective_voice_event_count"),
+      missing_narratable_event_count: nonNegativeInteger(voice.missing_narratable_event_count, "quality_evaluation.voice.missing_narratable_event_count"),
+      voice_coverage_rate: nullableRate(voice.voice_coverage_rate, "quality_evaluation.voice.voice_coverage_rate"),
+      voice_source_event_lag: nullableNonNegativeInteger(voice.voice_source_event_lag, "quality_evaluation.voice.voice_source_event_lag"),
+      terminal_judge_voice_coverage: nullableBoolean(voice.terminal_judge_voice_coverage, "quality_evaluation.voice.terminal_judge_voice_coverage"),
+      pending_voice_count: nonNegativeInteger(voice.pending_voice_count, "quality_evaluation.voice.pending_voice_count"),
+      failed_voice_count: nonNegativeInteger(voice.failed_voice_count, "quality_evaluation.voice.failed_voice_count"),
+      interruption_count: nonNegativeInteger(voice.interruption_count, "quality_evaluation.voice.interruption_count"),
+      replay_count: nonNegativeInteger(voice.replay_count, "quality_evaluation.voice.replay_count"),
+    },
+    performance: {
+      action_count: nonNegativeInteger(performance.action_count, "quality_evaluation.performance.action_count"),
+      action_duration_ms_max: nullableNonNegativeInteger(performance.action_duration_ms_max, "quality_evaluation.performance.action_duration_ms_max"),
+      action_duration_p95_ms: nullableNonNegativeInteger(performance.action_duration_p95_ms, "quality_evaluation.performance.action_duration_p95_ms"),
+      first_token_count: nonNegativeInteger(performance.first_token_count, "quality_evaluation.performance.first_token_count"),
+      first_token_ms_max: nullableNonNegativeInteger(performance.first_token_ms_max, "quality_evaluation.performance.first_token_ms_max"),
+      first_token_p95_ms: nullableNonNegativeInteger(performance.first_token_p95_ms, "quality_evaluation.performance.first_token_p95_ms"),
+      game_duration_ms: nullableNonNegativeInteger(performance.game_duration_ms, "quality_evaluation.performance.game_duration_ms"),
+      timeout_count: nonNegativeInteger(performance.timeout_count, "quality_evaluation.performance.timeout_count"),
+      retry_count: nonNegativeInteger(performance.retry_count, "quality_evaluation.performance.retry_count"),
+      fallback_count: nonNegativeInteger(performance.fallback_count, "quality_evaluation.performance.fallback_count"),
+    },
+    content: {
+      speech_check_count: nonNegativeInteger(content.speech_check_count, "quality_evaluation.content.speech_check_count"),
+      repeated_speech_count: nonNegativeInteger(content.repeated_speech_count, "quality_evaluation.content.repeated_speech_count"),
+      repeated_speech_rate: nullableRate(content.repeated_speech_rate, "quality_evaluation.content.repeated_speech_rate"),
+      speech_rewrite_count: nonNegativeInteger(content.speech_rewrite_count, "quality_evaluation.content.speech_rewrite_count"),
+      speech_rewrite_recovered_count: nonNegativeInteger(content.speech_rewrite_recovered_count, "quality_evaluation.content.speech_rewrite_recovered_count"),
+      speech_retry_exhausted_count: nonNegativeInteger(content.speech_retry_exhausted_count, "quality_evaluation.content.speech_retry_exhausted_count"),
+      privacy_p0_issue_count: nonNegativeInteger(content.privacy_p0_issue_count, "quality_evaluation.content.privacy_p0_issue_count"),
+      lineup_warning_count: nonNegativeInteger(content.lineup_warning_count, "quality_evaluation.content.lineup_warning_count"),
+    },
+    evaluated_at: nullableDateString(record.evaluated_at, "quality_evaluation.evaluated_at"),
+  };
+}
+
+export function parseAdminGameQualityIssues(value: unknown): AdminGameQualityIssues {
+  rejectSensitiveFields(value, "quality_issues");
+  const record = recordValue(value);
+  return {
+    session_id: requiredString(record.session_id, "quality_issues.session_id"),
+    evaluation_id: nullableString(record.evaluation_id, "quality_issues.evaluation_id"),
+    items: arrayValue(record.items, "quality_issues.items").map((value) => {
+      const issue = recordValue(value);
+      return {
+        issue_id: requiredString(issue.issue_id, "quality_issue.issue_id"),
+        code: requiredString(issue.code, "quality_issue.code"),
+        severity: enumValue(issue.severity, ["P0", "P1", "P2"] as const, "quality_issue.severity"),
+        channel: requiredString(issue.channel, "quality_issue.channel"),
+        round_number: nullableNonNegativeInteger(issue.round_number, "quality_issue.round_number"),
+        event_id: nullableNonNegativeInteger(issue.event_id, "quality_issue.event_id"),
+        utterance_id: nullableString(issue.utterance_id, "quality_issue.utterance_id"),
+        first_detected_at: dateString(issue.first_detected_at, "quality_issue.first_detected_at"),
+      };
+    }),
+  };
+}
+
+export function parseAdminGameQualityRetry(value: unknown): AdminGameQualityRetry {
+  rejectSensitiveFields(value, "quality_retry");
+  const record = recordValue(value);
+  return {
+    session_id: requiredString(record.session_id, "quality_retry.session_id"),
+    evaluation_id: requiredString(record.evaluation_id, "quality_retry.evaluation_id"),
+    status: enumValue(record.status, ["pending"] as const, "quality_retry.status"),
   };
 }
 
@@ -316,8 +453,13 @@ function rejectSensitiveFields(value: unknown, path = "response") {
   }
   Object.entries(value as Record<string, unknown>).forEach(([key, child]) => {
     const normalized = key.toLowerCase();
+    const isQualityCoverageStatus =
+      path.endsWith("quality_evaluation.source_coverage") &&
+      (normalized === "state" || normalized === "logs");
     if (
-      SENSITIVE_RESPONSE_KEYS.has(normalized) ||
+      (SENSITIVE_RESPONSE_KEYS.has(normalized) && !isQualityCoverageStatus) ||
+      normalized === "text" ||
+      normalized.endsWith("_text") ||
       normalized.endsWith("_key") ||
       normalized.endsWith("_token") ||
       normalized.endsWith("_secret")
@@ -403,6 +545,18 @@ function nullableNonNegativeInteger(
 function booleanValue(value: unknown, field: string) {
   if (typeof value !== "boolean") {
     throw invalidContract(`${field} 不是布尔值`);
+  }
+  return value;
+}
+
+function nullableBoolean(value: unknown, field: string): boolean | null {
+  return value === null ? null : booleanValue(value, field);
+}
+
+function nullableRate(value: unknown, field: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw invalidContract(`${field} 不是 0 到 1 的比率`);
   }
   return value;
 }

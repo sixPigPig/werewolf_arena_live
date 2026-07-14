@@ -131,6 +131,28 @@ services:
       start_period: 20s
       retries: 3
 
+  quality-evaluator:
+    profiles: ["quality"]
+    image: werewolf-api:local
+    command: ["python", "-m", "app.cli", "run-quality-evaluator"]
+    env_file:
+      - path: ${API_ENV_FILE:-apps/api/.env}
+        required: false
+    environment:
+      <<: *api-environment
+      QUALITY_EVALUATION_ENABLED: ${QUALITY_EVALUATION_ENABLED:-true}
+      QUALITY_EVALUATION_HMAC_KEY: ${QUALITY_EVALUATION_HMAC_KEY:-local-quality-evaluation-key}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.cli", "check-quality-evaluator"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
   admin:
     profiles: ["app"]
     build:

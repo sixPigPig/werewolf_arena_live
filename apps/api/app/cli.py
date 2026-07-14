@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
+from datetime import datetime
 from pathlib import Path
 from threading import Event
 from typing import Sequence
@@ -33,6 +34,8 @@ from app.werewolf.providers import default_model_name
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.orphan_reaper import OrphanRecoveryResult, run_live_run_reaper
 from app.werewolf.private_memory_cleanup import cleanup_private_round_memory
+from app.werewolf.quality_store import enqueue_recent_missing_evaluations
+from app.werewolf.quality_worker import run_quality_evaluation_worker
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.runner import GameRunError, run_game
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
@@ -43,6 +46,7 @@ from app.werewolf.voice_materializer import (
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
 from app.werewolf.worker_telemetry import (
     JUDGE_VOICE_WORKER_TYPE,
+    QUALITY_EVALUATION_WORKER_TYPE,
     RuntimeWorkerTelemetry,
     live_run_reaper_is_alive,
     runtime_worker_is_alive,
@@ -152,6 +156,39 @@ def _build_parser() -> argparse.ArgumentParser:
         default=settings.live_voice_materializer_probe_max_age_seconds,
     )
     materializer_probe_parser.set_defaults(func=_check_live_voice_materializer_command)
+
+    quality_worker_parser = subparsers.add_parser(
+        "run-quality-evaluator",
+        help="Evaluate terminal games from the persistent quality queue.",
+    )
+    quality_worker_parser.add_argument("--once", action="store_true")
+    quality_worker_parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=settings.quality_evaluation_poll_seconds,
+    )
+    quality_worker_parser.set_defaults(func=_run_quality_evaluator_command)
+
+    quality_probe_parser = subparsers.add_parser(
+        "check-quality-evaluator",
+        help="Exit successfully when a quality evaluator heartbeat is fresh.",
+    )
+    quality_probe_parser.add_argument(
+        "--max-age-seconds",
+        type=float,
+        default=settings.quality_evaluation_probe_max_age_seconds,
+    )
+    quality_probe_parser.set_defaults(func=_check_quality_evaluator_command)
+
+    quality_backfill_parser = subparsers.add_parser(
+        "backfill-quality-evaluations",
+        help="Dry-run or enqueue a bounded terminal-game quality backfill.",
+    )
+    quality_backfill_parser.add_argument("--session-id")
+    quality_backfill_parser.add_argument("--since")
+    quality_backfill_parser.add_argument("--limit", type=int, default=100)
+    quality_backfill_parser.add_argument("--apply", action="store_true")
+    quality_backfill_parser.set_defaults(func=_backfill_quality_evaluations_command)
 
     live_reaper_parser = subparsers.add_parser(
         "run-live-run-reaper",
@@ -500,6 +537,117 @@ def _check_live_voice_materializer_command(args: argparse.Namespace) -> int:
         return 2
     print("live_voice_materializer=ok" if alive else "live_voice_materializer=stale")
     return 0 if alive else 1
+
+
+def _run_quality_evaluator_command(args: argparse.Namespace) -> int:
+    if not 0.1 <= args.poll_seconds <= 60:
+        print("--poll-seconds must be between 0.1 and 60", file=sys.stderr)
+        return 2
+    if not settings.quality_evaluation_enabled:
+        print("quality evaluation is disabled", file=sys.stderr)
+        return 2
+    if not settings.quality_evaluation_hmac_key:
+        print("quality evaluation HMAC key is unavailable", file=sys.stderr)
+        return 2
+
+    stop_event = Event()
+    worker_id = f"quality-evaluator-{uuid4().hex}"
+    telemetry = RuntimeWorkerTelemetry(
+        SessionLocal,
+        worker_id=worker_id,
+        worker_type=QUALITY_EVALUATION_WORKER_TYPE,
+        heartbeat_seconds=settings.quality_evaluation_heartbeat_seconds,
+    )
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop_event.set()
+
+    previous_handlers = {
+        signal_number: signal.signal(signal_number, request_stop)
+        for signal_number in (signal.SIGINT, signal.SIGTERM)
+    }
+    telemetry_started = False
+    try:
+        telemetry.start()
+        telemetry_started = True
+        processed_count = run_quality_evaluation_worker(
+            SessionLocal,
+            hmac_key=settings.quality_evaluation_hmac_key,
+            worker_id=worker_id,
+            stop_event=stop_event,
+            poll_seconds=args.poll_seconds,
+            once=args.once,
+            lease_seconds=settings.quality_evaluation_lease_seconds,
+            max_attempts=settings.quality_evaluation_max_attempts,
+            backoff_seconds=settings.quality_evaluation_backoff_seconds,
+            on_job=lambda evaluation_id: print(
+                f"evaluation_id={evaluation_id}", flush=True
+            ),
+        )
+    except Exception as exc:
+        print(f"quality evaluator failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    finally:
+        if telemetry_started:
+            telemetry.stop()
+        for signal_number, handler in previous_handlers.items():
+            signal.signal(signal_number, handler)
+
+    if args.once and processed_count == 0:
+        print("evaluation_id=none")
+    return 0
+
+
+def _check_quality_evaluator_command(args: argparse.Namespace) -> int:
+    if not 5 <= args.max_age_seconds <= 300:
+        print("--max-age-seconds must be between 5 and 300", file=sys.stderr)
+        return 2
+    try:
+        with SessionLocal() as db:
+            alive = runtime_worker_is_alive(
+                db,
+                worker_type=QUALITY_EVALUATION_WORKER_TYPE,
+                max_age_seconds=args.max_age_seconds,
+            )
+    except Exception as exc:
+        print(f"quality_evaluator=unknown error={type(exc).__name__}", file=sys.stderr)
+        return 2
+    print("quality_evaluator=ok" if alive else "quality_evaluator=stale")
+    return 0 if alive else 1
+
+
+def _backfill_quality_evaluations_command(args: argparse.Namespace) -> int:
+    if not 1 <= args.limit <= 1000:
+        print("--limit must be between 1 and 1000", file=sys.stderr)
+        return 2
+    try:
+        since = datetime.fromisoformat(args.since) if args.since else None
+    except ValueError:
+        print("--since must be an ISO-8601 datetime", file=sys.stderr)
+        return 2
+    with SessionLocal() as db:
+        try:
+            result = enqueue_recent_missing_evaluations(
+                db,
+                evaluator_version=settings.quality_evaluation_version,
+                session_id=args.session_id,
+                since=since,
+                limit=args.limit,
+                dry_run=not args.apply,
+            )
+            if args.apply:
+                db.commit()
+            else:
+                db.rollback()
+        except Exception as exc:
+            db.rollback()
+            print(f"quality backfill failed: {type(exc).__name__}", file=sys.stderr)
+            return 1
+    print(
+        f"mode={'apply' if args.apply else 'dry-run'} matched={result['matched']} "
+        f"enqueued={result['enqueued']} skipped={result['skipped']}"
+    )
+    return 0
 
 
 def _live_voice_tts_config() -> VolcengineTtsConfig:
