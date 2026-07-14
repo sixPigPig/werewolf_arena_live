@@ -971,7 +971,7 @@ WEREWOLF_PUBLIC_OUTCOME_V1_ENABLED
 | 前端完整测试 | Game Client 279 + Mobile Web 196 + Admin Web 276 = 751 passed |
 | Admin Web 完整测试 | 276 passed，lint/typecheck/build 通过 |
 | 本局 fixture | P0/P1/P2 共 6 passed；P2 fixture v3 已覆盖同质阵容、重复发言、耗时、猎人链、原始选项 `5` 和隐私哨兵 |
-| 自然流量真实模型样本量 | 0（随正常对局被动积累，不发起专项付费批量压测） |
+| 自然流量真实模型样本量 | 0（观测切点为 `2026-07-14T15:00:23Z`；仅统计新 12 人角色库对局，随正常对局被动积累，不发起专项付费批量压测） |
 | 12 人对局耗时 | 待填写 |
 | 离散动作 P95 | 待填写 |
 | 发言首 token P95 | 待填写 |
