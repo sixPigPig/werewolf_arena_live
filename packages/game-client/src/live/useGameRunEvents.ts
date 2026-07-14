@@ -15,6 +15,7 @@ const EMPTY_EVENTS: LiveGameEvent[] = [];
 const EVENT_TYPES = [
   "run_created",
   "run_started",
+  "run_recovered",
   "game_started",
   "round_started",
   "phase_started",
@@ -35,28 +36,38 @@ const EVENT_TYPES = [
 
 type EventStreamState = {
   runId: string | undefined;
+  audience: GameRunEventAudience;
   events: LiveGameEvent[];
   connectionState: ConnectionState;
 };
 
-export function useGameRunEvents(runId: string | undefined) {
+export type GameRunEventAudience = "player_public" | "spectator_god_view";
+
+export function useGameRunEvents(
+  runId: string | undefined,
+  audience: GameRunEventAudience = "player_public",
+) {
   const [streamState, setStreamState] = useState<EventStreamState>(() => ({
     runId,
+    audience,
     events: [],
     connectionState: runId ? "connecting" : "idle",
   }));
 
-  if (streamState.runId !== runId) {
+  if (streamState.runId !== runId || streamState.audience !== audience) {
     setStreamState({
       runId,
+      audience,
       events: [],
       connectionState: runId ? "connecting" : "idle",
     });
   }
 
-  const events = streamState.runId === runId ? streamState.events : EMPTY_EVENTS;
+  const stateMatches =
+    streamState.runId === runId && streamState.audience === audience;
+  const events = stateMatches ? streamState.events : EMPTY_EVENTS;
   const connectionState =
-    streamState.runId === runId
+    stateMatches
       ? streamState.connectionState
       : runId
         ? "connecting"
@@ -71,15 +82,18 @@ export function useGameRunEvents(runId: string | undefined) {
     const EventSourceConstructor = globalThis.EventSource;
     if (typeof EventSourceConstructor !== "function") {
       setStreamState((current) =>
-        current.runId === runId
+        current.runId === runId && current.audience === audience
           ? { ...current, connectionState: "error" }
           : current,
       );
       return;
     }
 
+    const streamPath =
+      audience === "spectator_god_view" ? "god-view/events" : "events";
     const source = new EventSourceConstructor(
-      `${API_BASE_URL}/api/v1/games/runs/${runId}/events`,
+      `${API_BASE_URL}/api/v1/games/runs/${runId}/${streamPath}`,
+      { withCredentials: true },
     );
 
     const closeSource = () => {
@@ -94,7 +108,7 @@ export function useGameRunEvents(runId: string | undefined) {
         return;
       }
       setStreamState((current) =>
-        current.runId === runId
+        current.runId === runId && current.audience === audience
           ? { ...current, connectionState: "open" }
           : current,
       );
@@ -104,7 +118,7 @@ export function useGameRunEvents(runId: string | undefined) {
         return;
       }
       setStreamState((current) =>
-        current.runId === runId
+        current.runId === runId && current.audience === audience
           ? { ...current, connectionState: "error" }
           : current,
       );
@@ -119,7 +133,7 @@ export function useGameRunEvents(runId: string | undefined) {
         event = JSON.parse(message.data) as LiveGameEvent;
       } catch {
         setStreamState((current) =>
-          current.runId === runId
+          current.runId === runId && current.audience === audience
             ? { ...current, connectionState: "error" }
             : current,
         );
@@ -130,7 +144,7 @@ export function useGameRunEvents(runId: string | undefined) {
         event.type === "game_failed" ||
         event.type === "game_canceled";
       setStreamState((current) => {
-        if (current.runId !== runId) {
+        if (current.runId !== runId || current.audience !== audience) {
           return current;
         }
 
@@ -158,12 +172,12 @@ export function useGameRunEvents(runId: string | undefined) {
       isActive = false;
       closeSource();
       setStreamState((current) =>
-        current.runId === runId
+        current.runId === runId && current.audience === audience
           ? { ...current, connectionState: "closed" }
           : current,
       );
     };
-  }, [runId]);
+  }, [audience, runId]);
 
   const latestEvent = useMemo(() => events.at(-1) ?? null, [events]);
 

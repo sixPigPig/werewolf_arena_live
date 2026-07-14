@@ -21,7 +21,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.api.public.dependencies import public_problem
+from app.api.public.dependencies import (
+    PublicPrincipal,
+    get_current_public_principal,
+    public_problem,
+)
 from app.api.schemas.public_rule_sets import (
     PublicRuleSetCatalogItem,
     PublicRuleSetCatalogResponse,
@@ -72,6 +76,7 @@ from app.werewolf.live import (
     GameRunCanceled,
     LiveEvent,
     LiveGameRun,
+    ProjectedLiveEvent,
     LiveRunRegistry,
     RunActivationExpectedEvent,
     RunActivationExpectedState,
@@ -87,6 +92,7 @@ from app.werewolf.live_store import (
     DatabaseLiveStore,
     stored_event_matches,
 )
+from app.werewolf.privacy_projection import ProjectionAudience, project_live_event
 from app.werewolf.player_configs import (
     PlayerConfig,
     clean_optional_string,
@@ -107,9 +113,9 @@ from app.werewolf.replay_playback import (
     PRIVATE_ROUND_MEMORY_ACTION,
     build_public_game_session,
     build_replay_playback,
-    filter_public_playback_events,
     filter_public_playback_voices,
     private_round_memory_event_ids,
+    project_playback_events,
 )
 from app.werewolf.rules import (
     DEFAULT_RULE_SET_ID,
@@ -330,6 +336,23 @@ class SessionLiveStore:
         db = self.session_factory()
         try:
             return DatabaseLiveStore(db).events_after(run_id, after_id=after_id)
+        finally:
+            db.close()
+
+    def projected_events_after(
+        self,
+        run_id: str,
+        *,
+        audience: ProjectionAudience,
+        after_id: int | None = None,
+    ) -> list[ProjectedLiveEvent]:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).projected_events_after(
+                run_id,
+                audience=audience,
+                after_id=after_id,
+            )
         finally:
             db.close()
 
@@ -1217,7 +1240,10 @@ def get_game_run(
     run = registry.try_get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Game run not found")
-    return run.to_summary()
+    summary = run.to_summary()
+    if summary.get("error"):
+        summary["error"] = "对局异常中断。"
+    return summary
 
 
 @router.get("/runs/{run_id}/events")
@@ -1235,9 +1261,33 @@ def stream_game_run_events(
             registry,
             run_id,
             after_id=_resolve_event_resume_id(after_id, last_event_id),
+            audience="player_public",
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
+    )
+
+
+@router.get("/runs/{run_id}/god-view/events")
+def stream_game_run_god_view_events(
+    run_id: str,
+    registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
+    _principal: Annotated[PublicPrincipal, Depends(get_current_public_principal)],
+    after_id: Annotated[int | None, Query(ge=0)] = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    if registry.try_get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail="Game run not found")
+
+    return StreamingResponse(
+        _event_stream(
+            registry,
+            run_id,
+            after_id=_resolve_event_resume_id(after_id, last_event_id),
+            audience="spectator_god_view",
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "private, no-store"},
     )
 
 
@@ -1397,13 +1447,49 @@ def get_game_playback(
     store: Annotated[GameRecordStore, Depends(get_replay_store)],
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
+    return _get_game_playback(
+        session_id,
+        store=store,
+        db=db,
+        audience="player_public",
+    )
+
+
+@router.get("/{session_id}/god-view/playback")
+def get_game_god_view_playback(
+    session_id: Annotated[
+        str,
+        Path(pattern=SESSION_ID_RE),
+    ],
+    store: Annotated[GameRecordStore, Depends(get_replay_store)],
+    db: Annotated[Session, Depends(get_db)],
+    _principal: Annotated[PublicPrincipal, Depends(get_current_public_principal)],
+) -> dict:
+    return _get_game_playback(
+        session_id,
+        store=store,
+        db=db,
+        audience="spectator_god_view",
+    )
+
+
+def _get_game_playback(
+    session_id: str,
+    *,
+    store: GameRecordStore,
+    db: Session,
+    audience: ProjectionAudience,
+) -> dict:
     try:
         playback = build_replay_playback(store.load_session(session_id))
     except ReplayNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Game session not found") from exc
 
     try:
-        persisted_events = DatabaseLiveStore(db).playback_events_for_session(session_id)
+        persisted_events = DatabaseLiveStore(db).playback_events_for_session(
+            session_id,
+            audience=audience,
+        )
     except RecoverableDatabaseError:
         persisted_events = []
 
@@ -1411,7 +1497,7 @@ def get_game_playback(
     materialization_lag_ms: int | None = None
     if persisted_events:
         private_event_ids = private_round_memory_event_ids(persisted_events)
-        playback["events"] = filter_public_playback_events(persisted_events)
+        playback["events"] = persisted_events
         try:
             voice_store = DatabaseVoiceStore(
                 db,
@@ -1427,6 +1513,21 @@ def get_game_playback(
             )
         except RecoverableDatabaseError:
             saved_voices = []
+
+    playback["events"] = project_playback_events(
+        playback["events"],
+        audience=audience,
+    )
+    public_event_ids = {
+        event.get("source_event_id", event.get("id"))
+        for event in playback["events"]
+        if isinstance(event.get("source_event_id", event.get("id")), int)
+    }
+    saved_voices = [
+        voice
+        for voice in saved_voices
+        if voice.get("source_event_id") in public_event_ids
+    ]
 
     static_judge_voices = build_static_judge_playback_voices(
         playback["events"],
@@ -1620,9 +1721,14 @@ def _event_stream(
     run_id: str,
     *,
     after_id: int | None = None,
+    audience: ProjectionAudience = "player_public",
 ) -> Iterator[str]:
     last_event_id = after_id
-    for event in registry.events_after(run_id, after_id=after_id):
+    for event in registry.projected_events_after(
+        run_id,
+        after_id=after_id,
+        audience=audience,
+    ):
         last_event_id = event.id
         yield format_sse(event)
         if _is_terminal_event(event):
@@ -1638,7 +1744,9 @@ def _event_stream(
                 yield ": heartbeat\n\n"
                 continue
 
-            yield format_sse(event)
+            projected = project_live_event(event, audience)
+            if projected is not None:
+                yield format_sse(projected)
             if _is_terminal_event(event):
                 return
     finally:

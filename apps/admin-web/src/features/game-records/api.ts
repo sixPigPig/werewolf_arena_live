@@ -59,6 +59,19 @@ export async function getAdminGame(
   return parseAdminGameDetail(value);
 }
 
+export async function deleteAdminGame(
+  sessionId: string,
+  csrfToken: string,
+): Promise<void> {
+  await adminApiFetch<void>(
+    `${ADMIN_GAMES_PATH}/${encodeURIComponent(sessionId)}`,
+    {
+      method: "DELETE",
+      headers: { "X-CSRF-Token": csrfToken },
+    },
+  );
+}
+
 export async function getAdminGameDebug(
   sessionId: string,
   signal?: AbortSignal,

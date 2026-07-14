@@ -150,6 +150,58 @@ class LiveEventRecord(Base):
     )
 
 
+class PublicLiveEventRecord(Base):
+    __tablename__ = "public_live_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("run_id", "source_event_id"),
+            ("live_events.run_id", "live_events.event_id"),
+            ondelete="CASCADE",
+        ),
+        Index("ix_public_live_events_run_id_event_id", "run_id", "event_id"),
+        Index("ix_public_live_events_session_id", "session_id"),
+    )
+
+    run_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    event_id: Mapped[int] = mapped_column(primary_key=True)
+    source_event_id: Mapped[int] = mapped_column(nullable=False)
+    session_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    round: Mapped[int | None] = mapped_column(nullable=True)
+    phase: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    action: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    projection_version: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GodViewLiveEventRecord(Base):
+    __tablename__ = "god_view_live_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("run_id", "source_event_id"),
+            ("live_events.run_id", "live_events.event_id"),
+            ondelete="CASCADE",
+        ),
+        Index("ix_god_view_live_events_run_id_event_id", "run_id", "event_id"),
+        Index("ix_god_view_live_events_session_id", "session_id"),
+    )
+
+    run_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    event_id: Mapped[int] = mapped_column(primary_key=True)
+    source_event_id: Mapped[int] = mapped_column(nullable=False)
+    session_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    round: Mapped[int | None] = mapped_column(nullable=True)
+    phase: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    action: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    projection_version: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class VoiceMaterializationJobRecord(Base):
     __tablename__ = "voice_materialization_jobs"
     __table_args__ = (
@@ -171,6 +223,9 @@ class VoiceMaterializationJobRecord(Base):
     source_event_id: Mapped[int] = mapped_column(primary_key=True)
     speaker_kind: Mapped[str] = mapped_column(String(20), primary_key=True)
     session_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    audience: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="player_public", server_default="player_public"
+    )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", server_default="pending"
     )

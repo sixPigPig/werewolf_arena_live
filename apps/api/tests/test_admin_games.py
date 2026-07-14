@@ -22,7 +22,13 @@ from app.db.session import get_db
 from app.main import create_application
 from app.models.admin import AuditEvent
 from app.models.game_session import GameReplayPayload, GameSessionRecord
-from app.models.live import LiveEventRecord, LiveRunRecord, VoiceUtteranceRecord
+from app.models.live import (
+    LiveEventRecord,
+    LiveRunRecord,
+    VoiceAudioChunkRecord,
+    VoiceMaterializationJobRecord,
+    VoiceUtteranceRecord,
+)
 from app.models.quality_evaluation import GameQualityEvaluationRecord
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.werewolf.quality_store import build_database_quality_bundle
@@ -434,6 +440,171 @@ def test_admin_games_requires_authentication_and_games_read_permission(
     assert forbidden.status_code == 403
     assert forbidden.json()["code"] == "admin_permission_denied"
     assert "games.read" in forbidden.json()["detail"]
+
+
+def test_super_admin_deletes_game_and_all_owned_payloads(
+    context: AdminGamesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_at = datetime(2026, 7, 14, 10, tzinfo=UTC)
+    session_id = "game_00000031"
+    run_id = "run_000000000031"
+    utterance_id = "utt_00000031_failed"
+    _seed_game(
+        context,
+        session_id=session_id,
+        run_id=run_id,
+        created_at=created_at,
+    )
+    with context.session_factory() as db:
+        db.add(
+            VoiceAudioChunkRecord(
+                utterance_id=utterance_id,
+                chunk_index=0,
+                audio=b"audio",
+                byte_length=5,
+                created_at=created_at,
+            )
+        )
+        db.add(
+            VoiceMaterializationJobRecord(
+                run_id=run_id,
+                source_event_id=1,
+                speaker_kind="player",
+                session_id=session_id,
+                status="completed",
+                created_at=created_at,
+                updated_at=created_at,
+                completed_at=created_at,
+            )
+        )
+        db.add(
+            GameQualityEvaluationRecord(
+                id="quality_admin_delete_31",
+                session_id=session_id,
+                run_id=run_id,
+                evaluator_version="p3-v1",
+                source_revision="3" * 64,
+                status="completed",
+                data_status="available",
+                verdict="pass",
+                safe_summary={},
+                completed_at=created_at,
+            )
+        )
+        db.commit()
+
+    viewer = _login(context, monkeypatch, role="viewer")
+    forbidden = context.client.delete(
+        f"/api/v1/admin/games/{session_id}",
+        headers={"X-CSRF-Token": viewer["csrf_token"]},
+    )
+    assert forbidden.status_code == 403
+    assert forbidden.json()["code"] == "admin_permission_denied"
+    assert "games.delete" in forbidden.json()["detail"]
+
+    super_admin = _login(context, monkeypatch, role="super_admin")
+    missing_csrf = context.client.delete(f"/api/v1/admin/games/{session_id}")
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["code"] == "admin_csrf_invalid"
+
+    deleted = context.client.delete(
+        f"/api/v1/admin/games/{session_id}",
+        headers={
+            "X-CSRF-Token": super_admin["csrf_token"],
+            "X-Request-ID": "admin-game-delete-31",
+        },
+    )
+    assert deleted.status_code == 204, deleted.text
+    assert deleted.content == b""
+    assert deleted.headers["cache-control"] == "no-store"
+    assert deleted.headers["x-request-id"] == "admin-game-delete-31"
+
+    with context.session_factory() as db:
+        assert db.get(GameSessionRecord, session_id) is None
+        assert db.get(GameReplayPayload, session_id) is None
+        assert db.get(LiveRunRecord, run_id) is None
+        assert db.get(VoiceAudioChunkRecord, (utterance_id, 0)) is None
+        assert not list(
+            db.scalars(
+                select(LiveEventRecord).where(LiveEventRecord.session_id == session_id)
+            )
+        )
+        assert not list(
+            db.scalars(
+                select(VoiceMaterializationJobRecord).where(
+                    VoiceMaterializationJobRecord.session_id == session_id
+                )
+            )
+        )
+        assert not list(
+            db.scalars(
+                select(VoiceUtteranceRecord).where(
+                    VoiceUtteranceRecord.session_id == session_id
+                )
+            )
+        )
+        assert not list(
+            db.scalars(
+                select(GameQualityEvaluationRecord).where(
+                    GameQualityEvaluationRecord.session_id == session_id
+                )
+            )
+        )
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "admin.game.delete",
+                AuditEvent.resource_id == session_id,
+                AuditEvent.result == "success",
+            )
+        )
+    assert audit is not None
+    assert audit.before == {"status": "complete", "resumable": False}
+
+
+def test_admin_game_delete_rejects_active_runs_and_missing_games(
+    context: AdminGamesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "game_00000032"
+    _seed_game(
+        context,
+        session_id=session_id,
+        run_id="run_000000000032",
+        created_at=datetime(2026, 7, 14, 11, tzinfo=UTC),
+        status="partial",
+        run_status="running",
+    )
+    login = _login(context, monkeypatch, role="super_admin")
+    headers = {"X-CSRF-Token": login["csrf_token"]}
+
+    conflict = context.client.delete(
+        f"/api/v1/admin/games/{session_id}", headers=headers
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "admin_game_delete_active_run"
+
+    missing = context.client.delete(
+        "/api/v1/admin/games/game_deadbeef", headers=headers
+    )
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "admin_game_not_found"
+
+    with context.session_factory() as db:
+        assert db.get(GameSessionRecord, session_id) is not None
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "admin.game.delete",
+                AuditEvent.resource_id == session_id,
+                AuditEvent.result == "rejected",
+            )
+        )
+    assert audit is not None
+    assert audit.reason == "active_run"
+    assert audit.before == {
+        "run_id": "run_000000000032",
+        "run_status": "running",
+    }
 
 
 def test_admin_games_list_paginates_sorts_and_filters_without_loading_replay_payload(

@@ -17,6 +17,7 @@ class AdminPermission(StrEnum):
     RUNS_CONTROL = "runs.control"
     GAMES_READ = "games.read"
     GAMES_DEBUG_READ = "games.debug.read"
+    GAMES_DELETE = "games.delete"
     PLAYERS_READ = "players.read"
     PLAYERS_WRITE = "players.write"
     PLAYERS_PUBLISH = "players.publish"

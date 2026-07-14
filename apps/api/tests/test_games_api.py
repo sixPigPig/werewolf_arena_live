@@ -3580,6 +3580,85 @@ def test_game_run_events_replays_existing_events() -> None:
     assert "event: game_completed" in body
 
 
+def test_public_run_events_redact_roles_and_private_night_actions() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+    )
+    registry.publish(
+        run.run_id,
+        "game_started",
+        payload={
+            "players": [
+                {"name": "阿青", "role": "secret-role", "observations": ["private-memory"]}
+            ]
+        },
+    )
+    registry.publish(
+        run.run_id,
+        "action_parsed",
+        phase="night",
+        actor="阿青",
+        action="werewolf_kill_vote",
+        payload={"choice": "阿白"},
+    )
+    registry.mark_completed(run.run_id, winner="狼人阵营")
+    override_live_registry(registry)
+
+    try:
+        response = client.get(f"/api/v1/games/runs/{run.run_id}/events")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert '"name": "阿青"' in response.text
+    assert "secret-role" not in response.text
+    assert "private-memory" not in response.text
+    assert "werewolf_kill_vote" not in response.text
+
+
+def test_god_view_events_require_session_and_keep_structured_roles() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+    )
+    registry.publish(
+        run.run_id,
+        "game_started",
+        payload={
+            "players": [
+                {"name": "阿青", "role": "secret-role", "observations": ["private-memory"]}
+            ]
+        },
+    )
+    registry.mark_completed(run.run_id, winner="狼人阵营")
+    override_live_registry(registry)
+
+    try:
+        unauthenticated = client.get(
+            f"/api/v1/games/runs/{run.run_id}/god-view/events"
+        )
+        app.dependency_overrides[games_routes.get_current_public_principal] = lambda: object()
+        authenticated = client.get(
+            f"/api/v1/games/runs/{run.run_id}/god-view/events"
+        )
+    finally:
+        clear_overrides()
+
+    assert unauthenticated.status_code == 401
+    assert authenticated.status_code == 200
+    assert '"role": "secret-role"' in authenticated.text
+    assert "private-memory" not in authenticated.text
+
+
 def test_game_run_events_honors_after_id_query() -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
@@ -3715,10 +3794,12 @@ def test_get_game_detail_returns_state_and_logs() -> None:
     assert payload["session_id"] == session_id
     assert payload["status"] == "complete"
     assert payload["state"]["players"][0]["name"] == "张三"
-    assert payload["logs"][0]["eliminate"]["lm_log"]["prompt"] == "请选择今晚击杀对象。"
+    assert payload["logs"] == []
+    assert "role" in payload["state"]["players"][0]
+    assert "observations" not in payload["state"]["players"][0]
     assert "summaries" not in payload["state"]["rounds"][0]
     assert "private_summaries" not in payload["state"]["rounds"][0]
-    assert "summaries" not in payload["logs"][0]
+    assert "请选择今晚击杀对象。" not in response.text
     assert "SENTINEL_WOLF_PRIVATE_PLAN" not in response.text
     assert (
         'werewolf_rule_checkpoint_failures_total{reason="invalid_structure"} 0' in _rule_metrics()
@@ -3762,7 +3843,8 @@ def test_get_game_playback_returns_complete_playback_events() -> None:
     override_replay_store()
 
     try:
-        response = client.get(f"/api/v1/games/{session_id}/playback")
+        app.dependency_overrides[games_routes.get_current_public_principal] = lambda: object()
+        response = client.get(f"/api/v1/games/{session_id}/god-view/playback")
     finally:
         clear_overrides()
 
@@ -3790,24 +3872,11 @@ def test_get_game_playback_returns_complete_playback_events() -> None:
         "model": "deepseek-chat",
     }
     assert "round_started" in event_types
-    assert "action_requested" in event_types
     assert "action_parsed" in event_types
     assert all(event.get("action") != "summarize" for event in events)
     assert "SENTINEL_WOLF_PRIVATE_PLAN" not in response.text
-    requested_event = next(
-        event
-        for event in events
-        if event["type"] == "action_requested"
-        and event["actor"] == "张三"
-        and event["action"] == "remove"
-    )
-    assert requested_event["payload"].get("options") == ["李四"]
-    assert "visible_text" not in requested_event["payload"]
-    assert any(
-        event["type"] == "action_requested"
-        and event["actor"] == "张三"
-        and event["action"] == "remove"
-        and event["payload"].get("options") == ["李四"]
+    assert not any(
+        event["type"] == "action_requested" and event["action"] == "remove"
         for event in events
     )
     assert any(
@@ -3834,9 +3903,8 @@ def test_get_game_playback_returns_complete_playback_events() -> None:
     )
     assert event_types[-1] == "game_completed"
     assert payload["events"][-1]["payload"] == {"winner": "好人阵营"}
-    assert [event["id"] for event in payload["events"]] == list(
-        range(1, len(payload["events"]) + 1)
-    )
+    event_ids = [event["id"] for event in payload["events"]]
+    assert event_ids == sorted(set(event_ids))
     assert all(event["run_id"] == f"playback_{session_id}" for event in payload["events"])
     serialized_events = json.dumps(payload["events"], ensure_ascii=False)
     assert "请选择今晚击杀对象。" not in serialized_events
@@ -3852,6 +3920,34 @@ def test_get_game_playback_returns_complete_playback_events() -> None:
     assert "private gamestate secret" not in serialized_events
     assert "secret player reasoning" not in serialized_events
     assert "李四" in serialized_events
+
+
+def test_public_playback_redacts_roles_and_private_night_actions() -> None:
+    session_id = "game_1200abcd"
+    state = sample_state(session_id, winner="好人阵营")
+    state["players"][0]["role"] = "secret-role"
+    logs = sample_logs()
+    logs[0]["eliminate"]["lm_log"]["raw_response"] = "private-wolf-plan"
+    store_game_session(session_id, state=state, logs=logs)
+    override_replay_store()
+
+    try:
+        god_view_response = client.get(
+            f"/api/v1/games/{session_id}/god-view/playback"
+        )
+        response = client.get(f"/api/v1/games/{session_id}/playback")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert god_view_response.status_code == 401
+    assert "secret-role" not in response.text
+    assert "private-wolf-plan" not in response.text
+    assert all(
+        event.get("action")
+        not in {"remove", "protect", "investigate", "witch_save", "witch_poison"}
+        for event in response.json()["events"]
+    )
 
 
 def test_get_game_playback_returns_persisted_events_and_saved_voices() -> None:
@@ -4144,7 +4240,7 @@ def test_get_game_playback_omits_saved_voices_without_persisted_live_events(
     assert payload["voices"] == []
 
 
-def test_get_game_playback_exposes_safe_wolf_votes_and_final_target() -> None:
+def test_get_game_god_view_playback_exposes_safe_wolf_votes_and_final_target() -> None:
     session_id = "game_1200abcd"
     state = sample_state(session_id, winner="好人阵营")
     state["rounds"][0]["attacked"] = "李四"
@@ -4209,19 +4305,17 @@ def test_get_game_playback_exposes_safe_wolf_votes_and_final_target() -> None:
     override_replay_store()
 
     try:
-        response = client.get(f"/api/v1/games/{session_id}/playback")
+        app.dependency_overrides[games_routes.get_current_public_principal] = lambda: object()
+        response = client.get(f"/api/v1/games/{session_id}/god-view/playback")
     finally:
         clear_overrides()
 
     assert response.status_code == 200
     events = response.json()["events"]
-    wolf_start = next(
-        event
+    assert not any(
+        event["type"] == "action_requested" and event["action"] == "remove"
         for event in events
-        if event["type"] == "action_requested" and event["action"] == "remove"
     )
-    assert wolf_start["actor"] is None
-    assert wolf_start["payload"] == {}
     wolf_vote = next(
         event
         for event in events
@@ -4243,7 +4337,7 @@ def test_get_game_playback_exposes_safe_wolf_votes_and_final_target() -> None:
     )
     assert final_target["actor"] is None
     assert final_target["payload"]["choice"] == "李四"
-    assert events.index(wolf_start) < events.index(wolf_vote) < events.index(final_target)
+    assert events.index(wolf_vote) < events.index(final_target)
     cue_actions = [event["action"] for event in events if event["type"] == "judge_cue"]
     assert cue_actions == [
         "werewolves_wake",
@@ -4261,13 +4355,11 @@ def test_get_game_playback_exposes_safe_wolf_votes_and_final_target() -> None:
         for event in events
         if event["type"] == "judge_cue" and event["action"] == "witch_death"
     )
-    witch_save_request = next(
-        event
-        for event in events
-        if event["type"] == "action_requested" and event["action"] == "witch_save"
-    )
     assert witch_death["payload"]["target"] == "李四"
-    assert events.index(witch_death) < events.index(witch_save_request)
+    assert not any(
+        event["type"] == "action_requested" and event["action"] == "witch_save"
+        for event in events
+    )
     sheriff_cue = next(
         event
         for event in events
@@ -4496,7 +4588,8 @@ def test_get_game_playback_returns_partial_end_without_resuming(
     assert payload["resumable"] is True
     assert payload["events"][-1]["type"] == "game_failed"
     assert payload["events"][-1]["payload"]["playback_partial"] is True
-    assert payload["events"][-1]["payload"]["error"] == "Maximum rounds exceeded"
+    assert payload["events"][-1]["payload"]["message"] == "对局异常中断。"
+    assert "Maximum rounds exceeded" not in response.text
     assert created_runs == []
 
 
@@ -4619,6 +4712,32 @@ def test_get_game_detail_returns_empty_logs_when_logs_are_empty() -> None:
 
     assert response.status_code == 200
     assert response.json()["logs"] == []
+
+
+def test_partial_game_detail_never_reveals_roles_or_raw_failure_text() -> None:
+    session_id = "game_0600abcd"
+    state = sample_state(
+        session_id,
+        winner="",
+        error="PRIVATE_PROVIDER_FAILURE role=狼人",
+    )
+    state["players"][0]["observations"] = ["PRIVATE_OBSERVATION"]
+    store_game_session(session_id, state=state, logs=sample_logs())
+    override_replay_store()
+
+    try:
+        response = client.get(f"/api/v1/games/{session_id}")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "partial"
+    assert payload["state"]["error_message"] == "对局异常中断。"
+    assert payload["logs"] == []
+    assert all("role" not in player for player in payload["state"]["players"])
+    assert "PRIVATE_PROVIDER_FAILURE" not in response.text
+    assert "PRIVATE_OBSERVATION" not in response.text
 
 
 def test_get_game_detail_returns_404_for_malformed_state() -> None:

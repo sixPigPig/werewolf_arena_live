@@ -465,6 +465,45 @@ describe("deriveGodViewState", () => {
     expect(state.replayMarks.map((mark) => mark.text)).toContain("平安夜");
   });
 
+  it("reads structured night death events instead of marking them peaceful", () => {
+    const events = [
+      event({
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "阿烈", role: "seer", model: "test-model" },
+            { name: "纪衡", role: "hunter", model: "test-model" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        action: "hunter_shot_resolved",
+        payload: {
+          night_deaths: [
+            { player: "纪衡", cause: "werewolf_attack", source: "狼人" },
+            { player: "阿烈", cause: "hunter_shot", source: "纪衡" },
+          ],
+          active_players: [],
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+
+    const state = deriveGodViewState(events, spectator, "结构化死亡测试");
+
+    expect(state.nightResolution).toMatchObject({
+      label: "昨夜死亡",
+      detail: "纪衡、阿烈 夜晚出局。",
+      tone: "danger",
+    });
+    expect(state.eventLines[0]?.text).toBe("2号 夜晚死亡，1号 夜晚死亡");
+    expect(state.eventLines[0]?.text).not.toBe("平安夜");
+  });
+
   it("derives sheriff rule state and neutral win pressure", () => {
     const events = [
       event({

@@ -2272,7 +2272,29 @@ a {
 }
 
 .game-admin-action-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-self: end;
+}
+
+.game-delete-dialog code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  border: 1px solid #eaecf0;
+  border-radius: 8px;
+  color: #344054;
+  background: #f9fafb;
+  font-size: 11px;
+}
+
+.game-delete-dialog .game-delete-warning {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #93370d;
+  background: #fffaeb;
 }
 
 .game-empty-state,

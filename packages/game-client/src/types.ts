@@ -666,6 +666,9 @@ export type CreateGameRunRequest = {
 
 export type LiveGameEvent = {
   id: number;
+  source_event_id?: number;
+  audience?: "player_public" | "spectator_god_view";
+  projection_version?: number;
   type: string;
   run_id: string;
   session_id: string;

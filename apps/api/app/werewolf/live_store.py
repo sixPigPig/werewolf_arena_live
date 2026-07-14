@@ -11,8 +11,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.live import (
+    GodViewLiveEventRecord,
     LiveEventRecord,
     LiveRunRecord,
+    PublicLiveEventRecord,
     VoiceMaterializationJobRecord,
 )
 from app.werewolf.live import (
@@ -21,6 +23,7 @@ from app.werewolf.live import (
     GameRunCanceled,
     LiveEvent,
     LiveGameRun,
+    ProjectedLiveEvent,
     RunActivationExpectedEvent,
     RunActivationExpectedState,
     RunLeaseState,
@@ -36,6 +39,7 @@ from app.werewolf.live import (
     validate_prepared_run,
     validate_rule_set_revision_metadata,
 )
+from app.werewolf.privacy_projection import ProjectionAudience, project_live_event
 from app.werewolf.voice import voice_job_candidate
 
 
@@ -916,7 +920,11 @@ class DatabaseLiveStore:
         if guard.rowcount != 1:
             self.db.rollback()
             raise RunLeaseUnavailable(f"Run {event.run_id} event was rejected by its fencing token")
-        self._stage_event_with_voice_job(event)
+        try:
+            self._stage_event_with_voice_job(event)
+        except Exception:
+            self.db.rollback()
+            raise
         self._commit()
 
     def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]:
@@ -940,7 +948,12 @@ class DatabaseLiveStore:
             for row in rows
         ]
 
-    def playback_events_for_session(self, session_id: str) -> list[dict[str, Any]]:
+    def playback_events_for_session(
+        self,
+        session_id: str,
+        *,
+        audience: ProjectionAudience = "player_public",
+    ) -> list[dict[str, Any]]:
         eventful_run = (
             self.db.query(LiveEventRecord.run_id)
             .join(LiveRunRecord, LiveRunRecord.run_id == LiveEventRecord.run_id)
@@ -954,12 +967,45 @@ class DatabaseLiveStore:
 
         eventful_run_id = eventful_run[0]
         playback_run_id = f"playback_{session_id}"
+        projected_events = self.projected_events_after(
+            eventful_run_id,
+            audience=audience,
+        )
         return [
             {
                 **event.to_dict(),
                 "run_id": playback_run_id,
             }
-            for event in self.events_after(eventful_run_id)
+            for event in projected_events
+        ]
+
+    def projected_events_after(
+        self,
+        run_id: str,
+        *,
+        audience: ProjectionAudience,
+        after_id: int | None = None,
+    ) -> list[ProjectedLiveEvent]:
+        record_type = (
+            PublicLiveEventRecord
+            if audience == "player_public"
+            else GodViewLiveEventRecord
+        )
+        query = self.db.query(record_type).filter(record_type.run_id == run_id)
+        if after_id is not None:
+            query = query.filter(record_type.event_id > after_id)
+        rows = query.order_by(record_type.event_id.asc()).all()
+        if rows:
+            return [
+                _projected_event_from_record(row, audience=audience)
+                for row in rows
+            ]
+
+        # Safe compatibility path for runs created before projection tables existed.
+        return [
+            projected
+            for event in self.events_after(run_id, after_id=after_id)
+            if (projected := project_live_event(event, audience)) is not None
         ]
 
     def _commit(self) -> None:
@@ -972,16 +1018,25 @@ class DatabaseLiveStore:
     def _stage_event_with_voice_job(self, event: LiveEvent) -> LiveEventRecord:
         event_record = _event_record(event)
         self.db.add(event_record)
-        speaker_kind = voice_job_candidate(event)
+        self.db.flush([event_record])
+
+        public_event = project_live_event(event, "player_public")
+        god_view_event = project_live_event(event, "spectator_god_view")
+        if public_event is not None:
+            self.db.add(_public_projection_record(public_event))
+        if god_view_event is not None:
+            self.db.add(_god_view_projection_record(god_view_event))
+
+        speaker_kind = voice_job_candidate(public_event) if public_event is not None else None
         if speaker_kind is None:
             return event_record
 
-        self.db.flush([event_record])
         values = {
             "run_id": event.run_id,
             "source_event_id": event.id,
             "speaker_kind": speaker_kind,
             "session_id": event.session_id,
+            "audience": "player_public",
             "status": "pending",
             "attempt_count": 0,
             "not_before": datetime.now(tz=UTC),
@@ -1248,4 +1303,51 @@ def _event_record(event: LiveEvent) -> LiveEventRecord:
         action=event.action,
         payload=event.payload,
         created_at=parse_live_datetime(event.created_at) or datetime.now(tz=UTC),
+    )
+
+
+def _public_projection_record(event: ProjectedLiveEvent) -> PublicLiveEventRecord:
+    return PublicLiveEventRecord(**_projection_record_values(event))
+
+
+def _god_view_projection_record(event: ProjectedLiveEvent) -> GodViewLiveEventRecord:
+    return GodViewLiveEventRecord(**_projection_record_values(event))
+
+
+def _projection_record_values(event: ProjectedLiveEvent) -> dict[str, Any]:
+    return {
+        "run_id": event.run_id,
+        "event_id": event.id,
+        "source_event_id": event.source_event_id,
+        "session_id": event.session_id,
+        "type": event.type,
+        "round": event.round,
+        "phase": event.phase,
+        "actor": event.actor,
+        "action": event.action,
+        "payload": event.payload,
+        "projection_version": event.projection_version,
+        "created_at": parse_live_datetime(event.created_at) or datetime.now(tz=UTC),
+    }
+
+
+def _projected_event_from_record(
+    record: PublicLiveEventRecord | GodViewLiveEventRecord,
+    *,
+    audience: ProjectionAudience,
+) -> ProjectedLiveEvent:
+    return ProjectedLiveEvent(
+        id=record.event_id,
+        source_event_id=record.source_event_id,
+        type=record.type,
+        run_id=record.run_id,
+        session_id=record.session_id,
+        created_at=format_live_datetime(record.created_at),
+        audience=audience,
+        projection_version=record.projection_version,
+        round=record.round,
+        phase=record.phase,
+        actor=record.actor,
+        action=record.action,
+        payload=copy.deepcopy(record.payload),
     )

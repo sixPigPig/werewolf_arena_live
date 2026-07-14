@@ -1095,7 +1095,7 @@ function nightResolutionText(
   const eliminated = stringField(payload, "eliminated");
   const poisoned = stringField(payload, "poisoned");
   const savedByWitch = stringField(payload, "saved_by_witch");
-  const nightDeaths = stringArrayField(payload, "night_deaths");
+  const nightDeaths = deathPlayerArrayField(payload, "night_deaths");
 
   const deaths: string[] = [];
   if (eliminated) {
@@ -1319,6 +1319,15 @@ function buildNightResolution(
   const protectedPlayer = stringField(payload, "protected");
   const eliminated = stringField(payload, "eliminated");
   const poisoned = stringField(payload, "poisoned");
+  const nightDeaths = deathPlayerArrayField(payload, "night_deaths");
+
+  if (nightDeaths.length > 0) {
+    return {
+      label: "昨夜死亡",
+      detail: `${nightDeaths.join("、")} 夜晚出局。`,
+      tone: "danger",
+    };
+  }
 
   if (eliminated) {
     return {
@@ -1964,6 +1973,24 @@ function stringArrayField(payload: Record<string, unknown>, field: string) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function deathPlayerArrayField(
+  payload: Record<string, unknown>,
+  field: string,
+) {
+  const value = payload[field];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+      return isRecord(item) && typeof item.player === "string" ? item.player : "";
+    })
+    .filter(Boolean);
 }
 
 function timeLabel(event: LiveGameEvent) {

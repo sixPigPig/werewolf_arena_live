@@ -27,6 +27,8 @@ def test_fixed_roles_have_expected_permission_boundaries() -> None:
     assert AdminPermission.RUNS_CONTROL in operator
     assert AdminPermission.RUNS_DEBUG_READ in operator
     assert AdminPermission.RUNS_DEBUG_READ not in viewer
+    assert AdminPermission.GAMES_DELETE not in operator
+    assert AdminPermission.GAMES_DELETE in super_admin
     assert AdminPermission.PLAYERS_WRITE not in operator
     assert AdminPermission.RULES_READ in operator
     assert AdminPermission.RULES_WRITE not in operator

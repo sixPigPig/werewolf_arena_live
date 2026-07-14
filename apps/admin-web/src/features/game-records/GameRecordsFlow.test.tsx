@@ -99,6 +99,9 @@ describe("admin game record flow", () => {
     expect(
       screen.getByRole("link", { name: "查看对局 game_1234abcd" }),
     ).toHaveAttribute("href", "/operations/games/game_1234abcd");
+    expect(
+      screen.queryByRole("button", { name: "删除对局 game_1234abcd" }),
+    ).not.toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText("对局状态"), "partial");
     await waitFor(() =>
@@ -130,6 +133,61 @@ describe("admin game record flow", () => {
         String(input).includes("q=run_1234"),
       ),
     ).toBe(true);
+  });
+
+  it("lets a privileged admin confirm deletion and refreshes the list", async () => {
+    let deleted = false;
+    let listCalls = 0;
+    let deleteCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["games.read", "games.delete"]));
+      }
+      if (url.includes("/api/v1/admin/games?")) {
+        listCalls += 1;
+        return jsonResponse({
+          items: deleted ? [] : [contractGameItem],
+          pagination: {
+            page: 1,
+            page_size: 20,
+            total: deleted ? 0 : 1,
+            pages: deleted ? 0 : 1,
+          },
+        });
+      }
+      if (url.endsWith("/api/v1/admin/games/game_1234abcd")) {
+        deleteCalls += 1;
+        expect(init?.method).toBe("DELETE");
+        expect(new Headers(init?.headers).get("X-CSRF-Token")).toBe(
+          "csrf-games",
+        );
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/operations/games");
+
+    const opener = await screen.findByRole("button", {
+      name: "删除对局 game_1234abcd",
+    });
+    await user.click(opener);
+    const dialog = screen.getByRole("alertdialog", { name: "删除对局" });
+    expect(dialog).toHaveAccessibleDescription();
+    expect(within(dialog).getByText("game_1234abcd")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+    expect(deleteCalls).toBe(0);
+
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "还没有对局记录" }),
+    ).toBeInTheDocument();
+    expect(deleteCalls).toBe(1);
+    expect(listCalls).toBeGreaterThanOrEqual(2);
   });
 
   it("shows filter-aware empty state and blocks invalid date ranges locally", async () => {

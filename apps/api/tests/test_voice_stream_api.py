@@ -738,14 +738,6 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
         "subtitle_timing",
         "audio_chunk",
         "voice_end",
-        "voice_start",
-        "subtitle_timing",
-        "audio_chunk",
-        "voice_end",
-        "voice_start",
-        "subtitle_timing",
-        "audio_chunk",
-        "voice_end",
     ]
     start, subtitle, chunk, _end = websocket.messages[:4]
     assert start["speaker_kind"] == "judge"
@@ -761,30 +753,17 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
         ],
     }
     assert chunk["data"] == "c3RhdGljLW5pZ2h0"
-    wolf_start, wolf_subtitle, wolf_chunk, _wolf_end = websocket.messages[4:8]
-    assert wolf_start["speaker_kind"] == "judge"
-    assert wolf_subtitle == {
+    end_start, end_subtitle, end_chunk, _end = websocket.messages[4:8]
+    assert end_start["speaker_kind"] == "judge"
+    assert end_subtitle == {
         "type": "subtitle_timing",
-        "utterance_id": wolf_start["utterance_id"],
+        "utterance_id": end_start["utterance_id"],
         "cues": [
-            {"text": "狼人请选择今晚袭击的目标。", "start_ms": 0, "end_ms": 1200}
+            {"text": "游戏结束，", "start_ms": 0, "end_ms": 400},
+            {"text": "好人阵营获胜。", "start_ms": 400, "end_ms": 1000},
         ],
     }
-    assert wolf_chunk["data"] == "c3RhdGljLXdvbHZlcw=="
-    witch_start, witch_subtitle, witch_chunk, _witch_end = websocket.messages[8:12]
-    assert witch_start["speaker_kind"] == "judge"
-    assert witch_subtitle == {
-        "type": "subtitle_timing",
-        "utterance_id": witch_start["utterance_id"],
-        "cues": [
-            {
-                "text": "今晚被狼人袭击的玩家是2号玩家。",
-                "start_ms": 0,
-                "end_ms": 1400,
-            }
-        ],
-    }
-    assert witch_chunk["data"] == "c3RhdGljLXdpdGNo"
+    assert end_chunk["data"] == "c3RhdGljLWVuZA=="
 
 
 def test_voice_stream_service_plays_static_sheriff_direction_prompt(tmp_path) -> None:
@@ -2045,6 +2024,128 @@ def test_voice_stream_service_groups_immediate_deltas_by_request_id() -> None:
     assert websocket.messages[1]["chunk_index"] == 0
     assert websocket.messages[1]["audio_format"] == "pcm"
     assert websocket.messages[1]["sample_rate"] == 24000
+
+
+@pytest.mark.parametrize("with_response_received", [False, True])
+def test_voice_stream_service_does_not_repeat_final_speech_after_deltas(
+    with_response_received: bool,
+) -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-no-repeat",
+                "visible_text": "我是阿青，",
+                "is_public": True,
+            },
+        )
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-no-repeat",
+                "visible_text": "我继续发言。",
+                "is_public": True,
+            },
+        )
+        if with_response_received:
+            registry.publish(
+                run.run_id,
+                "model_response_received",
+                actor="阿青",
+                action="debate",
+                payload={
+                    "request_id": "req-no-repeat",
+                    "message": "模型返回已接收，正在解析行动",
+                },
+            )
+        registry.publish(
+            run.run_id,
+            "action_parsed",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-no-repeat",
+                "visible_result": {"say": "我是阿青，我继续发言。"},
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    player_calls = [
+        call
+        for instance in RecordingTtsClient.instances
+        for call in instance.calls
+        if call["speaker"] == "player"
+    ]
+    assert player_calls == [
+        {
+            "speaker": "player",
+            "text_chunks": ["我是阿青，", "我继续发言。"],
+        }
+    ]
+
+
+def test_voice_stream_service_uses_final_speech_when_no_deltas_were_streamed() -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "action_parsed",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-final-only",
+                "visible_result": {"say": "这是最终完整发言。"},
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    player_calls = [
+        call
+        for instance in RecordingTtsClient.instances
+        for call in instance.calls
+        if call["speaker"] == "player"
+    ]
+    assert player_calls == [
+        {
+            "speaker": "player",
+            "text_chunks": ["这是最终完整发言。"],
+        }
+    ]
 
 
 def test_voice_stream_service_groups_delayed_deltas_by_request_id() -> None:

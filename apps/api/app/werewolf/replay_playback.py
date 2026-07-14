@@ -5,6 +5,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.werewolf.live import LiveEvent
+from app.werewolf.privacy_projection import ProjectionAudience, project_live_event
 from app.werewolf.checkpoint import (
     sheriff_badge_resolution_from_dict,
     sheriff_election_resolution_from_dict,
@@ -95,12 +97,36 @@ def private_round_memory_event_ids(events: list[dict[str, Any]]) -> set[int]:
 
 
 def filter_public_playback_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop legacy private round-memory events before public playback serialization."""
-    return [
-        event
-        for event in events
-        if event.get("action") != PRIVATE_ROUND_MEMORY_ACTION
-    ]
+    """Apply the live player-public contract to persisted and reconstructed replay events."""
+    return project_playback_events(events, audience="player_public")
+
+
+def project_playback_events(
+    events: list[dict[str, Any]],
+    *,
+    audience: ProjectionAudience,
+) -> list[dict[str, Any]]:
+    projected_events: list[dict[str, Any]] = []
+    for event in events:
+        try:
+            canonical = LiveEvent(
+                id=int(event["id"]),
+                type=str(event["type"]),
+                run_id=str(event["run_id"]),
+                session_id=str(event["session_id"]),
+                created_at=str(event["created_at"]),
+                round=event.get("round") if isinstance(event.get("round"), int) else None,
+                phase=event.get("phase") if isinstance(event.get("phase"), str) else None,
+                actor=event.get("actor") if isinstance(event.get("actor"), str) else None,
+                action=event.get("action") if isinstance(event.get("action"), str) else None,
+                payload=event.get("payload") if isinstance(event.get("payload"), dict) else {},
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        projected = project_live_event(canonical, audience)
+        if projected is not None:
+            projected_events.append(projected.to_dict())
+    return projected_events
 
 
 def filter_public_playback_voices(
@@ -305,24 +331,129 @@ def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_public_game_session(session: dict[str, Any]) -> dict[str, Any]:
-    """Return the stored game payload without private round-memory fields."""
-    public_session = copy.deepcopy(session)
-    state = public_session.get("state")
-    if isinstance(state, dict):
-        rounds = state.get("rounds")
-        if isinstance(rounds, list):
-            for round_state in rounds:
-                if not isinstance(round_state, dict):
-                    continue
-                round_state.pop("summaries", None)
-                round_state.pop("private_summaries", None)
+    """Return a player-public game DTO without canonical replay logs or private state."""
+    raw_state = _dict_or_empty(session.get("state"))
+    status = str(session.get("status") or "partial")
+    terminal_reveal = (
+        status == "complete"
+        and not bool(session.get("resumable"))
+        and bool(raw_state.get("winner"))
+    )
+    players = [
+        _public_game_player(player, reveal_role=terminal_reveal)
+        for player in _list_or_empty(raw_state.get("players"))
+        if isinstance(player, dict)
+    ]
+    rounds = [
+        _public_game_round(round_state)
+        for round_state in _valid_rounds(raw_state.get("rounds"))
+    ]
+    state = {
+        "session_id": str(raw_state.get("session_id") or session.get("session_id") or ""),
+        "players": players,
+        "rounds": rounds,
+        "winner": str(raw_state.get("winner") or "") if terminal_reveal else "",
+        "error_message": (
+            "对局异常中断。" if raw_state.get("error_message") and not terminal_reveal else ""
+        ),
+        "public_facts": copy.deepcopy(raw_state.get("public_facts") or []),
+        "rule_set": copy.deepcopy(raw_state.get("rule_set")),
+        "sheriff": raw_state.get("sheriff"),
+        "sheriff_badge_lost": bool(raw_state.get("sheriff_badge_lost")),
+    }
+    return {
+        "session_id": str(session.get("session_id") or state["session_id"]),
+        "status": status,
+        "resumable": bool(session.get("resumable")),
+        "state": state,
+        "logs": [],
+    }
 
-    logs = public_session.get("logs")
-    if isinstance(logs, list):
-        for round_log in logs:
-            if isinstance(round_log, dict):
-                round_log.pop("summaries", None)
-    return public_session
+
+def _public_game_player(player: dict[str, Any], *, reveal_role: bool) -> dict[str, Any]:
+    allowed = {
+        "appearance_id",
+        "avatar_image_url",
+        "avatar_prompt",
+        "can_vote",
+        "is_sheriff",
+        "model",
+        "name",
+        "personality",
+        "personality_id",
+        "profile_id",
+        "revealed_role",
+        "tags",
+    }
+    if reveal_role:
+        allowed.add("role")
+    return {
+        key: copy.deepcopy(value)
+        for key, value in player.items()
+        if key in allowed
+    }
+
+
+def _public_game_round(round_state: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "active_players",
+        "bids",
+        "day_deaths",
+        "day_ended_by_self_explosion",
+        "debate",
+        "eliminated",
+        "exiled",
+        "hunter_shot",
+        "idiot_revealed",
+        "interruption",
+        "night_deaths",
+        "number",
+        "players",
+        "public_facts",
+        "public_outcome_events",
+        "public_outcome_next_sequence",
+        "public_summary",
+        "sheriff",
+        "sheriff_badge_lost",
+        "sheriff_badge_lost_reason",
+        "sheriff_badge_resolution",
+        "sheriff_badge_target",
+        "sheriff_candidates",
+        "sheriff_elected",
+        "sheriff_election_pending",
+        "sheriff_election_resolution",
+        "sheriff_final_candidates",
+        "sheriff_pk_candidates",
+        "sheriff_pk_speeches",
+        "sheriff_pre_election_bomb_count",
+        "sheriff_runoff_votes",
+        "sheriff_speech_direction",
+        "sheriff_speech_order",
+        "sheriff_speeches",
+        "sheriff_voters",
+        "sheriff_votes",
+        "sheriff_withdrawn",
+        "speech_order",
+        "speech_order_choice",
+        "success",
+        "vote_weights",
+        "votes",
+        "werewolf_self_exploded",
+    }
+    projected = {
+        key: copy.deepcopy(value)
+        for key, value in round_state.items()
+        if key in allowed
+    }
+    for field_name in ("night_deaths", "day_deaths"):
+        deaths = projected.get(field_name)
+        if isinstance(deaths, list):
+            projected[field_name] = [
+                {"player": death.get("player")}
+                for death in deaths
+                if isinstance(death, dict) and isinstance(death.get("player"), str)
+            ]
+    return projected
 
 
 def _publish_action_events(

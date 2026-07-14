@@ -610,6 +610,37 @@ describe("deriveMobileLiveFocusPresentation", () => {
     ]).presentation;
     expect(emptyNightDeaths.kind).toBe("night-result");
     expect(emptyNightDeaths.title).toBe("平安夜");
+
+    const structuredDeaths = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "night",
+        payload: {
+          night_deaths: [
+            {
+              player: "8号 猎人",
+              cause: "werewolf_attack",
+              source: "狼人",
+            },
+            {
+              player: "3号 平民A",
+              cause: "hunter_shot",
+              source: "8号 猎人",
+            },
+          ],
+          active_players: ["1号 狼人A", "2号 女巫"],
+        },
+      }),
+    ]).presentation;
+    expect(structuredDeaths).toMatchObject({
+      kind: "night-result",
+      tone: "danger",
+      title: "8号 夜晚死亡",
+      detail: "3号 夜晚死亡",
+    });
   });
 
   it("describes skill triggers and terminal results", () => {

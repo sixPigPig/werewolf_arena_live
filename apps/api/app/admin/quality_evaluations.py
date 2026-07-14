@@ -159,7 +159,7 @@ def build_admin_quality_overview(
             select(func.count())
             .select_from(GameSessionRecord)
             .where(
-                GameSessionRecord.status == "complete",
+                GameSessionRecord.status.in_(("complete", "partial")),
                 GameSessionRecord.updated_at >= cutoff,
                 ~exists(
                     select(GameQualityEvaluationRecord.id).where(

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -45,7 +45,15 @@ from app.api.schemas.admin_games import (
 )
 from app.db.session import get_db
 from app.models.game_session import GameReplayPayload, GameSessionRecord
-from app.models.live import LiveRunRecord
+from app.models.live import (
+    GodViewLiveEventRecord,
+    LiveEventRecord,
+    LiveRunRecord,
+    PublicLiveEventRecord,
+    VoiceAudioChunkRecord,
+    VoiceMaterializationJobRecord,
+    VoiceUtteranceRecord,
+)
 from app.models.quality_evaluation import GameQualityEvaluationRecord
 from app.werewolf.quality_evaluation import DEFAULT_EVALUATOR_VERSION
 from app.werewolf.quality_store import (
@@ -148,6 +156,111 @@ def get_game(
         raise _not_found()
     _set_private_headers(request, response)
     return _detail_response(detail, quality_record=quality_record)
+
+
+@router.delete("/games/{session_id}", status_code=204)
+def delete_game(
+    session_id: Annotated[str, Path(pattern=SESSION_ID_RE)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
+) -> None:
+    _require_game_delete_permission(principal)
+    try:
+        game = db.scalar(
+            select(GameSessionRecord)
+            .where(GameSessionRecord.session_id == session_id)
+            .with_for_update()
+        )
+        if game is None:
+            raise _not_found()
+
+        active_run = db.execute(
+            select(LiveRunRecord.run_id, LiveRunRecord.status)
+            .where(
+                LiveRunRecord.session_id == session_id,
+                LiveRunRecord.status.in_(("queued", "running")),
+            )
+            .order_by(LiveRunRecord.created_at.desc(), LiveRunRecord.run_id.desc())
+            .limit(1)
+        ).one_or_none()
+        if active_run is not None:
+            record_audit_event(
+                db,
+                request=request,
+                actor_user_id=principal.user.id,
+                action="admin.game.delete",
+                resource_type="game_session",
+                resource_id=session_id,
+                result="rejected",
+                reason="active_run",
+                before={"run_id": active_run.run_id, "run_status": active_run.status},
+            )
+            db.commit()
+            raise _game_delete_conflict()
+
+        utterance_ids = select(VoiceUtteranceRecord.utterance_id).where(
+            VoiceUtteranceRecord.session_id == session_id
+        )
+        db.execute(
+            delete(VoiceAudioChunkRecord).where(
+                VoiceAudioChunkRecord.utterance_id.in_(utterance_ids)
+            )
+        )
+        db.execute(
+            delete(VoiceMaterializationJobRecord).where(
+                VoiceMaterializationJobRecord.session_id == session_id
+            )
+        )
+        db.execute(
+            delete(VoiceUtteranceRecord).where(
+                VoiceUtteranceRecord.session_id == session_id
+            )
+        )
+        db.execute(
+            delete(GameQualityEvaluationRecord).where(
+                GameQualityEvaluationRecord.session_id == session_id
+            )
+        )
+        db.execute(
+            delete(PublicLiveEventRecord).where(
+                PublicLiveEventRecord.session_id == session_id
+            )
+        )
+        db.execute(
+            delete(GodViewLiveEventRecord).where(
+                GodViewLiveEventRecord.session_id == session_id
+            )
+        )
+        db.execute(
+            delete(LiveEventRecord).where(LiveEventRecord.session_id == session_id)
+        )
+        db.execute(
+            delete(LiveRunRecord).where(LiveRunRecord.session_id == session_id)
+        )
+        db.execute(
+            delete(GameReplayPayload).where(GameReplayPayload.session_id == session_id)
+        )
+        db.delete(game)
+        record_audit_event(
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.game.delete",
+            resource_type="game_session",
+            resource_id=session_id,
+            result="success",
+            before={"status": game.status, "resumable": game.resumable},
+        )
+        db.commit()
+    except AdminAPIProblem:
+        db.rollback()
+        raise
+    except RecoverableDatabaseError as exc:
+        db.rollback()
+        raise _database_unavailable() from exc
+    _set_private_headers(request, response)
 
 
 @router.get(
@@ -455,6 +568,16 @@ def _require_quality_debug_permission(principal: AdminPrincipal) -> None:
             code="admin_permission_denied",
             title="Permission denied",
             detail="The 'games.debug.read' permission is required.",
+        )
+
+
+def _require_game_delete_permission(principal: AdminPrincipal) -> None:
+    if AdminPermission.GAMES_DELETE not in principal.permissions:
+        raise AdminAPIProblem(
+            status_code=403,
+            code="admin_permission_denied",
+            title="Permission denied",
+            detail="The 'games.delete' permission is required.",
         )
 
 
@@ -800,6 +923,15 @@ def _quality_retry_conflict(detail: str) -> AdminAPIProblem:
         code="admin_quality_evaluation_retry_conflict",
         title="Quality evaluation cannot be retried",
         detail=detail,
+    )
+
+
+def _game_delete_conflict() -> AdminAPIProblem:
+    return AdminAPIProblem(
+        status_code=409,
+        code="admin_game_delete_active_run",
+        title="Game cannot be deleted",
+        detail="A queued or running live run must be stopped before deleting this game.",
     )
 
 

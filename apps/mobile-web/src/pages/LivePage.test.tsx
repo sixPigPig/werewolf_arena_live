@@ -362,7 +362,10 @@ describe("LivePage", () => {
       screen.getByRole("article", { name: "4号 木子 女巫 存活" }),
     ).toBeVisible();
     expect(gameClientMocks.getGameRun).toHaveBeenCalledWith("run-1");
-    expect(gameClientMocks.useGameRunEvents).toHaveBeenCalledWith("run-1");
+    expect(gameClientMocks.useGameRunEvents).toHaveBeenCalledWith(
+      "run-1",
+      "spectator_god_view",
+    );
   });
 
   it("starts live theater from game_started so startup events do not delay player entry", async () => {

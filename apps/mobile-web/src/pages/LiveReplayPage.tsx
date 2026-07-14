@@ -33,7 +33,7 @@ export function LiveReplayPage() {
   const queryClient = useQueryClient();
   const playbackQuery = useQuery({
     queryKey: ["game-playback", gameId],
-    queryFn: () => getGamePlayback(gameId ?? ""),
+    queryFn: () => getGamePlayback(gameId ?? "", "spectator_god_view"),
     enabled: Boolean(gameId),
   });
   const playback = playbackQuery.data;

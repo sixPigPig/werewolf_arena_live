@@ -189,7 +189,10 @@ describe("LiveReplayPage", () => {
     expect(
       within(stage).queryByText("model_response_delta"),
     ).not.toBeInTheDocument();
-    expect(gameClientMocks.getGamePlayback).toHaveBeenCalledWith("session-1");
+    expect(gameClientMocks.getGamePlayback).toHaveBeenCalledWith(
+      "session-1",
+      "spectator_god_view",
+    );
   });
 
   it("hides future speaker delta while playback is paused", async () => {

@@ -12,10 +12,12 @@ class MockEventSource {
   onmessage: ((event: MessageEvent) => void) | null = null;
   listeners = new Map<string, (event: MessageEvent) => void>();
   url: string;
+  withCredentials = false;
   closed = false;
 
-  constructor(url: string) {
+  constructor(url: string, options?: EventSourceInit) {
     this.url = url;
+    this.withCredentials = options?.withCredentials ?? false;
     MockEventSource.instances.push(this);
   }
 
@@ -82,6 +84,20 @@ describe("useGameRunEvents", () => {
     await waitFor(() => expect(result.current.events).toHaveLength(1));
     expect(result.current.connectionState).toBe("open");
     expect(source.url).toBe("/api/v1/games/runs/run_1234abcd/events");
+    expect(source.withCredentials).toBe(true);
+  });
+
+  it("uses the authenticated God View channel only when requested", () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    renderHook(() =>
+      useGameRunEvents("run_1234abcd", "spectator_god_view"),
+    );
+
+    expect(MockEventSource.instances[0]?.url).toBe(
+      "/api/v1/games/runs/run_1234abcd/god-view/events",
+    );
+    expect(MockEventSource.instances[0]?.withCredentials).toBe(true);
   });
 
   it("reports an error when EventSource is unavailable", async () => {

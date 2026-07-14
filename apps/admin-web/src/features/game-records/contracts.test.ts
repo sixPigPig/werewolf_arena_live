@@ -1,4 +1,5 @@
 import {
+  deleteAdminGame,
   getAdminGame,
   getAdminGameDebug,
   getAdminGameQualityIssues,
@@ -354,6 +355,24 @@ describe("admin game records contract", () => {
     expect(options.method).toBe("POST");
     expect(new Headers(options.headers).get("X-CSRF-Token")).toBe(
       "csrf-quality",
+    );
+  });
+
+  it("uses the encoded game endpoint and CSRF token for deletion", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await deleteAdminGame("game/unsafe", "csrf-delete");
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "/api/v1/admin/games/game%2Funsafe",
+    );
+    const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(options.method).toBe("DELETE");
+    expect(new Headers(options.headers).get("X-CSRF-Token")).toBe(
+      "csrf-delete",
     );
   });
 

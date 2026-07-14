@@ -755,7 +755,7 @@ function nightResultPresentation(
   const eliminated = stringField(payload, "eliminated");
   const poisoned = stringField(payload, "poisoned");
   const savedByWitch = stringField(payload, "saved_by_witch");
-  const nightDeaths = stringArrayField(payload, "night_deaths");
+  const nightDeaths = deathPlayerArrayField(payload, "night_deaths");
 
   const deaths: string[] = [];
   if (eliminated) {
@@ -1296,6 +1296,24 @@ function stringArrayField(
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function deathPlayerArrayField(
+  payload: Record<string, unknown>,
+  field: string,
+): string[] {
+  const value = payload[field];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+      return isRecord(item) && typeof item.player === "string" ? item.player : "";
+    })
+    .filter(Boolean);
 }
 
 function recordField(

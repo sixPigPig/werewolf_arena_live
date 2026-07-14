@@ -19,8 +19,10 @@ from sqlalchemy.pool import StaticPool
 from app.api.routes.games import SessionLiveStore
 from app.db.base import Base
 from app.models.live import (
+    GodViewLiveEventRecord,
     LiveEventRecord,
     LiveRunRecord,
+    PublicLiveEventRecord,
     VoiceMaterializationJobRecord,
 )
 from app.werewolf.live import (
@@ -3221,6 +3223,84 @@ def test_live_store_events_after_filters_by_event_id(db_session: Session) -> Non
     store.append_event(second, worker_id=run.worker_id, fence_token=run.fence_token)
 
     assert [event.id for event in store.events_after(run.run_id, after_id=first.id)] == [second.id]
+
+
+def test_live_store_persists_public_and_god_view_projections(db_session: Session) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    started = registry.publish(
+        run.run_id,
+        "game_started",
+        payload={
+            "players": [
+                {
+                    "name": "阿青",
+                    "role": "狼人",
+                    "observations": ["private"],
+                }
+            ]
+        },
+    )
+    wolf_vote = registry.publish(
+        run.run_id,
+        "action_parsed",
+        phase="night",
+        actor="阿青",
+        action="werewolf_kill_vote",
+        payload={"choice": "阿白"},
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    store.append_event(started, worker_id=run.worker_id, fence_token=run.fence_token)
+    store.append_event(wolf_vote, worker_id=run.worker_id, fence_token=run.fence_token)
+
+    public_started = db_session.get(PublicLiveEventRecord, (run.run_id, started.id))
+    god_started = db_session.get(GodViewLiveEventRecord, (run.run_id, started.id))
+    assert public_started is not None
+    assert god_started is not None
+    assert public_started.payload["players"] == [{"name": "阿青"}]
+    assert god_started.payload["players"] == [{"name": "阿青", "role": "狼人"}]
+    assert db_session.get(PublicLiveEventRecord, (run.run_id, wolf_vote.id)) is None
+    assert db_session.get(GodViewLiveEventRecord, (run.run_id, wolf_vote.id)) is not None
+
+
+def test_projection_failure_rolls_back_canonical_event_and_store_recovers(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.werewolf import live_store as live_store_module
+
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    event = registry.publish(run.run_id, "phase_started", phase="day")
+    store = DatabaseLiveStore(db_session)
+    store.save_run(run)
+    original_projector = live_store_module.project_live_event
+
+    def fail_projection(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("projection failed")
+
+    monkeypatch.setattr(live_store_module, "project_live_event", fail_projection)
+    with pytest.raises(RuntimeError, match="projection failed"):
+        store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
+    assert db_session.get(LiveEventRecord, (run.run_id, event.id)) is None
+
+    monkeypatch.setattr(live_store_module, "project_live_event", original_projector)
+    store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
+    assert db_session.get(LiveEventRecord, (run.run_id, event.id)) is not None
 
 
 def test_live_store_returns_latest_eventful_playback_events_for_session(

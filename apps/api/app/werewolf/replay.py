@@ -158,7 +158,7 @@ class DatabaseReplayStore:
         except Exception:
             self.db.rollback()
             raise
-        if status == "complete" and settings.quality_evaluation_enabled:
+        if status in {"complete", "partial"} and settings.quality_evaluation_enabled:
             try:
                 enqueue_quality_evaluation(
                     self.db,

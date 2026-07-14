@@ -261,6 +261,87 @@ class LiveEvent:
         }
 
 
+LiveEventAudience = Literal[
+    "internal",
+    "actor_private",
+    "team_private",
+    "player_public",
+    "spectator_god_view",
+    "terminal_reveal",
+]
+
+
+@dataclass(frozen=True, init=False)
+class ProjectedLiveEvent:
+    """An audience-scoped event that is safe to serialize outside the engine."""
+
+    id: int
+    source_event_id: int
+    type: str
+    run_id: str
+    session_id: str
+    created_at: str
+    audience: LiveEventAudience
+    projection_version: int
+    round: int | None = None
+    phase: str | None = None
+    actor: str | None = None
+    action: str | None = None
+    _payload: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def __init__(
+        self,
+        *,
+        id: int,
+        source_event_id: int,
+        type: str,
+        run_id: str,
+        session_id: str,
+        created_at: str,
+        audience: LiveEventAudience,
+        projection_version: int,
+        round: int | None = None,
+        phase: str | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        object.__setattr__(self, "id", id)
+        object.__setattr__(self, "source_event_id", source_event_id)
+        object.__setattr__(self, "type", type)
+        object.__setattr__(self, "run_id", run_id)
+        object.__setattr__(self, "session_id", session_id)
+        object.__setattr__(self, "created_at", created_at)
+        object.__setattr__(self, "audience", audience)
+        object.__setattr__(self, "projection_version", projection_version)
+        object.__setattr__(self, "round", round)
+        object.__setattr__(self, "phase", phase)
+        object.__setattr__(self, "actor", actor)
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "_payload", _copy_json_payload(payload or {}))
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return _copy_json_payload(self._payload)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "source_event_id": self.source_event_id,
+            "type": self.type,
+            "run_id": self.run_id,
+            "session_id": self.session_id,
+            "created_at": self.created_at,
+            "audience": self.audience,
+            "projection_version": self.projection_version,
+            "round": self.round,
+            "phase": self.phase,
+            "actor": self.actor,
+            "action": self.action,
+            "payload": self.payload,
+        }
+
+
 @dataclass
 class LiveGameRun:
     run_id: str
@@ -459,6 +540,14 @@ class LiveStore(Protocol):
     ) -> None: ...
 
     def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]: ...
+
+    def projected_events_after(
+        self,
+        run_id: str,
+        *,
+        audience: Literal["player_public", "spectator_god_view"],
+        after_id: int | None = None,
+    ) -> list[ProjectedLiveEvent]: ...
 
     def load_run(self, run_id: str) -> LiveGameRun | None: ...
 
@@ -1444,6 +1533,33 @@ class LiveRunRegistry:
         if not callable(loader):
             raise KeyError(run_id)
         return loader(run_id, after_id=after_id)
+
+    def projected_events_after(
+        self,
+        run_id: str,
+        *,
+        audience: Literal["player_public", "spectator_god_view"],
+        after_id: int | None = None,
+    ) -> list[ProjectedLiveEvent]:
+        from app.werewolf.privacy_projection import project_live_event
+
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is not None:
+                events = (
+                    list(run.events)
+                    if after_id is None
+                    else [event for event in run.events if event.id > after_id]
+                )
+                return [
+                    projected
+                    for event in events
+                    if (projected := project_live_event(event, audience)) is not None
+                ]
+        loader = getattr(self._live_store, "projected_events_after", None)
+        if not callable(loader):
+            raise KeyError(run_id)
+        return loader(run_id, audience=audience, after_id=after_id)
 
     def subscribe(
         self,
@@ -2928,7 +3044,9 @@ class NullEventSink:
         return None
 
 
-def format_sse(event: LiveEvent) -> str:
+def format_sse(event: ProjectedLiveEvent) -> str:
+    if not isinstance(event, ProjectedLiveEvent):
+        raise TypeError("SSE serialization requires an audience-projected event")
     data = json.dumps(event.to_dict(), ensure_ascii=False)
     return f"id: {event.id}\nevent: {event.type}\ndata: {data}\n\n"
 

@@ -27,7 +27,10 @@ export function LivePage() {
   const { gameId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { connectionState, events, latestEvent } = useGameRunEvents(gameId);
+  const { connectionState, events, latestEvent } = useGameRunEvents(
+    gameId,
+    "spectator_god_view",
+  );
   const runQuery = useQuery({
     queryKey: ["game-run", gameId],
     queryFn: () => getGameRun(gameId ?? ""),

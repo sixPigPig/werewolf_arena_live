@@ -17,12 +17,15 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.live import LiveEvent, LiveRunRegistry
+from app.werewolf.privacy_projection import project_live_event
 from app.werewolf.voice import (
     VoiceSpeakerConfig,
     VoiceUtterance,
     build_voice_messages,
     chunk_text_for_tts,
     event_to_voice_utterance,
+    is_public_complete_speech_event,
+    is_public_speech_event,
     voice_job_candidate,
 )
 from app.werewolf.volcengine_tts import (
@@ -161,8 +164,15 @@ class LiveVoiceStreamService:
             await websocket.send_json(_voice_unavailable_payload("terminal"))
             return
 
-        historical_events = self.registry.events_after(run_id)
-        last_event_id = historical_events[-1].id if historical_events else None
+        canonical_historical_events = self.registry.events_after(run_id)
+        last_event_id = (
+            canonical_historical_events[-1].id if canonical_historical_events else None
+        )
+        historical_events = [
+            projected
+            for event in canonical_historical_events
+            if (projected := project_live_event(event, "player_public")) is not None
+        ]
         run = self.registry.try_get_run(run_id)
         if run is None:
             return
@@ -214,15 +224,19 @@ class LiveVoiceStreamService:
                 if current_event_id is not None and event.id > replay_after_id
             )
             voice_context = _build_voice_context(context_events)
+            streamed_delta_request_ids: set[str] = set()
             subscriber = self.registry.subscribe(run_id, after_id=last_event_id)
             while True:
-                event = await _next_voice_event(
+                canonical_event = await _next_voice_event(
                     subscriber,
                     disconnect_task,
                     pending_events,
                 )
-                if event is None:
+                if canonical_event is None:
                     return
+                event = project_live_event(canonical_event, "player_public")
+                if event is None:
+                    continue
                 is_terminal = event.type in TERMINAL_EVENT_TYPES
                 _update_voice_context_before_event(voice_context, event)
                 utterance = event_to_voice_utterance(
@@ -232,8 +246,15 @@ class LiveVoiceStreamService:
                     previous_night_deaths=voice_context.previous_night_deaths,
                     peaceful_night=voice_context.peaceful_night,
                 )
+                if (
+                    utterance is not None
+                    and utterance.request_id in streamed_delta_request_ids
+                    and is_public_complete_speech_event(event)
+                ):
+                    utterance = None
 
                 if utterance is not None:
+                    started_from_delta = is_public_speech_event(event)
                     utterance = await _coalesce_request_deltas(
                         utterance,
                         subscriber,
@@ -242,6 +263,8 @@ class LiveVoiceStreamService:
                         speaker_config,
                         voice_context.player_seats,
                     )
+                    if started_from_delta and utterance.request_id is not None:
+                        streamed_delta_request_ids.add(utterance.request_id)
                     if disconnect_task.done():
                         return
                     chunks = chunk_text_for_tts(utterance.text)
@@ -736,6 +759,8 @@ def _night_death_names_from_payload(payload: dict[str, Any]) -> list[str]:
 
 
 def _is_peaceful_night_payload(payload: dict[str, Any]) -> bool:
+    if payload.get("peaceful_night") is True:
+        return True
     attacked = payload.get("attacked")
     protected_player = payload.get("protected")
     eliminated = payload.get("eliminated")
@@ -1350,17 +1375,28 @@ async def _coalesce_request_deltas(
             if event is None:
                 break
 
+        projected_event = project_live_event(event, "player_public")
+        if projected_event is None:
+            continue
+        event = projected_event
+
         next_utterance = event_to_voice_utterance(
             event,
             speaker_config,
             player_seats=player_seats,
         )
         if _is_same_request_utterance(utterance, next_utterance):
-            texts.append(next_utterance.text)
             last_source_event_id = max(
                 last_source_event_id,
                 next_utterance.last_source_event_id or next_utterance.source_event_id,
             )
+            if is_public_complete_speech_event(event):
+                return replace(
+                    utterance,
+                    last_source_event_id=last_source_event_id,
+                    text=next_utterance.text,
+                )
+            texts.append(next_utterance.text)
             continue
 
         pending_events.appendleft(event)

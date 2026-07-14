@@ -5,9 +5,18 @@ type GamePlaybackResponse = Omit<GamePlayback, "voices"> & {
   voices?: GamePlayback["voices"];
 };
 
-export async function getGamePlayback(sessionId: string): Promise<GamePlayback> {
+export type GamePlaybackAudience = "player_public" | "spectator_god_view";
+
+export async function getGamePlayback(
+  sessionId: string,
+  audience: GamePlaybackAudience = "player_public",
+): Promise<GamePlayback> {
+  const path =
+    audience === "spectator_god_view"
+      ? `/api/v1/games/${sessionId}/god-view/playback`
+      : `/api/v1/games/${sessionId}/playback`;
   const playback = await apiFetch<GamePlaybackResponse>(
-    `/api/v1/games/${sessionId}/playback`,
+    path,
   );
 
   return { ...playback, voices: playback.voices ?? [] };

@@ -136,7 +136,10 @@ describe("PlaybackPage", () => {
     expect(screen.getByText("villagers")).toBeVisible();
     expect(screen.getByText("第 1 轮")).toBeVisible();
     expect(screen.getByText("白石被投票放逐。")).toBeInTheDocument();
-    expect(gameClientMocks.getGamePlayback).toHaveBeenCalledWith("session-1");
+    expect(gameClientMocks.getGamePlayback).toHaveBeenCalledWith(
+      "session-1",
+      "spectator_god_view",
+    );
   });
 
   it("presents the replay as a gothic match dossier", async () => {

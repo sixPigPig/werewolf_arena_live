@@ -8,7 +8,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
 from app.werewolf.action_quality import action_quality_warnings
@@ -2831,7 +2831,10 @@ class GameEngine:
         world_state = self._public_model_world_state(copy.deepcopy(world_state))
         world_state["options"] = "、".join(public_options)
         facts = [
-            public_fact_from_dict(item)
+            replace(
+                public_fact_from_dict(item),
+                text=self._public_text(str(item.get("text") or "")),
+            )
             for item in self.state.public_facts
             if isinstance(item, dict)
         ]

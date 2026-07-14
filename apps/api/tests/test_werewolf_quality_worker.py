@@ -169,11 +169,16 @@ def test_source_revision_drift_supersedes_old_job_and_enqueues_new(
                 run_id=run_id,
                 event_id=2,
                 session_id=session_id,
-                type="judge_cue",
-                round=1,
-                phase="terminal",
-                action="terminal_winner",
-                payload={"visible_text": "好人阵营获胜。"},
+                    type="judge_cue",
+                    round=1,
+                    phase="terminal",
+                    action="dawn_peaceful",
+                    payload={
+                        "schema_version": 1,
+                        "cue_id": "dawn_peaceful",
+                        "cue": "dawn_peaceful",
+                        "visible_text": "昨夜平安夜。",
+                    },
             )
         )
         db.commit()
@@ -248,3 +253,24 @@ def test_terminal_replay_enqueue_is_best_effort_and_feature_gated(
         record = db.query(GameQualityEvaluationRecord).one()
         assert record.session_id == "game_1234abcd"
         assert record.status == "pending"
+
+
+def test_partial_replay_is_enqueued_for_privacy_evaluation(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "quality_evaluation_enabled", True)
+    monkeypatch.setattr(settings, "quality_evaluation_version", "p3-v1")
+    state = _state()
+    state["winner"] = ""
+    state["error_message"] = "model request failed"
+
+    with session_factory() as db:
+        DatabaseReplayStore(db).save_game_payload(state=state, logs=[])
+
+    with session_factory() as db:
+        game = db.get(GameSessionRecord, "game_1234abcd")
+        evaluation = db.query(GameQualityEvaluationRecord).one()
+        assert game is not None
+        assert game.status == "partial"
+        assert evaluation.status == "pending"

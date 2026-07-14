@@ -38,9 +38,8 @@ def test_target_game_leaking_fixture_flows_safely_through_worker_db_and_admin() 
     second = _run_fixture("run_05aa0b0f2b92_leaking.json")
 
     assert first["record"]["verdict"] == "fail"
-    assert first["summary"]["issue_counts"]["P0"] >= 5
-    assert {issue["channel"] for issue in first["issues"]} >= {
-        "live_event",
+    assert first["summary"]["issue_counts"]["P0"] == 4
+    assert {issue["channel"] for issue in first["issues"]} == {
         "voice",
         "subtitle",
         "replay",

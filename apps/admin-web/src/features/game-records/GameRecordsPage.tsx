@@ -1,9 +1,26 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { type FormEvent } from "react";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { isAdminApiError } from "@/api/problem-details";
-import { listAdminGames } from "@/features/game-records/api";
+import { useAdminSession } from "@/features/auth/session-context";
+import { hasAdminPermission } from "@/features/auth/permissions";
+import {
+  deleteAdminGame,
+  listAdminGames,
+} from "@/features/game-records/api";
 import {
   gameListParamsFromSearch,
   setGameSearchValues,
@@ -18,8 +35,18 @@ import { adminGameKeys } from "@/features/game-records/query-keys";
 import type { AdminGameListItem } from "@/features/game-records/types";
 
 export default function GameRecordsPage() {
+  const { session } = useAdminSession();
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [deleteState, setDeleteState] = useState<{
+    game: AdminGameListItem;
+    opener: HTMLButtonElement;
+  } | null>(null);
   const params = gameListParamsFromSearch(searchParams);
+  const canDelete = hasAdminPermission(
+    session?.permissions ?? [],
+    "games.delete",
+  );
   const invalidDateRange = Boolean(
     params.created_from &&
       params.created_to &&
@@ -32,6 +59,14 @@ export default function GameRecordsPage() {
     queryKey: adminGameKeys.list(params),
   });
   const data = invalidDateRange ? undefined : gamesQuery.data;
+  const deleteMutation = useMutation({
+    mutationFn: (sessionId: string) =>
+      deleteAdminGame(sessionId, session?.csrf_token ?? ""),
+    onSuccess: async () => {
+      setDeleteState(null);
+      await queryClient.invalidateQueries({ queryKey: adminGameKeys.lists() });
+    },
+  });
 
   function updateSearch(values: Record<string, string | undefined>) {
     setSearchParams(setGameSearchValues(searchParams, { page: "1", ...values }));
@@ -64,6 +99,22 @@ export default function GameRecordsPage() {
     );
   }
 
+  function openDeleteDialog(
+    game: AdminGameListItem,
+    opener: HTMLButtonElement,
+  ) {
+    deleteMutation.reset();
+    setDeleteState({ game, opener });
+  }
+
+  function closeDeleteDialog() {
+    if (deleteMutation.isPending) {
+      return;
+    }
+    deleteMutation.reset();
+    setDeleteState(null);
+  }
+
   const hasFilters = Boolean(
     params.q ||
       params.status ||
@@ -82,7 +133,9 @@ export default function GameRecordsPage() {
           <h1>对局记录</h1>
           <p>从持久化记录查看对局结果、运行状态与可公开诊断摘要。</p>
         </div>
-        <span className="page-readiness-badge">只读模块</span>
+        <span className="page-readiness-badge">
+          {canDelete ? "可受控删除" : "只读模块"}
+        </span>
       </header>
 
       <section aria-label="对局筛选" className="game-filter-panel">
@@ -244,7 +297,12 @@ export default function GameRecordsPage() {
         {data && data.items.length > 0 ? (
           <ul aria-label="对局记录列表" className="game-admin-list">
             {data.items.map((game) => (
-              <GameListItem game={game} key={game.session_id} />
+              <GameListItem
+                canDelete={canDelete}
+                game={game}
+                key={game.session_id}
+                onDelete={openDeleteDialog}
+              />
             ))}
           </ul>
         ) : null}
@@ -261,11 +319,36 @@ export default function GameRecordsPage() {
           />
         ) : null}
       </section>
+
+      {deleteState ? (
+        <GameDeleteDialog
+          error={
+            deleteMutation.isError
+              ? presentGameDeleteError(deleteMutation.error)
+              : null
+          }
+          game={deleteState.game}
+          onClose={closeDeleteDialog}
+          onConfirm={() =>
+            deleteMutation.mutate(deleteState.game.session_id)
+          }
+          opener={deleteState.opener}
+          pending={deleteMutation.isPending}
+        />
+      ) : null}
     </div>
   );
 }
 
-function GameListItem({ game }: { game: AdminGameListItem }) {
+function GameListItem({
+  canDelete,
+  game,
+  onDelete,
+}: {
+  canDelete: boolean;
+  game: AdminGameListItem;
+  onDelete: (game: AdminGameListItem, opener: HTMLButtonElement) => void;
+}) {
   return (
     <li className="game-admin-row">
       <div className="game-admin-identity">
@@ -306,6 +389,18 @@ function GameListItem({ game }: { game: AdminGameListItem }) {
         <small>更新于 {formatDateTime(game.updated_at)}</small>
       </div>
       <div className="game-admin-action-cell">
+        {canDelete ? (
+          <button
+            aria-label={`删除对局 ${game.session_id}`}
+            className="admin-danger-button"
+            onClick={(event: MouseEvent<HTMLButtonElement>) =>
+              onDelete(game, event.currentTarget)
+            }
+            type="button"
+          >
+            删除
+          </button>
+        ) : null}
         <Link
           aria-label={`查看对局 ${game.session_id}`}
           className="admin-secondary-link"
@@ -316,6 +411,120 @@ function GameListItem({ game }: { game: AdminGameListItem }) {
       </div>
     </li>
   );
+}
+
+function GameDeleteDialog({
+  error,
+  game,
+  onClose,
+  onConfirm,
+  opener,
+  pending,
+}: {
+  error: string | null;
+  game: AdminGameListItem;
+  onClose: () => void;
+  onConfirm: () => void;
+  opener: HTMLButtonElement;
+  pending: boolean;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+    return () => opener.focus();
+  }, [opener]);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape" && !pending) {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== "Tab") {
+      return;
+    }
+    const focusable = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>(
+        "button:not([disabled])",
+      ) ?? [],
+    );
+    if (focusable.length === 0) {
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable.at(-1) ?? first;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  return (
+    <div className="player-dialog-backdrop">
+      <div
+        aria-describedby="game-delete-description"
+        aria-labelledby="game-delete-title"
+        aria-modal="true"
+        className="player-transition-dialog game-delete-dialog"
+        onKeyDown={handleKeyDown}
+        ref={dialogRef}
+        role="alertdialog"
+      >
+        <span className="page-kicker">DESTRUCTIVE ACTION</span>
+        <h2 id="game-delete-title">删除对局</h2>
+        <p id="game-delete-description">
+          将永久删除此对局及其回放、运行事件、语音和质量评估数据，无法撤销。
+        </p>
+        <code>{game.session_id}</code>
+        <p className="game-delete-warning">
+          正在排队或运行的对局需先停止，才能删除。
+        </p>
+        {error ? (
+          <p aria-live="assertive" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="player-dialog-actions">
+          <button
+            className="admin-secondary-button"
+            disabled={pending}
+            onClick={onClose}
+            ref={cancelRef}
+            type="button"
+          >
+            取消
+          </button>
+          <button
+            className="admin-danger-button"
+            disabled={pending}
+            onClick={onConfirm}
+            type="button"
+          >
+            {pending ? "正在删除..." : "确认删除"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function presentGameDeleteError(error: unknown) {
+  if (isAdminApiError(error, 409)) {
+    return "对局仍在排队或运行，请先停止运行后再删除。";
+  }
+  if (isAdminApiError(error, 404)) {
+    return "该对局已不存在，请取消后刷新列表。";
+  }
+  if (isAdminApiError(error)) {
+    const requestId = error.requestId ? ` 请求编号：${error.requestId}` : "";
+    return `暂时无法删除对局，请稍后重试。${requestId}`;
+  }
+  return "暂时无法删除对局，请检查网络后重试。";
 }
 
 function GamePagination({

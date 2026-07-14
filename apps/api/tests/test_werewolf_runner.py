@@ -1689,6 +1689,61 @@ def test_world_state_includes_public_facts_for_late_day_actions() -> None:
     assert "7号玩家警上声明6号玩家为好人。" in world_state["public_facts"]
 
 
+def test_fact_prompt_coverage_uses_the_same_public_seat_projection() -> None:
+    rule_set = get_rule_set("starter_6")
+    custom_names = ["阿青", "白石", "南风", "岚", "乌木", "烛火"]
+    state = initialize_game_state(
+        session_id="fact_public_projection",
+        villager_model="deepseek-v4-flash",
+        werewolf_model="deepseek-v4-flash",
+        seed=20260715,
+        rule_set=rule_set,
+        player_configs=[
+            PlayerConfig(
+                seat=index,
+                profile_id=None,
+                name=name,
+                model="",
+                personality_id="balanced",
+                personality="",
+                appearance_id="default",
+                avatar_prompt="",
+                tags=(),
+            )
+            for index, name in enumerate(custom_names, start=1)
+        ],
+    )
+    state.public_facts.append(
+        {
+            "round_number": 1,
+            "category": "vote",
+            "text": "阿青投票给白石。",
+            "retention": "critical",
+        }
+    )
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=1,
+        rule_set=rule_set,
+        rng=random.Random(1),
+    )
+    round_state = RoundState(number=1, players=custom_names.copy())
+
+    request = engine._build_player_action_request(
+        player=state.players[0],
+        action="debate",
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert "1号玩家投票给2号玩家。" in request.world_state["public_facts"]
+    assert request.fact_prompt_coverage["expected_critical_count"] == 1
+    assert request.fact_prompt_coverage["included_critical_count"] == 1
+
+
 def test_world_state_carries_detached_exact_rule_snapshot() -> None:
     compiled = managed_official_compiled_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(

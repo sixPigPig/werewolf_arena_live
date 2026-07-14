@@ -16,7 +16,7 @@ export function PlaybackPage() {
   const { gameId } = useParams();
   const playbackQuery = useQuery({
     queryKey: ["game-playback", gameId],
-    queryFn: () => getGamePlayback(gameId ?? ""),
+    queryFn: () => getGamePlayback(gameId ?? "", "spectator_god_view"),
     enabled: Boolean(gameId),
   });
   const playback = playbackQuery.data;
@@ -28,7 +28,7 @@ export function PlaybackPage() {
       <header className="mobile-archive-hero">
         <span>对局卷宗</span>
         <h1>移动复盘</h1>
-        <p>复核整局走势、关键轮次和每位玩家的私有摘要。</p>
+        <p>复核整局走势、关键轮次和观战视角下的结构化行动。</p>
         {gameId ? (
           <Link
             className="mobile-button mobile-session-link"

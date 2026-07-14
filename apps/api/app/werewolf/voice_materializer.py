@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord
 from app.models.live import (
     LiveEventRecord,
+    PublicLiveEventRecord,
     VoiceAudioChunkRecord,
     VoiceMaterializationJobRecord,
     VoiceUtteranceRecord,
@@ -20,6 +21,7 @@ from app.models.live import (
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.live import LiveEvent
 from app.werewolf.live_store import format_live_datetime
+from app.werewolf.privacy_projection import project_live_event
 from app.werewolf.voice import (
     VoiceSpeakerConfig,
     VoiceUtterance,
@@ -154,13 +156,23 @@ class VoiceMaterializer:
             job = db.get(VoiceMaterializationJobRecord, key)
             if job is None or job.status != "processing" or job.worker_id != worker_id:
                 raise PermanentVoiceMaterializationError("voice job ownership was lost")
+            if job.audience != "player_public":
+                raise PermanentVoiceMaterializationError("voice job audience is unsupported")
             if _complete_utterance_exists(db, utterance_id):
                 return
 
-            event_record = db.get(LiveEventRecord, (run_id, source_event_id))
-            if event_record is None:
+            event_record = db.get(PublicLiveEventRecord, (run_id, source_event_id))
+            if event_record is not None:
+                event = _live_event(event_record)
+            else:
+                canonical_record = db.get(LiveEventRecord, (run_id, source_event_id))
+                event = (
+                    project_live_event(_live_event(canonical_record), "player_public")
+                    if canonical_record is not None
+                    else None
+                )
+            if event is None:
                 raise PermanentVoiceMaterializationError("source event is missing")
-            event = _live_event(event_record)
             player_seats, previous_night_deaths, peaceful_night = _voice_context(
                 db,
                 event,
@@ -394,7 +406,7 @@ def _complete_utterance_exists(db: Session, utterance_id: str) -> bool:
     return record is not None and record.status == "complete" and bool(chunk_count)
 
 
-def _live_event(record: LiveEventRecord) -> LiveEvent:
+def _live_event(record: LiveEventRecord | PublicLiveEventRecord) -> LiveEvent:
     return LiveEvent(
         id=record.event_id,
         type=record.type,
@@ -413,22 +425,41 @@ def _voice_context(
     db: Session,
     event: LiveEvent,
 ) -> tuple[dict[str, int], tuple[str, ...], bool]:
-    records = list(
+    projected_records = list(
         db.scalars(
-            select(LiveEventRecord)
+            select(PublicLiveEventRecord)
             .where(
-                LiveEventRecord.run_id == event.run_id,
-                LiveEventRecord.event_id <= event.id,
+                PublicLiveEventRecord.run_id == event.run_id,
+                PublicLiveEventRecord.event_id <= event.id,
             )
-            .order_by(LiveEventRecord.event_id.asc())
+            .order_by(PublicLiveEventRecord.event_id.asc())
         )
     )
+    records: list[LiveEventRecord | PublicLiveEventRecord] = projected_records
+    if not records:
+        records = list(
+            db.scalars(
+                select(LiveEventRecord)
+                .where(
+                    LiveEventRecord.run_id == event.run_id,
+                    LiveEventRecord.event_id <= event.id,
+                )
+                .order_by(LiveEventRecord.event_id.asc())
+            )
+        )
     player_seats: dict[str, int] = {}
     previous_night_deaths: tuple[str, ...] = ()
     peaceful_night = False
     for record in records:
-        payload = record.payload if isinstance(record.payload, dict) else {}
-        if record.type == "game_started":
+        projected = (
+            _live_event(record)
+            if isinstance(record, PublicLiveEventRecord)
+            else project_live_event(_live_event(record), "player_public")
+        )
+        if projected is None:
+            continue
+        payload = projected.payload
+        if projected.type == "game_started":
             players = payload.get("players")
             if isinstance(players, list):
                 player_seats = {
@@ -436,7 +467,7 @@ def _voice_context(
                     for index, player in enumerate(players, start=1)
                     if isinstance(player, dict) and isinstance(player.get("name"), str)
                 }
-        if record.type == "state_updated" and record.phase == "night":
+        if projected.type == "state_updated" and projected.phase == "night":
             deaths = payload.get("night_deaths")
             if isinstance(deaths, list):
                 names = [

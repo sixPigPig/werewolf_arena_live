@@ -8,13 +8,21 @@ from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from app.models.game_session import GameReplayPayload, GameSessionRecord
-from app.models.live import LiveEventRecord, LiveRunRecord, VoiceUtteranceRecord
+from app.models.live import (
+    LiveEventRecord,
+    LiveRunRecord,
+    PublicLiveEventRecord,
+    VoiceUtteranceRecord,
+)
 from app.models.quality_evaluation import GameQualityEvaluationRecord
 from app.werewolf.evaluation_bundle import (
     QualityEvaluationBundleV1,
     build_quality_evaluation_bundle,
 )
 from app.werewolf.quality_evaluation import DEFAULT_EVALUATOR_VERSION
+from app.werewolf.live import LiveEvent
+from app.werewolf.live_store import format_live_datetime
+from app.werewolf.privacy_projection import project_live_event
 
 
 class QualityEvaluationSourceUnavailable(RuntimeError):
@@ -46,14 +54,50 @@ def build_database_quality_bundle(
     events: list[dict[str, Any]] = []
     voices: list[dict[str, Any]] = []
     if effective_run_id:
-        event_records = list(
+        projected_records = list(
             db.scalars(
-                select(LiveEventRecord)
-                .where(LiveEventRecord.run_id == effective_run_id)
-                .order_by(LiveEventRecord.event_id.asc())
+                select(PublicLiveEventRecord)
+                .where(PublicLiveEventRecord.run_id == effective_run_id)
+                .order_by(PublicLiveEventRecord.event_id.asc())
             )
         )
-        events = [_event_dict(record) for record in event_records]
+        if projected_records:
+            events = [
+                _event_dict(record, audience="player_public")
+                for record in projected_records
+            ]
+        else:
+            event_records = list(
+                db.scalars(
+                    select(LiveEventRecord)
+                    .where(LiveEventRecord.run_id == effective_run_id)
+                    .order_by(LiveEventRecord.event_id.asc())
+                )
+            )
+            events = [
+                projected.to_dict()
+                for record in event_records
+                if (
+                    projected := project_live_event(
+                        LiveEvent(
+                            id=record.event_id,
+                            type=record.type,
+                            run_id=record.run_id,
+                            session_id=record.session_id,
+                            created_at=format_live_datetime(record.created_at),
+                            round=record.round,
+                            phase=record.phase,
+                            actor=record.actor,
+                            action=record.action,
+                            payload=(
+                                record.payload if isinstance(record.payload, dict) else {}
+                            ),
+                        ),
+                        "player_public",
+                    )
+                )
+                is not None
+            ]
         voice_records = list(
             db.scalars(
                 select(VoiceUtteranceRecord)
@@ -125,7 +169,9 @@ def enqueue_recent_missing_evaluations(
     dry_run: bool = True,
 ) -> dict[str, int]:
     bounded_limit = min(1000, max(1, limit))
-    query = select(GameSessionRecord.session_id).where(GameSessionRecord.status == "complete")
+    query = select(GameSessionRecord.session_id).where(
+        GameSessionRecord.status.in_(("complete", "partial"))
+    )
     if session_id:
         query = query.where(GameSessionRecord.session_id == session_id)
     if since:
@@ -194,9 +240,12 @@ def _quality_evaluation_id(session_id: str, version: str, revision: str) -> str:
     return f"quality_{digest}"
 
 
-def _event_dict(record: LiveEventRecord) -> dict[str, Any]:
+def _event_dict(record: PublicLiveEventRecord, *, audience: str) -> dict[str, Any]:
     return {
         "id": record.event_id,
+        "source_event_id": record.source_event_id,
+        "audience": audience,
+        "projection_version": record.projection_version,
         "type": record.type,
         "run_id": record.run_id,
         "session_id": record.session_id,
