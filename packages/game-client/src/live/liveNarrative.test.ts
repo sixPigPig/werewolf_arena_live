@@ -360,7 +360,7 @@ describe("deriveLiveNarrativeState", () => {
       }),
     ];
     const cues = buildDirectorCues(events);
-    const speechCue = cues.find((cue) => cue.eventId === 3);
+    const speechCue = cues.find((cue) => cue.latestEventId === 3);
 
     expect(speechCue).toBeDefined();
     expect(narrativeFor(events, speechCue).cue).toMatchObject({
@@ -433,7 +433,7 @@ describe("deriveLiveNarrativeState", () => {
       }),
     ];
     const cues = buildDirectorCues(events);
-    const streamingCue = cues.find((cue) => cue.eventId === 3);
+    const streamingCue = cues.find((cue) => cue.latestEventId === 3);
     const parsedCue = cues.find((cue) => cue.eventId === 4);
     const recordedCue = cues.find((cue) => cue.eventId === 5);
 

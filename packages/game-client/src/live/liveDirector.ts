@@ -8,6 +8,7 @@ export type DirectorCueImportance = "normal" | "action" | "key" | "terminal";
 
 export type DirectorCue = {
   eventId: number;
+  latestEventId: number;
   type: string;
   round: number | null;
   phase: string | null;
@@ -86,7 +87,7 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
       const actor = event.actor || requestCue.cue.actor || "未知玩家";
       const action = event.action || requestCue.cue.action;
       const body = `${actor}：${requestCue.visibleText}`;
-      requestCue.cue.eventId = event.id;
+      requestCue.cue.latestEventId = event.id;
       requestCue.cue.title = `${actor} 正在发言`;
       requestCue.cue.body = body;
       requestCue.cue.importance = "key";
@@ -185,17 +186,17 @@ export function useLiveDirector(
         : undefined,
     [cues, options.startAtEventType],
   );
-  const preferredStartEventId =
+  const preferredStartCueId =
     options.startAtLatestTerminal && latestTerminalCue
       ? latestTerminalCue.eventId
       : (firstRequestedStartCue?.eventId ?? null);
-  const [currentEventId, setCurrentEventId] = useState<number | null>(
-    () => preferredStartEventId ?? cues[0]?.eventId ?? null,
+  const [currentCueId, setCurrentCueId] = useState<number | null>(
+    () => preferredStartCueId ?? cues[0]?.eventId ?? null,
   );
   const [isPaused, setIsPaused] = useState(false);
   const [speed, setSpeedState] = useState<LiveDirectorSpeed>(1);
   const startedAtRef = useRef(0);
-  const lastStartedEventIdRef = useRef<number | null>(null);
+  const lastStartedCueIdRef = useRef<number | null>(null);
   const pausedAtRef = useRef<number | null>(null);
   const resetKeyRef = useRef(options.resetKey);
   const terminalStartRequestedAtResetRef = useRef(
@@ -224,7 +225,7 @@ export function useLiveDirector(
     }
 
     autoStartedTerminalEventIdRef.current = latestTerminalCue.eventId;
-    setCurrentEventId(latestTerminalCue.eventId);
+    setCurrentCueId(latestTerminalCue.eventId);
   }, [latestTerminalCue, options.startAtLatestTerminal]);
 
   useEffect(() => {
@@ -237,7 +238,7 @@ export function useLiveDirector(
     }
 
     autoStartedEventTypeIdRef.current = firstRequestedStartCue.eventId;
-    setCurrentEventId((current) =>
+    setCurrentCueId((current) =>
       current === null || current < firstRequestedStartCue.eventId
         ? firstRequestedStartCue.eventId
         : current,
@@ -249,18 +250,26 @@ export function useLiveDirector(
       return -1;
     }
 
-    if (currentEventId === null) {
+    if (currentCueId === null) {
       return 0;
     }
 
     const matchingIndex = cues.findIndex(
-      (cue) => cue.eventId === currentEventId,
+      (cue) => cue.eventId === currentCueId,
     );
-    return matchingIndex === -1 ? 0 : matchingIndex;
-  }, [cues, currentEventId]);
+    if (matchingIndex !== -1) {
+      return matchingIndex;
+    }
+
+    const nextIndex = cues.findIndex(
+      (cue) => cue.latestEventId >= currentCueId,
+    );
+    return nextIndex === -1 ? cues.length - 1 : nextIndex;
+  }, [cues, currentCueId]);
 
   const currentCue = currentIndex === -1 ? null : cues[currentIndex];
-  const resolvedCurrentEventId = currentCue?.eventId ?? null;
+  const resolvedCurrentCueId = currentCue?.eventId ?? null;
+  const resolvedCurrentEventId = currentCue?.latestEventId ?? null;
   const backlogCount =
     currentIndex >= 0 ? Math.max(0, cues.length - currentIndex - 1) : 0;
   const isCatchingUp = backlogCount >= CATCH_UP_BACKLOG_COUNT;
@@ -275,13 +284,13 @@ export function useLiveDirector(
 
     resetKeyRef.current = options.resetKey;
     startedAtRef.current = Date.now();
-    lastStartedEventIdRef.current = null;
+    lastStartedCueIdRef.current = null;
     pausedAtRef.current = null;
     terminalStartRequestedAtResetRef.current =
       options.startAtLatestTerminal === true;
     autoStartedTerminalEventIdRef.current = null;
     autoStartedEventTypeIdRef.current = null;
-    setCurrentEventId(null);
+    setCurrentCueId(null);
     setIsPaused(false);
     setSpeedState(1);
   }, [options.resetKey, options.startAtLatestTerminal]);
@@ -293,7 +302,7 @@ export function useLiveDirector(
       if (isPaused) {
         pausedAtRef.current = startedAtRef.current;
       }
-      setCurrentEventId(nextCue?.eventId ?? null);
+      setCurrentCueId(nextCue?.eventId ?? null);
     },
     [cues, isPaused],
   );
@@ -314,20 +323,34 @@ export function useLiveDirector(
         return;
       }
 
-      const matchingIndex = cues.findIndex((cue) => cue.eventId >= eventId);
+      const matchingIndex = cues.findIndex(
+        (cue) => cue.latestEventId >= eventId,
+      );
       moveToIndex(matchingIndex === -1 ? cues.length - 1 : matchingIndex);
     },
     [cues, moveToIndex],
   );
 
   useEffect(() => {
-    if (lastStartedEventIdRef.current === resolvedCurrentEventId) {
+    if (
+      currentCueId === null ||
+      resolvedCurrentCueId === null ||
+      currentCueId === resolvedCurrentCueId
+    ) {
+      return;
+    }
+
+    setCurrentCueId(resolvedCurrentCueId);
+  }, [currentCueId, resolvedCurrentCueId]);
+
+  useEffect(() => {
+    if (lastStartedCueIdRef.current === resolvedCurrentCueId) {
       return;
     }
 
     startedAtRef.current = Date.now();
-    lastStartedEventIdRef.current = resolvedCurrentEventId;
-  }, [resolvedCurrentEventId]);
+    lastStartedCueIdRef.current = resolvedCurrentCueId;
+  }, [resolvedCurrentCueId]);
 
   useEffect(() => {
     if (
@@ -726,6 +749,7 @@ function normalizeSpeechText(text: string): string {
 function cueBase(event: LiveGameEvent): DirectorCue {
   return {
     eventId: event.id,
+    latestEventId: event.id,
     type: event.type,
     round: event.round,
     phase: event.phase,

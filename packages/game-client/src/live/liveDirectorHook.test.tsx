@@ -139,6 +139,82 @@ describe("useLiveDirector seekToEventId", () => {
     expect(result.current.backlogCount).toBe(1);
   });
 
+  it("keeps the current cue when streaming deltas extend its event range", () => {
+    const initialEvents = [
+      event({ id: 1, type: "game_started" }),
+      event({
+        id: 2,
+        type: "model_request_started",
+        actor: "张三",
+        action: "debate",
+        payload: { request_id: "req_123", model: "deepseek-chat" },
+      }),
+    ];
+    const { rerender, result } = renderHook(
+      ({ liveEvents }: { liveEvents: LiveGameEvent[] }) =>
+        useLiveDirector(liveEvents),
+      { initialProps: { liveEvents: initialEvents } },
+    );
+
+    act(() => {
+      result.current.seekToEventId(2);
+    });
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 2,
+      latestEventId: 2,
+      type: "model_request_started",
+    });
+
+    rerender({
+      liveEvents: [
+        ...initialEvents,
+        event({
+          id: 3,
+          type: "model_response_delta",
+          actor: "张三",
+          action: "debate",
+          payload: {
+            request_id: "req_123",
+            visible_text: "我不是狼",
+            is_public: true,
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 2,
+      latestEventId: 3,
+      type: "model_request_started",
+      body: "张三：我不是狼",
+    });
+    expect(result.current.currentEventId).toBe(3);
+    expect(result.current.backlogCount).toBe(0);
+  });
+
+  it("recovers a missing cue by moving forward instead of restarting", () => {
+    const initialEvents = [
+      event({ id: 1, type: "game_started" }),
+      event({ id: 3, type: "phase_started", round: 1, phase: "night" }),
+      event({ id: 5, type: "phase_started", round: 1, phase: "day" }),
+    ];
+    const { rerender, result } = renderHook(
+      ({ liveEvents }: { liveEvents: LiveGameEvent[] }) =>
+        useLiveDirector(liveEvents),
+      { initialProps: { liveEvents: initialEvents } },
+    );
+
+    act(() => {
+      result.current.seekToEventId(3);
+    });
+    expect(result.current.currentEventId).toBe(3);
+
+    rerender({ liveEvents: [initialEvents[0], initialEvents[2]] });
+
+    expect(result.current.currentEventId).toBe(5);
+    expect(result.current.currentCue?.phase).toBe("day");
+  });
+
   it("does not auto-advance while external playback is holding the current cue", () => {
     vi.useFakeTimers();
 
