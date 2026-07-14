@@ -367,6 +367,7 @@ _ACTIVITY_EVENT_TYPES = {
     "model_response_received",
     "action_parsed",
     "action_requested",
+    "judge_cue",
     "state_updated",
 }
 _KNOWN_EVENT_TYPES = _LIFECYCLE_EVENT_TYPES | _WARNING_EVENT_TYPES | _ACTIVITY_EVENT_TYPES

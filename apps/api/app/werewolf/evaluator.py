@@ -41,6 +41,34 @@ class ReplayEvaluationReport:
         return [issue.code for issue in self.issues]
 
 
+@dataclass(frozen=True)
+class SelfExplosionBenchmarkReport:
+    game_count: int
+    chain_three_game_count: int
+    chain_three_game_rate: float
+    normal_day_debate_game_count: int
+    normal_day_debate_game_rate: float
+    audited_chain_decision_count: int
+    complete_audit_count: int
+    audit_completeness_rate: float
+    max_chain_length: int
+    passed: bool
+
+    def to_dict(self) -> dict[str, int | float | bool]:
+        return {
+            "game_count": self.game_count,
+            "chain_three_game_count": self.chain_three_game_count,
+            "chain_three_game_rate": self.chain_three_game_rate,
+            "normal_day_debate_game_count": self.normal_day_debate_game_count,
+            "normal_day_debate_game_rate": self.normal_day_debate_game_rate,
+            "audited_chain_decision_count": self.audited_chain_decision_count,
+            "complete_audit_count": self.complete_audit_count,
+            "audit_completeness_rate": self.audit_completeness_rate,
+            "max_chain_length": self.max_chain_length,
+            "passed": self.passed,
+        }
+
+
 def evaluate_replay(path: Path) -> ReplayEvaluationReport:
     data = json.loads(path.read_text(encoding="utf-8"))
     rounds = _rounds_from_data(data)
@@ -202,6 +230,86 @@ def evaluate_replay(path: Path) -> ReplayEvaluationReport:
     )
 
 
+def evaluate_self_explosion_benchmark(
+    replays: list[dict[str, Any]],
+    *,
+    max_chain_three_rate: float = 0.05,
+    min_normal_day_rate: float = 0.8,
+    min_audit_completeness_rate: float = 1.0,
+) -> SelfExplosionBenchmarkReport:
+    chain_three_games = 0
+    normal_day_games = 0
+    audited_chain_decisions = 0
+    complete_audits = 0
+    max_chain_length = 0
+
+    for replay in replays:
+        rounds = sorted(
+            _rounds_from_data(replay),
+            key=lambda round_state: int(round_state.get("number") or 0),
+        )
+        logs_by_round = _logs_by_round(replay)
+        current_chain = 0
+        game_max_chain = 0
+        has_normal_day = False
+        for round_state in rounds:
+            round_number = int(round_state.get("number") or 0)
+            exploded = bool(round_state.get("werewolf_self_exploded"))
+            if exploded:
+                prior_chain = current_chain
+                current_chain += 1
+                game_max_chain = max(game_max_chain, current_chain)
+                if prior_chain >= 1:
+                    audited_chain_decisions += 1
+                    action_log = logs_by_round.get(round_number, {}).get(
+                        "werewolf_self_explosion"
+                    )
+                    if _self_explosion_audit_complete(action_log):
+                        complete_audits += 1
+            else:
+                current_chain = 0
+
+            debate = round_state.get("debate")
+            votes = round_state.get("votes")
+            if (
+                isinstance(debate, list)
+                and bool(debate)
+                and bool(votes)
+                and not round_state.get("day_ended_by_self_explosion")
+            ):
+                has_normal_day = True
+
+        if game_max_chain >= 3:
+            chain_three_games += 1
+        if has_normal_day:
+            normal_day_games += 1
+        max_chain_length = max(max_chain_length, game_max_chain)
+
+    game_count = len(replays)
+    chain_rate = chain_three_games / game_count if game_count else 0.0
+    normal_day_rate = normal_day_games / game_count if game_count else 0.0
+    audit_rate = (
+        complete_audits / audited_chain_decisions if audited_chain_decisions else 1.0
+    )
+    return SelfExplosionBenchmarkReport(
+        game_count=game_count,
+        chain_three_game_count=chain_three_games,
+        chain_three_game_rate=chain_rate,
+        normal_day_debate_game_count=normal_day_games,
+        normal_day_debate_game_rate=normal_day_rate,
+        audited_chain_decision_count=audited_chain_decisions,
+        complete_audit_count=complete_audits,
+        audit_completeness_rate=audit_rate,
+        max_chain_length=max_chain_length,
+        passed=(
+            game_count > 0
+            and chain_rate <= max_chain_three_rate
+            and normal_day_rate >= min_normal_day_rate
+            and audit_rate >= min_audit_completeness_rate
+        ),
+    )
+
+
 def _append_issue(
     issues: list[ReplayEvaluationIssue],
     seen_issue_keys: set[tuple[str, int, str]],
@@ -230,6 +338,29 @@ def _rounds_from_data(data: dict[str, Any]) -> list[dict[str, Any]]:
         ]
 
     return []
+
+
+def _logs_by_round(data: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    logs = data.get("logs")
+    if not isinstance(logs, list):
+        return {}
+    return {
+        int(log.get("number") or 0): log
+        for log in logs
+        if isinstance(log, dict) and int(log.get("number") or 0) > 0
+    }
+
+
+def _self_explosion_audit_complete(action_log: object) -> bool:
+    if not isinstance(action_log, dict) or action_log.get("decision_schema") != "v1":
+        return False
+    audit = action_log.get("decision_audit")
+    if not isinstance(audit, dict):
+        return False
+    return all(
+        isinstance(audit.get(field), str) and bool(str(audit[field]).strip())
+        for field in ("benefit_type", "expected_gain", "primary_risk")
+    )
 
 
 def _error_message_from_data(data: dict[str, Any]) -> str:

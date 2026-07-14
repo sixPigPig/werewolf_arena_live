@@ -20,6 +20,8 @@ from app.werewolf.models import (
     Player,
     RoundLog,
     RoundState,
+    SheriffBadgeResolution,
+    SheriffElectionResolution,
     StageInterruption,
 )
 
@@ -436,7 +438,50 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
         sheriff_pre_election_bomb_count=int(data.get("sheriff_pre_election_bomb_count", 0)),
         sheriff_election_pending=bool(data.get("sheriff_election_pending", False)),
         sheriff_badge_lost_reason=data.get("sheriff_badge_lost_reason"),
+        sheriff_election_resolution=sheriff_election_resolution_from_dict(
+            data.get("sheriff_election_resolution")
+        ),
+        sheriff_badge_resolution=sheriff_badge_resolution_from_dict(
+            data.get("sheriff_badge_resolution")
+        ),
         success=bool(data.get("success", False)),
+    )
+
+
+def sheriff_election_resolution_from_dict(
+    data: object,
+) -> SheriffElectionResolution | None:
+    if not isinstance(data, dict):
+        return None
+    return SheriffElectionResolution(
+        schema_version=int(data.get("schema_version", 1)),
+        outcome=str(data.get("outcome") or "badge_lost"),  # type: ignore[arg-type]
+        reason_code=str(data.get("reason_code") or "no_candidates"),  # type: ignore[arg-type]
+        reason_text=str(data.get("reason_text") or ""),
+        sheriff=str(data["sheriff"]) if data.get("sheriff") is not None else None,
+        candidates=[str(item) for item in data.get("candidates", [])],
+        withdrawn=[str(item) for item in data.get("withdrawn", [])],
+        final_candidates=[str(item) for item in data.get("final_candidates", [])],
+        voters=[str(item) for item in data.get("voters", [])],
+        votes={str(key): str(value) for key, value in data.get("votes", {}).items()},
+        pk_candidates=[str(item) for item in data.get("pk_candidates", [])],
+        runoff_votes={
+            str(key): str(value) for key, value in data.get("runoff_votes", {}).items()
+        },
+        badge_lost=bool(data.get("badge_lost", False)),
+        election_pending=bool(data.get("election_pending", False)),
+    )
+
+
+def sheriff_badge_resolution_from_dict(data: object) -> SheriffBadgeResolution | None:
+    if not isinstance(data, dict):
+        return None
+    return SheriffBadgeResolution(
+        schema_version=int(data.get("schema_version", 1)),
+        outcome=str(data.get("outcome") or "destroyed"),  # type: ignore[arg-type]
+        from_player=str(data.get("from_player") or ""),
+        to_player=str(data["to_player"]) if data.get("to_player") is not None else None,
+        reason_code=str(data.get("reason_code") or "destroyed"),
     )
 
 
@@ -508,9 +553,15 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
     lm_log_data = data.get("lm_log", {})
     if not isinstance(lm_log_data, dict):
         lm_log_data = {}
+    action = str(data.get("action") or "")
+    decision_schema = (
+        str(data["decision_schema"])
+        if data.get("decision_schema") is not None
+        else ("legacy" if action == "werewolf_self_explosion" else None)
+    )
     return ActionLog(
         actor=str(data.get("actor") or ""),
-        action=str(data.get("action") or ""),
+        action=action,
         options=[str(item) for item in data.get("options", [])],
         choice=data.get("choice"),
         lm_log=LmLog(
@@ -524,6 +575,16 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
         fallback_choice=data.get("fallback_choice"),
         fallback_reason=data.get("fallback_reason"),
         attempt_count=int(data.get("attempt_count") or 1),
+        decision_schema=decision_schema,
+        decision_audit=(
+            {
+                str(key): str(value)
+                for key, value in data["decision_audit"].items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+            if isinstance(data.get("decision_audit"), dict)
+            else None
+        ),
     )
 
 

@@ -4,9 +4,11 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from app.werewolf.judge_voice_assets import (
+    DEFAULT_JUDGE_VOICE_ASSET_DIR,
     JUDGE_VOICE_LINES,
     generate_judge_voice_assets,
     list_judge_voice_assets,
+    validate_used_judge_voice_assets,
 )
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
 from app.werewolf.volcengine_tts import TtsSubtitleCue, TtsSubtitleTiming
@@ -59,6 +61,12 @@ def test_catalog_contains_standard_werewolf_judge_lines() -> None:
     assert lines_by_id["speech_prompt"].text == "{玩家}请发言。"
     assert lines_by_id["exile_result"].text == "{玩家} 得票最高，被放逐出局。"
     assert lines_by_id["game_over_wolves"].text == "游戏结束，狼人阵营获胜。"
+    assert lines_by_id["sheriff_no_voters"].text == "本轮没有警下投票者，警徽流失。"
+    assert lines_by_id["hunter_shot_skipped"].text == "猎人选择不发动技能。"
+
+
+def test_used_static_judge_voice_assets_have_audio_and_subtitle_timings() -> None:
+    validate_used_judge_voice_assets(asset_dir=DEFAULT_JUDGE_VOICE_ASSET_DIR)
 
 
 def test_list_judge_voice_assets_marks_existing_files(tmp_path: Path) -> None:

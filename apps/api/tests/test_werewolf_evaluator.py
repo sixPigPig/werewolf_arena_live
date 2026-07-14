@@ -1,6 +1,6 @@
 import json
 
-from app.werewolf.evaluator import evaluate_replay
+from app.werewolf.evaluator import evaluate_replay, evaluate_self_explosion_benchmark
 
 
 def test_evaluator_flags_private_summary_leak_and_forgotten_public_claim(
@@ -88,6 +88,66 @@ def test_evaluator_flags_invalid_abort_empty_logs_and_chain_self_explosion(tmp_p
     assert "invalid_action_abort" in report.issue_codes
     assert "empty_partial_logs" in report.issue_codes
     assert "chain_self_explosion_overuse" in report.issue_codes
+
+
+def test_chain_self_explosion_fixed_seed_benchmark_report() -> None:
+    replays = []
+    for seed in range(50):
+        for repetition in range(2):
+            is_chain_case = seed in {0, 10} and repetition == 0
+            rounds = [
+                {
+                    "number": 1,
+                    "werewolf_self_exploded": "2号玩家" if is_chain_case else None,
+                    "day_ended_by_self_explosion": is_chain_case,
+                    "debate": [] if is_chain_case else [{"speaker": "1号玩家", "message": "发言"}],
+                    "votes": {} if is_chain_case else {"1号玩家": "2号玩家"},
+                },
+                {
+                    "number": 2,
+                    "werewolf_self_exploded": "7号玩家" if is_chain_case else None,
+                    "day_ended_by_self_explosion": is_chain_case,
+                    "debate": [],
+                    "votes": {},
+                },
+                {
+                    "number": 3,
+                    "werewolf_self_exploded": "8号玩家" if is_chain_case else None,
+                    "day_ended_by_self_explosion": is_chain_case,
+                    "debate": [],
+                    "votes": {},
+                },
+            ]
+            audit_log = {
+                "decision_schema": "v1",
+                "decision_audit": {
+                    "benefit_type": "protect_last_hidden_wolf",
+                    "expected_gain": "保护最后隐狼",
+                    "primary_risk": "损失公开身份和存活狼人",
+                },
+            }
+            replays.append(
+                {
+                    "seed": seed,
+                    "repetition": repetition,
+                    "rounds": rounds,
+                    "logs": [
+                        {"number": 1, "werewolf_self_explosion": audit_log},
+                        {"number": 2, "werewolf_self_explosion": audit_log},
+                        {"number": 3, "werewolf_self_explosion": audit_log},
+                    ],
+                }
+            )
+
+    report = evaluate_self_explosion_benchmark(replays)
+
+    assert report.game_count == 100
+    assert report.chain_three_game_count == 2
+    assert report.chain_three_game_rate == 0.02
+    assert report.normal_day_debate_game_rate == 0.98
+    assert report.audit_completeness_rate == 1.0
+    assert report.max_chain_length == 3
+    assert report.passed is True
 
 
 def test_evaluator_flags_term_contradiction_and_self_reference(tmp_path) -> None:

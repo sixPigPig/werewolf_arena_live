@@ -10,6 +10,7 @@ from app.models.live import (
     LiveEventRecord,
     LiveRunRecord,
     VoiceAudioChunkRecord,
+    VoiceMaterializationJobRecord,
     VoiceUtteranceRecord,
 )
 from app.models.player_avatar_asset import PlayerAvatarAsset
@@ -38,6 +39,7 @@ __all__ = [
     "User",
     "UserFavoritePlayerProfile",
     "VoiceAudioChunkRecord",
+    "VoiceMaterializationJobRecord",
     "VoiceUtteranceRecord",
     "VirtualPlayerProfile",
 ]

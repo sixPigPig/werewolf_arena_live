@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models.live import VoiceAudioChunkRecord, VoiceUtteranceRecord
+from app.models.live import LiveEventRecord, VoiceAudioChunkRecord, VoiceUtteranceRecord
 from app.werewolf.voice import VoiceUtterance, chunk_text_for_tts
 
 TERMINAL_STATUSES = {"complete", "failed", "canceled"}
@@ -92,6 +92,13 @@ class DatabaseVoiceStore:
         self._commit()
 
     def append_chunk(self, utterance_id: str, *, chunk_index: int, audio: bytes) -> None:
+        existing = self.db.get(VoiceAudioChunkRecord, (utterance_id, chunk_index))
+        if existing is not None:
+            if bytes(existing.audio) != audio:
+                raise ValueError(
+                    f"Voice chunk {utterance_id}:{chunk_index} has incompatible audio"
+                )
+            return
         self.db.add(
             VoiceAudioChunkRecord(
                 utterance_id=utterance_id,
@@ -100,6 +107,16 @@ class DatabaseVoiceStore:
                 byte_length=len(audio),
             )
         )
+        self._commit()
+
+    def reset_incomplete_utterance(self, utterance_id: str) -> None:
+        record = self.db.get(VoiceUtteranceRecord, utterance_id)
+        if record is None or record.status == "complete":
+            return
+        self.db.query(VoiceAudioChunkRecord).filter(
+            VoiceAudioChunkRecord.utterance_id == utterance_id
+        ).delete(synchronize_session=False)
+        self.db.delete(record)
         self._commit()
 
     def complete_utterance(self, utterance_id: str, *, duration_ms: int) -> None:
@@ -227,6 +244,31 @@ class DatabaseVoiceStore:
             )
         return voices
 
+    def max_materialization_lag_ms(self) -> int | None:
+        rows = self.db.execute(
+            self.db.query(
+                VoiceUtteranceRecord.completed_at,
+                LiveEventRecord.created_at,
+            )
+            .join(
+                LiveEventRecord,
+                (LiveEventRecord.run_id == VoiceUtteranceRecord.run_id)
+                & (LiveEventRecord.event_id == VoiceUtteranceRecord.source_event_id),
+            )
+            .filter(
+                VoiceUtteranceRecord.session_id == self.session_id,
+                VoiceUtteranceRecord.status == "complete",
+                VoiceUtteranceRecord.completed_at.is_not(None),
+            )
+            .statement
+        ).all()
+        lags = [
+            max(0, int((_as_utc(completed_at) - _as_utc(created_at)).total_seconds() * 1000))
+            for completed_at, created_at in rows
+            if completed_at is not None and created_at is not None
+        ]
+        return max(lags) if lags else None
+
     def find_recent_utterance(
         self,
         *,
@@ -292,6 +334,12 @@ def _last_source_event_id(utterance: VoiceUtterance) -> int:
     if utterance.last_source_event_id is None:
         return utterance.source_event_id
     return max(utterance.source_event_id, utterance.last_source_event_id)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _normalize_subtitle_timings(value: list[dict[str, Any]]) -> list[dict[str, Any]]:

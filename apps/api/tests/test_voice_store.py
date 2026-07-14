@@ -4,7 +4,6 @@ from collections.abc import Generator
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -575,7 +574,7 @@ def test_voice_store_rejects_incompatible_existing_utterance(
         )
 
 
-def test_voice_store_duplicate_chunk_index_raises_and_session_remains_usable(
+def test_voice_store_incompatible_duplicate_chunk_raises_and_session_remains_usable(
     db_session: Session,
 ) -> None:
     store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
@@ -587,7 +586,7 @@ def test_voice_store_duplicate_chunk_index_raises_and_session_remains_usable(
     )
     store.append_chunk("voice_1", chunk_index=0, audio=b"abc")
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ValueError, match="incompatible audio"):
         store.append_chunk("voice_1", chunk_index=0, audio=b"overwrite")
 
     store.append_chunk("voice_1", chunk_index=1, audio=b"def")

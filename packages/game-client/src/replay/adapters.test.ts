@@ -469,6 +469,8 @@ describe("normalizeGameReplay", () => {
     expect(round.sheriff_pk_speeches).toEqual([]);
     expect(round.sheriff_runoff_votes).toEqual({});
     expect(round.sheriff_elected).toBeNull();
+    expect(round.sheriff_election_resolution).toBeNull();
+    expect(round.sheriff_badge_resolution).toBeNull();
   });
 
   it("normalizes public summary without exposing private summaries as round summaries", () => {

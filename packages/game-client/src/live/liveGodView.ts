@@ -543,28 +543,45 @@ function collectDeaths(
 }
 
 function collectSheriff(view: MutableGodView, payload: Record<string, unknown>) {
+  const election = recordField(payload, "sheriff_election");
+  const badge = recordField(payload, "sheriff_badge");
   const sheriff =
-    stringField(payload, "sheriff") || stringField(payload, "sheriff_elected");
+    stringField(payload, "sheriff") ||
+    stringField(payload, "sheriff_elected") ||
+    (election ? stringField(election, "sheriff") : "") ||
+    (badge ? stringField(badge, "to_player") : "");
   if (sheriff) {
     view.sheriff.current = sheriff;
   }
 
-  const badgeTarget = stringField(payload, "sheriff_badge_target");
+  const badgeTarget =
+    stringField(payload, "sheriff_badge_target") ||
+    (badge ? stringField(badge, "to_player") : "");
   if (badgeTarget) {
     view.sheriff.badgeFlow = `移交 ${badgeTarget}`;
   }
-  if (payload.sheriff_badge_lost === true) {
+  const electionOutcome = election ? stringField(election, "outcome") : "";
+  const badgeOutcome = badge ? stringField(badge, "outcome") : "";
+  if (
+    payload.sheriff_badge_lost === true ||
+    electionOutcome === "badge_lost" ||
+    badgeOutcome === "destroyed" ||
+    badgeOutcome === "lost_no_target"
+  ) {
     view.sheriff.current = null;
-    view.sheriff.badgeFlow = "警徽撕毁";
+    view.sheriff.badgeFlow = badgeOutcome === "destroyed" ? "警徽撕毁" : "警徽流失";
   }
 
-  const candidates = stringArrayField(payload, "sheriff_candidates");
-  if (candidates.length > 0) {
-    view.sheriff.candidates = candidates;
+  const candidateSource = election ?? payload;
+  if (Array.isArray(candidateSource.sheriff_candidates)) {
+    view.sheriff.candidates = stringArrayField(candidateSource, "sheriff_candidates");
+  } else if (Array.isArray(candidateSource.candidates)) {
+    view.sheriff.candidates = stringArrayField(candidateSource, "candidates");
   }
-  const voters = stringArrayField(payload, "sheriff_voters");
-  if (voters.length > 0) {
-    view.sheriff.voters = voters;
+  if (Array.isArray(candidateSource.sheriff_voters)) {
+    view.sheriff.voters = stringArrayField(candidateSource, "sheriff_voters");
+  } else if (Array.isArray(candidateSource.voters)) {
+    view.sheriff.voters = stringArrayField(candidateSource, "voters");
   }
 
   view.sheriff.callTarget = stringField(payload, "sheriff_call_target") || null;

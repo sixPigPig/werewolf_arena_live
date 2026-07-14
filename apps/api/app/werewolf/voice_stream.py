@@ -23,6 +23,7 @@ from app.werewolf.voice import (
     build_voice_messages,
     chunk_text_for_tts,
     event_to_voice_utterance,
+    voice_job_candidate,
 )
 from app.werewolf.volcengine_tts import (
     TtsSubtitleTiming,
@@ -127,6 +128,7 @@ class LiveVoiceStreamService:
         voice_store_factory: Callable[[str], VoiceStore | None] | None = None,
         judge_voice_asset_dir: Path = DEFAULT_JUDGE_VOICE_ASSET_DIR,
         judge_voice_asset_loader: Callable[[str], StaticJudgeVoiceAsset | None] | None = None,
+        persist_streamed_voices: bool = True,
     ) -> None:
         self.registry = registry
         self.config = config
@@ -134,6 +136,7 @@ class LiveVoiceStreamService:
         self.voice_store_factory = voice_store_factory
         self.judge_voice_asset_dir = judge_voice_asset_dir
         self.judge_voice_asset_loader = judge_voice_asset_loader
+        self.persist_streamed_voices = persist_streamed_voices
 
     @property
     def available(self) -> bool:
@@ -168,6 +171,7 @@ class LiveVoiceStreamService:
             return
 
         voice_store = self.voice_store_factory(run.session_id) if self.voice_store_factory else None
+        persistence_store = voice_store if self.persist_streamed_voices else None
         playback_acks: PlaybackAckQueue | None = (
             asyncio.Queue() if playback_ack_required else None
         )
@@ -248,7 +252,7 @@ class LiveVoiceStreamService:
                             utterance,
                             static_asset,
                             disconnect_task,
-                            voice_store,
+                            persistence_store,
                             playback_acks,
                         ):
                             return
@@ -257,7 +261,7 @@ class LiveVoiceStreamService:
                         utterance,
                         chunks,
                         disconnect_task,
-                        voice_store,
+                        persistence_store,
                         playback_acks,
                     ):
                         return
@@ -809,6 +813,14 @@ def _load_static_judge_voice_asset(
     )
 
 
+def load_static_judge_voice_asset(
+    asset_dir: Path,
+    asset_id: str,
+) -> StaticJudgeVoiceAsset | None:
+    """Load one controlled static judge asset for playback or materialization."""
+    return _load_static_judge_voice_asset(asset_dir, asset_id)
+
+
 def build_static_judge_playback_voices(
     events: list[dict[str, Any]],
     *,
@@ -884,6 +896,43 @@ def build_static_judge_playback_voices(
                 )
         _update_voice_context_after_event(voice_context, event)
     return voices
+
+
+def build_voice_playback_coverage(
+    events: list[dict[str, Any]],
+    effective_voices: list[dict[str, Any]],
+    *,
+    materialization_lag_ms: int | None = None,
+) -> dict[str, Any]:
+    narratable_keys: set[tuple[int, str]] = set()
+    terminal_keys: set[tuple[int, str]] = set()
+    for event_data in events:
+        event = _live_event_from_playback_dict(event_data)
+        if event is None:
+            continue
+        speaker_kind = voice_job_candidate(event)
+        if speaker_kind is None:
+            continue
+        key = (event.id, speaker_kind)
+        narratable_keys.add(key)
+        if event.type in TERMINAL_EVENT_TYPES:
+            terminal_keys.add(key)
+
+    voice_keys = {
+        (source_event_id, speaker_kind)
+        for voice in effective_voices
+        if isinstance((source_event_id := voice.get("source_event_id")), int)
+        and isinstance((speaker_kind := voice.get("speaker_kind")), str)
+    }
+    covered_keys = narratable_keys & voice_keys
+    return {
+        "narratable_event_count": len(narratable_keys),
+        "effective_voice_event_count": len(covered_keys),
+        "missing_narratable_event_count": len(narratable_keys - covered_keys),
+        "terminal_judge_voice_present": bool(terminal_keys)
+        and terminal_keys.issubset(voice_keys),
+        "voice_materialization_lag_ms": materialization_lag_ms,
+    }
 
 
 def _live_event_from_playback_dict(data: dict[str, Any]) -> LiveEvent | None:

@@ -4065,6 +4065,7 @@ def test_get_game_playback_exposes_safe_wolf_votes_and_final_target() -> None:
         "witch_wake",
         "witch_death",
         "witch_sleep",
+        "dawn_peaceful",
         "sheriff_raise_hands",
     ]
     witch_death = next(
@@ -4246,8 +4247,24 @@ def test_get_game_playback_preserves_public_day_stage_fields() -> None:
         "sheriff_pre_election_bomb_count": 1,
         "sheriff_election_pending": True,
         "sheriff_badge_lost_reason": "首爆中断警长竞选",
+        "narration_mode": "explicit_v1",
         "active_players": ["张三", "李四"],
     }
+
+    cue_events = [
+        event
+        for event in response.json()["events"]
+        if event["type"] == "judge_cue"
+    ]
+    assert [event["action"] for event in cue_events[-5:]] == [
+        "sheriff_result",
+        "werewolf_self_explosion",
+        "self_explosion_skip",
+        "badge_owner_out",
+        "badge_transfer",
+    ]
+    assert all(event["payload"]["schema_version"] == 1 for event in cue_events)
+    assert cue_events[-4]["payload"]["params"]["pending_actors"] == ["李四"]
 
 
 def test_get_game_playback_returns_partial_end_without_resuming(

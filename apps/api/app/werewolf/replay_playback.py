@@ -5,6 +5,23 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.werewolf.checkpoint import (
+    sheriff_badge_resolution_from_dict,
+    sheriff_election_resolution_from_dict,
+)
+from app.werewolf.judge_narration import (
+    JudgeCueSpec,
+    cue_spec,
+    dawn_result_cue,
+    exile_result_cue,
+    hunter_result_cue,
+    idiot_reveal_cues,
+    seat_asset_id,
+    self_explosion_cues,
+    sheriff_badge_cues,
+    sheriff_election_cues,
+)
+
 
 DEFAULT_PLAYBACK_CREATED_AT = "1970-01-01T00:00:00Z"
 PRIVATE_ROUND_MEMORY_ACTION = "summarize"
@@ -48,6 +65,8 @@ DAY_STAGE_STATE_KEYS = (
     "sheriff_pre_election_bomb_count",
     "sheriff_election_pending",
     "sheriff_badge_lost_reason",
+    "sheriff_election_resolution",
+    "sheriff_badge_resolution",
 )
 PUBLIC_PLAYER_KEYS = (
     "name",
@@ -194,14 +213,34 @@ def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
             "state_updated",
             round_number=round_number,
             phase="night",
-            payload=_night_state_payload(round_state, active_players),
+            action="night_resolved",
+            payload={
+                **_night_state_payload(round_state, active_players),
+                "narration_mode": "explicit_v1",
+            },
+        )
+        night_deaths = _list_or_empty(round_state.get("night_deaths"))
+        _publish_replay_cue(
+            publish,
+            dawn_result_cue(
+                [
+                    str(death.get("player"))
+                    for death in night_deaths
+                    if isinstance(death, dict) and death.get("player")
+                ]
+            ),
+            round_number=round_number,
+            phase="day",
         )
 
         publish(
             "phase_started",
             round_number=round_number,
             phase="day",
-            payload={"active_players": active_players},
+            payload={
+                "active_players": active_players,
+                "narration_mode": "explicit_v1",
+            },
         )
         sheriff_run_logs = _action_logs(round_log, ("sheriff_run",))
         if sheriff_run_logs:
@@ -212,8 +251,12 @@ def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
                 actor=None,
                 action="sheriff_raise_hands",
                 payload={
+                    "schema_version": 1,
+                    "cue_id": "sheriff_raise_hands",
                     "cue": "sheriff_raise_hands",
                     "visible_text": "想要竞选警长的玩家请举手。",
+                    "static_asset_id": "sheriff_raise_hands",
+                    "params": {},
                 },
             )
         for action_log in _action_logs(round_log, DAY_ACTION_KEYS):
@@ -227,7 +270,16 @@ def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
             "state_updated",
             round_number=round_number,
             phase="day",
-            payload=_day_state_payload(round_state, active_players),
+            action="day_resolution_completed",
+            payload={
+                **_day_state_payload(round_state, active_players),
+                "narration_mode": "explicit_v1",
+            },
+        )
+        _publish_replay_day_cues(
+            publish,
+            round_state,
+            round_number=round_number,
         )
 
     if status == "complete":
@@ -517,20 +569,163 @@ def _publish_night_judge_cue(
     round_number: int,
     target: str | None = None,
 ) -> None:
-    payload: dict[str, Any] = {
-        "cue": cue,
-        "visible_text": visible_text,
-    }
+    params: dict[str, object] = {}
     if target:
-        payload["target"] = target
+        params["target"] = target
+    static_asset_id = (
+        seat_asset_id(cue, target) if cue == "witch_death" and target else cue
+    )
+    _publish_replay_cue(
+        publish,
+        cue_spec(
+            cue,
+            visible_text,
+            static_asset_id=static_asset_id,
+            params=params,
+        ),
+        round_number=round_number,
+        phase="night",
+    )
+
+
+def _publish_replay_cue(
+    publish: Any,
+    cue: JudgeCueSpec,
+    *,
+    round_number: int,
+    phase: str,
+) -> None:
     publish(
         "judge_cue",
         round_number=round_number,
-        phase="night",
+        phase=phase,
         actor=None,
-        action=cue,
-        payload=payload,
+        action=cue.cue_id,
+        payload=cue.to_payload(),
     )
+
+
+def _publish_replay_day_cues(
+    publish: Any,
+    round_state: dict[str, Any],
+    *,
+    round_number: int,
+) -> None:
+    election = sheriff_election_resolution_from_dict(
+        round_state.get("sheriff_election_resolution")
+    )
+    if election is not None:
+        for cue in sheriff_election_cues(election):
+            _publish_replay_cue(publish, cue, round_number=round_number, phase="day")
+    else:
+        elected = _optional_str(round_state.get("sheriff_elected"))
+        if elected:
+            _publish_replay_cue(
+                publish,
+                cue_spec(
+                    "sheriff_result",
+                    f"{elected}当选警长，获得警徽。",
+                    static_asset_id=seat_asset_id("sheriff_result", elected),
+                    params={"sheriff": elected, "legacy_synthesized": True},
+                ),
+                round_number=round_number,
+                phase="day",
+            )
+        elif round_state.get("sheriff_badge_lost") is True:
+            _publish_replay_cue(
+                publish,
+                cue_spec(
+                    "sheriff_no_badge",
+                    static_asset_id="sheriff_no_badge",
+                    params={"legacy_synthesized": True},
+                ),
+                round_number=round_number,
+                phase="day",
+            )
+
+    self_exploded = _optional_str(round_state.get("werewolf_self_exploded"))
+    if self_exploded:
+        interruption = _dict_or_empty(round_state.get("interruption"))
+        cues = self_explosion_cues(
+            self_exploded,
+            stage=str(interruption.get("stage") or "day"),
+            completed_actors=[
+                str(item)
+                for item in _list_or_empty(interruption.get("completed_actors"))
+            ],
+            pending_actors=[
+                str(item)
+                for item in _list_or_empty(interruption.get("pending_actors"))
+            ],
+        )
+        for cue in cues:
+            _publish_replay_cue(publish, cue, round_number=round_number, phase="day")
+
+    idiot = _optional_str(round_state.get("idiot_revealed"))
+    if idiot:
+        for cue in idiot_reveal_cues(idiot):
+            _publish_replay_cue(publish, cue, round_number=round_number, phase="vote")
+
+    exiled = _optional_str(round_state.get("exiled"))
+    if exiled:
+        _publish_replay_cue(
+            publish,
+            exile_result_cue(exiled),
+            round_number=round_number,
+            phase="vote",
+        )
+
+    hunter_shot = _optional_str(round_state.get("hunter_shot"))
+    if hunter_shot:
+        _publish_replay_cue(
+            publish,
+            hunter_result_cue(hunter_shot),
+            round_number=round_number,
+            phase="vote",
+        )
+
+    badge = sheriff_badge_resolution_from_dict(round_state.get("sheriff_badge_resolution"))
+    if badge is not None:
+        for cue in sheriff_badge_cues(badge):
+            _publish_replay_cue(publish, cue, round_number=round_number, phase="vote")
+    else:
+        badge_target = _optional_str(round_state.get("sheriff_badge_target"))
+        badge_lost = round_state.get("sheriff_badge_lost") is True
+        if badge_target or (badge_lost and election is not None):
+            legacy_params: dict[str, object] = {"legacy_synthesized": True}
+            _publish_replay_cue(
+                publish,
+                cue_spec(
+                    "badge_owner_out",
+                    static_asset_id="badge_owner_out",
+                    params=legacy_params,
+                ),
+                round_number=round_number,
+                phase="vote",
+            )
+            if badge_target:
+                _publish_replay_cue(
+                    publish,
+                    cue_spec(
+                        "badge_transfer",
+                        f"警徽移交给 {badge_target}。",
+                        static_asset_id=seat_asset_id("badge_transfer", badge_target),
+                        params={**legacy_params, "to_player": badge_target},
+                    ),
+                    round_number=round_number,
+                    phase="vote",
+                )
+            else:
+                _publish_replay_cue(
+                    publish,
+                    cue_spec(
+                        "badge_destroyed",
+                        static_asset_id="badge_destroyed",
+                        params=legacy_params,
+                    ),
+                    round_number=round_number,
+                    phase="vote",
+                )
 
 
 def _publish_werewolf_vote(

@@ -5,10 +5,15 @@ from app.werewolf.voice import (
     VoiceSpeakerConfig,
     build_voice_messages,
     chunk_text_for_tts,
+    deterministic_voice_utterance_id,
+    event_to_voice_materialization,
     event_to_voice_utterance,
+    is_public_complete_speech_event,
     is_public_speech_event,
     is_static_judge_voice_asset_used,
+    voice_job_candidate,
 )
+from app.werewolf.voice_stream import build_voice_playback_coverage
 
 
 def live_event(
@@ -43,6 +48,91 @@ def test_public_speech_event_matches_supported_actions() -> None:
     )
 
     assert is_public_speech_event(event) is True
+
+
+def test_complete_public_speech_is_materialized_from_action_parsed() -> None:
+    event = live_event(
+        9,
+        "action_parsed",
+        actor="阿青",
+        action="debate",
+        payload={
+            "request_id": "req-final",
+            "visible_result": {"say": "这是最终完整发言。"},
+        },
+    )
+
+    utterance = event_to_voice_materialization(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+        player_seats={"阿青": 1},
+    )
+
+    assert is_public_complete_speech_event(event) is True
+    assert voice_job_candidate(event) == "player"
+    assert utterance is not None
+    assert utterance.utterance_id == deterministic_voice_utterance_id("run_1", 9, "player")
+    assert utterance.request_id == "req-final"
+    assert utterance.speaker_name == "1号玩家"
+    assert utterance.text == "这是最终完整发言。"
+
+
+def test_voice_job_candidate_rejects_private_and_delta_events() -> None:
+    public_delta = live_event(
+        10,
+        "model_response_delta",
+        actor="阿青",
+        action="debate",
+        payload={"is_public": True, "visible_text": "临时增量"},
+    )
+    private_action = live_event(
+        11,
+        "action_parsed",
+        actor="狼人",
+        action="werewolf_discuss",
+        payload={"visible_result": {"say": "秘密讨论"}},
+    )
+    explicit_day = live_event(
+        12,
+        "phase_started",
+        phase="day",
+        payload={"narration_mode": "explicit_v1"},
+    )
+
+    assert voice_job_candidate(public_delta) is None
+    assert voice_job_candidate(private_action) is None
+    assert voice_job_candidate(explicit_day) is None
+
+
+def test_terminal_effective_voice_coverage_counts_static_fallback() -> None:
+    events = [
+        {
+            "id": 7,
+            "type": "game_completed",
+            "run_id": "run_1",
+            "session_id": "game_1",
+            "created_at": "2026-07-07T00:00:00Z",
+            "payload": {"winner": "好人阵营"},
+        }
+    ]
+    fallback_voice = {
+        "utterance_id": "static_judge_7_game_over_villagers",
+        "source_event_id": 7,
+        "speaker_kind": "judge",
+    }
+
+    covered = build_voice_playback_coverage(events, [fallback_voice])
+    missing = build_voice_playback_coverage(events, [])
+
+    assert covered == {
+        "narratable_event_count": 1,
+        "effective_voice_event_count": 1,
+        "missing_narratable_event_count": 0,
+        "terminal_judge_voice_present": True,
+        "voice_materialization_lag_ms": None,
+    }
+    assert missing["missing_narratable_event_count"] == 1
+    assert missing["terminal_judge_voice_present"] is False
 
 
 def test_private_summary_delta_is_never_a_voice_speech_event() -> None:
@@ -326,6 +416,39 @@ def test_sheriff_raise_hands_cue_uses_managed_static_asset() -> None:
     assert utterance is not None
     assert utterance.text == "想要竞选警长的玩家请举手。"
     assert utterance.static_asset_id == "sheriff_raise_hands"
+
+
+def test_explicit_judge_cue_is_authoritative_and_state_fallback_is_suppressed() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    state_event = live_event(
+        14,
+        "state_updated",
+        action="exile_resolved",
+        phase="vote",
+        payload={
+            "narration_mode": "explicit_v1",
+            "exiled": "8号玩家",
+        },
+    )
+    cue_event = live_event(
+        15,
+        "judge_cue",
+        action="exile_result",
+        phase="vote",
+        payload={
+            "schema_version": 1,
+            "cue_id": "exile_result",
+            "visible_text": "8号玩家得票最高，被放逐出局。",
+            "static_asset_id": "exile_result_seat_08",
+            "params": {"player": "8号玩家"},
+        },
+    )
+
+    assert event_to_voice_utterance(state_event, config) is None
+    utterance = event_to_voice_utterance(cue_event, config)
+    assert utterance is not None
+    assert utterance.text == "8号玩家得票最高，被放逐出局。"
+    assert utterance.static_asset_id == "exile_result_seat_08"
 
 
 def test_speech_order_request_prompts_sheriff_with_managed_static_asset() -> None:

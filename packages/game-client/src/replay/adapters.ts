@@ -162,6 +162,8 @@ function normalizeRound(
       round.sheriff_pre_election_bomb_count ?? 0,
     sheriff_election_pending: round.sheriff_election_pending ?? false,
     sheriff_badge_lost_reason: round.sheriff_badge_lost_reason ?? null,
+    sheriff_election_resolution: round.sheriff_election_resolution ?? null,
+    sheriff_badge_resolution: round.sheriff_badge_resolution ?? null,
     bids: bidGroups.flatMap((group) => group.bids),
     bidGroups,
     votes,

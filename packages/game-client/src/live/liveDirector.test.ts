@@ -656,4 +656,39 @@ describe("toDirectorCue", () => {
       compressible: true,
     });
   });
+
+  it("uses explicit judge cues without duplicating narrated state updates", () => {
+    const cues = buildDirectorCues([
+      event({
+        id: 10,
+        type: "state_updated",
+        action: "exile_resolved",
+        payload: {
+          narration_mode: "explicit_v1",
+          exiled: "8号玩家",
+        },
+      }),
+      event({
+        id: 11,
+        type: "judge_cue",
+        action: "exile_result",
+        payload: {
+          schema_version: 1,
+          cue_id: "exile_result",
+          visible_text: "8号玩家得票最高，被放逐出局。",
+          static_asset_id: "exile_result_seat_08",
+          params: { player: "8号玩家" },
+        },
+      }),
+    ]);
+
+    expect(cues).toHaveLength(1);
+    expect(cues[0]).toMatchObject({
+      eventId: 11,
+      action: "exile_result",
+      body: "8号玩家得票最高，被放逐出局。",
+      importance: "key",
+      compressible: false,
+    });
+  });
 });

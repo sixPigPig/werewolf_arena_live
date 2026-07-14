@@ -68,8 +68,27 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "reasoning": {"type": "string"},
             "self_explode": {"type": "string"},
+            "benefit_type": {
+                "type": "string",
+                "enum": [
+                    "immediate_win",
+                    "secure_badge_denial",
+                    "protect_last_hidden_wolf",
+                    "deny_confirmed_public_information",
+                    "force_valuable_night",
+                    "none",
+                ],
+            },
+            "expected_gain": {"type": "string"},
+            "primary_risk": {"type": "string"},
         },
-        "required": ["reasoning", "self_explode"],
+        "required": [
+            "reasoning",
+            "self_explode",
+            "benefit_type",
+            "expected_gain",
+            "primary_risk",
+        ],
     },
     "investigate": {
         "type": "object",
@@ -173,10 +192,7 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
 
     debate_guidance_sections = []
     if action == "debate":
-        debate_guidance_sections = [
-            _render_debate_guidance(world_state),
-            _render_quality_feedback(world_state),
-        ]
+        debate_guidance_sections = [_render_debate_guidance(world_state)]
 
     sections = [
         _render_base(world_state),
@@ -186,6 +202,8 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
         _render_stage_interruptions(world_state),
         _render_endgame_context(world_state),
         _render_sheriff_election(world_state),
+        _render_public_action_eligibility(world_state),
+        _render_quality_feedback(world_state),
         _render_debate(world_state),
         *debate_guidance_sections,
         _render_instruction(action, world_state),
@@ -253,6 +271,41 @@ def _render_sheriff_election(world_state: dict[str, Any]) -> str:
     if not election:
         return ""
     return "警长竞选公开信息：\n" + "\n".join(f"- {line}" for line in election)
+
+
+def _render_public_action_eligibility(world_state: dict[str, Any]) -> str:
+    eligibility = world_state.get("public_action_eligibility")
+    if not isinstance(eligibility, dict):
+        return ""
+    candidates = [str(item) for item in eligibility.get("original_candidates", [])]
+    voters = [str(item) for item in eligibility.get("original_voters", [])]
+    final_candidates = [str(item) for item in eligibility.get("final_candidates", [])]
+    reason = str(eligibility.get("sheriff_vote_reason") or "")
+    lines = [
+        f"原始上警玩家：{'、'.join(candidates) or '无'}。",
+        f"原始警下投票者：{'、'.join(voters) or '无'}。",
+        f"当前最终候选：{'、'.join(final_candidates) or '无'}。",
+    ]
+    if candidates and not voters:
+        lines.append("本轮没有警下投票者；任何上警或退水玩家都不能进行警长投票。")
+    if eligibility.get("actor_can_sheriff_vote") is True:
+        lines.append("你是原始警下玩家，拥有本轮警长投票权。")
+    elif reason == "withdrew_candidate_not_original_voter":
+        lines.append("你已退水，但你不是原始警下玩家，因此没有本轮警长投票权。")
+    elif reason == "candidate_not_eligible":
+        lines.append("你是上警玩家，不属于原始警下玩家，因此没有本轮警长投票权。")
+    elif reason == "no_off_sheriff_voters":
+        lines.append("本轮不存在合法警长投票者。")
+    elif reason == "sheriff_disabled":
+        lines.append("本局未启用警长规则。")
+    elif eligibility.get("sheriff_election_active") is not True:
+        lines.append("警长竞选已经结算。")
+    lines.append(
+        "你可以参与白天放逐投票。"
+        if eligibility.get("actor_can_exile_vote") is True
+        else "你当前不能参与白天放逐投票。"
+    )
+    return "警长竞选资格：\n" + "\n".join(f"- {line}" for line in lines)
 
 
 def _render_debate(world_state: dict[str, Any]) -> str:
@@ -378,6 +431,22 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
         )
     if action == "werewolf_self_explosion":
         stage = world_state.get("self_explosion_stage") or "白天公开阶段"
+        decision_context = world_state.get("self_explosion_decision_context")
+        if not isinstance(decision_context, dict):
+            decision_context = {}
+        total_explosions = int(decision_context.get("total_self_explosions") or 0)
+        consecutive_explosions = int(
+            decision_context.get("consecutive_self_explosion_rounds") or 0
+        )
+        active_wolves = int(decision_context.get("active_wolves_before") or 0)
+        actor_is_last_wolf = decision_context.get("actor_is_last_wolf") is True
+        active_players = int(decision_context.get("active_players_before") or 0)
+        completed_speakers = int(decision_context.get("completed_public_speakers") or 0)
+        pending_speakers = int(decision_context.get("pending_public_speakers") or 0)
+        badge_impact = str(decision_context.get("badge_impact") or "none")
+        explosion_would_end_game = (
+            decision_context.get("explosion_would_end_game") is True
+        )
         sheriff = world_state.get("sheriff")
         election_open = world_state.get("sheriff_election_open") is True
         bomb_count = int(world_state.get("sheriff_pre_election_bomb_count") or 0)
@@ -422,17 +491,49 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             and badge_policy == "double"
         ):
             benefit_examples = f"吞警徽、{benefit_examples}"
+        chain_guidance = "正常比较公开身份代价与阵营收益。"
+        if consecutive_explosions == 1:
+            chain_guidance = (
+                "上一轮已经发生自爆；本次必须给出具体 benefit_type 和 primary_risk，"
+                "不能只写泛化的阻止好人获取信息。"
+            )
+        elif consecutive_explosions >= 2:
+            chain_guidance = (
+                f"已经连续 {consecutive_explosions} 轮发生狼人自爆，默认选择不自爆。"
+                "只有直接胜势、关键警徽收益或保护最后隐狼等高价值理由才支持继续；"
+                "阻止好人形成信息不能单独作为充分理由。"
+            )
+        last_wolf_guidance = (
+            "你是场上最后一名狼人；自爆会让狼队失去最后存活者，必须优先评估立即败北风险。"
+            if actor_is_last_wolf
+            else ""
+        )
+        terminal_guidance = (
+            "按当前人数和屠边条件，自爆会立即结算对局；必须明确胜负方向。"
+            if explosion_would_end_game
+            else ""
+        )
         return (
             "行动：狼人自爆判断。\n"
             f"当前阶段：{stage}。\n"
             f"警长产生前自爆次数：{bomb_count}。\n"
+            "自爆决策上下文：\n"
+            f"- 历史总自爆次数：{total_explosions}。\n"
+            f"- 连续自爆轮数：{consecutive_explosions}。\n"
+            f"- 当前存活狼人/玩家：{active_wolves}/{active_players}。\n"
+            f"- 已完成/待发言玩家数：{completed_speakers}/{pending_speakers}。\n"
+            f"- 警徽影响：{badge_impact}。\n"
             f"{feature_context}\n"
             f"{badge_context}\n"
+            f"{chain_guidance}\n"
+            f"{last_wolf_guidance}\n"
+            f"{terminal_guidance}\n"
             "选择自爆会公开你是狼人、你立刻出局，并让当天直接结束进入夜晚。\n"
             f"候选选项：{options}。\n"
             f"已有狼人自爆时，继续自爆必须能带来明确收益，例如{benefit_examples}。"
             "收益不明确时选择不自爆，保留白天发言空间。"
-            "请以狼人阵营收益判断，输出字段 reasoning 和 self_explode。"
+            "请以狼人阵营收益判断，输出字段 reasoning、self_explode、benefit_type、"
+            "expected_gain 和 primary_risk。"
         )
     if action == "investigate":
         return (
@@ -528,6 +629,14 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
 
 
 def _render_json_example(action: str) -> str:
+    if action == "werewolf_self_explosion":
+        return (
+            "JSON 示例（自爆收益审计）："
+            '{"reasoning":"当前连续自爆代价过高",'
+            '"self_explode":"不自爆","benefit_type":"none",'
+            '"expected_gain":"保留白天发言和抗推空间",'
+            '"primary_risk":"继续自爆会损失存活狼人"}'
+        )
     if action == "werewolf_discuss":
         field_mapping = (
             f"reasoning={FIELD_LABELS['reasoning']}，"

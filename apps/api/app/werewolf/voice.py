@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from app.werewolf.live import LiveEvent
@@ -19,6 +20,7 @@ PUBLIC_WINNER_ASSETS = {
 USED_STATIC_JUDGE_VOICE_ASSET_IDS = frozenset(
     {
         "badge_destroyed",
+        "badge_owner_out",
         "dawn_peaceful",
         "dawn_start",
         "exile_vote_start",
@@ -34,7 +36,14 @@ USED_STATIC_JUDGE_VOICE_ASSET_IDS = frozenset(
         "seer_sleep",
         "seer_wake",
         "sheriff_choose_badge_side",
+        "sheriff_no_badge",
         "sheriff_raise_hands",
+        "sheriff_vote",
+        "sheriff_tie",
+        "self_explosion_skip",
+        "hunter_shot_choose",
+        "hunter_shot_start",
+        "idiot_stays",
         "werewolves_choose",
         "werewolves_sleep",
         "werewolves_wake",
@@ -133,6 +142,41 @@ def is_public_speech_event(event: LiveEvent) -> bool:
     )
 
 
+def is_public_complete_speech_event(event: LiveEvent) -> bool:
+    if event.type != "action_parsed" or event.action not in PUBLIC_SPEECH_ACTIONS:
+        return False
+    visible_result = event.payload.get("visible_result")
+    return (
+        isinstance(visible_result, dict)
+        and isinstance(visible_result.get("say"), str)
+        and bool(visible_result["say"].strip())
+    )
+
+
+def voice_job_candidate(event: LiveEvent) -> SpeakerKind | None:
+    """Classify durable voice outbox candidates without inspecting private text."""
+    if is_public_complete_speech_event(event):
+        return "player"
+    if event.type in {"game_started", "judge_cue", "game_completed", "game_failed", "game_canceled"}:
+        return "judge"
+    if event.type == "phase_started" and event.phase in {"night", "day", "vote", "summary"}:
+        if event.phase == "day" and event.payload.get("narration_mode") == "explicit_v1":
+            return None
+        return "judge"
+    return None
+
+
+def deterministic_voice_utterance_id(
+    run_id: str,
+    source_event_id: int,
+    speaker_kind: SpeakerKind,
+) -> str:
+    digest = hashlib.sha256(
+        f"{run_id}:{source_event_id}:{speaker_kind}".encode()
+    ).hexdigest()[:24]
+    return f"voice_{digest}"
+
+
 def chunk_text_for_tts(text: str, *, max_chars: int = 24) -> list[str]:
     if max_chars < 1:
         raise ValueError("max_chars must be positive")
@@ -162,8 +206,16 @@ def event_to_voice_utterance(
     previous_night_deaths: Sequence[str] = (),
     peaceful_night: bool = False,
 ) -> VoiceUtterance | None:
-    if is_public_speech_event(event):
-        visible_text = _string_payload(event, "visible_text").strip()
+    if is_public_complete_speech_event(event) or is_public_speech_event(event):
+        if is_public_complete_speech_event(event):
+            visible_result = event.payload.get("visible_result")
+            visible_text = (
+                str(visible_result.get("say") or "")
+                if isinstance(visible_result, dict)
+                else ""
+            ).strip()
+        else:
+            visible_text = _string_payload(event, "visible_text").strip()
         if not visible_text:
             return None
         speaker_name = _player_label(event.actor, player_seats, fallback="当前玩家")
@@ -199,6 +251,36 @@ def event_to_voice_utterance(
         text=judge_cue.text,
         action=event.action,
         static_asset_id=judge_cue.static_asset_id,
+    )
+
+
+def event_to_voice_materialization(
+    event: LiveEvent,
+    config: VoiceSpeakerConfig,
+    *,
+    player_seats: Mapping[str, int] | None = None,
+    previous_night_deaths: Sequence[str] = (),
+    peaceful_night: bool = False,
+) -> VoiceUtterance | None:
+    candidate = voice_job_candidate(event)
+    if candidate is None:
+        return None
+    utterance = event_to_voice_utterance(
+        event,
+        config,
+        player_seats=player_seats,
+        previous_night_deaths=previous_night_deaths,
+        peaceful_night=peaceful_night,
+    )
+    if utterance is None or utterance.speaker_kind != candidate:
+        return None
+    return replace(
+        utterance,
+        utterance_id=deterministic_voice_utterance_id(
+            event.run_id,
+            event.id,
+            candidate,
+        ),
     )
 
 
@@ -255,6 +337,29 @@ def _judge_cue_for_event(
     previous_night_deaths: Sequence[str],
     peaceful_night: bool,
 ) -> JudgeVoiceCue | None:
+    if event.type == "judge_cue":
+        visible_text = _string_payload(event, "visible_text").strip()
+        if visible_text:
+            static_asset_id = _string_payload(event, "static_asset_id") or None
+            return JudgeVoiceCue(visible_text, static_asset_id)
+        role_cue = NIGHT_ROLE_JUDGE_CUES.get(event.action or "")
+        if role_cue is not None:
+            return role_cue
+        if event.action == "witch_death":
+            target = _string_payload(event, "target")
+            if not target:
+                return None
+            target_label = _player_label(target, player_seats, fallback="该玩家")
+            return JudgeVoiceCue(
+                f"今晚被狼人袭击的玩家是{target_label}。",
+                _seat_asset_id("witch_death", target, player_seats),
+            )
+        if event.action == "sheriff_raise_hands":
+            return JudgeVoiceCue(
+                "想要竞选警长的玩家请举手。",
+                "sheriff_raise_hands",
+            )
+        return None
     if event.type == "game_started":
         return JudgeVoiceCue("本局游戏开始，请所有玩家确认自己的身份牌。", "game_intro")
     if event.type == "phase_started" and event.phase == "night":
@@ -271,24 +376,6 @@ def _judge_cue_for_event(
         return JudgeVoiceCue("发言结束，进入放逐投票。", "exile_vote_start")
     if event.type == "phase_started" and event.phase == "summary":
         return JudgeVoiceCue("现在公布本轮结算。")
-    if event.type == "judge_cue" and event.phase == "night":
-        role_cue = NIGHT_ROLE_JUDGE_CUES.get(event.action or "")
-        if role_cue is not None:
-            return role_cue
-        if event.action == "witch_death":
-            target = _string_payload(event, "target")
-            if not target:
-                return None
-            target_label = _player_label(target, player_seats, fallback="该玩家")
-            return JudgeVoiceCue(
-                f"今晚被狼人袭击的玩家是{target_label}。",
-                _seat_asset_id("witch_death", target, player_seats),
-            )
-    if event.type == "judge_cue" and event.action == "sheriff_raise_hands":
-        return JudgeVoiceCue(
-            "想要竞选警长的玩家请举手。",
-            "sheriff_raise_hands",
-        )
     if event.type == "action_requested" and event.phase == "night":
         night_action_cue = NIGHT_ACTION_JUDGE_CUES.get(event.action or "")
         if night_action_cue is not None:
@@ -305,6 +392,8 @@ def _judge_cue_for_event(
             _seat_asset_id("speech_prompt", event.actor, player_seats),
         )
     if event.type == "state_updated":
+        if event.payload.get("narration_mode") == "explicit_v1":
+            return None
         state_cue = _state_update_judge_cue(event, player_seats)
         if state_cue is not None:
             return state_cue
@@ -316,6 +405,8 @@ def _judge_cue_for_event(
         return JudgeVoiceCue("游戏结束，胜利阵营获胜。")
     if event.type == "game_failed":
         return JudgeVoiceCue("对局异常中断。")
+    if event.type == "game_canceled":
+        return JudgeVoiceCue("对局已终止。")
     return None
 
 

@@ -105,6 +105,33 @@ describe("deriveMobileLiveFocusPresentation", () => {
     expect(presentation.detail).toBe("白天流程");
   });
 
+  it("shows pending speaker count for the explicit self-explosion interruption cue", () => {
+    const { presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "judge_cue",
+        round: 3,
+        phase: "day",
+        action: "self_explosion_skip",
+        payload: {
+          schema_version: 1,
+          cue_id: "self_explosion_skip",
+          visible_text: "本轮剩余发言和放逐投票终止，直接进入夜晚。",
+          static_asset_id: "self_explosion_skip",
+          params: {
+            stage: "debate",
+            pending_actors: ["5号玩家", "7号玩家"],
+          },
+        },
+      }),
+    ]);
+
+    expect(presentation.kind).toBe("skill");
+    expect(presentation.tone).toBe("danger");
+    expect(presentation.detail).toBe("剩余 2 名玩家未发言，放逐投票取消");
+  });
+
   it("shows the elected sheriff and winning vote count", () => {
     const { state, presentation } = focusFor([
       STARTED,
@@ -693,6 +720,48 @@ describe("deriveMobileLiveFocusPresentation", () => {
     expect(presentation.accessibleText).toContain("2号");
     expect(presentation.accessibleText).toContain("1号");
     expect(presentation.accessibleText).toContain("投票");
+  });
+
+  it("renders nested sheriff election and badge resolutions", () => {
+    const elected = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        action: "sheriff_election_resolved",
+        payload: {
+          sheriff_election: {
+            outcome: "elected",
+            sheriff: "4号 预言家",
+            voters: ["2号 女巫"],
+            votes: { "2号 女巫": "4号 预言家" },
+          },
+        },
+      }),
+    ]).presentation;
+    expect(elected.title).toBe("4号 当选警长");
+
+    const lost = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "state_updated",
+        round: 1,
+        phase: "day",
+        action: "sheriff_election_resolved",
+        payload: {
+          sheriff_election: {
+            outcome: "badge_lost",
+            sheriff: null,
+            voters: [],
+          },
+        },
+      }),
+    ]).presentation;
+    expect(lost.title).toBe("警徽流失");
+    expect(lost.accessibleText).toBe("警徽流失");
   });
 });
 

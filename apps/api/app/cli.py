@@ -36,6 +36,11 @@ from app.werewolf.private_memory_cleanup import cleanup_private_round_memory
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.runner import GameRunError, run_game
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
+from app.werewolf.voice_materializer import (
+    LIVE_VOICE_MATERIALIZER_WORKER_TYPE,
+    run_voice_materializer_worker,
+)
+from app.werewolf.volcengine_tts import VolcengineTtsConfig
 from app.werewolf.worker_telemetry import (
     JUDGE_VOICE_WORKER_TYPE,
     RuntimeWorkerTelemetry,
@@ -124,6 +129,29 @@ def _build_parser() -> argparse.ArgumentParser:
         default=settings.judge_voice_worker_probe_max_age_seconds,
     )
     voice_worker_probe_parser.set_defaults(func=_check_judge_voice_worker_command)
+
+    materializer_parser = subparsers.add_parser(
+        "run-live-voice-materializer",
+        help="Materialize durable live event audio independently of WebSocket clients.",
+    )
+    materializer_parser.add_argument("--once", action="store_true")
+    materializer_parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=settings.live_voice_materializer_poll_seconds,
+    )
+    materializer_parser.set_defaults(func=_run_live_voice_materializer_command)
+
+    materializer_probe_parser = subparsers.add_parser(
+        "check-live-voice-materializer",
+        help="Exit successfully when a live voice materializer heartbeat is fresh.",
+    )
+    materializer_probe_parser.add_argument(
+        "--max-age-seconds",
+        type=float,
+        default=settings.live_voice_materializer_probe_max_age_seconds,
+    )
+    materializer_probe_parser.set_defaults(func=_check_live_voice_materializer_command)
 
     live_reaper_parser = subparsers.add_parser(
         "run-live-run-reaper",
@@ -400,6 +428,91 @@ def _check_judge_voice_worker_command(args: argparse.Namespace) -> int:
         return 2
     print("judge_voice_worker=ok" if alive else "judge_voice_worker=stale")
     return 0 if alive else 1
+
+
+def _run_live_voice_materializer_command(args: argparse.Namespace) -> int:
+    if not 0.1 <= args.poll_seconds <= 60:
+        print("--poll-seconds must be between 0.1 and 60", file=sys.stderr)
+        return 2
+
+    stop_event = Event()
+    worker_id = f"live-voice-materializer-{uuid4().hex}"
+    telemetry = RuntimeWorkerTelemetry(
+        SessionLocal,
+        worker_id=worker_id,
+        worker_type=LIVE_VOICE_MATERIALIZER_WORKER_TYPE,
+        heartbeat_seconds=settings.live_voice_materializer_heartbeat_seconds,
+    )
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop_event.set()
+
+    previous_handlers = {
+        signal_number: signal.signal(signal_number, request_stop)
+        for signal_number in (signal.SIGINT, signal.SIGTERM)
+    }
+    telemetry_started = False
+    try:
+        telemetry.start()
+        telemetry_started = True
+        processed_count = run_voice_materializer_worker(
+            SessionLocal,
+            config=_live_voice_tts_config(),
+            worker_id=worker_id,
+            stop_event=stop_event,
+            poll_seconds=args.poll_seconds,
+            once=args.once,
+            lease_seconds=settings.live_voice_materializer_lease_seconds,
+            max_attempts=settings.live_voice_materializer_max_attempts,
+            backoff_seconds=settings.live_voice_materializer_backoff_seconds,
+            on_job=lambda key: print(
+                f"run_id={key[0]} source_event_id={key[1]} speaker_kind={key[2]}",
+                flush=True,
+            ),
+        )
+    except Exception as exc:
+        print(f"live voice materializer failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    finally:
+        if telemetry_started:
+            telemetry.stop()
+        for signal_number, handler in previous_handlers.items():
+            signal.signal(signal_number, handler)
+
+    if args.once and processed_count == 0:
+        print("voice_job=none")
+    return 0
+
+
+def _check_live_voice_materializer_command(args: argparse.Namespace) -> int:
+    if not 5 <= args.max_age_seconds <= 300:
+        print("--max-age-seconds must be between 5 and 300", file=sys.stderr)
+        return 2
+    try:
+        with SessionLocal() as db:
+            alive = runtime_worker_is_alive(
+                db,
+                worker_type=LIVE_VOICE_MATERIALIZER_WORKER_TYPE,
+                max_age_seconds=args.max_age_seconds,
+            )
+    except Exception as exc:
+        print(f"live_voice_materializer=unknown error={type(exc).__name__}", file=sys.stderr)
+        return 2
+    print("live_voice_materializer=ok" if alive else "live_voice_materializer=stale")
+    return 0 if alive else 1
+
+
+def _live_voice_tts_config() -> VolcengineTtsConfig:
+    return VolcengineTtsConfig(
+        enabled=settings.ark_tts_enabled,
+        api_key=settings.ark_tts_api_key,
+        resource_id=settings.ark_tts_resource_id,
+        ws_url=settings.ark_tts_ws_url,
+        player_speaker=settings.ark_tts_player_speaker,
+        judge_speaker=settings.ark_tts_judge_speaker,
+        audio_format=settings.ark_tts_audio_format,
+        sample_rate=settings.ark_tts_sample_rate,
+    )
 
 
 def _run_live_run_reaper_command(args: argparse.Namespace) -> int:

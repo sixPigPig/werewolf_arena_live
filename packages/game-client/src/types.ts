@@ -79,6 +79,42 @@ export type SpeechEntry = {
   message: string;
 };
 
+export type SheriffElectionResolution = {
+  schema_version: number;
+  outcome: "elected" | "badge_lost" | "postponed";
+  reason_code: string;
+  reason_text: string;
+  sheriff: string | null;
+  candidates: string[];
+  withdrawn: string[];
+  final_candidates: string[];
+  voters: string[];
+  votes: Record<string, string>;
+  pk_candidates: string[];
+  runoff_votes: Record<string, string>;
+  badge_lost: boolean;
+  election_pending: boolean;
+};
+
+export type SheriffBadgeResolution = {
+  schema_version: number;
+  outcome: "transferred" | "destroyed" | "lost_no_target";
+  from_player: string;
+  to_player: string | null;
+  reason_code: string;
+};
+
+export type NarrationMode = "explicit_v1";
+
+export type JudgeCuePayloadV1 = {
+  schema_version: 1;
+  cue_id: string;
+  cue?: string;
+  visible_text: string;
+  static_asset_id: string | null;
+  params: Record<string, unknown>;
+};
+
 export type RawRoundLog = {
   number: number;
   eliminate: RawActionLog | null;
@@ -190,6 +226,8 @@ export type RawRoundState = {
   sheriff_pre_election_bomb_count?: number;
   sheriff_election_pending?: boolean;
   sheriff_badge_lost_reason?: string | null;
+  sheriff_election_resolution?: SheriffElectionResolution | null;
+  sheriff_badge_resolution?: SheriffBadgeResolution | null;
   debate: SpeechEntry[];
   bids: Array<Record<string, number>>;
   votes: Array<Record<string, string>>;
@@ -294,6 +332,8 @@ export type GameRound = Omit<
   | "sheriff_pre_election_bomb_count"
   | "sheriff_election_pending"
   | "sheriff_badge_lost_reason"
+  | "sheriff_election_resolution"
+  | "sheriff_badge_resolution"
 > & {
   attacked: string | null;
   eliminated: string | null;
@@ -328,6 +368,8 @@ export type GameRound = Omit<
   sheriff_pre_election_bomb_count: number;
   sheriff_election_pending: boolean;
   sheriff_badge_lost_reason: string | null;
+  sheriff_election_resolution: SheriffElectionResolution | null;
+  sheriff_badge_resolution: SheriffBadgeResolution | null;
   bids: BidEntry[];
   bidGroups: BidGroup[];
   votes: VoteEntry[];

@@ -5,10 +5,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models.live import LiveEventRecord, LiveRunRecord
+from app.models.live import (
+    LiveEventRecord,
+    LiveRunRecord,
+    VoiceMaterializationJobRecord,
+)
 from app.werewolf.live import (
     ACTIVATION_ACK_RUN_FIELD_NAMES,
     ACTIVATION_ACK_RUN_TIMESTAMP_NAMES,
@@ -30,6 +36,7 @@ from app.werewolf.live import (
     validate_prepared_run,
     validate_rule_set_revision_metadata,
 )
+from app.werewolf.voice import voice_job_candidate
 
 
 def parse_live_datetime(value: str | None) -> datetime | None:
@@ -96,7 +103,7 @@ class DatabaseLiveStore:
         )
         self.db.add(record)
         self.db.flush()
-        self.db.add(_event_record(event))
+        self._stage_event_with_voice_job(event)
         self.db.flush()
 
     def save_new_run(self, run: LiveGameRun) -> None:
@@ -281,8 +288,7 @@ class DatabaseLiveStore:
             record.status = "running"
             record.started_at = parsed_started_at
             self.db.flush([record])
-            event_record = _event_record(activation)
-            self.db.add(event_record)
+            event_record = self._stage_event_with_voice_job(activation)
             self.db.flush([event_record])
             self.db.commit()
         except Exception:
@@ -426,8 +432,7 @@ class DatabaseLiveStore:
             record.fence_token += 1
             record.recovery_last_error = error
             self.db.flush([record])
-            event_record = _event_record(failure)
-            self.db.add(event_record)
+            event_record = self._stage_event_with_voice_job(failure)
             self.db.flush([event_record])
             self.db.commit()
         except Exception:
@@ -905,7 +910,7 @@ class DatabaseLiveStore:
         if guard.rowcount != 1:
             self.db.rollback()
             raise RunLeaseUnavailable(f"Run {event.run_id} event was rejected by its fencing token")
-        self.db.add(_event_record(event))
+        self._stage_event_with_voice_job(event)
         self._commit()
 
     def events_after(self, run_id: str, *, after_id: int | None = None) -> list[LiveEvent]:
@@ -957,6 +962,43 @@ class DatabaseLiveStore:
         except SQLAlchemyError:
             self.db.rollback()
             raise
+
+    def _stage_event_with_voice_job(self, event: LiveEvent) -> LiveEventRecord:
+        event_record = _event_record(event)
+        self.db.add(event_record)
+        speaker_kind = voice_job_candidate(event)
+        if speaker_kind is None:
+            return event_record
+
+        self.db.flush([event_record])
+        values = {
+            "run_id": event.run_id,
+            "source_event_id": event.id,
+            "speaker_kind": speaker_kind,
+            "session_id": event.session_id,
+            "status": "pending",
+            "attempt_count": 0,
+            "not_before": datetime.now(tz=UTC),
+        }
+        dialect_name = self.db.get_bind().dialect.name
+        if dialect_name == "postgresql":
+            statement = postgresql_insert(VoiceMaterializationJobRecord).values(**values)
+            statement = statement.on_conflict_do_nothing(
+                index_elements=("run_id", "source_event_id", "speaker_kind")
+            )
+            self.db.execute(statement)
+        elif dialect_name == "sqlite":
+            statement = sqlite_insert(VoiceMaterializationJobRecord).values(**values)
+            statement = statement.on_conflict_do_nothing(
+                index_elements=("run_id", "source_event_id", "speaker_kind")
+            )
+            self.db.execute(statement)
+        elif self.db.get(
+            VoiceMaterializationJobRecord,
+            (event.run_id, event.id, speaker_kind),
+        ) is None:
+            self.db.add(VoiceMaterializationJobRecord(**values))
+        return event_record
 
 
 def _format_optional_datetime(value: datetime | None) -> str | None:

@@ -27,9 +27,11 @@ class ActionLog:
     fallback_choice: object | None = None
     fallback_reason: str | None = None
     attempt_count: int = 1
+    decision_schema: str | None = None
+    decision_audit: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "actor": self.actor,
             "action": self.action,
             "options": self.options,
@@ -40,6 +42,11 @@ class ActionLog:
             "fallback_reason": self.fallback_reason,
             "attempt_count": self.attempt_count,
         }
+        if self.decision_schema is not None:
+            payload["decision_schema"] = self.decision_schema
+        if self.decision_audit is not None:
+            payload["decision_audit"] = self.decision_audit.copy()
+        return payload
 
 
 @dataclass
@@ -145,6 +152,102 @@ class StageInterruption:
         }
 
 
+SheriffElectionOutcome = Literal["elected", "badge_lost", "postponed"]
+SheriffElectionReason = Literal[
+    "single_candidate",
+    "first_vote_winner",
+    "runoff_vote_winner",
+    "no_candidates",
+    "all_candidates_withdrew",
+    "no_off_sheriff_voters",
+    "first_vote_empty",
+    "runoff_tied",
+    "first_pre_election_self_explosion",
+    "double_pre_election_self_explosion",
+]
+
+
+@dataclass(frozen=True)
+class SheriffElectionResolution:
+    schema_version: int
+    outcome: SheriffElectionOutcome
+    reason_code: SheriffElectionReason
+    reason_text: str
+    sheriff: str | None
+    candidates: list[str]
+    withdrawn: list[str]
+    final_candidates: list[str]
+    voters: list[str]
+    votes: dict[str, str]
+    pk_candidates: list[str]
+    runoff_votes: dict[str, str]
+    badge_lost: bool
+    election_pending: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+SheriffBadgeOutcome = Literal["transferred", "destroyed", "lost_no_target"]
+
+
+@dataclass(frozen=True)
+class SheriffBadgeResolution:
+    schema_version: int
+    outcome: SheriffBadgeOutcome
+    from_player: str
+    to_player: str | None
+    reason_code: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+SheriffVoteEligibilityReason = Literal[
+    "eligible_original_voter",
+    "candidate_not_eligible",
+    "withdrew_candidate_not_original_voter",
+    "no_off_sheriff_voters",
+    "election_resolved",
+    "sheriff_disabled",
+]
+
+
+@dataclass(frozen=True)
+class PublicActionEligibility:
+    sheriff_election_active: bool
+    original_candidates: list[str]
+    original_voters: list[str]
+    final_candidates: list[str]
+    actor_was_candidate: bool
+    actor_withdrew: bool
+    actor_can_sheriff_vote: bool
+    sheriff_vote_reason: SheriffVoteEligibilityReason
+    actor_can_exile_vote: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SelfExplosionDecisionContext:
+    total_self_explosions: int
+    consecutive_self_explosion_rounds: int
+    active_wolves_before: int
+    actor_is_last_wolf: bool
+    active_players_before: int
+    current_stage: str
+    completed_public_speakers: int
+    pending_public_speakers: int
+    sheriff_election_open: bool
+    pre_election_bomb_count: int
+    badge_impact: str
+    explosion_would_end_game: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass
 class RoundState:
     number: int
@@ -193,6 +296,8 @@ class RoundState:
     sheriff_pre_election_bomb_count: int = 0
     sheriff_election_pending: bool = False
     sheriff_badge_lost_reason: str | None = None
+    sheriff_election_resolution: SheriffElectionResolution | None = None
+    sheriff_badge_resolution: SheriffBadgeResolution | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -241,6 +346,14 @@ class RoundState:
             "sheriff_pre_election_bomb_count": self.sheriff_pre_election_bomb_count,
             "sheriff_election_pending": self.sheriff_election_pending,
             "sheriff_badge_lost_reason": self.sheriff_badge_lost_reason,
+            "sheriff_election_resolution": (
+                self.sheriff_election_resolution.to_dict()
+                if self.sheriff_election_resolution
+                else None
+            ),
+            "sheriff_badge_resolution": (
+                self.sheriff_badge_resolution.to_dict() if self.sheriff_badge_resolution else None
+            ),
             "success": self.success,
         }
 

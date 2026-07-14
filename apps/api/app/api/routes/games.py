@@ -120,6 +120,7 @@ from app.werewolf.voice_stream import (
     LiveVoiceStreamService,
     StaticJudgeVoiceAsset,
     build_static_judge_playback_voices,
+    build_voice_playback_coverage,
 )
 from app.werewolf.voice_store import DatabaseVoiceStore
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
@@ -545,6 +546,7 @@ def get_voice_streamer(
         config=config,
         voice_store_factory=lambda session_id: SessionVoiceStore(session_id=session_id),
         judge_voice_asset_loader=_persistent_judge_voice_loader(),
+        persist_streamed_voices=False,
     )
 
 
@@ -1265,16 +1267,19 @@ def get_game_playback(
         persisted_events = []
 
     saved_voices: list[dict[str, Any]] = []
+    materialization_lag_ms: int | None = None
     if persisted_events:
         private_event_ids = private_round_memory_event_ids(persisted_events)
         playback["events"] = filter_public_playback_events(persisted_events)
         try:
-            saved_voices = DatabaseVoiceStore(
+            voice_store = DatabaseVoiceStore(
                 db,
                 session_id=session_id,
-            ).list_playback_voices(
+            )
+            saved_voices = voice_store.list_playback_voices(
                 excluded_actions=frozenset({PRIVATE_ROUND_MEMORY_ACTION})
             )
+            materialization_lag_ms = voice_store.max_materialization_lag_ms()
             saved_voices = filter_public_playback_voices(
                 saved_voices,
                 private_event_ids=private_event_ids,
@@ -1290,6 +1295,11 @@ def get_game_playback(
         ),
     )
     playback["voices"] = _merge_playback_voices(saved_voices, static_judge_voices)
+    playback["voice_coverage"] = build_voice_playback_coverage(
+        playback["events"],
+        playback["voices"],
+        materialization_lag_ms=materialization_lag_ms,
+    )
     return playback
 
 

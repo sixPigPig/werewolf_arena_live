@@ -8,7 +8,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from app.werewolf.voice import chunk_text_for_tts
+from app.werewolf.voice import (
+    USED_STATIC_JUDGE_VOICE_ASSET_IDS,
+    USED_STATIC_JUDGE_VOICE_ASSET_TEMPLATE_IDS,
+    chunk_text_for_tts,
+)
 from app.werewolf.volcengine_tts import (
     TtsSubtitleTiming,
     TtsSynthesisItem,
@@ -110,6 +114,10 @@ JUDGE_VOICE_LINES: tuple[JudgeVoiceLine, ...] = (
     JudgeVoiceLine("vote_countdown", "三，二，一，请投票。", "投票"),
     JudgeVoiceLine("sheriff_result", "{玩家} 当选警长，获得警徽。", "警长"),
     JudgeVoiceLine("sheriff_tie", "出现平票，进入 PK 发言并再次投票。", "警长"),
+    JudgeVoiceLine("sheriff_pk_start", "平票候选人依次进行 PK 发言。", "警长"),
+    JudgeVoiceLine("sheriff_runoff_vote", "PK 发言结束，警下玩家开始二轮投票。", "警长"),
+    JudgeVoiceLine("sheriff_no_voters", "本轮没有警下投票者，警徽流失。", "警长"),
+    JudgeVoiceLine("sheriff_runoff_tied", "警长二轮投票仍未产生唯一领先者。", "警长"),
     JudgeVoiceLine("sheriff_no_badge", "再次平票，本局无警长。", "警长"),
     JudgeVoiceLine("dawn_deaths", "昨夜死亡的玩家是 {玩家列表}。", "白天"),
     JudgeVoiceLine("dawn_peaceful", "昨夜平安夜。", "白天"),
@@ -128,6 +136,7 @@ JUDGE_VOICE_LINES: tuple[JudgeVoiceLine, ...] = (
     JudgeVoiceLine("hunter_shot_start", "猎人发动技能。", "特殊事件"),
     JudgeVoiceLine("hunter_shot_choose", "请猎人选择要带走的玩家。", "特殊事件"),
     JudgeVoiceLine("hunter_shot_result", "{玩家} 被猎人带走，出局。", "特殊事件"),
+    JudgeVoiceLine("hunter_shot_skipped", "猎人选择不发动技能。", "特殊事件"),
     JudgeVoiceLine("idiot_reveal", "{玩家} 翻牌为白痴。", "特殊事件"),
     JudgeVoiceLine("idiot_stays", "该玩家免于本次放逐，之后按本局规则保留或失去投票权。", "特殊事件"),
     JudgeVoiceLine("badge_owner_out", "警长出局，请选择移交警徽或撕毁警徽。", "警徽"),
@@ -162,6 +171,29 @@ def list_judge_voice_assets(
 
 def list_judge_voice_line_definitions() -> list[JudgeVoiceLine]:
     return _expanded_voice_lines()
+
+
+def validate_used_judge_voice_assets(
+    *,
+    asset_dir: Path = DEFAULT_JUDGE_VOICE_ASSET_DIR,
+    audio_format: str = "mp3",
+) -> None:
+    assets = list_judge_voice_assets(asset_dir=asset_dir, audio_format=audio_format)
+    assets_by_id = {asset.id: asset for asset in assets}
+    required_ids = set(USED_STATIC_JUDGE_VOICE_ASSET_IDS)
+    for template_id in USED_STATIC_JUDGE_VOICE_ASSET_TEMPLATE_IDS:
+        required_ids.update(
+            asset.id for asset in assets if asset.template_id == template_id
+        )
+    missing = sorted(
+        asset_id
+        for asset_id in required_ids
+        if asset_id not in assets_by_id
+        or not assets_by_id[asset_id].exists
+        or not assets_by_id[asset_id].subtitle_timings
+    )
+    if missing:
+        raise RuntimeError(f"Judge voice asset gate failed: {', '.join(missing)}")
 
 
 async def generate_judge_voice_assets(

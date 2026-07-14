@@ -35,6 +35,7 @@ from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.replay import DatabaseReplayStore
 from app.werewolf.rules import (
     ACTION_DEBATE,
+    ACTION_SHERIFF_SPEECH,
     ACTION_WEREWOLF_SELF_EXPLOSION,
     ACTION_WITCH_POISON,
     MODEL_GROUP_WEREWOLF,
@@ -3086,7 +3087,74 @@ def test_werewolf_self_explosion_prompt_renders_double_badge_context() -> None:
     assert "警上发言前" in prompt
     assert "双爆吞警徽" in prompt
     assert "第二次警长产生前自爆会导致警徽流失" in prompt
-    assert schema["required"] == ["reasoning", "self_explode"]
+    assert schema["required"] == [
+        "reasoning",
+        "self_explode",
+        "benefit_type",
+        "expected_gain",
+        "primary_risk",
+    ]
+
+
+def test_self_explosion_context_counts_chain_and_last_wolf_risk() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_self_explosion_context",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=69,
+        rule_set=rule_set,
+    )
+    wolf = next(player.name for player in state.players if player.role == WEREWOLF)
+    active_players = [
+        wolf,
+        *[player.name for player in state.players if player.role != WEREWOLF][:3],
+    ]
+    first = RoundState(number=1, players=active_players.copy(), werewolf_self_exploded="2号玩家")
+    second = RoundState(number=2, players=active_players.copy(), werewolf_self_exploded="7号玩家")
+    current = RoundState(number=3, players=active_players.copy())
+    state.rounds = [first, second, current]
+    engine = GameEngine(
+        state=state,
+        provider=FakeProvider([]),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+    cursor = PublicStageCursor(
+        stage="debate",
+        ordered_actors=tuple(active_players),
+        completed_actors=tuple(active_players[:2]),
+        current_actor=active_players[2],
+        timing="before_actor",
+    )
+
+    context = engine._self_explosion_decision_context(
+        actor=wolf,
+        round_state=current,
+        active_players=active_players,
+        active_wolves=[wolf],
+        cursor=cursor,
+    )
+    prompt, _schema = build_prompt(
+        "werewolf_self_explosion",
+        {
+            **engine._world_state(state.player_by_name()[wolf], [], current),
+            "options": "自爆、不自爆",
+            "self_explosion_stage": "白天发言前",
+            "self_explosion_decision_context": context.to_dict(),
+        },
+    )
+
+    assert context.total_self_explosions == 2
+    assert context.consecutive_self_explosion_rounds == 2
+    assert context.active_wolves_before == 1
+    assert context.actor_is_last_wolf is True
+    assert context.completed_public_speakers == 2
+    assert context.pending_public_speakers == 2
+    assert context.explosion_would_end_game is True
+    assert "已经连续 2 轮发生狼人自爆，默认选择不自爆" in prompt
+    assert "你是场上最后一名狼人" in prompt
+    assert "自爆会立即结算对局" in prompt
 
 
 def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
@@ -3137,6 +3205,13 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     ] == active_wolves
     assert round_state.werewolf_self_exploded == exploding_wolf
     assert round_log.werewolf_self_explosion is not None
+    assert round_log.werewolf_self_explosion.decision_schema == "legacy"
+    assert round_state.sheriff_election_resolution is not None
+    assert round_state.sheriff_election_resolution.outcome == "postponed"
+    assert (
+        round_state.sheriff_election_resolution.reason_code
+        == "first_pre_election_self_explosion"
+    )
     assert round_log.werewolf_self_explosion.actor == exploding_wolf
     assert round_state.interruption is not None
     assert round_state.interruption.stage == "debate"
@@ -3171,6 +3246,12 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     assert public_updates[-1]["actor"] == exploding_wolf
     assert public_updates[-1]["payload"]["werewolf_self_exploded"] == exploding_wolf
     assert public_updates[-1]["payload"]["interruption"] == round_state.interruption.to_dict()
+    assert [
+        event["action"]
+        for event in sink.events
+        if event["type"] == "judge_cue"
+        and event["action"] in {"werewolf_self_explosion", "self_explosion_skip"}
+    ] == ["werewolf_self_explosion", "self_explosion_skip"]
 
 
 def test_first_pre_sheriff_self_explosion_ends_day_without_losing_badge() -> None:
@@ -3234,6 +3315,12 @@ def test_second_pre_sheriff_self_explosion_loses_badge() -> None:
     assert state.sheriff_badge_lost is True
     assert state.sheriff_election_pending is False
     assert round_state.sheriff_badge_lost_reason == "双爆吞警徽"
+    assert round_state.sheriff_election_resolution is not None
+    assert round_state.sheriff_election_resolution.outcome == "badge_lost"
+    assert (
+        round_state.sheriff_election_resolution.reason_code
+        == "double_pre_election_self_explosion"
+    )
 
 
 def test_pending_sheriff_election_can_resume_after_first_self_explosion() -> None:
@@ -3541,6 +3628,123 @@ def test_sheriff_vote_prompt_includes_public_election_context() -> None:
     assert f"最终候选：{active_players[0]}" in prompt
     assert f"PK 候选：{active_players[0]}、{active_players[3]}" in prompt
     assert f"{active_players[3]}：我进入 PK。" in prompt
+    assert "警长竞选资格" in prompt
+    assert f"原始警下投票者：{active_players[2]}" in prompt
+    assert "你是原始警下玩家，拥有本轮警长投票权" in prompt
+    eligibility = world_state["public_action_eligibility"]
+    assert isinstance(eligibility, dict)
+    assert eligibility["actor_can_sheriff_vote"] is True
+    assert eligibility["sheriff_vote_reason"] == "eligible_original_voter"
+
+
+def test_empty_sheriff_voters_and_withdrawn_candidate_are_explicit_in_prompt() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_empty_sheriff_voters",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=61,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    withdrawn = active_players[0]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.sheriff_candidates = active_players.copy()
+    round_state.sheriff_voters = []
+    round_state.sheriff_withdrawn = [withdrawn]
+    round_state.sheriff_final_candidates = active_players[1:]
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    world_state = engine._world_state(
+        state.player_by_name()[withdrawn],
+        round_state.sheriff_final_candidates,
+        round_state,
+    )
+    prompt, _schema = build_prompt("sheriff_vote", world_state)
+
+    assert "警下名单：无" in prompt
+    assert "原始警下投票者：无" in prompt
+    assert "本轮没有警下投票者" in prompt
+    assert "你已退水" in prompt
+    eligibility = world_state["public_action_eligibility"]
+    assert isinstance(eligibility, dict)
+    assert eligibility["actor_can_sheriff_vote"] is False
+    assert (
+        eligibility["sheriff_vote_reason"]
+        == "withdrew_candidate_not_original_voter"
+    )
+
+
+def test_invalid_eligibility_draft_is_buffered_and_only_valid_retry_is_public() -> None:
+    class QualityRetryStreamProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.prompts: list[str] = []
+
+        def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+            del model, temperature
+            self.calls += 1
+            self.prompts.append(prompt)
+            speech = (
+                "警下玩家请把票投给我。"
+                if self.calls == 1
+                else "本轮没有警下投票者，我只陈述自己的判断。"
+            )
+            return [
+                '{"reasoning":"资格检查",',
+                f'"say":"{speech}"',
+                "}",
+            ]
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            return "".join(self.stream_json(model=model, prompt=prompt, temperature=temperature))
+
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_buffered_quality_retry",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=62,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    speaker = state.players[0]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.sheriff_candidates = active_players.copy()
+    round_state.sheriff_voters = []
+    round_state.sheriff_final_candidates = active_players.copy()
+    provider = QualityRetryStreamProvider()
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    message, _log = engine._player_action(
+        player=speaker,
+        action=ACTION_SHERIFF_SPEECH,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert provider.calls == 2
+    assert "没有警下投票者" in provider.prompts[1]
+    assert message == "本轮没有警下投票者，我只陈述自己的判断。"
+    public_blob = str(sink.events)
+    assert "警下玩家请把票投给我" not in public_blob
+    assert "本轮没有警下投票者，我只陈述自己的判断" in public_blob
+    assert [event["type"] for event in sink.events].count("model_retry_scheduled") == 1
+    assert [event["type"] for event in sink.events].count("action_parsed") == 1
 
 
 def test_12_player_wolf_world_state_lists_all_living_teammates() -> None:
@@ -4114,17 +4318,17 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
         if event["type"] == "action_requested" and event["action"] == "speech_order"
     )
     assert election_event["actor"] == sheriff
-    assert election_event["payload"] == {
-        "sheriff": sheriff,
-        "sheriff_elected": sheriff,
-        "sheriff_candidates": [sheriff, second_candidate],
-        "sheriff_final_candidates": [sheriff, second_candidate],
-        "sheriff_voters": active_players[2:],
-        "sheriff_votes": {name: sheriff for name in active_players[2:]},
-        "sheriff_runoff_votes": {},
-        "sheriff_badge_lost": False,
-        "active_players": active_players,
-    }
+    assert election_event["action"] == "sheriff_election_resolved"
+    assert election_event["payload"]["narration_mode"] == "explicit_v1"
+    assert election_event["payload"]["sheriff"] == sheriff
+    assert election_event["payload"]["sheriff_candidates"] == [sheriff, second_candidate]
+    assert election_event["payload"]["sheriff_voters"] == active_players[2:]
+    assert election_event["payload"]["active_players"] == active_players
+    assert election_event["payload"]["sheriff_election"]["outcome"] == "elected"
+    assert (
+        election_event["payload"]["sheriff_election"]["reason_code"]
+        == "first_vote_winner"
+    )
     assert sink.events.index(election_event) < sink.events.index(direction_request)
 
 
@@ -4204,10 +4408,10 @@ def test_sheriff_run_requests_all_players_concurrently() -> None:
         for event in sink.events
         if event["type"] == "action_requested" and event["action"] == "sheriff_run"
     )
-    assert sheriff_cue["payload"] == {
-        "cue": "sheriff_raise_hands",
-        "visible_text": "想要竞选警长的玩家请举手。",
-    }
+    assert sheriff_cue["payload"]["cue_id"] == "sheriff_raise_hands"
+    assert sheriff_cue["payload"]["cue"] == "sheriff_raise_hands"
+    assert sheriff_cue["payload"]["visible_text"] == "想要竞选警长的玩家请举手。"
+    assert sheriff_cue["payload"]["static_asset_id"] == "sheriff_raise_hands"
     assert sink.events.index(sheriff_cue) < sink.events.index(first_run_request)
     assert [
         actor for action, actor in provider.actions if action == "sheriff_run"
@@ -4536,7 +4740,12 @@ def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_
         for index, event in enumerate(sink.events)
         if event["type"] == "action_requested" and event["action"] == "debate"
     )
-    assert night_update_index < first_debate_index
+    dawn_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "judge_cue" and event["action"] == "dawn_peaceful"
+    )
+    assert night_update_index < dawn_index < first_debate_index
 
 
 def test_sheriff_election_limits_speeches_to_candidates_and_votes_to_off_sheriff_players() -> None:
@@ -4609,7 +4818,14 @@ def test_sheriff_election_runs_pk_and_runoff_when_first_vote_ties() -> None:
     )
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
 
     engine._run_day_phase(round_state, round_log, active_players)
 
@@ -4621,6 +4837,21 @@ def test_sheriff_election_runs_pk_and_runoff_when_first_vote_ties() -> None:
     assert round_state.sheriff_runoff_votes == runoff_votes
     assert round_state.sheriff_elected == first_candidate
     assert state.sheriff == first_candidate
+    assert round_state.sheriff_election_resolution is not None
+    assert round_state.sheriff_election_resolution.reason_code == "runoff_vote_winner"
+    assert [
+        event["action"]
+        for event in sink.events
+        if event["type"] == "state_updated"
+        and event["action"] in {"sheriff_pk_started", "sheriff_election_resolved"}
+    ] == ["sheriff_pk_started", "sheriff_election_resolved"]
+    assert [
+        event["action"]
+        for event in sink.events
+        if event["type"] == "judge_cue"
+        and event["action"]
+        in {"sheriff_tie", "sheriff_pk_start", "sheriff_runoff_vote", "sheriff_result"}
+    ] == ["sheriff_tie", "sheriff_pk_start", "sheriff_runoff_vote", "sheriff_result"]
     pk_facts = [
         fact
         for fact in state.public_facts
@@ -4659,7 +4890,14 @@ def test_sheriff_badge_is_lost_and_all_players_are_off_sheriff_when_no_one_runs(
     )
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
 
     engine._run_day_phase(round_state, round_log, active_players)
 
@@ -4667,6 +4905,12 @@ def test_sheriff_badge_is_lost_and_all_players_are_off_sheriff_when_no_one_runs(
     assert round_state.sheriff_voters == active_players
     assert round_state.sheriff_badge_lost is True
     assert state.sheriff is None
+    assert round_state.sheriff_election_resolution is not None
+    assert round_state.sheriff_election_resolution.reason_code == "no_candidates"
+    resolution_events = [
+        event for event in sink.events if event["action"] == "sheriff_election_resolved"
+    ]
+    assert len(resolution_events) == 1
 
 
 def test_sheriff_badge_is_lost_when_no_candidates_remain_after_withdraw() -> None:
@@ -4713,13 +4957,32 @@ def test_sheriff_badge_is_lost_when_all_players_run_and_multiple_candidates_rema
     )
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
 
     engine._run_day_phase(round_state, round_log, active_players)
 
     assert round_state.sheriff_voters == []
     assert round_state.sheriff_badge_lost is True
     assert state.sheriff is None
+    assert round_state.sheriff_election_resolution is not None
+    assert round_state.sheriff_election_resolution.reason_code == "no_off_sheriff_voters"
+    resolution_event = next(
+        event for event in sink.events if event["action"] == "sheriff_election_resolved"
+    )
+    assert resolution_event["payload"]["sheriff_election"]["voters"] == []
+    no_voters_cue = next(
+        event
+        for event in sink.events
+        if event["type"] == "judge_cue" and event["action"] == "sheriff_no_voters"
+    )
+    assert no_voters_cue["payload"]["params"]["reason_code"] == "no_off_sheriff_voters"
 
 
 def test_sheriff_vote_counts_as_one_and_half_votes() -> None:
@@ -4816,7 +5079,14 @@ def test_dead_sheriff_can_transfer_badge() -> None:
     )
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
 
     engine._remove_player(active_players, old_sheriff)
     round_state.day_deaths.append(DeathEvent(old_sheriff, "vote_exile", "投票"))
@@ -4834,6 +5104,16 @@ def test_dead_sheriff_can_transfer_badge() -> None:
     assert round_state.sheriff_badge_target == new_sheriff
     assert round_state.sheriff_badge_lost is False
     assert round_log.sheriff_badge is not None
+    assert round_state.sheriff_badge_resolution is not None
+    assert round_state.sheriff_badge_resolution.outcome == "transferred"
+    badge_event = next(event for event in sink.events if event["action"] == "sheriff_badge_resolved")
+    assert badge_event["payload"]["sheriff"] == new_sheriff
+    assert [
+        event["action"]
+        for event in sink.events
+        if event["type"] == "judge_cue"
+        and event["action"] in {"badge_owner_out", "badge_transfer"}
+    ] == ["badge_owner_out", "badge_transfer"]
 
 
 def test_living_sheriff_cannot_transfer_or_destroy_badge() -> None:
@@ -5306,7 +5586,7 @@ def test_first_night_hunter_shot_is_announced_before_badge_and_debate() -> None:
         for index, event in enumerate(sink.events)
         if event["type"] == "state_updated"
         and event["phase"] == "night"
-        and event["payload"]["night_deaths"]
+        and event["payload"].get("night_deaths")
         == [
             {"player": hunter.name, "cause": "werewolf_attack", "source": "狼人"},
             {"player": shot_sheriff, "cause": "hunter_shot", "source": hunter.name},
@@ -5702,8 +5982,12 @@ def test_witch_poison_invalid_choice_falls_back_to_no_poison() -> None:
         "witch_sleep",
     ]
     assert witch_cues[1]["payload"] == {
+        "schema_version": 1,
+        "cue_id": "witch_death",
         "cue": "witch_death",
         "visible_text": "今晚被狼人袭击的玩家是10号玩家。",
+        "static_asset_id": "witch_death_seat_10",
+        "params": {"target": "10号玩家"},
         "target": "10号玩家",
     }
     poison_request = next(

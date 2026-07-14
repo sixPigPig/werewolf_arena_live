@@ -18,7 +18,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.routes.games import SessionLiveStore
 from app.db.base import Base
-from app.models.live import LiveEventRecord, LiveRunRecord
+from app.models.live import (
+    LiveEventRecord,
+    LiveRunRecord,
+    VoiceMaterializationJobRecord,
+)
 from app.werewolf.live import (
     ACTIVATION_ACK_RUN_FIELD_NAMES,
     ACTIVATION_ACK_RUN_TIMESTAMP_NAMES,
@@ -3139,6 +3143,64 @@ def test_live_store_saves_run_and_events(db_session: Session) -> None:
     assert saved_run.session_id == "game_1200abcd"
     assert [item.id for item in loaded_events] == [event.id]
     assert loaded_events[0].payload["visible_text"] == "我不是狼"
+
+
+def test_live_store_creates_voice_job_with_narratable_event(db_session: Session) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_voice_job",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    event = registry.publish(
+        run.run_id,
+        "action_parsed",
+        actor="阿青",
+        action="debate",
+        payload={
+            "request_id": "req-final",
+            "visible_result": {"say": "最终公开发言。"},
+        },
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
+
+    job = db_session.get(
+        VoiceMaterializationJobRecord,
+        (run.run_id, event.id, "player"),
+    )
+    assert job is not None
+    assert job.session_id == run.session_id
+    assert job.status == "pending"
+    assert job.attempt_count == 0
+
+
+def test_live_store_never_creates_private_voice_job(db_session: Session) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_private_voice_job",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    event = registry.publish(
+        run.run_id,
+        "action_parsed",
+        actor="狼人",
+        action="werewolf_discuss",
+        payload={"visible_result": {"say": "秘密讨论。"}},
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
+
+    assert db_session.query(VoiceMaterializationJobRecord).count() == 0
 
 
 def test_live_store_events_after_filters_by_event_id(db_session: Session) -> None:

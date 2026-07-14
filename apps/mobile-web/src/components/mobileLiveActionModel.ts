@@ -101,17 +101,28 @@ export function deriveMobileLiveFocusPresentation(
   if (event.type === "judge_cue") {
     const visibleText = stringField(payload, "visible_text") || "请听法官提示";
     const target = stringField(payload, "target");
+    const cueId = stringField(payload, "cue_id") || event.action || "";
+    const params = recordField(payload, "params");
+    const pendingActors = params ? stringArrayField(params, "pending_actors") : [];
+    const interrupted = cueId === "self_explosion_skip";
     return {
       eventId: event.id,
-      kind: event.phase === "night" ? "night-action" : "waiting",
-      tone: event.action === "witch_death" ? "danger" : "neutral",
+      kind: interrupted ? "skill" : event.phase === "night" ? "night-action" : "waiting",
+      tone:
+        event.action === "witch_death" || interrupted || cueId === "exile_result"
+          ? "danger"
+          : "neutral",
       actorName: "法官",
       actorSeat: null,
       actorRole: null,
       targetName: target ? canonicalPlayerName(target, state) : null,
       eyebrow: "法官提示",
       title: visibleText,
-      detail: event.phase === "night" ? "夜间流程" : "白天流程",
+      detail: interrupted
+        ? `剩余 ${pendingActors.length} 名玩家未发言，放逐投票取消`
+        : event.phase === "night"
+          ? "夜间流程"
+          : "白天流程",
       progress: null,
       accessibleText: visibleText,
     };
@@ -618,7 +629,10 @@ function stateUpdatedPresentation(
   state: GodViewState,
   payload: Record<string, unknown>,
 ): MobileLiveFocusPresentation {
-  const sheriffElected = stringField(payload, "sheriff_elected");
+  const sheriffElection = recordField(payload, "sheriff_election");
+  const sheriffElected =
+    stringField(payload, "sheriff_elected") ||
+    (sheriffElection ? stringField(sheriffElection, "sheriff") : "");
   if (sheriffElected) {
     const sheriff = findPlayer(state, sheriffElected);
     const seat = seatLabel(sheriffElected, state);
@@ -903,7 +917,10 @@ function readSkillTrigger(
       accessibleText: `${seat}号翻牌留在场上`,
     };
   }
-  const badgeTarget = stringField(payload, "sheriff_badge_target");
+  const badgeResolution = recordField(payload, "sheriff_badge");
+  const badgeTarget =
+    stringField(payload, "sheriff_badge_target") ||
+    (badgeResolution ? stringField(badgeResolution, "to_player") : "");
   if (badgeTarget) {
     const seat = seatLabel(badgeTarget, state);
     return {
@@ -921,7 +938,17 @@ function readSkillTrigger(
       accessibleText: `警徽移交给 ${seat}号`,
     };
   }
-  if (payload.sheriff_badge_lost === true) {
+  const badgeOutcome = badgeResolution
+    ? stringField(badgeResolution, "outcome")
+    : "";
+  const electionOutcome = recordField(payload, "sheriff_election");
+  if (
+    payload.sheriff_badge_lost === true ||
+    badgeOutcome === "destroyed" ||
+    badgeOutcome === "lost_no_target" ||
+    (electionOutcome && stringField(electionOutcome, "outcome") === "badge_lost")
+  ) {
+    const destroyed = badgeOutcome === "destroyed";
     return {
       eventId: event.id,
       kind: "skill",
@@ -931,10 +958,10 @@ function readSkillTrigger(
       actorRole: null,
       targetName: null,
       eyebrow: "警徽",
-      title: "警徽撕毁",
-      detail: "警徽被撕毁",
+      title: destroyed ? "警徽撕毁" : "警徽流失",
+      detail: destroyed ? "警徽被撕毁" : "本局不再产生警长",
       progress: null,
-      accessibleText: "警徽被撕毁",
+      accessibleText: destroyed ? "警徽被撕毁" : "警徽流失",
     };
   }
   return null;

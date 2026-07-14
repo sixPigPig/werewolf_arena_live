@@ -1303,4 +1303,57 @@ describe("deriveGodViewState meaningful event lines", () => {
     expect(typeof removeLine?.detail).toBe("string");
     expect(removeLine?.detail).toContain("7号");
   });
+
+  it("projects nested sheriff resolutions and preserves explicit empty voters", () => {
+    const started = eightPlayerEvents();
+    const elected = event({
+      id: 2,
+      type: "state_updated",
+      round: 1,
+      phase: "day",
+      action: "sheriff_election_resolved",
+      payload: {
+        sheriff_election: {
+          outcome: "elected",
+          sheriff: "4号 预言家",
+          candidates: ["4号 预言家", "1号 狼人A"],
+          voters: ["2号 女巫"],
+        },
+      },
+    });
+    const lost = event({
+      id: 3,
+      type: "state_updated",
+      round: 2,
+      phase: "day",
+      action: "sheriff_election_resolved",
+      payload: {
+        sheriff_election: {
+          outcome: "badge_lost",
+          sheriff: null,
+          candidates: ["4号 预言家", "1号 狼人A"],
+          voters: [],
+        },
+      },
+    });
+
+    const electedSpectator = deriveLiveSpectatorState([...started, elected]);
+    const electedState = deriveGodViewState(
+      [...started, elected],
+      electedSpectator,
+      "暗夜古堡",
+    );
+    expect(electedState.sheriff.current).toBe("4号 预言家");
+    expect(electedState.sheriff.voters).toEqual(["2号 女巫"]);
+
+    const lostSpectator = deriveLiveSpectatorState([...started, elected, lost]);
+    const lostState = deriveGodViewState(
+      [...started, elected, lost],
+      lostSpectator,
+      "暗夜古堡",
+    );
+    expect(lostState.sheriff.current).toBeNull();
+    expect(lostState.sheriff.voters).toEqual([]);
+    expect(lostState.sheriff.badgeFlow).toBe("警徽流失");
+  });
 });

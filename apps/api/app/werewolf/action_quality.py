@@ -11,6 +11,7 @@ def action_quality_warnings(
     endgame: bool = False,
     prior_texts: list[str] | tuple[str, ...] = (),
     personality: str = "",
+    eligibility: dict[str, object] | None = None,
 ) -> list[str]:
     warnings: list[str] = []
     normalized = text.replace(" ", "")
@@ -24,15 +25,39 @@ def action_quality_warnings(
         if recognizes_other and asks_badge_for_self:
             warnings.append("sheriff_speech_conflicting_badge_goal")
 
+    if eligibility is not None:
+        original_voters = eligibility.get("original_voters")
+        no_sheriff_voters = isinstance(original_voters, list) and not original_voters
+        appeals_for_sheriff_vote = "警下" in normalized and any(
+            phrase in normalized for phrase in ("投票", "上票", "票投", "给我票")
+        )
+        if no_sheriff_voters and appeals_for_sheriff_vote:
+            warnings.append("appeals_to_missing_sheriff_voters")
+
+        promises_own_vote = any(
+            phrase in normalized for phrase in ("我会投", "我投给", "我的票", "我这一票")
+        )
+        if eligibility.get("actor_can_sheriff_vote") is False and promises_own_vote:
+            warnings.append("promises_ineligible_sheriff_vote")
+
     if endgame and action == "debate":
-        mentions_tomorrow = "明天再" in normalized or "下一轮" in normalized
+        mentions_tomorrow = any(
+            phrase in normalized for phrase in ("明天", "下一轮", "下一夜")
+        )
         mentions_pressure = (
             "不能出错" in normalized
             or "直接输" in normalized
-            or "轮次" in normalized
+            or "直接结束" in normalized
+            or "可能结束" in normalized
+            or "没有明天" in normalized
+            or "不一定有明天" in normalized
+            or "终局" in normalized
+            or "生死局" in normalized
         )
         if mentions_tomorrow and not mentions_pressure:
             warnings.append("endgame_tomorrow_without_pressure")
+            warnings.append("assumes_future_round_in_endgame")
+            warnings.append("ignores_terminal_risk")
 
     if ("查杀" in normalized and "好人" in normalized) or (
         "金水" in normalized and "狼人" in normalized

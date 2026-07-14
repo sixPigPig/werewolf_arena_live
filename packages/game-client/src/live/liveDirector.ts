@@ -72,6 +72,13 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
     const payload = payloadForEvent(event);
     const requestId = stringField(payload, "request_id");
 
+    if (
+      event.type === "state_updated" &&
+      stringField(payload, "narration_mode") === "explicit_v1"
+    ) {
+      continue;
+    }
+
     if (event.type === "model_response_delta") {
       const requestCue = requestId ? requestCueById.get(requestId) : undefined;
       if (!requestCue) {
@@ -498,13 +505,26 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
   }
 
   if (event.type === "judge_cue") {
+    const cueId = stringField(payload, "cue_id") || event.action || "";
+    const uncompressible = new Set([
+      "werewolf_self_explosion",
+      "self_explosion_skip",
+      "hunter_shot_result",
+      "idiot_reveal",
+      "idiot_stays",
+      "exile_result",
+      "badge_transfer",
+      "badge_destroyed",
+      "sheriff_no_voters",
+      "sheriff_runoff_tied",
+    ]).has(cueId);
     return {
       ...base,
       title: "法官提示",
       body: stringField(payload, "visible_text") || "请听法官提示。",
-      importance: "action",
-      durationMs: 1200,
-      compressible: true,
+      importance: uncompressible ? "key" : "action",
+      durationMs: uncompressible ? 4500 : 2200,
+      compressible: !uncompressible,
     };
   }
 

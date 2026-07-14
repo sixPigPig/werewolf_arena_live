@@ -29,6 +29,8 @@ from app.werewolf.models import (
     Player,
     RoundLog,
     RoundState,
+    SheriffBadgeResolution,
+    SheriffElectionResolution,
     StageInterruption,
 )
 from app.werewolf.replay import DatabaseReplayStore
@@ -789,6 +791,7 @@ def test_resume_checkpoint_preserves_self_explosion_state() -> None:
     assert restored_round.sheriff_badge_lost_reason == "首爆中断警长竞选"
     assert restored_log.werewolf_self_explosion is not None
     assert restored_log.werewolf_self_explosion.choice == "自爆"
+    assert restored_log.werewolf_self_explosion.decision_schema == "legacy"
 
 
 def test_round_state_from_dict_defaults_new_summary_fields() -> None:
@@ -797,6 +800,48 @@ def test_round_state_from_dict_defaults_new_summary_fields() -> None:
     assert round_state.public_summary == ""
     assert round_state.private_summaries == {}
     assert round_state.interruption is None
+
+
+def test_round_state_sheriff_resolutions_round_trip_through_checkpoint_payload() -> None:
+    source = RoundState(
+        number=4,
+        players=["5号玩家", "10号玩家"],
+        sheriff_election_resolution=SheriffElectionResolution(
+            schema_version=1,
+            outcome="badge_lost",
+            reason_code="no_off_sheriff_voters",
+            reason_text="警下无人可投票",
+            sheriff=None,
+            candidates=["5号玩家", "10号玩家"],
+            withdrawn=[],
+            final_candidates=["5号玩家", "10号玩家"],
+            voters=[],
+            votes={},
+            pk_candidates=[],
+            runoff_votes={},
+            badge_lost=True,
+            election_pending=False,
+        ),
+        sheriff_badge_resolution=SheriffBadgeResolution(
+            schema_version=1,
+            outcome="destroyed",
+            from_player="5号玩家",
+            to_player=None,
+            reason_code="destroyed_by_owner",
+        ),
+    )
+
+    restored = round_state_from_dict(source.to_dict())
+
+    assert restored.sheriff_election_resolution == source.sheriff_election_resolution
+    assert restored.sheriff_badge_resolution == source.sheriff_badge_resolution
+
+
+def test_round_state_from_legacy_checkpoint_defaults_sheriff_resolutions() -> None:
+    restored = round_state_from_dict({"number": 1, "players": ["1号玩家"]})
+
+    assert restored.sheriff_election_resolution is None
+    assert restored.sheriff_badge_resolution is None
 
 
 def test_round_state_interruption_round_trips_through_checkpoint_payload() -> None:
