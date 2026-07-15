@@ -31,6 +31,7 @@ export type GodViewPlayer = {
   statusLabel: string;
   stageStatus: GodViewPlayerStageStatus;
   isSheriff: boolean;
+  hasRaisedHand: boolean;
   isSpeaking: boolean;
   voteTarget: string | null;
   receivedVotes: number;
@@ -121,6 +122,12 @@ export type GodViewState = {
     candidates: string[];
     voters: string[];
   };
+  sheriffSignUp: {
+    active: boolean;
+    requestedCount: number;
+    resolvedCount: number;
+    raised: string[];
+  };
   sheriffRuleState: {
     enabled: boolean;
     label: string;
@@ -158,6 +165,12 @@ type MutableGodView = {
   deaths: GodViewDeathInfo[];
   isPeacefulNight: boolean;
   sheriff: GodViewState["sheriff"];
+  sheriffSignUp: {
+    active: boolean;
+    requested: Set<string>;
+    resolved: Set<string>;
+    raised: Set<string>;
+  };
   speechOrder: string[];
   winnerLabel: string;
   eventLines: GodViewEventLine[];
@@ -213,6 +226,12 @@ export function deriveGodViewState(
       candidates: [],
       voters: [],
     },
+    sheriffSignUp: {
+      active: false,
+      requested: new Set(),
+      resolved: new Set(),
+      raised: new Set(),
+    },
     speechOrder: [],
     winnerLabel: "未结算",
     eventLines: [],
@@ -231,6 +250,7 @@ export function deriveGodViewState(
       view.currentPhase = event.phase;
     }
 
+    collectSheriffSignUp(view, event);
     collectActionLine(view, event);
     collectStateUpdate(view, event);
     collectTerminal(view, event);
@@ -293,6 +313,12 @@ export function deriveGodViewState(
       topTarget: tallies[0]?.target ?? null,
     },
     sheriff: view.sheriff,
+    sheriffSignUp: {
+      active: view.sheriffSignUp.active,
+      requestedCount: view.sheriffSignUp.requested.size,
+      resolvedCount: view.sheriffSignUp.resolved.size,
+      raised: Array.from(view.sheriffSignUp.raised),
+    },
     sheriffRuleState: buildSheriffRuleState(options.sheriffEnabled),
     speechOrder,
     speakerFlow: buildSpeakerFlow(players, speechOrder, view.stageFocus.speakerName),
@@ -302,6 +328,51 @@ export function deriveGodViewState(
     skillTriggers: view.skillTriggers.slice(-5),
     winPressure: buildWinPressure(progress),
   };
+}
+
+function collectSheriffSignUp(view: MutableGodView, event: LiveGameEvent) {
+  const signUp = view.sheriffSignUp;
+  const isSheriffRun = event.action === "sheriff_run";
+
+  if (
+    signUp.active &&
+    !isSheriffRun &&
+    signUp.requested.size > 0 &&
+    signUp.resolved.size >= signUp.requested.size
+  ) {
+    signUp.active = false;
+    signUp.raised.clear();
+  }
+
+  if (!isSheriffRun || !event.actor) {
+    return;
+  }
+
+  if (event.type === "action_requested") {
+    if (!signUp.active) {
+      signUp.active = true;
+      signUp.requested.clear();
+      signUp.resolved.clear();
+      signUp.raised.clear();
+    }
+    signUp.requested.add(event.actor);
+    return;
+  }
+
+  if (event.type !== "action_parsed") {
+    return;
+  }
+
+  signUp.active = true;
+  signUp.requested.add(event.actor);
+  signUp.resolved.add(event.actor);
+  const payload = payloadForEvent(event);
+  const choice = stringField(payload, "choice") || parsedChoice(payload);
+  if (choice === "上警") {
+    signUp.raised.add(event.actor);
+  } else {
+    signUp.raised.delete(event.actor);
+  }
 }
 
 function buildSpeakerFlow(
@@ -725,6 +796,8 @@ function toGodViewPlayer(
     statusLabel: statusLabel(player, stageStatus),
     stageStatus,
     isSheriff: view.sheriff.current === player.name,
+    hasRaisedHand:
+      view.sheriffSignUp.active && view.sheriffSignUp.raised.has(player.name),
     isSpeaking,
     voteTarget: view.voteTargets.get(player.name) ?? null,
     receivedVotes,

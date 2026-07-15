@@ -706,6 +706,94 @@ describe("deriveGodViewState", () => {
     expect(state.deaths).toEqual([]);
     expect(state.vote.tallies).toEqual([]);
   });
+
+  it("marks sheriff candidates with raised hands until the batch leaves the result", () => {
+    const started = event({
+      id: 1,
+      type: "game_started",
+      payload: {
+        players: [
+          { name: "阿青", role: "villager", model: "test-model" },
+          { name: "白石", role: "werewolf", model: "test-model" },
+        ],
+      },
+    });
+    const requests = [
+      event({
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "阿青",
+        action: "sheriff_run",
+      }),
+      event({
+        id: 3,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "白石",
+        action: "sheriff_run",
+      }),
+    ];
+    const firstResult = event({
+      id: 4,
+      type: "action_parsed",
+      round: 1,
+      phase: "day",
+      actor: "阿青",
+      action: "sheriff_run",
+      payload: { choice: "上警" },
+    });
+    const finalResult = event({
+      id: 5,
+      type: "action_parsed",
+      round: 1,
+      phase: "day",
+      actor: "白石",
+      action: "sheriff_run",
+      payload: { choice: "不上警" },
+    });
+    const nextStage = event({
+      id: 6,
+      type: "action_requested",
+      round: 1,
+      phase: "day",
+      actor: "阿青",
+      action: "sheriff_speech",
+    });
+
+    const partialEvents = [started, ...requests, firstResult];
+    const partialState = deriveGodViewState(
+      partialEvents,
+      deriveLiveSpectatorState(partialEvents),
+      "上警测试",
+    );
+    expect(partialState.players.find((player) => player.name === "阿青")).toMatchObject({
+      hasRaisedHand: true,
+    });
+    expect(partialState.players.find((player) => player.name === "白石")).toMatchObject({
+      hasRaisedHand: false,
+    });
+
+    const resultEvents = [...partialEvents, finalResult];
+    const resultState = deriveGodViewState(
+      resultEvents,
+      deriveLiveSpectatorState(resultEvents),
+      "上警测试",
+    );
+    expect(resultState.players.find((player) => player.name === "阿青")).toMatchObject({
+      hasRaisedHand: true,
+    });
+
+    const speechEvents = [...resultEvents, nextStage];
+    const speechState = deriveGodViewState(
+      speechEvents,
+      deriveLiveSpectatorState(speechEvents),
+      "上警测试",
+    );
+    expect(speechState.players.every((player) => !player.hasRaisedHand)).toBe(true);
+  });
 });
 
 function eightPlayerEvents(): LiveGameEvent[] {

@@ -50,6 +50,12 @@ function stateWith(lines: GodViewEventLine[]): GodViewState {
       candidates: [],
       voters: [],
     },
+    sheriffSignUp: {
+      active: false,
+      requestedCount: 0,
+      resolvedCount: 0,
+      raised: [],
+    },
     sheriffRuleState: { enabled: true, label: "警长规则开启" },
     speechOrder: [],
     speakerFlow: { previous: null, current: null, next: null, modeLabel: "等待发言" },

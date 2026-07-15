@@ -7,7 +7,7 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
@@ -231,6 +231,15 @@ class PlayerActionResult:
 
 
 @dataclass(frozen=True)
+class PendingSelfExplosionBatch:
+    round_number: int
+    active_wolves: tuple[str, ...]
+    requests: tuple[PlayerActionRequest, ...]
+    futures: tuple[Future[PlayerActionResult], ...]
+    started_at: float
+
+
+@dataclass(frozen=True)
 class PublicStageCursor:
     stage: str
     ordered_actors: tuple[str, ...] = ()
@@ -382,6 +391,7 @@ SHERIFF_BADGE_LOST_DOUBLE_BOMB = "双爆吞警徽"
 SHERIFF_BADGE_PENDING_FIRST_BOMB = "首爆中断警长竞选"
 SHERIFF_SPEECH_CLOCKWISE = "顺时针"
 SHERIFF_SPEECH_COUNTERCLOCKWISE = "逆时针"
+SELF_EXPLOSION_HANDOFF_TIMEOUT_SECONDS = 0.005
 SHERIFF_ELECTION_REASON_TEXT: dict[SheriffElectionReason, str] = {
     "single_candidate": "仅剩一名候选人",
     "first_vote_winner": "首轮投票产生唯一领先者",
@@ -514,6 +524,8 @@ class GameEngine:
         self.execution_mode = execution_mode
         self.resume_from_round = resume_from_round
         self.logs: list[RoundLog] = []
+        self._self_explosion_executor: ThreadPoolExecutor | None = None
+        self._pending_self_explosion: PendingSelfExplosionBatch | None = None
 
     def run(self) -> list[RoundLog]:
         logs: list[RoundLog] = []
@@ -535,37 +547,40 @@ class GameEngine:
             start_payload["resume_from_round"] = self.resume_from_round
         self._publish(start_event_type, payload=start_payload)
 
-        while not self.state.winner:
-            if len(self.state.rounds) >= self.max_rounds:
-                raise MaxRoundsExceeded("Maximum rounds exceeded before a winner was found.")
+        try:
+            while not self.state.winner:
+                if len(self.state.rounds) >= self.max_rounds:
+                    raise MaxRoundsExceeded("Maximum rounds exceeded before a winner was found.")
 
-            round_number = len(self.state.rounds) + 1
-            self._sync_game_views(active_players, round_number)
-            round_state = RoundState(number=round_number, players=active_players.copy())
-            round_log = RoundLog(number=round_number)
-            self._checkpoint_round_start(
-                round_number=round_number,
-                active_players=active_players,
-                logs=logs,
-            )
-            self.state.rounds.append(round_state)
-            logs.append(round_log)
-            self._publish(
-                "round_started",
-                round_number=round_number,
-                payload={"active_players": active_players.copy()},
-            )
+                round_number = len(self.state.rounds) + 1
+                self._sync_game_views(active_players, round_number)
+                round_state = RoundState(number=round_number, players=active_players.copy())
+                round_log = RoundLog(number=round_number)
+                self._checkpoint_round_start(
+                    round_number=round_number,
+                    active_players=active_players,
+                    logs=logs,
+                )
+                self.state.rounds.append(round_state)
+                logs.append(round_log)
+                self._publish(
+                    "round_started",
+                    round_number=round_number,
+                    payload={"active_players": active_players.copy()},
+                )
 
-            pending_deaths = self._run_night_phase(round_state, round_log, active_players)
-            if self.state.winner:
+                pending_deaths = self._run_night_phase(round_state, round_log, active_players)
+                if self.state.winner:
+                    round_state.success = True
+                    break
+
+                self._run_day_phase(round_state, round_log, active_players, pending_deaths)
+                self._refresh_winner(active_players)
                 round_state.success = True
-                break
 
-            self._run_day_phase(round_state, round_log, active_players, pending_deaths)
-            self._refresh_winner(active_players)
-            round_state.success = True
-
-        return logs
+            return logs
+        finally:
+            self._shutdown_self_explosion_worker()
 
     def _run_night_phase(
         self,
@@ -1517,11 +1532,63 @@ class GameEngine:
         if self.state.winner:
             return False
 
+        pending = self._pending_self_explosion
+        if pending is not None and pending.round_number != round_state.number:
+            self._cancel_pending_self_explosion()
+            pending = None
+
+        if pending is not None:
+            if not all(future.done() for future in pending.futures):
+                wait(pending.futures, timeout=SELF_EXPLOSION_HANDOFF_TIMEOUT_SECONDS)
+                if not all(future.done() for future in pending.futures):
+                    return False
+            self._pending_self_explosion = None
+            decisions = self._finish_pending_self_explosion(pending)
+            players_by_name = self.state.player_by_name()
+            for name, (choice, action_log) in zip(
+                pending.active_wolves,
+                decisions,
+                strict=True,
+            ):
+                if (
+                    choice != WEREWOLF_SELF_EXPLODE
+                    or name not in active_players
+                    or not self._is_werewolf(players_by_name[name])
+                ):
+                    continue
+
+                round_log.werewolf_self_explosion = action_log
+                round_state.interruption = self._stage_interruption_from_cursor(
+                    cursor,
+                    actor=name,
+                )
+                self._resolve_werewolf_self_explosion(
+                    wolf=name,
+                    round_state=round_state,
+                    round_log=round_log,
+                    active_players=active_players,
+                )
+                interruption_text = self._stage_interruption_text(
+                    round_state.number,
+                    round_state.interruption,
+                )
+                self._add_public_fact(
+                    round_state.number,
+                    "interruption",
+                    interruption_text,
+                    stage=cursor.stage,
+                    actor=name,
+                    retention="critical",
+                    details=round_state.interruption.to_dict(),
+                )
+                self._refresh_winner(active_players)
+                return True
+
         players_by_name = self.state.player_by_name()
         active_wolves = [
             name for name in active_players if self._is_werewolf(players_by_name[name])
         ]
-        requests = [
+        requests = tuple(
             self._build_player_action_request(
                 player=players_by_name[name],
                 action=ACTION_WEREWOLF_SELF_EXPLOSION,
@@ -1550,42 +1617,111 @@ class GameEngine:
                 },
             )
             for name in active_wolves
-        ]
-        for name, (choice, action_log) in zip(
-            active_wolves,
-            self._player_actions_batch(requests),
-            strict=True,
-        ):
-            if choice != WEREWOLF_SELF_EXPLODE:
-                continue
-
-            round_log.werewolf_self_explosion = action_log
-            round_state.interruption = self._stage_interruption_from_cursor(
-                cursor,
-                actor=name,
-            )
-            self._resolve_werewolf_self_explosion(
-                wolf=name,
-                round_state=round_state,
-                round_log=round_log,
-                active_players=active_players,
-            )
-            interruption_text = self._stage_interruption_text(
-                round_state.number,
-                round_state.interruption,
-            )
-            self._add_public_fact(
-                round_state.number,
-                "interruption",
-                interruption_text,
-                stage=cursor.stage,
-                actor=name,
-                retention="critical",
-                details=round_state.interruption.to_dict(),
-            )
-            self._refresh_winner(active_players)
-            return True
+        )
+        self._start_pending_self_explosion(
+            round_number=round_state.number,
+            active_wolves=tuple(active_wolves),
+            requests=requests,
+        )
         return False
+
+    def _start_pending_self_explosion(
+        self,
+        *,
+        round_number: int,
+        active_wolves: tuple[str, ...],
+        requests: tuple[PlayerActionRequest, ...],
+    ) -> None:
+        if not requests:
+            return
+        if self._self_explosion_executor is None:
+            self._self_explosion_executor = ThreadPoolExecutor(
+                max_workers=max(1, len(self.state.players)),
+                thread_name_prefix="werewolf-self-explosion",
+            )
+
+        condition = threading.Condition()
+        next_index = {"value": 0}
+        futures = tuple(
+            self._self_explosion_executor.submit(
+                self._execute_player_action_request,
+                request,
+                _OrderedBatchProvider(
+                    provider=self.provider,
+                    index=index,
+                    condition=condition,
+                    next_index=next_index,
+                ),
+                NullEventSink(),
+            )
+            for index, request in enumerate(requests)
+        )
+        self._pending_self_explosion = PendingSelfExplosionBatch(
+            round_number=round_number,
+            active_wolves=active_wolves,
+            requests=requests,
+            futures=futures,
+            started_at=self.monotonic(),
+        )
+
+    def _finish_pending_self_explosion(
+        self,
+        pending: PendingSelfExplosionBatch,
+    ) -> list[tuple[object | None, ActionLog]]:
+        results: list[PlayerActionResult | None] = [None] * len(pending.futures)
+        exceptions: dict[int, Exception] = {}
+        for index, future in enumerate(pending.futures):
+            try:
+                results[index] = future.result()
+            except Exception as exc:
+                exceptions[index] = exc
+
+        if self.action_budgets_enabled:
+            record_action_batch(
+                action_kind=self.action_execution_budget.for_action(
+                    ACTION_WEREWOLF_SELF_EXPLOSION
+                ).kind,
+                result="failed" if exceptions else "completed",
+                duration_ms=max(
+                    0,
+                    round((self.monotonic() - pending.started_at) * 1000),
+                ),
+            )
+        self._checkpoint_player_action_results(results)
+        if exceptions:
+            first_failed_index = min(exceptions)
+            request = pending.requests[first_failed_index]
+            exc = exceptions[first_failed_index]
+            self._checkpoint_player_action_failure(request, exc)
+            raise exc
+
+        finalized: list[tuple[object | None, ActionLog]] = []
+        for result in results:
+            if result is None:
+                raise RuntimeError("Self-explosion batch completed without a result.")
+            try:
+                finalized.append(
+                    self._finalize_player_action_result(result, checkpoint=False)
+                )
+            except Exception as exc:
+                self._checkpoint_player_action_failure(result.request, exc)
+                raise
+        return finalized
+
+    def _cancel_pending_self_explosion(self) -> None:
+        pending = self._pending_self_explosion
+        self._pending_self_explosion = None
+        if pending is None:
+            return
+        for future in pending.futures:
+            future.cancel()
+
+    def _shutdown_self_explosion_worker(self) -> None:
+        self._cancel_pending_self_explosion()
+        executor = self._self_explosion_executor
+        self._self_explosion_executor = None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def _self_explosion_decision_context(
         self,
@@ -1864,6 +2000,19 @@ class GameEngine:
 
         completed_sheriff_speakers: list[str] = []
         for name in sheriff_speech_order:
+            if self._maybe_run_werewolf_self_explosion(
+                round_state,
+                round_log,
+                active_players,
+                PublicStageCursor(
+                    stage="sheriff_speech",
+                    ordered_actors=tuple(sheriff_speech_order),
+                    completed_actors=tuple(completed_sheriff_speakers),
+                    current_actor=name,
+                    timing="before_actor",
+                ),
+            ):
+                return True
             message, action_log = self._player_action(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_SPEECH,
@@ -2047,6 +2196,19 @@ class GameEngine:
 
         completed_pk_speakers: list[str] = []
         for name in pk_candidates:
+            if self._maybe_run_werewolf_self_explosion(
+                round_state,
+                round_log,
+                active_players,
+                PublicStageCursor(
+                    stage="sheriff_pk_speech",
+                    ordered_actors=tuple(pk_candidates),
+                    completed_actors=tuple(completed_pk_speakers),
+                    current_actor=name,
+                    timing="before_actor",
+                ),
+            ):
+                return True
             message, action_log = self._player_action(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_PK_SPEECH,

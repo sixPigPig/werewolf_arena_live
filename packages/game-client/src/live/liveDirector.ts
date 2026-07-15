@@ -54,8 +54,27 @@ type StreamedSpeechSignature = {
   text: string;
 };
 
+type SheriffRunBatch = {
+  cue: DirectorCue;
+  requested: Set<string>;
+  resolved: Set<string>;
+  raised: string[];
+  declined: string[];
+  completed: boolean;
+};
+
 const CATCH_UP_BACKLOG_COUNT = 8;
 const MIN_DURATION_MS = 500;
+const SHERIFF_RUN_EVENT_TYPES = new Set([
+  "action_requested",
+  "model_request_started",
+  "model_thinking_tick",
+  "model_response_delta",
+  "model_response_received",
+  "model_retry_scheduled",
+  "action_quality_warning",
+  "action_parsed",
+]);
 
 export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
   const cues: DirectorCue[] = [];
@@ -68,10 +87,54 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
     string,
     StreamedSpeechSignature
   >();
+  let sheriffRunBatch: SheriffRunBatch | null = null;
 
   for (const event of events) {
     const payload = payloadForEvent(event);
     const requestId = stringField(payload, "request_id");
+
+    if (
+      event.action === "sheriff_run" &&
+      SHERIFF_RUN_EVENT_TYPES.has(event.type)
+    ) {
+      if (
+        event.type === "action_requested" &&
+        (!sheriffRunBatch || sheriffRunBatch.completed)
+      ) {
+        const cue = {
+          ...cueBase(event),
+          title: "玩家正在决定是否上警",
+          body: "等待全部玩家返回上警意向（0/1）",
+          importance: "action" as const,
+          durationMs: 2500,
+          compressible: true,
+        };
+        sheriffRunBatch = {
+          cue,
+          requested: new Set(),
+          resolved: new Set(),
+          raised: [],
+          declined: [],
+          completed: false,
+        };
+        cues.push(cue);
+      }
+
+      if (sheriffRunBatch) {
+        updateSheriffRunBatch(sheriffRunBatch, event, payload);
+        if (
+          !sheriffRunBatch.completed &&
+          sheriffRunBatch.requested.size > 0 &&
+          sheriffRunBatch.resolved.size >= sheriffRunBatch.requested.size
+        ) {
+          sheriffRunBatch.completed = true;
+          sheriffRunBatch.cue.durationMs = MIN_DURATION_MS;
+          sheriffRunBatch.cue.compressible = true;
+          cues.push(sheriffRunResultCue(event, sheriffRunBatch));
+        }
+        continue;
+      }
+    }
 
     if (
       event.type === "state_updated" &&
@@ -168,6 +231,54 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
   }
 
   return cues;
+}
+
+function updateSheriffRunBatch(
+  batch: SheriffRunBatch,
+  event: LiveGameEvent,
+  payload: Record<string, unknown>,
+) {
+  batch.cue.latestEventId = event.id;
+  if (event.type === "action_requested" && event.actor) {
+    batch.requested.add(event.actor);
+  }
+  if (event.type === "action_parsed" && event.actor) {
+    batch.requested.add(event.actor);
+    batch.resolved.add(event.actor);
+    const choice = stringField(payload, "choice");
+    const raisedIndex = batch.raised.indexOf(event.actor);
+    const declinedIndex = batch.declined.indexOf(event.actor);
+    if (raisedIndex !== -1) {
+      batch.raised.splice(raisedIndex, 1);
+    }
+    if (declinedIndex !== -1) {
+      batch.declined.splice(declinedIndex, 1);
+    }
+    (choice === "上警" ? batch.raised : batch.declined).push(event.actor);
+  }
+
+  const raisedText = batch.raised.length
+    ? `；已举手：${batch.raised.join("、")}`
+    : "";
+  batch.cue.body = `等待全部玩家返回上警意向（${batch.resolved.size}/${batch.requested.size}）${raisedText}`;
+}
+
+function sheriffRunResultCue(
+  event: LiveGameEvent,
+  batch: SheriffRunBatch,
+): DirectorCue {
+  const raisedText = batch.raised.length ? batch.raised.join("、") : "无人";
+  const declinedText = batch.declined.length
+    ? `\n不上警：${batch.declined.join("、")}`
+    : "";
+  return {
+    ...cueBase(event),
+    title: "上警结果",
+    body: `举手上警：${raisedText}${declinedText}`,
+    importance: "key",
+    durationMs: 6000,
+    compressible: false,
+  };
 }
 
 export function useLiveDirector(

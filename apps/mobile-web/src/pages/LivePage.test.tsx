@@ -440,6 +440,66 @@ describe("LivePage", () => {
     ).toHaveClass("mobile-live-seat-sheriff-badge");
   });
 
+  it("marks players who raised their hands during the parallel sheriff sign-up", async () => {
+    const user = userEvent.setup();
+    const sheriffRunEvents: LiveGameEvent[] = [
+      gameStartedEvent,
+      {
+        ...gameStartedEvent,
+        id: 2,
+        type: "action_requested",
+        actor: "阿青",
+        action: "sheriff_run",
+        payload: { options: ["上警", "不上警"] },
+      },
+      {
+        ...gameStartedEvent,
+        id: 3,
+        type: "action_requested",
+        actor: "白石",
+        action: "sheriff_run",
+        payload: { options: ["上警", "不上警"] },
+      },
+      {
+        ...gameStartedEvent,
+        id: 4,
+        type: "action_parsed",
+        actor: "阿青",
+        action: "sheriff_run",
+        payload: { choice: "上警" },
+      },
+      {
+        ...gameStartedEvent,
+        id: 5,
+        type: "action_parsed",
+        actor: "白石",
+        action: "sheriff_run",
+        payload: { choice: "不上警" },
+      },
+    ];
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: sheriffRunEvents,
+      latestEvent: sheriffRunEvents.at(-1),
+    });
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const raisedSeat = screen.getByRole("article", {
+      name: /1号 阿青 平民 .* 举手上警/,
+    });
+    expect(
+      within(raisedSeat).getByRole("img", { name: "举手上警" }),
+    ).toHaveClass("mobile-live-seat-raised-hand");
+    expect(
+      screen.getByRole("article", { name: /2号 白石 狼人/ }),
+    ).not.toHaveAccessibleName(/举手上警/);
+    expect(screen.getByRole("status", { name: "当前舞台" })).toHaveTextContent(
+      "上警结果",
+    );
+  });
+
   it("marks night eliminations and daytime exiles over grayscale avatars", async () => {
     const user = userEvent.setup();
     gameClientMocks.useGameRunEvents.mockReturnValue({

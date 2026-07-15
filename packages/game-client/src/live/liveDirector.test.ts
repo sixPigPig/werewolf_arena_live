@@ -691,4 +691,106 @@ describe("toDirectorCue", () => {
       compressible: false,
     });
   });
+
+  it("runs sheriff sign-up as one parallel batch and holds the final result for 6 seconds", () => {
+    const requests = ["阿青", "白石", "南风"].map((actor, index) =>
+      event({
+        id: index + 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor,
+        action: "sheriff_run",
+        payload: { request_id: `sheriff-${index + 1}`, options: ["上警", "不上警"] },
+      }),
+    );
+    const cues = buildDirectorCues([
+      ...requests,
+      event({
+        id: 5,
+        type: "model_request_started",
+        round: 1,
+        phase: "day",
+        actor: "阿青",
+        action: "sheriff_run",
+        payload: { request_id: "sheriff-1", model: "test-model" },
+      }),
+      event({
+        id: 6,
+        type: "action_parsed",
+        round: 1,
+        phase: "day",
+        actor: "白石",
+        action: "sheriff_run",
+        payload: { request_id: "sheriff-2", choice: "不上警" },
+      }),
+      event({
+        id: 7,
+        type: "action_parsed",
+        round: 1,
+        phase: "day",
+        actor: "阿青",
+        action: "sheriff_run",
+        payload: { request_id: "sheriff-1", choice: "上警" },
+      }),
+      event({
+        id: 8,
+        type: "action_parsed",
+        round: 1,
+        phase: "day",
+        actor: "南风",
+        action: "sheriff_run",
+        payload: { request_id: "sheriff-3", choice: "上警" },
+      }),
+    ]);
+
+    expect(cues).toHaveLength(2);
+    expect(cues[0]).toMatchObject({
+      eventId: 2,
+      latestEventId: 8,
+      title: "玩家正在决定是否上警",
+      durationMs: 500,
+      compressible: true,
+    });
+    expect(cues[1]).toMatchObject({
+      eventId: 8,
+      latestEventId: 8,
+      title: "上警结果",
+      body: "举手上警：阿青、南风\n不上警：白石",
+      durationMs: 6000,
+      compressible: false,
+    });
+  });
+
+  it("keeps a partial sheriff sign-up batch on one live progress cue", () => {
+    const cues = buildDirectorCues([
+      event({
+        id: 2,
+        type: "action_requested",
+        actor: "阿青",
+        action: "sheriff_run",
+      }),
+      event({
+        id: 3,
+        type: "action_requested",
+        actor: "白石",
+        action: "sheriff_run",
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        actor: "阿青",
+        action: "sheriff_run",
+        payload: { choice: "上警" },
+      }),
+    ]);
+
+    expect(cues).toHaveLength(1);
+    expect(cues[0]).toMatchObject({
+      eventId: 2,
+      latestEventId: 4,
+      body: "等待全部玩家返回上警意向（1/2）；已举手：阿青",
+      durationMs: 2500,
+    });
+  });
 });

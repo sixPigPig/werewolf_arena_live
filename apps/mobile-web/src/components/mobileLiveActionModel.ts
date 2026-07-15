@@ -329,6 +329,10 @@ function actionRequestedPresentation(
     };
   }
 
+  if (action === "sheriff_run") {
+    return sheriffRunPresentation(event, state);
+  }
+
   if (isSpeechAction(action)) {
     return speechPresentation(event, state);
   }
@@ -389,6 +393,10 @@ function actionParsedPresentation(
     eventId: event.id,
     progress: null as string | null,
   };
+
+  if (action === "sheriff_run") {
+    return sheriffRunPresentation(event, state);
+  }
 
   if (action === "werewolf_kill_vote") {
     const choice = readChoice(payload);
@@ -475,6 +483,33 @@ function actionParsedPresentation(
   }
 
   return waitingPresentation(event.id, "等待行动");
+}
+
+function sheriffRunPresentation(
+  event: LiveGameEvent,
+  state: GodViewState,
+): MobileLiveFocusPresentation {
+  const signUp = state.sheriffSignUp;
+  const completed =
+    signUp.requestedCount > 0 && signUp.resolvedCount >= signUp.requestedCount;
+  const raised = signUp.raised.length ? signUp.raised.join("、") : "无人";
+  const progress = `${signUp.resolvedCount}/${signUp.requestedCount}`;
+  return {
+    eventId: event.id,
+    kind: "waiting",
+    tone: "warning",
+    actorName: null,
+    actorSeat: null,
+    actorRole: null,
+    targetName: null,
+    eyebrow: "警长竞选",
+    title: completed ? "上警结果" : "正在决定是否上警",
+    detail: completed ? `举手上警：${raised}` : `已返回 ${progress}`,
+    progress,
+    accessibleText: completed
+      ? `上警结果，举手上警：${raised}`
+      : `正在决定是否上警，已返回 ${progress}`,
+  };
 }
 
 function witchLikeParsed(

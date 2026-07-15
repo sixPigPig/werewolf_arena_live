@@ -503,6 +503,27 @@ class BarrierActionProvider(ScriptedChineseProvider):
         return marker is None or marker in prompt
 
 
+class BlockingSelfExplosionProvider(ScriptedChineseProvider):
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"self_explode"' not in prompt:
+            return super().complete_json(
+                model=model,
+                prompt=prompt,
+                temperature=temperature,
+            )
+        self.started.set()
+        if not self.release.wait(timeout=2.0):
+            raise TimeoutError("self-explosion test provider was not released")
+        return json.dumps(
+            {"reasoning": "后台判断完成。", "self_explode": "不自爆"},
+            ensure_ascii=False,
+        )
+
+
 class BarrierSheriffProvider(BarrierActionProvider):
     def __init__(
         self,
@@ -3347,6 +3368,23 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
         ),
     )
 
+    assert interrupted is False
+    pending = engine._pending_self_explosion
+    assert pending is not None
+    for future in pending.futures:
+        future.result(timeout=2.0)
+
+    interrupted = engine._maybe_run_werewolf_self_explosion(
+        round_state,
+        round_log,
+        active_players,
+        PublicStageCursor(
+            stage="debate",
+            ordered_actors=tuple(active_players),
+            timing="before_stage",
+        ),
+    )
+
     assert interrupted is True
     assert [
         actor for action, actor in provider.actions if action == "werewolf_self_explosion"
@@ -3399,6 +3437,59 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
         if event["type"] == "judge_cue"
         and event["action"] in {"werewolf_self_explosion", "self_explosion_skip"}
     ] == ["werewolf_self_explosion", "self_explosion_skip"]
+
+
+def test_werewolf_self_explosion_does_not_block_the_main_game_thread() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_non_blocking_self_explosion",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=701,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    provider = BlockingSelfExplosionProvider()
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+    cursor = PublicStageCursor(
+        stage="debate",
+        ordered_actors=tuple(active_players),
+        timing="before_stage",
+    )
+
+    interrupted = engine._maybe_run_werewolf_self_explosion(
+        round_state,
+        round_log,
+        active_players,
+        cursor,
+    )
+
+    assert interrupted is False
+    assert provider.started.wait(timeout=1.0)
+    pending = engine._pending_self_explosion
+    assert pending is not None
+    assert not all(future.done() for future in pending.futures)
+
+    provider.release.set()
+    for future in pending.futures:
+        future.result(timeout=2.0)
+    assert (
+        engine._maybe_run_werewolf_self_explosion(
+            round_state,
+            round_log,
+            active_players,
+            cursor,
+        )
+        is False
+    )
+    engine._shutdown_self_explosion_worker()
 
 
 def test_first_pre_sheriff_self_explosion_ends_day_without_losing_badge() -> None:
@@ -3642,7 +3733,32 @@ def test_self_explosion_before_actor_records_pending_speakers_and_reaches_prompt
         rule_set=rule_set,
     )
 
-    interrupted = engine._run_debate_phase(round_state, round_log, active_players)
+    cursor = PublicStageCursor(
+        stage="debate",
+        ordered_actors=tuple(speech_order),
+        completed_actors=(first_speaker,),
+        current_actor=exploding_wolf,
+        timing="before_actor",
+    )
+    interrupted = engine._maybe_run_werewolf_self_explosion(
+        round_state,
+        round_log,
+        active_players,
+        cursor,
+    )
+
+    assert interrupted is False
+    pending = engine._pending_self_explosion
+    assert pending is not None
+    for future in pending.futures:
+        future.result(timeout=2.0)
+
+    interrupted = engine._maybe_run_werewolf_self_explosion(
+        round_state,
+        round_log,
+        active_players,
+        cursor,
+    )
 
     assert interrupted is True
     assert round_state.interruption is not None

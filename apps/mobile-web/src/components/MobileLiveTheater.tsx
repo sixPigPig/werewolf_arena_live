@@ -5,6 +5,7 @@ import {
   BadgeCheck,
   Gauge,
   Gavel,
+  Hand,
   PawPrint,
   Pause,
   Play,
@@ -254,7 +255,7 @@ export function LiveSeatAvatar({
   const statusLabel = player.isSpeaking ? "发言中" : player.stageStatus.label;
   const exitMarker = liveSeatExitMarker(player);
   const modifier = seatModifierFor(player, presentation);
-  const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}${player.isSheriff ? " 警长" : ""}`;
+  const seatLabel = `${player.seatNumber}号 ${player.name} ${player.role || "未知"} ${statusLabel}${player.isSheriff ? " 警长" : ""}${player.hasRaisedHand ? " 举手上警" : ""}`;
   const avatarImageUrl = resolveAvatarImageUrl({
     avatar_image_url: player.avatarImageUrl,
   });
@@ -285,6 +286,15 @@ export function LiveSeatAvatar({
             role="img"
           >
             <BadgeCheck aria-hidden="true" strokeWidth={2.4} />
+          </span>
+        ) : null}
+        {player.hasRaisedHand ? (
+          <span
+            aria-label="举手上警"
+            className="mobile-live-seat-raised-hand"
+            role="img"
+          >
+            <Hand aria-hidden="true" strokeWidth={2.4} />
           </span>
         ) : null}
         <span className="mobile-live-seat-avatar">

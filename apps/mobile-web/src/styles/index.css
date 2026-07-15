@@ -2092,6 +2092,29 @@ textarea {
   height: 16px;
 }
 
+.mobile-live-seat-raised-hand {
+  position: absolute;
+  top: -7px;
+  right: -5px;
+  z-index: 5;
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  border: 1px solid rgb(255 226 132 / 90%);
+  border-radius: 999px;
+  background: linear-gradient(145deg, #a86d16, #4b2908);
+  color: #fff0b0;
+  box-shadow:
+    0 2px 6px rgb(0 0 0 / 68%),
+    0 0 10px rgb(242 184 62 / 52%);
+}
+
+.mobile-live-seat-raised-hand svg {
+  width: 15px;
+  height: 15px;
+}
+
 .mobile-live-seat-sheriff .mobile-live-seat-avatar {
   border-color: #f1c76e;
   box-shadow:
