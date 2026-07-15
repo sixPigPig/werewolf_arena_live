@@ -4966,3 +4966,468 @@ a {
     animation-iteration-count: 1 !important;
   }
 }
+
+.models-heading,
+.models-heading-actions,
+.model-provider-heading,
+.model-form-actions,
+.model-toggle-row {
+  display: flex;
+  align-items: center;
+}
+
+.models-heading {
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.models-heading-actions,
+.model-form-actions,
+.model-toggle-row {
+  gap: 10px;
+}
+
+.models-safety-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  margin: 18px 0;
+  padding: 14px 16px;
+  border: 1px solid #d0d5dd;
+  border-radius: 12px;
+  color: #344054;
+  background: #f9fafb;
+}
+
+.models-safety-note strong {
+  color: #101828;
+}
+
+.model-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.model-source-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 20px;
+  padding: 18px;
+  border: 1px solid #eaecf0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
+}
+
+.model-source-card[data-status="error"] {
+  border-color: #fecdca;
+  background: #fffbfa;
+}
+
+.model-source-card > div {
+  display: grid;
+  gap: 4px;
+}
+
+.model-source-card > div span,
+.model-provider-heading span,
+.model-card-badges b,
+.model-card-badges small {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.model-source-card > div span {
+  color: #7f56d9;
+}
+
+.model-source-card > b {
+  color: #101828;
+}
+
+.model-source-card > small {
+  grid-column: 1 / -1;
+  color: #667085;
+  line-height: 1.5;
+}
+
+.model-source-card > a,
+.model-form-actions a {
+  width: fit-content;
+  color: #6941c6;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.model-provider-sections {
+  display: grid;
+  gap: 20px;
+}
+
+.model-provider-panel {
+  overflow: hidden;
+  border: 1px solid #eaecf0;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 2px 6px rgb(16 24 40 / 4%);
+}
+
+.model-provider-heading {
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 22px;
+  border-bottom: 1px solid #eaecf0;
+  background: linear-gradient(135deg, #fff 0%, #f9fafb 100%);
+}
+
+.model-provider-heading h2 {
+  margin: 0 0 5px;
+  color: #101828;
+  font-size: 1.08rem;
+}
+
+.model-provider-heading p {
+  margin: 0;
+  color: #667085;
+  font-size: 0.88rem;
+}
+
+.model-provider-heading span {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: #475467;
+  background: #f2f4f7;
+}
+
+.model-card-list {
+  display: grid;
+}
+
+.model-card {
+  border-bottom: 1px solid #eaecf0;
+}
+
+.model-card:last-child {
+  border-bottom: 0;
+}
+
+.model-card > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 20px;
+  padding: 17px 22px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.model-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.model-card > summary::before {
+  content: "+";
+  grid-column: 3;
+  grid-row: 1;
+  margin-left: 0;
+  color: #98a2b3;
+  font-size: 1.2rem;
+}
+
+.model-card[open] > summary::before {
+  content: "−";
+}
+
+.model-card-identity {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.model-card-identity strong {
+  overflow: hidden;
+  color: #101828;
+  font-size: 0.94rem;
+  text-overflow: ellipsis;
+}
+
+.model-card code,
+.model-card-identity code {
+  color: #667085;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.model-card-badges {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1;
+  align-items: center;
+  gap: 7px;
+  padding-right: 28px;
+}
+
+.model-card-badges b,
+.model-card-badges small {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #475467;
+  background: #f2f4f7;
+}
+
+.model-card-badges b[data-tone="accent"] {
+  color: #5925dc;
+  background: #f4f3ff;
+}
+
+.model-card-badges b[data-tone="success"] {
+  color: #027a48;
+  background: #ecfdf3;
+}
+
+.model-card-badges b[data-tone="info"] {
+  color: #175cd3;
+  background: #eff8ff;
+}
+
+.model-card-body {
+  padding: 0 22px 22px;
+}
+
+.model-card-body > p {
+  max-width: 920px;
+  margin: 0 0 8px;
+  color: #475467;
+  font-size: 0.87rem;
+  line-height: 1.6;
+}
+
+.model-configuration-form {
+  margin-top: 18px;
+}
+
+.model-configuration-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid #eaecf0;
+  border-radius: 12px;
+  background: #fcfcfd;
+}
+
+.model-configuration-form legend {
+  padding: 0 7px;
+  color: #344054;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.model-toggle-row {
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.model-toggle-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 9px;
+  color: #344054;
+  background: #fff;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.model-parameter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-parameter-field {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #475467;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.model-parameter-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.model-parameter-label label {
+  min-width: 0;
+}
+
+.model-parameter-help {
+  display: inline-grid;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #98a2b3;
+  border-radius: 50%;
+  color: #667085;
+  background: #fff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.model-parameter-help:hover,
+.model-parameter-help:focus-visible,
+.model-parameter-help[aria-expanded="true"] {
+  border-color: #6941c6;
+  color: #5925dc;
+  background: #f4f3ff;
+  outline: none;
+}
+
+.model-parameter-help:focus-visible {
+  box-shadow: 0 0 0 3px rgb(127 86 217 / 18%);
+}
+
+.model-parameter-popover {
+  position: absolute;
+  z-index: 20;
+  top: 24px;
+  left: 0;
+  width: 280px;
+  max-width: calc(100vw - 64px);
+  padding: 10px 12px;
+  border: 1px solid #d6bbfb;
+  border-radius: 9px;
+  color: #344054;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(16 24 40 / 16%);
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+.model-parameter-field:nth-child(4n) .model-parameter-popover {
+  right: 0;
+  left: auto;
+}
+
+.model-parameter-grid input,
+.model-parameter-grid select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  color: #101828;
+  background: #fff;
+  font: inherit;
+}
+
+.model-parameter-grid input:disabled,
+.model-parameter-grid select:disabled {
+  color: #98a2b3;
+  background: #f2f4f7;
+}
+
+.model-parameter-note {
+  margin: 12px 0 0;
+  color: #667085;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.model-form-actions {
+  justify-content: space-between;
+  margin-top: 14px;
+}
+
+.model-form-actions > span {
+  color: #98a2b3;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 1000px) {
+  .model-parameter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .model-parameter-field:nth-child(odd) .model-parameter-popover {
+    right: auto;
+    left: 0;
+  }
+
+  .model-parameter-field:nth-child(even) .model-parameter-popover {
+    right: 0;
+    left: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .models-heading,
+  .model-provider-heading,
+  .model-form-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .models-heading-actions,
+  .model-source-grid,
+  .model-parameter-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .models-safety-note {
+    grid-template-columns: 1fr;
+  }
+
+  .model-source-card,
+  .model-card > summary {
+    grid-template-columns: 1fr;
+  }
+
+  .model-source-card > b,
+  .model-card-badges {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .model-card > summary::before {
+    display: none;
+  }
+
+  .model-card-badges {
+    flex-wrap: wrap;
+    padding-right: 0;
+  }
+
+  .model-card-body,
+  .model-card > summary,
+  .model-provider-heading {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .model-form-actions .admin-primary-button {
+    width: 100%;
+  }
+
+  .model-parameter-field .model-parameter-popover {
+    right: auto;
+    left: 0;
+    width: min(280px, 100%);
+  }
+}

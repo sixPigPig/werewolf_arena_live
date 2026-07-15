@@ -85,7 +85,7 @@ describe("useGameRunEvents", () => {
 
     await waitFor(() => expect(result.current.events).toHaveLength(1));
     expect(result.current.connectionState).toBe("open");
-    expect(source.url).toBe("/api/v1/games/runs/run_1234abcd/events");
+    expect(source.url).toBe("/api/v1/games/runs/run_1234abcd/timeline-events");
     expect(source.withCredentials).toBe(true);
   });
 
@@ -124,7 +124,7 @@ describe("useGameRunEvents", () => {
 
     await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
     expect(MockEventSource.instances[0]?.url).toBe(
-      "/api/v1/games/runs/run_1234abcd/god-view/events",
+      "/api/v1/games/runs/run_1234abcd/god-view/timeline-events",
     );
     expect(MockEventSource.instances[0]?.withCredentials).toBe(true);
   });
@@ -286,7 +286,7 @@ describe("useGameRunEvents", () => {
     expect(result.current.latestEvent).toBeNull();
     expect(result.current.connectionState).toBe("connecting");
     expect(MockEventSource.instances[1].url).toBe(
-      "/api/v1/games/runs/run_second/events",
+      "/api/v1/games/runs/run_second/timeline-events",
     );
   });
 

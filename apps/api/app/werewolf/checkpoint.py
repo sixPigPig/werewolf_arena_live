@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from app.rule_sets.telemetry import record_rule_checkpoint_failure
 from app.rule_sets.types import CompiledRuleSet
-from app.werewolf.lm import LmLog, ModelProvider
+from app.werewolf.lm import LmLog, ModelProvider, parse_json_object
 from app.werewolf.models import (
     ActionLog,
     DebateEntry,
@@ -198,7 +198,9 @@ class ReplayThenLiveProvider:
         cached_model_responses: list[dict[str, Any]],
         delegate: ModelProvider,
     ) -> None:
-        self._cached_model_responses = copy.deepcopy(cached_model_responses)
+        self._cached_model_responses = valid_cached_model_responses(
+            cached_model_responses
+        )
         self._delegate = delegate
         self._lock = threading.Lock()
 
@@ -228,6 +230,31 @@ class ReplayThenLiveProvider:
         return None
 
 
+def _cached_model_response_is_structurally_valid(response: object) -> bool:
+    if not isinstance(response, dict):
+        return False
+    raw_response = response.get("raw_response")
+    if not isinstance(raw_response, str):
+        return False
+    try:
+        parse_json_object(raw_response)
+    except ValueError:
+        return False
+    return True
+
+
+def valid_cached_model_responses(
+    responses: object,
+) -> list[dict[str, Any]]:
+    if not isinstance(responses, list):
+        return []
+    return [
+        copy.deepcopy(response)
+        for response in responses
+        if _cached_model_response_is_structurally_valid(response)
+    ]
+
+
 class ResumeCheckpointManager:
     def __init__(
         self,
@@ -236,6 +263,7 @@ class ResumeCheckpointManager:
         session_id: str,
         compiled_rule_set: CompiledRuleSet,
         run_params: dict[str, Any],
+        logs_prefix: list[RoundLog] | None = None,
     ) -> None:
         self.record_store = record_store
         self.session_id = session_id
@@ -252,6 +280,7 @@ class ResumeCheckpointManager:
                 "rule_set_snapshot": copy.deepcopy(self.rule_set_snapshot),
             }
         )
+        self._logs_prefix = tuple(copy.deepcopy(logs_prefix or []))
         self._checkpoint: dict[str, Any] | None = None
 
     def start_round(
@@ -273,7 +302,9 @@ class ResumeCheckpointManager:
             "active_players": active_players.copy(),
             "rng_state": _json_safe_rng_state(rng_state),
             "state_at_round_start": state_payload,
-            "logs_before_round": [log.to_dict() for log in logs],
+            "logs_before_round": [
+                log.to_dict() for log in (*self._logs_prefix, *logs)
+            ],
             "cached_model_responses": [],
             "failed_request": None,
             "last_error": None,

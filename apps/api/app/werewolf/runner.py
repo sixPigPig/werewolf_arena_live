@@ -193,6 +193,7 @@ def resume_game(
         session_id=session_id,
         compiled_rule_set=compiled,
         run_params=run_params,
+        logs_prefix=logs_before_round,
     )
     rng = rng_from_json_state(checkpoint.get("rng_state"))
     logs_after_resume = []
@@ -212,6 +213,8 @@ def resume_game(
             action_budgets_enabled=settings.werewolf_action_budgets_enabled,
             action_execution_budget=_action_execution_budget(),
             fallback_seed=fallback_seed,
+            execution_mode="resume",
+            resume_from_round=int(checkpoint.get("round_number") or len(state.rounds) + 1),
         )
         logs_after_resume = engine.run()
     except ReplayWriteFencedError:

@@ -1,3 +1,5 @@
+import pytest
+
 from app.werewolf.action_quality import action_quality_warnings
 
 
@@ -17,6 +19,48 @@ def test_sheriff_speech_warns_on_conflicting_badge_goal() -> None:
     )
 
     assert "sheriff_speech_conflicting_badge_goal" in warnings
+
+
+@pytest.mark.parametrize(
+    ("role", "text"),
+    [
+        ("女巫", "3号，女巫，明牌打。警徽流先验警下1号，再验警下7号。"),
+        ("狼人", "2号上警，身份村民。我的警徽流先验5号，再验10号。"),
+        ("村民", "我的警徽流暂定验警下4号或7号。"),
+    ],
+)
+def test_sheriff_speech_warns_on_investigation_plan_without_seer_claim(
+    role: str,
+    text: str,
+) -> None:
+    warnings = action_quality_warnings(
+        action="sheriff_speech",
+        text=text,
+        role=role,
+    )
+
+    assert "sheriff_speech_investigation_plan_without_seer_claim" in warnings
+
+
+@pytest.mark.parametrize(
+    ("role", "text"),
+    [
+        ("预言家", "9号预言家，昨晚查验3号是好人。警徽流今晚验12号。"),
+        ("狼人", "我是预言家，昨晚查验3号是好人。我的警徽流先验5号，再验10号。"),
+        ("村民", "2号自己的警徽流先验5号、再验10号，缺乏依据。"),
+    ],
+)
+def test_sheriff_speech_allows_seer_claims_and_other_player_plan_references(
+    role: str,
+    text: str,
+) -> None:
+    warnings = action_quality_warnings(
+        action="sheriff_speech",
+        text=text,
+        role=role,
+    )
+
+    assert "sheriff_speech_investigation_plan_without_seer_claim" not in warnings
 
 
 def test_endgame_warning_for_tomorrow_without_pressure() -> None:

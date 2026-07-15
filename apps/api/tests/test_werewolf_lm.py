@@ -728,6 +728,33 @@ def test_generate_action_with_events_does_not_schedule_retry_on_final_invalid_at
     assert [event["type"] for event in sink.events] == ["model_request_started"]
 
 
+def test_generate_action_with_events_classifies_empty_content_and_retries_safely() -> None:
+    sink = CapturingLmEventSink()
+    provider = FakeProvider(["", {"reasoning": "补充发言", "say": "我会继续观察票型。"}])
+
+    value, log = generate_action_with_events(
+        provider=provider,
+        action="debate",
+        world_state=_world_state_for_special_action("村民", ""),
+        model="deepseek-chat",
+        result_key="say",
+        event_sink=sink,
+        event_context={
+            "round_number": 1,
+            "phase": "day",
+            "actor": "Alice",
+            "action": "debate",
+        },
+        enable_progress_ticks=False,
+    )
+
+    assert value == "我会继续观察票型。"
+    assert log.invalid_attempts[0]["reason_code"] == "empty_content"
+    retry = next(event for event in sink.events if event["type"] == "model_retry_scheduled")
+    assert retry["payload"]["reason_code"] == "empty_content"
+    assert "raw_response" not in retry["payload"]
+
+
 def test_generate_action_with_events_publishes_sanitized_started_before_model_output() -> None:
     sink = CapturingLmEventSink()
     world_state = _world_state_for_special_action("村民", "")

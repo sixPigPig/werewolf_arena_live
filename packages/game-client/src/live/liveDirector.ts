@@ -44,6 +44,7 @@ type UseLiveDirectorOptions = {
   holdAdvance?: boolean;
   resetKey?: string;
   startAtEventType?: string;
+  startAtLatestEventType?: string;
   startAtLatestTerminal?: boolean;
 };
 
@@ -193,10 +194,19 @@ export function useLiveDirector(
         : undefined,
     [cues, options.startAtEventType],
   );
+  const latestRequestedStartCue = useMemo(
+    () =>
+      options.startAtLatestEventType
+        ? [...cues]
+            .reverse()
+            .find((cue) => cue.type === options.startAtLatestEventType)
+        : undefined,
+    [cues, options.startAtLatestEventType],
+  );
   const preferredStartCueId =
     options.startAtLatestTerminal && latestTerminalCue
       ? latestTerminalCue.eventId
-      : (firstRequestedStartCue?.eventId ?? null);
+      : (latestRequestedStartCue?.eventId ?? firstRequestedStartCue?.eventId ?? null);
   const [currentCueId, setCurrentCueId] = useState<number | null>(
     () => preferredStartCueId ?? cues[0]?.eventId ?? null,
   );
@@ -215,7 +225,7 @@ export function useLiveDirector(
       : null,
   );
   const autoStartedEventTypeIdRef = useRef<number | null>(
-    firstRequestedStartCue?.eventId ?? null,
+    latestRequestedStartCue?.eventId ?? firstRequestedStartCue?.eventId ?? null,
   );
 
   useEffect(() => {
@@ -251,6 +261,21 @@ export function useLiveDirector(
         : current,
     );
   }, [firstRequestedStartCue, options.startAtEventType]);
+
+  useEffect(() => {
+    if (!options.startAtLatestEventType || !latestRequestedStartCue) {
+      return;
+    }
+    if (autoStartedEventTypeIdRef.current === latestRequestedStartCue.eventId) {
+      return;
+    }
+    autoStartedEventTypeIdRef.current = latestRequestedStartCue.eventId;
+    setCurrentCueId((current) =>
+      current === null || current < latestRequestedStartCue.eventId
+        ? latestRequestedStartCue.eventId
+        : current,
+    );
+  }, [latestRequestedStartCue, options.startAtLatestEventType]);
 
   const currentIndex = useMemo(() => {
     if (cues.length === 0) {
@@ -482,6 +507,17 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
       body: gameStartedBody(payload),
       importance: "key",
       durationMs: 5000,
+      compressible: false,
+    };
+  }
+
+  if (event.type === "game_resumed") {
+    return {
+      ...base,
+      title: "对局继续",
+      body: "已恢复到上次中断的回合，本局游戏继续。",
+      importance: "key",
+      durationMs: 3000,
       compressible: false,
     };
   }

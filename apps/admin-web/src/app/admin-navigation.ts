@@ -19,7 +19,8 @@ export type AdminPermission =
   | "users.manage"
   | "roles.manage"
   | "audit.read"
-  | "settings.read";
+  | "settings.read"
+  | "settings.manage";
 
 export type AdminNavItem = {
   description: string;
@@ -100,6 +101,14 @@ export const adminNavigation: AdminNavSection[] = [
         href: "/content/rules",
         marker: "规",
         permission: "rules.read",
+      },
+      {
+        id: "models",
+        label: "模型管理",
+        description: "目录同步、启用与推理参数",
+        href: "/content/models",
+        marker: "模",
+        permission: "settings.read",
       },
     ],
   },

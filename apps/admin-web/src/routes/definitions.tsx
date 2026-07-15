@@ -23,6 +23,7 @@ import {
   RuleSetsRoute,
   RuleSetNewRoute,
   RuleSetDetailRoute,
+  ModelsRoute,
 } from "@/routes/lazy-pages";
 
 export const routes: RouteObject[] = [
@@ -122,6 +123,10 @@ export const routes: RouteObject[] = [
               {
                 path: "content/rules/:ruleSetId",
                 element: <RequireAdminPermission permission="rules.read"><RuleSetDetailRoute /></RequireAdminPermission>,
+              },
+              {
+                path: "content/models",
+                element: <RequireAdminPermission permission="settings.read"><ModelsRoute /></RequireAdminPermission>,
               },
               {
                 path: "system/jobs",

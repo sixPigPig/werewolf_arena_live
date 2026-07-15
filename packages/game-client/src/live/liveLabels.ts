@@ -30,6 +30,7 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   run_created: "运行已创建",
   run_started: "运行已开始",
   game_started: "对局开始",
+  game_resumed: "对局继续",
   round_started: "回合开始",
   phase_started: "阶段开始",
   judge_cue: "法官提示",
@@ -85,6 +86,9 @@ export function liveEventTitle(event: LiveGameEvent) {
   }
   if (event.type === "game_started") {
     return "对局开始";
+  }
+  if (event.type === "game_resumed") {
+    return "对局继续";
   }
   if (event.type === "round_started") {
     return event.round === null ? "新回合开始" : `第 ${event.round} 轮开始`;

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-13T14:19:16Z",
+  "generated_at": "2026-07-15T04:40:00Z",
   "audio_format": "mp3",
   "sample_rate": 24000,
   "mime_type": "audio/mpeg",
@@ -110,6 +110,25 @@
           "text": "牌。",
           "start_ms": 3735,
           "end_ms": 4085
+        }
+      ]
+    },
+    {
+      "id": "game_resume",
+      "text": "本局游戏继续。",
+      "category": "开局",
+      "filename": "game_resume.mp3",
+      "public_url": "/judge-voice/game_resume.mp3",
+      "exists": true,
+      "byte_size": 11756,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "本局游戏继续。",
+          "start_ms": 120,
+          "end_ms": 1260
         }
       ]
     },

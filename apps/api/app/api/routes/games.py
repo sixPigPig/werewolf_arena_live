@@ -1,7 +1,9 @@
 from collections.abc import Callable
+import json
 import logging
 import queue
 import threading
+import time
 from typing import Annotated, Any, Iterator, Literal
 
 from fastapi import (
@@ -329,6 +331,13 @@ class SessionLiveStore:
         db = self.session_factory()
         try:
             return DatabaseLiveStore(db).active_run_for_session(session_id)
+        finally:
+            db.close()
+
+    def latest_run_for_session(self, session_id: str) -> LiveGameRun | None:
+        db = self.session_factory()
+        try:
+            return DatabaseLiveStore(db).latest_run_for_session(session_id)
         finally:
             db.close()
 
@@ -1291,6 +1300,49 @@ def stream_game_run_god_view_events(
     )
 
 
+@router.get("/runs/{run_id}/timeline-events")
+def stream_game_session_timeline_events(
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    after_id: Annotated[int | None, Query(ge=0)] = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    if db.get(LiveRunRecord, run_id) is None:
+        raise HTTPException(status_code=404, detail="Game run not found")
+    return StreamingResponse(
+        _timeline_event_stream(
+            db,
+            run_id,
+            after_id=_resolve_event_resume_id(after_id, last_event_id),
+            audience="player_public",
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@router.get("/runs/{run_id}/god-view/timeline-events")
+def stream_game_session_god_view_timeline_events(
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    _principal: Annotated[PublicPrincipal, Depends(get_current_public_principal)],
+    after_id: Annotated[int | None, Query(ge=0)] = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    if db.get(LiveRunRecord, run_id) is None:
+        raise HTTPException(status_code=404, detail="Game run not found")
+    return StreamingResponse(
+        _timeline_event_stream(
+            db,
+            run_id,
+            after_id=_resolve_event_resume_id(after_id, last_event_id),
+            audience="spectator_god_view",
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 @router.websocket("/runs/{run_id}/voice-stream")
 async def stream_game_run_voice(
     websocket: WebSocket,
@@ -1393,12 +1445,17 @@ def start_resume_game_run(
         active_run = claimed_run
         _require_live_run_matches_checkpoint(active_run, compiled)
     if active_run is None:
+        parent_run = registry.latest_run_for_session(session_id)
+        resume_from_round = int(checkpoint.get("round_number") or 1)
         run, created = registry.get_or_create_active_run(
             session_id=session_id,
             villager_model=villager_model,
             werewolf_model=werewolf_model,
             seed=seed,
             max_rounds=max_rounds,
+            parent_run_id=parent_run.run_id if parent_run is not None else None,
+            resume_from_round=resume_from_round if parent_run is not None else None,
+            attempt_no=(parent_run.attempt_no + 1) if parent_run is not None else 1,
             rule_set_id=compiled.rule_set.id,
             rule_set_revision_id=compiled.revision_id,
             rule_set_revision_no=compiled.revision_no,
@@ -1507,6 +1564,10 @@ def _get_game_playback(
                 excluded_actions=frozenset({PRIVATE_ROUND_MEMORY_ACTION})
             )
             materialization_lag_ms = voice_store.max_materialization_lag_ms()
+            saved_voices = _map_playback_voices_to_timeline(
+                saved_voices,
+                persisted_events,
+            )
             saved_voices = filter_public_playback_voices(
                 saved_voices,
                 private_event_ids=private_event_ids,
@@ -1514,14 +1575,15 @@ def _get_game_playback(
         except RecoverableDatabaseError:
             saved_voices = []
 
-    playback["events"] = project_playback_events(
-        playback["events"],
-        audience=audience,
-    )
+    if not persisted_events:
+        playback["events"] = project_playback_events(
+            playback["events"],
+            audience=audience,
+        )
     public_event_ids = {
-        event.get("source_event_id", event.get("id"))
+        event.get("id")
         for event in playback["events"]
-        if isinstance(event.get("source_event_id", event.get("id")), int)
+        if isinstance(event.get("id"), int)
     }
     saved_voices = [
         voice
@@ -1543,6 +1605,48 @@ def _get_game_playback(
         materialization_lag_ms=materialization_lag_ms,
     )
     return playback
+
+
+def _map_playback_voices_to_timeline(
+    voices: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    source_to_timeline = {
+        (event.get("source_run_id"), event.get("source_event_id")): event.get("id")
+        for event in events
+        if isinstance(event.get("source_run_id"), str)
+        and isinstance(event.get("source_event_id"), int)
+        and isinstance(event.get("id"), int)
+    }
+    mapped: list[dict[str, Any]] = []
+    for voice in voices:
+        run_id = voice.get("run_id")
+        first_source_id = voice.get("source_event_id")
+        last_source_id = voice.get("last_source_event_id", first_source_id)
+        if not isinstance(run_id, str) or not isinstance(first_source_id, int):
+            continue
+        if not isinstance(last_source_id, int):
+            last_source_id = first_source_id
+        first_timeline_id = source_to_timeline.get((run_id, first_source_id))
+        if not isinstance(first_timeline_id, int):
+            continue
+        last_timeline_id = source_to_timeline.get((run_id, last_source_id))
+        if not isinstance(last_timeline_id, int):
+            candidates = [
+                timeline_id
+                for (source_run_id, source_event_id), timeline_id in source_to_timeline.items()
+                if source_run_id == run_id
+                and first_source_id <= source_event_id <= last_source_id
+            ]
+            last_timeline_id = max(candidates, default=first_timeline_id)
+        mapped.append(
+            {
+                **{key: value for key, value in voice.items() if key != "run_id"},
+                "source_event_id": first_timeline_id,
+                "last_source_event_id": last_timeline_id,
+            }
+        )
+    return mapped
 
 
 def _merge_playback_voices(
@@ -1752,6 +1856,44 @@ def _event_stream(
     finally:
         if subscriber is not None:
             registry.unsubscribe(run_id, subscriber)
+
+
+def _timeline_event_stream(
+    db: Session,
+    run_id: str,
+    *,
+    after_id: int | None = None,
+    audience: ProjectionAudience = "player_public",
+) -> Iterator[str]:
+    cursor = after_id or 0
+    last_heartbeat = time.monotonic()
+    while True:
+        db.expire_all()
+        timeline = DatabaseLiveStore(db).session_timeline_for_run(
+            run_id,
+            audience=audience,
+        )
+        if timeline is None:
+            return
+        emitted_terminal = False
+        for event in timeline.events:
+            if event.id <= cursor:
+                continue
+            cursor = event.id
+            payload = event.to_dict(run_id=timeline.current_run_id)
+            data = json.dumps(payload, ensure_ascii=False)
+            yield f"id: {event.id}\nevent: {event.type}\ndata: {data}\n\n"
+            emitted_terminal = event.type in {
+                "game_completed",
+                "game_failed",
+                "game_canceled",
+            }
+        if emitted_terminal:
+            return
+        if time.monotonic() - last_heartbeat >= 15:
+            yield ": heartbeat\n\n"
+            last_heartbeat = time.monotonic()
+        time.sleep(0.25)
 
 
 def _is_terminal_event(event: LiveEvent) -> bool:

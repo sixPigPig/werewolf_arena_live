@@ -133,6 +133,7 @@ HARD_ACTION_QUALITY_CODES = frozenset(
     {
         "appeals_to_missing_sheriff_voters",
         "promises_ineligible_sheriff_vote",
+        "sheriff_speech_investigation_plan_without_seer_claim",
         "assumes_future_round_in_endgame",
         "ignores_terminal_risk",
     }
@@ -140,6 +141,8 @@ HARD_ACTION_QUALITY_CODES = frozenset(
 BUFFERED_QUALITY_ACTIONS = frozenset(
     {ACTION_SHERIFF_SPEECH, ACTION_SHERIFF_PK_SPEECH, ACTION_DEBATE}
 )
+REQUIRED_PUBLIC_SPEECH_FALLBACK = "本轮暂不追加判断，投票时我会给出明确选择。"
+SHERIFF_SPEECH_CONTEXT_MAX_CHARS = 180
 SELF_EXPLOSION_BENEFIT_TYPES = frozenset(
     {
         "immediate_win",
@@ -150,6 +153,13 @@ SELF_EXPLOSION_BENEFIT_TYPES = frozenset(
         "none",
     }
 )
+
+
+def _compact_sheriff_speech_context(text: str) -> str:
+    compact = " ".join(text.split())
+    if len(compact) <= SHERIFF_SPEECH_CONTEXT_MAX_CHARS:
+        return compact
+    return compact[: SHERIFF_SPEECH_CONTEXT_MAX_CHARS - 1].rstrip() + "…"
 
 
 class MaxRoundsExceeded(RuntimeError):
@@ -482,6 +492,8 @@ class GameEngine:
         action_execution_budget: ActionExecutionBudgetV1 | None = None,
         fallback_seed: int | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        execution_mode: Literal["new", "resume"] = "new",
+        resume_from_round: int | None = None,
     ) -> None:
         self.state = state
         self.provider = provider
@@ -499,6 +511,8 @@ class GameEngine:
         )
         self.fallback_seed = fallback_seed
         self.monotonic = monotonic
+        self.execution_mode = execution_mode
+        self.resume_from_round = resume_from_round
         self.logs: list[RoundLog] = []
 
     def run(self) -> list[RoundLog]:
@@ -510,13 +524,16 @@ class GameEngine:
             else [player.name for player in self.state.players]
         )
         self._refresh_winner(active_players)
-        self._publish(
-            "game_started",
-            payload={
-                "players": [player.to_dict() for player in self.state.players],
-                "active_players": active_players.copy(),
-            },
+        start_event_type = (
+            "game_resumed" if self.execution_mode == "resume" else "game_started"
         )
+        start_payload: dict[str, object] = {
+            "players": [player.to_dict() for player in self.state.players],
+            "active_players": active_players.copy(),
+        }
+        if self.execution_mode == "resume":
+            start_payload["resume_from_round"] = self.resume_from_round
+        self._publish(start_event_type, payload=start_payload)
 
         while not self.state.winner:
             if len(self.state.rounds) >= self.max_rounds:
@@ -2801,6 +2818,15 @@ class GameEngine:
         public_options = [self._public_player_reference(option) for option in options_snapshot]
         public_choice_to_internal = dict(zip(public_options, options_snapshot, strict=True))
         world_state = self._world_state(player, options_snapshot, round_state)
+        if action == ACTION_SHERIFF_SPEECH:
+            world_state["public_facts"] = self._public_fact_lines(
+                sheriff_speech_context_round=round_state.number,
+            )
+            world_state["sheriff_election"] = self._sheriff_election_context(
+                round_state,
+                compact_prior_speeches=True,
+            )
+            world_state["compact_sheriff_speech_context"] = True
         if extra_world_state:
             world_state.update(extra_world_state)
         if action in BUFFERED_QUALITY_ACTIONS:
@@ -3046,6 +3072,7 @@ class GameEngine:
             prior_texts=[entry.message for entry in request.round_state.debate],
             personality=request.player.personality,
             eligibility=eligibility if isinstance(eligibility, dict) else None,
+            role=request.player.role,
         )
         return [warning for warning in warnings if warning in HARD_ACTION_QUALITY_CODES]
 
@@ -3053,6 +3080,10 @@ class GameEngine:
         guidance = {
             "appeals_to_missing_sheriff_voters": "本轮没有警下投票者，不要向警下拉票。",
             "promises_ineligible_sheriff_vote": "你没有警长投票资格，不要承诺自己的警长票。",
+            "sheriff_speech_investigation_plan_without_seer_claim": (
+                "只有预言家或明确公开跳预言家的玩家才能给出查验式警徽流；"
+                "否则请改为说明发言方向、归票和警徽移交原则，不要承诺先验、再验或今晚验人。"
+            ),
             "assumes_future_round_in_endgame": "不能假定一定存在明天或下一轮。",
             "ignores_terminal_risk": "说明本轮错误放逐可能立即结束游戏。",
             "repeated_debate_phrase": "不要复述已有长句，加入一个新的公开事实、票型变化或具体反问。",
@@ -3154,7 +3185,7 @@ class GameEngine:
     ) -> PlayerActionResult:
         result: dict[str, object]
         if request.action in BUFFERED_QUALITY_ACTIONS:
-            value: object | None = "本轮暂不追加判断，投票时我会给出明确选择。"
+            value: object | None = REQUIRED_PUBLIC_SPEECH_FALLBACK
             result = {request.result_key: value}
             reason = "timeout_neutral_public_speech"
         else:
@@ -3270,26 +3301,39 @@ class GameEngine:
                 action_log.decision_schema,
                 action_log.decision_audit,
             ) = _self_explosion_decision_audit(lm_log.result)
-        if checkpoint:
-            self._checkpoint_player_action_success(result)
         invalid_error = self._invalid_player_action_error(result)
         if invalid_error is not None:
             fallback_choice = self._optional_fallback_choice(request)
+            fallback_reason = "optional_action_invalid"
+            if request.action in BUFFERED_QUALITY_ACTIONS:
+                fallback_choice = REQUIRED_PUBLIC_SPEECH_FALLBACK
+                fallback_reason = "required_public_speech_invalid"
             if fallback_choice is None:
                 raise invalid_error
             invalid_value = self._invalid_value_from_result(result)
             value = fallback_choice
+            fallback_result = dict(lm_log.result or {})
+            fallback_result[request.result_key] = fallback_choice
+            lm_log.result = fallback_result
             action_log.choice = str(fallback_choice)
             action_log.invalid_value = invalid_value
             action_log.fallback_choice = fallback_choice
-            action_log.fallback_reason = "optional_action_invalid"
+            action_log.fallback_reason = fallback_reason
+            action_log.execution_status = "fallback"
             action_log.attempt_count = max(1, len(lm_log.invalid_attempts))
             if request.event_visibility == "public":
-                self._publish_optional_fallback_warning(
+                self._publish_invalid_action_fallback_warning(
                     request=request,
                     invalid_value=invalid_value,
                     fallback_choice=fallback_choice,
+                    warning=(
+                        "required_speech_fallback"
+                        if request.action in BUFFERED_QUALITY_ACTIONS
+                        else "off_option_fallback"
+                    ),
                 )
+        elif checkpoint and self._is_checkpointable_player_action_result(result):
+            self._checkpoint_player_action_success(result)
         if self.action_budgets_enabled:
             record_action_execution(
                 action_kind=self.action_execution_budget.for_action(
@@ -3488,8 +3532,18 @@ class GameEngine:
         results: list[PlayerActionResult | None],
     ) -> None:
         for result in results:
-            if result is not None:
+            if result is not None and self._is_checkpointable_player_action_result(result):
                 self._checkpoint_player_action_success(result)
+
+    def _is_checkpointable_player_action_result(
+        self,
+        result: PlayerActionResult,
+    ) -> bool:
+        return (
+            result.execution_status == "completed"
+            and result.fallback_reason is None
+            and self._invalid_player_action_error(result) is None
+        )
 
     def _publish_player_action_requested(self, request: PlayerActionRequest) -> None:
         if request.event_visibility == "private":
@@ -3522,6 +3576,12 @@ class GameEngine:
 
     def _invalid_player_action_error(self, result: PlayerActionResult) -> ValueError | None:
         request = result.request
+        if request.action in BUFFERED_QUALITY_ACTIONS and (
+            not isinstance(result.value, str) or not result.value.strip()
+        ):
+            return ValueError(
+                f"{request.player.name} did not return a valid {request.action} message."
+            )
         if request.options and result.value not in request.options:
             return ValueError(
                 f"{request.player.name} returned invalid {request.action}: {result.value}"
@@ -3541,12 +3601,13 @@ class GameEngine:
             return result.lm_log.invalid_attempts[-1].get("value")
         return None
 
-    def _publish_optional_fallback_warning(
+    def _publish_invalid_action_fallback_warning(
         self,
         *,
         request: PlayerActionRequest,
         invalid_value: object | None,
         fallback_choice: object,
+        warning: str,
     ) -> None:
         self._publish(
             "action_quality_warning",
@@ -3555,7 +3616,7 @@ class GameEngine:
             actor=request.player.name,
             action=request.action,
             payload={
-                "warnings": ["off_option_fallback"],
+                "warnings": [warning],
                 "invalid_value": invalid_value,
                 "fallback_choice": self._public_action_value(fallback_choice),
                 "allowed_values": request.public_options.copy(),
@@ -3738,6 +3799,7 @@ class GameEngine:
             prior_texts=prior_texts,
             personality=personality,
             eligibility=eligibility,
+            role=player.role if player is not None else "",
         )
         if not warnings:
             return
@@ -4003,8 +4065,24 @@ class GameEngine:
             )
         return propositions
 
-    def _public_fact_lines(self) -> list[str]:
+    def _public_fact_lines(
+        self,
+        *,
+        sheriff_speech_context_round: int | None = None,
+    ) -> list[str]:
         facts = [public_fact_from_dict(item) for item in self.state.public_facts]
+        if sheriff_speech_context_round is not None:
+            compacted_facts: list[PublicFact] = []
+            for fact in facts:
+                if fact.stage != "sheriff_speech":
+                    compacted_facts.append(fact)
+                    continue
+                if fact.round_number == sheriff_speech_context_round:
+                    continue
+                compacted_facts.append(
+                    replace(fact, text=_compact_sheriff_speech_context(fact.text))
+                )
+            facts = compacted_facts
         return compressed_public_facts(facts)
 
     def _public_self_history(self, player_name: str) -> list[str]:
@@ -4054,18 +4132,33 @@ class GameEngine:
             lines.append("如果讨论明天，必须同时说明本轮错误放逐可能立即结束游戏。")
         return lines
 
-    def _sheriff_election_context(self, round_state: RoundState) -> list[str]:
+    def _sheriff_election_context(
+        self,
+        round_state: RoundState,
+        *,
+        compact_prior_speeches: bool = False,
+    ) -> list[str]:
         lines: list[str] = []
         if round_state.sheriff_candidates:
             lines.append(f"上警名单：{'、'.join(round_state.sheriff_candidates)}")
             voters = "、".join(round_state.sheriff_voters) or "无"
             lines.append(f"警下名单：{voters}")
         if round_state.sheriff_speeches:
-            speech_lines = [
-                f"{entry.get('speaker', '')}：{entry.get('message', '')}"
-                for entry in round_state.sheriff_speeches
-                if entry.get("speaker") and entry.get("message")
-            ]
+            if compact_prior_speeches:
+                speech_lines = [
+                    (
+                        f"{entry.get('speaker', '')}（前置位观点摘要，勿复用措辞或格式）："
+                        f"{_compact_sheriff_speech_context(str(entry.get('message', '')))}"
+                    )
+                    for entry in round_state.sheriff_speeches
+                    if entry.get("speaker") and entry.get("message")
+                ]
+            else:
+                speech_lines = [
+                    f"{entry.get('speaker', '')}：{entry.get('message', '')}"
+                    for entry in round_state.sheriff_speeches
+                    if entry.get("speaker") and entry.get("message")
+                ]
             if speech_lines:
                 lines.append(f"警上发言：{'；'.join(speech_lines)}")
         if round_state.sheriff_withdrawn:

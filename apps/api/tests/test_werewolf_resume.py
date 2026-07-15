@@ -140,6 +140,14 @@ class RecordingRecordStore:
         self.checkpoints.append({"session_id": session_id, "checkpoint": checkpoint.copy()})
 
 
+class CapturingEventSink:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def publish(self, event_type: str, **kwargs: object) -> None:
+        self.events.append({"type": event_type, **kwargs})
+
+
 def test_resume_checkpoint_manager_persists_checkpoint_to_record_store() -> None:
     store = RecordingRecordStore()
     compiled = managed_official_compiled_rule_set("starter_6")
@@ -214,6 +222,47 @@ def test_resume_checkpoint_manager_persists_checkpoint_to_record_store() -> None
     assert state_snapshot is not run_params["rule_set_snapshot"]
     assert state_snapshot is not compiled.snapshot
     assert run_params["rule_set_snapshot"] is not compiled.snapshot
+
+
+def test_resume_checkpoint_manager_preserves_prior_round_logs() -> None:
+    store = RecordingRecordStore()
+    compiled = managed_official_compiled_rule_set("starter_6")
+    prior_log = RoundLog(number=1)
+    current_log = RoundLog(number=2)
+    manager = ResumeCheckpointManager(
+        record_store=store,
+        session_id="game_1200abcd",
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+        logs_prefix=[prior_log],
+    )
+    state = initialize_game_state(
+        session_id="game_1200abcd",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        rule_set=get_rule_set("starter_6"),
+    )
+
+    manager.start_round(
+        state=state,
+        logs=[current_log],
+        round_number=3,
+        active_players=["1号玩家"],
+        rng_state=None,
+    )
+
+    checkpoint = store.checkpoints[-1]["checkpoint"]
+    assert [entry["number"] for entry in checkpoint["logs_before_round"]] == [
+        1,
+        2,
+    ]
 
 
 @pytest.mark.parametrize(
@@ -480,15 +529,19 @@ def test_resume_game_replays_cached_model_responses_without_catalog_lookup(
     )
 
     resume_provider = ScriptedProvider()
+    sink = CapturingEventSink()
     result = resume_game(
         record_store=record_store,
         session_id=error.value.session_id,
         provider=resume_provider,
+        event_sink=sink,
     )
 
     assert result.session_id == error.value.session_id
     assert result.winner
     assert resume_provider.calls > 0
+    assert [event["type"] for event in sink.events].count("game_resumed") == 1
+    assert "game_started" not in [event["type"] for event in sink.events]
     with pytest.raises(ResumeCheckpointError):
         record_store.load_resume_checkpoint(result.session_id)
     assert record_store.load_session(result.session_id)["status"] == "complete"
@@ -592,6 +645,31 @@ def test_replay_then_live_provider_uses_cached_response_first() -> None:
         == '{"reasoning":"cached","target":"李四"}'
     )
     assert live_provider.calls == 0
+
+    response = provider.complete_json(
+        model="deepseek-chat",
+        prompt='行动："vote"。候选人：李四。',
+        temperature=0.4,
+    )
+
+    assert json.loads(response)["vote"] == "李四"
+    assert live_provider.calls == 1
+
+
+def test_replay_then_live_provider_drops_legacy_invalid_cached_response() -> None:
+    live_provider = ScriptedProvider()
+    provider = ReplayThenLiveProvider(
+        cached_model_responses=[
+            {
+                "actor": "林言",
+                "action": "debate",
+                "phase": "day",
+                "model": "deepseek-chat",
+                "raw_response": "\n--- retry ---\n",
+            }
+        ],
+        delegate=live_provider,
+    )
 
     response = provider.complete_json(
         model="deepseek-chat",

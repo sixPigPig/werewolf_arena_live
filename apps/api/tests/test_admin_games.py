@@ -940,10 +940,13 @@ def test_run_status_filter_only_matches_the_latest_run(
     )
     with context.session_factory() as db:
         db.add(
-            LiveRunRecord(
-                run_id="run_000000000041",
-                session_id=session_id,
-                status="completed",
+                LiveRunRecord(
+                    run_id="run_000000000041",
+                    session_id=session_id,
+                    parent_run_id="run_000000000040",
+                    resume_from_round=1,
+                    attempt_no=2,
+                    status="completed",
                 villager_model="model-new",
                 werewolf_model="model-new",
                 max_rounds=8,
@@ -1200,10 +1203,13 @@ def test_game_debug_requires_debug_permission_returns_safe_summaries_and_audits(
     with context.session_factory() as db:
         for index in range(21, 44):
             db.add(
-                LiveRunRecord(
-                    run_id=f"run_0000000000{index:02d}",
-                    session_id="game_00000020",
-                    status="failed",
+                    LiveRunRecord(
+                        run_id=f"run_0000000000{index:02d}",
+                        session_id="game_00000020",
+                        parent_run_id=f"run_0000000000{index - 1:02d}",
+                        resume_from_round=1,
+                        attempt_no=index - 19,
+                        status="failed",
                     villager_model="model-alpha",
                     werewolf_model="model-alpha",
                     max_rounds=8,

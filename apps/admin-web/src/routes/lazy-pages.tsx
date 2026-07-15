@@ -25,6 +25,7 @@ const PlayerProfileEditorPage = lazy(
   () => import("@/features/player-profiles/PlayerProfileEditorPage"),
 );
 const RuleSetsPage = lazy(() => import("@/features/rule-sets/RuleSetsPage"));
+const ModelsPage = lazy(() => import("@/features/models/ModelsPage"));
 const RuleSetNewPage = lazy(() => import("@/features/rule-sets/RuleSetsPage").then((module) => ({ default: module.RuleSetNewPage })));
 const RuleSetDetailPage = lazy(() => import("@/features/rule-sets/RuleSetsPage").then((module) => ({ default: module.RuleSetDetailPage })));
 const AdminUsersPage = lazy(
@@ -123,6 +124,7 @@ export function PlayerProfileEditorRoute() {
 }
 
 export function RuleSetsRoute() { return <LazyRoute><RuleSetsPage /></LazyRoute>; }
+export function ModelsRoute() { return <LazyRoute><ModelsPage /></LazyRoute>; }
 export function RuleSetNewRoute() { return <LazyRoute><RuleSetNewPage /></LazyRoute>; }
 export function RuleSetDetailRoute() { return <LazyRoute><RuleSetDetailPage /></LazyRoute>; }
 

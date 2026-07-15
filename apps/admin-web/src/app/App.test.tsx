@@ -97,6 +97,7 @@ describe("admin app routes", () => {
     ["/overview", "运营总览"],
     ["/content/players", "虚拟玩家"],
     ["/content/voice-assets", "法官语音资产"],
+    ["/content/models", "模型管理"],
     ["/operations/games", "对局记录"],
     ["/operations/runs", "运行监控"],
     ["/system/settings", "运行设置"],

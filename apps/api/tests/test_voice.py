@@ -77,6 +77,22 @@ def test_complete_public_speech_is_materialized_from_action_parsed() -> None:
     assert utterance.text == "这是最终完整发言。"
 
 
+def test_game_resumed_uses_resume_judge_voice() -> None:
+    event = live_event(10, "game_resumed", payload={"resume_from_round": 4})
+
+    utterance = event_to_voice_materialization(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+        player_seats={},
+    )
+
+    assert voice_job_candidate(event) == "judge"
+    assert utterance is not None
+    assert utterance.text == "本局游戏继续。"
+    assert utterance.static_asset_id == "game_resume"
+    assert is_static_judge_voice_asset_used("game_resume") is True
+
+
 def test_voice_job_candidate_rejects_private_and_delta_events() -> None:
     public_delta = live_event(
         10,

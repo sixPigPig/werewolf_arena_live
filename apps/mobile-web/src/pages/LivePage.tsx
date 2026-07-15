@@ -58,10 +58,17 @@ export function LivePage() {
   const director = useLiveDirector(events, {
     holdAdvance: voiceAdvanceHold,
     resetKey: gameId,
-    startAtEventType: "game_started",
+    startAtEventType: run?.attempt_no && run.attempt_no > 1 ? undefined : "game_started",
+    startAtLatestEventType:
+      run?.attempt_no && run.attempt_no > 1 ? "game_resumed" : undefined,
   });
+  const directorSourceEventId = sourceEventIdForCurrentRun(
+    events,
+    director.currentEventId,
+    gameId,
+  );
   const voice = useLiveVoiceStream(gameId, {
-    currentEventId: director.currentEventId,
+    currentEventId: directorSourceEventId,
     enabled: voiceEnabled,
     isPaused: director.isPaused,
   });
@@ -77,14 +84,14 @@ export function LivePage() {
   useEffect(() => {
     const shouldHold =
       voiceEnabled &&
-      isVoicePlaybackBlocking(voiceCurrentItem, director.currentEventId);
+      isVoicePlaybackBlocking(voiceCurrentItem, directorSourceEventId);
     // Voice playback depends on the current director event, so this feeds the
     // next render's hold flag back into the director without marking a user pause.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setVoiceAdvanceHold((current) =>
       current === shouldHold ? current : shouldHold,
     );
-  }, [director.currentEventId, voiceCurrentItem, voiceEnabled]);
+  }, [directorSourceEventId, voiceCurrentItem, voiceEnabled]);
   const handleToggleVoice = async () => {
     if (voiceEnabled && voice.connectionState === "error") {
       setVoiceEnabled(false);
@@ -285,4 +292,19 @@ function isVoicePlaybackBlocking(
   }
 
   return currentItem.status !== "played" && currentItem.status !== "error";
+}
+
+function sourceEventIdForCurrentRun(
+  events: LiveGameEvent[],
+  timelineEventId: number | null,
+  currentRunId: string | undefined,
+) {
+  if (timelineEventId === null || !currentRunId) {
+    return null;
+  }
+  const event = events.find((candidate) => candidate.id === timelineEventId);
+  if (!event || (event.source_run_id && event.source_run_id !== currentRunId)) {
+    return null;
+  }
+  return event.source_event_id ?? event.id;
 }

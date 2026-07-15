@@ -40,6 +40,11 @@ from app.werewolf.live import (
     validate_rule_set_revision_metadata,
 )
 from app.werewolf.privacy_projection import ProjectionAudience, project_live_event
+from app.werewolf.session_timeline import (
+    SessionTimeline,
+    TimelineRun,
+    build_session_timeline,
+)
 from app.werewolf.voice import voice_job_candidate
 
 
@@ -82,6 +87,9 @@ class DatabaseLiveStore:
             werewolf_model=run.werewolf_model,
             seed=run.seed,
             max_rounds=run.max_rounds,
+            parent_run_id=run.parent_run_id,
+            resume_from_round=run.resume_from_round,
+            attempt_no=run.attempt_no,
             rule_set_id=run.rule_set_id,
             rule_set_revision_id=run.rule_set_revision_id,
             rule_set_revision_no=run.rule_set_revision_no,
@@ -138,6 +146,9 @@ class DatabaseLiveStore:
                 werewolf_model=run.werewolf_model,
                 seed=run.seed,
                 max_rounds=run.max_rounds,
+                parent_run_id=run.parent_run_id,
+                resume_from_round=run.resume_from_round,
+                attempt_no=run.attempt_no,
                 rule_set_id=run.rule_set_id,
                 created_at=parse_live_datetime(run.created_at) or datetime.now(tz=UTC),
             )
@@ -180,6 +191,9 @@ class DatabaseLiveStore:
             record.error = run.error
             record.completed_at = parse_live_datetime(run.completed_at)
         record.rule_set_revision_id = run.rule_set_revision_id
+        record.parent_run_id = run.parent_run_id
+        record.resume_from_round = run.resume_from_round
+        record.attempt_no = run.attempt_no
         record.rule_set_revision_no = run.rule_set_revision_no
         record.rule_set_content_hash = run.rule_set_content_hash
         record.rule_set = copy.deepcopy(run.rule_set)
@@ -506,6 +520,19 @@ class DatabaseLiveStore:
                 LiveRunRecord.status.in_(("queued", "running")),
             )
             .order_by(LiveRunRecord.created_at.desc(), LiveRunRecord.run_id.desc())
+            .limit(1)
+        )
+        return self._run_from_record(record) if record is not None else None
+
+    def latest_run_for_session(self, session_id: str) -> LiveGameRun | None:
+        record = self.db.scalar(
+            select(LiveRunRecord)
+            .where(LiveRunRecord.session_id == session_id)
+            .order_by(
+                LiveRunRecord.attempt_no.desc(),
+                LiveRunRecord.created_at.desc(),
+                LiveRunRecord.run_id.desc(),
+            )
             .limit(1)
         )
         return self._run_from_record(record) if record is not None else None
@@ -853,6 +880,9 @@ class DatabaseLiveStore:
             werewolf_model=record.werewolf_model,
             seed=record.seed,
             max_rounds=record.max_rounds,
+            parent_run_id=record.parent_run_id,
+            resume_from_round=record.resume_from_round,
+            attempt_no=record.attempt_no,
             rule_set_id=record.rule_set_id,
             rule_set_revision_id=record.rule_set_revision_id,
             rule_set_revision_no=record.rule_set_revision_no,
@@ -954,30 +984,65 @@ class DatabaseLiveStore:
         *,
         audience: ProjectionAudience = "player_public",
     ) -> list[dict[str, Any]]:
-        eventful_run = (
-            self.db.query(LiveEventRecord.run_id)
-            .join(LiveRunRecord, LiveRunRecord.run_id == LiveEventRecord.run_id)
-            .filter(LiveRunRecord.session_id == session_id)
-            .group_by(LiveEventRecord.run_id)
-            .order_by(func.max(LiveEventRecord.created_at).desc())
-            .first()
-        )
-        if eventful_run is None:
-            return []
-
-        eventful_run_id = eventful_run[0]
+        timeline = self.session_timeline_for_session(session_id, audience=audience)
         playback_run_id = f"playback_{session_id}"
-        projected_events = self.projected_events_after(
-            eventful_run_id,
-            audience=audience,
-        )
         return [
-            {
-                **event.to_dict(),
-                "run_id": playback_run_id,
-            }
-            for event in projected_events
+            event.to_dict(run_id=playback_run_id)
+            for event in timeline.events
         ]
+
+    def session_timeline_for_run(
+        self,
+        run_id: str,
+        *,
+        audience: ProjectionAudience = "player_public",
+    ) -> SessionTimeline | None:
+        run = self.db.get(LiveRunRecord, run_id)
+        if run is None:
+            return None
+        return self.session_timeline_for_session(run.session_id, audience=audience)
+
+    def session_timeline_for_session(
+        self,
+        session_id: str,
+        *,
+        audience: ProjectionAudience = "player_public",
+    ) -> SessionTimeline:
+        records = (
+            self.db.query(LiveRunRecord)
+            .filter(LiveRunRecord.session_id == session_id)
+            .order_by(
+                LiveRunRecord.attempt_no.asc(),
+                LiveRunRecord.created_at.asc(),
+                LiveRunRecord.run_id.asc(),
+            )
+            .all()
+        )
+        runs = [
+            TimelineRun(
+                run_id=record.run_id,
+                created_at=format_live_datetime(record.created_at),
+                attempt_no=record.attempt_no,
+                parent_run_id=record.parent_run_id,
+                resume_from_round=record.resume_from_round,
+            )
+            for record in records
+        ]
+        events_by_run = {
+            record.run_id: [
+                event.to_dict()
+                for event in self.projected_events_after(
+                    record.run_id,
+                    audience=audience,
+                )
+            ]
+            for record in records
+        }
+        return build_session_timeline(
+            session_id=session_id,
+            runs=runs,
+            projected_events_by_run=events_by_run,
+        )
 
     def projected_events_after(
         self,
@@ -1147,6 +1212,9 @@ def _stored_expected_state_matches(
             "werewolf_model": record.werewolf_model,
             "seed": record.seed,
             "max_rounds": record.max_rounds,
+            "parent_run_id": record.parent_run_id,
+            "resume_from_round": record.resume_from_round,
+            "attempt_no": record.attempt_no,
             "rule_set_id": record.rule_set_id,
             "rule_set_revision_id": record.rule_set_revision_id,
             "rule_set_revision_no": record.rule_set_revision_no,

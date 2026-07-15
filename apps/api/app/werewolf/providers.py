@@ -11,6 +11,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.model_catalog.runtime import (
+    catalog_all_model_names,
+    catalog_model_names,
+    runtime_configuration_for_model,
+    runtime_default_model,
+)
 from app.werewolf.execution_budget import ModelCallOptions, ModelDeadlineExceeded
 from app.werewolf.streaming import extract_openai_chat_delta
 
@@ -204,6 +210,18 @@ class OpenAICompatibleProvider:
         temperature: float,
         call_options: ModelCallOptions | None,
     ) -> dict[str, Any]:
+        runtime_configuration = runtime_configuration_for_model(
+            _catalog_provider_name(self.config),
+            model,
+        )
+        parameters = runtime_configuration.parameters if runtime_configuration else {}
+        thinking = parameters.get("thinking", "default")
+        configured_temperature = parameters.get("temperature")
+        effective_temperature = (
+            configured_temperature
+            if isinstance(configured_temperature, (int, float))
+            else temperature
+        )
         payload = {
             "model": self.config.model_aliases.get(model.lower(), model),
             "messages": [
@@ -213,13 +231,30 @@ class OpenAICompatibleProvider:
                 },
                 {"role": "user", "content": prompt},
             ],
-            "temperature": temperature,
             "stream": False,
         }
+        if not (self.config.env_prefix == "DEEPSEEK" and thinking != "disabled"):
+            payload["temperature"] = effective_temperature
         if self.config.response_format is not None:
             payload["response_format"] = self.config.response_format
-        if call_options is not None and call_options.max_output_tokens is not None:
-            payload["max_tokens"] = call_options.max_output_tokens
+        configured_max_tokens = parameters.get("max_tokens")
+        budget_max_tokens = call_options.max_output_tokens if call_options is not None else None
+        max_tokens = _minimum_optional_int(configured_max_tokens, budget_max_tokens)
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if thinking in {"enabled", "disabled"}:
+            payload["thinking"] = {"type": thinking}
+        reasoning_effort = parameters.get("reasoning_effort")
+        if (
+            thinking != "disabled"
+            and isinstance(reasoning_effort, str)
+            and reasoning_effort
+        ):
+            payload["reasoning_effort"] = reasoning_effort
+        for parameter in ("top_p", "frequency_penalty", "presence_penalty"):
+            value = parameters.get(parameter)
+            if isinstance(value, (int, float)):
+                payload[parameter] = value
         payload.update(self.config.extra_payload)
         return payload
 
@@ -548,6 +583,18 @@ def _registration_for_config(
 
 
 def _configured_model_names(config: OpenAICompatibleProviderConfig) -> tuple[str, ...]:
+    provider_name = _catalog_provider_name(config)
+    catalog_names = catalog_model_names(provider_name)
+    if catalog_names is not None:
+        explicit_names = _explicit_process_model_names(config)
+        catalog_all_names = catalog_all_model_names(provider_name) or ()
+        if explicit_names and any(name not in catalog_all_names for name in explicit_names):
+            return explicit_names
+        return catalog_names
+    return environment_model_names(config)
+
+
+def environment_model_names(config: OpenAICompatibleProviderConfig) -> tuple[str, ...]:
     dotenv = _load_dotenv(Path(".env"), prefixes=(config.env_prefix,))
     models_name = f"{config.env_prefix}_MODELS"
     model_name = f"{config.env_prefix}_MODEL"
@@ -559,6 +606,16 @@ def _configured_model_names(config: OpenAICompatibleProviderConfig) -> tuple[str
     if configured_model:
         return (configured_model,)
     return config.available_models
+
+
+def _explicit_process_model_names(
+    config: OpenAICompatibleProviderConfig,
+) -> tuple[str, ...]:
+    configured_models = os.getenv(f"{config.env_prefix}_MODELS")
+    if configured_models:
+        return _split_model_names(configured_models)
+    configured_model = os.getenv(f"{config.env_prefix}_MODEL")
+    return (configured_model,) if configured_model else ()
 
 
 def _split_model_names(value: str) -> tuple[str, ...]:
@@ -598,10 +655,23 @@ def configured_model_options() -> list[dict[str, str]]:
 
 def default_model_name() -> str:
     dotenv = _load_dotenv(Path(".env"), prefixes=("WEREWOLF",))
-    explicit_default = os.getenv("WEREWOLF_DEFAULT_MODEL") or dotenv.get("WEREWOLF_DEFAULT_MODEL")
+    explicit_default = os.getenv("WEREWOLF_DEFAULT_MODEL") or dotenv.get(
+        "WEREWOLF_DEFAULT_MODEL"
+    )
     if explicit_default:
         return _canonical_model_name(explicit_default)
-
+    if catalog_default := runtime_default_model():
+        default_provider, default_model = catalog_default
+        matching_config = next(
+            (
+                config
+                for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS
+                if _catalog_provider_name(config) == default_provider
+            ),
+            None,
+        )
+        if matching_config is not None and _has_api_key(matching_config):
+            return default_model
     for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS:
         if _has_api_key(config):
             configured_names = _configured_model_names(config)
@@ -618,6 +688,19 @@ def _canonical_model_name(model: str) -> str:
         if canonical_name := config.model_aliases.get(normalized_model):
             return canonical_name
     return model
+
+
+def _catalog_provider_name(config: OpenAICompatibleProviderConfig) -> str:
+    return {
+        "ARK_AGENT_PLAN": "agent_plan",
+        "DEEPSEEK": "deepseek",
+        "DASHSCOPE": "qwen",
+    }.get(config.env_prefix, config.env_prefix.lower())
+
+
+def _minimum_optional_int(*values: Any) -> int | None:
+    integers = [value for value in values if isinstance(value, int) and not isinstance(value, bool)]
+    return min(integers) if integers else None
 
 
 def _has_api_key(config: OpenAICompatibleProviderConfig) -> bool:

@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     werewolf_private_text_total_seconds: float = Field(default=25.0, ge=0.1, le=300)
     werewolf_private_text_batch_seconds: float = Field(default=25.0, ge=0.1, le=300)
     werewolf_logs_dir: str = "logs"
+    model_catalog_agent_plan: Literal[
+        "agent-plan",
+        "agent-plan-team",
+        "coding-plan",
+        "coding-plan-team",
+    ] = "agent-plan"
+    model_catalog_arkcli_path: str = "arkcli"
+    model_catalog_sync_timeout_seconds: float = Field(default=20.0, ge=1.0, le=120.0)
+    model_catalog_deepseek_timeout_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
     ark_tts_enabled: bool = False
     ark_tts_api_key: str = ""
     ark_tts_resource_id: str = "seed-tts-2.0"

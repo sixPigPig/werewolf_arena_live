@@ -3698,6 +3698,57 @@ def test_game_run_events_honors_after_id_query() -> None:
     assert "event: game_completed" in body
 
 
+def test_session_timeline_events_fold_resume_runs() -> None:
+    session_id = "game_a110e120"
+    registry = LiveRunRegistry(live_store=RecordingSessionLiveStore())
+    first = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    registry.publish(first.run_id, "game_started", payload={"players": []})
+    registry.publish(first.run_id, "round_started", round_number=1, payload={"round": 1})
+    registry.publish(first.run_id, "round_started", round_number=2, payload={"round": 2})
+    registry.mark_failed(first.run_id, error="temporary")
+
+    resumed = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+        parent_run_id=first.run_id,
+        resume_from_round=2,
+        attempt_no=2,
+    )
+    registry.publish(
+        resumed.run_id,
+        "game_resumed",
+        payload={"players": [], "resume_from_round": 2},
+    )
+    registry.publish(resumed.run_id, "round_started", round_number=2, payload={"round": 2})
+    registry.mark_completed(resumed.run_id, winner="好人阵营")
+
+    response = client.get(f"/api/v1/games/runs/{resumed.run_id}/timeline-events")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.count("event: game_started") == 1
+    assert response.text.count("event: game_resumed") == 1
+    streamed_events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert [
+        event["round"] for event in streamed_events if event["type"] == "round_started"
+    ] == [1, 2]
+    assert "event: game_failed" not in response.text
+    assert "event: game_completed" in response.text
+
+
 def test_game_run_events_honors_last_event_id_header() -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
@@ -4067,7 +4118,9 @@ def test_historical_summary_event_and_voice_are_filtered_on_read() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert all(event.get("action") != "summarize" for event in payload["events"])
-    assert any(event["id"] == public_event.id for event in payload["events"])
+    assert any(
+        event["source_event_id"] == public_event.id for event in payload["events"]
+    )
     assert payload["voices"] == []
     assert sentinel not in response.text
 

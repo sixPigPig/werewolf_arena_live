@@ -1,6 +1,46 @@
 from __future__ import annotations
 
+import re
+
 from app.werewolf.debate_realism import dialogue_quality_warnings
+
+
+_SEER_SELF_CLAIM_RE = re.compile(
+    r"(?:我(?:是|跳|拿的(?:是)?|这张牌是)一?张?预言家(?:牌)?|"
+    r"(?:^|[。！？；\n])\s*(?:\d{1,2}号(?:玩家)?[，,:：]?\s*)?预言家(?:牌)?(?:[，。,:：]|$))"
+)
+_NON_SEER_SELF_CLAIM_RE = re.compile(
+    r"(?:我(?:是|跳|拿的(?:是)?|这张牌是|身份是?)一?张?"
+    r"(?:村民|平民|女巫|猎人|白痴|守卫|狼人)(?:牌)?|"
+    r"(?:^|[。！？；\n])\s*(?:\d{1,2}号(?:玩家)?[，,:：]?\s*)"
+    r"(?:身份(?:是)?[，,:：]?\s*)?"
+    r"(?:村民|平民|女巫|猎人|白痴|守卫|狼人)(?:牌)?(?:[，。,:：]|$))"
+)
+_FUTURE_INVESTIGATION_RE = re.compile(
+    r"(?:先|再|今晚|今夜|明晚|下一晚|优先|暂定|计划|准备|会|要)"
+    r"[^。！？；\n]{0,10}(?:查验|验(?:警上|警下|(?:玩家)?\d{1,2}号))"
+)
+_OTHER_BADGE_FLOW_OWNER_RE = re.compile(
+    r"(?:\d{1,2}号(?:玩家)?|你|他|她)(?:自己)?(?:刚才|提出|说)?的?$"
+)
+
+
+def _has_self_investigation_plan(text: str) -> bool:
+    normalized = text.replace(" ", "")
+    if re.search(
+        r"我(?:今晚|今夜|明晚|下一晚|先|再|准备|计划|会|要|优先)"
+        r"[^。！？；\n]{0,12}(?:查验|验(?:警上|警下|(?:玩家)?\d{1,2}号))",
+        normalized,
+    ):
+        return True
+    for segment in re.split(r"[。！？；\n]", normalized):
+        if "警徽流" not in segment or not _FUTURE_INVESTIGATION_RE.search(segment):
+            continue
+        owner_prefix = segment.split("警徽流", 1)[0][-16:]
+        if "我的" not in owner_prefix and _OTHER_BADGE_FLOW_OWNER_RE.search(owner_prefix):
+            continue
+        return True
+    return False
 
 
 def action_quality_warnings(
@@ -12,6 +52,7 @@ def action_quality_warnings(
     prior_texts: list[str] | tuple[str, ...] = (),
     personality: str = "",
     eligibility: dict[str, object] | None = None,
+    role: str = "",
 ) -> list[str]:
     warnings: list[str] = []
     normalized = text.replace(" ", "")
@@ -24,6 +65,12 @@ def action_quality_warnings(
         asks_badge_for_self = "警徽投给我" in normalized or "把警徽投给我" in normalized
         if recognizes_other and asks_badge_for_self:
             warnings.append("sheriff_speech_conflicting_badge_goal")
+
+        if _has_self_investigation_plan(text):
+            claims_seer = _SEER_SELF_CLAIM_RE.search(text) is not None
+            claims_non_seer = _NON_SEER_SELF_CLAIM_RE.search(text) is not None
+            if claims_non_seer or (role != "预言家" and not claims_seer):
+                warnings.append("sheriff_speech_investigation_plan_without_seer_claim")
 
     if eligibility is not None:
         original_voters = eligibility.get("original_voters")

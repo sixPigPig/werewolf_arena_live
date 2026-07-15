@@ -18,6 +18,7 @@ const EVENT_TYPES = [
   "run_started",
   "run_recovered",
   "game_started",
+  "game_resumed",
   "round_started",
   "phase_started",
   "judge_cue",
@@ -164,7 +165,9 @@ export function useGameRunEvents(
       }
 
       const streamPath =
-        audience === "spectator_god_view" ? "god-view/events" : "events";
+        audience === "spectator_god_view"
+          ? "god-view/timeline-events"
+          : "timeline-events";
       source = new EventSourceConstructor(
         `${API_BASE_URL}/api/v1/games/runs/${runId}/${streamPath}`,
         { withCredentials: true },

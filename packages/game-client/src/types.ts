@@ -641,6 +641,9 @@ export type GameRun = {
   rule_set?: RuleSetSummary | null;
   seed: number | null;
   max_rounds: number;
+  parent_run_id?: string | null;
+  resume_from_round?: number | null;
+  attempt_no?: number;
   winner: string | null;
   status: GameRunStatus;
   created_at: string;
@@ -666,9 +669,11 @@ export type CreateGameRunRequest = {
 
 export type LiveGameEvent = {
   id: number;
+  source_run_id?: string;
   source_event_id?: number;
   audience?: "player_public" | "spectator_god_view";
   projection_version?: number;
+  timeline_version?: "session-timeline-v1";
   type: string;
   run_id: string;
   session_id: string;

@@ -85,6 +85,30 @@ def test_god_view_game_started_includes_role_but_not_private_memory() -> None:
     assert projected.payload["players"] == [{"name": "1号玩家", "role": "狼人"}]
 
 
+def test_public_game_resumed_keeps_only_resume_boundary_metadata() -> None:
+    projected = project_live_event(
+        _event(
+            "game_resumed",
+            payload={
+                "active_players": ["1号玩家"],
+                "parent_run_id": "run_parent",
+                "resume_from_round": 4,
+                "attempt_no": 3,
+                "private_error": "secret",
+            },
+        ),
+        "player_public",
+    )
+
+    assert projected is not None
+    assert projected.payload == {
+        "active_players": ["1号玩家"],
+        "parent_run_id": "run_parent",
+        "resume_from_round": 4,
+        "attempt_no": 3,
+    }
+
+
 def test_public_projection_drops_private_night_actions() -> None:
     assert (
         project_live_event(

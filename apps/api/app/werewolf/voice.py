@@ -25,6 +25,7 @@ USED_STATIC_JUDGE_VOICE_ASSET_IDS = frozenset(
         "dawn_start",
         "exile_vote_start",
         "game_intro",
+        "game_resume",
         "game_over_third_party",
         "game_over_villagers",
         "game_over_wolves",
@@ -157,7 +158,14 @@ def voice_job_candidate(event: LiveEvent) -> SpeakerKind | None:
     """Classify durable voice outbox candidates without inspecting private text."""
     if is_public_complete_speech_event(event):
         return "player"
-    if event.type in {"game_started", "judge_cue", "game_completed", "game_failed", "game_canceled"}:
+    if event.type in {
+        "game_started",
+        "game_resumed",
+        "judge_cue",
+        "game_completed",
+        "game_failed",
+        "game_canceled",
+    }:
         return "judge"
     if event.type == "phase_started" and event.phase in {"night", "day", "vote", "summary"}:
         if event.phase == "day" and event.payload.get("narration_mode") == "explicit_v1":
@@ -362,6 +370,8 @@ def _judge_cue_for_event(
         return None
     if event.type == "game_started":
         return JudgeVoiceCue("本局游戏开始，请所有玩家确认自己的身份牌。", "game_intro")
+    if event.type == "game_resumed":
+        return JudgeVoiceCue("本局游戏继续。", "game_resume")
     if event.type == "phase_started" and event.phase == "night":
         return JudgeVoiceCue("夜晚降临，所有玩家请闭眼。", "night_start")
     if event.type == "phase_started" and event.phase == "day":

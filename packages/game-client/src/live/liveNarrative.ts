@@ -165,6 +165,20 @@ function cueForEvent({
     });
   }
 
+  if (event.type === "game_resumed") {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: "neutral",
+      judgeLine: "本局游戏继续。",
+      performerLine: "玩家回到中断的回合。",
+      detailLine: "对局从上次中断处继续。",
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
   if (event.type === "phase_started") {
     return phaseCue(cue, event.phase, godViewState, actorName);
   }

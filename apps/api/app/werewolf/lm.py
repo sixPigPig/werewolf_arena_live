@@ -27,6 +27,10 @@ STREAM_DELTA_FLUSH_SECONDS = 0.12
 PUBLIC_MODEL_FAILURE_MESSAGE = "模型请求失败，正在中止本次行动"
 
 
+class EmptyModelResponseError(ValueError):
+    """The provider completed successfully but returned no usable content."""
+
+
 class ModelProvider(Protocol):
     def complete_json(
         self,
@@ -120,7 +124,15 @@ def generate_action(
         raw_responses.append(raw_response)
         try:
             result = parse_json_object(raw_response)
+        except EmptyModelResponseError:
+            invalid_attempts.append(
+                _invalid_response_attempt("empty_content", result_key=result_key)
+            )
+            continue
         except ValueError:
+            invalid_attempts.append(
+                _invalid_response_attempt("invalid_json", result_key=result_key)
+            )
             continue
 
         last_result = result
@@ -265,7 +277,32 @@ def generate_action_with_events(
         raw_responses.append(raw_response)
         try:
             result = parse_json_object(raw_response)
-        except ValueError:
+        except (EmptyModelResponseError, ValueError) as exc:
+            reason_code = (
+                "empty_content"
+                if isinstance(exc, EmptyModelResponseError)
+                else "invalid_json"
+            )
+            invalid_attempts.append(
+                _invalid_response_attempt(reason_code, result_key=result_key)
+            )
+            if attempt + 1 < retries:
+                _publish_model_event(
+                    event_sink,
+                    "model_retry_scheduled",
+                    context=context,
+                    payload={
+                        "request_id": request_id,
+                        "model": model,
+                        "attempt": attempt + 2,
+                        "reason_code": reason_code,
+                        "message": (
+                            "模型返回为空，正在重试。"
+                            if reason_code == "empty_content"
+                            else "模型返回格式无效，正在重试。"
+                        ),
+                    },
+                )
             continue
 
         last_result = result
@@ -535,10 +572,28 @@ def _invalid_attempt(
     }
 
 
+def _invalid_response_attempt(
+    reason_code: str,
+    *,
+    result_key: str | None,
+) -> dict[str, Any]:
+    return {
+        "reason_code": reason_code,
+        "value": None,
+        "allowed_values": [],
+        "result_key": result_key or "result",
+    }
+
+
 def _prompt_with_invalid_feedback(
     base_prompt: str,
     invalid_attempt: dict[str, Any],
 ) -> str:
+    reason_code = invalid_attempt.get("reason_code")
+    if reason_code == "empty_content":
+        return f"{base_prompt}\n\n上次输出为空。本次必须只输出符合要求的合法 JSON。"
+    if reason_code == "invalid_json":
+        return f"{base_prompt}\n\n上次输出不是合法 JSON。本次必须只输出符合要求的合法 JSON。"
     allowed_values = "、".join(str(item) for item in invalid_attempt["allowed_values"])
     result_key = str(invalid_attempt["result_key"])
     value = str(invalid_attempt["value"])
@@ -554,6 +609,8 @@ def _prompt_with_invalid_feedback(
 
 def parse_json_object(raw_response: str) -> dict[str, Any]:
     content = raw_response.strip()
+    if not content:
+        raise EmptyModelResponseError("Model response content was empty.")
     if content.startswith("```"):
         content = content.strip("`")
         if content.startswith("json"):

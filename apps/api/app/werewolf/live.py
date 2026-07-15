@@ -32,6 +32,9 @@ ACTIVATION_ACK_RUN_FIELD_NAMES = frozenset(
         "werewolf_model",
         "seed",
         "max_rounds",
+        "parent_run_id",
+        "resume_from_round",
+        "attempt_no",
         "rule_set_id",
         "rule_set_revision_id",
         "rule_set_revision_no",
@@ -350,6 +353,9 @@ class LiveGameRun:
     werewolf_model: str
     seed: int | None
     max_rounds: int
+    parent_run_id: str | None = None
+    resume_from_round: int | None = None
+    attempt_no: int = 1
     rule_set_id: str = DEFAULT_RULE_SET_ID
     rule_set_revision_id: str | None = None
     rule_set_revision_no: int | None = None
@@ -404,6 +410,9 @@ class LiveGameRun:
             "werewolf_model": self.werewolf_model,
             "seed": self.seed,
             "max_rounds": self.max_rounds,
+            "parent_run_id": self.parent_run_id,
+            "resume_from_round": self.resume_from_round,
+            "attempt_no": self.attempt_no,
             "rule_set_id": self.rule_set_id,
             "rule_set_revision_id": self.rule_set_revision_id,
             "rule_set_revision_no": self.rule_set_revision_no,
@@ -553,6 +562,8 @@ class LiveStore(Protocol):
 
     def active_run_for_session(self, session_id: str) -> LiveGameRun | None: ...
 
+    def latest_run_for_session(self, session_id: str) -> LiveGameRun | None: ...
+
     def acquire_lease(
         self,
         run_id: str,
@@ -627,6 +638,9 @@ class LiveRunRegistry:
         werewolf_model: str,
         seed: int | None,
         max_rounds: int,
+        parent_run_id: str | None = None,
+        resume_from_round: int | None = None,
+        attempt_no: int = 1,
         rule_set_id: str = DEFAULT_RULE_SET_ID,
         rule_set_revision_id: str | None = None,
         rule_set_revision_no: int | None = None,
@@ -642,6 +656,9 @@ class LiveRunRegistry:
             werewolf_model=werewolf_model,
             seed=seed,
             max_rounds=max_rounds,
+            parent_run_id=parent_run_id,
+            resume_from_round=resume_from_round,
+            attempt_no=attempt_no,
             rule_set_id=rule_set_id,
             rule_set_revision_id=rule_set_revision_id,
             rule_set_revision_no=rule_set_revision_no,
@@ -667,6 +684,9 @@ class LiveRunRegistry:
         werewolf_model: str,
         seed: int | None,
         max_rounds: int,
+        parent_run_id: str | None = None,
+        resume_from_round: int | None = None,
+        attempt_no: int = 1,
         rule_set_id: str = DEFAULT_RULE_SET_ID,
         rule_set_revision_id: str | None = None,
         rule_set_revision_no: int | None = None,
@@ -697,6 +717,9 @@ class LiveRunRegistry:
             werewolf_model=werewolf_model,
             seed=seed,
             max_rounds=max_rounds,
+            parent_run_id=parent_run_id,
+            resume_from_round=resume_from_round,
+            attempt_no=attempt_no,
             rule_set_id=rule_set_id,
             rule_set_revision_id=rule_set_revision_id,
             rule_set_revision_no=rule_set_revision_no,
@@ -720,6 +743,9 @@ class LiveRunRegistry:
                     "werewolf_model": werewolf_model,
                     "seed": seed,
                     "max_rounds": max_rounds,
+                    "parent_run_id": parent_run_id,
+                    "resume_from_round": resume_from_round,
+                    "attempt_no": attempt_no,
                     "rule_set_id": rule_set_id,
                     "rule_set_revision_id": rule_set_revision_id,
                     "rule_set_revision_no": rule_set_revision_no,
@@ -770,6 +796,23 @@ class LiveRunRegistry:
             return local_run
         return self._load_complete_persisted_active_run(session_id)
 
+    def latest_run_for_session(self, session_id: str) -> LiveGameRun | None:
+        with self._lock:
+            local_runs = [run for run in self._runs.values() if run.session_id == session_id]
+            local_run = max(
+                local_runs,
+                key=lambda run: (run.attempt_no, run.created_at, run.run_id),
+                default=None,
+            )
+        loader = getattr(self._live_store, "latest_run_for_session", None)
+        persisted_run = loader(session_id) if callable(loader) else None
+        candidates = [run for run in (local_run, persisted_run) if run is not None]
+        return max(
+            candidates,
+            key=lambda run: (run.attempt_no, run.created_at, run.run_id),
+            default=None,
+        )
+
     def get_or_create_active_run(
         self,
         *,
@@ -778,6 +821,9 @@ class LiveRunRegistry:
         werewolf_model: str,
         seed: int | None,
         max_rounds: int,
+        parent_run_id: str | None = None,
+        resume_from_round: int | None = None,
+        attempt_no: int = 1,
         rule_set_id: str = DEFAULT_RULE_SET_ID,
         rule_set_revision_id: str | None = None,
         rule_set_revision_no: int | None = None,
@@ -800,6 +846,9 @@ class LiveRunRegistry:
             werewolf_model=werewolf_model,
             seed=seed,
             max_rounds=max_rounds,
+            parent_run_id=parent_run_id,
+            resume_from_round=resume_from_round,
+            attempt_no=attempt_no,
             rule_set_id=rule_set_id,
             rule_set_revision_id=rule_set_revision_id,
             rule_set_revision_no=rule_set_revision_no,
@@ -2178,6 +2227,20 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
     _require_exact_str(run.werewolf_model)
     _require_exact_optional_int(run.seed)
     _require_exact_int(run.max_rounds)
+    _require_exact_optional_str(run.parent_run_id)
+    _require_exact_optional_int(run.resume_from_round)
+    _require_exact_int(run.attempt_no)
+    if run.attempt_no <= 0 or (
+        run.attempt_no == 1
+        and (run.parent_run_id is not None or run.resume_from_round is not None)
+    ):
+        _raise_invalid_exact_json_value()
+    if run.attempt_no > 1 and (
+        run.parent_run_id is None
+        or run.resume_from_round is None
+        or run.resume_from_round <= 0
+    ):
+        _raise_invalid_exact_json_value()
     _require_exact_str(run.rule_set_id)
     _require_exact_optional_str(run.rule_set_revision_id)
     _require_exact_optional_int(run.rule_set_revision_no)
@@ -2220,6 +2283,9 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
         "werewolf_model": run.werewolf_model,
         "seed": run.seed,
         "max_rounds": run.max_rounds,
+        "parent_run_id": run.parent_run_id,
+        "resume_from_round": run.resume_from_round,
+        "attempt_no": run.attempt_no,
         "rule_set_id": run.rule_set_id,
         "rule_set_revision_id": run.rule_set_revision_id,
         "rule_set_revision_no": run.rule_set_revision_no,
@@ -2905,6 +2971,9 @@ def _raw_prepared_run_state(run: LiveGameRun) -> dict[str, object]:
         "werewolf_model": run.werewolf_model,
         "seed": run.seed,
         "max_rounds": run.max_rounds,
+        "parent_run_id": run.parent_run_id,
+        "resume_from_round": run.resume_from_round,
+        "attempt_no": run.attempt_no,
         "rule_set_id": run.rule_set_id,
         "rule_set_revision_id": run.rule_set_revision_id,
         "rule_set_revision_no": run.rule_set_revision_no,

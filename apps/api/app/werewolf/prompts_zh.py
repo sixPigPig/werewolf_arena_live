@@ -272,7 +272,14 @@ def _render_sheriff_election(world_state: dict[str, Any]) -> str:
     election = world_state.get("sheriff_election") or []
     if not election:
         return ""
-    return "警长竞选公开信息：\n" + "\n".join(f"- {line}" for line in election)
+    context_note = (
+        "（前置位内容仅供判断，不要复用其措辞、标题或段落格式）"
+        if world_state.get("compact_sheriff_speech_context") is True
+        else ""
+    )
+    return f"警长竞选公开信息{context_note}：\n" + "\n".join(
+        f"- {line}" for line in election
+    )
 
 
 def _render_public_action_eligibility(world_state: dict[str, Any]) -> str:
@@ -394,9 +401,21 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             f"请以{role}的目标思考，输出字段 reasoning 和 run。"
         )
     if action == "sheriff_speech":
+        role_guidance = (
+            "如果你选择公开声称预言家，需要说明已公开的查验结果，并给出后续查验计划；"
+            "这种查验计划才叫警徽流。若不公开预言家身份，就不要编造查验能力。"
+            if role == "预言家"
+            else (
+                "警徽流专指预言家的后续查验计划。你并非预言家，不要把警长使用方案写成警徽流，"
+                "也不要承诺“先验、再验、今晚验”某位玩家。只有当你的阵营策略明确要求你公开跳预言家时，"
+                "才可以给出警徽流，并且必须明确声称预言家、保持身份声明与查验计划一致。"
+            )
+        )
         return (
             "行动：警上竞选发言。\n"
-            "你已经上警，需要公开说明竞选警长的理由、警徽流思路和当前判断。\n"
+            "你已经上警，需要公开说明竞选警长的理由、当前判断，以及如果当选将如何使用警长权限，"
+            "包括发言方向、归票和警徽移交原则。\n"
+            f"{role_guidance}\n"
             "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
         )
     if action == "sheriff_withdraw":

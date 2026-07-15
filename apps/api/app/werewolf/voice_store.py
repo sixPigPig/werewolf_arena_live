@@ -215,6 +215,7 @@ class DatabaseVoiceStore:
                 utterance.utterance_id,
                 {
                     "utterance_id": utterance.utterance_id,
+                    "run_id": utterance.run_id,
                     "source_event_id": utterance.source_event_id,
                     "last_source_event_id": utterance.last_source_event_id,
                     "speaker_kind": utterance.speaker_kind,

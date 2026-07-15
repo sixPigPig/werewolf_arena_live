@@ -3303,7 +3303,7 @@ def test_projection_failure_rolls_back_canonical_event_and_store_recovers(
     assert db_session.get(LiveEventRecord, (run.run_id, event.id)) is not None
 
 
-def test_live_store_returns_latest_eventful_playback_events_for_session(
+def test_live_store_returns_folded_session_playback_events(
     db_session: Session,
 ) -> None:
     first_registry = LiveRunRegistry()
@@ -3323,6 +3323,9 @@ def test_live_store_returns_latest_eventful_playback_events_for_session(
         werewolf_model="deepseek-chat",
         seed=8,
         max_rounds=8,
+        parent_run_id=first_run.run_id,
+        resume_from_round=1,
+        attempt_no=2,
     )
 
     latest_registry = LiveRunRegistry()
@@ -3332,6 +3335,9 @@ def test_live_store_returns_latest_eventful_playback_events_for_session(
         werewolf_model="deepseek-chat",
         seed=9,
         max_rounds=8,
+        parent_run_id=empty_run.run_id,
+        resume_from_round=1,
+        attempt_no=3,
     )
     latest_event = latest_registry.publish(
         latest_run.run_id,
@@ -3361,7 +3367,11 @@ def test_live_store_returns_latest_eventful_playback_events_for_session(
 
     playback_events = store.playback_events_for_session("game_1200abcd")
 
-    assert [event["id"] for event in playback_events] == [latest_event.id]
+    assert [event["id"] for event in playback_events] == [1, 2]
+    assert [event["source_run_id"] for event in playback_events] == [
+        first_run.run_id,
+        latest_run.run_id,
+    ]
     assert {event["run_id"] for event in playback_events} == {"playback_game_1200abcd"}
     assert playback_events[-1]["payload"]["visible_text"] == "我不是狼"
 

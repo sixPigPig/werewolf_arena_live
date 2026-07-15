@@ -80,6 +80,7 @@ PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
 
 JUDGE_VOICE_LINES: tuple[JudgeVoiceLine, ...] = (
     JudgeVoiceLine("game_intro", "本局游戏开始，请所有玩家确认自己的身份牌。", "开局"),
+    JudgeVoiceLine("game_resume", "本局游戏继续。", "开局"),
     JudgeVoiceLine("night_start", "夜晚降临，所有玩家请闭眼。", "夜晚"),
     JudgeVoiceLine("werewolves_wake", "狼人请睁眼，请互相确认队友。", "狼人"),
     JudgeVoiceLine("werewolves_choose", "狼人请选择今晚袭击的目标。", "狼人"),

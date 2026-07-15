@@ -3115,6 +3115,100 @@ def test_sheriff_prompt_actions_render_chinese_instructions() -> None:
     assert badge_schema["required"] == ["reasoning", "badge"]
 
 
+def test_sheriff_speech_prompt_separates_badge_use_from_seer_investigation_plan() -> None:
+    world_state = {
+        "round": 1,
+        "name": "Alice",
+        "role": "村民",
+        "remaining_players": "Alice、Bob、Cora",
+        "options": "",
+        "observations": [],
+        "debate": [],
+        "rule_text": "你正在进行一局数字版狼人杀。",
+    }
+
+    villager_prompt, _schema = build_prompt("sheriff_speech", world_state)
+    seer_prompt, _schema = build_prompt(
+        "sheriff_speech",
+        {**world_state, "role": "预言家"},
+    )
+
+    assert "发言方向、归票和警徽移交原则" in villager_prompt
+    assert "警徽流专指预言家的后续查验计划" in villager_prompt
+    assert "不要承诺“先验、再验、今晚验”" in villager_prompt
+    assert "需要公开说明竞选警长的理由、警徽流思路" not in villager_prompt
+    assert "已公开的查验结果" in seer_prompt
+    assert "这种查验计划才叫警徽流" in seer_prompt
+
+
+def test_sheriff_speech_prompt_compacts_prior_speeches_without_duplicate_public_fact() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_compact_sheriff_speech_context",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=71,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    prior_speaker = state.players[0]
+    next_speaker = state.players[1]
+    long_speech = (
+        "【竞选理由】我会整理票型。\n"
+        "【警徽流】先验3号，再验5号。\n"
+        + "这段前置位发言不应被后置位整段照抄。" * 24
+    )
+    state.public_facts.append(
+        {
+            "round_number": 1,
+            "category": "claim",
+            "text": f"第1轮警上发言：{prior_speaker.name}：{long_speech}",
+            "schema_version": 3,
+            "fact_id": "fact-sheriff-speech-context",
+            "stage": "sheriff_speech",
+            "actor": prior_speaker.name,
+            "retention": "important",
+            "source_opportunity_id": None,
+            "details": {},
+        }
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.sheriff_candidates = active_players[:3]
+    round_state.sheriff_speech_order = active_players[:3]
+    round_state.sheriff_speeches = [
+        {"speaker": prior_speaker.name, "message": long_speech}
+    ]
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    request = engine._build_player_action_request(
+        player=next_speaker,
+        action=ACTION_SHERIFF_SPEECH,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    public_facts = request.world_state["public_facts"]
+    assert isinstance(public_facts, list)
+    assert all("第1轮警上发言" not in str(line) for line in public_facts)
+    election_context = request.world_state["sheriff_election"]
+    assert isinstance(election_context, list)
+    summary_line = next(
+        str(line) for line in election_context if "前置位观点摘要" in str(line)
+    )
+    assert "\n" not in summary_line
+    assert summary_line.endswith("…")
+    assert len(summary_line.split("）：", 1)[1]) <= 180
+    prompt, _schema = build_prompt(ACTION_SHERIFF_SPEECH, request.world_state)
+    assert "不要复用其措辞、标题或段落格式" in prompt
+
+
 def test_werewolf_self_explosion_prompt_renders_double_badge_context() -> None:
     world_state = {
         "round": 1,
@@ -3792,6 +3886,76 @@ def test_invalid_eligibility_draft_is_buffered_and_only_valid_retry_is_public() 
     public_blob = str(sink.events)
     assert "警下玩家请把票投给我" not in public_blob
     assert "本轮没有警下投票者，我只陈述自己的判断" in public_blob
+    assert [event["type"] for event in sink.events].count("model_retry_scheduled") == 1
+    assert [event["type"] for event in sink.events].count("action_parsed") == 1
+
+
+def test_invalid_non_seer_investigation_plan_is_rewritten_before_publication() -> None:
+    class InvestigationPlanRetryProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.prompts: list[str] = []
+
+        def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+            del model, temperature
+            self.calls += 1
+            self.prompts.append(prompt)
+            speech = (
+                "我是村民。我的警徽流先验3号，再验5号。"
+                if self.calls == 1
+                else "我是村民；如果当选，我会整理票型、明确归票并谨慎移交警徽。"
+            )
+            return [json.dumps({"reasoning": "角色能力检查", "say": speech}, ensure_ascii=False)]
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            return "".join(
+                self.stream_json(model=model, prompt=prompt, temperature=temperature)
+            )
+
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_non_seer_investigation_plan_retry",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=72,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    speaker = next(player for player in state.players if player.role != SEER)
+    candidates = [speaker.name, *[name for name in active_players if name != speaker.name][:2]]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.sheriff_candidates = candidates
+    round_state.sheriff_speech_order = candidates.copy()
+    round_state.sheriff_voters = [name for name in active_players if name not in candidates]
+    round_state.sheriff_final_candidates = candidates.copy()
+    provider = InvestigationPlanRetryProvider()
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    message, action_log = engine._player_action(
+        player=speaker,
+        action=ACTION_SHERIFF_SPEECH,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert provider.calls == 2
+    assert "只有预言家或明确公开跳预言家的玩家" in provider.prompts[1]
+    assert message == "我是村民；如果当选，我会整理票型、明确归票并谨慎移交警徽。"
+    assert "sheriff_speech_investigation_plan_without_seer_claim" in (
+        action_log.speech_quality_initial_codes
+    )
+    public_blob = str(sink.events)
+    assert "我的警徽流先验3号" not in public_blob
+    assert "整理票型、明确归票并谨慎移交警徽" in public_blob
     assert [event["type"] for event in sink.events].count("model_retry_scheduled") == 1
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
 
@@ -5079,7 +5243,7 @@ def test_batched_action_failure_checkpoints_successful_responses_before_raising(
     assert checkpoint_manager.failures[0]["error"] == "batched model failure"
 
 
-def test_batched_invalid_action_checkpoints_all_responses_and_failure() -> None:
+def test_batched_invalid_action_does_not_checkpoint_invalid_response() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_batch_invalid_checkpoint_successes",
@@ -5111,7 +5275,9 @@ def test_batched_invalid_action_checkpoints_all_responses_and_failure() -> None:
     assert provider.attempts_by_actor == {
         actor: 3 if actor == invalid_actor else 1 for actor in active_players
     }
-    assert [success["actor"] for success in checkpoint_manager.successes] == active_players
+    assert [success["actor"] for success in checkpoint_manager.successes] == [
+        actor for actor in active_players if actor != invalid_actor
+    ]
     assert {success["action"] for success in checkpoint_manager.successes} == {"sheriff_run"}
     assert all(success["prompt"] for success in checkpoint_manager.successes)
     assert [failure["actor"] for failure in checkpoint_manager.failures] == [invalid_actor]
@@ -5128,6 +5294,54 @@ def test_batched_invalid_action_checkpoints_all_responses_and_failure() -> None:
         (active_players[1], "model_response_received"),
         (active_players[1], "action_parsed"),
     ]
+
+
+@pytest.mark.parametrize(
+    "action",
+    [ACTION_DEBATE, ACTION_SHERIFF_SPEECH, ACTION_SHERIFF_PK_SPEECH],
+)
+def test_required_public_speech_empty_response_uses_fallback_without_checkpoint(
+    action: str,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id=f"session_test_empty_{action}",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=40,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    speaker = state.players[0]
+    round_state = RoundState(number=1, players=active_players.copy())
+    checkpoint_manager = RecordingCheckpointManager()
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=FakeProvider([{"reasoning": "无发言", "say": ""}]),
+        max_rounds=8,
+        rule_set=rule_set,
+        checkpoint_manager=checkpoint_manager,
+        event_sink=sink,
+    )
+
+    message, action_log = engine._player_action(
+        player=speaker,
+        action=action,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert message == "本轮暂不追加判断，投票时我会给出明确选择。"
+    assert action_log.execution_status == "fallback"
+    assert action_log.fallback_reason == "required_public_speech_invalid"
+    assert checkpoint_manager.successes == []
+    assert checkpoint_manager.failures == []
+    parsed_event = next(event for event in sink.events if event["type"] == "action_parsed")
+    assert parsed_event["payload"]["result"]["say"] == message
+    assert parsed_event["payload"]["fallback_reason"] == "required_public_speech_invalid"
 
 
 def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_debate() -> None:

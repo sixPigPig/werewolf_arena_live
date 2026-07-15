@@ -15,6 +15,7 @@ from app.models.live import (
     VoiceMaterializationJobRecord,
     VoiceUtteranceRecord,
 )
+from app.models.model_configuration import ModelConfigurationRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.public import PublicSession, UserFavoritePlayerProfile
 from app.models.quality_evaluation import GameQualityEvaluationRecord
@@ -36,6 +37,7 @@ __all__ = [
     "GodViewLiveEventRecord",
     "LiveEventRecord",
     "LiveRunRecord",
+    "ModelConfigurationRecord",
     "PublicLiveEventRecord",
     "PlayerAvatarAsset",
     "PublicSession",

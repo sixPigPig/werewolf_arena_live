@@ -459,13 +459,16 @@ def test_resume_live_run_requires_persistent_resumable_state_and_returns_new_run
     def fake_start_resume_game_run(*, session_id, store, registry):
         del store
         return (
-            registry.create_run(
-                session_id=session_id,
-                villager_model="model-villager",
-                werewolf_model="model-werewolf",
-                seed=90,
-                max_rounds=8,
-            ),
+                registry.create_run(
+                    session_id=session_id,
+                    villager_model="model-villager",
+                    werewolf_model="model-werewolf",
+                    seed=90,
+                    max_rounds=8,
+                    parent_run_id="run_000000000090",
+                    resume_from_round=1,
+                    attempt_no=2,
+                ),
             True,
         )
 

@@ -31,6 +31,14 @@ class LiveRunRecord(Base):
     werewolf_model: Mapped[str] = mapped_column(String(120), nullable=False)
     seed: Mapped[int | None] = mapped_column(nullable=True)
     max_rounds: Mapped[int] = mapped_column(nullable=False)
+    parent_run_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("live_runs.run_id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    resume_from_round: Mapped[int | None] = mapped_column(nullable=True)
+    attempt_no: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     rule_set_id: Mapped[str] = mapped_column(String(80), nullable=False)
     rule_set_revision_id: Mapped[str | None] = mapped_column(
         String(36),
@@ -96,6 +104,12 @@ Index(
     LiveRunRecord.session_id,
     LiveRunRecord.created_at.desc(),
     LiveRunRecord.run_id.desc(),
+)
+Index(
+    "uq_live_runs_session_attempt_no",
+    LiveRunRecord.session_id,
+    LiveRunRecord.attempt_no,
+    unique=True,
 )
 Index(
     "uq_live_runs_active_session",

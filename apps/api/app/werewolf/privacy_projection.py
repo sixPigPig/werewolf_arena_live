@@ -19,6 +19,7 @@ _KNOWN_EVENT_TYPES = frozenset(
         "game_canceled",
         "game_completed",
         "game_failed",
+        "game_resumed",
         "game_started",
         "idiot_revealed",
         "judge_cue",
@@ -343,6 +344,9 @@ _PAYLOAD_KEYS_BY_EVENT_TYPE: dict[str, frozenset[str]] = {
     "run_recovered": frozenset(),
     "run_stop_requested": frozenset({"requested_at"}),
     "game_started": frozenset({"active_players", "playback", "players", "rule_set"}),
+    "game_resumed": frozenset(
+        {"active_players", "attempt_no", "parent_run_id", "players", "resume_from_round"}
+    ),
     "round_started": frozenset({"active_players", "playback", "round"}),
     "phase_started": frozenset({"active_players", "narration_mode", "playback"}),
     "judge_cue": _JUDGE_CUE_PAYLOAD_KEYS,

@@ -4,6 +4,7 @@ from app.api.routes.admin_auth import router as admin_auth_router
 from app.api.routes.admin_dashboard import router as admin_dashboard_router
 from app.api.routes.admin_games import router as admin_games_router
 from app.api.routes.admin_live_runs import router as admin_live_runs_router
+from app.api.routes.admin_models import router as admin_models_router
 from app.api.routes.admin_player_profiles import router as admin_player_profiles_router
 from app.api.routes.admin_rule_sets import router as admin_rule_sets_router
 from app.api.routes.admin_system import router as admin_system_router
@@ -22,6 +23,7 @@ api_router.include_router(admin_auth_router, prefix="/admin", tags=["admin-auth"
 api_router.include_router(admin_dashboard_router, prefix="/admin", tags=["admin-dashboard"])
 api_router.include_router(admin_games_router, prefix="/admin", tags=["admin-games"])
 api_router.include_router(admin_live_runs_router, prefix="/admin", tags=["admin-live-runs"])
+api_router.include_router(admin_models_router, prefix="/admin", tags=["admin-models"])
 api_router.include_router(admin_rule_sets_router, prefix="/admin", tags=["admin-rule-sets"])
 api_router.include_router(admin_system_router, prefix="/admin", tags=["admin-system"])
 api_router.include_router(
