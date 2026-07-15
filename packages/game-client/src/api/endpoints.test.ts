@@ -5,6 +5,7 @@ import { getGamePlayback } from "./getGamePlayback";
 import { listGames } from "./listGames";
 import { listPlayerProfiles } from "./listPlayerProfiles";
 import { previewGameLineup } from "./previewGameLineup";
+import { clearPublicSessionCache } from "./publicSession";
 import { resumeGameRun } from "./resumeGameRun";
 
 function jsonResponse(body: unknown) {
@@ -16,6 +17,7 @@ function jsonResponse(body: unknown) {
 
 describe("game API endpoints", () => {
   afterEach(() => {
+    clearPublicSessionCache();
     vi.unstubAllGlobals();
   });
 
@@ -200,5 +202,40 @@ describe("game API endpoints", () => {
     await expect(getGamePlayback("session-1")).resolves.toMatchObject({
       voices: [],
     });
+  });
+
+  it("bootstraps a guest session before loading God View playback", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/v1/public/session") {
+        return jsonResponse({
+          viewer: { kind: "guest" },
+          csrf_token: "csrf-public-session",
+          session_expires_at: "2999-07-10T00:00:00.000Z",
+        });
+      }
+      return jsonResponse({
+        session_id: "session-1",
+        status: "complete",
+        rule_set: null,
+        resumable: false,
+        events: [],
+        voices: [],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      getGamePlayback("session-1", "spectator_god_view"),
+    ).resolves.toMatchObject({ session_id: "session-1" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/public/session", {
+      credentials: "include",
+      method: "POST",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/games/session-1/god-view/playback",
+      { credentials: "include" },
+    );
   });
 });

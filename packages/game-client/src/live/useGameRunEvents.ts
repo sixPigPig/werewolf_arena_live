@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { ensurePublicSession } from "../api/publicSession";
 import type { LiveGameEvent } from "../types";
 
 type ConnectionState =
@@ -79,49 +80,25 @@ export function useGameRunEvents(
     }
 
     let isActive = true;
-    const EventSourceConstructor = globalThis.EventSource;
-    if (typeof EventSourceConstructor !== "function") {
+    let source: EventSource | null = null;
+
+    const markConnectionError = () => {
       setStreamState((current) =>
         current.runId === runId && current.audience === audience
           ? { ...current, connectionState: "error" }
           : current,
       );
-      return;
-    }
-
-    const streamPath =
-      audience === "spectator_god_view" ? "god-view/events" : "events";
-    const source = new EventSourceConstructor(
-      `${API_BASE_URL}/api/v1/games/runs/${runId}/${streamPath}`,
-      { withCredentials: true },
-    );
+    };
 
     const closeSource = () => {
+      if (!source) {
+        return;
+      }
       source.onopen = null;
       source.onerror = null;
       source.onmessage = null;
       source.close();
-    };
-
-    source.onopen = () => {
-      if (!isActive) {
-        return;
-      }
-      setStreamState((current) =>
-        current.runId === runId && current.audience === audience
-          ? { ...current, connectionState: "open" }
-          : current,
-      );
-    };
-    source.onerror = () => {
-      if (!isActive) {
-        return;
-      }
-      setStreamState((current) =>
-        current.runId === runId && current.audience === audience
-          ? { ...current, connectionState: "error" }
-          : current,
-      );
+      source = null;
     };
 
     const handleEvent = (message: MessageEvent) => {
@@ -164,9 +141,57 @@ export function useGameRunEvents(
       }
     };
 
-    for (const eventType of EVENT_TYPES) {
-      source.addEventListener(eventType, handleEvent);
-    }
+    const connect = async () => {
+      if (audience === "spectator_god_view") {
+        try {
+          await ensurePublicSession();
+        } catch {
+          if (isActive) {
+            markConnectionError();
+          }
+          return;
+        }
+      }
+
+      if (!isActive) {
+        return;
+      }
+
+      const EventSourceConstructor = globalThis.EventSource;
+      if (typeof EventSourceConstructor !== "function") {
+        markConnectionError();
+        return;
+      }
+
+      const streamPath =
+        audience === "spectator_god_view" ? "god-view/events" : "events";
+      source = new EventSourceConstructor(
+        `${API_BASE_URL}/api/v1/games/runs/${runId}/${streamPath}`,
+        { withCredentials: true },
+      );
+
+      source.onopen = () => {
+        if (!isActive) {
+          return;
+        }
+        setStreamState((current) =>
+          current.runId === runId && current.audience === audience
+            ? { ...current, connectionState: "open" }
+            : current,
+        );
+      };
+      source.onerror = () => {
+        if (isActive) {
+          markConnectionError();
+        }
+      };
+
+      for (const eventType of EVENT_TYPES) {
+        source.addEventListener(eventType, handleEvent);
+      }
+    };
+
+    void connect();
 
     return () => {
       isActive = false;

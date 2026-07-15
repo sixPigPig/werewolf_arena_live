@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { ApiError, apiFetch } from "./client";
 import type { PublicSessionResponse } from "../types";
 
 let cachedPublicSession: PublicSessionResponse | null = null;
@@ -35,6 +35,25 @@ export function ensurePublicSession(): Promise<PublicSessionResponse> {
     });
 
   return publicSessionBootstrap;
+}
+
+export async function withFreshPublicSession<T>(
+  request: (session: PublicSessionResponse) => Promise<T>,
+): Promise<T> {
+  const session = await ensurePublicSession();
+  try {
+    return await request(session);
+  } catch (error) {
+    if (
+      !(error instanceof ApiError) ||
+      (error.status !== 401 && error.status !== 403)
+    ) {
+      throw error;
+    }
+
+    clearPublicSessionCache(session);
+    return request(await ensurePublicSession());
+  }
 }
 
 function isSessionUsable(

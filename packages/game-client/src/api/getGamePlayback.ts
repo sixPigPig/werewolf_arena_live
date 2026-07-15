@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { withFreshPublicSession } from "./publicSession";
 import type { GamePlayback } from "../types";
 
 type GamePlaybackResponse = Omit<GamePlayback, "voices"> & {
@@ -15,9 +16,12 @@ export async function getGamePlayback(
     audience === "spectator_god_view"
       ? `/api/v1/games/${sessionId}/god-view/playback`
       : `/api/v1/games/${sessionId}/playback`;
-  const playback = await apiFetch<GamePlaybackResponse>(
-    path,
-  );
+  const playback =
+    audience === "spectator_god_view"
+      ? await withFreshPublicSession(() =>
+          apiFetch<GamePlaybackResponse>(path, { credentials: "include" }),
+        )
+      : await apiFetch<GamePlaybackResponse>(path);
 
   return { ...playback, voices: playback.voices ?? [] };
 }

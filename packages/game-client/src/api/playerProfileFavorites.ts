@@ -1,9 +1,9 @@
-import { ApiError, apiFetch } from "./client";
+import { apiFetch } from "./client";
 import type {
   PlayerProfileFavoriteMutationResponse,
   PlayerProfileFavoritesResponse,
 } from "../types";
-import { clearPublicSessionCache, ensurePublicSession } from "./publicSession";
+import { withFreshPublicSession } from "./publicSession";
 
 const FAVORITES_PATH = "/api/v1/public/me/favorite-player-profiles";
 
@@ -41,20 +41,4 @@ async function writePlayerProfileFavorite(
       },
     );
   });
-}
-
-async function withFreshPublicSession<T>(
-  request: (session: Awaited<ReturnType<typeof ensurePublicSession>>) => Promise<T>,
-): Promise<T> {
-  const session = await ensurePublicSession();
-  try {
-    return await request(session);
-  } catch (error) {
-    if (!(error instanceof ApiError) || (error.status !== 401 && error.status !== 403)) {
-      throw error;
-    }
-
-    clearPublicSessionCache(session);
-    return request(await ensurePublicSession());
-  }
 }

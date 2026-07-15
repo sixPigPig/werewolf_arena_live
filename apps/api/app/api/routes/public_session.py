@@ -328,7 +328,7 @@ def _set_public_session_cookie(
         value=session_token,
         max_age=settings.public_session_ttl_seconds,
         expires=as_utc(expires_at),
-        path=f"{settings.api_v1_prefix.rstrip('/')}/public",
+        path=settings.api_v1_prefix.rstrip("/"),
         secure=settings.public_session_cookie_secure,
         httponly=True,
         samesite="lax",

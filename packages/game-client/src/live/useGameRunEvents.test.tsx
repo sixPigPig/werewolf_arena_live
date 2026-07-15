@@ -3,6 +3,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { clearPublicSessionCache } from "../api/publicSession";
 import { useGameRunEvents } from "./useGameRunEvents";
 
 class MockEventSource {
@@ -44,6 +45,7 @@ class MockEventSource {
 
 describe("useGameRunEvents", () => {
   afterEach(() => {
+    clearPublicSessionCache();
     vi.unstubAllGlobals();
     MockEventSource.instances = [];
   });
@@ -87,17 +89,64 @@ describe("useGameRunEvents", () => {
     expect(source.withCredentials).toBe(true);
   });
 
-  it("uses the authenticated God View channel only when requested", () => {
+  it("bootstraps a guest session before opening the God View channel", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
+    let resolveBootstrap!: (response: Response) => void;
+    const bootstrapResponse = new Promise<Response>((resolve) => {
+      resolveBootstrap = resolve;
+    });
+    const fetchMock = vi.fn(() => bootstrapResponse);
+    vi.stubGlobal("fetch", fetchMock);
 
     renderHook(() =>
       useGameRunEvents("run_1234abcd", "spectator_god_view"),
     );
 
+    expect(MockEventSource.instances).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/public/session", {
+      credentials: "include",
+      method: "POST",
+    });
+
+    resolveBootstrap(
+      new Response(
+        JSON.stringify({
+          viewer: { kind: "guest" },
+          csrf_token: "csrf-public-session",
+          session_expires_at: "2999-07-10T00:00:00.000Z",
+        }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      ),
+    );
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
     expect(MockEventSource.instances[0]?.url).toBe(
       "/api/v1/games/runs/run_1234abcd/god-view/events",
     );
     expect(MockEventSource.instances[0]?.withCredentials).toBe(true);
+  });
+
+  it("reports an error without opening God View when session bootstrap fails", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ detail: "unavailable" }), {
+          headers: { "content-type": "application/json" },
+          status: 503,
+        }),
+      ),
+    );
+
+    const { result } = renderHook(() =>
+      useGameRunEvents("run_1234abcd", "spectator_god_view"),
+    );
+
+    await waitFor(() => expect(result.current.connectionState).toBe("error"));
+    expect(MockEventSource.instances).toHaveLength(0);
   });
 
   it("reports an error when EventSource is unavailable", async () => {

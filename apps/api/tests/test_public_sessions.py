@@ -148,7 +148,7 @@ def test_public_session_is_server_issued_hash_only_idempotent_and_private(
     assert any(
         "test_public_session=" in value
         and "HttpOnly" in value
-        and "Path=/api/v1/public" in value
+        and "Path=/api/v1" in value
         and "SameSite=lax" in value
         for value in set_cookies
     )
@@ -177,6 +177,21 @@ def test_public_session_is_server_issued_hash_only_idempotent_and_private(
     with public_context.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(User)) == 1
         assert db.scalar(select(func.count()).select_from(PublicSession)) == 1
+
+
+def test_public_session_cookie_authenticates_god_view_routes(
+    public_context: PublicTestContext,
+) -> None:
+    live_path = "/api/v1/games/runs/run_missing/god-view/events"
+    playback_path = "/api/v1/games/game_deadbeef/god-view/playback"
+
+    assert public_context.client.get(live_path).status_code == 401
+    assert public_context.client.get(playback_path).status_code == 401
+
+    _bootstrap(public_context.client)
+
+    assert public_context.client.get(live_path).status_code == 404
+    assert public_context.client.get(playback_path).status_code == 404
 
 
 def test_public_bootstrap_rejects_foreign_origin_without_replacing_identity(
