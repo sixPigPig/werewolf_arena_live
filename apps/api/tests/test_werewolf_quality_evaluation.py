@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.werewolf.evaluation_bundle import build_quality_evaluation_bundle
-from app.werewolf.evaluator import evaluate_quality_fixture, main
 from app.werewolf.quality_evaluation import evaluate_quality_bundle
 
 
@@ -14,11 +13,20 @@ HMAC_KEY = "test-quality-evaluation-key"
 SENTINEL = "P3_PRIVATE_SENTINEL_11号计划刀10号并嫁祸12号"
 
 
-def test_leaking_fixture_detects_every_public_channel_without_returning_text() -> None:
-    report = evaluate_quality_fixture(
-        FIXTURE_DIR / "run_05aa0b0f2b92_leaking.json",
-        hmac_key=HMAC_KEY,
+def _evaluate_fixture(path: Path) -> dict[str, object]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    bundle = build_quality_evaluation_bundle(
+        state=data["state"],
+        logs=data["logs"],
+        live_events=data["live_events"],
+        voice_utterances=data["voice_utterances"],
+        run_id=data["run_id"],
     )
+    return evaluate_quality_bundle(bundle, hmac_key=HMAC_KEY).to_dict()
+
+
+def test_leaking_fixture_detects_every_public_channel_without_returning_text() -> None:
+    report = _evaluate_fixture(FIXTURE_DIR / "run_05aa0b0f2b92_leaking.json")
 
     channels = {issue["channel"] for issue in report["safe_issues"]}
     assert {"live_event", "voice", "subtitle", "replay", "public_state"} <= channels
@@ -28,10 +36,7 @@ def test_leaking_fixture_detects_every_public_channel_without_returning_text() -
 
 
 def test_sanitized_fixture_allows_legal_reveals_and_has_no_p0() -> None:
-    report = evaluate_quality_fixture(
-        FIXTURE_DIR / "run_05aa0b0f2b92_sanitized.json",
-        hmac_key=HMAC_KEY,
-    )
+    report = _evaluate_fixture(FIXTURE_DIR / "run_05aa0b0f2b92_sanitized.json")
 
     assert report["verdict"] == "pass"
     assert report["issue_counts"]["P0"] == 0
@@ -117,29 +122,3 @@ def test_rejected_draft_marker_is_p0_and_safe() -> None:
 
     assert "rejected_draft_public" in {issue.code for issue in report.safe_issues}
     assert "REJECTED_SECRET" not in json.dumps(report.to_dict(), ensure_ascii=False)
-
-
-def test_strict_cli_has_pass_fail_and_evaluator_error_exit_codes(tmp_path) -> None:
-    assert (
-        main(
-            [
-                "--fixture",
-                str(FIXTURE_DIR / "run_05aa0b0f2b92_sanitized.json"),
-                "--strict-p0",
-            ]
-        )
-        == 0
-    )
-    assert (
-        main(
-            [
-                "--fixture",
-                str(FIXTURE_DIR / "run_05aa0b0f2b92_leaking.json"),
-                "--strict-p0",
-            ]
-        )
-        == 1
-    )
-    invalid = tmp_path / "invalid.json"
-    invalid.write_text("[]", encoding="utf-8")
-    assert main(["--fixture", str(invalid), "--strict-p0"]) == 2

@@ -28,7 +28,6 @@ from app.player_avatar_asset_migration import (
 from app.player_profile_import import PlayerProfileImportError, import_player_profiles
 from app.models.user import User
 from app.rule_sets.snapshots import resolve_rule_set_snapshot
-from app.werewolf.evaluator import evaluate_replay
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.providers import default_model_name
 from app.werewolf.replay import DatabaseReplayStore
@@ -272,13 +271,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Apply the cleanup in one transaction. Without this flag the command is a dry-run.",
     )
     redact_private_memory_parser.set_defaults(func=_redact_private_round_memory_command)
-
-    evaluate_parser = subparsers.add_parser(
-        "evaluate-replay",
-        help="Evaluate a game_complete.json replay for realism issues.",
-    )
-    evaluate_parser.add_argument("--source", type=Path, required=True)
-    evaluate_parser.set_defaults(func=_evaluate_replay_command)
 
     return parser
 
@@ -779,19 +771,6 @@ def _provision_admin_user_command(args: argparse.Namespace) -> int:
         user_id = user.id
         db.commit()
     print(f"user_id={user_id} action={action} role={args.role}")
-    return 0
-
-
-def _evaluate_replay_command(args: argparse.Namespace) -> int:
-    report = evaluate_replay(args.source)
-    print(f"session_id={report.session_id}")
-    if not report.issues:
-        print("issues=0")
-        return 0
-
-    print(f"issues={len(report.issues)}")
-    for issue in report.issues:
-        print(f"{issue.code} round={issue.round_number} detail={issue.detail}")
     return 0
 
 

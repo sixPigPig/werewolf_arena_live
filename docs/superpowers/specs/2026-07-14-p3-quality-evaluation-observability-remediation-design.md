@@ -12,6 +12,7 @@
 - 目标问题：P3-01、P3-02
 - 文档状态：已开发，待 P3-T24 部署与自然流量验证（P3-T01～P3-T23 已完成）
 - 编写日期：2026-07-14
+- 后续变更：2026-07-15 移除文件型离线评估器与 fixture CLI；生产质量评估只走 PostgreSQL 队列和在线 Worker，确定性验证直接测试领域函数。
 
 本文是 P3 的可执行开发设计。P0～P2 已分别处理事实、隐私、终局、流程、语音、阵容、发言、时延和结算表达；P3 的目标不是再叠加一层自由文本检查，而是把这些质量约束变成可复现的终局评估、确定性发布门禁、低基数运行指标和安全的 Admin 诊断能力。
 
@@ -19,7 +20,7 @@
 
 ## 2. 总体结论
 
-本局暴露出的根因是：对局质量数据分散在终局状态、轮次日志、Live 事件、语音物化记录和进程内指标中，现有离线评估器只读取了其中一部分，因此既无法完整发现真实泄密路径，也无法用统一口径回答“事实是否被记住、终局是否播完、动作到底慢在哪里”。
+本局暴露出的根因是：对局质量数据分散在终局状态、轮次日志、Live 事件、语音物化记录和进程内指标中，设计基线中的离线评估器只读取了其中一部分，因此既无法完整发现真实泄密路径，也无法用统一口径回答“事实是否被记住、终局是否播完、动作到底慢在哪里”。该离线评估器现已退役。
 
 P3 建立一条异步、只读、可重放的质量链路：
 
@@ -98,7 +99,7 @@ P3 使用三层状态，防止“代码已合并”与“自然流量已验证�
 
 | 领域 | 已有能力 | 当前缺口 |
 | --- | --- | --- |
-| 离线评估 | `evaluator.py` 可读取回放，检查公开总结、身份矛盾、终局、连续自爆、阵容和重复发言 | 未统一读取数据库状态、RoundLog、Live、字幕和有效语音；问题详情包含自由文本；不能识别真实的跨渠道泄密路径 |
+| 历史离线评估 | 设计基线曾支持文件型回放评估，现已移除 | 生产诊断统一读取 PostgreSQL，并由在线质量 Worker 生成安全结果 |
 | 事实 | `PublicFact` 已有稳定 `fact_id` 和保留级别 | 没有“本应写入”的结构化分母；无法证明关键事实写入率；每次 Prompt 是否携带应有事实也没有快照 |
 | 语音 | 已能计算可叙事事件、有效语音、缺失数、终局法官语音和物化滞后 | 尚未形成终局持久化质量结果；中断、补播和物化失败口径未统一 |
 | 性能 | P2 有动作耗时、首 Token、超时、降级、批次和进度计数 | 当前耗时输出只有 sum/count，无法计算 P50/P95/P99；进程重启后丢失；缺少整局耗时聚合 |
@@ -302,17 +303,7 @@ GameQualityEvaluationV1
 
 ### 6.6 CI 和发布门禁
 
-新增严格模式 CLI 或测试入口：
-
-```text
-python -m app.werewolf.evaluator --fixture <path> --strict-p0
-```
-
-退出语义：
-
-- `0`：输入完整，未发现 P0；
-- `1`：发现 P0 质量问题；
-- `2`：fixture、契约或评估器自身错误，不能当作通过。
+不提供文件型评估 CLI。确定性门禁通过 pytest 直接调用 `build_quality_evaluation_bundle` 和 `evaluate_quality_bundle`；生产评估只由 PostgreSQL 队列触发。
 
 目标对局应脱敏为两份固定 fixture：
 
@@ -673,7 +664,7 @@ POST /api/v1/admin/games/{session_id}/quality-evaluation/retry
 
 ### 12.1 API / Domain
 
-- `apps/api/app/werewolf/evaluator.py`：拆分纯评估入口、问题枚举、安全输出和严格模式；
+- `apps/api/app/werewolf/quality_evaluation.py`：在线评估领域逻辑、问题枚举和安全输出；
 - `apps/api/app/werewolf/evaluation_bundle.py`：组装 Bundle、来源水位和披露账本；
 - `apps/api/app/werewolf/quality_worker.py`：异步 Claim、租约、重试和 CLI；
 - `apps/api/app/werewolf/public_facts.py`：事实机会、事实关联和 Prompt 覆盖；
@@ -695,7 +686,7 @@ POST /api/v1/admin/games/{session_id}/quality-evaluation/retry
 
 ### 12.3 测试与 fixture
 
-- `apps/api/tests/test_werewolf_evaluator.py`：跨渠道、披露账本和误报回归；
+- `apps/api/tests/test_werewolf_quality_evaluation.py`：跨渠道、披露账本和误报回归；
 - 新增 Bundle / Worker / persistence / metrics / Admin contract 测试；
 - `apps/api/tests/fixtures/werewolf_quality/`：目标对局脱敏 leaking / sanitized fixture；
 - Admin Web：Overview、Game 详情、权限、按需加载和隐私快照测试；
@@ -940,7 +931,7 @@ P3-A 可以先合并纯函数和 fixture，但生产评估开关保持关闭；P
 实现时根据仓库现有命令更新准确路径，最低要求包含：
 
 ```text
-pytest apps/api/tests/test_werewolf_evaluator.py
+pytest apps/api/tests/test_werewolf_quality_evaluation.py
 pytest apps/api/tests/test_werewolf_quality_worker.py
 pytest apps/api/tests/test_werewolf_quality_metrics.py
 pytest apps/api/tests/test_admin_game_quality.py
@@ -1041,8 +1032,8 @@ pytest apps/api/tests/test_werewolf_p2.py
 
 | 任务 | 状态 | 主要文件 / 提交 | 验证命令与结果 | 备注 |
 | --- | --- | --- | --- | --- |
-| P3-T01～P3-T05 | 已完成 | `evaluation_bundle.py`、`quality_evaluation.py`、`evaluator.py` | `ruff` 通过；质量评估与旧评估器测试 12 passed | 五渠道检出、披露账本、安全 issue、稳定 revision / issue ID |
-| P3-T06 | 已完成 | `tests/fixtures/werewolf_quality/`、`test_werewolf_quality_evaluation.py` | leaking 退出 1；sanitized 退出 0；非法 fixture 退出 2 | 不访问数据库和在线模型 |
+| P3-T01～P3-T05 | 已完成 | `evaluation_bundle.py`、`quality_evaluation.py` | `ruff` 通过；质量评估领域测试通过 | 五渠道检出、披露账本、安全 issue、稳定 revision / issue ID；离线入口后续已移除 |
+| P3-T06 | 已完成 | `tests/fixtures/werewolf_quality/`、`test_werewolf_quality_evaluation.py` | leaking / sanitized 确定性领域测试通过 | 测试直接调用领域函数，不提供文件型评估 CLI |
 | P3-T07 | 已完成 | migration `20260714_20`、`models/quality_evaluation.py` | SQLite 全链 upgrade / downgrade / upgrade 通过；Alembic 单 head | 任务/结果共表和 4 组索引 |
 | P3-T08～P3-T10 | 已完成 | `quality_store.py`、`quality_worker.py`、`replay.py`、`voice_store.py` | Worker/投递测试 6 passed | 幂等、租约接管、revision supersede、错误码、Dry-run |
 | P3-T11 | 已完成 | `config.py`、`cli.py`、`quality_evaluation_telemetry.py`、Compose/Kubernetes | 相关后端测试 49 passed；Compose 校验和双环境 Kustomize 渲染通过 | 独立 Worker、探针、Secret、backlog 与耗时指标 |

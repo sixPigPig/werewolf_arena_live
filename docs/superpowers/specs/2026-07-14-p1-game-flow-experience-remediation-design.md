@@ -949,7 +949,7 @@ werewolf_self_explosion_missing_benefit_total{streak}
 | `apps/api/app/admin/live_runs.py` | 将 `judge_cue` 纳入已知 Live 事件和诊断统计 |
 | `apps/api/app/werewolf/replay_playback.py` | 显式 Cue 和旧回放 fallback |
 | `apps/api/app/api/routes/games.py` | playback voice 合并与 worker dependency |
-| `apps/api/app/werewolf/evaluator.py` | 自爆批量指标与缺失收益审计 |
+| `apps/api/app/werewolf/quality_evaluation.py` | 在线终局质量指标与安全问题审计；原离线回放评估器已移除 |
 | `apps/api/app/werewolf/judge_voice_assets.py` | 缺失 Cue 和静态资产 |
 | `packages/game-client/src/types.ts` | 新状态/Cue 类型 |
 | `packages/game-client/src/live/liveGodView.ts` | resolution 状态投影 |

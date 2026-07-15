@@ -138,7 +138,7 @@ On game failure:
 
 ## CLI And Cleanup
 
-The `run-game` CLI should write to PostgreSQL by default, matching API behavior. The old `--logs-dir` argument becomes unnecessary for game records and should be removed or ignored with a clear help text update. Existing CLI replay evaluation can remain file-based because it evaluates an explicitly supplied JSON file.
+The `run-game` CLI writes to PostgreSQL by default, matching API behavior. The old `--logs-dir` argument is not used for game records. The legacy file-based replay evaluator is removed; game diagnostics and quality evaluation use persisted PostgreSQL data.
 
 Add a cleanup command:
 

@@ -158,7 +158,7 @@
 - `apps/api/app/werewolf/engine.py`
 - `apps/api/app/werewolf/public_facts.py`
 - `apps/api/app/werewolf/prompts_zh.py`
-- `apps/api/app/werewolf/evaluator.py`
+- `apps/api/app/werewolf/quality_evaluation.py`
 
 #### 验收标准
 
@@ -744,6 +744,6 @@
 - 模型公开增量：`apps/api/app/werewolf/streaming.py`
 - 法官台词与语音映射：`apps/api/app/werewolf/voice.py`
 - Live 语音队列和持久化：`apps/api/app/werewolf/voice_stream.py`、`voice_store.py`
-- 终局质量评估：`apps/api/app/werewolf/evaluator.py`
+- 终局质量评估：`apps/api/app/werewolf/quality_evaluation.py`、`quality_worker.py`
 - Live 叙事与 God View：`packages/game-client/src/live/`
 - Mobile Live 展示：`apps/mobile-web/src/components/mobileLiveActionModel.ts`、`MobileLiveTheater.tsx`
