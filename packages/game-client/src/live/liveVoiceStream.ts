@@ -22,6 +22,8 @@ import {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const STALE_EVENT_DISTANCE = 8;
 const PCM_COMPLETION_POLL_INTERVAL_MS = 25;
+const BLOB_PLAYBACK_STALL_POLL_INTERVAL_MS = 1000;
+const BLOB_PLAYBACK_STALL_TIMEOUT_MS = 30_000;
 const VOICE_STREAM_UNAVAILABLE_ERROR =
   "当前浏览器不支持语音连接。";
 const VOICE_STREAM_SERVER_UNAVAILABLE_ERROR = "语音服务暂不可用，请稍后重试。";
@@ -105,6 +107,12 @@ export type LiveVoiceSubtitle = {
   utteranceId: string;
 };
 
+export type VoicePlaybackCompletion = {
+  id: string;
+  sourceEventId: number;
+  lastSourceEventId: number;
+};
+
 export type LiveVoiceQueueItem = {
   utteranceId: string;
   sourceEventId: number;
@@ -134,6 +142,9 @@ type VoiceQueueAction =
     }
   | {
       type: "reset";
+    }
+  | {
+      type: "stream_terminated";
     }
   | {
       type: "utterance_played";
@@ -502,6 +513,18 @@ function voiceQueueReducer(
     };
   }
 
+  if (action.type === "stream_terminated") {
+    return {
+      ...queue,
+      items: queue.items.map((item) =>
+        item.status === "receiving" ||
+        (item.status === "playing" && !item.isEnded)
+          ? { ...item, status: "error" }
+          : item,
+      ),
+    };
+  }
+
   if (action.type === "utterance_started") {
     return {
       ...queue,
@@ -625,6 +648,8 @@ export function useLiveVoiceStream(
   );
   const [subtitleClock, setSubtitleClock] =
     useState<LiveVoiceSubtitleClock>(null);
+  const [lastCompletedPlayback, setLastCompletedPlayback] =
+    useState<VoicePlaybackCompletion | null>(null);
   const streamUrl = useMemo(
     () => (runId ? resolveVoiceStreamUrl(runId) : null),
     [runId],
@@ -650,6 +675,7 @@ export function useLiveVoiceStream(
   );
   const isPausedRef = useRef(isPaused);
   const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
+  const playbackCompletionSequenceRef = useRef(0);
   useEffect(() => {
     isPausedRef.current = isPaused;
   }, [isPaused]);
@@ -706,29 +732,60 @@ export function useLiveVoiceStream(
       });
     }
   }, [currentEventId, enabled, queue.items, sendPlaybackAck]);
-  const consumePcmUtterance = useCallback((utteranceId: string) => {
-    consumedUtteranceIdsRef.current.add(utteranceId);
-    sendPlaybackAck(utteranceId);
-    scheduledPcmChunkIndexesRef.current.delete(utteranceId);
-    pcmEndTimesRef.current.delete(utteranceId);
-    pcmSubtitleStartTimesRef.current.delete(utteranceId);
-    setSubtitleClock((current) =>
-      current?.utteranceId === utteranceId ? null : current,
-    );
-    dispatch({
-      type: "utterance_played",
-      utteranceId,
-    });
-  }, [sendPlaybackAck]);
+  const recordPlaybackCompletion = useCallback(
+    (
+      item: Pick<
+        LiveVoiceQueueItem,
+        "utteranceId" | "sourceEventId" | "lastSourceEventId"
+      >,
+    ) => {
+      playbackCompletionSequenceRef.current += 1;
+      setLastCompletedPlayback({
+        id: `${item.utteranceId}:${playbackCompletionSequenceRef.current}`,
+        sourceEventId: item.sourceEventId,
+        lastSourceEventId: item.lastSourceEventId,
+      });
+    },
+    [],
+  );
+  const consumePcmUtterance = useCallback(
+    (
+      utteranceId: string,
+      completedItem?: Pick<
+        LiveVoiceQueueItem,
+        "utteranceId" | "sourceEventId" | "lastSourceEventId"
+      >,
+    ) => {
+      consumedUtteranceIdsRef.current.add(utteranceId);
+      sendPlaybackAck(utteranceId);
+      scheduledPcmChunkIndexesRef.current.delete(utteranceId);
+      pcmEndTimesRef.current.delete(utteranceId);
+      pcmSubtitleStartTimesRef.current.delete(utteranceId);
+      setSubtitleClock((current) =>
+        current?.utteranceId === utteranceId ? null : current,
+      );
+      dispatch({
+        type: "utterance_played",
+        utteranceId,
+      });
+      if (completedItem) {
+        recordPlaybackCompletion(completedItem);
+      }
+    },
+    [recordPlaybackCompletion, sendPlaybackAck],
+  );
   const armPcmCompletionPoll = useCallback(
     ({
       context,
       endTime,
-      utteranceId,
+      item,
     }: {
       context: AudioContext;
       endTime: number;
-      utteranceId: string;
+      item: Pick<
+        LiveVoiceQueueItem,
+        "utteranceId" | "sourceEventId" | "lastSourceEventId"
+      >;
     }) => {
       clearPcmCompletionTimeout();
 
@@ -743,7 +800,7 @@ export function useLiveVoiceStream(
         }
         if (context.currentTime >= endTime) {
           pcmCompletionTimeoutRef.current = null;
-          consumePcmUtterance(utteranceId);
+          consumePcmUtterance(item.utteranceId, item);
           return;
         }
 
@@ -1005,7 +1062,7 @@ export function useLiveVoiceStream(
           armPcmCompletionPoll({
             context: pcmAudio.context,
             endTime: latestEndTime,
-            utteranceId: currentItem.utteranceId,
+            item: currentItem,
           });
         }
       } catch {
@@ -1041,7 +1098,7 @@ export function useLiveVoiceStream(
     let objectUrl: string | null = null;
     let audio: HTMLAudioElement | null = null;
 
-    const consumeUtterance = () => {
+    const consumeUtterance = (completed: boolean) => {
       if (isConsumed) {
         return;
       }
@@ -1055,6 +1112,9 @@ export function useLiveVoiceStream(
         type: "utterance_played",
         utteranceId: currentItem.utteranceId,
       });
+      if (completed) {
+        recordPlaybackCompletion(currentItem);
+      }
     };
 
     const releaseAudio = () => {
@@ -1080,7 +1140,7 @@ export function useLiveVoiceStream(
         return;
       }
       releaseAudio();
-      consumeUtterance();
+      consumeUtterance(true);
     };
 
     const reportPlaybackError = () => {
@@ -1092,7 +1152,7 @@ export function useLiveVoiceStream(
         type: "queue_error",
         message: "Unable to play live voice audio.",
       });
-      consumeUtterance();
+      consumeUtterance(false);
     };
 
     try {
@@ -1116,7 +1176,7 @@ export function useLiveVoiceStream(
       audio?.removeEventListener("ended", markPlayed);
       releaseAudio();
     };
-  }, [blobPlaybackKey, enabled, sendPlaybackAck]);
+  }, [blobPlaybackKey, enabled, recordPlaybackCompletion, sendPlaybackAck]);
 
   useEffect(() => {
     if (!enabled || !blobPlaybackKey || !audioRef.current) {
@@ -1155,6 +1215,46 @@ export function useLiveVoiceStream(
       isActive = false;
     };
   }, [blobPlaybackKey, enabled, isPaused, sendPlaybackAck]);
+
+  useEffect(() => {
+    if (
+      !enabled ||
+      isPaused ||
+      !currentItem ||
+      currentItem.status !== "playing" ||
+      isPcmAudioFormat(currentItem.audioFormat) ||
+      !audioRef.current
+    ) {
+      return;
+    }
+
+    const audio = audioRef.current;
+    const utteranceId = currentItem.utteranceId;
+    let lastCurrentTime = audio.currentTime;
+    let lastProgressAt = Date.now();
+    const intervalId = globalThis.setInterval(() => {
+      if (audio.currentTime > lastCurrentTime) {
+        lastCurrentTime = audio.currentTime;
+        lastProgressAt = Date.now();
+        return;
+      }
+      if (Date.now() - lastProgressAt < BLOB_PLAYBACK_STALL_TIMEOUT_MS) {
+        return;
+      }
+
+      consumedUtteranceIdsRef.current.add(utteranceId);
+      sendPlaybackAck(utteranceId);
+      dispatch({
+        type: "queue_error",
+        message: "Unable to play live voice audio.",
+      });
+      dispatch({ type: "utterance_played", utteranceId });
+    }, BLOB_PLAYBACK_STALL_POLL_INTERVAL_MS);
+
+    return () => {
+      globalThis.clearInterval(intervalId);
+    };
+  }, [currentItem, enabled, isPaused, sendPlaybackAck]);
 
   useEffect(() => {
     if (!enabled || !pcmSchedulerRef.current) {
@@ -1198,7 +1298,7 @@ export function useLiveVoiceStream(
           armPcmCompletionPoll({
             context,
             endTime: latestEndTime,
-            utteranceId: currentItem.utteranceId,
+            item: currentItem,
           });
         }
       })().catch(reportPlaybackError);
@@ -1231,7 +1331,9 @@ export function useLiveVoiceStream(
   useEffect(() => {
     consumedUtteranceIdsRef.current.clear();
     acknowledgedUtteranceIdsRef.current.clear();
+    playbackCompletionSequenceRef.current = 0;
     pcmSubtitleStartTimesRef.current.clear();
+    setLastCompletedPlayback(null);
     setSubtitleClock(null);
     dispatch({ type: "reset" });
 
@@ -1258,12 +1360,16 @@ export function useLiveVoiceStream(
     const reportError = (
       message: string,
       state: LiveVoiceConnectionState = "error",
+      terminateStream = false,
     ) => {
       if (!isActive) {
         return;
       }
       hasError = true;
       setConnectionState(state);
+      if (terminateStream) {
+        dispatch({ type: "stream_terminated" });
+      }
       dispatch({ type: "queue_error", message });
     };
 
@@ -1304,9 +1410,10 @@ export function useLiveVoiceStream(
           return;
         }
         if (failed) {
-          reportError("Live voice stream connection failed.");
+          reportError("Live voice stream connection failed.", "error", true);
           return;
         }
+        dispatch({ type: "stream_terminated" });
         setConnectionState("closed");
       };
 
@@ -1342,6 +1449,7 @@ export function useLiveVoiceStream(
         if (parsed.type === "voice_unavailable") {
           isActive = false;
           setConnectionState("unavailable");
+          dispatch({ type: "stream_terminated" });
           dispatch({
             type: "queue_error",
             message:
@@ -1373,6 +1481,7 @@ export function useLiveVoiceStream(
     currentItem,
     currentSubtitle,
     errors: visibleQueue.errors,
+    lastCompletedPlayback,
     unlockAudio,
   };
 }

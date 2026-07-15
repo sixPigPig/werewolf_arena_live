@@ -3178,8 +3178,7 @@ def test_sheriff_speech_prompt_compacts_prior_speeches_without_duplicate_public_
     next_speaker = state.players[1]
     long_speech = (
         "【竞选理由】我会整理票型。\n"
-        "【警徽流】先验3号，再验5号。\n"
-        + "这段前置位发言不应被后置位整段照抄。" * 24
+        "【警徽流】先验3号，再验5号。\n" + "这段前置位发言不应被后置位整段照抄。" * 24
     )
     state.public_facts.append(
         {
@@ -3198,9 +3197,7 @@ def test_sheriff_speech_prompt_compacts_prior_speeches_without_duplicate_public_
     round_state = RoundState(number=1, players=active_players.copy())
     round_state.sheriff_candidates = active_players[:3]
     round_state.sheriff_speech_order = active_players[:3]
-    round_state.sheriff_speeches = [
-        {"speaker": prior_speaker.name, "message": long_speech}
-    ]
+    round_state.sheriff_speeches = [{"speaker": prior_speaker.name, "message": long_speech}]
     engine = GameEngine(
         state=state,
         provider=ScriptedChineseProvider(),
@@ -3222,9 +3219,7 @@ def test_sheriff_speech_prompt_compacts_prior_speeches_without_duplicate_public_
     assert all("第1轮警上发言" not in str(line) for line in public_facts)
     election_context = request.world_state["sheriff_election"]
     assert isinstance(election_context, list)
-    summary_line = next(
-        str(line) for line in election_context if "前置位观点摘要" in str(line)
-    )
+    summary_line = next(str(line) for line in election_context if "前置位观点摘要" in str(line))
     assert "\n" not in summary_line
     assert summary_line.endswith("…")
     assert len(summary_line.split("）：", 1)[1]) <= 180
@@ -4026,9 +4021,7 @@ def test_invalid_non_seer_investigation_plan_is_rewritten_before_publication() -
             return [json.dumps({"reasoning": "角色能力检查", "say": speech}, ensure_ascii=False)]
 
         def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-            return "".join(
-                self.stream_json(model=model, prompt=prompt, temperature=temperature)
-            )
+            return "".join(self.stream_json(model=model, prompt=prompt, temperature=temperature))
 
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -4102,9 +4095,7 @@ def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
             return ['{"reasoning":"质量检查",', f'"say":"{speech}"', "}"]
 
         def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-            return "".join(
-                self.stream_json(model=model, prompt=prompt, temperature=temperature)
-            )
+            return "".join(self.stream_json(model=model, prompt=prompt, temperature=temperature))
 
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -4124,14 +4115,10 @@ def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
     elif action == ACTION_SHERIFF_SPEECH:
         round_state.sheriff_candidates = active_players.copy()
         round_state.sheriff_speech_order = active_players.copy()
-        round_state.sheriff_speeches = [
-            {"speaker": active_players[0], "message": prior_message}
-        ]
+        round_state.sheriff_speeches = [{"speaker": active_players[0], "message": prior_message}]
     else:
         round_state.sheriff_pk_candidates = active_players.copy()
-        round_state.sheriff_pk_speeches = [
-            {"speaker": active_players[0], "message": prior_message}
-        ]
+        round_state.sheriff_pk_speeches = [{"speaker": active_players[0], "message": prior_message}]
     provider = SpeechQualityRetryProvider()
     sink = CapturingEventSink()
     engine = GameEngine(
@@ -4184,9 +4171,7 @@ def test_public_speech_quality_retry_exhaustion_publishes_only_second_draft() ->
             return ['{"reasoning":"质量检查",', f'"say":"{speech}"', "}"]
 
         def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-            return "".join(
-                self.stream_json(model=model, prompt=prompt, temperature=temperature)
-            )
+            return "".join(self.stream_json(model=model, prompt=prompt, temperature=temperature))
 
     rule_set = get_rule_set("classic_8")
     state = initialize_game_state(
@@ -4232,9 +4217,7 @@ def test_public_speech_quality_retry_exhaustion_publishes_only_second_draft() ->
     assert "所以我保持原判断" not in public_blob
     assert "我还是不改判断" in public_blob
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
-    assert all(
-        event["type"] != "speech_quality_retry_exhausted" for event in sink.events
-    )
+    assert all(event["type"] != "speech_quality_retry_exhausted" for event in sink.events)
     assert action_log.speech_quality_attempt_count == 2
     assert action_log.speech_quality_retry_exhausted is True
     assert action_log.speech_quality_report is not None
@@ -4914,7 +4897,7 @@ def test_day_exile_vote_requests_eligible_voters_concurrently() -> None:
     assert list(round_state.vote_weights) == eligible_voters
 
 
-def test_round_summaries_request_active_players_sequentially() -> None:
+def test_round_summaries_request_active_players_concurrently_and_commit_in_order() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_sequential_summaries",
@@ -4925,7 +4908,13 @@ def test_round_summaries_request_active_players_sequentially() -> None:
     )
     active_players = [player.name for player in state.players[:3]]
     sink = CapturingEventSink()
-    provider = ScriptedChineseProvider()
+    response_value_by_actor = {name: f"{name}的第1轮私有总结。" for name in active_players}
+    provider = BarrierActionProvider(
+        action_key="summarize",
+        result_key="summary",
+        response_value_by_actor=response_value_by_actor,
+        expected_calls=len(active_players),
+    )
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
     engine = GameEngine(
@@ -4957,10 +4946,71 @@ def test_round_summaries_request_active_players_sequentially() -> None:
     assert round_state.summaries == {}
     assert round_state.public_summary == "第1轮；没有公开出局。"
     assert [log.actor for log in round_log.summaries] == active_players
+    assert [actor for action, actor in provider.actions if action == "summarize"] == (
+        active_players
+    )
     for name in active_players:
         assert state.player_by_name()[name].observations[-1] == (
-            "第1轮总结：我会继续关注发言矛盾最大的玩家。"
+            f"第1轮总结：{response_value_by_actor[name]}"
         )
+
+
+def test_round_summary_failure_commits_only_prior_results() -> None:
+    class FailingSummaryProvider(ScriptedChineseProvider):
+        def __init__(self, fail_actor: str) -> None:
+            self.fail_actor = fail_actor
+            self.actions: list[str] = []
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            name = _extract_actor_name(prompt)
+            if '"summary"' in prompt:
+                self.actions.append(name)
+                if name == self.fail_actor:
+                    raise RuntimeError("summary model failure")
+                return json.dumps(
+                    {
+                        "reasoning": "私有总结失败边界测试。",
+                        "summary": f"{name}的私有总结。",
+                    },
+                    ensure_ascii=False,
+                )
+            return super().complete_json(
+                model=model,
+                prompt=prompt,
+                temperature=temperature,
+            )
+
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_summary_failure_boundary",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=60,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players[:3]]
+    checkpoint_manager = RecordingCheckpointManager()
+    engine = GameEngine(
+        state=state,
+        provider=FailingSummaryProvider(active_players[1]),
+        max_rounds=8,
+        rule_set=rule_set,
+        checkpoint_manager=checkpoint_manager,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    with pytest.raises(RuntimeError, match="summary model failure"):
+        engine._run_private_round_memories(round_state, round_log, active_players)
+
+    assert list(round_state.private_summaries) == active_players[:1]
+    assert [log.actor for log in round_log.summaries] == active_players[:1]
+    assert [item["actor"] for item in checkpoint_manager.successes] == active_players[:1]
+    assert [item["actor"] for item in checkpoint_manager.failures] == active_players[1:2]
+    assert all(
+        not player.observations or "私有总结" not in player.observations[-1]
+        for player in state.players[1:3]
+    )
 
 
 def test_small_rule_day_phase_uses_full_seat_order_without_bids() -> None:
@@ -6180,8 +6230,7 @@ def test_werewolf_consensus_uses_unique_highest_vote_after_final_round(
     majority_target = non_wolves[0]
     minority_target = non_wolves[1]
     votes = {
-        wolf: majority_target if index < 3 else minority_target
-        for index, wolf in enumerate(wolves)
+        wolf: majority_target if index < 3 else minority_target for index, wolf in enumerate(wolves)
     }
     provider = WerewolfConsensusProvider(vote_rounds=[votes])
     active_players = [player.name for player in state.players]
@@ -7003,9 +7052,7 @@ def test_hunter_numeric_seat_alias_is_normalized_without_retry() -> None:
     candidates = [player for player in state.players if player is not hunter][:2]
     target = candidates[0]
     target_seat = state.players.index(target) + 1
-    provider = FakeProvider(
-        [{"reasoning": "直接返回座位数字", "shoot": target_seat}]
-    )
+    provider = FakeProvider([{"reasoning": "直接返回座位数字", "shoot": target_seat}])
     engine = GameEngine(
         state=state,
         provider=provider,

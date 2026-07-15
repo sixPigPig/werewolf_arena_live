@@ -9,6 +9,7 @@ import type { GamePlayback, LiveGameEvent } from "@werewolf-arena/game-client";
 
 const gameClientMocks = vi.hoisted(() => ({
   getGamePlayback: vi.fn(),
+  getGamePlaybackVoice: vi.fn(),
   resumeGameRun: vi.fn(),
   useLiveDirector: vi.fn(),
   usePlaybackVoice: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("@werewolf-arena/game-client", async () => {
   return {
     ...actual,
     getGamePlayback: gameClientMocks.getGamePlayback,
+    getGamePlaybackVoice: gameClientMocks.getGamePlaybackVoice,
     resumeGameRun: gameClientMocks.resumeGameRun,
     useLiveDirector: (...args: Parameters<typeof actual.useLiveDirector>) => {
       gameClientMocks.useLiveDirector(...args);

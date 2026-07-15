@@ -20,6 +20,7 @@ from app.api.routes.games import (
 from app.db.base import Base
 from app.main import app
 from app.models.live import VoiceMaterializationJobRecord
+from app.werewolf import voice_stream as voice_stream_module
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.voice import VoiceUtterance
 from app.werewolf.voice_stream import LiveVoiceStreamService
@@ -121,9 +122,7 @@ class FakeWebSocket:
         return incoming_task.result()
 
     def send_client_json(self, message: dict) -> None:
-        self._incoming().put_nowait(
-            {"type": "websocket.receive", "text": json.dumps(message)}
-        )
+        self._incoming().put_nowait({"type": "websocket.receive", "text": json.dumps(message)})
 
     def disconnect(self) -> None:
         self._disconnect().set()
@@ -2015,9 +2014,7 @@ def test_voice_stream_service_skips_dependent_persistence_after_upsert_failure(
         "voice_end",
     ]
     utterance_id = websocket.messages[0]["utterance_id"]
-    assert [
-        chunk for chunk in voice_store.chunks if chunk["utterance_id"] == utterance_id
-    ] == []
+    assert [chunk for chunk in voice_store.chunks if chunk["utterance_id"] == utterance_id] == []
     assert [
         completed
         for completed in voice_store.completed
@@ -2325,15 +2322,11 @@ def test_voice_stream_service_waits_for_playback_ack_before_next_tts_request() -
             {"speaker": "player", "text_chunks": ["我是第一位发言。"]},
         ]
         first_utterance_id = websocket.messages[0]["utterance_id"]
-        websocket.send_client_json(
-            {"type": "voice_played", "utterance_id": first_utterance_id}
-        )
+        websocket.send_client_json({"type": "voice_played", "utterance_id": first_utterance_id})
         await wait_for_messages(websocket, 6)
 
         second_utterance_id = websocket.messages[3]["utterance_id"]
-        websocket.send_client_json(
-            {"type": "voice_played", "utterance_id": second_utterance_id}
-        )
+        websocket.send_client_json({"type": "voice_played", "utterance_id": second_utterance_id})
         registry.mark_completed(run.run_id, winner="好人阵营")
         await wait_for_messages(websocket, 9)
         websocket.send_client_json(
@@ -2343,9 +2336,66 @@ def test_voice_stream_service_waits_for_playback_ack_before_next_tts_request() -
 
     asyncio.run(stream_live_events())
 
-    player_calls = [
-        call for instance in RecordingTtsClient.instances for call in instance.calls
+    player_calls = [call for instance in RecordingTtsClient.instances for call in instance.calls]
+    assert player_calls[:2] == [
+        {"speaker": "player", "text_chunks": ["我是第一位发言。"]},
+        {"speaker": "player", "text_chunks": ["我是第二位发言。"]},
     ]
+
+
+def test_voice_stream_service_releases_playback_ack_wait_after_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(voice_stream_module, "PLAYBACK_ACK_TIMEOUT_SECONDS", 0.01)
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(
+            service.stream_run(
+                run.run_id,
+                websocket,
+                playback_ack_required=True,
+            )
+        )
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-first",
+                "visible_text": "我是第一位发言。",
+                "is_public": True,
+            },
+        )
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="白石",
+            action="debate",
+            payload={
+                "request_id": "req-second",
+                "visible_text": "我是第二位发言。",
+                "is_public": True,
+            },
+        )
+
+        await wait_for_messages(websocket, 6)
+        websocket.disconnect()
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    player_calls = [call for instance in RecordingTtsClient.instances for call in instance.calls]
     assert player_calls[:2] == [
         {"speaker": "player", "text_chunks": ["我是第一位发言。"]},
         {"speaker": "player", "text_chunks": ["我是第二位发言。"]},

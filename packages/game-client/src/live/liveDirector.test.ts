@@ -258,7 +258,7 @@ describe("toDirectorCue", () => {
     expect(cue?.body).not.toContain("刀9号");
   });
 
-  it("uses normal speech pace for visible long text at 1x", () => {
+  it("estimates the no-voice fallback for visible long text at 1x", () => {
     const message =
       "我现在给出完整的发言，先说明昨晚信息，再解释投票理由，最后给出今天建议。";
     const cue = toDirectorCue(
@@ -279,7 +279,7 @@ describe("toDirectorCue", () => {
     expect(cue.durationMs).toBe(9500);
   });
 
-  it("uses normal speech pace for parsed visible action text", () => {
+  it("estimates the no-voice fallback for parsed visible action text", () => {
     const message =
       "我现在给出完整的发言，先说明昨晚信息，再解释投票理由，最后给出今天建议。";
     const cue = toDirectorCue(
@@ -299,7 +299,7 @@ describe("toDirectorCue", () => {
     expect(cue.compressible).toBe(false);
   });
 
-  it("uses normal speech pace for kana visible text", () => {
+  it("estimates the no-voice fallback for kana visible text", () => {
     const message = "こんにちは".repeat(5);
     const cue = toDirectorCue(
       event({

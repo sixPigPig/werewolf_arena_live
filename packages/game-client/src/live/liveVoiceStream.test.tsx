@@ -666,6 +666,61 @@ describe("live voice stream", () => {
     expect(result.current.currentItem?.utteranceId).toBe("voice-1");
   });
 
+  it("releases an incomplete receiving utterance after the connection finally fails", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.();
+      MockWebSocket.instances[0].emit(voiceStartMessage());
+    });
+    expect(result.current.currentItem).toMatchObject({
+      status: "receiving",
+      utteranceId: "voice-1",
+    });
+
+    act(() => {
+      MockWebSocket.instances[0].onerror?.();
+      MockWebSocket.instances[1].onerror?.();
+    });
+
+    await waitFor(() => expect(result.current.connectionState).toBe("error"));
+    expect(result.current.currentItem).toBeNull();
+  });
+
+  it("releases an incomplete receiving utterance when the server becomes unavailable", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.();
+      MockWebSocket.instances[0].emit(voiceStartMessage());
+      MockWebSocket.instances[0].emit({
+        type: "voice_unavailable",
+        reason: "terminal",
+      });
+    });
+
+    await waitFor(() =>
+      expect(result.current.connectionState).toBe("unavailable"),
+    );
+    expect(result.current.currentItem).toBeNull();
+  });
+
   it("opens the websocket with the initial current event id", () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
 
@@ -1180,6 +1235,10 @@ describe("live voice stream", () => {
     });
 
     await vi.waitFor(() => expect(result.current.currentItem).toBeNull());
+    expect(result.current.lastCompletedPlayback).toMatchObject({
+      sourceEventId: 4,
+      lastSourceEventId: 4,
+    });
   });
 
   it("does not double-schedule when a rerender overlaps audio resume", async () => {
@@ -1706,6 +1765,43 @@ describe("live voice stream", () => {
     rerender({ isPaused: false });
 
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+  });
+
+  it("fails open when non-PCM audio makes no progress", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubObjectUrls(["blob:stalled-live-voice"]);
+    stubAudioElement();
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      emitReadyUtterance(socket, "voice-1", 4);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.currentItem).toMatchObject({
+      status: "playing",
+      utteranceId: "voice-1",
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(result.current.currentItem).toBeNull();
+    expect(result.current.lastCompletedPlayback).toBeNull();
+    expect(socket.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "voice_played", utterance_id: "voice-1" }),
+    );
   });
 
   it("plays the second ready utterance after the first audio ends", async () => {

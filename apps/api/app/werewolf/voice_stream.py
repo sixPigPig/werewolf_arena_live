@@ -42,6 +42,7 @@ TERMINAL_EVENT_TYPES = {"game_completed", "game_failed", "game_canceled"}
 TERMINAL_RUN_STATUSES = {"completed", "failed", "canceled"}
 IDLE_POLL_SECONDS = 0.1
 REQUEST_DELTA_COALESCE_SECONDS = 0.16
+PLAYBACK_ACK_TIMEOUT_SECONDS = 60.0
 TERMINAL_UNAVAILABLE_MESSAGE = "语音只支持进行中的实时对局；该对局已结束或异常中断。"
 
 
@@ -165,9 +166,7 @@ class LiveVoiceStreamService:
             return
 
         canonical_historical_events = self.registry.events_after(run_id)
-        last_event_id = (
-            canonical_historical_events[-1].id if canonical_historical_events else None
-        )
+        last_event_id = canonical_historical_events[-1].id if canonical_historical_events else None
         historical_events = [
             projected
             for event in canonical_historical_events
@@ -182,12 +181,8 @@ class LiveVoiceStreamService:
 
         voice_store = self.voice_store_factory(run.session_id) if self.voice_store_factory else None
         persistence_store = voice_store if self.persist_streamed_voices else None
-        playback_acks: PlaybackAckQueue | None = (
-            asyncio.Queue() if playback_ack_required else None
-        )
-        disconnect_task = asyncio.create_task(
-            _watch_websocket_control(websocket, playback_acks)
-        )
+        playback_acks: PlaybackAckQueue | None = asyncio.Queue() if playback_ack_required else None
+        disconnect_task = asyncio.create_task(_watch_websocket_control(websocket, playback_acks))
         subscriber: queue.Queue[LiveEvent] | None = None
         speaker_config = VoiceSpeakerConfig(
             player_speaker=self.config.player_speaker,
@@ -789,11 +784,7 @@ def _load_static_judge_voice_asset(
         return None
 
     matching_line = next(
-        (
-            line
-            for line in lines
-            if isinstance(line, dict) and line.get("id") == asset_id
-        ),
+        (line for line in lines if isinstance(line, dict) and line.get("id") == asset_id),
         None,
     )
     if matching_line is None or matching_line.get("exists") is False:
@@ -806,10 +797,14 @@ def _load_static_judge_voice_asset(
     if not audio_path.exists():
         return None
 
-    audio_format = _string_manifest_value(
-        matching_line,
-        "audio_format",
-    ) or _string_manifest_value(manifest, "audio_format") or audio_path.suffix.lstrip(".")
+    audio_format = (
+        _string_manifest_value(
+            matching_line,
+            "audio_format",
+        )
+        or _string_manifest_value(manifest, "audio_format")
+        or audio_path.suffix.lstrip(".")
+    )
     if not audio_format:
         return None
     mime_type = (
@@ -817,10 +812,14 @@ def _load_static_judge_voice_asset(
         or _string_manifest_value(manifest, "mime_type")
         or mime_type_for_format(audio_format)
     )
-    sample_rate = _int_manifest_value(
-        matching_line,
-        "sample_rate",
-    ) or _int_manifest_value(manifest, "sample_rate") or 24000
+    sample_rate = (
+        _int_manifest_value(
+            matching_line,
+            "sample_rate",
+        )
+        or _int_manifest_value(manifest, "sample_rate")
+        or 24000
+    )
 
     try:
         audio = audio_path.read_bytes()
@@ -872,18 +871,13 @@ def build_static_judge_playback_voices(
             peaceful_night=voice_context.peaceful_night,
         )
         if utterance is not None and utterance.static_asset_id is not None:
-            asset = (
-                asset_loader(utterance.static_asset_id)
-                if asset_loader is not None
-                else None
-            )
+            asset = asset_loader(utterance.static_asset_id) if asset_loader is not None else None
             if asset is None:
                 asset = _load_static_judge_voice_asset(asset_dir, utterance.static_asset_id)
             if asset is not None:
                 start_message, chunk_message, _end_message = build_voice_messages(
                     utterance_id=(
-                        f"static_judge_{utterance.source_event_id}_"
-                        f"{utterance.static_asset_id}"
+                        f"static_judge_{utterance.source_event_id}_{utterance.static_asset_id}"
                     ),
                     source_event_id=utterance.source_event_id,
                     last_source_event_id=utterance.last_source_event_id,
@@ -1227,16 +1221,25 @@ async def _wait_for_playback_ack(
         await asyncio.sleep(0)
         return True
 
+    deadline = asyncio.get_running_loop().time() + PLAYBACK_ACK_TIMEOUT_SECONDS
     while True:
         if disconnect_task.done():
             return False
+        remaining_seconds = deadline - asyncio.get_running_loop().time()
+        if remaining_seconds <= 0:
+            return True
         ack_task = asyncio.create_task(playback_acks.get())
         done, pending = await asyncio.wait(
             {ack_task, disconnect_task},
             return_when=asyncio.FIRST_COMPLETED,
+            timeout=remaining_seconds,
         )
         if ack_task in pending:
             ack_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await ack_task
+        if not done:
+            return True
         if disconnect_task in done:
             return False
         if ack_task.result() == utterance_id:

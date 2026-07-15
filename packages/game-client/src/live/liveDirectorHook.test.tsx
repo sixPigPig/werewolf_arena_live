@@ -35,11 +35,13 @@ describe("useLiveDirector seekToEventId", () => {
 
   it("jumps to the requested cue or the nearest available cue", () => {
     const { result } = renderHook(() => useLiveDirector(events));
+    expect(result.current.cursorVersion).toBe(0);
 
     act(() => {
       result.current.seekToEventId(5);
     });
     expect(result.current.currentEventId).toBe(5);
+    expect(result.current.cursorVersion).toBe(1);
     expect(result.current.currentCue?.phase).toBe("day");
 
     act(() => {
@@ -56,6 +58,21 @@ describe("useLiveDirector seekToEventId", () => {
       result.current.seekToEventId(0);
     });
     expect(result.current.currentEventId).toBe(1);
+  });
+
+  it("changes cursor version only for explicit navigation", () => {
+    const { result } = renderHook(() => useLiveDirector(events));
+
+    act(() => {
+      result.current.advance();
+    });
+    expect(result.current.currentEventId).toBe(3);
+    expect(result.current.cursorVersion).toBe(0);
+
+    act(() => {
+      result.current.catchUpToLatest();
+    });
+    expect(result.current.cursorVersion).toBe(1);
   });
 
   it("preserves the paused state when seeking", () => {
@@ -239,5 +256,34 @@ describe("useLiveDirector seekToEventId", () => {
     });
 
     expect(result.current.currentEventId).toBe(3);
+  });
+
+  it("clears only the matching cue fallback time after voice completes", () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useLiveDirector(events));
+
+    act(() => {
+      result.current.completeVoicePlayback({
+        id: "voice-1:1",
+        sourceEventId: 1,
+        lastSourceEventId: 1,
+      });
+    });
+    expect(result.current.effectiveDurationMs).toBe(0);
+
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(result.current.currentEventId).toBe(3);
+    expect(result.current.effectiveDurationMs).toBeGreaterThan(0);
+
+    act(() => {
+      result.current.completeVoicePlayback({
+        id: "stale-voice:1",
+        sourceEventId: 1,
+        lastSourceEventId: 1,
+      });
+    });
+    expect(result.current.effectiveDurationMs).toBeGreaterThan(0);
   });
 });

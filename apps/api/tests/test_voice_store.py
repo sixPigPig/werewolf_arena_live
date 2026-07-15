@@ -45,6 +45,7 @@ def stored_utterance(
     source_event_id: int,
     text: str,
     speaker_kind: str = "player",
+    action: str = "debate",
 ) -> VoiceUtterance:
     return VoiceUtterance(
         utterance_id=utterance_id,
@@ -55,7 +56,7 @@ def stored_utterance(
         speaker_name="阿青",
         speaker="zh_female_vv_uranus_bigtts",
         text=text,
-        action="debate",
+        action=action,
     )
 
 
@@ -215,6 +216,79 @@ def test_voice_store_lists_playback_voices_with_base64_chunks(
         {"chunk_index": 1, "data": "Zmlyc3QtMQ=="},
     ]
     assert voices[1]["chunks"] == [{"chunk_index": 0, "data": "c2Vjb25kLTA="}]
+
+
+def test_voice_store_loads_one_public_complete_playback_voice(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    public = stored_utterance(
+        utterance_id="voice_public",
+        source_event_id=4,
+        text="公开发言",
+    )
+    private = stored_utterance(
+        utterance_id="voice_private",
+        source_event_id=5,
+        text="私有总结",
+        action="summarize",
+    )
+    for item in (public, private):
+        store.upsert_utterance(
+            item,
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
+        store.append_chunk(item.utterance_id, chunk_index=0, audio=b"audio")
+        store.complete_utterance(item.utterance_id, duration_ms=100)
+
+    loaded = store.load_playback_voice(
+        "voice_public",
+        excluded_actions=frozenset({"summarize"}),
+    )
+
+    assert loaded is not None
+    assert loaded["utterance_id"] == "voice_public"
+    assert loaded["chunks"] == [{"chunk_index": 0, "data": "YXVkaW8="}]
+    assert (
+        store.load_playback_voice(
+            "voice_private",
+            excluded_actions=frozenset({"summarize"}),
+        )
+        is None
+    )
+    assert (
+        DatabaseVoiceStore(
+            db_session,
+            session_id="game_other000",
+        ).load_playback_voice("voice_public")
+        is None
+    )
+
+
+def test_voice_store_lists_playback_metadata_without_loading_chunks(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    item = stored_utterance(
+        utterance_id="voice_metadata",
+        source_event_id=4,
+        text="公开发言",
+    )
+    store.upsert_utterance(
+        item,
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+    store.append_chunk(item.utterance_id, chunk_index=0, audio=b"large-sentinel")
+    store.complete_utterance(item.utterance_id, duration_ms=100)
+
+    voices = store.list_playback_voices(include_chunks=False)
+
+    assert [voice["utterance_id"] for voice in voices] == ["voice_metadata"]
+    assert "chunks" not in voices[0]
 
 
 def test_voice_store_defaults_new_utterance_to_synthesizing(db_session: Session) -> None:

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -8,6 +8,7 @@ import {
   deriveGodViewState,
   deriveLiveSpectatorState,
   getGamePlayback,
+  getGamePlaybackVoice,
   resumeGameRun,
   useLiveDirector,
   usePlaybackVoice,
@@ -47,13 +48,28 @@ export function LiveReplayPage() {
     startAtLatestTerminal: false,
   });
   const currentEventId = director.currentEventId;
+  const loadPlaybackVoice = useCallback(
+    (utteranceId: string) =>
+      getGamePlaybackVoice(
+        gameId ?? "",
+        utteranceId,
+        "spectator_god_view",
+      ),
+    [gameId],
+  );
   const voice = usePlaybackVoice(playbackVoices, {
     currentEventId,
+    cursorVersion: director.cursorVersion,
     enabled: voiceEnabled,
     isPaused: director.isPaused,
+    loadVoice: loadPlaybackVoice,
   });
   const voiceCurrentItem = voice.currentItem;
   const unlockVoiceAudio = voice.unlockAudio;
+  const completeVoicePlayback = director.completeVoicePlayback;
+  useEffect(() => {
+    completeVoicePlayback(voice.lastCompletedPlayback);
+  }, [completeVoicePlayback, voice.lastCompletedPlayback]);
   useEffect(() => {
     if (!gameId || !voiceEnabled) {
       return;

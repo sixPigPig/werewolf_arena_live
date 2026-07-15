@@ -18,6 +18,7 @@ import type {
   LiveVoiceQueueItem,
   LiveVoiceSubtitleCue,
   LiveVoiceSubtitle,
+  VoicePlaybackCompletion,
 } from "./liveVoiceStream";
 import {
   SUBTITLE_CLOCK_POLL_INTERVAL_MS,
@@ -32,58 +33,83 @@ import type { PlaybackVoiceChunk, PlaybackVoiceUtterance } from "../types";
 const PLAYBACK_VOICE_EMPTY_MESSAGE = "这局回放没有保存的语音。";
 const PLAYBACK_VOICE_ERROR_MESSAGE = "Unable to play saved replay voice audio.";
 const PCM_COMPLETION_POLL_INTERVAL_MS = 25;
+const BLOB_PLAYBACK_STALL_POLL_INTERVAL_MS = 1000;
+const BLOB_PLAYBACK_STALL_TIMEOUT_MS = 30_000;
 
 export function usePlaybackVoice(
   voices: PlaybackVoiceUtterance[],
   {
     currentEventId,
+    cursorVersion = 0,
     enabled,
     isPaused,
+    loadVoice,
   }: {
     currentEventId: number | null;
+    cursorVersion?: number;
     enabled: boolean;
     isPaused: boolean;
+    loadVoice?: (utteranceId: string) => Promise<PlaybackVoiceUtterance>;
   },
 ) {
-  const sortedVoices = useMemo(
+  const sourceVoices = useMemo(
     () =>
       voices
-        .filter(isPlayablePlaybackVoice)
+        .filter(isPlaybackVoiceMetadata)
         .slice()
         .sort(comparePlaybackVoices),
     [voices],
   );
   const voicesKey = useMemo(
     () =>
-      sortedVoices
+      sourceVoices
         .map(
           (voice) =>
             [
               voice.utterance_id,
               voice.source_event_id,
               voice.last_source_event_id,
-              voice.chunks.length,
+              voice.chunks?.length ?? 0,
               subtitleTimingsKey(voice),
             ].join(":"),
         )
         .join("|"),
-    [sortedVoices],
+    [sourceVoices],
+  );
+  const [loadedVoicesById, setLoadedVoicesById] = useState<
+    Map<string, PlaybackVoiceUtterance>
+  >(new Map());
+  const sortedVoices = useMemo(
+    () =>
+      sourceVoices.map(
+        (voice) => loadedVoicesById.get(voice.utterance_id) ?? voice,
+      ),
+    [loadedVoicesById, sourceVoices],
   );
   const [errors, setErrors] = useState<string[]>([]);
   const [currentItem, setCurrentItem] = useState<LiveVoiceQueueItem | null>(null);
   const [subtitleClock, setSubtitleClock] =
     useState<LiveVoiceSubtitleClock>(null);
+  const [lastCompletedPlayback, setLastCompletedPlayback] =
+    useState<VoicePlaybackCompletion | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const blobCleanupRef = useRef<(() => void) | null>(null);
   const schedulerRef = useRef<PcmAudioScheduler | null>(null);
+  const pcmEndTimesRef = useRef<Map<string, number>>(new Map());
   const pcmSubtitleStartTimesRef = useRef<Map<string, number>>(new Map());
   const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
   const activeUtteranceIdsRef = useRef<Set<string>>(new Set());
+  const latestCurrentEventIdRef = useRef(currentEventId);
+  latestCurrentEventIdRef.current = currentEventId;
+  const sourceVoicesRef = useRef(sourceVoices);
+  sourceVoicesRef.current = sourceVoices;
   const previousVoicesKeyRef = useRef(voicesKey);
+  const skipSelectionAfterCursorChangeRef = useRef(false);
   const completionTimeoutsRef = useRef<Set<ReturnType<typeof globalThis.setTimeout>>>(
     new Set(),
   );
+  const playbackCompletionSequenceRef = useRef(0);
 
   const connectionState = useMemo<LiveVoiceConnectionState>(() => {
     if (!enabled) {
@@ -131,6 +157,7 @@ export function usePlaybackVoice(
     const scheduler = schedulerRef.current;
     audioContextRef.current = null;
     schedulerRef.current = null;
+    pcmEndTimesRef.current.clear();
     pcmSubtitleStartTimesRef.current.clear();
     setSubtitleClock(null);
     for (const timeoutId of completionTimeoutsRef.current) {
@@ -140,11 +167,65 @@ export function usePlaybackVoice(
     void scheduler?.close().catch(() => undefined);
   }, []);
 
+  const recordPlaybackCompletion = useCallback((item: LiveVoiceQueueItem) => {
+    playbackCompletionSequenceRef.current += 1;
+    setLastCompletedPlayback({
+      id: `${item.utteranceId}:${playbackCompletionSequenceRef.current}`,
+      sourceEventId: item.sourceEventId,
+      lastSourceEventId: item.lastSourceEventId,
+    });
+  }, []);
+
+  const releaseLoadedVoice = useCallback((utteranceId: string) => {
+    setLoadedVoicesById((current) => {
+      if (!current.has(utteranceId)) {
+        return current;
+      }
+      const next = new Map(current);
+      next.delete(utteranceId);
+      return next;
+    });
+  }, []);
+
+  const finishPcmVoice = useCallback((item: LiveVoiceQueueItem) => {
+    activeUtteranceIdsRef.current.delete(item.utteranceId);
+    consumedUtteranceIdsRef.current.add(item.utteranceId);
+    pcmEndTimesRef.current.delete(item.utteranceId);
+    pcmSubtitleStartTimesRef.current.delete(item.utteranceId);
+    setSubtitleClock((current) =>
+      current?.utteranceId === item.utteranceId ? null : current,
+    );
+    setCurrentItem((current) =>
+      current?.utteranceId === item.utteranceId ? null : current,
+    );
+    releaseLoadedVoice(item.utteranceId);
+    recordPlaybackCompletion(item);
+  }, [recordPlaybackCompletion, releaseLoadedVoice]);
+
   const releaseBlobAudio = useCallback(() => {
     const cleanup = blobCleanupRef.current;
     blobCleanupRef.current = null;
     cleanup?.();
   }, []);
+
+  useEffect(() => {
+    const targetEventId = latestCurrentEventIdRef.current;
+    releaseBlobAudio();
+    closeScheduler();
+    activeUtteranceIdsRef.current.clear();
+    consumedUtteranceIdsRef.current = new Set(
+      targetEventId === null
+        ? []
+        : sourceVoicesRef.current
+            .filter((voice) => voice.last_source_event_id < targetEventId)
+            .map((voice) => voice.utterance_id),
+    );
+    skipSelectionAfterCursorChangeRef.current = true;
+    setLoadedVoicesById(new Map());
+    setCurrentItem(null);
+    setLastCompletedPlayback(null);
+    setSubtitleClock(null);
+  }, [closeScheduler, cursorVersion, releaseBlobAudio]);
 
   const unlockAudio = useCallback(async () => {
     if (sortedVoices.length === 0) {
@@ -183,7 +264,10 @@ export function usePlaybackVoice(
     closeScheduler();
     consumedUtteranceIdsRef.current.clear();
     activeUtteranceIdsRef.current.clear();
+    playbackCompletionSequenceRef.current = 0;
+    setLoadedVoicesById(new Map());
     setCurrentItem(null);
+    setLastCompletedPlayback(null);
     setSubtitleClock(null);
     setErrors([]);
   }, [closeScheduler, releaseBlobAudio, voicesKey]);
@@ -196,6 +280,10 @@ export function usePlaybackVoice(
   }, [enabled, sortedVoices.length]);
 
   useEffect(() => {
+    if (skipSelectionAfterCursorChangeRef.current) {
+      skipSelectionAfterCursorChangeRef.current = false;
+      return;
+    }
     if (!enabled || isPaused || currentEventId === null || currentItem !== null) {
       return;
     }
@@ -212,11 +300,58 @@ export function usePlaybackVoice(
 
     activeUtteranceIdsRef.current.add(nextVoice.utterance_id);
 
+    if ((nextVoice.chunks?.length ?? 0) === 0) {
+      const utteranceId = nextVoice.utterance_id;
+      let isActive = true;
+      if (!loadVoice) {
+        markVoiceFailed(
+          utteranceId,
+          activeUtteranceIdsRef,
+          consumedUtteranceIdsRef,
+        );
+        pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
+        return;
+      }
+      void loadVoice(utteranceId)
+        .then((loadedVoice) => {
+          if (!isActive) {
+            return;
+          }
+          if (
+            loadedVoice.utterance_id !== utteranceId ||
+            (loadedVoice.chunks?.length ?? 0) === 0
+          ) {
+            throw new Error("Playback voice has no audio chunks");
+          }
+          activeUtteranceIdsRef.current.delete(utteranceId);
+          setLoadedVoicesById((current) => {
+            const next = new Map(current);
+            next.set(utteranceId, loadedVoice);
+            return next;
+          });
+        })
+        .catch(() => {
+          if (!isActive) {
+            return;
+          }
+          markVoiceFailed(
+            utteranceId,
+            activeUtteranceIdsRef,
+            consumedUtteranceIdsRef,
+          );
+          pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
+        });
+      return () => {
+        isActive = false;
+        activeUtteranceIdsRef.current.delete(utteranceId);
+      };
+    }
+
     if (!isPcmAudioFormat(nextVoice.audio_format)) {
       const utteranceId = nextVoice.utterance_id;
       try {
         releaseBlobAudio();
-        const chunks = nextVoice.chunks
+        const chunks = (nextVoice.chunks ?? [])
           .slice()
           .sort(compareChunks)
           .map((chunk) => chunk.data);
@@ -252,6 +387,8 @@ export function usePlaybackVoice(
           setCurrentItem((current) =>
             current?.utteranceId === utteranceId ? null : current,
           );
+          releaseLoadedVoice(utteranceId);
+          recordPlaybackCompletion(toQueueItem(nextVoice));
         };
         function handleEnded() {
           finishVoice();
@@ -269,6 +406,7 @@ export function usePlaybackVoice(
           setCurrentItem((current) =>
             current?.utteranceId === utteranceId ? null : current,
           );
+          releaseLoadedVoice(utteranceId);
           pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
         }
 
@@ -283,6 +421,7 @@ export function usePlaybackVoice(
         markVoiceFailed(utteranceId, activeUtteranceIdsRef, consumedUtteranceIdsRef);
         setSubtitleClock(null);
         setCurrentItem(null);
+        releaseLoadedVoice(utteranceId);
         pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
       }
       return;
@@ -302,7 +441,7 @@ export function usePlaybackVoice(
           await audio.context.resume();
         }
         await audio.scheduler.resume();
-        const chunks = nextVoice.chunks.slice().sort(compareChunks);
+        const chunks = (nextVoice.chunks ?? []).slice().sort(compareChunks);
         let latestEndTime = audio.context.currentTime;
         for (const chunk of chunks) {
           if (!isActive) {
@@ -332,29 +471,15 @@ export function usePlaybackVoice(
         if (!isActive) {
           return;
         }
+        pcmEndTimesRef.current.set(nextVoice.utterance_id, latestEndTime);
         setCurrentItem(toQueueItem(nextVoice));
-        const delayMs = Math.max(
-          PCM_COMPLETION_POLL_INTERVAL_MS,
-          (latestEndTime - audio.context.currentTime) * 1000,
-        );
-        const timeoutId = globalThis.setTimeout(() => {
-          completionTimeoutsRef.current.delete(timeoutId);
-          activeUtteranceIdsRef.current.delete(nextVoice.utterance_id);
-          consumedUtteranceIdsRef.current.add(nextVoice.utterance_id);
-          pcmSubtitleStartTimesRef.current.delete(nextVoice.utterance_id);
-          setSubtitleClock((current) =>
-            current?.utteranceId === nextVoice.utterance_id ? null : current,
-          );
-          setCurrentItem((current) =>
-            current?.utteranceId === nextVoice.utterance_id ? null : current,
-          );
-        }, delayMs);
-        completionTimeoutsRef.current.add(timeoutId);
       } catch {
         markVoiceFailed(nextVoice.utterance_id, activeUtteranceIdsRef, consumedUtteranceIdsRef);
+        pcmEndTimesRef.current.delete(nextVoice.utterance_id);
         pcmSubtitleStartTimesRef.current.delete(nextVoice.utterance_id);
         setCurrentItem(null);
         setSubtitleClock(null);
+        releaseLoadedVoice(nextVoice.utterance_id);
         pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
       }
     })();
@@ -364,13 +489,64 @@ export function usePlaybackVoice(
     };
   }, [
     currentEventId,
+    cursorVersion,
     currentItem,
     enabled,
     ensureScheduler,
+    errors.length,
     isPaused,
+    loadVoice,
+    recordPlaybackCompletion,
+    releaseLoadedVoice,
     releaseBlobAudio,
     sortedVoices,
   ]);
+
+  useEffect(() => {
+    if (
+      !enabled ||
+      isPaused ||
+      !currentItem ||
+      !isPcmAudioFormat(currentItem.audioFormat)
+    ) {
+      return;
+    }
+
+    const context = audioContextRef.current;
+    const endTime = pcmEndTimesRef.current.get(currentItem.utteranceId);
+    if (!context || endTime === undefined) {
+      return;
+    }
+
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
+    const pollForCompletion = () => {
+      if (timeoutId !== null) {
+        completionTimeoutsRef.current.delete(timeoutId);
+      }
+      if (context.state === "running" && context.currentTime >= endTime) {
+        finishPcmVoice(currentItem);
+        return;
+      }
+      timeoutId = globalThis.setTimeout(
+        pollForCompletion,
+        PCM_COMPLETION_POLL_INTERVAL_MS,
+      );
+      completionTimeoutsRef.current.add(timeoutId);
+    };
+
+    timeoutId = globalThis.setTimeout(
+      pollForCompletion,
+      PCM_COMPLETION_POLL_INTERVAL_MS,
+    );
+    completionTimeoutsRef.current.add(timeoutId);
+
+    return () => {
+      if (timeoutId !== null) {
+        globalThis.clearTimeout(timeoutId);
+        completionTimeoutsRef.current.delete(timeoutId);
+      }
+    };
+  }, [currentItem, enabled, finishPcmVoice, isPaused]);
 
   const currentSubtitle = useMemo<LiveVoiceSubtitle | null>(
     () =>
@@ -448,9 +624,68 @@ export function usePlaybackVoice(
       setSubtitleClock((current) =>
         current?.utteranceId === utteranceId ? null : current,
       );
+      releaseLoadedVoice(utteranceId);
       pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
     });
-  }, [currentItem, enabled, isPaused, releaseBlobAudio]);
+  }, [
+    currentItem,
+    enabled,
+    isPaused,
+    releaseBlobAudio,
+    releaseLoadedVoice,
+  ]);
+
+  useEffect(() => {
+    if (
+      !enabled ||
+      isPaused ||
+      !currentItem ||
+      isPcmAudioFormat(currentItem.audioFormat) ||
+      !audioElementRef.current
+    ) {
+      return;
+    }
+
+    const audio = audioElementRef.current;
+    const utteranceId = currentItem.utteranceId;
+    let lastCurrentTime = audio.currentTime;
+    let lastProgressAt = Date.now();
+    const intervalId = globalThis.setInterval(() => {
+      if (audio.currentTime > lastCurrentTime) {
+        lastCurrentTime = audio.currentTime;
+        lastProgressAt = Date.now();
+        return;
+      }
+      if (Date.now() - lastProgressAt < BLOB_PLAYBACK_STALL_TIMEOUT_MS) {
+        return;
+      }
+
+      releaseBlobAudio();
+      markVoiceFailed(
+        utteranceId,
+        activeUtteranceIdsRef,
+        consumedUtteranceIdsRef,
+      );
+      setSubtitleClock((current) =>
+        current?.utteranceId === utteranceId ? null : current,
+      );
+      setCurrentItem((current) =>
+        current?.utteranceId === utteranceId ? null : current,
+      );
+      releaseLoadedVoice(utteranceId);
+      pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
+    }, BLOB_PLAYBACK_STALL_POLL_INTERVAL_MS);
+
+    return () => {
+      globalThis.clearInterval(intervalId);
+    };
+  }, [
+    currentItem,
+    enabled,
+    isPaused,
+    releaseBlobAudio,
+    releaseLoadedVoice,
+  ]);
 
   useEffect(() => {
     const scheduler = schedulerRef.current;
@@ -474,9 +709,27 @@ export function usePlaybackVoice(
     if (enabled) {
       return;
     }
+    if (currentItem) {
+      markVoiceFailed(
+        currentItem.utteranceId,
+        activeUtteranceIdsRef,
+        consumedUtteranceIdsRef,
+      );
+      pcmEndTimesRef.current.delete(currentItem.utteranceId);
+      pcmSubtitleStartTimesRef.current.delete(currentItem.utteranceId);
+      setCurrentItem(null);
+      setSubtitleClock(null);
+      releaseLoadedVoice(currentItem.utteranceId);
+    }
     releaseBlobAudio();
     closeScheduler();
-  }, [closeScheduler, enabled, releaseBlobAudio]);
+  }, [
+    closeScheduler,
+    currentItem,
+    enabled,
+    releaseBlobAudio,
+    releaseLoadedVoice,
+  ]);
 
   useEffect(
     () => () => {
@@ -492,6 +745,7 @@ export function usePlaybackVoice(
     currentSpeakerName: isPaused ? null : currentItem?.speakerName ?? null,
     currentSubtitle,
     errors,
+    lastCompletedPlayback,
     unlockAudio,
   };
 }
@@ -536,13 +790,12 @@ export function currentSubtitleForPlaybackVoices({
   };
 }
 
-function isPlayablePlaybackVoice(voice: PlaybackVoiceUtterance) {
+function isPlaybackVoiceMetadata(voice: PlaybackVoiceUtterance) {
   return (
     (voice.speaker_kind === "player" || voice.speaker_kind === "judge") &&
     voice.audio_format.trim().length > 0 &&
     voice.mime_type.trim().length > 0 &&
-    voice.sample_rate > 0 &&
-    voice.chunks.length > 0
+    voice.sample_rate > 0
   );
 }
 
@@ -587,7 +840,7 @@ function playbackSubtitleCues(
 }
 
 function toQueueItem(voice: PlaybackVoiceUtterance): LiveVoiceQueueItem {
-  const chunkMetadata = voice.chunks.slice().sort(compareChunks).map((chunk) => ({
+  const chunkMetadata = (voice.chunks ?? []).slice().sort(compareChunks).map((chunk) => ({
     audioFormat: voice.audio_format,
     chunkIndex: chunk.chunk_index,
     data: chunk.data,

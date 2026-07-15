@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LiveGameEvent } from "../types";
 import { eventTypeLabel, liveEventTitle } from "./liveLabels";
 import type { LiveDirectorSpeed } from "./liveNavStatus";
+import type { VoicePlaybackCompletion } from "./liveVoiceStream";
 
 export type DirectorCueImportance = "normal" | "action" | "key" | "terminal";
 
@@ -17,6 +18,7 @@ export type DirectorCue = {
   title: string;
   body: string;
   importance: DirectorCueImportance;
+  /** Visual display duration and no-voice fallback; TTS subtitles use audio timestamps. */
   durationMs: number;
   compressible: boolean;
   suppressSpeechSubtitle?: boolean;
@@ -26,6 +28,7 @@ export type UseLiveDirectorResult = {
   cues: DirectorCue[];
   currentCue: DirectorCue | null;
   currentEventId: number | null;
+  cursorVersion: number;
   backlogCount: number;
   isCatchingUp: boolean;
   isPaused: boolean;
@@ -38,6 +41,7 @@ export type UseLiveDirectorResult = {
   advance: () => void;
   seekToEventId: (eventId: number) => void;
   catchUpToLatest: () => void;
+  completeVoicePlayback: (completion: VoicePlaybackCompletion | null) => void;
 };
 
 type UseLiveDirectorOptions = {
@@ -323,6 +327,10 @@ export function useLiveDirector(
   );
   const [isPaused, setIsPaused] = useState(false);
   const [speed, setSpeedState] = useState<LiveDirectorSpeed>(1);
+  const [cursorVersion, setCursorVersion] = useState(0);
+  const [voiceCompletedCueId, setVoiceCompletedCueId] = useState<number | null>(
+    null,
+  );
   const startedAtRef = useRef(0);
   const lastStartedCueIdRef = useRef<number | null>(null);
   const pausedAtRef = useRef<number | null>(null);
@@ -338,6 +346,7 @@ export function useLiveDirector(
   const autoStartedEventTypeIdRef = useRef<number | null>(
     latestRequestedStartCue?.eventId ?? firstRequestedStartCue?.eventId ?? null,
   );
+  const lastVoiceCompletionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (
@@ -416,9 +425,12 @@ export function useLiveDirector(
   const backlogCount =
     currentIndex >= 0 ? Math.max(0, cues.length - currentIndex - 1) : 0;
   const isCatchingUp = backlogCount >= CATCH_UP_BACKLOG_COUNT;
-  const effectiveDurationMs = currentCue
-    ? durationForCue(currentCue, speed, isCatchingUp)
-    : 0;
+  const effectiveDurationMs =
+    currentCue && voiceCompletedCueId === currentCue.eventId
+      ? 0
+      : currentCue
+        ? durationForCue(currentCue, speed, isCatchingUp)
+        : 0;
 
   useEffect(() => {
     if (resetKeyRef.current === options.resetKey) {
@@ -436,6 +448,9 @@ export function useLiveDirector(
     setCurrentCueId(null);
     setIsPaused(false);
     setSpeedState(1);
+    setCursorVersion((current) => current + 1);
+    setVoiceCompletedCueId(null);
+    lastVoiceCompletionIdRef.current = null;
   }, [options.resetKey, options.startAtLatestTerminal]);
 
   const moveToIndex = useCallback(
@@ -461,6 +476,8 @@ export function useLiveDirector(
 
   const seekToEventId = useCallback(
     (eventId: number) => {
+      setCursorVersion((current) => current + 1);
+      setVoiceCompletedCueId(null);
       if (cues.length === 0) {
         moveToIndex(-1);
         return;
@@ -554,7 +571,29 @@ export function useLiveDirector(
     setSpeedState(nextSpeed);
   }, []);
 
+  const completeVoicePlayback = useCallback(
+    (completion: VoicePlaybackCompletion | null) => {
+      if (
+        !completion ||
+        completion.id === lastVoiceCompletionIdRef.current
+      ) {
+        return;
+      }
+      lastVoiceCompletionIdRef.current = completion.id;
+      if (
+        currentCue &&
+        completion.sourceEventId <= currentCue.latestEventId &&
+        completion.lastSourceEventId >= currentCue.eventId
+      ) {
+        setVoiceCompletedCueId(currentCue.eventId);
+      }
+    },
+    [currentCue],
+  );
+
   const catchUpToLatest = useCallback(() => {
+    setCursorVersion((current) => current + 1);
+    setVoiceCompletedCueId(null);
     if (cues.length === 0) {
       moveToIndex(-1);
       return;
@@ -573,6 +612,7 @@ export function useLiveDirector(
     cues,
     currentCue,
     currentEventId: resolvedCurrentEventId,
+    cursorVersion,
     backlogCount,
     isCatchingUp,
     isPaused,
@@ -585,6 +625,7 @@ export function useLiveDirector(
     advance,
     seekToEventId,
     catchUpToLatest,
+    completeVoicePlayback,
   };
 }
 
@@ -791,6 +832,8 @@ function durationForCue(
   speed: LiveDirectorSpeed,
   isCatchingUp: boolean,
 ): number {
+  // Speed and catch-up compression apply only while the cue is using its
+  // visual/no-voice fallback clock. A completed TTS range sets the cue to 0.
   if (isCatchingUp && cue.compressible) {
     return MIN_DURATION_MS;
   }
@@ -1172,6 +1215,8 @@ const MIN_TEXT_DURATION_MS = 6000;
 const MAX_TEXT_DURATION_MS = 20000;
 
 function longTextDuration(text: string): number {
+  // This reading estimate is intentionally retained only for missing,
+  // disabled, or failed voice playback. TTS subtitles never use this clock.
   const cjkChars = Array.from(text).filter(isCjkSpeechChar).length;
   const words = text.match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*/g)?.length ?? 0;
   const chineseMs = (cjkChars / NORMAL_CHARS_PER_SECOND) * 1000;

@@ -707,7 +707,7 @@ export type PlaybackVoiceUtterance = {
   sample_rate: number;
   duration_ms: number | null;
   subtitle_timings: PlaybackVoiceSubtitleCue[];
-  chunks: PlaybackVoiceChunk[];
+  chunks?: PlaybackVoiceChunk[];
 };
 
 export type GamePlayback = {

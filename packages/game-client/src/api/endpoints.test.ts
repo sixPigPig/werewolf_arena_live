@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createGameRun } from "./createGameRun";
-import { getGamePlayback } from "./getGamePlayback";
+import { getGamePlayback, getGamePlaybackVoice } from "./getGamePlayback";
 import { listGames } from "./listGames";
 import { listPlayerProfiles } from "./listPlayerProfiles";
 import { previewGameLineup } from "./previewGameLineup";
@@ -202,6 +202,33 @@ describe("game API endpoints", () => {
     await expect(getGamePlayback("session-1")).resolves.toMatchObject({
       voices: [],
     });
+  });
+
+  it("loads one saved playback voice on demand", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        utterance_id: "voice/1",
+        source_event_id: 4,
+        last_source_event_id: 4,
+        speaker_kind: "player",
+        speaker_name: "阿青",
+        mime_type: "audio/L16",
+        audio_format: "pcm",
+        sample_rate: 24000,
+        duration_ms: 120,
+        subtitle_timings: [],
+        chunks: [{ chunk_index: 0, data: "YWJj" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      getGamePlaybackVoice("session-1", "voice/1"),
+    ).resolves.toMatchObject({ utterance_id: "voice/1" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/games/session-1/playback/voices/voice%2F1",
+      undefined,
+    );
   });
 
   it("bootstraps a guest session before loading God View playback", async () => {

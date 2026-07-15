@@ -74,6 +74,19 @@ export function LivePage() {
   });
   const voiceCurrentItem = voice.currentItem;
   const unlockVoiceAudio = voice.unlockAudio;
+  const completeVoicePlayback = director.completeVoicePlayback;
+  const completedTimelinePlayback = useMemo(
+    () =>
+      mapVoiceCompletionToTimeline(
+        events,
+        voice.lastCompletedPlayback,
+        gameId,
+      ),
+    [events, gameId, voice.lastCompletedPlayback],
+  );
+  useEffect(() => {
+    completeVoicePlayback(completedTimelinePlayback);
+  }, [completeVoicePlayback, completedTimelinePlayback]);
   useEffect(() => {
     if (!gameId || !voiceEnabled) {
       return;
@@ -308,4 +321,37 @@ function sourceEventIdForCurrentRun(
     return null;
   }
   return event.source_event_id ?? event.id;
+}
+
+function mapVoiceCompletionToTimeline(
+  events: LiveGameEvent[],
+  completion: {
+    id: string;
+    sourceEventId: number;
+    lastSourceEventId: number;
+  } | null,
+  currentRunId: string | undefined,
+) {
+  if (!completion || !currentRunId) {
+    return null;
+  }
+  const coveredTimelineIds = events
+    .filter((event) => {
+      const sourceRunId = event.source_run_id ?? event.run_id;
+      const sourceEventId = event.source_event_id ?? event.id;
+      return (
+        sourceRunId === currentRunId &&
+        sourceEventId >= completion.sourceEventId &&
+        sourceEventId <= completion.lastSourceEventId
+      );
+    })
+    .map((event) => event.id);
+  if (coveredTimelineIds.length === 0) {
+    return null;
+  }
+  return {
+    id: completion.id,
+    sourceEventId: Math.min(...coveredTimelineIds),
+    lastSourceEventId: Math.max(...coveredTimelineIds),
+  };
 }

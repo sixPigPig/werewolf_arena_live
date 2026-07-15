@@ -289,21 +289,15 @@ def add_virtual_profiles(
                     display_name=f"虚拟玩家{index}",
                     model="profile-model",
                     personality_id=(
-                        personalities[(index - 1) % len(personalities)]
-                        if diverse
-                        else "balanced"
+                        personalities[(index - 1) % len(personalities)] if diverse else "balanced"
                     ),
                     personality_text=f"稳健推进。\n常用表达: 表达{index if diverse else 1}",
                     strategy_profile=(
-                        strategies[(index - 1) % len(strategies)]
-                        if diverse
-                        else "balanced"
+                        strategies[(index - 1) % len(strategies)] if diverse else "balanced"
                     ),
                     catchphrases=[f"表达{index if diverse else 1}"],
                     appearance_id=(
-                        appearances[(index - 1) % len(appearances)]
-                        if diverse
-                        else "default"
+                        appearances[(index - 1) % len(appearances)] if diverse else "default"
                     ),
                     avatar_prompt="",
                     tags=[],
@@ -2159,8 +2153,7 @@ def test_create_game_run_returns_lineup_quality_warnings_for_homogeneous_profile
     assert problem["code"] == "lineup_quality_gate_failed"
     assert problem["lineup_quality_report"]["is_blocked"] is True
     assert "personality_overrepresented" in {
-        violation["code"]
-        for violation in problem["lineup_quality_report"]["violations"]
+        violation["code"] for violation in problem["lineup_quality_report"]["violations"]
     }
 
 
@@ -2344,12 +2337,12 @@ def test_create_game_run_resolves_profile_configs(
         "personality_id": "aggressive",
         "personality": expected_personality,
         "appearance_id": "crimson",
-            "avatar_prompt": "silver moon portrait",
-            "avatar_image_url": "/api/v1/player-profiles/avatar-assets/system-gothic-female-2",
-            "avatar_asset_id": "system-gothic-female-2",
-            "catchphrases": [],
-            "strategy_profile": "balanced",
-            "tags": ["压迫", "控场"],
+        "avatar_prompt": "silver moon portrait",
+        "avatar_image_url": "/api/v1/player-profiles/avatar-assets/system-gothic-female-2",
+        "avatar_asset_id": "system-gothic-female-2",
+        "catchphrases": [],
+        "strategy_profile": "balanced",
+        "tags": ["压迫", "控场"],
     }
     background_configs = captured[0]["player_configs"]
     assert len(background_configs) == 8
@@ -3593,9 +3586,7 @@ def test_public_run_events_redact_roles_and_private_night_actions() -> None:
         run.run_id,
         "game_started",
         payload={
-            "players": [
-                {"name": "阿青", "role": "secret-role", "observations": ["private-memory"]}
-            ]
+            "players": [{"name": "阿青", "role": "secret-role", "observations": ["private-memory"]}]
         },
     )
     registry.publish(
@@ -3634,22 +3625,16 @@ def test_god_view_events_require_session_and_keep_structured_roles() -> None:
         run.run_id,
         "game_started",
         payload={
-            "players": [
-                {"name": "阿青", "role": "secret-role", "observations": ["private-memory"]}
-            ]
+            "players": [{"name": "阿青", "role": "secret-role", "observations": ["private-memory"]}]
         },
     )
     registry.mark_completed(run.run_id, winner="狼人阵营")
     override_live_registry(registry)
 
     try:
-        unauthenticated = client.get(
-            f"/api/v1/games/runs/{run.run_id}/god-view/events"
-        )
+        unauthenticated = client.get(f"/api/v1/games/runs/{run.run_id}/god-view/events")
         app.dependency_overrides[games_routes.get_current_public_principal] = lambda: object()
-        authenticated = client.get(
-            f"/api/v1/games/runs/{run.run_id}/god-view/events"
-        )
+        authenticated = client.get(f"/api/v1/games/runs/{run.run_id}/god-view/events")
     finally:
         clear_overrides()
 
@@ -3742,9 +3727,10 @@ def test_session_timeline_events_fold_resume_runs() -> None:
         for line in response.text.splitlines()
         if line.startswith("data: ")
     ]
-    assert [
-        event["round"] for event in streamed_events if event["type"] == "round_started"
-    ] == [1, 2]
+    assert [event["round"] for event in streamed_events if event["type"] == "round_started"] == [
+        1,
+        2,
+    ]
     assert "event: game_failed" not in response.text
     assert "event: game_completed" in response.text
 
@@ -3927,8 +3913,7 @@ def test_get_game_playback_returns_complete_playback_events() -> None:
     assert all(event.get("action") != "summarize" for event in events)
     assert "SENTINEL_WOLF_PRIVATE_PLAN" not in response.text
     assert not any(
-        event["type"] == "action_requested" and event["action"] == "remove"
-        for event in events
+        event["type"] == "action_requested" and event["action"] == "remove" for event in events
     )
     assert any(
         event["type"] == "action_parsed"
@@ -3983,9 +3968,7 @@ def test_public_playback_redacts_roles_and_private_night_actions() -> None:
     override_replay_store()
 
     try:
-        god_view_response = client.get(
-            f"/api/v1/games/{session_id}/god-view/playback"
-        )
+        god_view_response = client.get(f"/api/v1/games/{session_id}/god-view/playback")
         response = client.get(f"/api/v1/games/{session_id}/playback")
     finally:
         clear_overrides()
@@ -4058,9 +4041,75 @@ def test_get_game_playback_returns_persisted_events_and_saved_voices() -> None:
             "sample_rate": 24000,
             "duration_ms": 123,
             "subtitle_timings": [],
-            "chunks": [{"chunk_index": 0, "data": "YWJj"}],
         }
     ]
+
+    voice_response = client.get(f"/api/v1/games/{session_id}/playback/voices/voice_api_1")
+    assert voice_response.status_code == 200
+    assert voice_response.json()["chunks"] == [{"chunk_index": 0, "data": "YWJj"}]
+
+
+def test_get_game_playback_voice_rejects_cross_session_and_requires_god_view_session() -> None:
+    session_id = "game_a110e011"
+    other_session_id = "game_a110e012"
+    store_game_session(session_id)
+    store_game_session(other_session_id)
+    registry = LiveRunRegistry(live_store=RecordingSessionLiveStore())
+    run = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    event = registry.publish(
+        run.run_id,
+        "model_response_delta",
+        actor="阿青",
+        action="debate",
+        payload={"request_id": "req-voice", "visible_text": "公开发言", "is_public": True},
+    )
+    with TestingSessionLocal() as session:
+        voice_store = DatabaseVoiceStore(session, session_id=session_id)
+        voice_store.upsert_utterance(
+            VoiceUtterance(
+                utterance_id="voice_scoped",
+                run_id=run.run_id,
+                source_event_id=event.id,
+                request_id="req-voice",
+                speaker_kind="player",
+                speaker_name="阿青",
+                speaker="player",
+                text="公开发言",
+                action="debate",
+            ),
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
+        voice_store.append_chunk("voice_scoped", chunk_index=0, audio=b"scoped")
+        voice_store.complete_utterance("voice_scoped", duration_ms=100)
+
+    assert (
+        client.get(f"/api/v1/games/{other_session_id}/playback/voices/voice_scoped").status_code
+        == 404
+    )
+    assert (
+        client.get(f"/api/v1/games/{session_id}/god-view/playback/voices/voice_scoped").status_code
+        == 401
+    )
+    app.dependency_overrides[games_routes.get_current_public_principal] = lambda: object()
+    try:
+        god_view_response = client.get(
+            f"/api/v1/games/{session_id}/god-view/playback/voices/voice_scoped"
+        )
+    finally:
+        app.dependency_overrides.pop(
+            games_routes.get_current_public_principal,
+            None,
+        )
+    assert god_view_response.status_code == 200
+    assert god_view_response.json()["chunks"] == [{"chunk_index": 0, "data": "c2NvcGVk"}]
 
 
 def test_historical_summary_event_and_voice_are_filtered_on_read() -> None:
@@ -4118,9 +4167,7 @@ def test_historical_summary_event_and_voice_are_filtered_on_read() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert all(event.get("action") != "summarize" for event in payload["events"])
-    assert any(
-        event["source_event_id"] == public_event.id for event in payload["events"]
-    )
+    assert any(event["source_event_id"] == public_event.id for event in payload["events"])
     assert payload["voices"] == []
     assert sentinel not in response.text
 
@@ -4366,8 +4413,7 @@ def test_get_game_god_view_playback_exposes_safe_wolf_votes_and_final_target() -
     assert response.status_code == 200
     events = response.json()["events"]
     assert not any(
-        event["type"] == "action_requested" and event["action"] == "remove"
-        for event in events
+        event["type"] == "action_requested" and event["action"] == "remove" for event in events
     )
     wolf_vote = next(
         event
@@ -4410,8 +4456,7 @@ def test_get_game_god_view_playback_exposes_safe_wolf_votes_and_final_target() -
     )
     assert witch_death["payload"]["target"] == "李四"
     assert not any(
-        event["type"] == "action_requested" and event["action"] == "witch_save"
-        for event in events
+        event["type"] == "action_requested" and event["action"] == "witch_save" for event in events
     )
     sheriff_cue = next(
         event

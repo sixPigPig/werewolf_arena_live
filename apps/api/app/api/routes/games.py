@@ -928,9 +928,7 @@ def preview_game_lineup(
             item.seat: clean_optional_string(item.profile_id)
             for item in request_body.player_configs
         }
-        resolved_profiles = {
-            config.seat: config.profile_id for config in player_configs
-        }
+        resolved_profiles = {config.seat: config.profile_id for config in player_configs}
         report = evaluate_lineup_quality(
             player_configs,
             player_count=player_count,
@@ -942,11 +940,7 @@ def preview_game_lineup(
             and all(requested_profiles.values())
             and locked_seats == set(requested_profiles)
         )
-        if (
-            policy.mode == "repair"
-            and report.is_blocked
-            and not is_locked_manual_lineup
-        ):
+        if policy.mode == "repair" and report.is_blocked and not is_locked_manual_lineup:
             raise public_problem(
                 request,
                 status_code=422,
@@ -1024,18 +1018,15 @@ def create_game_run(
             item.seat: clean_optional_string(item.profile_id)
             for item in request_body.player_configs
         }
-        resolved_profiles = {
-            config.seat: config.profile_id for config in player_configs
-        }
+        resolved_profiles = {config.seat: config.profile_id for config in player_configs}
         lineup_report = evaluate_lineup_quality(
             player_configs,
             player_count=compiled.rule_set.player_count,
             policy=policy,
             was_repaired=requested_profiles != resolved_profiles,
         )
-        manual_complete = (
-            len(requested_profiles) == compiled.rule_set.player_count
-            and all(requested_profiles.values())
+        manual_complete = len(requested_profiles) == compiled.rule_set.player_count and all(
+            requested_profiles.values()
         )
         override_allowed = (
             policy.mode == "repair"
@@ -1531,6 +1522,82 @@ def get_game_god_view_playback(
     )
 
 
+@router.get("/{session_id}/playback/voices/{utterance_id}")
+def get_game_playback_voice(
+    session_id: Annotated[str, Path(pattern=SESSION_ID_RE)],
+    utterance_id: Annotated[str, Path(min_length=1, max_length=128)],
+    store: Annotated[GameRecordStore, Depends(get_replay_store)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    return _get_game_playback_voice(
+        session_id,
+        utterance_id,
+        store=store,
+        db=db,
+        audience="player_public",
+    )
+
+
+@router.get("/{session_id}/god-view/playback/voices/{utterance_id}")
+def get_game_god_view_playback_voice(
+    session_id: Annotated[str, Path(pattern=SESSION_ID_RE)],
+    utterance_id: Annotated[str, Path(min_length=1, max_length=128)],
+    store: Annotated[GameRecordStore, Depends(get_replay_store)],
+    db: Annotated[Session, Depends(get_db)],
+    _principal: Annotated[PublicPrincipal, Depends(get_current_public_principal)],
+) -> dict:
+    return _get_game_playback_voice(
+        session_id,
+        utterance_id,
+        store=store,
+        db=db,
+        audience="spectator_god_view",
+    )
+
+
+def _get_game_playback_voice(
+    session_id: str,
+    utterance_id: str,
+    *,
+    store: GameRecordStore,
+    db: Session,
+    audience: ProjectionAudience,
+) -> dict:
+    playback = _get_game_playback(
+        session_id,
+        store=store,
+        db=db,
+        audience=audience,
+    )
+    allowed_voice = next(
+        (
+            voice
+            for voice in playback.get("voices", [])
+            if voice.get("utterance_id") == utterance_id
+        ),
+        None,
+    )
+    if not isinstance(allowed_voice, dict):
+        raise HTTPException(status_code=404, detail="Playback voice not found")
+    inline_chunks = allowed_voice.get("chunks")
+    if isinstance(inline_chunks, list) and inline_chunks:
+        return allowed_voice
+
+    try:
+        stored_voice = DatabaseVoiceStore(
+            db,
+            session_id=session_id,
+        ).load_playback_voice(
+            utterance_id,
+            excluded_actions=frozenset({PRIVATE_ROUND_MEMORY_ACTION}),
+        )
+    except RecoverableDatabaseError:
+        stored_voice = None
+    if stored_voice is None:
+        raise HTTPException(status_code=404, detail="Playback voice not found")
+    return {**allowed_voice, "chunks": stored_voice["chunks"]}
+
+
 def _get_game_playback(
     session_id: str,
     *,
@@ -1562,7 +1629,8 @@ def _get_game_playback(
                 session_id=session_id,
             )
             saved_voices = voice_store.list_playback_voices(
-                excluded_actions=frozenset({PRIVATE_ROUND_MEMORY_ACTION})
+                excluded_actions=frozenset({PRIVATE_ROUND_MEMORY_ACTION}),
+                include_chunks=False,
             )
             materialization_lag_ms = voice_store.max_materialization_lag_ms()
             saved_voices = _map_playback_voices_to_timeline(
@@ -1582,14 +1650,10 @@ def _get_game_playback(
             audience=audience,
         )
     public_event_ids = {
-        event.get("id")
-        for event in playback["events"]
-        if isinstance(event.get("id"), int)
+        event.get("id") for event in playback["events"] if isinstance(event.get("id"), int)
     }
     saved_voices = [
-        voice
-        for voice in saved_voices
-        if voice.get("source_event_id") in public_event_ids
+        voice for voice in saved_voices if voice.get("source_event_id") in public_event_ids
     ]
 
     static_judge_voices = build_static_judge_playback_voices(
@@ -1636,8 +1700,7 @@ def _map_playback_voices_to_timeline(
             candidates = [
                 timeline_id
                 for (source_run_id, source_event_id), timeline_id in source_to_timeline.items()
-                if source_run_id == run_id
-                and first_source_id <= source_event_id <= last_source_id
+                if source_run_id == run_id and first_source_id <= source_event_id <= last_source_id
             ]
             last_timeline_id = max(candidates, default=first_timeline_id)
         mapped.append(

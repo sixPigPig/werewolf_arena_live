@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -103,9 +104,7 @@ class DatabaseVoiceStore:
         existing = self.db.get(VoiceAudioChunkRecord, (utterance_id, chunk_index))
         if existing is not None:
             if bytes(existing.audio) != audio:
-                raise ValueError(
-                    f"Voice chunk {utterance_id}:{chunk_index} has incompatible audio"
-                )
+                raise ValueError(f"Voice chunk {utterance_id}:{chunk_index} has incompatible audio")
             return
         self.db.add(
             VoiceAudioChunkRecord(
@@ -217,11 +216,81 @@ class DatabaseVoiceStore:
         )
         return [row.audio for row in rows]
 
+    def load_playback_voice(
+        self,
+        utterance_id: str,
+        *,
+        excluded_actions: frozenset[str] = frozenset(),
+    ) -> dict[str, Any] | None:
+        record = (
+            self.db.query(VoiceUtteranceRecord)
+            .filter(
+                VoiceUtteranceRecord.utterance_id == utterance_id,
+                VoiceUtteranceRecord.session_id == self.session_id,
+                VoiceUtteranceRecord.status == "complete",
+                VoiceUtteranceRecord.speaker_kind.in_(("player", "judge")),
+                VoiceUtteranceRecord.sample_rate > 0,
+            )
+            .first()
+        )
+        if record is None or record.action in excluded_actions:
+            return None
+        chunks = (
+            self.db.query(VoiceAudioChunkRecord)
+            .filter(VoiceAudioChunkRecord.utterance_id == utterance_id)
+            .order_by(VoiceAudioChunkRecord.chunk_index.asc())
+            .all()
+        )
+        if not chunks:
+            return None
+        return _playback_voice_from_record(record, chunks=chunks)
+
     def list_playback_voices(
         self,
         *,
         excluded_actions: frozenset[str] = frozenset(),
+        include_chunks: bool = True,
     ) -> list[dict[str, Any]]:
+        if not include_chunks:
+            audio_lengths = (
+                self.db.query(
+                    VoiceAudioChunkRecord.utterance_id.label("utterance_id"),
+                    func.sum(VoiceAudioChunkRecord.byte_length).label("audio_byte_length"),
+                )
+                .group_by(VoiceAudioChunkRecord.utterance_id)
+                .subquery()
+            )
+            rows = (
+                self.db.query(
+                    VoiceUtteranceRecord,
+                    audio_lengths.c.audio_byte_length,
+                )
+                .join(
+                    audio_lengths,
+                    audio_lengths.c.utterance_id == VoiceUtteranceRecord.utterance_id,
+                )
+                .filter(
+                    VoiceUtteranceRecord.session_id == self.session_id,
+                    VoiceUtteranceRecord.status == "complete",
+                    VoiceUtteranceRecord.speaker_kind.in_(("player", "judge")),
+                    VoiceUtteranceRecord.sample_rate > 0,
+                )
+                .order_by(
+                    VoiceUtteranceRecord.source_event_id.asc(),
+                    VoiceUtteranceRecord.utterance_id.asc(),
+                )
+                .all()
+            )
+            return [
+                _playback_voice_from_record(
+                    utterance,
+                    audio_byte_length=int(audio_byte_length or 0),
+                    include_chunks=False,
+                )
+                for utterance, audio_byte_length in rows
+                if utterance.action not in excluded_actions
+            ]
+
         rows = (
             self.db.query(VoiceUtteranceRecord, VoiceAudioChunkRecord)
             .join(
@@ -391,6 +460,49 @@ def _utterance_record_to_dict(record: VoiceUtteranceRecord) -> dict[str, Any]:
         "updated_at": record.updated_at,
         "completed_at": record.completed_at,
     }
+
+
+def _playback_voice_from_record(
+    record: VoiceUtteranceRecord,
+    *,
+    chunks: list[VoiceAudioChunkRecord] | None = None,
+    audio_byte_length: int | None = None,
+    include_chunks: bool = True,
+) -> dict[str, Any]:
+    resolved_chunks = chunks or []
+    resolved_audio_byte_length = (
+        audio_byte_length
+        if audio_byte_length is not None
+        else sum(chunk.byte_length for chunk in resolved_chunks)
+    )
+    voice = {
+        "utterance_id": record.utterance_id,
+        "run_id": record.run_id,
+        "source_event_id": record.source_event_id,
+        "last_source_event_id": record.last_source_event_id,
+        "speaker_kind": record.speaker_kind,
+        "speaker_name": record.speaker_name,
+        "mime_type": record.mime_type,
+        "audio_format": record.audio_format,
+        "sample_rate": record.sample_rate,
+        "duration_ms": record.duration_ms,
+        "subtitle_timings": _playback_subtitle_timings(
+            subtitle_timings=record.subtitle_timings or [],
+            text=record.text,
+            audio_format=record.audio_format,
+            sample_rate=record.sample_rate,
+            audio_byte_length=resolved_audio_byte_length,
+        ),
+    }
+    if include_chunks:
+        voice["chunks"] = [
+            {
+                "chunk_index": chunk.chunk_index,
+                "data": base64.b64encode(chunk.audio).decode("ascii"),
+            }
+            for chunk in resolved_chunks
+        ]
+    return voice
 
 
 def _last_source_event_id(utterance: VoiceUtterance) -> int:
