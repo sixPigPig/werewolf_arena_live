@@ -196,6 +196,7 @@ class WerewolfConsensusProvider(ScriptedChineseProvider):
         self.shoot_choice = shoot_choice
         self.vote_calls = 0
         self.actions: list[tuple[str, str, str]] = []
+        self.vote_prompts: list[str] = []
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         name = _extract_actor_name(prompt)
@@ -212,6 +213,7 @@ class WerewolfConsensusProvider(ScriptedChineseProvider):
                 ensure_ascii=False,
             )
         if '"target"' in prompt:
+            self.vote_prompts.append(prompt)
             wolves_in_round = max(1, len(self.vote_rounds[0]))
             round_index = min(self.vote_calls // wolves_in_round, len(self.vote_rounds) - 1)
             target = self.vote_rounds[round_index][name]
@@ -6061,8 +6063,8 @@ def test_werewolf_consensus_first_vote_sets_attacked() -> None:
             "result": target,
         }
     ]
-    assert len(round_state.werewolf_discussion) == len(wolves)
-    assert len(round_log.werewolf_discussion) == len(wolves)
+    assert round_state.werewolf_discussion == []
+    assert round_log.werewolf_discussion == []
     assert len(round_log.werewolf_votes) == 1
     assert [log.actor for log in round_log.werewolf_votes[0]] == wolves
     assert round_log.eliminate is round_log.werewolf_votes[0][0]
@@ -6109,8 +6111,14 @@ def test_werewolf_consensus_revotes_until_unanimous() -> None:
     assert round_state.werewolf_vote_rounds[0]["result"] is None
     assert round_state.werewolf_vote_rounds[1]["unanimous"] is True
     assert round_state.werewolf_vote_rounds[1]["result"] == final_target
-    assert round_state.werewolf_vote_rounds[1]["candidates"] == [first_target, second_target]
+    assert round_state.werewolf_vote_rounds[1]["candidates"] == non_wolves
     assert len(round_log.werewolf_votes) == 2
+    second_round_prompts = provider.vote_prompts[len(wolves) :]
+    assert len(second_round_prompts) == len(wolves)
+    assert all("第1轮匿名刀口" in prompt for prompt in second_round_prompts)
+    assert all("2票" in prompt for prompt in second_round_prompts)
+    assert all(" -> " not in prompt for prompt in second_round_prompts)
+    assert not any(action == "werewolf_discuss" for action, _actor, _target in provider.actions)
 
 
 def test_werewolf_consensus_can_converge_on_third_vote() -> None:
@@ -6156,7 +6164,142 @@ def test_werewolf_consensus_can_converge_on_third_vote() -> None:
     assert round_state.werewolf_vote_rounds[2]["unanimous"] is True
 
 
-def test_werewolf_consensus_errors_when_vote_round_limit_is_exceeded(
+def test_werewolf_consensus_uses_unique_highest_vote_after_final_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_wolf_consensus_majority",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=509,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    non_wolves = [player.name for player in state.players if player.role != "狼人"]
+    majority_target = non_wolves[0]
+    minority_target = non_wolves[1]
+    votes = {
+        wolf: majority_target if index < 3 else minority_target
+        for index, wolf in enumerate(wolves)
+    }
+    provider = WerewolfConsensusProvider(vote_rounds=[votes])
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    monkeypatch.setattr("app.werewolf.engine.MAX_WEREWOLF_KILL_VOTE_ROUNDS", 1)
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    attacked = engine._run_werewolf_kill_consensus(
+        round_state,
+        round_log,
+        active_players,
+        wolves,
+        non_wolves,
+    )
+
+    assert attacked == majority_target
+    assert round_state.werewolf_vote_rounds[0]["unanimous"] is False
+    assert round_state.werewolf_vote_rounds[0]["result"] == majority_target
+    assert round_log.eliminate is not None
+    assert round_log.eliminate.choice == majority_target
+
+
+def test_werewolf_consensus_ignores_timed_out_wolf_and_uses_completed_majority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OneWolfOfflineProvider(ScriptedChineseProvider):
+        def __init__(self, offline_wolf: str, target: str) -> None:
+            self.offline_wolf = offline_wolf
+            self.target = target
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def complete_json(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            temperature: float,
+            call_options: object | None = None,
+        ) -> str:
+            del model, temperature, call_options
+            actor = _extract_actor_name(prompt)
+            if actor == self.offline_wolf:
+                self.started.set()
+                self.release.wait(timeout=1.0)
+            return json.dumps(
+                {"reasoning": "选择当前多数刀口。", "target": self.target},
+                ensure_ascii=False,
+            )
+
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_wolf_consensus_offline",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=510,
+        rule_set=rule_set,
+    )
+    wolves = [player.name for player in state.players if player.role == "狼人"]
+    non_wolves = [player.name for player in state.players if player.role != "狼人"]
+    target = non_wolves[0]
+    provider = OneWolfOfflineProvider(wolves[-1], target)
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    monkeypatch.setattr(
+        "app.werewolf.engine.WEREWOLF_KILL_DECISION_TIMEOUT_SECONDS",
+        0.05,
+    )
+    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+
+    attacked = engine._run_werewolf_kill_consensus(
+        round_state,
+        round_log,
+        active_players,
+        wolves,
+        non_wolves,
+    )
+
+    assert provider.started.is_set()
+    assert attacked == target
+    assert round_state.werewolf_vote_rounds[0]["tally"] == {target: 3}
+    assert round_state.werewolf_vote_rounds[0]["unanimous"] is False
+    assert len(round_log.werewolf_votes[0]) == 3
+    provider.release.set()
+
+
+def test_werewolf_vote_round_context_is_anonymous() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_wolf_consensus_anonymous_context",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=511,
+        rule_set=rule_set,
+    )
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+    )
+
+    context = engine._werewolf_vote_round_context(
+        {
+            "round": 1,
+            "votes": {"1号玩家": "3号玩家", "2号玩家": "4号玩家"},
+            "tally": {"3号玩家": 1, "4号玩家": 1},
+        }
+    )
+
+    assert context == "第1轮匿名刀口：3号玩家：1票；4号玩家：1票。"
+    assert "1号玩家 ->" not in context
+    assert "2号玩家 ->" not in context
+
+
+def test_werewolf_consensus_tied_highest_vote_results_in_no_kill(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rule_set = get_rule_set("classic_8")
@@ -6182,8 +6325,16 @@ def test_werewolf_consensus_errors_when_vote_round_limit_is_exceeded(
     monkeypatch.setattr("app.werewolf.engine.MAX_WEREWOLF_KILL_VOTE_ROUNDS", 2)
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
-    with pytest.raises(RuntimeError, match="狼人夜晚投票未能达成一致"):
-        engine._run_night_phase(round_state, round_log, active_players)
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+
+    assert pending_deaths is None
+    assert round_state.attacked is None
+    assert round_state.werewolf_vote_rounds[-1]["tally"] == {
+        non_wolves[0]: 1,
+        non_wolves[1]: 1,
+    }
+    assert round_state.werewolf_vote_rounds[-1]["result"] is None
+    assert round_log.eliminate is None
 
 
 def test_guard_protects_consensus_werewolf_attack() -> None:
@@ -6667,7 +6818,7 @@ def test_werewolf_consensus_live_events_publish_only_safe_vote_results() -> None
     assert "message" not in str(safe_wolf_events)
     assert "reasoning" not in str(safe_wolf_events)
     assert "raw_response" not in str(safe_wolf_events)
-    assert [log.actor for log in round_log.werewolf_discussion] == wolves
+    assert round_log.werewolf_discussion == []
     assert len(round_log.werewolf_votes) == 1
     assert [log.actor for log in round_log.werewolf_votes[0]] == wolves
 

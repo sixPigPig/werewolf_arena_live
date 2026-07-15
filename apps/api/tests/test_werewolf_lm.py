@@ -134,7 +134,7 @@ def test_build_prompt_supports_werewolf_kill_vote_action() -> None:
         {
             **_world_state_for_special_action("狼人", "Alice、Bob"),
             "werewolf_discussion": ["Wolf A 建议袭击 Alice。"],
-            "werewolf_previous_vote_round": "第1轮票型：Wolf A -> Alice；Wolf B -> Bob。",
+            "werewolf_previous_vote_round": "第1轮匿名刀口：Alice：1票；Bob：1票。",
             "werewolf_kill_vote_round": 2,
         },
     )
@@ -142,6 +142,10 @@ def test_build_prompt_supports_werewolf_kill_vote_action() -> None:
     assert schema["required"] == ["reasoning", "target"]
     assert "狼人夜晚狼刀投票" in prompt
     assert "当前是第 2 轮狼刀投票" in prompt
+    assert "总倒计时为 90 秒" in prompt
+    assert "匿名刀口" in prompt
+    assert "不会显示具体是哪名狼人" in prompt
+    assert "Wolf A ->" not in prompt
     assert "输出字段 reasoning 和 target" in prompt
 
 

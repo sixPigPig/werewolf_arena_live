@@ -128,6 +128,8 @@ from app.werewolf.rules import (
 
 
 MAX_WEREWOLF_KILL_VOTE_ROUNDS = 8
+WEREWOLF_KILL_DECISION_TIMEOUT_SECONDS = 90.0
+WEREWOLF_KILL_VOTE_ROUND_TIMEOUT_SECONDS = 15.0
 EventVisibility = Literal["public", "private"]
 HARD_ACTION_QUALITY_CODES = frozenset(
     {
@@ -746,21 +748,12 @@ class GameEngine:
         players_by_name = self.state.player_by_name()
         candidates = non_wolves.copy()
         previous_vote_round: dict[str, object] | None = None
+        current_votes: dict[str, str] = {}
+        latest_vote_logs: dict[str, ActionLog] = {}
+        decision_deadline = self.monotonic() + WEREWOLF_KILL_DECISION_TIMEOUT_SECONDS
 
         for vote_round in range(1, MAX_WEREWOLF_KILL_VOTE_ROUNDS + 1):
-            if len(active_wolves) > 1:
-                self._run_werewolf_discussion_round(
-                    round_state=round_state,
-                    round_log=round_log,
-                    active_wolves=active_wolves,
-                    candidates=candidates,
-                    vote_round=vote_round,
-                    previous_vote_round=previous_vote_round,
-                )
-
-            votes: dict[str, str] = {}
             vote_logs: list[ActionLog] = []
-            discussion_context = self._werewolf_discussion_context(round_state)
             previous_vote_context = self._werewolf_vote_round_context(previous_vote_round)
             vote_requests = [
                 self._build_player_action_request(
@@ -771,25 +764,34 @@ class GameEngine:
                     round_state=round_state,
                     phase="night",
                     extra_world_state={
-                        "werewolf_discussion": discussion_context,
                         "werewolf_previous_vote_round": previous_vote_context,
                         "werewolf_kill_vote_round": vote_round,
                     },
                 )
                 for wolf_name in active_wolves
             ]
-            for wolf_name, (target, action_log) in zip(
-                active_wolves,
-                self._player_actions_batch(vote_requests),
-                strict=True,
-            ):
-                votes[wolf_name] = str(target)
+            round_deadline = min(
+                decision_deadline,
+                self.monotonic() + WEREWOLF_KILL_VOTE_ROUND_TIMEOUT_SECONDS,
+            )
+            vote_results = self._run_werewolf_vote_round(
+                vote_requests,
+                deadline_at_monotonic=round_deadline,
+            )
+            for wolf_name, target, action_log in vote_results:
+                current_votes[wolf_name] = target
+                latest_vote_logs[wolf_name] = action_log
                 vote_logs.append(action_log)
 
             round_log.werewolf_votes.append(vote_logs)
-            vote_record = self._record_werewolf_vote_round(vote_round, candidates, votes)
+            vote_record = self._record_werewolf_vote_round(
+                vote_round,
+                candidates,
+                current_votes,
+                expected_voters=len(active_wolves),
+            )
             round_state.werewolf_vote_rounds.append(vote_record)
-            for wolf_name, target in votes.items():
+            for wolf_name, target, _action_log in vote_results:
                 public_target = self._public_player_reference(target)
                 public_result = {"target": public_target}
                 self._publish(
@@ -807,87 +809,152 @@ class GameEngine:
                 )
             previous_vote_round = vote_record
             if vote_record["unanimous"]:
-                round_log.eliminate = vote_logs[0] if vote_logs else None
                 final_target = str(vote_record["result"])
-                public_target = self._public_player_reference(final_target)
-                public_result = {"target": public_target}
-                self._publish(
-                    "action_parsed",
-                    round_number=round_state.number,
-                    phase="night",
-                    actor=None,
-                    action=ACTION_REMOVE,
-                    payload={
-                        "choice": public_target,
-                        "result": public_result,
-                        "visible_result": public_result,
-                        "vote_round": vote_round,
-                        "final_target": True,
-                    },
+                round_log.eliminate = next(
+                    (
+                        latest_vote_logs[wolf_name]
+                        for wolf_name in active_wolves
+                        if current_votes.get(wolf_name) == final_target
+                        and wolf_name in latest_vote_logs
+                    ),
+                    None,
                 )
-                self._publish_night_judge_cue(
-                    round_state,
-                    "werewolves_sleep",
-                    "狼人请闭眼。",
+                self._publish_final_werewolf_target(
+                    round_state=round_state,
+                    target=final_target,
+                    vote_round=vote_round,
                 )
                 return final_target
 
-            candidates = list(dict.fromkeys(votes.values()))
+            if self.monotonic() >= decision_deadline:
+                break
 
-        raise RuntimeError("狼人夜晚投票未能达成一致")
+        final_target = self._werewolf_majority_target(current_votes)
+        if final_target is not None and round_state.werewolf_vote_rounds:
+            round_state.werewolf_vote_rounds[-1]["result"] = final_target
+            round_log.eliminate = next(
+                (
+                    latest_vote_logs[wolf_name]
+                    for wolf_name in active_wolves
+                    if current_votes.get(wolf_name) == final_target
+                    and wolf_name in latest_vote_logs
+                ),
+                None,
+            )
+            self._publish_final_werewolf_target(
+                round_state=round_state,
+                target=final_target,
+                vote_round=len(round_state.werewolf_vote_rounds),
+            )
+            return final_target
 
-    def _run_werewolf_discussion_round(
+        self._publish_night_judge_cue(
+            round_state,
+            "werewolves_sleep",
+            "狼人请闭眼。",
+        )
+        return None
+
+    def _run_werewolf_vote_round(
+        self,
+        requests: list[PlayerActionRequest],
+        *,
+        deadline_at_monotonic: float,
+    ) -> list[tuple[str, str, ActionLog]]:
+        if not requests:
+            return []
+
+        condition = threading.Condition()
+        next_index = {"value": 0}
+        executor = ThreadPoolExecutor(max_workers=len(requests))
+        futures = {
+            executor.submit(
+                self._execute_player_action_request,
+                request,
+                _OrderedBatchProvider(
+                    provider=self.provider,
+                    index=index,
+                    condition=condition,
+                    next_index=next_index,
+                ),
+                NullEventSink(),
+                deadline_at_monotonic=deadline_at_monotonic,
+                timeout_fallback=False,
+            ): index
+            for index, request in enumerate(requests)
+        }
+        wait_seconds = max(0.0, deadline_at_monotonic - self.monotonic())
+        done, pending = wait(futures, timeout=wait_seconds)
+        results: list[PlayerActionResult | None] = [None] * len(requests)
+        failures: set[int] = set()
+        for future in done:
+            index = futures[future]
+            try:
+                results[index] = future.result()
+            except Exception:
+                failures.add(index)
+        for future in pending:
+            future.cancel()
+            failures.add(futures[future])
+        executor.shutdown(wait=not pending, cancel_futures=bool(pending))
+
+        completed: list[tuple[str, str, ActionLog]] = []
+        for index, request in enumerate(requests):
+            if index in failures:
+                continue
+            result = results[index]
+            if result is None:
+                continue
+            try:
+                target, action_log = self._finalize_player_action_result(result)
+            except Exception:
+                continue
+            if isinstance(target, str) and target in request.options:
+                completed.append((request.player.name, target, action_log))
+        return completed
+
+    def _publish_final_werewolf_target(
         self,
         *,
         round_state: RoundState,
-        round_log: RoundLog,
-        active_wolves: list[str],
-        candidates: list[str],
+        target: str,
         vote_round: int,
-        previous_vote_round: dict[str, object] | None,
     ) -> None:
-        players_by_name = self.state.player_by_name()
-        previous_vote_context = self._werewolf_vote_round_context(previous_vote_round)
-        for wolf_name in active_wolves:
-            discussion_context = self._werewolf_discussion_context(round_state)
-            wolf = players_by_name[wolf_name]
-            target, action_log = self._player_action(
-                player=wolf,
-                action=ACTION_WEREWOLF_DISCUSS,
-                options=candidates,
-                result_key="target",
-                round_state=round_state,
-                phase="night",
-                extra_world_state={
-                    "werewolf_discussion": discussion_context,
-                    "werewolf_previous_vote_round": previous_vote_context,
-                    "werewolf_kill_vote_round": vote_round,
-                },
-            )
-            message = ""
-            if action_log.lm_log.result:
-                message = str(action_log.lm_log.result.get("message") or "")
-            round_state.werewolf_discussion.append(
-                {
-                    "round": vote_round,
-                    "speaker": wolf.name,
-                    "target": str(target),
-                    "message": message,
-                }
-            )
-            round_log.werewolf_discussion.append(action_log)
+        public_target = self._public_player_reference(target)
+        public_result = {"target": public_target}
+        self._publish(
+            "action_parsed",
+            round_number=round_state.number,
+            phase="night",
+            actor=None,
+            action=ACTION_REMOVE,
+            payload={
+                "choice": public_target,
+                "result": public_result,
+                "visible_result": public_result,
+                "vote_round": vote_round,
+                "final_target": True,
+            },
+        )
+        self._publish_night_judge_cue(
+            round_state,
+            "werewolves_sleep",
+            "狼人请闭眼。",
+        )
 
     def _record_werewolf_vote_round(
         self,
         vote_round: int,
         candidates: list[str],
         votes: dict[str, str],
+        *,
+        expected_voters: int,
     ) -> dict[str, object]:
         tally: dict[str, int] = {}
         for target in votes.values():
             tally[target] = tally.get(target, 0) + 1
         voted_targets = list(dict.fromkeys(votes.values()))
-        unanimous = len(voted_targets) == 1
+        unanimous = len(votes) == expected_voters and len(voted_targets) == 1
         return {
             "round": vote_round,
             "candidates": candidates.copy(),
@@ -897,26 +964,25 @@ class GameEngine:
             "result": voted_targets[0] if unanimous else None,
         }
 
-    def _werewolf_discussion_context(self, round_state: RoundState) -> list[str]:
-        return [
-            (
-                f"第{entry.get('round')}轮沟通，{entry.get('speaker')}建议"
-                f"{entry.get('target')}：{entry.get('message')}"
-            )
-            for entry in round_state.werewolf_discussion
-        ]
-
     def _werewolf_vote_round_context(
         self,
         vote_round: dict[str, object] | None,
     ) -> str:
         if not vote_round:
             return "暂无。"
-        votes = vote_round.get("votes")
-        if not isinstance(votes, dict):
+        tally = vote_round.get("tally")
+        if not isinstance(tally, dict) or not tally:
             return "暂无。"
-        vote_text = "；".join(f"{wolf} -> {target}" for wolf, target in votes.items())
-        return f"第{vote_round.get('round')}轮票型：{vote_text}。"
+        vote_text = "；".join(f"{target}：{count}票" for target, count in tally.items())
+        return f"第{vote_round.get('round')}轮匿名刀口：{vote_text}。"
+
+    def _werewolf_majority_target(self, votes: dict[str, str]) -> str | None:
+        tally = Counter(votes.values())
+        if not tally:
+            return None
+        highest_count = max(tally.values())
+        leaders = [target for target, count in tally.items() if count == highest_count]
+        return leaders[0] if len(leaders) == 1 else None
 
     def _run_witch_phase(
         self,
@@ -3050,6 +3116,8 @@ class GameEngine:
         request: PlayerActionRequest,
         provider: ModelProvider | None = None,
         event_sink: object | None = None,
+        deadline_at_monotonic: float | None = None,
+        timeout_fallback: bool = True,
     ) -> PlayerActionResult:
         self._require_non_terminal_player_action()
         action_provider = provider or self.provider
@@ -3061,6 +3129,35 @@ class GameEngine:
             if self.action_budgets_enabled
             else None
         )
+        if deadline_at_monotonic is not None:
+            remaining_seconds = max(0.0, deadline_at_monotonic - started_at)
+            if remaining_seconds <= 0:
+                if not timeout_fallback:
+                    raise ModelDeadlineExceeded("model action deadline exceeded")
+                return self._timeout_fallback_result(
+                    request,
+                    started_at=started_at,
+                    budget_ms=0,
+                )
+            if call_options is None:
+                call_options = ModelCallOptions(
+                    deadline_at_monotonic=deadline_at_monotonic,
+                    request_timeout_seconds=remaining_seconds,
+                )
+            else:
+                effective_deadline = min(
+                    call_options.deadline_at_monotonic,
+                    deadline_at_monotonic,
+                )
+                effective_remaining = max(0.0, effective_deadline - started_at)
+                call_options = replace(
+                    call_options,
+                    deadline_at_monotonic=effective_deadline,
+                    request_timeout_seconds=min(
+                        call_options.request_timeout_seconds,
+                        effective_remaining,
+                    ),
+                )
         try:
             if self._should_buffer_quality_action(request):
                 value, lm_log = self._generate_buffered_quality_action(
@@ -3081,6 +3178,8 @@ class GameEngine:
                     call_options=call_options,
                 )
         except ModelDeadlineExceeded:
+            if not timeout_fallback:
+                raise
             return self._timeout_fallback_result(
                 request,
                 started_at=started_at,

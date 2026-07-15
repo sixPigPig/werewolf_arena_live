@@ -590,18 +590,27 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "输出字段 reasoning、target 和 message。"
         )
     if action == "werewolf_kill_vote":
-        discussion = world_state.get("werewolf_discussion") or []
         previous_vote = world_state.get("werewolf_previous_vote_round") or "暂无。"
         vote_round = int(world_state.get("werewolf_kill_vote_round") or 1)
-        discussion_text = "\n".join(f"- {line}" for line in discussion) if discussion else "暂无。"
+        round_guidance = (
+            "这是首轮选择，所有存活狼人会同时、独立提交刀口；你看不到其他狼人本轮正在选择什么。"
+            if vote_round == 1
+            else (
+                "你可以保留或修改自己的刀口。上一轮只展示各目标的匿名票数，"
+                "不会显示具体是哪名狼人先选或投给了谁。"
+            )
+        )
         return (
             "行动：狼人夜晚狼刀投票。\n"
             f"当前是第 {vote_round} 轮狼刀投票。\n"
+            "本次狼刀总倒计时为 90 秒。\n"
             f"候选人：{options}。\n"
-            f"狼人沟通记录：\n{discussion_text}\n"
-            f"上一轮票型：{previous_vote}\n"
-            "你必须从候选人中选择一名袭击目标。狼刀只有在所有存活狼人投向同一目标时才成立。"
-            "请尽量与队友形成一致刀口。输出字段 reasoning 和 target。"
+            f"当前匿名刀口：{previous_vote}\n"
+            f"{round_guidance}\n"
+            "你必须从候选人中选择一名袭击目标。所有存活狼人刀口一致时会立即执行；"
+            "倒计时结束时执行唯一最高票目标，最高票平票则本夜空刀。"
+            "结合匿名票数独立判断，不要因为某个目标已有票就机械跟票。"
+            "输出字段 reasoning 和 target。"
         )
     if action == "remove":
         return (
