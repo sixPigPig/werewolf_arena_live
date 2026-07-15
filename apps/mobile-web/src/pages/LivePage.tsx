@@ -286,7 +286,8 @@ function isVoicePlaybackBlocking(
     return false;
   }
 
-  const playbackEventId = currentItem.lastSourceEventId ?? currentItem.sourceEventId;
+  // Hold the speech cue from playback start, not after every coalesced delta.
+  const playbackEventId = currentItem.sourceEventId;
   if (playbackEventId > currentEventId) {
     return false;
   }

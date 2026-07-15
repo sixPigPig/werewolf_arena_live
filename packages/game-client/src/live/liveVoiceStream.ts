@@ -810,8 +810,10 @@ export function useLiveVoiceStream(
   }, [ensurePcmScheduler]);
   const isConsumableItem = (item: LiveVoiceQueueItem) =>
     !consumedUtteranceIdsRef.current.has(item.utteranceId);
+  // A coalesced speech may span many delta events. Start at its first event;
+  // lastSourceEventId remains the durable replay/deduplication range boundary.
   const hasReachedSourceEvent = (item: LiveVoiceQueueItem) =>
-    currentEventId !== null && currentEventId >= item.lastSourceEventId;
+    currentEventId !== null && currentEventId >= item.sourceEventId;
   const isActivePlaybackItem = (item: LiveVoiceQueueItem) =>
     isConsumableItem(item) && hasReachedSourceEvent(item);
   const currentItem =

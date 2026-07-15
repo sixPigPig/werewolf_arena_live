@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -151,6 +151,70 @@ const backlogSpeakingDeltaEvent: LiveGameEvent = {
     visible_text: "我先听后置位发言。",
   },
 };
+
+const coalescedSpeechEvents: LiveGameEvent[] = [
+  gameStartedEvent,
+  {
+    ...gameStartedEvent,
+    id: 91,
+    type: "action_requested",
+    actor: "阿青",
+    action: "sheriff_speech",
+    payload: { options: [], result_key: "say" },
+  },
+  {
+    ...gameStartedEvent,
+    id: 92,
+    type: "model_request_started",
+    actor: "阿青",
+    action: "sheriff_speech",
+    payload: { request_id: "req-coalesced" },
+  },
+  {
+    ...gameStartedEvent,
+    id: 93,
+    type: "model_response_delta",
+    actor: "阿青",
+    action: "sheriff_speech",
+    payload: { request_id: "req-coalesced", visible_text: "我是1号玩家。" },
+  },
+  {
+    ...gameStartedEvent,
+    id: 129,
+    type: "model_response_delta",
+    actor: "阿青",
+    action: "sheriff_speech",
+    payload: {
+      request_id: "req-coalesced",
+      visible_text:
+        "这是一段足够长的竞选发言，用来覆盖导演的最长文字展示时间，但语音应当在第一段内容到达舞台时立即开始。",
+    },
+  },
+  {
+    ...gameStartedEvent,
+    id: 130,
+    type: "model_response_received",
+    actor: "阿青",
+    action: "sheriff_speech",
+    payload: { request_id: "req-coalesced", message: "模型返回已接收" },
+  },
+  {
+    ...gameStartedEvent,
+    id: 131,
+    type: "action_parsed",
+    actor: "阿青",
+    action: "sheriff_speech",
+    payload: {
+      request_id: "req-coalesced",
+      choice:
+        "我是1号玩家。这是一段足够长的竞选发言，用来覆盖导演的最长文字展示时间，但语音应当在第一段内容到达舞台时立即开始。",
+      visible_result: {
+        say:
+          "我是1号玩家。这是一段足够长的竞选发言，用来覆盖导演的最长文字展示时间，但语音应当在第一段内容到达舞台时立即开始。",
+      },
+    },
+  },
+];
 
 const nightPhaseEvent: LiveGameEvent = {
   ...gameStartedEvent,
@@ -334,6 +398,7 @@ describe("LivePage", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -881,6 +946,49 @@ describe("LivePage", () => {
         enabled: true,
         isPaused: false,
       }),
+    );
+  });
+
+  it("holds the speech cue when coalesced voice reaches its first source event", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: coalescedSpeechEvents,
+      latestEvent: coalescedSpeechEvents.at(-1) ?? null,
+    });
+    gameClientMocks.useLiveVoiceStream.mockReturnValue({
+      connectionState: "open",
+      currentItem: {
+        lastSourceEventId: 131,
+        sourceEventId: 93,
+        status: "playing",
+      },
+      currentSpeakerName: "1号玩家",
+      currentSubtitle: null,
+      errors: [],
+      unlockAudio,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+
+    await user.click(await screen.findByRole("button", { name: "暂停" }));
+    await user.click(screen.getByRole("button", { name: "最新" }));
+    await waitFor(() =>
+      expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
+        "run-1",
+        expect.objectContaining({ currentEventId: 129 }),
+      ),
+    );
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    act(() => {
+      vi.advanceTimersByTime(30000);
+    });
+
+    expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
+      "run-1",
+      expect.objectContaining({ currentEventId: 129 }),
     );
   });
 

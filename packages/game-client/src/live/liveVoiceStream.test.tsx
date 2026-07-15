@@ -1290,7 +1290,7 @@ describe("live voice stream", () => {
     expect(pcmMocks.schedule).toHaveBeenCalledWith("AAAAAA==", 24000);
   });
 
-  it("waits to schedule coalesced PCM chunks until the director reaches the last source event", async () => {
+  it("schedules coalesced PCM chunks when the director reaches the first source event", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     stubAudioContext({ state: "running" });
 
@@ -1301,7 +1301,7 @@ describe("live voice stream", () => {
           enabled: true,
           isPaused: false,
         }),
-      { initialProps: { currentEventId: 4 } },
+      { initialProps: { currentEventId: 3 } },
     );
 
     act(() => {
@@ -1324,13 +1324,9 @@ describe("live voice stream", () => {
       );
     });
 
-    await act(async () => {
-      await Promise.resolve();
-    });
-
     expect(pcmMocks.schedule).not.toHaveBeenCalled();
 
-    rerender({ currentEventId: 6 });
+    rerender({ currentEventId: 4 });
 
     await waitFor(() => expect(pcmMocks.schedule).toHaveBeenCalledTimes(1));
     expect(pcmMocks.schedule).toHaveBeenCalledWith("AAAAAA==", 24000);
