@@ -101,8 +101,8 @@ def test_run_game_command_defaults_to_agent_plan_when_plan_key_is_configured(
 
     assert exit_code == 0
     assert "record_store" in calls
-    assert calls["villager_model"] == "doubao-seed-2-0-pro-260215"
-    assert calls["werewolf_model"] == "doubao-seed-2-0-pro-260215"
+    assert calls["villager_model"] == "doubao-seed-2-0-lite-260215"
+    assert calls["werewolf_model"] == "doubao-seed-2-0-lite-260215"
 
 
 def test_run_game_command_returns_nonzero_on_engine_failure(capsys, monkeypatch) -> None:

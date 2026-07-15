@@ -2576,7 +2576,7 @@ def test_run_game_defaults_to_agent_plan_when_plan_key_is_configured(
 
     state = record_store.load_session(result.session_id)["state"]
 
-    assert {player["model"] for player in state["players"]} == {"doubao-seed-2-0-pro-260215"}
+    assert {player["model"] for player in state["players"]} == {"doubao-seed-2-0-lite-260215"}
 
 
 def test_run_game_is_reproducible_for_same_seed(

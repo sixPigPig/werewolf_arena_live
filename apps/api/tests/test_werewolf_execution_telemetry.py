@@ -11,7 +11,7 @@ def test_action_execution_metrics_cover_latency_timeout_fallback_and_batch() -> 
     reset_action_execution_metrics_for_tests()
     record_action_execution(
         action_kind="public_speech",
-        model="doubao-seed-2-0-pro-260215",
+        model="doubao-seed-2-0-lite-260215",
         result="completed",
         duration_ms=1250,
         first_token_ms=125,

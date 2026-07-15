@@ -65,13 +65,9 @@ class OpenAICompatibleProviderConfig:
 
 
 ARK_AGENT_PLAN_MODELS = (
-    "doubao-seed-2-0-pro-260215",
     "doubao-seed-2-0-lite-260215",
     "glm-5-2-260617",
-    "kimi-k2.7-code",
     "minimax-m3",
-    "minimax-m2.7",
-    "kimi-k2.6",
 )
 
 ARK_AGENT_PLAN_CONFIG = OpenAICompatibleProviderConfig(
@@ -83,7 +79,6 @@ ARK_AGENT_PLAN_CONFIG = OpenAICompatibleProviderConfig(
     available_models=ARK_AGENT_PLAN_MODELS,
     api_key_env_aliases=("ARK_API_KEY",),
     api_host_base_path="/api/plan/v3",
-    model_aliases={"minimax-m2.7": "minimax-m2.7"},
 )
 
 DEEPSEEK_CONFIG = OpenAICompatibleProviderConfig(

@@ -2229,10 +2229,10 @@ def test_create_game_run_defaults_to_agent_plan_when_plan_key_is_configured(
 
     assert response.status_code == 201
     payload = response.json()
-    assert payload["villager_model"] == "doubao-seed-2-0-pro-260215"
-    assert payload["werewolf_model"] == "doubao-seed-2-0-pro-260215"
-    assert captured[0]["villager_model"] == "doubao-seed-2-0-pro-260215"
-    assert captured[0]["werewolf_model"] == "doubao-seed-2-0-pro-260215"
+    assert payload["villager_model"] == "doubao-seed-2-0-lite-260215"
+    assert payload["werewolf_model"] == "doubao-seed-2-0-lite-260215"
+    assert captured[0]["villager_model"] == "doubao-seed-2-0-lite-260215"
+    assert captured[0]["werewolf_model"] == "doubao-seed-2-0-lite-260215"
 
 
 def test_create_game_run_rejects_unknown_rule_set(
@@ -2561,7 +2561,7 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     session_id = "game_1200abcd"
     run_params = {
         "villager_model": "Qwen3.6-Plus",
-        "werewolf_model": "MiniMax-M2.7",
+        "werewolf_model": "minimax-m3",
         "seed": 21,
         "max_rounds": 8,
         "rule_set_id": "starter_6",
@@ -2623,7 +2623,7 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     payload = response.json()
     assert payload["session_id"] == session_id
     assert payload["villager_model"] == "Qwen3.6-Plus"
-    assert payload["werewolf_model"] == "MiniMax-M2.7"
+    assert payload["werewolf_model"] == "minimax-m3"
     assert payload["rule_set"]["id"] == "starter_6"
     compiled = managed_official_compiled_rule_set("starter_6")
     assert payload["rule_set"] == compiled.snapshot

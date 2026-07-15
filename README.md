@@ -246,18 +246,13 @@ cd apps/api
 Agent Plan 使用 `ARK_AGENT_PLAN_API_KEY`（也兼容标准变量 `ARK_API_KEY`）和
 `https://ark.cn-beijing.volces.com/api/plan/v3`，一把套餐 Key 可选择以下模型：
 
-- `doubao-seed-2-0-pro-260215`
 - `doubao-seed-2-0-lite-260215`
 - `glm-5-2-260617`
-- `kimi-k2.7-code`
 - `minimax-m3`
-- `minimax-m2.7`
-- `kimi-k2.6`
 
 如果 `WEREWOLF_DEFAULT_MODEL` 为空且配置了 Agent Plan Key，默认模型为
-`doubao-seed-2-0-pro-260215`。历史配置中的 `MiniMax-M2.7` 仍可作为兼容模型名传入，
-但会归一化为 `minimax-m2.7` 并通过火山 Agent Plan 调用；项目不再读取
-`MINIMAX_API_KEY`，也不再请求 MiniMax 官方接口。
+`doubao-seed-2-0-lite-260215`。项目不读取 `MINIMAX_API_KEY`，也不请求 MiniMax
+官方接口。
 
 DeepSeek 默认模型为 `deepseek-v4-flash`。Qwen 使用阿里云百炼 DashScope OpenAI 兼容
 接口，默认模型为 `qwen3.6-plus`，也支持在对局参数中传入 `Qwen3.6-Plus`；北京地域
