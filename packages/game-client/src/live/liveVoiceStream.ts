@@ -413,11 +413,19 @@ export function pruneStaleVoiceQueue(
   return {
     ...queue,
     items: queue.items.filter(
-      (item) =>
-        item.speakerKind === "player" ||
-        currentEventId - item.lastSourceEventId <= STALE_EVENT_DISTANCE,
+      (item) => !isStaleJudgeVoiceItem(item, currentEventId),
     ),
   };
+}
+
+function isStaleJudgeVoiceItem(
+  item: LiveVoiceQueueItem,
+  currentEventId: number,
+) {
+  return (
+    item.speakerKind === "judge" &&
+    currentEventId - item.lastSourceEventId > STALE_EVENT_DISTANCE
+  );
 }
 
 function base64ToBlob(chunks: string[], mimeType: string) {
@@ -678,6 +686,26 @@ export function useLiveVoiceStream(
       // Playback progression should not depend on ack delivery.
     }
   }, []);
+  useEffect(() => {
+    if (!enabled || currentEventId === null) {
+      return;
+    }
+
+    for (const item of queue.items) {
+      if (
+        (item.status === "played" || item.status === "error") ||
+        !isStaleJudgeVoiceItem(item, currentEventId)
+      ) {
+        continue;
+      }
+      consumedUtteranceIdsRef.current.add(item.utteranceId);
+      sendPlaybackAck(item.utteranceId);
+      dispatch({
+        type: "utterance_played",
+        utteranceId: item.utteranceId,
+      });
+    }
+  }, [currentEventId, enabled, queue.items, sendPlaybackAck]);
   const consumePcmUtterance = useCallback((utteranceId: string) => {
     consumedUtteranceIdsRef.current.add(utteranceId);
     sendPlaybackAck(utteranceId);
@@ -1100,6 +1128,7 @@ export function useLiveVoiceStream(
         return;
       }
       consumedUtteranceIdsRef.current.add(blobPlaybackKey);
+      sendPlaybackAck(blobPlaybackKey);
       dispatch({
         type: "queue_error",
         message: "Unable to play live voice audio.",
@@ -1123,7 +1152,7 @@ export function useLiveVoiceStream(
     return () => {
       isActive = false;
     };
-  }, [blobPlaybackKey, enabled, isPaused]);
+  }, [blobPlaybackKey, enabled, isPaused, sendPlaybackAck]);
 
   useEffect(() => {
     if (!enabled || !pcmSchedulerRef.current) {

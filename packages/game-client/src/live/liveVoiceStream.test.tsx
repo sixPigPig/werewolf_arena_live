@@ -556,6 +556,41 @@ describe("live voice stream", () => {
     ]);
   });
 
+  it("acknowledges stale judge narration so later player speech is not blocked", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 12,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      socket.emit(
+        voiceStartMessage({
+          utterance_id: "judge-old",
+          source_event_id: 1,
+          speaker_kind: "judge",
+          speaker_name: "法官",
+        }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(socket.send).toHaveBeenCalledWith(
+        JSON.stringify({
+          type: "voice_played",
+          utterance_id: "judge-old",
+        }),
+      ),
+    );
+    expect(result.current.currentItem).toBeNull();
+  });
+
   it("does not connect until enabled", () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
 
@@ -1907,13 +1942,17 @@ describe("live voice stream", () => {
       }),
     );
 
+    const socket = MockWebSocket.instances[0];
     act(() => {
-      MockWebSocket.instances[0].onopen?.();
-      emitReadyUtterance(MockWebSocket.instances[0], "voice-1", 4);
-      emitReadyUtterance(MockWebSocket.instances[0], "voice-2", 5);
+      socket.onopen?.();
+      emitReadyUtterance(socket, "voice-1", 4);
+      emitReadyUtterance(socket, "voice-2", 5);
     });
 
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(socket.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "voice_played", utterance_id: "voice-1" }),
+    );
     expect(result.current.connectionState).toBe("open");
     expect(result.current.errors).toEqual(["Unable to play live voice audio."]);
   });
