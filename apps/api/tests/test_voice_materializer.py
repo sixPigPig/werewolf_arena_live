@@ -17,8 +17,9 @@ from app.models.live import (
 )
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.live_store import DatabaseLiveStore
-from app.werewolf.voice import deterministic_voice_utterance_id
+from app.werewolf.voice import VoiceUtterance, deterministic_voice_utterance_id
 from app.werewolf.voice_materializer import VoiceMaterializer
+from app.werewolf.voice_store import DatabaseVoiceStore
 from app.werewolf.voice_stream import StaticJudgeVoiceAsset
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
@@ -183,6 +184,63 @@ def test_dynamic_player_job_retries_without_duplicate_audio(
         assert db.query(VoiceUtteranceRecord).count() == 1
         assert db.query(VoiceAudioChunkRecord).count() == 1
         assert db.get(VoiceUtteranceRecord, utterance_id) is not None
+
+
+def test_dynamic_player_job_reuses_equivalent_live_audio(
+    session_factory: sessionmaker[Session],
+) -> None:
+    key = seed_event(
+        session_factory,
+        event_type="action_parsed",
+        actor="阿青",
+        action="debate",
+        payload={
+            "request_id": "req-live-saved",
+            "visible_result": {"say": "这段现场语音已经保存。"},
+        },
+    )
+    with session_factory() as db:
+        store = DatabaseVoiceStore(db, session_id="game_materializer")
+        store.upsert_utterance(
+            VoiceUtterance(
+                utterance_id="voice_live_saved",
+                run_id=key[0],
+                source_event_id=key[1],
+                request_id="req-live-saved",
+                speaker_kind="player",
+                speaker_name="阿青",
+                speaker="player",
+                text="这段现场语音已经保存。",
+                action="debate",
+            ),
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
+        store.append_chunk("voice_live_saved", chunk_index=0, audio=b"live-audio")
+        store.complete_utterance("voice_live_saved", duration_ms=250)
+
+    def reject_external_tts(_config: VolcengineTtsConfig) -> object:
+        raise AssertionError("saved live audio must not be synthesized again")
+
+    materializer = VoiceMaterializer(
+        session_factory,
+        config=tts_config(),
+        client_factory=reject_external_tts,
+    )
+    claimed = materializer.claim_next_job(worker_id="worker-a")
+
+    assert claimed == key
+    assert asyncio.run(
+        materializer.process_claimed_job(claimed, worker_id="worker-a")
+    ) is True
+
+    with session_factory() as db:
+        job = db.get(VoiceMaterializationJobRecord, key)
+        assert job is not None and job.status == "complete"
+        assert db.query(VoiceUtteranceRecord).count() == 1
+        assert db.query(VoiceAudioChunkRecord).count() == 1
+        assert db.get(VoiceUtteranceRecord, "voice_live_saved") is not None
 
 
 def test_expired_processing_lease_is_reclaimed(

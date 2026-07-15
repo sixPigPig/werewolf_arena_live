@@ -151,6 +151,32 @@ def test_terminal_effective_voice_coverage_counts_static_fallback() -> None:
     assert missing["terminal_judge_voice_present"] is False
 
 
+def test_voice_coverage_counts_coalesced_live_voice_range() -> None:
+    events = [
+        {
+            "id": 9,
+            "type": "action_parsed",
+            "run_id": "run_1",
+            "session_id": "game_1",
+            "created_at": "2026-07-07T00:00:00Z",
+            "actor": "阿青",
+            "action": "debate",
+            "payload": {"visible_result": {"say": "完整发言。"}},
+        }
+    ]
+    live_voice = {
+        "utterance_id": "voice_live",
+        "source_event_id": 7,
+        "last_source_event_id": 9,
+        "speaker_kind": "player",
+    }
+
+    coverage = build_voice_playback_coverage(events, [live_voice])
+
+    assert coverage["effective_voice_event_count"] == 1
+    assert coverage["missing_narratable_event_count"] == 0
+
+
 def test_private_summary_delta_is_never_a_voice_speech_event() -> None:
     event = live_event(
         14,

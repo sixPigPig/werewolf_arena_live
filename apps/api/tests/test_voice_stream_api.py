@@ -11,9 +11,15 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.routes.games import get_live_registry, get_voice_streamer
+from app.api.routes.games import (
+    SessionLiveStore,
+    SessionVoiceStore,
+    get_live_registry,
+    get_voice_streamer,
+)
 from app.db.base import Base
 from app.main import app
+from app.models.live import VoiceMaterializationJobRecord
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.voice import VoiceUtterance
 from app.werewolf.voice_stream import LiveVoiceStreamService
@@ -464,6 +470,70 @@ async def wait_for_messages(websocket: FakeWebSocket, count: int) -> None:
 
 def override_registry(registry: LiveRunRegistry) -> None:
     app.dependency_overrides[get_live_registry] = lambda: registry
+
+
+def test_get_voice_streamer_persists_audio_generated_for_live_playback(
+    db_session: Session,
+) -> None:
+    MultiChunkTtsClient.instances.clear()
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(live_store=SessionLiveStore(session_factory))
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = get_voice_streamer(registry, BASE_TTS_CONFIG)
+    assert service.voice_store_factory is not None
+    service.client_factory = MultiChunkTtsClient
+    service.voice_store_factory = lambda session_id: SessionVoiceStore(
+        session_id=session_id,
+        session_factory=session_factory,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-live-persist",
+                "visible_text": "这段现场语音需要保存。",
+                "is_public": True,
+            },
+        )
+        final_event = registry.publish(
+            run.run_id,
+            "action_parsed",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-live-persist",
+                "visible_result": {"say": "这段现场语音需要保存。"},
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+        with session_factory() as db:
+            job = db.get(
+                VoiceMaterializationJobRecord,
+                (run.run_id, final_event.id, "player"),
+            )
+            assert job is not None and job.status == "complete"
+
+    asyncio.run(stream_live_events())
+
+    with session_factory() as db:
+        voices = DatabaseVoiceStore(db, session_id=run.session_id).list_playback_voices()
+    player_voice = next(voice for voice in voices if voice["speaker_kind"] == "player")
+    assert [chunk["data"] for chunk in player_voice["chunks"]] == [
+        "Zmlyc3Q=",
+        "c2Vjb25k",
+    ]
 
 
 def override_streamer(streamer: FakeVoiceStreamer) -> None:

@@ -9,7 +9,12 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models.live import LiveEventRecord, VoiceAudioChunkRecord, VoiceUtteranceRecord
+from app.models.live import (
+    LiveEventRecord,
+    VoiceAudioChunkRecord,
+    VoiceMaterializationJobRecord,
+    VoiceUtteranceRecord,
+)
 from app.core.config import settings
 from app.werewolf.voice import VoiceUtterance, chunk_text_for_tts
 
@@ -122,16 +127,46 @@ class DatabaseVoiceStore:
         self.db.delete(record)
         self._commit()
 
-    def complete_utterance(self, utterance_id: str, *, duration_ms: int) -> None:
+    def complete_utterance(
+        self,
+        utterance_id: str,
+        *,
+        duration_ms: int,
+        satisfy_materialization_jobs: bool = False,
+    ) -> None:
         record = self.db.get(VoiceUtteranceRecord, utterance_id)
         if record is None:
             return
         if record.status in TERMINAL_STATUSES:
             return
+        completed_at = datetime.now(tz=UTC)
         record.status = "complete"
         record.duration_ms = duration_ms
         record.error_message = None
-        record.completed_at = datetime.now(tz=UTC)
+        record.completed_at = completed_at
+        has_audio = (
+            self.db.query(VoiceAudioChunkRecord.utterance_id)
+            .filter(VoiceAudioChunkRecord.utterance_id == utterance_id)
+            .first()
+            is not None
+        )
+        if satisfy_materialization_jobs and has_audio:
+            self.db.query(VoiceMaterializationJobRecord).filter(
+                VoiceMaterializationJobRecord.run_id == record.run_id,
+                VoiceMaterializationJobRecord.session_id == self.session_id,
+                VoiceMaterializationJobRecord.speaker_kind == record.speaker_kind,
+                VoiceMaterializationJobRecord.source_event_id >= record.source_event_id,
+                VoiceMaterializationJobRecord.source_event_id <= record.last_source_event_id,
+                VoiceMaterializationJobRecord.status == "pending",
+            ).update(
+                {
+                    VoiceMaterializationJobRecord.status: "complete",
+                    VoiceMaterializationJobRecord.last_error: None,
+                    VoiceMaterializationJobRecord.completed_at: completed_at,
+                    VoiceMaterializationJobRecord.updated_at: completed_at,
+                },
+                synchronize_session=False,
+            )
         self._commit()
         self._enqueue_quality_refresh()
 

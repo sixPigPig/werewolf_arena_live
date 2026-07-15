@@ -495,20 +495,34 @@ def _voice_metrics(bundle: QualityEvaluationBundleV1) -> dict[str, Any]:
         narratable_keys.add(key)
         if live_event.type in {"game_completed", "game_failed", "game_canceled"}:
             terminal_keys.add(key)
-    completed_voice_keys = {
-        (voice.get("source_event_id"), voice.get("speaker_kind"))
+    completed_voice_ranges = [
+        (
+            source_event_id,
+            max(source_event_id, last_source_event_id),
+            speaker_kind,
+        )
         for voice in bundle.voice_utterances
         if voice.get("status", "complete") == "complete"
-        and type(voice.get("source_event_id")) is int
-        and isinstance(voice.get("speaker_kind"), str)
+        and type(source_event_id := voice.get("source_event_id")) is int
+        and type(
+            last_source_event_id := voice.get("last_source_event_id", source_event_id)
+        ) is int
+        and isinstance((speaker_kind := voice.get("speaker_kind")), str)
+    ]
+    covered = {
+        (event_id, speaker_kind)
+        for event_id, speaker_kind in narratable_keys
+        if any(
+            voice_kind == speaker_kind and first_event_id <= event_id <= last_event_id
+            for first_event_id, last_event_id, voice_kind in completed_voice_ranges
+        )
     }
-    covered = narratable_keys & completed_voice_keys
     max_event = max((event_id for event_id, _kind in narratable_keys), default=None)
     max_voice = max((event_id for event_id, _kind in covered), default=None)
     return {
         "narratable_event_count": len(narratable_keys),
         "effective_voice_event_count": len(covered),
-        "missing_narratable_event_count": len(narratable_keys - completed_voice_keys),
+        "missing_narratable_event_count": len(narratable_keys - covered),
         "voice_coverage_rate": len(covered) / len(narratable_keys) if narratable_keys else None,
         "max_event_id": max_event,
         "max_voice_source_event_id": max_voice,
@@ -518,7 +532,7 @@ def _voice_metrics(bundle: QualityEvaluationBundleV1) -> dict[str, Any]:
             else None
         ),
         "terminal_judge_voice_coverage": bool(terminal_keys)
-        and terminal_keys.issubset(completed_voice_keys),
+        and terminal_keys.issubset(covered),
         "pending_voice_count": coverage.pending_voice_count,
         "failed_voice_count": coverage.failed_voice_count,
         "interruption_count": sum(

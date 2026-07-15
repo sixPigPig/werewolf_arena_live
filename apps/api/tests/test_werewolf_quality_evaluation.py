@@ -43,6 +43,41 @@ def test_sanitized_fixture_allows_legal_reveals_and_has_no_p0() -> None:
     assert report["voice"]["terminal_judge_voice_coverage"] is True
 
 
+def test_quality_coverage_counts_coalesced_live_voice_range() -> None:
+    bundle = build_quality_evaluation_bundle(
+        state={"session_id": "game_1234abcd", "rounds": []},
+        logs=[],
+        live_events=[
+            {
+                "id": 9,
+                "type": "action_parsed",
+                "run_id": "run_voice_range",
+                "session_id": "game_1234abcd",
+                "created_at": "2026-07-14T00:00:00Z",
+                "actor": "阿青",
+                "action": "debate",
+                "payload": {"visible_result": {"say": "完整发言。"}},
+            }
+        ],
+        voice_utterances=[
+            {
+                "utterance_id": "voice_live",
+                "source_event_id": 7,
+                "last_source_event_id": 9,
+                "speaker_kind": "player",
+                "status": "complete",
+                "text": "完整发言。",
+            }
+        ],
+        run_id="run_voice_range",
+    )
+
+    report = evaluate_quality_bundle(bundle, hmac_key=HMAC_KEY)
+
+    assert report.voice["effective_voice_event_count"] == 1
+    assert report.voice["missing_narratable_event_count"] == 0
+
+
 def test_bundle_revision_and_issue_ids_are_deterministic() -> None:
     data = json.loads(
         (FIXTURE_DIR / "run_05aa0b0f2b92_leaking.json").read_text(encoding="utf-8")

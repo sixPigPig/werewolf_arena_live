@@ -943,19 +943,34 @@ def build_voice_playback_coverage(
         if event.type in TERMINAL_EVENT_TYPES:
             terminal_keys.add(key)
 
-    voice_keys = {
-        (source_event_id, speaker_kind)
+    voice_ranges = [
+        (
+            source_event_id,
+            max(source_event_id, last_source_event_id),
+            speaker_kind,
+        )
         for voice in effective_voices
         if isinstance((source_event_id := voice.get("source_event_id")), int)
+        and isinstance(
+            (last_source_event_id := voice.get("last_source_event_id", source_event_id)),
+            int,
+        )
         and isinstance((speaker_kind := voice.get("speaker_kind")), str)
+    ]
+    covered_keys = {
+        (event_id, speaker_kind)
+        for event_id, speaker_kind in narratable_keys
+        if any(
+            voice_kind == speaker_kind and first_event_id <= event_id <= last_event_id
+            for first_event_id, last_event_id, voice_kind in voice_ranges
+        )
     }
-    covered_keys = narratable_keys & voice_keys
     return {
         "narratable_event_count": len(narratable_keys),
         "effective_voice_event_count": len(covered_keys),
         "missing_narratable_event_count": len(narratable_keys - covered_keys),
         "terminal_judge_voice_present": bool(terminal_keys)
-        and terminal_keys.issubset(voice_keys),
+        and terminal_keys.issubset(covered_keys),
         "voice_materialization_lag_ms": materialization_lag_ms,
     }
 

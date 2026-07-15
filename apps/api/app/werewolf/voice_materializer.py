@@ -189,6 +189,8 @@ class VoiceMaterializer:
             )
             if utterance is None or utterance.speaker_kind != speaker_kind:
                 raise PermanentVoiceMaterializationError("source event is no longer narratable")
+            if _equivalent_complete_voice_exists(db, utterance):
+                return
 
             store = DatabaseVoiceStore(db, session_id=job.session_id)
             store.reset_incomplete_utterance(utterance.utterance_id)
@@ -404,6 +406,46 @@ def _complete_utterance_exists(db: Session, utterance_id: str) -> bool:
     )
     record = db.get(VoiceUtteranceRecord, utterance_id)
     return record is not None and record.status == "complete" and bool(chunk_count)
+
+
+def _equivalent_complete_voice_exists(
+    db: Session,
+    utterance: VoiceUtterance,
+) -> bool:
+    query = (
+        select(VoiceUtteranceRecord)
+        .join(
+            VoiceAudioChunkRecord,
+            VoiceAudioChunkRecord.utterance_id == VoiceUtteranceRecord.utterance_id,
+        )
+        .where(
+            VoiceUtteranceRecord.run_id == utterance.run_id,
+            VoiceUtteranceRecord.speaker_kind == utterance.speaker_kind,
+            VoiceUtteranceRecord.status == "complete",
+        )
+    )
+    if utterance.request_id is not None:
+        query = query.where(VoiceUtteranceRecord.request_id == utterance.request_id)
+    else:
+        query = query.where(
+            VoiceUtteranceRecord.source_event_id <= utterance.source_event_id,
+            VoiceUtteranceRecord.last_source_event_id >= utterance.source_event_id,
+        )
+    records = list(
+        db.scalars(
+            query.order_by(
+                VoiceUtteranceRecord.source_event_id.asc(),
+                VoiceUtteranceRecord.utterance_id.asc(),
+            )
+        ).unique()
+    )
+    return bool(records) and _normalized_voice_text(
+        "".join(record.text for record in records)
+    ) == _normalized_voice_text(utterance.text)
+
+
+def _normalized_voice_text(text: str) -> str:
+    return "".join(text.split())
 
 
 def _live_event(record: LiveEventRecord | PublicLiveEventRecord) -> LiveEvent:

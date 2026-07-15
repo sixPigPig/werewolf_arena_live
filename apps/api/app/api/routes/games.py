@@ -508,6 +508,7 @@ class SessionVoiceStore:
             DatabaseVoiceStore(db, session_id=self.session_id).complete_utterance(
                 utterance_id,
                 duration_ms=duration_ms,
+                satisfy_materialization_jobs=True,
             )
         finally:
             db.close()
@@ -594,7 +595,7 @@ def get_voice_streamer(
         config=config,
         voice_store_factory=lambda session_id: SessionVoiceStore(session_id=session_id),
         judge_voice_asset_loader=_persistent_judge_voice_loader(),
-        persist_streamed_voices=False,
+        persist_streamed_voices=True,
     )
 
 
