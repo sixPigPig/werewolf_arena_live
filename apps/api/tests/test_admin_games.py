@@ -1468,6 +1468,10 @@ def test_admin_game_query_indexes_are_registered_in_model_metadata() -> None:
     assert latest_run_index.expressions[0].name == "session_id"
     assert str(latest_run_index.expressions[1]).endswith("created_at DESC")
     assert str(latest_run_index.expressions[2]).endswith("run_id DESC")
+    assert any(
+        constraint.name == "uq_live_runs_session_attempt_no"
+        for constraint in LiveRunRecord.__table__.constraints
+    )
 
     quality_indexes = {
         index.name: index
@@ -1478,6 +1482,25 @@ def test_admin_game_query_indexes_are_registered_in_model_metadata() -> None:
     ]
     assert len(latest_quality_index.expressions) == 3
     assert latest_quality_index.expressions[0].name == "session_id"
+    assert str(latest_quality_index.expressions[1]).endswith("created_at DESC")
+    assert str(latest_quality_index.expressions[2]).endswith("id DESC")
+    assert str(
+        quality_indexes["ix_game_quality_evaluations_status_completed"].expressions[1]
+    ).endswith("completed_at DESC")
+    assert str(
+        quality_indexes["ix_game_quality_evaluations_verdict_completed"].expressions[1]
+    ).endswith("completed_at DESC")
+
+    voice_job_indexes = {
+        index.name: index for index in VoiceMaterializationJobRecord.__table__.indexes
+    }
+    audience_status_index = voice_job_indexes[
+        "ix_voice_materialization_jobs_audience_status"
+    ]
+    assert [expression.name for expression in audience_status_index.expressions] == [
+        "audience",
+        "status",
+    ]
 
 
 def test_admin_quality_query_plans_use_bounded_cohort_indexes(

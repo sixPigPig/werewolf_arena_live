@@ -25,22 +25,6 @@ class GameQualityEvaluationRecord(Base):
             "lease_expires_at",
             "id",
         ),
-        Index(
-            "ix_game_quality_evaluations_session_created",
-            "session_id",
-            "created_at",
-            "id",
-        ),
-        Index(
-            "ix_game_quality_evaluations_status_completed",
-            "status",
-            "completed_at",
-        ),
-        Index(
-            "ix_game_quality_evaluations_verdict_completed",
-            "verdict",
-            "completed_at",
-        ),
     )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -92,3 +76,21 @@ class GameQualityEvaluationRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+Index(
+    "ix_game_quality_evaluations_session_created",
+    GameQualityEvaluationRecord.session_id,
+    GameQualityEvaluationRecord.created_at.desc(),
+    GameQualityEvaluationRecord.id.desc(),
+)
+Index(
+    "ix_game_quality_evaluations_status_completed",
+    GameQualityEvaluationRecord.status,
+    GameQualityEvaluationRecord.completed_at.desc(),
+)
+Index(
+    "ix_game_quality_evaluations_verdict_completed",
+    GameQualityEvaluationRecord.verdict,
+    GameQualityEvaluationRecord.completed_at.desc(),
+)

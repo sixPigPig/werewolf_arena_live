@@ -12,6 +12,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -21,6 +22,13 @@ from app.db.base import Base
 
 class LiveRunRecord(Base):
     __tablename__ = "live_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "attempt_no",
+            name="uq_live_runs_session_attempt_no",
+        ),
+    )
 
     run_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     session_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -104,12 +112,6 @@ Index(
     LiveRunRecord.session_id,
     LiveRunRecord.created_at.desc(),
     LiveRunRecord.run_id.desc(),
-)
-Index(
-    "uq_live_runs_session_attempt_no",
-    LiveRunRecord.session_id,
-    LiveRunRecord.attempt_no,
-    unique=True,
 )
 Index(
     "uq_live_runs_active_session",
@@ -231,6 +233,11 @@ class VoiceMaterializationJobRecord(Base):
             "lease_expires_at",
         ),
         Index("ix_voice_materialization_jobs_session", "session_id"),
+        Index(
+            "ix_voice_materialization_jobs_audience_status",
+            "audience",
+            "status",
+        ),
     )
 
     run_id: Mapped[str] = mapped_column(String(32), primary_key=True)
