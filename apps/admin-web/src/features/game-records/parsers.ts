@@ -396,7 +396,76 @@ function parseRound(value: unknown): AdminGameRound {
       record.werewolf_self_exploded,
       "round.werewolf_self_exploded",
     ),
+    sheriff_candidates: stringArray(
+      record.sheriff_candidates,
+      "round.sheriff_candidates",
+    ),
+    sheriff_withdrawn: stringArray(
+      record.sheriff_withdrawn,
+      "round.sheriff_withdrawn",
+    ),
+    sheriff_final_candidates: stringArray(
+      record.sheriff_final_candidates,
+      "round.sheriff_final_candidates",
+    ),
+    sheriff_votes: stringRecord(record.sheriff_votes, "round.sheriff_votes"),
+    sheriff_pk_candidates: stringArray(
+      record.sheriff_pk_candidates,
+      "round.sheriff_pk_candidates",
+    ),
+    sheriff_runoff_votes: stringRecord(
+      record.sheriff_runoff_votes,
+      "round.sheriff_runoff_votes",
+    ),
+    sheriff_speech_order: stringArray(
+      record.sheriff_speech_order,
+      "round.sheriff_speech_order",
+    ),
+    sheriff_speech_direction: nullableString(
+      record.sheriff_speech_direction,
+      "round.sheriff_speech_direction",
+    ),
+    speech_order: stringArray(record.speech_order, "round.speech_order"),
+    speech_order_choice: nullableString(
+      record.speech_order_choice,
+      "round.speech_order_choice",
+    ),
+    sheriff_speeches: speechArray(
+      record.sheriff_speeches,
+      "round.sheriff_speeches",
+    ),
+    sheriff_pk_speeches: speechArray(
+      record.sheriff_pk_speeches,
+      "round.sheriff_pk_speeches",
+    ),
+    debate: speechArray(record.debate, "round.debate"),
+    sheriff_badge_target: nullableString(
+      record.sheriff_badge_target,
+      "round.sheriff_badge_target",
+    ),
+    sheriff_badge_lost: booleanValue(
+      record.sheriff_badge_lost,
+      "round.sheriff_badge_lost",
+    ),
+    sheriff_badge_lost_reason: nullableString(
+      record.sheriff_badge_lost_reason,
+      "round.sheriff_badge_lost_reason",
+    ),
+    day_ended_by_self_explosion: booleanValue(
+      record.day_ended_by_self_explosion,
+      "round.day_ended_by_self_explosion",
+    ),
   };
+}
+
+function speechArray(value: unknown, field: string) {
+  return arrayValue(value, field).map((item, index) => {
+    const record = recordValue(item);
+    return {
+      speaker: requiredString(record.speaker, `${field}[${index}].speaker`),
+      message: requiredString(record.message, `${field}[${index}].message`),
+    };
+  });
 }
 
 function parseEvent(value: unknown): AdminGameEvent {

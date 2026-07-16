@@ -11,9 +11,21 @@ import {
   retryAdminGameQualityEvaluation,
 } from "@/features/game-records/api";
 import {
+  actionLabel,
   displayValue,
+  eventTypeLabel,
   formatDateTime,
   GAME_STATUS_LABELS,
+  personalityLabel,
+  phaseLabel,
+  qualityActualLabel,
+  qualityChannelLabel,
+  qualityCodeLabel,
+  qualityGateLabel,
+  qualityIssueLabel,
+  qualityPolicyLabel,
+  qualitySeverityLabel,
+  qualitySourceStatusLabel,
   RUN_STATUS_LABELS,
 } from "@/features/game-records/presentation";
 import { adminGameKeys } from "@/features/game-records/query-keys";
@@ -128,7 +140,7 @@ export default function GameRecordDetailPage() {
       </Link>
       <header className="page-heading game-detail-heading">
         <div>
-          <span className="page-kicker">GAME DIAGNOSTICS</span>
+          <span className="page-kicker">对局诊断</span>
           <h1>{game.session_id}</h1>
           <p>
             {game.rule_set
@@ -210,7 +222,7 @@ export default function GameRecordDetailPage() {
       <div className="game-detail-grid">
         <section aria-labelledby="game-runs-title" className="game-detail-panel">
           <PanelHeading
-            eyebrow="EXECUTIONS"
+            eyebrow="运行记录"
             id="game-runs-title"
             meta={`${game.runs.length} 次`}
             title="运行记录"
@@ -228,7 +240,7 @@ export default function GameRecordDetailPage() {
 
         <section aria-labelledby="game-players-title" className="game-detail-panel">
           <PanelHeading
-            eyebrow="LINEUP SNAPSHOT"
+            eyebrow="阵容快照"
             id="game-players-title"
             meta={`${game.players.length} 位`}
             title="玩家与角色结果"
@@ -248,8 +260,12 @@ export default function GameRecordDetailPage() {
                     <strong>
                       {player.seat} 号 · {player.name}
                     </strong>
+                    <small>
+                      {personalityLabel(player.personality_id)}
+                      {player.tags.length > 0 ? ` · ${player.tags.join("、")}` : ""}
+                    </small>
                     <small title={player.profile_id ?? undefined}>
-                      {player.profile_id ?? "无玩家资料快照"}
+                      {player.profile_id ? `档案：${player.profile_id}` : "无玩家资料快照"}
                     </small>
                   </span>
                   <span className="game-player-role">
@@ -267,7 +283,7 @@ export default function GameRecordDetailPage() {
 
       <section aria-labelledby="game-rounds-title" className="game-detail-panel">
         <PanelHeading
-          eyebrow="ROUND SUMMARY"
+          eyebrow="轮次摘要"
           id="game-rounds-title"
           meta={`${game.rounds.length} 轮`}
           title="公开轮次摘要"
@@ -287,7 +303,7 @@ export default function GameRecordDetailPage() {
 
       <section aria-labelledby="game-events-title" className="game-detail-panel">
         <PanelHeading
-          eyebrow="RECENT EVENTS"
+          eyebrow="最近事件"
           id="game-events-title"
           meta={`最近 ${game.recent_events.length} / ${game.diagnostics.event_count} 条`}
           title="事件时间线"
@@ -321,7 +337,7 @@ function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
   return (
     <section aria-labelledby="game-p2-title" className="game-detail-panel">
       <PanelHeading
-        eyebrow="P2 QUALITY"
+        eyebrow="P2 质量"
         id="game-p2-title"
         meta={p2StatusLabel(quality.data_status)}
         title="P2 对局质量"
@@ -340,7 +356,7 @@ function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
           <div className="game-detail-metrics">
             <article>
               <span>阵容模式 / 修复</span>
-              <strong>{quality.lineup_quality.policy_mode ?? "—"}</strong>
+              <strong>{qualityPolicyLabel(quality.lineup_quality.policy_mode)}</strong>
               <small>
                 {quality.lineup_quality.was_repaired ? "已自动修复" : "未自动修复"}
                 {" · "}风格桶 {quality.lineup_quality.style_bucket_count ?? "—"}/
@@ -382,9 +398,9 @@ function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
             <ul aria-label="阵容质量违规" className="game-event-list">
               {quality.lineup_quality.violations.map((violation, index) => (
                 <li key={`${violation.code}-${index}`}>
-                  <strong>{violation.code}</strong>
+                  <strong title={violation.code}>{qualityCodeLabel(violation.code)}</strong>
                   <span>
-                    {violation.severity} · {violation.count}/{violation.limit} · 座位{" "}
+                    {qualitySeverityLabel(violation.severity)} · {violation.count}/{violation.limit} · 座位{" "}
                     {violation.seat_numbers.join("、") || "—"}
                   </span>
                 </li>
@@ -395,10 +411,11 @@ function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
             {quality.quality_gates.map((gate) => (
               <li key={gate.gate}>
                 <strong>
-                  {gate.gate} · {gateStatusLabel(gate.status)}
+                  {qualityGateLabel(gate.gate)} · {gateStatusLabel(gate.status)}
                 </strong>
                 <span>
-                  {gate.code} · 阈值 {gate.threshold ?? "—"} · 实际 {gate.actual ?? "—"}
+                  <span title={gate.code}>{qualityCodeLabel(gate.code)}</span>
+                  {" · "}阈值 {gate.threshold ?? "—"} · 实际 {qualityActualLabel(gate.actual)}
                 </span>
               </li>
             ))}
@@ -444,7 +461,7 @@ function GameP3QualityPanel({
     <section aria-labelledby="game-p3-title" className="game-detail-panel">
       <div className="dashboard-panel-heading">
         <div>
-          <span className="page-kicker">P3 QUALITY EVALUATION</span>
+          <span className="page-kicker">P3 质量评估</span>
           <h2 id="game-p3-title">P3 质量评估</h2>
           <p>
             {p3EvaluationStatusLabel(quality.evaluation_status)} · 数据
@@ -457,9 +474,9 @@ function GameP3QualityPanel({
       </div>
 
       <dl className="dashboard-breakdown" aria-label="P3 来源覆盖">
-        <div><dt>状态 / 日志</dt><dd>{quality.source_coverage.state} / {quality.source_coverage.logs}</dd></div>
-        <div><dt>事件</dt><dd>{quality.source_coverage.events}</dd></div>
-        <div><dt>语音 / 字幕</dt><dd>{quality.source_coverage.voice} / {quality.source_coverage.subtitles}</dd></div>
+        <div><dt>状态 / 日志</dt><dd>{qualitySourceStatusLabel(quality.source_coverage.state)} / {qualitySourceStatusLabel(quality.source_coverage.logs)}</dd></div>
+        <div><dt>事件</dt><dd>{qualitySourceStatusLabel(quality.source_coverage.events)}</dd></div>
+        <div><dt>语音 / 字幕</dt><dd>{qualitySourceStatusLabel(quality.source_coverage.voice)} / {qualitySourceStatusLabel(quality.source_coverage.subtitles)}</dd></div>
         <div><dt>待处理 / 失败语音</dt><dd>{quality.source_coverage.pending_voice_count} / {quality.source_coverage.failed_voice_count}</dd></div>
       </dl>
 
@@ -469,7 +486,7 @@ function GameP3QualityPanel({
             <span>事实</span>
             <strong>{ratioLabel(quality.facts.critical_recorded_count, quality.facts.critical_opportunity_count)}</strong>
             <small>
-              Prompt {ratioLabel(quality.facts.prompt_included_critical_count, quality.facts.prompt_expected_critical_count)} · 矛盾 {quality.facts.deterministic_contradiction_count}
+              提示词 {ratioLabel(quality.facts.prompt_included_critical_count, quality.facts.prompt_expected_critical_count)} · 矛盾 {quality.facts.deterministic_contradiction_count}
             </small>
           </article>
           <article>
@@ -554,9 +571,11 @@ function GameP3QualityPanel({
               <ul aria-label="P3 安全问题坐标" className="game-event-list">
                 {issues.items.map((issue) => (
                   <li key={issue.issue_id}>
-                    <strong>{issue.severity} · {issue.code}</strong>
+                    <strong title={issue.code}>
+                      {qualitySeverityLabel(issue.severity)} · {qualityIssueLabel(issue.code)}
+                    </strong>
                     <span>
-                      {issue.channel} · 轮次 {issue.round_number ?? "—"} · event {issue.event_id ?? "—"} · utterance {issue.utterance_id ?? "—"} · {issue.issue_id}
+                      {qualityChannelLabel(issue.channel)} · 轮次 {issue.round_number ?? "—"} · 事件 {issue.event_id ?? "—"} · 语音记录 {issue.utterance_id ?? "—"} · {issue.issue_id}
                     </span>
                   </li>
                 ))}
@@ -617,7 +636,7 @@ function PublicOutcomePanel({ quality }: { quality: AdminGameP2Quality }) {
   return (
     <section aria-labelledby="game-outcomes-title" className="game-detail-panel">
       <PanelHeading
-        eyebrow="PUBLIC OUTCOMES"
+        eyebrow="公开结算"
         id="game-outcomes-title"
         meta={`${quality.public_outcomes.length} 条`}
         title="公开结算链"
@@ -829,6 +848,11 @@ function RunItem({
 
 function RoundItem({ round }: { round: AdminGameRound }) {
   const voteEntries = Object.entries(round.votes);
+  const speechGroups = [
+    { label: "警长竞选发言", items: round.sheriff_speeches },
+    { label: "警长平票发言", items: round.sheriff_pk_speeches },
+    { label: "白天发言", items: round.debate },
+  ].filter((group) => group.items.length > 0);
   return (
     <li>
       <div className="game-round-marker" aria-hidden="true">{round.number}</div>
@@ -846,19 +870,102 @@ function RoundItem({ round }: { round: AdminGameRound }) {
           <RoundFact label="放逐" value={displayValue(round.exiled)} />
           <RoundFact label="警长" value={displayValue(round.sheriff_elected ?? round.sheriff)} />
           <RoundFact label="猎人开枪" value={displayValue(round.hunter_shot)} />
-          <RoundFact label="狼人自爆" value={displayValue(round.werewolf_self_exploded)} />
+          <RoundFact label="白痴翻牌" value={displayValue(round.idiot_revealed)} />
+          <RoundFact
+            label="狼人自爆"
+            value={
+              round.werewolf_self_exploded && round.day_ended_by_self_explosion
+                ? `${round.werewolf_self_exploded}（白天提前结束）`
+                : displayValue(round.werewolf_self_exploded)
+            }
+          />
+          <RoundFact label="本轮存活" value={formatNames(round.players)} />
+          {round.sheriff_candidates.length > 0 ? (
+            <RoundFact label="上警名单" value={formatNames(round.sheriff_candidates)} />
+          ) : null}
+          {round.sheriff_withdrawn.length > 0 ? (
+            <RoundFact label="退水名单" value={formatNames(round.sheriff_withdrawn)} />
+          ) : null}
+          {round.sheriff_final_candidates.length > 0 ? (
+            <RoundFact label="最终候选" value={formatNames(round.sheriff_final_candidates)} />
+          ) : null}
+          {Object.keys(round.sheriff_votes).length > 0 ? (
+            <RoundFact label="警长票型" value={formatVotes(round.sheriff_votes)} />
+          ) : null}
+          {round.sheriff_pk_candidates.length > 0 ? (
+            <RoundFact label="平票候选" value={formatNames(round.sheriff_pk_candidates)} />
+          ) : null}
+          {Object.keys(round.sheriff_runoff_votes).length > 0 ? (
+            <RoundFact label="加赛票型" value={formatVotes(round.sheriff_runoff_votes)} />
+          ) : null}
+          {round.sheriff_speech_order.length > 0 ? (
+            <RoundFact
+              label="竞选发言顺序"
+              value={`${formatNames(round.sheriff_speech_order)}${round.sheriff_speech_direction ? `（${round.sheriff_speech_direction}）` : ""}`}
+            />
+          ) : null}
+          {round.speech_order.length > 0 ? (
+            <RoundFact
+              label="白天发言顺序"
+              value={`${formatNames(round.speech_order)}${round.speech_order_choice ? `（${round.speech_order_choice}）` : ""}`}
+            />
+          ) : null}
+          {round.sheriff_badge_lost ? (
+            <RoundFact
+              label="警徽状态"
+              value={round.sheriff_badge_lost_reason ? `已流失（${badgeLostReasonLabel(round.sheriff_badge_lost_reason)}）` : "已流失"}
+            />
+          ) : round.sheriff_badge_target ? (
+            <RoundFact label="警徽移交" value={round.sheriff_badge_target} />
+          ) : null}
           <RoundFact
             label="最新票型"
             value={
               voteEntries.length > 0
-                ? voteEntries.map(([voter, target]) => `${voter}→${target}`).join("、")
+                ? formatVotes(round.votes)
                 : "—"
             }
           />
         </div>
+        {speechGroups.length > 0 ? (
+          <div className="game-round-speeches">
+            {speechGroups.map((group) => (
+              <section key={group.label}>
+                <h3>{group.label} · {group.items.length} 条</h3>
+                <ol>
+                  {group.items.map((speech, index) => (
+                    <li key={`${speech.speaker}-${index}`}>
+                      <strong>{speech.speaker}</strong>
+                      <p>{speech.message}</p>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ))}
+          </div>
+        ) : null}
       </div>
     </li>
   );
+}
+
+function formatNames(values: string[]) {
+  return values.length > 0 ? values.join("、") : "—";
+}
+
+function formatVotes(votes: Record<string, string>) {
+  const entries = Object.entries(votes);
+  return entries.length > 0
+    ? entries.map(([voter, target]) => `${voter}→${target}`).join("、")
+    : "—";
+}
+
+function badgeLostReasonLabel(value: string) {
+  return {
+    no_target: "未选择移交目标",
+    destroyed: "警徽被撕毁",
+    owner_selected_destroy: "警长选择撕毁警徽",
+  }[value] ?? "其他原因";
 }
 
 function RoundFact({ label, value }: { label: string; value: string }) {
@@ -875,12 +982,12 @@ function EventItem({ event }: { event: AdminGameEvent }) {
     <li>
       <span className="game-event-index">#{event.event_id}</span>
       <span className="game-event-main">
-        <strong>{event.type}</strong>
+        <strong title={event.type}>{eventTypeLabel(event.type)}</strong>
         <small>
           {event.round ? `第 ${event.round} 轮` : "全局"}
-          {event.phase ? ` · ${event.phase}` : ""}
+          {event.phase ? ` · ${phaseLabel(event.phase)}` : ""}
           {event.actor ? ` · ${event.actor}` : ""}
-          {event.action ? ` · ${event.action}` : ""}
+          {event.action ? ` · ${actionLabel(event.action)}` : ""}
         </small>
       </span>
       <code title={event.run_id}>{event.run_id}</code>
@@ -925,7 +1032,7 @@ function GameDetailError({
   const notFound = isAdminApiError(error, 404);
   return (
     <section className="game-detail-load-error" role="alert">
-      <span className="page-kicker">GAME DIAGNOSTICS</span>
+      <span className="page-kicker">对局诊断</span>
       <h1>{notFound ? "对局不存在" : "无法读取对局详情"}</h1>
       <p>{error.message}</p>
       {isAdminApiError(error) && error.requestId ? (

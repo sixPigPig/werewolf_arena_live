@@ -338,7 +338,15 @@ describe("admin game record flow", () => {
     expect(
       screen.getByRole("heading", { name: "P2 对局质量" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("repair")).toBeInTheDocument();
+    expect(screen.getByText("自动修复")).toBeInTheDocument();
+    expect(screen.getByText("分析 · 控场")).toBeInTheDocument();
+    expect(
+      screen.getByText("我会先听完大家的上警理由。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("结合票型，我认为灰塔更可疑。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("结算与摘要一致")).toBeInTheDocument();
     expect(screen.getByText("样本不足")).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "P2 质量门槛" }).children).toHaveLength(5);
     expect(
@@ -482,6 +490,9 @@ describe("admin game record flow", () => {
     expect(
       await screen.findByRole("heading", { name: "P3 质量评估" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("对局完成")).toBeInTheDocument();
+    expect(screen.getByText(/第 1 轮 · 总结/)).toBeInTheDocument();
+    expect(screen.queryByText("game_completed")).not.toBeInTheDocument();
     expect(screen.getByText("100.0% (4/4)")).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.some(([input]) =>
@@ -493,9 +504,9 @@ describe("admin game record flow", () => {
       screen.getByRole("button", { name: "加载安全问题坐标" }),
     );
     expect(
-      await screen.findByText("P0 · private_voice_materialized"),
+      await screen.findByText("P0 严重 · 私密内容被合成为语音"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/voice · 轮次 1 · event 5/)).toBeInTheDocument();
+    expect(screen.getByText(/语音 · 轮次 1 · 事件 5/)).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.filter(([input]) =>
         String(input).endsWith("/quality-evaluation/issues"),

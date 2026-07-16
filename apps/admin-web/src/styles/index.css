@@ -2849,6 +2849,58 @@ a {
   font-weight: 650;
 }
 
+.game-round-speeches {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.game-round-speeches > section {
+  overflow: hidden;
+  border: 1px solid #eaecf0;
+  border-radius: 10px;
+  background: #fcfcfd;
+}
+
+.game-round-speeches h3 {
+  margin: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid #eaecf0;
+  color: #475467;
+  font-size: 9px;
+}
+
+.game-round-speeches ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.game-round-speeches li {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.18fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 10px;
+  border-bottom: 1px solid #f2f4f7;
+}
+
+.game-round-speeches li:last-child {
+  border-bottom: 0;
+}
+
+.game-round-speeches li strong {
+  color: #175cd3;
+  font-size: 9px;
+}
+
+.game-round-speeches li p {
+  margin: 0;
+  color: #475467;
+  font-size: 9px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
 .game-events-boundary {
   margin: 0;
   padding: 11px 20px;

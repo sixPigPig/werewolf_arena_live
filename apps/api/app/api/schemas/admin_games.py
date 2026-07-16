@@ -92,6 +92,11 @@ class AdminGameDeathSummary(BaseModel):
     source: str | None
 
 
+class AdminGameSpeechSummary(BaseModel):
+    speaker: str
+    message: str
+
+
 class AdminGameRoundSummary(BaseModel):
     number: int
     success: bool
@@ -106,6 +111,23 @@ class AdminGameRoundSummary(BaseModel):
     votes: dict[str, str]
     sheriff_elected: str | None
     werewolf_self_exploded: str | None
+    sheriff_candidates: list[str]
+    sheriff_withdrawn: list[str]
+    sheriff_final_candidates: list[str]
+    sheriff_votes: dict[str, str]
+    sheriff_pk_candidates: list[str]
+    sheriff_runoff_votes: dict[str, str]
+    sheriff_speech_order: list[str]
+    sheriff_speech_direction: str | None
+    speech_order: list[str]
+    speech_order_choice: str | None
+    sheriff_speeches: list[AdminGameSpeechSummary]
+    sheriff_pk_speeches: list[AdminGameSpeechSummary]
+    debate: list[AdminGameSpeechSummary]
+    sheriff_badge_target: str | None
+    sheriff_badge_lost: bool
+    sheriff_badge_lost_reason: str | None
+    day_ended_by_self_explosion: bool
 
 
 class AdminGameEventSummary(BaseModel):

@@ -91,7 +91,29 @@ export type AdminGameRound = {
   votes: Record<string, string>;
   sheriff_elected: string | null;
   werewolf_self_exploded: string | null;
+  sheriff_candidates: string[];
+  sheriff_withdrawn: string[];
+  sheriff_final_candidates: string[];
+  sheriff_votes: Record<string, string>;
+  sheriff_pk_candidates: string[];
+  sheriff_runoff_votes: Record<string, string>;
+  sheriff_speech_order: string[];
+  sheriff_speech_direction: string | null;
+  speech_order: string[];
+  speech_order_choice: string | null;
+  sheriff_speeches: AdminGameSpeech[];
+  sheriff_pk_speeches: AdminGameSpeech[];
+  debate: AdminGameSpeech[];
+  sheriff_badge_target: string | null;
+  sheriff_badge_lost: boolean;
+  sheriff_badge_lost_reason: string | null;
+  day_ended_by_self_explosion: boolean;
   public_summary: string;
+};
+
+export type AdminGameSpeech = {
+  speaker: string;
+  message: string;
 };
 
 export type AdminGameDeath = {

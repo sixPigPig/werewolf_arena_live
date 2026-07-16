@@ -129,7 +129,7 @@ export default function GameRecordsPage() {
     <div className="admin-page game-records-page">
       <header className="page-heading game-records-heading">
         <div>
-          <span className="page-kicker">OPERATIONS</span>
+          <span className="page-kicker">运营管理</span>
           <h1>对局记录</h1>
           <p>从持久化记录查看对局结果、运行状态与可公开诊断摘要。</p>
         </div>
@@ -146,7 +146,7 @@ export default function GameRecordsPage() {
               defaultValue={params.q ?? ""}
               key={`q-${params.q ?? ""}`}
               name="q"
-              placeholder="Session、Run、模型或胜方"
+              placeholder="对局 ID、运行 ID、模型或胜方"
               type="search"
             />
           </label>
@@ -267,7 +267,7 @@ export default function GameRecordsPage() {
       <section aria-labelledby="game-list-title" className="game-list-panel">
         <div className="game-list-heading">
           <div>
-            <span>GAME ARCHIVE</span>
+            <span>对局归档</span>
             <h2 id="game-list-title">持久化对局</h2>
           </div>
           <p aria-live="polite">
@@ -475,7 +475,7 @@ function GameDeleteDialog({
         ref={dialogRef}
         role="alertdialog"
       >
-        <span className="page-kicker">DESTRUCTIVE ACTION</span>
+        <span className="page-kicker">危险操作</span>
         <h2 id="game-delete-title">删除对局</h2>
         <p id="game-delete-description">
           将永久删除此对局及其回放、运行事件、语音和质量评估数据，无法撤销。

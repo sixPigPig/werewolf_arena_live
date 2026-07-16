@@ -61,6 +61,11 @@ from app.werewolf.quality_store import (
     enqueue_quality_evaluation,
     latest_quality_evaluation,
 )
+from app.werewolf.public_outcomes import (
+    conservative_legacy_outcomes,
+    public_outcome_event_from_dict,
+    render_public_round_summary,
+)
 from app.werewolf.replay import SESSION_ID_RE
 
 
@@ -711,7 +716,7 @@ def _round_summaries(
                 "number": max(0, item["number"]),
                 "success": bool(item.get("success")),
                 "players": _string_list(item.get("players"), max_items=24, max_length=120),
-                "public_summary": _safe_text(item.get("public_summary"), max_length=2000),
+                "public_summary": _public_round_summary(item),
                 "night_deaths": _death_summaries(
                     item.get("night_deaths"),
                     reveal_causes=False,
@@ -730,9 +735,88 @@ def _round_summaries(
                     item.get("werewolf_self_exploded"),
                     max_length=120,
                 ),
+                "sheriff_candidates": _string_list(
+                    item.get("sheriff_candidates"), max_items=24, max_length=120
+                ),
+                "sheriff_withdrawn": _string_list(
+                    item.get("sheriff_withdrawn"), max_items=24, max_length=120
+                ),
+                "sheriff_final_candidates": _string_list(
+                    item.get("sheriff_final_candidates"), max_items=24, max_length=120
+                ),
+                "sheriff_votes": _votes_summary(item.get("sheriff_votes")),
+                "sheriff_pk_candidates": _string_list(
+                    item.get("sheriff_pk_candidates"), max_items=24, max_length=120
+                ),
+                "sheriff_runoff_votes": _votes_summary(item.get("sheriff_runoff_votes")),
+                "sheriff_speech_order": _string_list(
+                    item.get("sheriff_speech_order"), max_items=24, max_length=120
+                ),
+                "sheriff_speech_direction": _optional_text(
+                    item.get("sheriff_speech_direction"), max_length=40
+                ),
+                "speech_order": _string_list(
+                    item.get("speech_order"), max_items=24, max_length=120
+                ),
+                "speech_order_choice": _optional_text(
+                    item.get("speech_order_choice"), max_length=40
+                ),
+                "sheriff_speeches": _speech_summaries(item.get("sheriff_speeches")),
+                "sheriff_pk_speeches": _speech_summaries(item.get("sheriff_pk_speeches")),
+                "debate": _speech_summaries(item.get("debate")),
+                "sheriff_badge_target": _optional_text(
+                    item.get("sheriff_badge_target"), max_length=120
+                ),
+                "sheriff_badge_lost": bool(item.get("sheriff_badge_lost")),
+                "sheriff_badge_lost_reason": _optional_text(
+                    item.get("sheriff_badge_lost_reason"), max_length=80
+                ),
+                "day_ended_by_self_explosion": bool(item.get("day_ended_by_self_explosion")),
             }
         )
     return rounds
+
+
+def _public_round_summary(item: dict[str, Any]) -> str:
+    stored = _optional_text(item.get("public_summary"), max_length=2000)
+    if stored is not None:
+        return stored
+
+    raw_events = item.get("public_outcome_events")
+    events = []
+    if isinstance(raw_events, list):
+        for raw_event in raw_events[:100]:
+            if not isinstance(raw_event, dict):
+                continue
+            try:
+                events.append(public_outcome_event_from_dict(raw_event))
+            except (TypeError, ValueError):
+                continue
+    if not events:
+        events = conservative_legacy_outcomes(item)
+    if not events:
+        return ""
+    try:
+        rendered = render_public_round_summary(events)
+    except ValueError:
+        return ""
+    round_number = max(0, int(item.get("number") or 0))
+    return _safe_text(f"第{round_number}轮；{rendered}", max_length=2000)
+
+
+def _speech_summaries(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    for item in value[:24]:
+        if not isinstance(item, dict):
+            continue
+        speaker = _optional_text(item.get("speaker"), max_length=120)
+        message = _optional_text(item.get("message"), max_length=2000)
+        if speaker is None or message is None:
+            continue
+        result.append({"speaker": speaker, "message": message})
+    return result
 
 
 def _death_summaries(

@@ -164,6 +164,19 @@ def _seed_game(
                 "hunter_shot": None,
                 "idiot_revealed": None,
                 "sheriff": "张三",
+                "sheriff_candidates": ["张三", "李四"],
+                "sheriff_speech_order": ["张三", "李四"],
+                "sheriff_speech_direction": "顺时针",
+                "sheriff_speeches": [{"speaker": "张三", "message": "我会先听清大家的竞选理由。"}],
+                "sheriff_withdrawn": ["李四"],
+                "sheriff_final_candidates": ["张三"],
+                "sheriff_votes": {"李四": "张三"},
+                "sheriff_pk_candidates": [],
+                "sheriff_pk_speeches": [],
+                "sheriff_runoff_votes": {},
+                "debate": [{"speaker": "张三", "message": "这是可以进入后台记录的公开发言。"}],
+                "speech_order": ["李四", "张三"],
+                "speech_order_choice": "警左发言",
                 "votes": [
                     {
                         "张三": "李四",
@@ -171,7 +184,24 @@ def _seed_game(
                     }
                 ],
                 "sheriff_elected": "张三",
+                "sheriff_badge_target": None,
+                "sheriff_badge_lost": False,
+                "sheriff_badge_lost_reason": None,
                 "werewolf_self_exploded": None,
+                "day_ended_by_self_explosion": False,
+                "public_outcome_events": [
+                    {
+                        "schema_version": 1,
+                        "event_id": "outcome_1111111111111111",
+                        "sequence": 1,
+                        "kind": "night_death",
+                        "actor_player_id": None,
+                        "target_player_id": "2号玩家",
+                        "outcome": "eliminated",
+                        "caused_by_event_id": None,
+                        "occurred_phase": "night",
+                    }
+                ],
                 "protected": ("SENTINEL_PROTECTED_TARGET" if adversarial_unfinished else None),
                 "investigated": (
                     "SENTINEL_INVESTIGATED_TARGET" if adversarial_unfinished else None
@@ -1013,6 +1043,13 @@ def test_admin_game_detail_is_strictly_whitelisted_bounded_and_hides_partial_rol
         created_at=created_at + timedelta(hours=2),
     )
     with context.session_factory() as db:
+        replay = db.get(GameReplayPayload, "game_00000010")
+        assert replay is not None
+        state = dict(replay.state)
+        rounds = [dict(item) for item in state["rounds"]]
+        rounds[0]["public_summary"] = ""
+        state["rounds"] = rounds
+        replay.state = state
         resumable_record = db.get(GameSessionRecord, "game_00000012")
         assert resumable_record is not None
         resumable_record.resumable = True
@@ -1053,10 +1090,21 @@ def test_admin_game_detail_is_strictly_whitelisted_bounded_and_hides_partial_rol
     assert payload["players"][0]["role"] == "预言家"
     assert payload["players"][0]["tags"] == ["冷静"]
     assert payload["players"][1]["avatar_image_url"] == ""
+    assert payload["rounds"][0]["public_summary"] == "第1轮；2号玩家夜间出局。"
     assert payload["rounds"][0]["votes"] == {"张三": "李四"}
+    assert payload["rounds"][0]["sheriff_candidates"] == ["张三", "李四"]
+    assert payload["rounds"][0]["sheriff_votes"] == {"李四": "张三"}
+    assert payload["rounds"][0]["speech_order"] == ["李四", "张三"]
+    assert payload["rounds"][0]["sheriff_speeches"] == [
+        {"speaker": "张三", "message": "我会先听清大家的竞选理由。"}
+    ]
+    assert payload["rounds"][0]["debate"] == [
+        {"speaker": "张三", "message": "这是可以进入后台记录的公开发言。"}
+    ]
     assert payload["rounds"][0]["night_deaths"] == [
         {"player": "李四", "cause": None, "source": None}
     ]
+    assert payload["p2_quality"]["public_outcomes"][0]["target_player_id"] == "2号玩家"
     assert len(payload["recent_events"]) == 50
     assert payload["recent_events"][0]["event_id"] == 6
     assert payload["recent_events"][-1]["event_id"] == 55

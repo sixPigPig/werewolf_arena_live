@@ -651,9 +651,10 @@ def _public_player_ids(
     result: set[str] = set()
     players = state.get("players")
     if isinstance(players, list):
-        for player in players:
+        for seat, player in enumerate(players, start=1):
             if isinstance(player, dict) and isinstance(player.get("name"), str):
                 result.add(player["name"])
+                result.add(f"{seat}号玩家")
     for round_data in rounds:
         if not isinstance(round_data, dict) or not isinstance(
             round_data.get("players"), list
