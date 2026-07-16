@@ -564,6 +564,39 @@ def test_day_phase_with_multiple_night_deaths_uses_dynamic_seat_line() -> None:
     assert utterance.static_asset_id is None
 
 
+def test_explicit_dawn_cue_suppresses_duplicate_day_phase_narration() -> None:
+    config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
+    phase_event = live_event(
+        10,
+        "phase_started",
+        phase="day",
+        payload={"narration_mode": "explicit_v1"},
+    )
+    cue_event = live_event(
+        11,
+        "judge_cue",
+        action="dawn_deaths",
+        phase="day",
+        payload={
+            "cue_id": "dawn_deaths",
+            "visible_text": "昨夜死亡的玩家是 1号玩家、2号玩家。",
+            "players": ["1号玩家", "2号玩家"],
+        },
+    )
+
+    phase_utterance = event_to_voice_utterance(
+        phase_event,
+        config,
+        previous_night_deaths=("阿青", "白石"),
+        player_seats={"阿青": 1, "白石": 2},
+    )
+    cue_utterance = event_to_voice_utterance(cue_event, config)
+
+    assert phase_utterance is None
+    assert cue_utterance is not None
+    assert cue_utterance.text == "昨夜死亡的玩家是 1号玩家、2号玩家。"
+
+
 def test_game_completed_judge_voice_whitelists_winner_label() -> None:
     config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
     known_winner = live_event(14, "game_completed", payload={"winner": "狼人阵营"})

@@ -708,8 +708,8 @@ describe("deriveMobileLiveFocusPresentation", () => {
     expect(malformed.tone).toBe("neutral");
   });
 
-  it("keeps speech focus unchanged for public speech actions", () => {
-    const { presentation } = focusFor([
+  it("distinguishes daytime, sheriff-campaign and sheriff-PK speech", () => {
+    const daytime = focusFor([
       STARTED,
       event({
         id: 2,
@@ -720,11 +720,50 @@ describe("deriveMobileLiveFocusPresentation", () => {
         action: "debate",
         payload: { visible_text: "我是好人" },
       }),
-    ]);
+    ]).presentation;
 
-    expect(presentation.kind).toBe("speech");
-    expect(presentation.actorName).toBe("1号 狼人A");
-    expect(presentation.actorSeat).toBe(1);
+    const campaign = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "model_response_delta",
+        round: 1,
+        phase: "day",
+        actor: "4号 预言家",
+        action: "sheriff_speech",
+        payload: { visible_text: "我竞选警长" },
+      }),
+    ]).presentation;
+
+    const campaignPk = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "model_response_delta",
+        round: 1,
+        phase: "day",
+        actor: "4号 预言家",
+        action: "sheriff_pk_speech",
+        payload: { visible_text: "这是我的 PK 发言" },
+      }),
+    ]).presentation;
+
+    expect(daytime).toMatchObject({
+      kind: "speech",
+      actorName: "1号 狼人A",
+      actorSeat: 1,
+      eyebrow: "白天发言",
+    });
+    expect(campaign).toMatchObject({
+      kind: "speech",
+      eyebrow: "警长竞选发言",
+      title: "4号 预言家警长竞选发言",
+    });
+    expect(campaignPk).toMatchObject({
+      kind: "speech",
+      eyebrow: "警长竞选 PK 发言",
+      title: "4号 预言家警长竞选 PK 发言",
+    });
   });
 
   it("always produces a complete accessible sentence", () => {

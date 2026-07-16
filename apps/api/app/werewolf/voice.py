@@ -375,6 +375,8 @@ def _judge_cue_for_event(
     if event.type == "phase_started" and event.phase == "night":
         return JudgeVoiceCue("夜晚降临，所有玩家请闭眼。", "night_start")
     if event.type == "phase_started" and event.phase == "day":
+        if event.payload.get("narration_mode") == "explicit_v1":
+            return None
         if previous_night_deaths:
             return JudgeVoiceCue(
                 f"昨夜死亡的玩家是 {_join_player_labels(previous_night_deaths, player_seats)}。"

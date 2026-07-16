@@ -66,6 +66,7 @@ function player(overrides: TestPlayer): GodViewPlayer {
     },
     isSheriff: false,
     hasRaisedHand: false,
+    hasWithdrawn: false,
     isSpeaking: false,
     voteTarget: null,
     receivedVotes: 0,

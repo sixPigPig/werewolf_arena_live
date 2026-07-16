@@ -58,9 +58,8 @@ function renderSpeech(
       ? `${presentation.actorSeat}号`
       : "等待";
   const status = currentPlayer?.stageStatus.label ?? godViewState.currentSeatLabel;
-  const phase = godViewState.phaseLabel
-    ? `${godViewState.phaseLabel}阶段`
-    : "公开发言";
+  const speechLabel = presentation.eyebrow || "白天发言";
+  const phase = `${speechLabel}阶段`;
 
   return (
     <section
@@ -90,7 +89,7 @@ function renderSpeech(
       <span aria-hidden="true">{seat}</span>
       <strong aria-hidden="true">{name}</strong>
       <em aria-hidden="true">{status}</em>
-      <p aria-hidden="true">公开发言</p>
+      <p aria-hidden="true">{speechLabel}</p>
       <small aria-hidden="true">{phase}</small>
     </section>
   );

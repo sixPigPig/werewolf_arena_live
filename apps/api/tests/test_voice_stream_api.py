@@ -835,6 +835,71 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
     assert end_chunk["data"] == "c3RhdGljLWVuZA=="
 
 
+def test_voice_stream_service_announces_explicit_dawn_deaths_once(tmp_path) -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        judge_voice_asset_dir=tmp_path / "missing-judge-voice",
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "state_updated",
+            round_number=2,
+            phase="night",
+            action="night_resolved",
+            payload={
+                "narration_mode": "explicit_v1",
+                "night_deaths": [
+                    {
+                        "player": "阿青",
+                        "cause": "werewolf_attack",
+                        "source": "狼人",
+                    }
+                ],
+            },
+        )
+        registry.publish(
+            run.run_id,
+            "judge_cue",
+            round_number=2,
+            phase="day",
+            action="dawn_deaths",
+            payload={
+                "cue_id": "dawn_deaths",
+                "visible_text": "昨夜死亡的玩家是 1号玩家。",
+                "players": ["1号玩家"],
+            },
+        )
+        registry.publish(
+            run.run_id,
+            "phase_started",
+            round_number=2,
+            phase="day",
+            payload={"narration_mode": "explicit_v1"},
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    spoken_texts = [
+        "".join(call["text_chunks"])
+        for instance in RecordingTtsClient.instances
+        for call in instance.calls
+    ]
+    assert spoken_texts.count("昨夜死亡的玩家是 1号玩家。") == 1
+    assert len([text for text in spoken_texts if text.startswith("昨夜死亡")]) == 1
+
+
 def test_voice_stream_service_plays_static_sheriff_direction_prompt(tmp_path) -> None:
     RecordingTtsClient.instances.clear()
     asset_dir = tmp_path / "judge-voice"

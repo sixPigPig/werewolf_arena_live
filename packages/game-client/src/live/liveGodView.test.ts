@@ -707,7 +707,7 @@ describe("deriveGodViewState", () => {
     expect(state.vote.tallies).toEqual([]);
   });
 
-  it("marks sheriff candidates with raised hands until the batch leaves the result", () => {
+  it("keeps raised hands and withdrawal marks until the sheriff election resolves", () => {
     const started = event({
       id: 1,
       type: "game_started",
@@ -762,6 +762,29 @@ describe("deriveGodViewState", () => {
       actor: "阿青",
       action: "sheriff_speech",
     });
+    const withdrawal = event({
+      id: 7,
+      type: "action_parsed",
+      round: 1,
+      phase: "day",
+      actor: "阿青",
+      action: "sheriff_withdraw",
+      payload: { result: { withdraw: "退水" } },
+    });
+    const interruptedResolution = event({
+      id: 8,
+      type: "state_updated",
+      round: 1,
+      phase: "day",
+      action: "sheriff_election_resolved",
+      payload: {
+        sheriff_election: {
+          outcome: "postponed",
+          reason_code: "first_pre_election_self_explosion",
+        },
+        sheriff_election_pending: true,
+      },
+    });
 
     const partialEvents = [started, ...requests, firstResult];
     const partialState = deriveGodViewState(
@@ -792,7 +815,35 @@ describe("deriveGodViewState", () => {
       deriveLiveSpectatorState(speechEvents),
       "上警测试",
     );
-    expect(speechState.players.every((player) => !player.hasRaisedHand)).toBe(true);
+    expect(speechState.phaseLabel).toBe("警长竞选");
+    expect(speechState.players.find((player) => player.name === "阿青")).toMatchObject({
+      hasRaisedHand: true,
+      hasWithdrawn: false,
+    });
+
+    const withdrawnEvents = [...speechEvents, withdrawal];
+    const withdrawnState = deriveGodViewState(
+      withdrawnEvents,
+      deriveLiveSpectatorState(withdrawnEvents),
+      "上警测试",
+    );
+    expect(withdrawnState.players.find((player) => player.name === "阿青")).toMatchObject({
+      hasRaisedHand: true,
+      hasWithdrawn: true,
+    });
+
+    const resolvedEvents = [...withdrawnEvents, interruptedResolution];
+    const resolvedState = deriveGodViewState(
+      resolvedEvents,
+      deriveLiveSpectatorState(resolvedEvents),
+      "上警测试",
+    );
+    expect(resolvedState.phaseLabel).toBe("白天发言");
+    expect(
+      resolvedState.players.every(
+        (player) => !player.hasRaisedHand && !player.hasWithdrawn,
+      ),
+    ).toBe(true);
   });
 });
 

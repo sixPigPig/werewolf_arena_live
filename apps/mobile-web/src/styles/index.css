@@ -2115,6 +2115,26 @@ textarea {
   height: 15px;
 }
 
+.mobile-live-seat-withdrawn {
+  position: absolute;
+  top: -7px;
+  left: -5px;
+  z-index: 5;
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  border: 1px solid rgb(170 188 207 / 90%);
+  border-radius: 999px;
+  background: linear-gradient(145deg, #536273, #202a35);
+  color: #eef5fb;
+  font-size: 11px;
+  font-weight: 900;
+  box-shadow:
+    0 2px 6px rgb(0 0 0 / 68%),
+    0 0 9px rgb(116 146 174 / 42%);
+}
+
 .mobile-live-seat-sheriff .mobile-live-seat-avatar {
   border-color: #f1c76e;
   box-shadow:

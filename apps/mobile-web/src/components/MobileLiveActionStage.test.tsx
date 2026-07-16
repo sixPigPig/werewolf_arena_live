@@ -19,6 +19,7 @@ function player(overrides: Partial<GodViewPlayer> = {}): GodViewPlayer {
     stageStatus: { kind: "idle", label: "存活" },
     isSheriff: false,
     hasRaisedHand: false,
+    hasWithdrawn: false,
     isSpeaking: false,
     voteTarget: null,
     receivedVotes: 0,
@@ -101,7 +102,7 @@ function presentation(
 }
 
 describe("MobileLiveActionStage", () => {
-  it("renders the speech portrait, name and public-speech label unchanged", () => {
+  it("renders the speech portrait, name and action-specific speech label", () => {
     const currentPlayer = player({
       seatNumber: 1,
       name: "阿青",
@@ -114,8 +115,8 @@ describe("MobileLiveActionStage", () => {
           actorName: "阿青",
           actorSeat: 1,
           title: "1号 阿青发言",
-          eyebrow: "公开发言",
-          accessibleText: "1号 阿青公开发言",
+          eyebrow: "警长竞选发言",
+          accessibleText: "1号 阿青警长竞选发言",
         })}
         currentPlayer={currentPlayer}
         godViewState={stateWith([currentPlayer])}
@@ -124,7 +125,8 @@ describe("MobileLiveActionStage", () => {
 
     const stage = screen.getByRole("status");
     expect(within(stage).getByText("阿青")).toBeVisible();
-    expect(within(stage).getByText("公开发言")).toBeVisible();
+    expect(within(stage).getByText("警长竞选发言")).toBeVisible();
+    expect(within(stage).getByText("警长竞选发言阶段")).toBeVisible();
     expect(stage.querySelector(".mobile-live-presenter img")).toHaveAttribute(
       "src",
       "/avatar.png",

@@ -565,6 +565,68 @@ describe("LivePage", () => {
     );
   });
 
+  it("keeps the raised hand through campaign speech and marks withdrawals", async () => {
+    const user = userEvent.setup();
+    const electionEvents: LiveGameEvent[] = [
+      gameStartedEvent,
+      {
+        ...gameStartedEvent,
+        id: 2,
+        type: "action_requested",
+        actor: "阿青",
+        action: "sheriff_run",
+        payload: { options: ["上警", "不上警"] },
+      },
+      {
+        ...gameStartedEvent,
+        id: 3,
+        type: "action_parsed",
+        actor: "阿青",
+        action: "sheriff_run",
+        payload: { choice: "上警" },
+      },
+      {
+        ...gameStartedEvent,
+        id: 4,
+        type: "model_response_delta",
+        actor: "阿青",
+        action: "sheriff_speech",
+        payload: {
+          request_id: "req-sheriff-speech",
+          visible_text: "我竞选警长。",
+          is_public: true,
+        },
+      },
+      {
+        ...gameStartedEvent,
+        id: 5,
+        type: "action_parsed",
+        actor: "阿青",
+        action: "sheriff_withdraw",
+        payload: { choice: "退水" },
+      },
+    ];
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: electionEvents,
+      latestEvent: electionEvents.at(-1),
+    });
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const withdrawnSeat = screen.getByRole("article", {
+      name: /1号 阿青 平民 .* 举手上警 已退水/,
+    });
+    expect(
+      within(withdrawnSeat).getByRole("img", { name: "举手上警" }),
+    ).toBeVisible();
+    expect(
+      within(withdrawnSeat).getByRole("img", { name: "已退水" }),
+    ).toHaveClass("mobile-live-seat-withdrawn");
+    expect(screen.getByLabelText("当前轮次")).toHaveTextContent("警长竞选");
+  });
+
   it("marks night eliminations and daytime exiles over grayscale avatars", async () => {
     const user = userEvent.setup();
     gameClientMocks.useGameRunEvents.mockReturnValue({
@@ -636,7 +698,7 @@ describe("LivePage", () => {
 
     const stage = await screen.findByRole("status", { name: "当前舞台" });
     expect(within(stage).getByText("阿青")).toBeVisible();
-    expect(within(stage).getByText("公开发言")).toBeVisible();
+    expect(within(stage).getByText("白天发言")).toBeVisible();
     expect(within(stage).queryByText("model_response_delta")).not.toBeInTheDocument();
 
     const presenterImage = stage.querySelector(".mobile-live-presenter img");

@@ -1033,6 +1033,8 @@ function speechPresentation(
   state: GodViewState,
 ): MobileLiveFocusPresentation {
   const actor = resolveActor(event, state);
+  const label = speechLabel(event.action);
+  const actorLabel = speechActorLabel(actor);
   return {
     eventId: event.id,
     kind: "speech",
@@ -1041,12 +1043,29 @@ function speechPresentation(
     actorSeat: actor.seat,
     actorRole: actor.role,
     targetName: null,
-    eyebrow: "公开发言",
-    title: actor.name ? `${actor.label}发言` : "公开发言",
+    eyebrow: label,
+    title: actor.name ? `${actorLabel}${label}` : label,
     detail: "",
     progress: null,
-    accessibleText: `${actor.label}公开发言`,
+    accessibleText: `${actorLabel}${label}`,
   };
+}
+
+function speechActorLabel(actor: ResolvedActor): string {
+  if (actor.name && seatNumberFromReference(actor.name) !== null) {
+    return actor.name;
+  }
+  return actor.label;
+}
+
+function speechLabel(action: string | null): string {
+  if (action === "sheriff_speech") {
+    return "警长竞选发言";
+  }
+  if (action === "sheriff_pk_speech") {
+    return "警长竞选 PK 发言";
+  }
+  return "白天发言";
 }
 
 function waitingPresentation(

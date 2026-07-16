@@ -32,6 +32,7 @@ export type GodViewPlayer = {
   stageStatus: GodViewPlayerStageStatus;
   isSheriff: boolean;
   hasRaisedHand: boolean;
+  hasWithdrawn: boolean;
   isSpeaking: boolean;
   voteTarget: string | null;
   receivedVotes: number;
@@ -170,6 +171,7 @@ type MutableGodView = {
     requested: Set<string>;
     resolved: Set<string>;
     raised: Set<string>;
+    withdrawn: Set<string>;
   };
   speechOrder: string[];
   winnerLabel: string;
@@ -231,6 +233,7 @@ export function deriveGodViewState(
       requested: new Set(),
       resolved: new Set(),
       raised: new Set(),
+      withdrawn: new Set(),
     },
     speechOrder: [],
     winnerLabel: "未结算",
@@ -287,7 +290,9 @@ export function deriveGodViewState(
   return {
     boardName,
     dayNightLabel: roundLabel(view.currentRound, view.currentPhase),
-    phaseLabel: phaseDisplay(view.currentPhase),
+    phaseLabel: view.sheriffSignUp.active
+      ? "警长竞选"
+      : phaseDisplay(view.currentPhase),
     currentSeatLabel: currentSeatLabel(players, view.stageFocus),
     countdownLabel: view.stageFocus.countdownLabel,
     aliveLabel: `存活 ${totalAlive}/${players.length}`,
@@ -334,17 +339,31 @@ function collectSheriffSignUp(view: MutableGodView, event: LiveGameEvent) {
   const signUp = view.sheriffSignUp;
   const isSheriffRun = event.action === "sheriff_run";
 
-  if (
-    signUp.active &&
-    !isSheriffRun &&
-    signUp.requested.size > 0 &&
-    signUp.resolved.size >= signUp.requested.size
-  ) {
+  if (signUp.active && isSheriffElectionEndEvent(event)) {
     signUp.active = false;
     signUp.raised.clear();
+    signUp.withdrawn.clear();
+    return;
   }
 
-  if (!isSheriffRun || !event.actor) {
+  if (!event.actor) {
+    return;
+  }
+
+  if (event.action === "sheriff_withdraw" && event.type === "action_parsed") {
+    if (!signUp.active) {
+      return;
+    }
+    const choice = sheriffChoice(payloadForEvent(event), "withdraw");
+    if (choice === "退水") {
+      signUp.withdrawn.add(event.actor);
+    } else {
+      signUp.withdrawn.delete(event.actor);
+    }
+    return;
+  }
+
+  if (!isSheriffRun) {
     return;
   }
 
@@ -354,6 +373,7 @@ function collectSheriffSignUp(view: MutableGodView, event: LiveGameEvent) {
       signUp.requested.clear();
       signUp.resolved.clear();
       signUp.raised.clear();
+      signUp.withdrawn.clear();
     }
     signUp.requested.add(event.actor);
     return;
@@ -367,12 +387,46 @@ function collectSheriffSignUp(view: MutableGodView, event: LiveGameEvent) {
   signUp.requested.add(event.actor);
   signUp.resolved.add(event.actor);
   const payload = payloadForEvent(event);
-  const choice = stringField(payload, "choice") || parsedChoice(payload);
+  const choice = sheriffChoice(payload, "run");
   if (choice === "上警") {
     signUp.raised.add(event.actor);
   } else {
     signUp.raised.delete(event.actor);
   }
+}
+
+function isSheriffElectionEndEvent(event: LiveGameEvent): boolean {
+  if (
+    event.type === "game_completed" ||
+    event.type === "game_failed" ||
+    event.type === "game_canceled"
+  ) {
+    return true;
+  }
+  if (
+    event.type === "state_updated" &&
+    event.action === "sheriff_election_resolved"
+  ) {
+    return true;
+  }
+  if (event.type !== "judge_cue") {
+    return false;
+  }
+  const payload = payloadForEvent(event);
+  const cueId = stringField(payload, "cue_id") || event.action || "";
+  return cueId === "werewolf_self_explosion" || cueId === "self_explosion_skip";
+}
+
+function sheriffChoice(
+  payload: Record<string, unknown>,
+  resultField: "run" | "withdraw",
+): string {
+  const directChoice = stringField(payload, "choice");
+  if (directChoice) {
+    return directChoice;
+  }
+  const result = recordField(payload, "result");
+  return result ? stringField(result, resultField) : "";
 }
 
 function buildSpeakerFlow(
@@ -798,6 +852,8 @@ function toGodViewPlayer(
     isSheriff: view.sheriff.current === player.name,
     hasRaisedHand:
       view.sheriffSignUp.active && view.sheriffSignUp.raised.has(player.name),
+    hasWithdrawn:
+      view.sheriffSignUp.active && view.sheriffSignUp.withdrawn.has(player.name),
     isSpeaking,
     voteTarget: view.voteTargets.get(player.name) ?? null,
     receivedVotes,
