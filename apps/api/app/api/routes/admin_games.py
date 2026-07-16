@@ -861,6 +861,13 @@ def _round_summaries(
                     item.get("sheriff_pk_candidates"), max_items=24, max_length=120
                 ),
                 "sheriff_runoff_votes": _votes_summary(item.get("sheriff_runoff_votes")),
+                "exile_pk_candidates": _string_list(
+                    item.get("exile_pk_candidates"), max_items=24, max_length=120
+                ),
+                "exile_runoff_votes": _votes_summary(item.get("exile_runoff_votes")),
+                "exile_resolution_reason": _optional_text(
+                    item.get("exile_resolution_reason"), max_length=80
+                ),
                 "sheriff_speech_order": _string_list(
                     item.get("sheriff_speech_order"), max_items=24, max_length=120
                 ),
@@ -875,6 +882,7 @@ def _round_summaries(
                 ),
                 "sheriff_speeches": _speech_summaries(item.get("sheriff_speeches")),
                 "sheriff_pk_speeches": _speech_summaries(item.get("sheriff_pk_speeches")),
+                "exile_pk_speeches": _speech_summaries(item.get("exile_pk_speeches")),
                 "debate": _speech_summaries(item.get("debate")),
                 "sheriff_badge_target": _optional_text(
                     item.get("sheriff_badge_target"), max_length=120

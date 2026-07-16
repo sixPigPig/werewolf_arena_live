@@ -4032,6 +4032,7 @@ def test_get_game_playback_returns_persisted_events_and_saved_voices() -> None:
     assert payload["voices"] == [
         {
             "utterance_id": "voice_api_1",
+            "audience": "player_public",
             "source_event_id": event.id,
             "last_source_event_id": event.id,
             "speaker_kind": "player",
@@ -4040,13 +4041,150 @@ def test_get_game_playback_returns_persisted_events_and_saved_voices() -> None:
             "audio_format": "pcm",
             "sample_rate": 24000,
             "duration_ms": 123,
-            "subtitle_timings": [],
+            "subtitle_timings": [
+                {"text": "我不是狼", "start_ms": 0, "end_ms": 1}
+            ],
         }
     ]
 
     voice_response = client.get(f"/api/v1/games/{session_id}/playback/voices/voice_api_1")
     assert voice_response.status_code == 200
     assert voice_response.json()["chunks"] == [{"chunk_index": 0, "data": "YWJj"}]
+
+
+def test_god_view_playback_includes_scoped_wolf_chat_voice_only() -> None:
+    session_id = "game_a110e002"
+    store_game_session(session_id)
+    registry = LiveRunRegistry(live_store=RecordingSessionLiveStore())
+    run = registry.create_run(
+        session_id=session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=21,
+        max_rounds=8,
+    )
+    event = registry.publish(
+        run.run_id,
+        "action_parsed",
+        actor="阿青",
+        action="werewolf_discuss",
+        payload={
+            "choice": "3号玩家",
+            "visible_result": {
+                "target": "3号玩家",
+                "message": "今晚建议刀3号。",
+            },
+        },
+    )
+    with TestingSessionLocal() as session:
+        voice_store = DatabaseVoiceStore(session, session_id=session_id)
+        voice_store.upsert_utterance(
+            VoiceUtterance(
+                utterance_id="voice_wolf_chat_api",
+                run_id=run.run_id,
+                source_event_id=event.id,
+                request_id=None,
+                speaker_kind="player",
+                speaker_name="1号玩家",
+                speaker="player",
+                text="今晚建议刀3号。",
+                action="werewolf_discuss",
+                audience="spectator_god_view",
+            ),
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
+        voice_store.append_chunk(
+            "voice_wolf_chat_api",
+            chunk_index=0,
+            audio=b"wolf-chat",
+        )
+        voice_store.complete_utterance("voice_wolf_chat_api", duration_ms=120)
+
+    public_response = client.get(f"/api/v1/games/{session_id}/playback")
+    public_audio = client.get(
+        f"/api/v1/games/{session_id}/playback/voices/voice_wolf_chat_api"
+    )
+    app.dependency_overrides[games_routes.get_current_public_principal] = lambda: object()
+    try:
+        god_response = client.get(f"/api/v1/games/{session_id}/god-view/playback")
+        god_audio = client.get(
+            f"/api/v1/games/{session_id}/god-view/playback/voices/voice_wolf_chat_api"
+        )
+    finally:
+        app.dependency_overrides.pop(
+            games_routes.get_current_public_principal,
+            None,
+        )
+
+    assert public_response.status_code == 200
+    assert not any(
+        voice["utterance_id"] == "voice_wolf_chat_api"
+        for voice in public_response.json()["voices"]
+    )
+    assert public_audio.status_code == 404
+    assert god_response.status_code == 200
+    wolf_voice = next(
+        voice
+        for voice in god_response.json()["voices"]
+        if voice["utterance_id"] == "voice_wolf_chat_api"
+    )
+    assert wolf_voice["source_event_id"] == event.id
+    assert wolf_voice["audience"] == "spectator_god_view"
+    assert wolf_voice["subtitle_timings"]
+    assert god_audio.status_code == 200
+    assert god_audio.json()["chunks"] == [
+        {"chunk_index": 0, "data": "d29sZi1jaGF0"}
+    ]
+
+
+def test_playback_player_voice_covers_the_full_streamed_request_cue() -> None:
+    events = [
+        {
+            "id": 10,
+            "source_run_id": "run_voice",
+            "source_event_id": 20,
+            "type": "model_request_started",
+            "payload": {"request_id": "req_voice"},
+        },
+        {
+            "id": 11,
+            "source_run_id": "run_voice",
+            "source_event_id": 21,
+            "type": "model_response_delta",
+            "payload": {"request_id": "req_voice", "visible_text": "我是好人"},
+        },
+        {
+            "id": 12,
+            "source_run_id": "run_voice",
+            "source_event_id": 22,
+            "type": "action_parsed",
+            "payload": {"request_id": "req_voice"},
+        },
+    ]
+
+    mapped = games_routes._map_playback_voices_to_timeline(
+        [
+            {
+                "utterance_id": "voice_streamed",
+                "run_id": "run_voice",
+                "source_event_id": 22,
+                "last_source_event_id": 22,
+                "speaker_kind": "player",
+            }
+        ],
+        events,
+    )
+
+    assert mapped == [
+        {
+            "utterance_id": "voice_streamed",
+            "source_event_id": 10,
+            "last_source_event_id": 12,
+            "speaker_kind": "player",
+        }
+    ]
 
 
 def test_get_game_playback_voice_rejects_cross_session_and_requires_god_view_session() -> None:
@@ -4281,6 +4419,7 @@ def test_get_game_playback_adds_static_judge_voice_without_saved_voice_rows(
     assert payload["voices"] == [
         {
             "utterance_id": f"static_judge_{game_started_event['id']}_game_intro",
+            "audience": "player_public",
             "source_event_id": game_started_event["id"],
             "last_source_event_id": game_started_event["id"],
             "speaker_kind": "judge",
@@ -4425,6 +4564,7 @@ def test_get_game_god_view_playback_exposes_safe_wolf_votes_and_final_target() -
         "choice": "李四",
         "result": {"target": "李四"},
         "visible_result": {"target": "李四"},
+        "decision_stage": "final",
         "vote_round": 1,
     }
     final_target = next(
@@ -4448,6 +4588,7 @@ def test_get_game_god_view_playback_exposes_safe_wolf_votes_and_final_target() -
         "witch_sleep",
         "dawn_peaceful",
         "sheriff_raise_hands",
+        "exile_no_result",
     ]
     witch_death = next(
         event
@@ -4479,6 +4620,108 @@ def test_get_game_god_view_playback_exposes_safe_wolf_votes_and_final_target() -
         and event["payload"].get("choice") == "张三"
         for event in events
     )
+
+
+def test_werewolf_tiebreak_playback_is_god_only_and_replays_trigger_order() -> None:
+    session_id = "game_1200abce"
+    state = sample_state(session_id, winner="好人阵营")
+    state["players"] = [
+        {"name": "张三", "role": "狼人", "model": "deepseek-chat", "observations": []},
+        {"name": "王五", "role": "狼人", "model": "deepseek-chat", "observations": []},
+        {"name": "李四", "role": "村民", "model": "deepseek-chat", "observations": []},
+        {"name": "赵六", "role": "村民", "model": "deepseek-chat", "observations": []},
+    ]
+    round_state = state["rounds"][0]
+    round_state["players"] = ["张三", "王五", "李四", "赵六"]
+    round_state["attacked"] = "赵六"
+    round_state["werewolf_discussion"] = [
+        {
+            "round": 1,
+            "stage": "proposal",
+            "speaker": "张三",
+            "target": "李四",
+            "message": "李四带队能力强，建议先处理。",
+        },
+        {
+            "round": 1,
+            "stage": "proposal",
+            "speaker": "王五",
+            "target": "赵六",
+            "message": "赵六更像关键神职，我倾向改刀。",
+        },
+    ]
+    round_state["werewolf_vote_rounds"] = [
+        {
+            "round": 1,
+            "stage": "final_vote",
+            "candidates": ["李四", "赵六"],
+            "votes": {"张三": "李四", "王五": "赵六"},
+            "tally": {"李四": 1, "赵六": 1},
+            "unanimous": False,
+            "result": "赵六",
+            "tiebreak": {
+                "triggered": True,
+                "actor": "王五",
+                "candidates": ["李四", "赵六"],
+                "choice": "赵六",
+                "source": "model",
+            },
+        }
+    ]
+    store_game_session(session_id, state=state, logs=sample_logs())
+    override_replay_store()
+
+    try:
+        public_response = client.get(f"/api/v1/games/{session_id}/playback")
+        app.dependency_overrides[games_routes.get_current_public_principal] = lambda: object()
+        god_response = client.get(f"/api/v1/games/{session_id}/god-view/playback")
+    finally:
+        clear_overrides()
+
+    assert public_response.status_code == 200
+    public_events = public_response.json()["events"]
+    assert not any(
+        event.get("action")
+        in {
+            "werewolf_discuss",
+            "werewolf_kill_vote",
+            "werewolf_tiebreak_start",
+            "werewolf_tiebreak_result",
+        }
+        for event in public_events
+    )
+
+    assert god_response.status_code == 200
+    private_events = [
+        event
+        for event in god_response.json()["events"]
+        if event.get("action")
+        in {
+            "werewolf_discuss",
+            "werewolf_kill_vote",
+            "werewolf_tiebreak_start",
+            "werewolf_tiebreak_result",
+        }
+    ]
+    assert [event["action"] for event in private_events] == [
+        "werewolf_discuss",
+        "werewolf_discuss",
+        "werewolf_kill_vote",
+        "werewolf_kill_vote",
+        "werewolf_tiebreak_start",
+        "werewolf_kill_vote",
+        "werewolf_tiebreak_result",
+    ]
+    assert [
+        event["payload"].get("decision_stage")
+        for event in private_events
+        if event["action"] == "werewolf_kill_vote"
+    ] == ["final", "final", "tiebreak"]
+    tiebreak_start = next(
+        event for event in private_events if event["action"] == "werewolf_tiebreak_start"
+    )
+    assert tiebreak_start["payload"]["player"] == "王五"
+    assert tiebreak_start["payload"]["players"] == ["李四", "赵六"]
 
 
 def test_get_game_playback_suppresses_secret_wolf_self_explosion_check() -> None:

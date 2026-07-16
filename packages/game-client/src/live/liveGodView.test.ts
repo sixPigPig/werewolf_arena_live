@@ -1064,6 +1064,75 @@ describe("deriveGodViewState meaningful event lines", () => {
     );
   });
 
+  it("renders wolf private chat and tie-only judge cues in God View", () => {
+    const events = [
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "1号 狼人A", role: "werewolf", model: "test" },
+            { name: "2号 狼人B", role: "werewolf", model: "test" },
+            { name: "3号 平民A", role: "villager", model: "test" },
+            { name: "4号 平民B", role: "villager", model: "test" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "werewolf_discuss",
+        payload: {
+          choice: "3号玩家",
+          message: "建议刀3号，他像预言家。",
+          decision_stage: "proposal",
+        },
+      }),
+      event({
+        id: 3,
+        type: "judge_cue",
+        round: 1,
+        phase: "night",
+        action: "werewolf_tiebreak_start",
+        payload: {
+          visible_text: "狼队刀口出现平票。本夜由1号玩家行使归票权。",
+        },
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "werewolf_kill_vote",
+        payload: {
+          choice: "3号玩家",
+          message: "最终归票3号。",
+          decision_stage: "tiebreak",
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+
+    expect(state.eventLines.map((line) => line.text)).toEqual(
+      expect.arrayContaining([
+        "1号 密聊：建议刀3号，他像预言家。",
+        "狼队刀口出现平票。本夜由1号玩家行使归票权。",
+        "1号 归票 -> 3号",
+      ]),
+    );
+    expect(state.nightActions).toEqual(
+      expect.arrayContaining([
+        { label: "1号 密聊", value: "建议刀3号，他像预言家。", tone: "info" },
+        { label: "1号 归票", value: "定 3号", tone: "danger" },
+      ]),
+    );
+  });
+
   it("keeps only spectator-meaningful action requests and state updates", () => {
     const events = [
       ...eightPlayerEvents(),

@@ -3181,7 +3181,7 @@ def test_live_store_creates_voice_job_with_narratable_event(db_session: Session)
     assert job.attempt_count == 0
 
 
-def test_live_store_never_creates_private_voice_job(db_session: Session) -> None:
+def test_live_store_creates_god_view_only_private_voice_job(db_session: Session) -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
         session_id="game_private_voice_job",
@@ -3195,14 +3195,20 @@ def test_live_store_never_creates_private_voice_job(db_session: Session) -> None
         "action_parsed",
         actor="狼人",
         action="werewolf_discuss",
-        payload={"visible_result": {"say": "秘密讨论。"}},
+        payload={"visible_result": {"message": "秘密讨论。"}},
     )
     store = DatabaseLiveStore(db_session)
 
     store.save_run(run)
     store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
 
-    assert db_session.query(VoiceMaterializationJobRecord).count() == 0
+    job = db_session.query(VoiceMaterializationJobRecord).one()
+    assert job.audience == "spectator_god_view"
+    assert job.speaker_kind == "player"
+    assert (
+        db_session.get(PublicLiveEventRecord, (run.run_id, event.id)) is None
+    )
+    assert db_session.get(GodViewLiveEventRecord, (run.run_id, event.id)) is not None
 
 
 def test_live_store_events_after_filters_by_event_id(db_session: Session) -> None:

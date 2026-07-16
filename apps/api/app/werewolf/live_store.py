@@ -45,7 +45,7 @@ from app.werewolf.session_timeline import (
     TimelineRun,
     build_session_timeline,
 )
-from app.werewolf.voice import voice_job_candidate
+from app.werewolf.voice import is_god_view_private_speech_event, voice_job_candidate
 
 
 def parse_live_datetime(value: str | None) -> datetime | None:
@@ -1092,38 +1092,48 @@ class DatabaseLiveStore:
         if god_view_event is not None:
             self.db.add(_god_view_projection_record(god_view_event))
 
-        speaker_kind = voice_job_candidate(public_event) if public_event is not None else None
-        if speaker_kind is None:
-            return event_record
+        voice_jobs: list[tuple[str, str]] = []
+        if public_event is not None:
+            public_speaker_kind = voice_job_candidate(public_event)
+            if public_speaker_kind is not None:
+                voice_jobs.append((public_speaker_kind, "player_public"))
+        if god_view_event is not None and is_god_view_private_speech_event(god_view_event):
+            god_view_speaker_kind = voice_job_candidate(
+                god_view_event,
+                audience="spectator_god_view",
+            )
+            if god_view_speaker_kind is not None:
+                voice_jobs.append((god_view_speaker_kind, "spectator_god_view"))
 
-        values = {
-            "run_id": event.run_id,
-            "source_event_id": event.id,
-            "speaker_kind": speaker_kind,
-            "session_id": event.session_id,
-            "audience": "player_public",
-            "status": "pending",
-            "attempt_count": 0,
-            "not_before": datetime.now(tz=UTC),
-        }
         dialect_name = self.db.get_bind().dialect.name
-        if dialect_name == "postgresql":
-            statement = postgresql_insert(VoiceMaterializationJobRecord).values(**values)
-            statement = statement.on_conflict_do_nothing(
-                index_elements=("run_id", "source_event_id", "speaker_kind")
-            )
-            self.db.execute(statement)
-        elif dialect_name == "sqlite":
-            statement = sqlite_insert(VoiceMaterializationJobRecord).values(**values)
-            statement = statement.on_conflict_do_nothing(
-                index_elements=("run_id", "source_event_id", "speaker_kind")
-            )
-            self.db.execute(statement)
-        elif self.db.get(
-            VoiceMaterializationJobRecord,
-            (event.run_id, event.id, speaker_kind),
-        ) is None:
-            self.db.add(VoiceMaterializationJobRecord(**values))
+        for speaker_kind, audience in voice_jobs:
+            values = {
+                "run_id": event.run_id,
+                "source_event_id": event.id,
+                "speaker_kind": speaker_kind,
+                "session_id": event.session_id,
+                "audience": audience,
+                "status": "pending",
+                "attempt_count": 0,
+                "not_before": datetime.now(tz=UTC),
+            }
+            if dialect_name == "postgresql":
+                statement = postgresql_insert(VoiceMaterializationJobRecord).values(**values)
+                statement = statement.on_conflict_do_nothing(
+                    index_elements=("run_id", "source_event_id", "speaker_kind")
+                )
+                self.db.execute(statement)
+            elif dialect_name == "sqlite":
+                statement = sqlite_insert(VoiceMaterializationJobRecord).values(**values)
+                statement = statement.on_conflict_do_nothing(
+                    index_elements=("run_id", "source_event_id", "speaker_kind")
+                )
+                self.db.execute(statement)
+            elif self.db.get(
+                VoiceMaterializationJobRecord,
+                (event.run_id, event.id, speaker_kind),
+            ) is None:
+                self.db.add(VoiceMaterializationJobRecord(**values))
         return event_record
 
 

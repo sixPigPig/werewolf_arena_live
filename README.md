@@ -82,8 +82,8 @@ cd apps/api
 make api
 ```
 
-`make api` 会先执行 `alembic upgrade head`，并注入仅用于本地 HTTP
-联调的开发认证与 Cookie 配置。如果手动启动，需先自行完成迁移并提供等价环境变量：
+`make api` 会先执行 `alembic upgrade head`，同时启动历史语音物化 worker，并注入仅用于本地 HTTP
+联调的开发认证与 Cookie 配置。如果手动启动，需先自行完成迁移、另启语音物化 worker，并提供等价环境变量：
 
 ```bash
 cd apps/api
@@ -92,6 +92,12 @@ ADMIN_DEV_AUTH_ENABLED=true \
 ADMIN_SESSION_COOKIE_SECURE=false \
 PUBLIC_SESSION_COOKIE_SECURE=false \
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+手动启动 API 时，另一个终端还必须运行：
+
+```bash
+make live-voice-materializer
 ```
 
 后端地址：

@@ -17,13 +17,14 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.live import LiveEvent, LiveRunRegistry
-from app.werewolf.privacy_projection import project_live_event
+from app.werewolf.privacy_projection import ProjectionAudience, project_live_event
 from app.werewolf.voice import (
     VoiceSpeakerConfig,
     VoiceUtterance,
     build_voice_messages,
     chunk_text_for_tts,
     event_to_voice_utterance,
+    is_god_view_private_speech_event,
     is_public_complete_speech_event,
     is_public_speech_event,
     voice_job_candidate,
@@ -153,6 +154,7 @@ class LiveVoiceStreamService:
         *,
         current_event_id: int | None = None,
         playback_ack_required: bool = False,
+        audience: ProjectionAudience = "player_public",
     ) -> None:
         if not self.available:
             await websocket.send_json(self.config.unavailable_payload)
@@ -170,7 +172,7 @@ class LiveVoiceStreamService:
         historical_events = [
             projected
             for event in canonical_historical_events
-            if (projected := project_live_event(event, "player_public")) is not None
+            if (projected := project_live_event(event, audience)) is not None
         ]
         run = self.registry.try_get_run(run_id)
         if run is None:
@@ -180,7 +182,11 @@ class LiveVoiceStreamService:
             return
 
         voice_store = self.voice_store_factory(run.session_id) if self.voice_store_factory else None
-        persistence_store = voice_store if self.persist_streamed_voices else None
+        persistence_store = (
+            voice_store
+            if self.persist_streamed_voices and audience == "player_public"
+            else None
+        )
         playback_acks: PlaybackAckQueue | None = asyncio.Queue() if playback_ack_required else None
         disconnect_task = asyncio.create_task(_watch_websocket_control(websocket, playback_acks))
         subscriber: queue.Queue[LiveEvent] | None = None
@@ -191,7 +197,7 @@ class LiveVoiceStreamService:
         try:
             recent_replay = await _replay_recent_utterance(
                 websocket,
-                voice_store,
+                voice_store if audience == "player_public" else None,
                 run_id=run_id,
                 current_event_id=current_event_id,
                 disconnect_task=disconnect_task,
@@ -229,7 +235,7 @@ class LiveVoiceStreamService:
                 )
                 if canonical_event is None:
                     return
-                event = project_live_event(canonical_event, "player_public")
+                event = project_live_event(canonical_event, audience)
                 if event is None:
                     continue
                 is_terminal = event.type in TERMINAL_EVENT_TYPES
@@ -241,6 +247,11 @@ class LiveVoiceStreamService:
                     previous_night_deaths=voice_context.previous_night_deaths,
                     peaceful_night=voice_context.peaceful_night,
                 )
+                if utterance is not None and is_god_view_private_speech_event(event):
+                    utterance = replace(
+                        utterance,
+                        audience="spectator_god_view",
+                    )
                 if (
                     utterance is not None
                     and utterance.request_id in streamed_delta_request_ids
@@ -257,6 +268,7 @@ class LiveVoiceStreamService:
                         pending_events,
                         speaker_config,
                         voice_context.player_seats,
+                        audience,
                     )
                     if started_from_delta and utterance.request_id is not None:
                         streamed_delta_request_ids.add(utterance.request_id)
@@ -351,6 +363,7 @@ class LiveVoiceStreamService:
             audio_format=asset.audio_format,
             sample_rate=asset.sample_rate,
             chunk_index=0,
+            audience=utterance.audience,
         )
         try:
             await websocket.send_json(start_message)
@@ -480,6 +493,7 @@ class LiveVoiceStreamService:
                     ),
                     "speaker_kind": utterance.speaker_kind,
                     "speaker_name": utterance.speaker_name,
+                    "audience": utterance.audience,
                     "mime_type": mime_type,
                     "audio_format": audio_format,
                     "sample_rate": sample_rate,
@@ -557,6 +571,7 @@ class LiveVoiceStreamService:
                     audio_format=audio_format,
                     sample_rate=sample_rate,
                     chunk_index=chunk_index,
+                    audience=utterance.audience,
                 )
                 await websocket.send_json(chunk_message)
                 if persistence_enabled:
@@ -889,6 +904,7 @@ def build_static_judge_playback_voices(
                     audio_format=asset.audio_format,
                     sample_rate=asset.sample_rate,
                     chunk_index=0,
+                    audience=utterance.audience,
                 )
                 voices.append(
                     {
@@ -900,6 +916,7 @@ def build_static_judge_playback_voices(
                         ),
                         "speaker_kind": start_message["speaker_kind"],
                         "speaker_name": start_message["speaker_name"],
+                        "audience": start_message["audience"],
                         "mime_type": start_message["mime_type"],
                         "audio_format": start_message["audio_format"],
                         "sample_rate": start_message["sample_rate"],
@@ -922,6 +939,7 @@ def build_voice_playback_coverage(
     effective_voices: list[dict[str, Any]],
     *,
     materialization_lag_ms: int | None = None,
+    audience: ProjectionAudience = "player_public",
 ) -> dict[str, Any]:
     narratable_keys: set[tuple[int, str]] = set()
     terminal_keys: set[tuple[int, str]] = set()
@@ -929,7 +947,7 @@ def build_voice_playback_coverage(
         event = _live_event_from_playback_dict(event_data)
         if event is None:
             continue
-        speaker_kind = voice_job_candidate(event)
+        speaker_kind = voice_job_candidate(event, audience=audience)
         if speaker_kind is None:
             continue
         key = (event.id, speaker_kind)
@@ -1098,6 +1116,9 @@ async def _replay_recent_utterance(
     speaker_name = utterance.get("speaker_name")
     mime_type = utterance.get("mime_type")
     audio_format = utterance.get("audio_format")
+    audience = utterance.get("audience")
+    if audience not in {"player_public", "spectator_god_view"}:
+        audience = "player_public"
     if (
         not isinstance(source_event_id, int)
         or speaker_kind not in {"player", "judge"}
@@ -1122,6 +1143,7 @@ async def _replay_recent_utterance(
         audio_format=audio_format,
         sample_rate=sample_rate,
         chunk_index=0,
+        audience=audience,
     )
     if not await _send_replay_message(websocket, start_message, disconnect_task):
         return RecentUtteranceReplayResult(should_continue=False)
@@ -1152,6 +1174,7 @@ async def _replay_recent_utterance(
             audio_format=audio_format,
             sample_rate=sample_rate,
             chunk_index=chunk_index,
+            audience=audience,
         )
         if not await _send_replay_message(websocket, chunk_message, disconnect_task):
             return RecentUtteranceReplayResult(should_continue=False)
@@ -1375,6 +1398,7 @@ async def _coalesce_request_deltas(
     pending_events: deque[LiveEvent],
     speaker_config: VoiceSpeakerConfig,
     player_seats: dict[str, int],
+    audience: ProjectionAudience = "player_public",
 ) -> VoiceUtterance:
     if utterance.request_id is None or utterance.speaker_kind != "player":
         return utterance
@@ -1393,7 +1417,7 @@ async def _coalesce_request_deltas(
             if event is None:
                 break
 
-        projected_event = project_live_event(event, "player_public")
+        projected_event = project_live_event(event, audience)
         if projected_event is None:
             continue
         event = projected_event

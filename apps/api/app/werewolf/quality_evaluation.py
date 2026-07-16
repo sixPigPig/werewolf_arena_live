@@ -464,7 +464,15 @@ def _structure_metrics(state: dict[str, Any], logs: list[dict[str, Any]]) -> dic
     actions = [str(item.get("action") or "") for item in _iter_action_logs(logs)]
     sheriff_requests = sum(action.startswith("sheriff_") for action in actions)
     public_requests = sum(
-        action in {"debate", "sheriff_run", "sheriff_speech", "sheriff_pk_speech"}
+        action
+        in {
+            "debate",
+            "sheriff_run",
+            "sheriff_speech",
+            "sheriff_pk_speech",
+            "exile_pk_speech",
+            "exile_runoff_vote",
+        }
         or action.startswith("sheriff_vote")
         for action in actions
     )

@@ -278,11 +278,15 @@ class VoiceUtteranceRecord(Base):
     __table_args__ = (
         Index("ix_voice_utterances_run_source_event", "run_id", "source_event_id"),
         Index("ix_voice_utterances_run_status", "run_id", "status"),
+        Index("ix_voice_utterances_session_audience", "session_id", "audience"),
     )
 
     utterance_id: Mapped[str] = mapped_column(String(40), primary_key=True)
     run_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     session_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    audience: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="player_public", server_default="player_public"
+    )
     source_event_id: Mapped[int] = mapped_column(nullable=False)
     last_source_event_id: Mapped[int] = mapped_column(nullable=False)
     request_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)

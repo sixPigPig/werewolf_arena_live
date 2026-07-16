@@ -131,6 +131,8 @@ export type RawRoundLog = {
   sheriff_votes?: RawActionLog[];
   sheriff_pk_speech?: RawActionLog[];
   sheriff_runoff_votes?: RawActionLog[];
+  exile_pk_speech?: RawActionLog[];
+  exile_runoff_votes?: RawActionLog[];
   werewolf_self_explosion?: RawActionLog | null;
   speech_order?: RawActionLog | null;
   sheriff_badge?: RawActionLog | null;
@@ -154,6 +156,7 @@ export type PublicFact = {
 
 export type WerewolfDiscussionEntry = {
   round: number;
+  stage?: "proposal" | string;
   speaker: string;
   target: string;
   message: string;
@@ -161,11 +164,19 @@ export type WerewolfDiscussionEntry = {
 
 export type WerewolfVoteRound = {
   round: number;
+  stage?: "discussion_consensus" | "final_vote" | string;
   candidates: string[];
   votes: Record<string, string>;
   tally: Record<string, number>;
   unanimous: boolean;
   result: string | null;
+  tiebreak?: {
+    triggered: boolean;
+    actor: string;
+    candidates: string[];
+    choice: string;
+    source: "model" | "existing_vote" | "seeded_fallback" | string;
+  };
 };
 
 export type RawPlayer = {
@@ -215,6 +226,10 @@ export type RawRoundState = {
   sheriff_pk_candidates?: string[];
   sheriff_pk_speeches?: SpeechEntry[];
   sheriff_runoff_votes?: Record<string, string>;
+  exile_pk_candidates?: string[];
+  exile_pk_speeches?: SpeechEntry[];
+  exile_runoff_votes?: Record<string, string>;
+  exile_resolution_reason?: string | null;
   sheriff_elected?: string | null;
   speech_order?: string[];
   speech_order_choice?: string | null;
@@ -321,6 +336,10 @@ export type GameRound = Omit<
   | "sheriff_pk_candidates"
   | "sheriff_pk_speeches"
   | "sheriff_runoff_votes"
+  | "exile_pk_candidates"
+  | "exile_pk_speeches"
+  | "exile_runoff_votes"
+  | "exile_resolution_reason"
   | "sheriff_elected"
   | "speech_order"
   | "speech_order_choice"
@@ -357,6 +376,10 @@ export type GameRound = Omit<
   sheriff_pk_candidates: string[];
   sheriff_pk_speeches: SpeechEntry[];
   sheriff_runoff_votes: Record<string, string>;
+  exile_pk_candidates: string[];
+  exile_pk_speeches: SpeechEntry[];
+  exile_runoff_votes: Record<string, string>;
+  exile_resolution_reason: string | null;
   sheriff_elected: string | null;
   speech_order: string[];
   speech_order_choice: string | null;
@@ -698,6 +721,7 @@ export type PlaybackVoiceSubtitleCue = {
 
 export type PlaybackVoiceUtterance = {
   utterance_id: string;
+  audience?: "player_public" | "spectator_god_view";
   source_event_id: number;
   last_source_event_id: number;
   speaker_kind: "player" | "judge";

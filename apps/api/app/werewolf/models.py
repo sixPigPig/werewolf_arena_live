@@ -335,6 +335,10 @@ class RoundState:
     debate: list[DebateEntry] = field(default_factory=list)
     bids: list[dict[str, int]] = field(default_factory=list)
     votes: list[dict[str, str]] = field(default_factory=list)
+    exile_pk_candidates: list[str] = field(default_factory=list)
+    exile_pk_speeches: list[dict[str, str]] = field(default_factory=list)
+    exile_runoff_votes: dict[str, str] = field(default_factory=dict)
+    exile_resolution_reason: str | None = None
     summaries: dict[str, str] = field(default_factory=dict)
     private_summaries: dict[str, str] = field(default_factory=dict)
     public_summary: str = ""
@@ -388,6 +392,10 @@ class RoundState:
             "debate": [entry.to_dict() for entry in self.debate],
             "bids": self.bids,
             "votes": self.votes,
+            "exile_pk_candidates": self.exile_pk_candidates,
+            "exile_pk_speeches": self.exile_pk_speeches,
+            "exile_runoff_votes": self.exile_runoff_votes,
+            "exile_resolution_reason": self.exile_resolution_reason,
             "summaries": self.summaries,
             "private_summaries": self.private_summaries,
             "public_summary": self.public_summary,
@@ -445,6 +453,8 @@ class RoundLog:
     bid: list[list[ActionLog]] = field(default_factory=list)
     debate: list[ActionLog] = field(default_factory=list)
     votes: list[list[ActionLog]] = field(default_factory=list)
+    exile_pk_speech: list[ActionLog] = field(default_factory=list)
+    exile_runoff_votes: list[ActionLog] = field(default_factory=list)
     summaries: list[ActionLog] = field(default_factory=list)
     sheriff_run: list[ActionLog] = field(default_factory=list)
     sheriff_speech: list[ActionLog] = field(default_factory=list)
@@ -472,6 +482,8 @@ class RoundLog:
             "bid": [[log.to_dict() for log in turn] for turn in self.bid],
             "debate": [log.to_dict() for log in self.debate],
             "votes": [[log.to_dict() for log in vote_logs] for vote_logs in self.votes],
+            "exile_pk_speech": [log.to_dict() for log in self.exile_pk_speech],
+            "exile_runoff_votes": [log.to_dict() for log in self.exile_runoff_votes],
             "summaries": [log.to_dict() for log in self.summaries],
             "sheriff_run": [log.to_dict() for log in self.sheriff_run],
             "sheriff_speech": [log.to_dict() for log in self.sheriff_speech],

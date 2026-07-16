@@ -35,6 +35,8 @@ const PLAYBACK_VOICE_ERROR_MESSAGE = "Unable to play saved replay voice audio.";
 const PCM_COMPLETION_POLL_INTERVAL_MS = 25;
 const BLOB_PLAYBACK_STALL_POLL_INTERVAL_MS = 1000;
 const BLOB_PLAYBACK_STALL_TIMEOUT_MS = 30_000;
+const SILENT_AUDIO_UNLOCK_DATA_URL =
+  "data:audio/wav;base64,UklGRnQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YVAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==";
 
 export function usePlaybackVoice(
   voices: PlaybackVoiceUtterance[],
@@ -88,6 +90,7 @@ export function usePlaybackVoice(
   );
   const [errors, setErrors] = useState<string[]>([]);
   const [currentItem, setCurrentItem] = useState<LiveVoiceQueueItem | null>(null);
+  const [pendingItem, setPendingItem] = useState<LiveVoiceQueueItem | null>(null);
   const [subtitleClock, setSubtitleClock] =
     useState<LiveVoiceSubtitleClock>(null);
   const [lastCompletedPlayback, setLastCompletedPlayback] =
@@ -105,7 +108,7 @@ export function usePlaybackVoice(
   const sourceVoicesRef = useRef(sourceVoices);
   sourceVoicesRef.current = sourceVoices;
   const previousVoicesKeyRef = useRef(voicesKey);
-  const skipSelectionAfterCursorChangeRef = useRef(false);
+  const playbackAttemptRef = useRef(0);
   const completionTimeoutsRef = useRef<Set<ReturnType<typeof globalThis.setTimeout>>>(
     new Set(),
   );
@@ -210,6 +213,7 @@ export function usePlaybackVoice(
 
   useEffect(() => {
     const targetEventId = latestCurrentEventIdRef.current;
+    playbackAttemptRef.current += 1;
     releaseBlobAudio();
     closeScheduler();
     activeUtteranceIdsRef.current.clear();
@@ -220,9 +224,9 @@ export function usePlaybackVoice(
             .filter((voice) => voice.last_source_event_id < targetEventId)
             .map((voice) => voice.utterance_id),
     );
-    skipSelectionAfterCursorChangeRef.current = true;
     setLoadedVoicesById(new Map());
     setCurrentItem(null);
+    setPendingItem(null);
     setLastCompletedPlayback(null);
     setSubtitleClock(null);
   }, [closeScheduler, cursorVersion, releaseBlobAudio]);
@@ -234,7 +238,18 @@ export function usePlaybackVoice(
     }
 
     if (!hasPcmVoice) {
-      return true;
+      const audio = audioElementRef.current ?? createAudioElement();
+      audioElementRef.current = audio;
+      try {
+        audio.src = SILENT_AUDIO_UNLOCK_DATA_URL;
+        await Promise.resolve(audio.play());
+        audio.pause();
+        audio.currentTime = 0;
+        return true;
+      } catch {
+        pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
+        return false;
+      }
     }
 
     const audio = ensureScheduler();
@@ -255,11 +270,36 @@ export function usePlaybackVoice(
     }
   }, [ensureScheduler, hasPcmVoice, sortedVoices.length]);
 
+  const retryAudio = useCallback(async () => {
+    if (!(await unlockAudio())) {
+      return false;
+    }
+
+    const targetEventId = latestCurrentEventIdRef.current;
+    playbackAttemptRef.current += 1;
+    activeUtteranceIdsRef.current.clear();
+    consumedUtteranceIdsRef.current = new Set(
+      targetEventId === null
+        ? []
+        : sourceVoicesRef.current
+            .filter((voice) => voice.last_source_event_id < targetEventId)
+            .map((voice) => voice.utterance_id),
+    );
+    setLoadedVoicesById(new Map());
+    setCurrentItem(null);
+    setPendingItem(null);
+    setLastCompletedPlayback(null);
+    setSubtitleClock(null);
+    setErrors([]);
+    return true;
+  }, [unlockAudio]);
+
   useEffect(() => {
     if (previousVoicesKeyRef.current === voicesKey) {
       return;
     }
     previousVoicesKeyRef.current = voicesKey;
+    playbackAttemptRef.current += 1;
     releaseBlobAudio();
     closeScheduler();
     consumedUtteranceIdsRef.current.clear();
@@ -267,6 +307,7 @@ export function usePlaybackVoice(
     playbackCompletionSequenceRef.current = 0;
     setLoadedVoicesById(new Map());
     setCurrentItem(null);
+    setPendingItem(null);
     setLastCompletedPlayback(null);
     setSubtitleClock(null);
     setErrors([]);
@@ -280,29 +321,51 @@ export function usePlaybackVoice(
   }, [enabled, sortedVoices.length]);
 
   useEffect(() => {
-    if (skipSelectionAfterCursorChangeRef.current) {
-      skipSelectionAfterCursorChangeRef.current = false;
-      return;
-    }
     if (!enabled || isPaused || currentEventId === null || currentItem !== null) {
       return;
     }
 
-    const nextVoice = sortedVoices.find(
-      (voice) =>
-        voice.last_source_event_id <= currentEventId &&
-        !consumedUtteranceIdsRef.current.has(voice.utterance_id) &&
-        !activeUtteranceIdsRef.current.has(voice.utterance_id),
-    );
+    let nextVoice: PlaybackVoiceUtterance | undefined;
+    if (pendingItem) {
+      if (!voiceCoversEvent(pendingItem, currentEventId)) {
+        playbackAttemptRef.current += 1;
+        markVoiceFailed(
+          pendingItem.utteranceId,
+          activeUtteranceIdsRef,
+          consumedUtteranceIdsRef,
+        );
+        releaseLoadedVoice(pendingItem.utteranceId);
+        setPendingItem(null);
+        return;
+      }
+      if (pendingItem.status !== "receiving") {
+        return;
+      }
+      nextVoice = sortedVoices.find(
+        (voice) => voice.utterance_id === pendingItem.utteranceId,
+      );
+      if (!nextVoice || (nextVoice.chunks?.length ?? 0) === 0) {
+        return;
+      }
+    } else {
+      nextVoice = sortedVoices.find(
+        (voice) =>
+          voice.source_event_id <= currentEventId &&
+          voice.last_source_event_id >= currentEventId &&
+          !consumedUtteranceIdsRef.current.has(voice.utterance_id) &&
+          !activeUtteranceIdsRef.current.has(voice.utterance_id),
+      );
+    }
     if (!nextVoice) {
       return;
     }
 
-    activeUtteranceIdsRef.current.add(nextVoice.utterance_id);
+    if (!pendingItem) {
+      activeUtteranceIdsRef.current.add(nextVoice.utterance_id);
+    }
 
     if ((nextVoice.chunks?.length ?? 0) === 0) {
       const utteranceId = nextVoice.utterance_id;
-      let isActive = true;
       if (!loadVoice) {
         markVoiceFailed(
           utteranceId,
@@ -312,9 +375,11 @@ export function usePlaybackVoice(
         pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
         return;
       }
+      const attempt = ++playbackAttemptRef.current;
+      setPendingItem({ ...toQueueItem(nextVoice), status: "receiving" });
       void loadVoice(utteranceId)
         .then((loadedVoice) => {
-          if (!isActive) {
+          if (playbackAttemptRef.current !== attempt) {
             return;
           }
           if (
@@ -323,7 +388,6 @@ export function usePlaybackVoice(
           ) {
             throw new Error("Playback voice has no audio chunks");
           }
-          activeUtteranceIdsRef.current.delete(utteranceId);
           setLoadedVoicesById((current) => {
             const next = new Map(current);
             next.set(utteranceId, loadedVoice);
@@ -331,7 +395,7 @@ export function usePlaybackVoice(
           });
         })
         .catch(() => {
-          if (!isActive) {
+          if (playbackAttemptRef.current !== attempt) {
             return;
           }
           markVoiceFailed(
@@ -339,12 +403,12 @@ export function usePlaybackVoice(
             activeUtteranceIdsRef,
             consumedUtteranceIdsRef,
           );
+          setPendingItem((current) =>
+            current?.utteranceId === utteranceId ? null : current,
+          );
           pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
         });
-      return () => {
-        isActive = false;
-        activeUtteranceIdsRef.current.delete(utteranceId);
-      };
+      return;
     }
 
     if (!isPcmAudioFormat(nextVoice.audio_format)) {
@@ -357,7 +421,7 @@ export function usePlaybackVoice(
           .map((chunk) => chunk.data);
         const blob = base64ToBlob(chunks, nextVoice.mime_type);
         const objectUrl = createAudioObjectUrl(blob);
-        const audio = createAudioElement();
+        const audio = audioElementRef.current ?? createAudioElement();
         let isReleased = false;
 
         const releaseCurrentAudio = () => {
@@ -416,11 +480,13 @@ export function usePlaybackVoice(
         audioElementRef.current = audio;
         blobCleanupRef.current = releaseCurrentAudio;
         setCurrentItem(toQueueItem(nextVoice));
+        setPendingItem(null);
       } catch {
         releaseBlobAudio();
         markVoiceFailed(utteranceId, activeUtteranceIdsRef, consumedUtteranceIdsRef);
         setSubtitleClock(null);
         setCurrentItem(null);
+        setPendingItem(null);
         releaseLoadedVoice(utteranceId);
         pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
       }
@@ -434,7 +500,9 @@ export function usePlaybackVoice(
       return;
     }
 
-    let isActive = true;
+    const attempt = ++playbackAttemptRef.current;
+    const queueItem = toQueueItem(nextVoice);
+    setPendingItem({ ...queueItem, status: "ready" });
     void (async () => {
       try {
         if (audio.context.state !== "running") {
@@ -444,7 +512,7 @@ export function usePlaybackVoice(
         const chunks = (nextVoice.chunks ?? []).slice().sort(compareChunks);
         let latestEndTime = audio.context.currentTime;
         for (const chunk of chunks) {
-          if (!isActive) {
+          if (playbackAttemptRef.current !== attempt) {
             return;
           }
           const scheduledChunk = await audio.scheduler.schedule(
@@ -468,25 +536,26 @@ export function usePlaybackVoice(
           }
           latestEndTime = Math.max(latestEndTime, scheduledChunk.endTime);
         }
-        if (!isActive) {
+        if (playbackAttemptRef.current !== attempt) {
           return;
         }
         pcmEndTimesRef.current.set(nextVoice.utterance_id, latestEndTime);
-        setCurrentItem(toQueueItem(nextVoice));
+        setCurrentItem(queueItem);
+        setPendingItem(null);
       } catch {
+        if (playbackAttemptRef.current !== attempt) {
+          return;
+        }
         markVoiceFailed(nextVoice.utterance_id, activeUtteranceIdsRef, consumedUtteranceIdsRef);
         pcmEndTimesRef.current.delete(nextVoice.utterance_id);
         pcmSubtitleStartTimesRef.current.delete(nextVoice.utterance_id);
         setCurrentItem(null);
+        setPendingItem(null);
         setSubtitleClock(null);
         releaseLoadedVoice(nextVoice.utterance_id);
         pushError(setErrors, PLAYBACK_VOICE_ERROR_MESSAGE);
       }
     })();
-
-    return () => {
-      isActive = false;
-    };
   }, [
     currentEventId,
     cursorVersion,
@@ -496,6 +565,7 @@ export function usePlaybackVoice(
     errors.length,
     isPaused,
     loadVoice,
+    pendingItem,
     recordPlaybackCompletion,
     releaseLoadedVoice,
     releaseBlobAudio,
@@ -709,6 +779,16 @@ export function usePlaybackVoice(
     if (enabled) {
       return;
     }
+    playbackAttemptRef.current += 1;
+    if (pendingItem) {
+      markVoiceFailed(
+        pendingItem.utteranceId,
+        activeUtteranceIdsRef,
+        consumedUtteranceIdsRef,
+      );
+      setPendingItem(null);
+      releaseLoadedVoice(pendingItem.utteranceId);
+    }
     if (currentItem) {
       markVoiceFailed(
         currentItem.utteranceId,
@@ -727,25 +807,30 @@ export function usePlaybackVoice(
     closeScheduler,
     currentItem,
     enabled,
+    pendingItem,
     releaseBlobAudio,
     releaseLoadedVoice,
   ]);
 
   useEffect(
     () => () => {
+      playbackAttemptRef.current += 1;
       releaseBlobAudio();
       closeScheduler();
     },
     [closeScheduler, releaseBlobAudio],
   );
 
+  const visibleCurrentItem = currentItem ?? pendingItem;
+
   return {
     connectionState,
-    currentItem,
-    currentSpeakerName: isPaused ? null : currentItem?.speakerName ?? null,
+    currentItem: visibleCurrentItem,
+    currentSpeakerName: isPaused ? null : visibleCurrentItem?.speakerName ?? null,
     currentSubtitle,
     errors,
     lastCompletedPlayback,
+    retryAudio,
     unlockAudio,
   };
 }
@@ -769,7 +854,11 @@ export function currentSubtitleForPlaybackVoices({
     .filter(isSubtitlePlaybackVoice)
     .slice()
     .sort(comparePlaybackVoices)
-    .find((item) => item.last_source_event_id === currentEventId);
+    .find(
+      (item) =>
+        item.source_event_id <= currentEventId &&
+        item.last_source_event_id >= currentEventId,
+    );
   if (!voice) {
     return null;
   }
@@ -784,6 +873,7 @@ export function currentSubtitleForPlaybackVoices({
 
   return {
     ...display,
+    audience: voice.audience ?? "player_public",
     speakerKind: voice.speaker_kind,
     speakerName: voice.speaker_name,
     utteranceId: voice.utterance_id,
@@ -811,6 +901,13 @@ function comparePlaybackVoices(left: PlaybackVoiceUtterance, right: PlaybackVoic
     left.source_event_id - right.source_event_id ||
     left.utterance_id.localeCompare(right.utterance_id)
   );
+}
+
+function voiceCoversEvent(
+  item: Pick<LiveVoiceQueueItem, "lastSourceEventId" | "sourceEventId">,
+  eventId: number,
+) {
+  return item.sourceEventId <= eventId && item.lastSourceEventId >= eventId;
 }
 
 function compareChunks(left: PlaybackVoiceChunk, right: PlaybackVoiceChunk) {
@@ -851,6 +948,7 @@ function toQueueItem(voice: PlaybackVoiceUtterance): LiveVoiceQueueItem {
     utteranceId: voice.utterance_id,
     sourceEventId: voice.source_event_id,
     lastSourceEventId: voice.last_source_event_id,
+    audience: voice.audience ?? "player_public",
     speakerKind: voice.speaker_kind,
     speakerName: voice.speaker_name,
     mimeType: voice.mime_type,

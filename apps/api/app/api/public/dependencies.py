@@ -4,7 +4,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import (
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketException,
+    status,
+)
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -70,6 +78,30 @@ def get_current_public_principal(
             code="public_session_required",
             detail="A valid public session is required.",
         )
+    return PublicPrincipal(user=user, session=session)
+
+
+def get_current_public_websocket_principal(
+    websocket: WebSocket,
+    db: Annotated[Session, Depends(get_db)],
+) -> PublicPrincipal:
+    session_token = websocket.cookies.get(settings.public_session_cookie_name)
+    if not session_token:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    try:
+        session = find_public_session(db, session_token)
+        user = db.get(User, session.user_id) if session is not None else None
+    except (OperationalError, ProgrammingError) as exc:
+        raise WebSocketException(code=status.WS_1011_INTERNAL_ERROR) from exc
+    if (
+        session is None
+        or session.revoked_at is not None
+        or public_session_is_expired(session)
+        or user is None
+        or not user.is_active
+        or user.auth_provider != "guest"
+    ):
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
     return PublicPrincipal(user=user, session=session)
 
 

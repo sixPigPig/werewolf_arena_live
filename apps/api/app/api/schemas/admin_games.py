@@ -123,12 +123,16 @@ class AdminGameRoundSummary(BaseModel):
     sheriff_votes: dict[str, str]
     sheriff_pk_candidates: list[str]
     sheriff_runoff_votes: dict[str, str]
+    exile_pk_candidates: list[str]
+    exile_runoff_votes: dict[str, str]
+    exile_resolution_reason: str | None
     sheriff_speech_order: list[str]
     sheriff_speech_direction: str | None
     speech_order: list[str]
     speech_order_choice: str | None
     sheriff_speeches: list[AdminGameSpeechSummary]
     sheriff_pk_speeches: list[AdminGameSpeechSummary]
+    exile_pk_speeches: list[AdminGameSpeechSummary]
     debate: list[AdminGameSpeechSummary]
     sheriff_badge_target: str | None
     sheriff_badge_lost: bool

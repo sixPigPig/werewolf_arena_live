@@ -36,6 +36,8 @@ export type LiveVoiceConnectionState =
   | "closed"
   | "unavailable";
 
+export type VoiceAudience = "player_public" | "spectator_god_view";
+
 export type LiveVoiceMessage =
   | {
       type: "voice_start";
@@ -44,6 +46,7 @@ export type LiveVoiceMessage =
       last_source_event_id?: number;
       speaker_kind: "player" | "judge";
       speaker_name: string;
+      audience?: VoiceAudience;
       mime_type: string;
       audio_format: string;
       sample_rate: number;
@@ -101,6 +104,7 @@ export type LiveVoiceSubtitle = {
   completedText: string;
   pageIndex: number;
   pendingText: string;
+  audience?: VoiceAudience;
   speakerKind: "player" | "judge";
   speakerName: string;
   text: string;
@@ -117,6 +121,7 @@ export type LiveVoiceQueueItem = {
   utteranceId: string;
   sourceEventId: number;
   lastSourceEventId: number;
+  audience?: VoiceAudience;
   speakerKind: "player" | "judge";
   speakerName: string;
   mimeType: string;
@@ -159,11 +164,15 @@ export function resolveVoiceStreamUrl(
   runId: string,
   baseUrl = API_BASE_URL,
   currentEventId?: number | null,
+  audience: "player_public" | "spectator_god_view" = "player_public",
 ) {
   const fallbackOrigin =
     typeof window === "undefined" ? "http://localhost" : window.location.origin;
   const base = resolveUrlBase(baseUrl, fallbackOrigin);
-  const voiceStreamPath = `/api/v1/games/runs/${encodeURIComponent(runId)}/voice-stream`;
+  const voiceStreamPath =
+    audience === "spectator_god_view"
+      ? `/api/v1/games/runs/${encodeURIComponent(runId)}/god-view/voice-stream`
+      : `/api/v1/games/runs/${encodeURIComponent(runId)}/voice-stream`;
   base.pathname = joinUrlPaths(stripApiPathSuffix(base.pathname), voiceStreamPath);
   base.search = "";
   base.hash = "";
@@ -268,6 +277,7 @@ export function enqueueVoiceMessage(
                 ),
                 speakerKind: message.speaker_kind,
                 speakerName: message.speaker_name,
+                audience: message.audience ?? "player_public",
                 mimeType: message.mime_type,
                 audioFormat: message.audio_format,
                 sampleRate: message.sample_rate,
@@ -289,6 +299,7 @@ export function enqueueVoiceMessage(
           lastSourceEventId,
           speakerKind: message.speaker_kind,
           speakerName: message.speaker_name,
+          audience: message.audience ?? "player_public",
           mimeType: message.mime_type,
           audioFormat: message.audio_format,
           sampleRate: message.sample_rate,
@@ -553,6 +564,10 @@ function isSpeakerKind(value: unknown): value is "player" | "judge" {
   return value === "player" || value === "judge";
 }
 
+function isVoiceAudience(value: unknown): value is VoiceAudience {
+  return value === "player_public" || value === "spectator_god_view";
+}
+
 function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
   if (!isRecord(value) || typeof value.type !== "string") {
     return false;
@@ -573,6 +588,7 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
         typeof value.last_source_event_id === "number") &&
       isSpeakerKind(value.speaker_kind) &&
       typeof value.speaker_name === "string" &&
+      (value.audience === undefined || isVoiceAudience(value.audience)) &&
       typeof value.mime_type === "string" &&
       typeof value.audio_format === "string" &&
       typeof value.sample_rate === "number"
@@ -627,10 +643,12 @@ function isLiveVoiceSubtitleCueMessage(value: unknown) {
 export function useLiveVoiceStream(
   runId: string | undefined,
   {
+    audience = "player_public",
     currentEventId,
     enabled,
     isPaused,
   }: {
+    audience?: "player_public" | "spectator_god_view";
     currentEventId: number | null;
     enabled: boolean;
     isPaused: boolean;
@@ -651,8 +669,8 @@ export function useLiveVoiceStream(
   const [lastCompletedPlayback, setLastCompletedPlayback] =
     useState<VoicePlaybackCompletion | null>(null);
   const streamUrl = useMemo(
-    () => (runId ? resolveVoiceStreamUrl(runId) : null),
-    [runId],
+    () => (runId ? resolveVoiceStreamUrl(runId, API_BASE_URL, undefined, audience) : null),
+    [audience, runId],
   );
   const latestCurrentEventIdRef = useRef(currentEventId);
   latestCurrentEventIdRef.current = currentEventId;
@@ -1382,6 +1400,7 @@ export function useLiveVoiceStream(
           runId,
           API_BASE_URL,
           latestCurrentEventIdRef.current,
+          audience,
         );
         nextSocket = new WebSocketConstructor(connectionUrl);
       } catch {
@@ -1473,7 +1492,7 @@ export function useLiveVoiceStream(
       }
       socket?.close();
     };
-  }, [enabled, hasCurrentEventId, runId, streamUrl]);
+  }, [audience, enabled, hasCurrentEventId, runId, streamUrl]);
 
   return {
     connectionState,

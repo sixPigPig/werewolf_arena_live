@@ -255,6 +255,46 @@ describe("LiveReplayPage", () => {
     expect(within(subtitle).getByLabelText("语音时间轴字幕")).toBeVisible();
   });
 
+  it("renders saved private replay subtitles in the red private style", async () => {
+    const user = userEvent.setup();
+
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        voices: [
+          {
+            utterance_id: "voice-private",
+            audience: "spectator_god_view",
+            source_event_id: 4,
+            last_source_event_id: 4,
+            speaker_kind: "player",
+            speaker_name: "1号玩家",
+            mime_type: "audio/L16",
+            audio_format: "pcm",
+            sample_rate: 24000,
+            duration_ms: 100,
+            subtitle_timings: [
+              { text: "今晚建议刀3号", start_ms: 0, end_ms: 100 },
+            ],
+            chunks: [],
+          },
+        ],
+        events: [
+          gameStartedEvent,
+          phaseStartedEvent,
+          requestStartedEvent,
+          responseDeltaEvent,
+        ],
+      }),
+    );
+
+    renderLiveReplayRoute();
+
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+    const subtitle = await screen.findByRole("status", { name: "直播字幕" });
+    expect(subtitle).toHaveClass("mobile-live-subtitle-private");
+    expect(subtitle).not.toHaveClass("mobile-live-subtitle-player-0");
+  });
+
   it("prefers timed replay voice subtitles over event-derived subtitles", async () => {
     gameClientMocks.usePlaybackVoice.mockReturnValue({
       connectionState: "open",
@@ -344,6 +384,62 @@ describe("LiveReplayPage", () => {
     expect(within(subtitle).queryByText("回放时钟兜底字幕")).not.toBeInTheDocument();
   });
 
+  it("does not show the replay-clock subtitle while audio is still loading", async () => {
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "open",
+      currentItem: {
+        lastSourceEventId: 4,
+        sourceEventId: 4,
+        status: "receiving",
+      },
+      currentSpeakerName: "1号玩家",
+      currentSubtitle: null,
+      errors: [],
+      unlockAudio: vi.fn(async () => true),
+    });
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        voices: [
+          {
+            utterance_id: "voice-1",
+            source_event_id: 4,
+            last_source_event_id: 4,
+            speaker_kind: "player",
+            speaker_name: "1号玩家",
+            mime_type: "audio/L16",
+            audio_format: "pcm",
+            sample_rate: 24000,
+            duration_ms: 100,
+            subtitle_timings: [
+              { text: "不应提前显示的字幕", start_ms: 0, end_ms: 200 },
+            ],
+            chunks: [],
+          },
+        ],
+        events: [
+          gameStartedEvent,
+          phaseStartedEvent,
+          requestStartedEvent,
+          responseDeltaEvent,
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+
+    renderLiveReplayRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    await waitFor(() => {
+      expect(gameClientMocks.useLiveDirector).toHaveBeenLastCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ holdAdvance: true }),
+      );
+    });
+    expect(
+      screen.queryByRole("status", { name: "直播字幕" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("holds replay director advancement while saved voice is playing", async () => {
     gameClientMocks.usePlaybackVoice.mockReturnValue({
       connectionState: "open",
@@ -388,6 +484,46 @@ describe("LiveReplayPage", () => {
         }),
       );
     });
+  });
+
+  it("holds replay at the first event of a coalesced saved voice", async () => {
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "open",
+      currentItem: {
+        lastSourceEventId: 4,
+        sourceEventId: 1,
+        status: "playing",
+      },
+      currentSpeakerName: "1号玩家",
+      errors: [],
+      unlockAudio: vi.fn(async () => true),
+    });
+
+    renderLiveReplayRoute();
+
+    await waitFor(() => {
+      expect(gameClientMocks.useLiveDirector).toHaveBeenLastCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ holdAdvance: true }),
+      );
+    });
+  });
+
+  it("retries saved replay audio through the playback hook", async () => {
+    const retryAudio = vi.fn(async () => true);
+    gameClientMocks.usePlaybackVoice.mockReturnValue({
+      connectionState: "error",
+      currentSpeakerName: null,
+      errors: ["Unable to play saved replay voice audio."],
+      retryAudio,
+      unlockAudio: vi.fn(async () => false),
+    });
+    const user = userEvent.setup();
+
+    renderLiveReplayRoute();
+    await user.click(await screen.findByRole("button", { name: "重试语音" }));
+
+    expect(retryAudio).toHaveBeenCalledTimes(1);
   });
 
   it("renders the phase selector", async () => {

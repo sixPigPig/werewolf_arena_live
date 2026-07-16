@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-15T04:40:00Z",
+  "generated_at": "2026-07-16T13:00:46Z",
   "audio_format": "mp3",
   "sample_rate": 24000,
   "mime_type": "audio/mpeg",
@@ -10565,6 +10565,1079 @@
           "text": "胜。",
           "start_ms": 2765,
           "end_ms": 3005
+        }
+      ]
+    },
+    {
+      "id": "sheriff_pk_start",
+      "text": "平票候选人依次进行 PK 发言。",
+      "category": "警长",
+      "filename": "sheriff_pk_start.mp3",
+      "public_url": "/judge-voice/sheriff_pk_start.mp3",
+      "exists": true,
+      "byte_size": 24621,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "平",
+          "start_ms": 235,
+          "end_ms": 455
+        },
+        {
+          "text": "票",
+          "start_ms": 455,
+          "end_ms": 645
+        },
+        {
+          "text": "候",
+          "start_ms": 645,
+          "end_ms": 775
+        },
+        {
+          "text": "选",
+          "start_ms": 775,
+          "end_ms": 955
+        },
+        {
+          "text": "人",
+          "start_ms": 955,
+          "end_ms": 1185
+        },
+        {
+          "text": "依",
+          "start_ms": 1185,
+          "end_ms": 1305
+        },
+        {
+          "text": "次",
+          "start_ms": 1305,
+          "end_ms": 1455
+        },
+        {
+          "text": "进",
+          "start_ms": 1455,
+          "end_ms": 1615
+        },
+        {
+          "text": "行",
+          "start_ms": 1615,
+          "end_ms": 1915
+        },
+        {
+          "text": "PK",
+          "start_ms": 2205,
+          "end_ms": 2235
+        },
+        {
+          "text": "发",
+          "start_ms": 2235,
+          "end_ms": 2465
+        },
+        {
+          "text": "言。",
+          "start_ms": 2465,
+          "end_ms": 2695
+        }
+      ]
+    },
+    {
+      "id": "sheriff_runoff_vote",
+      "text": "PK 发言结束，警下玩家开始二轮投票。",
+      "category": "警长",
+      "filename": "sheriff_runoff_vote.mp3",
+      "public_url": "/judge-voice/sheriff_runoff_vote.mp3",
+      "exists": true,
+      "byte_size": 29229,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "PK",
+          "start_ms": 0,
+          "end_ms": 45
+        },
+        {
+          "text": "发",
+          "start_ms": 585,
+          "end_ms": 735
+        },
+        {
+          "text": "言",
+          "start_ms": 735,
+          "end_ms": 845
+        },
+        {
+          "text": "结",
+          "start_ms": 845,
+          "end_ms": 1035
+        },
+        {
+          "text": "束，",
+          "start_ms": 1035,
+          "end_ms": 1375
+        },
+        {
+          "text": "警",
+          "start_ms": 1485,
+          "end_ms": 1635
+        },
+        {
+          "text": "下",
+          "start_ms": 1635,
+          "end_ms": 1815
+        },
+        {
+          "text": "玩",
+          "start_ms": 1815,
+          "end_ms": 1945
+        },
+        {
+          "text": "家",
+          "start_ms": 1945,
+          "end_ms": 2185
+        },
+        {
+          "text": "开",
+          "start_ms": 2185,
+          "end_ms": 2365
+        },
+        {
+          "text": "始",
+          "start_ms": 2365,
+          "end_ms": 2595
+        },
+        {
+          "text": "二",
+          "start_ms": 2625,
+          "end_ms": 2815
+        },
+        {
+          "text": "轮",
+          "start_ms": 2815,
+          "end_ms": 2945
+        },
+        {
+          "text": "投",
+          "start_ms": 2945,
+          "end_ms": 3105
+        },
+        {
+          "text": "票。",
+          "start_ms": 3105,
+          "end_ms": 3335
+        }
+      ]
+    },
+    {
+      "id": "sheriff_no_voters",
+      "text": "本轮没有警下投票者，警徽流失。",
+      "category": "警长",
+      "filename": "sheriff_no_voters.mp3",
+      "public_url": "/judge-voice/sheriff_no_voters.mp3",
+      "exists": true,
+      "byte_size": 24621,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "本",
+          "start_ms": 235,
+          "end_ms": 395
+        },
+        {
+          "text": "轮",
+          "start_ms": 395,
+          "end_ms": 505
+        },
+        {
+          "text": "没",
+          "start_ms": 505,
+          "end_ms": 675
+        },
+        {
+          "text": "有",
+          "start_ms": 675,
+          "end_ms": 725
+        },
+        {
+          "text": "警",
+          "start_ms": 725,
+          "end_ms": 905
+        },
+        {
+          "text": "下",
+          "start_ms": 905,
+          "end_ms": 1075
+        },
+        {
+          "text": "投",
+          "start_ms": 1075,
+          "end_ms": 1225
+        },
+        {
+          "text": "票",
+          "start_ms": 1225,
+          "end_ms": 1445
+        },
+        {
+          "text": "者，",
+          "start_ms": 1445,
+          "end_ms": 1715
+        },
+        {
+          "text": "警",
+          "start_ms": 1855,
+          "end_ms": 2065
+        },
+        {
+          "text": "徽",
+          "start_ms": 2065,
+          "end_ms": 2275
+        },
+        {
+          "text": "流",
+          "start_ms": 2275,
+          "end_ms": 2425
+        },
+        {
+          "text": "失。",
+          "start_ms": 2425,
+          "end_ms": 2675
+        }
+      ]
+    },
+    {
+      "id": "sheriff_runoff_tied",
+      "text": "警长二轮投票仍未产生唯一领先者。",
+      "category": "警长",
+      "filename": "sheriff_runoff_tied.mp3",
+      "public_url": "/judge-voice/sheriff_runoff_tied.mp3",
+      "exists": true,
+      "byte_size": 27693,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "警",
+          "start_ms": 285,
+          "end_ms": 535
+        },
+        {
+          "text": "长",
+          "start_ms": 535,
+          "end_ms": 695
+        },
+        {
+          "text": "二",
+          "start_ms": 695,
+          "end_ms": 895
+        },
+        {
+          "text": "轮",
+          "start_ms": 895,
+          "end_ms": 1015
+        },
+        {
+          "text": "投",
+          "start_ms": 1015,
+          "end_ms": 1165
+        },
+        {
+          "text": "票",
+          "start_ms": 1165,
+          "end_ms": 1475
+        },
+        {
+          "text": "仍",
+          "start_ms": 1475,
+          "end_ms": 1625
+        },
+        {
+          "text": "未",
+          "start_ms": 1625,
+          "end_ms": 1795
+        },
+        {
+          "text": "产",
+          "start_ms": 1795,
+          "end_ms": 2015
+        },
+        {
+          "text": "生",
+          "start_ms": 2015,
+          "end_ms": 2245
+        },
+        {
+          "text": "唯",
+          "start_ms": 2245,
+          "end_ms": 2395
+        },
+        {
+          "text": "一",
+          "start_ms": 2395,
+          "end_ms": 2525
+        },
+        {
+          "text": "领",
+          "start_ms": 2525,
+          "end_ms": 2695
+        },
+        {
+          "text": "先",
+          "start_ms": 2695,
+          "end_ms": 2895
+        },
+        {
+          "text": "者。",
+          "start_ms": 2895,
+          "end_ms": 3135
+        }
+      ]
+    },
+    {
+      "id": "exile_tie",
+      "text": "放逐投票出现平票，进入 PK 环节。",
+      "category": "放逐",
+      "filename": "exile_tie.mp3",
+      "public_url": "/judge-voice/exile_tie.mp3",
+      "exists": true,
+      "byte_size": 30957,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "放",
+          "start_ms": 335,
+          "end_ms": 575
+        },
+        {
+          "text": "逐",
+          "start_ms": 575,
+          "end_ms": 715
+        },
+        {
+          "text": "投",
+          "start_ms": 715,
+          "end_ms": 895
+        },
+        {
+          "text": "票",
+          "start_ms": 895,
+          "end_ms": 1205
+        },
+        {
+          "text": "出",
+          "start_ms": 1205,
+          "end_ms": 1375
+        },
+        {
+          "text": "现",
+          "start_ms": 1375,
+          "end_ms": 1535
+        },
+        {
+          "text": "平",
+          "start_ms": 1535,
+          "end_ms": 1765
+        },
+        {
+          "text": "票，",
+          "start_ms": 1765,
+          "end_ms": 2075
+        },
+        {
+          "text": "进",
+          "start_ms": 2245,
+          "end_ms": 2425
+        },
+        {
+          "text": "入",
+          "start_ms": 2425,
+          "end_ms": 2635
+        },
+        {
+          "text": "PK",
+          "start_ms": 2975,
+          "end_ms": 3005
+        },
+        {
+          "text": "环",
+          "start_ms": 3005,
+          "end_ms": 3185
+        },
+        {
+          "text": "节。",
+          "start_ms": 3185,
+          "end_ms": 3465
+        }
+      ]
+    },
+    {
+      "id": "exile_pk_start",
+      "text": "平票候选人依次进行 PK 发言。",
+      "category": "放逐",
+      "filename": "exile_pk_start.mp3",
+      "public_url": "/judge-voice/exile_pk_start.mp3",
+      "exists": true,
+      "byte_size": 22893,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "平",
+          "start_ms": 185,
+          "end_ms": 375
+        },
+        {
+          "text": "票",
+          "start_ms": 375,
+          "end_ms": 555
+        },
+        {
+          "text": "候",
+          "start_ms": 555,
+          "end_ms": 695
+        },
+        {
+          "text": "选",
+          "start_ms": 695,
+          "end_ms": 895
+        },
+        {
+          "text": "人",
+          "start_ms": 895,
+          "end_ms": 1125
+        },
+        {
+          "text": "依",
+          "start_ms": 1125,
+          "end_ms": 1275
+        },
+        {
+          "text": "次",
+          "start_ms": 1275,
+          "end_ms": 1435
+        },
+        {
+          "text": "进",
+          "start_ms": 1435,
+          "end_ms": 1625
+        },
+        {
+          "text": "行",
+          "start_ms": 1625,
+          "end_ms": 1865
+        },
+        {
+          "text": "PK",
+          "start_ms": 2125,
+          "end_ms": 2155
+        },
+        {
+          "text": "发",
+          "start_ms": 2155,
+          "end_ms": 2415
+        },
+        {
+          "text": "言。",
+          "start_ms": 2415,
+          "end_ms": 2675
+        }
+      ]
+    },
+    {
+      "id": "exile_runoff_vote",
+      "text": "PK 发言结束，除 PK 玩家外的玩家开始二轮投票。",
+      "category": "放逐",
+      "filename": "exile_runoff_vote.mp3",
+      "public_url": "/judge-voice/exile_runoff_vote.mp3",
+      "exists": true,
+      "byte_size": 35565,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "PK",
+          "start_ms": 495,
+          "end_ms": 525
+        },
+        {
+          "text": "发",
+          "start_ms": 525,
+          "end_ms": 685
+        },
+        {
+          "text": "言",
+          "start_ms": 685,
+          "end_ms": 805
+        },
+        {
+          "text": "结",
+          "start_ms": 805,
+          "end_ms": 955
+        },
+        {
+          "text": "束，",
+          "start_ms": 955,
+          "end_ms": 1245
+        },
+        {
+          "text": "除",
+          "start_ms": 1525,
+          "end_ms": 1705
+        },
+        {
+          "text": "PK",
+          "start_ms": 1985,
+          "end_ms": 2015
+        },
+        {
+          "text": "玩",
+          "start_ms": 2015,
+          "end_ms": 2175
+        },
+        {
+          "text": "家",
+          "start_ms": 2175,
+          "end_ms": 2355
+        },
+        {
+          "text": "外",
+          "start_ms": 2355,
+          "end_ms": 2515
+        },
+        {
+          "text": "的",
+          "start_ms": 2515,
+          "end_ms": 2595
+        },
+        {
+          "text": "玩",
+          "start_ms": 2595,
+          "end_ms": 2735
+        },
+        {
+          "text": "家",
+          "start_ms": 2735,
+          "end_ms": 3025
+        },
+        {
+          "text": "开",
+          "start_ms": 3025,
+          "end_ms": 3195
+        },
+        {
+          "text": "始",
+          "start_ms": 3195,
+          "end_ms": 3465
+        },
+        {
+          "text": "二",
+          "start_ms": 3495,
+          "end_ms": 3675
+        },
+        {
+          "text": "轮",
+          "start_ms": 3675,
+          "end_ms": 3795
+        },
+        {
+          "text": "投",
+          "start_ms": 3795,
+          "end_ms": 3935
+        },
+        {
+          "text": "票。",
+          "start_ms": 3935,
+          "end_ms": 4215
+        }
+      ]
+    },
+    {
+      "id": "exile_runoff_tied",
+      "text": "二轮投票仍为平票，本轮无人被放逐，直接进入夜晚。",
+      "category": "放逐",
+      "filename": "exile_runoff_tied.mp3",
+      "public_url": "/judge-voice/exile_runoff_tied.mp3",
+      "exists": true,
+      "byte_size": 38829,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "二",
+          "start_ms": 225,
+          "end_ms": 365
+        },
+        {
+          "text": "轮",
+          "start_ms": 365,
+          "end_ms": 495
+        },
+        {
+          "text": "投",
+          "start_ms": 495,
+          "end_ms": 665
+        },
+        {
+          "text": "票",
+          "start_ms": 665,
+          "end_ms": 935
+        },
+        {
+          "text": "仍",
+          "start_ms": 935,
+          "end_ms": 1075
+        },
+        {
+          "text": "为",
+          "start_ms": 1075,
+          "end_ms": 1235
+        },
+        {
+          "text": "平",
+          "start_ms": 1235,
+          "end_ms": 1435
+        },
+        {
+          "text": "票，",
+          "start_ms": 1435,
+          "end_ms": 1725
+        },
+        {
+          "text": "本",
+          "start_ms": 2015,
+          "end_ms": 2185
+        },
+        {
+          "text": "轮",
+          "start_ms": 2185,
+          "end_ms": 2355
+        },
+        {
+          "text": "无",
+          "start_ms": 2355,
+          "end_ms": 2545
+        },
+        {
+          "text": "人",
+          "start_ms": 2545,
+          "end_ms": 2695
+        },
+        {
+          "text": "被",
+          "start_ms": 2695,
+          "end_ms": 2825
+        },
+        {
+          "text": "放",
+          "start_ms": 2825,
+          "end_ms": 3045
+        },
+        {
+          "text": "逐，",
+          "start_ms": 3045,
+          "end_ms": 3345
+        },
+        {
+          "text": "直",
+          "start_ms": 3545,
+          "end_ms": 3725
+        },
+        {
+          "text": "接",
+          "start_ms": 3725,
+          "end_ms": 3905
+        },
+        {
+          "text": "进",
+          "start_ms": 3905,
+          "end_ms": 4055
+        },
+        {
+          "text": "入",
+          "start_ms": 4055,
+          "end_ms": 4195
+        },
+        {
+          "text": "夜",
+          "start_ms": 4195,
+          "end_ms": 4335
+        },
+        {
+          "text": "晚。",
+          "start_ms": 4335,
+          "end_ms": 4555
+        }
+      ]
+    },
+    {
+      "id": "exile_no_votes",
+      "text": "本轮没有形成有效投票，无人被放逐。",
+      "category": "放逐",
+      "filename": "exile_no_votes.mp3",
+      "public_url": "/judge-voice/exile_no_votes.mp3",
+      "exists": true,
+      "byte_size": 27693,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "本",
+          "start_ms": 195,
+          "end_ms": 405
+        },
+        {
+          "text": "轮",
+          "start_ms": 405,
+          "end_ms": 535
+        },
+        {
+          "text": "没",
+          "start_ms": 535,
+          "end_ms": 695
+        },
+        {
+          "text": "有",
+          "start_ms": 695,
+          "end_ms": 745
+        },
+        {
+          "text": "形",
+          "start_ms": 745,
+          "end_ms": 955
+        },
+        {
+          "text": "成",
+          "start_ms": 955,
+          "end_ms": 1165
+        },
+        {
+          "text": "有",
+          "start_ms": 1165,
+          "end_ms": 1305
+        },
+        {
+          "text": "效",
+          "start_ms": 1305,
+          "end_ms": 1515
+        },
+        {
+          "text": "投",
+          "start_ms": 1515,
+          "end_ms": 1685
+        },
+        {
+          "text": "票，",
+          "start_ms": 1685,
+          "end_ms": 1975
+        },
+        {
+          "text": "无",
+          "start_ms": 2205,
+          "end_ms": 2345
+        },
+        {
+          "text": "人",
+          "start_ms": 2345,
+          "end_ms": 2465
+        },
+        {
+          "text": "被",
+          "start_ms": 2465,
+          "end_ms": 2605
+        },
+        {
+          "text": "放",
+          "start_ms": 2605,
+          "end_ms": 2815
+        },
+        {
+          "text": "逐。",
+          "start_ms": 2815,
+          "end_ms": 3085
+        }
+      ]
+    },
+    {
+      "id": "exile_no_runoff_voters",
+      "text": "本轮没有可参与二轮投票的玩家，无人被放逐。",
+      "category": "放逐",
+      "filename": "exile_no_runoff_voters.mp3",
+      "public_url": "/judge-voice/exile_no_runoff_voters.mp3",
+      "exists": true,
+      "byte_size": 32301,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "本",
+          "start_ms": 205,
+          "end_ms": 385
+        },
+        {
+          "text": "轮",
+          "start_ms": 385,
+          "end_ms": 485
+        },
+        {
+          "text": "没",
+          "start_ms": 485,
+          "end_ms": 655
+        },
+        {
+          "text": "有",
+          "start_ms": 655,
+          "end_ms": 715
+        },
+        {
+          "text": "可",
+          "start_ms": 715,
+          "end_ms": 925
+        },
+        {
+          "text": "参",
+          "start_ms": 925,
+          "end_ms": 1195
+        },
+        {
+          "text": "与",
+          "start_ms": 1195,
+          "end_ms": 1265
+        },
+        {
+          "text": "二",
+          "start_ms": 1265,
+          "end_ms": 1485
+        },
+        {
+          "text": "轮",
+          "start_ms": 1485,
+          "end_ms": 1605
+        },
+        {
+          "text": "投",
+          "start_ms": 1605,
+          "end_ms": 1775
+        },
+        {
+          "text": "票",
+          "start_ms": 1775,
+          "end_ms": 1995
+        },
+        {
+          "text": "的",
+          "start_ms": 1995,
+          "end_ms": 2085
+        },
+        {
+          "text": "玩",
+          "start_ms": 2085,
+          "end_ms": 2275
+        },
+        {
+          "text": "家，",
+          "start_ms": 2275,
+          "end_ms": 2575
+        },
+        {
+          "text": "无",
+          "start_ms": 2785,
+          "end_ms": 2965
+        },
+        {
+          "text": "人",
+          "start_ms": 2965,
+          "end_ms": 3075
+        },
+        {
+          "text": "被",
+          "start_ms": 3075,
+          "end_ms": 3225
+        },
+        {
+          "text": "放",
+          "start_ms": 3225,
+          "end_ms": 3455
+        },
+        {
+          "text": "逐。",
+          "start_ms": 3455,
+          "end_ms": 3735
+        }
+      ]
+    },
+    {
+      "id": "hunter_shot_skipped",
+      "text": "猎人选择不发动技能。",
+      "category": "特殊事件",
+      "filename": "hunter_shot_skipped.mp3",
+      "public_url": "/judge-voice/hunter_shot_skipped.mp3",
+      "exists": true,
+      "byte_size": 16365,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "猎",
+          "start_ms": 265,
+          "end_ms": 325
+        },
+        {
+          "text": "人",
+          "start_ms": 325,
+          "end_ms": 465
+        },
+        {
+          "text": "选",
+          "start_ms": 465,
+          "end_ms": 675
+        },
+        {
+          "text": "择",
+          "start_ms": 675,
+          "end_ms": 835
+        },
+        {
+          "text": "不",
+          "start_ms": 835,
+          "end_ms": 995
+        },
+        {
+          "text": "发",
+          "start_ms": 995,
+          "end_ms": 1165
+        },
+        {
+          "text": "动",
+          "start_ms": 1165,
+          "end_ms": 1325
+        },
+        {
+          "text": "技",
+          "start_ms": 1325,
+          "end_ms": 1475
+        },
+        {
+          "text": "能。",
+          "start_ms": 1475,
+          "end_ms": 1715
+        }
+      ]
+    },
+    {
+      "id": "exile_no_result",
+      "text": "放逐投票未产生出局玩家，本轮无人被放逐。",
+      "category": "放逐",
+      "filename": "exile_no_result.mp3",
+      "public_url": "/judge-voice/exile_no_result.mp3",
+      "exists": true,
+      "byte_size": 35565,
+      "template_id": null,
+      "template_text": null,
+      "seat_number": null,
+      "subtitle_timings": [
+        {
+          "text": "放",
+          "start_ms": 225,
+          "end_ms": 455
+        },
+        {
+          "text": "逐",
+          "start_ms": 455,
+          "end_ms": 595
+        },
+        {
+          "text": "投",
+          "start_ms": 595,
+          "end_ms": 765
+        },
+        {
+          "text": "票",
+          "start_ms": 765,
+          "end_ms": 1035
+        },
+        {
+          "text": "未",
+          "start_ms": 1035,
+          "end_ms": 1195
+        },
+        {
+          "text": "产",
+          "start_ms": 1195,
+          "end_ms": 1395
+        },
+        {
+          "text": "生",
+          "start_ms": 1395,
+          "end_ms": 1665
+        },
+        {
+          "text": "出",
+          "start_ms": 1665,
+          "end_ms": 1855
+        },
+        {
+          "text": "局",
+          "start_ms": 1855,
+          "end_ms": 1995
+        },
+        {
+          "text": "玩",
+          "start_ms": 1995,
+          "end_ms": 2145
+        },
+        {
+          "text": "家，",
+          "start_ms": 2145,
+          "end_ms": 2465
+        },
+        {
+          "text": "本",
+          "start_ms": 2795,
+          "end_ms": 3015
+        },
+        {
+          "text": "轮",
+          "start_ms": 3015,
+          "end_ms": 3245
+        },
+        {
+          "text": "无",
+          "start_ms": 3245,
+          "end_ms": 3415
+        },
+        {
+          "text": "人",
+          "start_ms": 3415,
+          "end_ms": 3575
+        },
+        {
+          "text": "被",
+          "start_ms": 3575,
+          "end_ms": 3725
+        },
+        {
+          "text": "放",
+          "start_ms": 3725,
+          "end_ms": 3915
+        },
+        {
+          "text": "逐。",
+          "start_ms": 3915,
+          "end_ms": 4195
         }
       ]
     }

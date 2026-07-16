@@ -53,6 +53,16 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {"reasoning": {"type": "string"}, "sheriff_vote": {"type": "string"}},
         "required": ["reasoning", "sheriff_vote"],
     },
+    "exile_pk_speech": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
+        "required": ["reasoning", "say"],
+    },
+    "exile_runoff_vote": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "vote": {"type": "string"}},
+        "required": ["reasoning", "vote"],
+    },
     "speech_order": {
         "type": "object",
         "properties": {"reasoning": {"type": "string"}, "speech_order": {"type": "string"}},
@@ -111,8 +121,12 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "werewolf_kill_vote": {
         "type": "object",
-        "properties": {"reasoning": {"type": "string"}, "target": {"type": "string"}},
-        "required": ["reasoning", "target"],
+        "properties": {
+            "reasoning": {"type": "string"},
+            "target": {"type": "string"},
+            "message": {"type": "string"},
+        },
+        "required": ["reasoning", "target", "message"],
     },
     "protect": {
         "type": "object",
@@ -150,6 +164,8 @@ RESULT_FIELD_BY_ACTION = {
     "sheriff_vote": "sheriff_vote",
     "sheriff_pk_speech": "say",
     "sheriff_runoff_vote": "sheriff_vote",
+    "exile_pk_speech": "say",
+    "exile_runoff_vote": "vote",
     "speech_order": "speech_order",
     "sheriff_badge": "badge",
     "werewolf_self_explosion": "self_explode",
@@ -191,7 +207,7 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
         raise ValueError(f"Unsupported action: {action}")
 
     speech_guidance_sections = []
-    if action in {"debate", "sheriff_speech", "sheriff_pk_speech"}:
+    if action in {"debate", "sheriff_speech", "sheriff_pk_speech", "exile_pk_speech"}:
         speech_guidance_sections.append(_render_speech_mission(world_state))
     if action == "debate":
         speech_guidance_sections.append(_render_debate_guidance(world_state))
@@ -390,6 +406,7 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
         return (
             "行动：投票放逐。\n"
             "你必须从候选人中选择一名玩家投票。结合发言、行为矛盾和阵营目标做判断。\n"
+            "唯一最高票玩家将被放逐，不要求过半；最高票平票时会进入 PK 发言和二轮投票。\n"
             f"候选人：{options}。\n"
             "输出字段 reasoning 和 vote。"
         )
@@ -446,6 +463,19 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "你是警下玩家，只能从 PK 候选中选择一名玩家投票。\n"
             f"候选人：{options}。\n"
             "输出字段 reasoning 和 sheriff_vote。"
+        )
+    if action == "exile_pk_speech":
+        return (
+            "行动：白天放逐 PK 发言。\n"
+            "首轮放逐投票出现最高票平票，你是 PK 候选，需要根据公开发言和首轮票型再次发言。\n"
+            "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
+        )
+    if action == "exile_runoff_vote":
+        return (
+            "行动：白天放逐二轮投票。\n"
+            "你不在 PK 台上，只能从 PK 候选中选择一名玩家投票。\n"
+            f"候选人：{options}。\n"
+            "输出字段 reasoning 和 vote。"
         )
     if action == "speech_order":
         return (
@@ -575,42 +605,40 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "输出字段 reasoning 和 investigate。"
         )
     if action == "werewolf_discuss":
-        discussion = world_state.get("werewolf_discussion") or []
-        previous_vote = world_state.get("werewolf_previous_vote_round") or "暂无。"
-        vote_round = int(world_state.get("werewolf_kill_vote_round") or 1)
-        discussion_text = "\n".join(f"- {line}" for line in discussion) if discussion else "暂无。"
         return (
-            "行动：狼人夜晚私密沟通。\n"
-            f"当前是第 {vote_round} 轮狼刀投票前的沟通。\n"
+            "行动：狼人夜晚第一轮私密表态。\n"
             f"候选人：{options}。\n"
-            f"已有狼人沟通：\n{discussion_text}\n"
-            f"上一轮票型：{previous_vote}\n"
+            "所有存活狼人会同时、独立生成第一轮意见，你暂时看不到队友本轮的内容。\n"
             "你必须从候选人中建议一名袭击目标，并用 message 给队友简短说明理由。"
+            "message 控制在 30 至 60 个汉字，不要透露 reasoning 内容。"
             "这是仅狼人队友可见的信息。避免伤害性措辞，用游戏术语表达。"
             "输出字段 reasoning、target 和 message。"
         )
     if action == "werewolf_kill_vote":
-        previous_vote = world_state.get("werewolf_previous_vote_round") or "暂无。"
-        vote_round = int(world_state.get("werewolf_kill_vote_round") or 1)
-        round_guidance = (
-            "这是首轮选择，所有存活狼人会同时、独立提交刀口；你看不到其他狼人本轮正在选择什么。"
-            if vote_round == 1
-            else (
-                "你可以保留或修改自己的刀口。上一轮只展示各目标的匿名票数，"
-                "不会显示具体是哪名狼人先选或投给了谁。"
+        stage = str(world_state.get("werewolf_kill_vote_stage") or "final")
+        discussion = world_state.get("werewolf_discussion") or []
+        discussion_text = "\n".join(f"- {line}" for line in discussion) if discussion else "暂无。"
+        final_vote_context = world_state.get("werewolf_final_vote_context") or "暂无。"
+        if stage == "tiebreak":
+            return (
+                "行动：狼人夜晚平票归票。\n"
+                f"完整狼队密聊：\n{discussion_text}\n"
+                f"最终票型：{final_vote_context}\n"
+                f"最高票平票候选人：{options}。\n"
+                "法官已临时要求你行使本夜归票权。你只能从这些平票候选人中"
+                "确认一个最终刀口，不能改刀其他玩家。"
+                "message 用一句简短中文说明最终归票理由。"
+                "输出字段 reasoning、target 和 message。"
             )
-        )
         return (
-            "行动：狼人夜晚狼刀投票。\n"
-            f"当前是第 {vote_round} 轮狼刀投票。\n"
-            "本次狼刀总倒计时为 90 秒。\n"
+            "行动：狼人夜晚最终表态与狼刀投票。\n"
             f"候选人：{options}。\n"
-            f"当前匿名刀口：{previous_vote}\n"
-            f"{round_guidance}\n"
-            "你必须从候选人中选择一名袭击目标。所有存活狼人刀口一致时会立即执行；"
-            "倒计时结束时执行唯一最高票目标，最高票平票则本夜空刀。"
-            "结合匿名票数独立判断，不要因为某个目标已有票就机械跟票。"
-            "输出字段 reasoning 和 target。"
+            f"完整狼队密聊：\n{discussion_text}\n"
+            "所有存活狼人会同时提交这一次最终票，不会继续进行第三轮投票。"
+            "你可以坚持或修改第一轮建议；唯一最高票目标会成为刀口，最高票平票时"
+            "法官才会临时触发隐藏归票机制。你不知道谁会获得归票权。"
+            "message 用一句简短中文向队友说明坚持或改刀。"
+            "输出字段 reasoning、target 和 message。"
         )
     if action == "remove":
         return (
@@ -678,7 +706,7 @@ def _render_json_example(action: str) -> str:
             '"expected_gain":"保留白天发言和抗推空间",'
             '"primary_risk":"继续自爆会损失存活狼人"}'
         )
-    if action == "werewolf_discuss":
+    if action in {"werewolf_discuss", "werewolf_kill_vote"}:
         field_mapping = (
             f"reasoning={FIELD_LABELS['reasoning']}，"
             f"target={FIELD_LABELS['target']}，"

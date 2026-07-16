@@ -479,10 +479,18 @@ function collectActionLine(view: MutableGodView, event: LiveGameEvent) {
       round: event.round,
       phase: event.phase,
     };
-    if (event.action === "werewolf_kill_vote" && event.actor && choice) {
+    if (event.action === "werewolf_discuss" && event.actor && choice) {
+      const message = stringField(payloadForEvent(event), "message");
       pushUniqueAction(view, {
-        label: `${seatLabel(event.actor, view.nameToSeat)} 狼刀`,
-        value: `投 ${seatLabel(choice, view.nameToSeat)}`,
+        label: `${seatLabel(event.actor, view.nameToSeat)} 密聊`,
+        value: message || `建议刀 ${seatLabel(choice, view.nameToSeat)}`,
+        tone: "info",
+      });
+    } else if (event.action === "werewolf_kill_vote" && event.actor && choice) {
+      const decisionStage = stringField(payloadForEvent(event), "decision_stage");
+      pushUniqueAction(view, {
+        label: `${seatLabel(event.actor, view.nameToSeat)} ${decisionStage === "tiebreak" ? "归票" : "狼刀"}`,
+        value: `${decisionStage === "tiebreak" ? "定" : "投"} ${seatLabel(choice, view.nameToSeat)}`,
         tone: "danger",
       });
     }
@@ -538,9 +546,11 @@ function collectStateUpdate(view: MutableGodView, event: LiveGameEvent) {
 
   const payload = payloadForEvent(event);
   const votes = recordField(payload, "votes");
-  if (votes) {
+  const exileRunoffVotes = recordField(payload, "exile_runoff_votes");
+  const publicVotes = exileRunoffVotes ?? votes;
+  if (publicVotes) {
     view.voteTargets = new Map(
-      Object.entries(votes).map(([voter, target]) => [voter, String(target)]),
+      Object.entries(publicVotes).map(([voter, target]) => [voter, String(target)]),
     );
   }
   const weights = recordField(payload, "vote_weights");
@@ -909,6 +919,24 @@ function eventLineFor(
   if (event.type === "action_parsed") {
     return actionParsedLine(event, payload, nameToSeat);
   }
+  if (
+    event.type === "judge_cue" &&
+    (event.action === "werewolf_tiebreak_start" ||
+      event.action === "werewolf_tiebreak_result")
+  ) {
+    const text = stringField(payload, "visible_text");
+    if (!text) {
+      return null;
+    }
+    return {
+      id: event.id,
+      time: timeLabel(event),
+      text,
+      tone: event.action === "werewolf_tiebreak_result" ? "danger" : "warning",
+      round: event.round,
+      phase: event.phase,
+    };
+  }
   if (event.type === "state_updated") {
     const text = stateUpdatedReplayText(event, payload, nameToSeat);
     if (!text) {
@@ -968,7 +996,8 @@ function isMeaningfulActionRequest(action: string | null): boolean {
     action === "witch_poison" ||
     action === "vote" ||
     action === "sheriff_vote" ||
-    action === "sheriff_runoff_vote"
+    action === "sheriff_runoff_vote" ||
+    action === "exile_runoff_vote"
   );
 }
 
@@ -1002,10 +1031,10 @@ function actionParsedLine(
   const action = event.action;
   if (
     !action ||
-    action === "werewolf_discuss" ||
     action === "debate" ||
     action === "sheriff_speech" ||
     action === "sheriff_pk_speech" ||
+    action === "exile_pk_speech" ||
     action === "summarize"
   ) {
     return null;
@@ -1020,6 +1049,20 @@ function actionParsedLine(
     phase: event.phase,
   };
 
+  if (action === "werewolf_discuss") {
+    if (!event.actor || !choice) {
+      return null;
+    }
+    const actorSeat = seatLabel(event.actor, nameToSeat);
+    const message = stringField(payload, "message");
+    return {
+      ...base,
+      text: `${actorSeat} 密聊：${message || `建议袭击 ${targetSeat}`}`,
+      detail: `${actorSeat}建议袭击 ${targetSeat}`,
+      tone: "info",
+    };
+  }
+
   if (action === "werewolf_kill_vote") {
     if (!event.actor || !choice) {
       return null;
@@ -1029,10 +1072,14 @@ function actionParsedLine(
       typeof payload.vote_round === "number" && Number.isInteger(payload.vote_round)
         ? payload.vote_round
         : 1;
+    const decisionStage = stringField(payload, "decision_stage");
+    const message = stringField(payload, "message");
     return {
       ...base,
-      text: `${actorSeat} 刀票 -> ${targetSeat}`,
-      detail: `${voteRound > 1 ? `第 ${voteRound} 轮 · ` : ""}${actorSeat}选择袭击 ${targetSeat}`,
+      text: `${actorSeat} ${decisionStage === "tiebreak" ? "归票" : "刀票"} -> ${targetSeat}`,
+      detail:
+        message ||
+        `${voteRound > 1 ? `第 ${voteRound} 轮 · ` : ""}${actorSeat}选择袭击 ${targetSeat}`,
       tone: "danger",
     };
   }
@@ -1092,7 +1139,12 @@ function actionParsedLine(
       tone: used ? "danger" : "default",
     };
   }
-  if (action === "vote" || action === "sheriff_vote" || action === "sheriff_runoff_vote") {
+  if (
+    action === "vote" ||
+    action === "sheriff_vote" ||
+    action === "sheriff_runoff_vote" ||
+    action === "exile_runoff_vote"
+  ) {
     if (!event.actor || !choice) {
       return null;
     }
@@ -1144,6 +1196,14 @@ function stateUpdatedReplayText(
   const votes = recordField(payload, "votes");
   if (votes) {
     return voteTallySummary(votes, recordField(payload, "vote_weights"), nameToSeat);
+  }
+  const exileRunoffVotes = recordField(payload, "exile_runoff_votes");
+  if (exileRunoffVotes) {
+    return `放逐二轮：${voteTallySummary(
+      exileRunoffVotes,
+      recordField(payload, "vote_weights"),
+      nameToSeat,
+    )}`;
   }
   const debateEntry = payload.debate_entry;
   if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
@@ -1930,7 +1990,8 @@ function isPublicSpeechAction(action: string | null) {
   return (
     action === "debate" ||
     action === "sheriff_speech" ||
-    action === "sheriff_pk_speech"
+    action === "sheriff_pk_speech" ||
+    action === "exile_pk_speech"
   );
 }
 
@@ -1938,7 +1999,8 @@ function isVoteAction(action: string | null) {
   return (
     action === "vote" ||
     action === "sheriff_vote" ||
-    action === "sheriff_runoff_vote"
+    action === "sheriff_runoff_vote" ||
+    action === "exile_runoff_vote"
   );
 }
 

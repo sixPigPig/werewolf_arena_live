@@ -31,6 +31,8 @@ ACTION_SPEECH_ORDER = "speech_order"
 ACTION_SHERIFF_BADGE = "sheriff_badge"
 ACTION_DEBATE = "debate"
 ACTION_VOTE = "vote"
+ACTION_EXILE_PK_SPEECH = "exile_pk_speech"
+ACTION_EXILE_RUNOFF_VOTE = "exile_runoff_vote"
 ACTION_SUMMARIZE = "summarize"
 
 SPEECH_POLICY_SEQUENTIAL = "sequential"
@@ -97,7 +99,11 @@ CLASSIC_8 = RuleSet(
         RoleSpec("村民", 4, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE, ACTION_PROTECT, ACTION_INVESTIGATE),
-    day_actions=(ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
+    day_actions=(
+        ACTION_DEBATE,
+        ACTION_VOTE,
+        ACTION_SUMMARIZE,
+    ),
     win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
     reveal_policy=REVEAL_POLICY_HIDDEN,
     complexity="标准",
@@ -118,7 +124,11 @@ STARTER_6 = RuleSet(
         RoleSpec("村民", 3, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE, ACTION_PROTECT, ACTION_INVESTIGATE),
-    day_actions=(ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
+    day_actions=(
+        ACTION_DEBATE,
+        ACTION_VOTE,
+        ACTION_SUMMARIZE,
+    ),
     win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
     reveal_policy=REVEAL_POLICY_HIDDEN,
     complexity="入门",
@@ -137,7 +147,11 @@ SOCIAL_8 = RuleSet(
         RoleSpec("村民", 6, TEAM_VILLAGERS, MODEL_GROUP_VILLAGER, ROLE_CATEGORY_CIVILIAN),
     ),
     night_actions=(ACTION_REMOVE,),
-    day_actions=(ACTION_DEBATE, ACTION_VOTE, ACTION_SUMMARIZE),
+    day_actions=(
+        ACTION_DEBATE,
+        ACTION_VOTE,
+        ACTION_SUMMARIZE,
+    ),
     win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
     reveal_policy=REVEAL_POLICY_HIDDEN,
     complexity="心理",

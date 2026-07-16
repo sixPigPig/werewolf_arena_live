@@ -130,8 +130,9 @@ describe("PlaybackPage", () => {
 
     expect(await screen.findByRole("heading", { name: "移动复盘" })).toBeVisible();
     expect(
-      screen.getByRole("link", { name: "导入直播页播放" }),
+      screen.getByRole("link", { name: "打开带语音字幕的直播回放" }),
     ).toHaveAttribute("href", "/games/session-1/live-replay");
+    expect(screen.getByText(/本页不播放语音/)).toBeVisible();
     expect(await screen.findByText("session-1")).toBeVisible();
     expect(screen.getByText("villagers")).toBeVisible();
     expect(screen.getByText("第 1 轮")).toBeVisible();

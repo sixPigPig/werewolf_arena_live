@@ -703,8 +703,17 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
       "exile_result",
       "badge_transfer",
       "badge_destroyed",
+      "werewolf_tiebreak_start",
+      "werewolf_tiebreak_result",
       "sheriff_no_voters",
       "sheriff_runoff_tied",
+      "exile_tie",
+      "exile_pk_start",
+      "exile_runoff_vote",
+      "exile_runoff_tied",
+      "exile_no_votes",
+      "exile_no_result",
+      "exile_no_runoff_voters",
     ]).has(cueId);
     return {
       ...base,
@@ -1008,6 +1017,20 @@ function stateUpdatedCue(
     };
   }
 
+  const exileRunoffVotes = payload.exile_runoff_votes;
+  if (isRecord(exileRunoffVotes)) {
+    return {
+      ...base,
+      title: "放逐二轮票型",
+      body: Object.entries(exileRunoffVotes)
+        .map(([voter, target]) => `${voter} -> ${String(target)}`)
+        .join("\n"),
+      importance: "key",
+      durationMs: 6000,
+      compressible: false,
+    };
+  }
+
   const exiled = stringField(payload, "exiled");
   if (exiled) {
     return {
@@ -1163,6 +1186,7 @@ function isPublicSpeechAction(action: string | null): boolean {
     action === "debate" ||
     action === "sheriff_speech" ||
     action === "sheriff_pk_speech" ||
+    action === "exile_pk_speech" ||
     action === "summarize"
   );
 }

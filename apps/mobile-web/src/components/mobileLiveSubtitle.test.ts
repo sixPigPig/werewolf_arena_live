@@ -215,6 +215,26 @@ describe("voiceSubtitleToMobileSubtitle", () => {
     });
   });
 
+  it("uses the private tone instead of the player seat color for god-view speech", () => {
+    expect(
+      voiceSubtitleToMobileSubtitle({
+        activeText: "刀",
+        audience: "spectator_god_view",
+        completedText: "今晚",
+        pageIndex: 0,
+        pendingText: "三号",
+        speakerKind: "player",
+        speakerName: "3号玩家",
+        text: "今晚刀三号",
+        utteranceId: "voice-private",
+      }),
+    ).toMatchObject({
+      colorIndex: 0,
+      speakerName: "3号玩家",
+      tone: "private",
+    });
+  });
+
   it("keeps question and exclamation marks that carry spoken intent", () => {
     expect(
       voiceSubtitleToMobileSubtitle({

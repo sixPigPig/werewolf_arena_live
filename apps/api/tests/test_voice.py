@@ -114,10 +114,12 @@ def test_voice_job_candidate_rejects_private_and_delta_events() -> None:
         phase="day",
         payload={"narration_mode": "explicit_v1"},
     )
+    summary_phase = live_event(13, "phase_started", phase="summary")
 
     assert voice_job_candidate(public_delta) is None
     assert voice_job_candidate(private_action) is None
     assert voice_job_candidate(explicit_day) is None
+    assert voice_job_candidate(summary_phase) is None
 
 
 def test_terminal_effective_voice_coverage_counts_static_fallback() -> None:
@@ -206,13 +208,97 @@ def test_private_or_non_speech_event_is_not_public_speech() -> None:
         5,
         "model_response_delta",
         actor="狼人",
-        action="werewolf_discussion",
+        action="werewolf_discuss",
         payload={"request_id": "req-2", "visible_text": "今晚刀谁。"},
     )
     state_event = live_event(6, "state_updated", payload={"role": "werewolf"})
 
     assert is_public_speech_event(night_event) is False
     assert is_public_speech_event(state_event) is False
+
+
+def test_projected_god_view_werewolf_message_can_be_spoken_privately() -> None:
+    event = live_event(
+        15,
+        "action_parsed",
+        actor="阿青",
+        action="werewolf_discuss",
+        payload={
+            "choice": "3号玩家",
+            "visible_result": {
+                "target": "3号玩家",
+                "message": "建议刀3号，他像预言家。",
+            },
+        },
+        phase="night",
+    )
+
+    utterance = event_to_voice_utterance(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+        player_seats={"阿青": 1},
+    )
+
+    assert utterance is not None
+    assert utterance.speaker_kind == "player"
+    assert utterance.speaker_name == "1号玩家"
+    assert utterance.text == "建议刀3号，他像预言家。"
+    assert voice_job_candidate(event) is None
+    assert (
+        voice_job_candidate(event, audience="spectator_god_view")
+        == "player"
+    )
+
+    materialization = event_to_voice_materialization(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+        player_seats={"阿青": 1},
+        audience="spectator_god_view",
+    )
+
+    assert materialization is not None
+    assert materialization.audience == "spectator_god_view"
+    assert materialization.utterance_id == deterministic_voice_utterance_id(
+        "run_1",
+        15,
+        "player",
+        audience="spectator_god_view",
+    )
+
+
+def test_god_view_voice_coverage_counts_private_wolf_chat() -> None:
+    events = [
+        {
+            "id": 15,
+            "type": "action_parsed",
+            "run_id": "run_1",
+            "session_id": "game_1",
+            "created_at": "2026-07-07T00:00:00Z",
+            "actor": "阿青",
+            "action": "werewolf_discuss",
+            "payload": {
+                "visible_result": {"message": "今晚建议刀3号。"},
+            },
+        }
+    ]
+    voice = {
+        "utterance_id": "voice_wolf_chat",
+        "source_event_id": 15,
+        "last_source_event_id": 15,
+        "speaker_kind": "player",
+    }
+
+    public_coverage = build_voice_playback_coverage(events, [])
+    god_view_coverage = build_voice_playback_coverage(
+        events,
+        [voice],
+        audience="spectator_god_view",
+    )
+
+    assert public_coverage["narratable_event_count"] == 0
+    assert god_view_coverage["narratable_event_count"] == 1
+    assert god_view_coverage["effective_voice_event_count"] == 1
+    assert god_view_coverage["missing_narratable_event_count"] == 0
 
 
 def test_missing_or_false_public_flag_is_not_public_speech() -> None:
@@ -345,7 +431,7 @@ def test_event_to_voice_utterance_ignores_private_action_visible_text() -> None:
         13,
         "model_response_delta",
         actor="狼人",
-        action="werewolf_discussion",
+        action="werewolf_discuss",
         payload={
             "request_id": "req-13",
             "visible_text": "今晚刀谁。",
@@ -487,10 +573,14 @@ def test_explicit_judge_cue_is_authoritative_and_state_fallback_is_suppressed() 
     )
 
     assert event_to_voice_utterance(state_event, config) is None
+    assert voice_job_candidate(cue_event) == "judge"
     utterance = event_to_voice_utterance(cue_event, config)
     assert utterance is not None
     assert utterance.text == "8号玩家得票最高，被放逐出局。"
     assert utterance.static_asset_id == "exile_result_seat_08"
+    materialization = event_to_voice_materialization(cue_event, config)
+    assert materialization is not None
+    assert materialization.text == "8号玩家得票最高，被放逐出局。"
 
 
 def test_speech_order_request_prompts_sheriff_with_managed_static_asset() -> None:
@@ -534,17 +624,15 @@ def test_sheriff_election_result_uses_managed_seat_asset() -> None:
     assert utterance.static_asset_id == "sheriff_result_seat_03"
 
 
-def test_summary_phase_judge_voice_announces_public_resolution() -> None:
+def test_summary_phase_is_silent_after_vote_resolution() -> None:
     config = VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge")
     event = live_event(16, "phase_started", phase="summary")
 
     utterance = event_to_voice_utterance(event, config)
 
-    assert utterance is not None
-    assert utterance.speaker_kind == "judge"
-    assert utterance.speaker_name == "法官"
-    assert utterance.text == "现在公布本轮结算。"
-    assert utterance.static_asset_id is None
+    assert voice_job_candidate(event) is None
+    assert utterance is None
+    assert event_to_voice_materialization(event, config) is None
 
 
 def test_day_phase_with_multiple_night_deaths_uses_dynamic_seat_line() -> None:
@@ -633,6 +721,7 @@ def test_voice_messages_serialize_audio_chunks() -> None:
 
     assert start["type"] == "voice_start"
     assert start["source_event_id"] == 10
+    assert start["audience"] == "player_public"
     assert start["audio_format"] == "pcm"
     assert start["sample_rate"] == 24000
     assert chunk == {

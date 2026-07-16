@@ -6,7 +6,12 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-_PUBLIC_SPEECH_ACTIONS = {"debate", "sheriff_speech", "sheriff_pk_speech"}
+_PUBLIC_SPEECH_ACTIONS = {
+    "debate",
+    "sheriff_speech",
+    "sheriff_pk_speech",
+    "exile_pk_speech",
+}
 _PRIVATE_TEXT_ACTIONS = {"werewolf_discuss", "summarize"}
 _OUTCOME_KINDS = {
     "night_death",

@@ -48,6 +48,7 @@ const SPEECH_ACTIONS = new Set([
   "debate",
   "sheriff_speech",
   "sheriff_pk_speech",
+  "exile_pk_speech",
   "summarize",
 ]);
 
@@ -109,7 +110,13 @@ export function deriveMobileLiveFocusPresentation(
       eventId: event.id,
       kind: interrupted ? "skill" : event.phase === "night" ? "night-action" : "waiting",
       tone:
-        event.action === "witch_death" || interrupted || cueId === "exile_result"
+        event.action === "witch_death" ||
+        interrupted ||
+        cueId === "exile_result" ||
+        cueId === "exile_runoff_tied" ||
+        cueId === "exile_no_votes" ||
+        cueId === "exile_no_result" ||
+        cueId === "exile_no_runoff_voters"
           ? "danger"
           : "neutral",
       actorName: "法官",
@@ -295,7 +302,12 @@ function actionRequestedPresentation(
     return singleActorNight(event, state, payload, "女巫", "正在决定是否使用毒药", "neutral");
   }
 
-  if (action === "vote" || action === "sheriff_vote" || action === "sheriff_runoff_vote") {
+  if (
+    action === "vote" ||
+    action === "sheriff_vote" ||
+    action === "sheriff_runoff_vote" ||
+    action === "exile_runoff_vote"
+  ) {
     const actor = resolveActor(event, state);
     const voted = countVotedPlayers(state);
     const alive = state.progress.totalAlive;
@@ -398,6 +410,29 @@ function actionParsedPresentation(
     return sheriffRunPresentation(event, state);
   }
 
+  if (action === "werewolf_discuss") {
+    const choice = readChoice(payload);
+    const message = stringField(payload, "message");
+    if (!choice) {
+      return malformedNight(event, state, "狼队密聊");
+    }
+    const actor = resolveActor(event, state);
+    const seat = seatLabel(choice, state);
+    return {
+      ...base,
+      kind: "night-action",
+      tone: "info",
+      actorName: actor.name,
+      actorSeat: actor.seat,
+      actorRole: actor.role ?? "狼人",
+      targetName: canonicalPlayerName(choice, state),
+      eyebrow: "狼队密聊",
+      title: message || "提出袭击建议",
+      detail: `建议袭击 ${seat}号`,
+      accessibleText: `${actor.label}密聊：${message || `建议袭击 ${seat}号`}`,
+    };
+  }
+
   if (action === "werewolf_kill_vote") {
     const choice = readChoice(payload);
     if (!choice) {
@@ -407,6 +442,10 @@ function actionParsedPresentation(
     const seat = seatLabel(choice, state);
     const voteRound = integerField(payload, "vote_round");
     const roundLabel = voteRound > 1 ? `第 ${voteRound} 轮 · ` : "";
+    const decisionStage = stringField(payload, "decision_stage");
+    const message = stringField(payload, "message");
+    const isTiebreak = decisionStage === "tiebreak";
+    const isFinalVote = decisionStage === "final";
     return {
       ...base,
       kind: "night-action",
@@ -415,10 +454,12 @@ function actionParsedPresentation(
       actorSeat: actor.seat,
       actorRole: actor.role ?? "狼人",
       targetName: canonicalPlayerName(choice, state),
-      eyebrow: "狼人刀票",
-      title: "选择袭击目标",
-      detail: `${roundLabel}投 ${seat}号`,
-      accessibleText: `${actor.label}${roundLabel}选择袭击 ${seat}号 ${choice}`,
+      eyebrow: isTiebreak ? "归票裁决" : isFinalVote ? "狼人最终刀票" : "狼人刀票",
+      title:
+        message ||
+        (isTiebreak ? "确认最终刀口" : isFinalVote ? "提交最终刀票" : "选择袭击目标"),
+      detail: `${roundLabel}${isTiebreak ? "归票" : "投"} ${seat}号`,
+      accessibleText: `${actor.label}${roundLabel}${isTiebreak ? "归票" : "选择袭击"} ${seat}号 ${choice}`,
     };
   }
 
@@ -455,7 +496,12 @@ function actionParsedPresentation(
   if (action === "witch_poison") {
     return witchParsed(event, state, payload, "女巫毒药", "女巫", "毒", "danger");
   }
-  if (action === "vote" || action === "sheriff_vote" || action === "sheriff_runoff_vote") {
+  if (
+    action === "vote" ||
+    action === "sheriff_vote" ||
+    action === "sheriff_runoff_vote" ||
+    action === "exile_runoff_vote"
+  ) {
     return voteParsed(event, state, payload);
   }
 
@@ -722,6 +768,15 @@ function stateUpdatedPresentation(
   const votes = recordField(payload, "votes");
   if (votes) {
     return voteTallyPresentation(event, state, votes, recordField(payload, "vote_weights"));
+  }
+  const exileRunoffVotes = recordField(payload, "exile_runoff_votes");
+  if (exileRunoffVotes) {
+    return voteTallyPresentation(
+      event,
+      state,
+      exileRunoffVotes,
+      recordField(payload, "vote_weights"),
+    );
   }
 
   const debateEntry = payload.debate_entry;
@@ -1064,6 +1119,9 @@ function speechLabel(action: string | null): string {
   }
   if (action === "sheriff_pk_speech") {
     return "警长竞选 PK 发言";
+  }
+  if (action === "exile_pk_speech") {
+    return "放逐 PK 发言";
   }
   return "白天发言";
 }

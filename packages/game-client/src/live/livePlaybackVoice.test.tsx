@@ -207,6 +207,26 @@ describe("playback voice", () => {
     expect(pcmMocks.resume).toHaveBeenCalled();
   });
 
+  it("unlocks saved non-PCM audio with a reusable audio element", async () => {
+    vi.stubGlobal("AudioContext", undefined);
+    const { audioElements, play } = stubAudioElement();
+    const { result } = renderHook(() =>
+      usePlaybackVoice([mp3Voice()], {
+        currentEventId: 4,
+        enabled: false,
+        isPaused: false,
+      }),
+    );
+
+    await act(async () => {
+      await expect(result.current.unlockAudio()).resolves.toBe(true);
+    });
+
+    expect(audioElements).toHaveLength(1);
+    expect(audioElements[0].src).toMatch(/^data:audio\/wav;base64,/);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
   it("schedules saved PCM chunks after reaching the source event", async () => {
     const { rerender } = renderHook(
       ({ currentEventId }) =>
@@ -252,6 +272,96 @@ describe("playback voice", () => {
     expect(loadVoice).toHaveBeenCalledTimes(1);
   });
 
+  it("reserves the current cue while lazy audio is loading", async () => {
+    let resolveVoice: ((loaded: PlaybackVoiceUtterance) => void) | undefined;
+    const loadVoice = vi.fn(
+      () =>
+        new Promise<PlaybackVoiceUtterance>((resolve) => {
+          resolveVoice = resolve;
+        }),
+    );
+    const metadata = voice({ chunks: undefined });
+    const { result, rerender } = renderHook(() =>
+      usePlaybackVoice([metadata], {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+        loadVoice,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(result.current.currentItem).toMatchObject({
+        sourceEventId: 4,
+        status: "receiving",
+        utteranceId: "voice-1",
+      }),
+    );
+    rerender();
+    expect(loadVoice).toHaveBeenCalledTimes(1);
+    expect(pcmMocks.schedule).not.toHaveBeenCalled();
+
+    act(() => resolveVoice?.(voice()));
+
+    await waitFor(() =>
+      expect(pcmMocks.schedule).toHaveBeenCalledWith("YWJj", 24000),
+    );
+  });
+
+  it("reserves the current cue while PCM chunks are being scheduled", async () => {
+    let resolveSchedule:
+      | ((scheduled: { duration: number; endTime: number; startTime: number }) => void)
+      | undefined;
+    pcmMocks.schedule.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSchedule = resolve;
+        }),
+    );
+    const { result } = renderHook(() =>
+      usePlaybackVoice([voice()], {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(result.current.currentItem).toMatchObject({
+        sourceEventId: 4,
+        status: "ready",
+        utteranceId: "voice-1",
+      }),
+    );
+
+    act(() =>
+      resolveSchedule?.({ duration: 0.01, endTime: 0.01, startTime: 0 }),
+    );
+    await waitFor(() =>
+      expect(result.current.currentItem).toMatchObject({ status: "playing" }),
+    );
+  });
+
+  it("does not backfill a stale voice after the director passed its range", async () => {
+    const loadVoice = vi.fn().mockResolvedValue(voice());
+    const { result } = renderHook(() =>
+      usePlaybackVoice([voice({ chunks: undefined })], {
+        currentEventId: 5,
+        enabled: true,
+        isPaused: false,
+        loadVoice,
+      }),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.currentItem).toBeNull();
+    expect(loadVoice).not.toHaveBeenCalled();
+    expect(pcmMocks.schedule).not.toHaveBeenCalled();
+  });
+
   it("releases lazy audio after playback and reloads it after a backward seek", async () => {
     vi.stubGlobal("AudioContext", undefined);
     stubObjectUrls(["blob:voice-first", "blob:voice-again"]);
@@ -271,7 +381,10 @@ describe("playback voice", () => {
     );
 
     await waitFor(() =>
-      expect(result.current.currentItem?.utteranceId).toBe("voice-1"),
+      expect(result.current.currentItem).toMatchObject({
+        status: "playing",
+        utteranceId: "voice-1",
+      }),
     );
     expect(loadVoice).toHaveBeenCalledTimes(1);
 
@@ -284,7 +397,10 @@ describe("playback voice", () => {
 
     await waitFor(() => expect(loadVoice).toHaveBeenCalledTimes(2));
     await waitFor(() =>
-      expect(result.current.currentItem?.utteranceId).toBe("voice-1"),
+      expect(result.current.currentItem).toMatchObject({
+        status: "playing",
+        utteranceId: "voice-1",
+      }),
     );
   });
 
@@ -371,7 +487,7 @@ describe("playback voice", () => {
     );
   });
 
-  it("schedules saved coalesced PCM chunks after reaching the last source event", async () => {
+  it("schedules saved coalesced PCM chunks at the first source event", async () => {
     const coalescedVoice = voice({
       last_source_event_id: 6,
       source_event_id: 4,
@@ -386,17 +502,34 @@ describe("playback voice", () => {
       { initialProps: { currentEventId: 4 } },
     );
 
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(pcmMocks.schedule).not.toHaveBeenCalled();
-
-    rerender({ currentEventId: 6 });
-
     await waitFor(() => {
       expect(pcmMocks.schedule).toHaveBeenCalledWith("YWJj", 24000);
     });
+
+    rerender({ currentEventId: 6 });
+    expect(pcmMocks.schedule).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a failed saved voice from the current replay cursor", async () => {
+    pcmMocks.schedule
+      .mockRejectedValueOnce(new Error("autoplay blocked"))
+      .mockResolvedValue({ duration: 0.01, endTime: 0.01, startTime: 0 });
+    const { result } = renderHook(() =>
+      usePlaybackVoice([voice()], {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+
+    await waitFor(() => expect(result.current.connectionState).toBe("error"));
+
+    await act(async () => {
+      await expect(result.current.retryAudio()).resolves.toBe(true);
+    });
+
+    await waitFor(() => expect(pcmMocks.schedule).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.connectionState).toBe("open"));
   });
 
   it("suspends and resumes with replay pause state", async () => {
@@ -614,6 +747,7 @@ describe("playback voice", () => {
 
     expect(subtitle).toEqual({
       activeText: "",
+      audience: "player_public",
       completedText: "我先过",
       pageIndex: 0,
       pendingText: "",
@@ -624,7 +758,30 @@ describe("playback voice", () => {
     });
   });
 
-  it("matches coalesced player replay subtitles by last source event id", () => {
+  it("preserves private audience on replay subtitles", () => {
+    expect(
+      currentSubtitleForPlaybackVoices({
+        currentEventId: 32,
+        elapsedMs: 0,
+        isPaused: false,
+        voices: [
+          voice({
+            audience: "spectator_god_view",
+            chunks: [],
+            source_event_id: 32,
+            last_source_event_id: 32,
+            subtitle_timings: [{ text: "今晚刀三号。", start_ms: 0, end_ms: 420 }],
+          }),
+        ],
+      }),
+    ).toMatchObject({
+      audience: "spectator_god_view",
+      speakerKind: "player",
+      text: "今晚刀三号",
+    });
+  });
+
+  it("matches coalesced player replay subtitles across the source event range", () => {
     const replayVoice = voice({
       last_source_event_id: 41,
       source_event_id: 32,
@@ -639,7 +796,11 @@ describe("playback voice", () => {
         isPaused: false,
         voices: [replayVoice],
       }),
-    ).toBeNull();
+    ).toMatchObject({
+      speakerKind: "player",
+      speakerName: "2号玩家",
+      text: "我先过",
+    });
     expect(
       currentSubtitleForPlaybackVoices({
         currentEventId: 41,

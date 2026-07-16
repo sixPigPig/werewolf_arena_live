@@ -17,6 +17,7 @@ from app.api.routes.games import (
     get_live_registry,
     get_voice_streamer,
 )
+from app.api.public.dependencies import get_current_public_websocket_principal
 from app.db.base import Base
 from app.main import app
 from app.models.live import VoiceMaterializationJobRecord
@@ -52,12 +53,14 @@ class FakeVoiceStreamer:
         *,
         current_event_id: int | None = None,
         playback_ack_required: bool = False,
+        audience: str = "player_public",
     ) -> None:
         self.calls.append(
             {
                 "run_id": run_id,
                 "current_event_id": current_event_id,
                 "playback_ack_required": playback_ack_required,
+                "audience": audience,
             }
         )
         if not self.available:
@@ -585,6 +588,7 @@ def test_voice_stream_route_forwards_current_event_id_query() -> None:
             "run_id": run.run_id,
             "current_event_id": 7,
             "playback_ack_required": False,
+            "audience": "player_public",
         }
     ]
 
@@ -607,8 +611,49 @@ def test_voice_stream_route_forwards_playback_ack_query() -> None:
             "run_id": run.run_id,
             "current_event_id": 7,
             "playback_ack_required": True,
+            "audience": "player_public",
         }
     ]
+
+
+def test_god_view_voice_stream_route_uses_private_projection() -> None:
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    streamer = FakeVoiceStreamer()
+    override_registry(registry)
+    override_streamer(streamer)
+    app.dependency_overrides[get_current_public_websocket_principal] = lambda: object()
+
+    with client_with_overrides() as client:
+        with client.websocket_connect(
+            f"/api/v1/games/runs/{run.run_id}/god-view/voice-stream?current_event_id=7"
+        ) as ws:
+            assert ws.receive_json()["type"] == "voice_start"
+
+    assert streamer.calls == [
+        {
+            "run_id": run.run_id,
+            "current_event_id": 7,
+            "playback_ack_required": False,
+            "audience": "spectator_god_view",
+        }
+    ]
+
+
+def test_god_view_voice_stream_route_requires_public_session() -> None:
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    override_registry(registry)
+    override_streamer(FakeVoiceStreamer())
+
+    with client_with_overrides() as client:
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect(
+                f"/api/v1/games/runs/{run.run_id}/god-view/voice-stream"
+            ):
+                pass
+
+    assert exc_info.value.code == 1008
 
 
 def test_voice_stream_route_reports_unknown_run() -> None:
@@ -658,7 +703,7 @@ def test_voice_stream_service_streams_public_voice_events_and_unsubscribes(tmp_p
             run.run_id,
             "model_response_delta",
             actor="狼人",
-            action="werewolf_discussion",
+            action="werewolf_discuss",
             payload={
                 "request_id": "req-private",
                 "visible_text": "今晚刀谁。",
@@ -701,6 +746,72 @@ def test_voice_stream_service_streams_public_voice_events_and_unsubscribes(tmp_p
     assert websocket.messages[1]["sample_rate"] == 24000
     assert websocket.messages[1]["data"] == "YWJj"
     assert websocket.messages[4]["chunk_index"] == 0
+
+
+def test_voice_stream_service_streams_private_wolf_chat_to_god_view(tmp_path) -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    registry.publish(
+        run.run_id,
+        "game_started",
+        payload={
+            "players": [
+                {"name": "张三", "role": "werewolf", "model": "test-model"},
+                {"name": "李四", "role": "villager", "model": "test-model"},
+            ]
+        },
+    )
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        judge_voice_asset_dir=tmp_path / "judge-voice",
+    )
+
+    async def stream_private_event() -> None:
+        task = asyncio.create_task(
+            service.stream_run(
+                run.run_id,
+                websocket,
+                audience="spectator_god_view",
+            )
+        )
+        await wait_for_subscription(registry, run.run_id)
+        private_event = registry.publish(
+            run.run_id,
+            "action_parsed",
+            actor="张三",
+            action="werewolf_discuss",
+            payload={
+                "choice": "李四",
+                "result": {"target": "李四", "message": "李四带队能力强，建议先处理。"},
+                "visible_result": {
+                    "target": "李四",
+                    "message": "李四带队能力强，建议先处理。",
+                },
+                "message": "李四带队能力强，建议先处理。",
+                "decision_stage": "proposal",
+            },
+        )
+        await wait_for_messages(websocket, 3)
+        websocket.disconnect()
+        await asyncio.wait_for(task, timeout=1)
+        assert websocket.messages[0]["source_event_id"] == private_event.id
+
+    asyncio.run(stream_private_event())
+
+    assert RecordingTtsClient.instances[0].calls == [
+        {"speaker": "player", "text_chunks": ["李四带队能力强，", "建议先处理。"]}
+    ]
+    assert [message["type"] for message in websocket.messages] == [
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+    ]
+    assert websocket.messages[0]["speaker_name"] == "1号玩家"
+    assert websocket.messages[0]["audience"] == "spectator_god_view"
 
 
 def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) -> None:
@@ -1519,6 +1630,7 @@ def test_voice_stream_service_replays_recent_complete_utterance_then_streams_fut
             "last_source_event_id": 7,
             "speaker_kind": "player",
             "speaker_name": "阿青",
+            "audience": "player_public",
             "mime_type": "audio/L16",
             "audio_format": "pcm",
             "sample_rate": 24000,
@@ -1658,6 +1770,7 @@ def test_voice_stream_service_replays_database_utterance_when_newer_rows_are_inv
             "last_source_event_id": 4,
             "speaker_kind": "player",
             "speaker_name": "阿青",
+            "audience": "player_public",
             "mime_type": "audio/L16",
             "audio_format": "pcm",
             "sample_rate": 24000,

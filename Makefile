@@ -13,7 +13,7 @@ NODE_IMAGE ?= public.ecr.aws/docker/library/node:22-alpine
 NGINX_IMAGE ?= public.ecr.aws/docker/library/nginx:1.27-alpine
 PYTHON_IMAGE ?= public.ecr.aws/docker/library/python:3.12-slim
 
-.PHONY: install dev api mobile-web mobile-e2e admin-web admin-e2e voice-worker live-run-reaper db-up db-down stack-up stack-down container-build lint test build format release-check
+.PHONY: install dev api mobile-web mobile-e2e admin-web admin-e2e voice-worker live-voice-materializer live-run-reaper db-up db-down stack-up stack-down container-build lint test build format release-check
 
 install:
 	cd apps/api && uv sync
@@ -24,12 +24,16 @@ dev:
 	@printf "API: http://127.0.0.1:8000\n"
 	@printf "Mobile Web: http://127.0.0.1:5174\n"
 	@printf "Admin Web: http://127.0.0.1:5175\n"
-	@printf "Workers: make voice-worker / make live-run-reaper\n"
+	@printf "Workers: make voice-worker / make live-voice-materializer / make live-run-reaper\n"
 	@printf "LAN Mobile Web: http://$(LAN_HOST):5174\n"
 
 api:
 	cd apps/api && $(API_LOCAL_ENV) .venv/bin/alembic upgrade head
-	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+	cd apps/api && $(API_LOCAL_ENV) sh -c '\
+		.venv/bin/python -m app.cli run-live-voice-materializer & \
+		materializer_pid=$$!; \
+		trap "kill $$materializer_pid 2>/dev/null || true" EXIT INT TERM; \
+		.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload'
 
 mobile-web:
 	cd apps/mobile-web && pnpm dev --host 0.0.0.0 --port 5174
@@ -45,6 +49,9 @@ admin-e2e:
 
 voice-worker:
 	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-judge-voice-worker
+
+live-voice-materializer:
+	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-live-voice-materializer
 
 live-run-reaper:
 	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-live-run-reaper

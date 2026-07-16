@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.api.public.dependencies import (
     PublicPrincipal,
     get_current_public_principal,
+    get_current_public_websocket_principal,
     public_problem,
 )
 from app.api.schemas.public_rule_sets import (
@@ -1363,6 +1364,39 @@ async def stream_game_run_voice(
     )
 
 
+@router.websocket("/runs/{run_id}/god-view/voice-stream")
+async def stream_game_run_god_view_voice(
+    websocket: WebSocket,
+    run_id: str,
+    registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
+    streamer: Annotated[LiveVoiceStreamService, Depends(get_voice_streamer)],
+    _principal: Annotated[
+        PublicPrincipal,
+        Depends(get_current_public_websocket_principal),
+    ],
+    current_event_id: Annotated[int | None, Query(ge=0)] = None,
+    playback_ack: Annotated[bool, Query()] = False,
+) -> None:
+    await websocket.accept()
+    if registry.try_get_run(run_id) is None:
+        await websocket.send_json(
+            {
+                "type": "voice_unavailable",
+                "reason": "run_not_found",
+                "message": "对局不存在或已失效，请返回大厅重新开始。",
+            }
+        )
+        await websocket.close()
+        return
+    await streamer.stream_run(
+        run_id,
+        websocket,
+        current_event_id=current_event_id,
+        playback_ack_required=playback_ack,
+        audience="spectator_god_view",
+    )
+
+
 @router.post("/{session_id}/resume", status_code=201)
 def resume_game_run(
     session_id: Annotated[
@@ -1584,12 +1618,18 @@ def _get_game_playback_voice(
         return allowed_voice
 
     try:
+        allowed_audiences = (
+            frozenset({"player_public", "spectator_god_view"})
+            if audience == "spectator_god_view"
+            else frozenset({"player_public"})
+        )
         stored_voice = DatabaseVoiceStore(
             db,
             session_id=session_id,
         ).load_playback_voice(
             utterance_id,
             excluded_actions=frozenset({PRIVATE_ROUND_MEMORY_ACTION}),
+            allowed_audiences=allowed_audiences,
         )
     except RecoverableDatabaseError:
         stored_voice = None
@@ -1628,11 +1668,19 @@ def _get_game_playback(
                 db,
                 session_id=session_id,
             )
+            allowed_audiences = (
+                frozenset({"player_public", "spectator_god_view"})
+                if audience == "spectator_god_view"
+                else frozenset({"player_public"})
+            )
             saved_voices = voice_store.list_playback_voices(
                 excluded_actions=frozenset({PRIVATE_ROUND_MEMORY_ACTION}),
+                allowed_audiences=allowed_audiences,
                 include_chunks=False,
             )
-            materialization_lag_ms = voice_store.max_materialization_lag_ms()
+            materialization_lag_ms = voice_store.max_materialization_lag_ms(
+                allowed_audiences=allowed_audiences,
+            )
             saved_voices = _map_playback_voices_to_timeline(
                 saved_voices,
                 persisted_events,
@@ -1668,6 +1716,7 @@ def _get_game_playback(
         playback["events"],
         playback["voices"],
         materialization_lag_ms=materialization_lag_ms,
+        audience=audience,
     )
     return playback
 
@@ -1676,12 +1725,15 @@ def _map_playback_voices_to_timeline(
     voices: list[dict[str, Any]],
     events: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    source_to_timeline = {
-        (event.get("source_run_id"), event.get("source_event_id")): event.get("id")
+    source_events = {
+        (event.get("source_run_id"), event.get("source_event_id")): event
         for event in events
         if isinstance(event.get("source_run_id"), str)
         and isinstance(event.get("source_event_id"), int)
         and isinstance(event.get("id"), int)
+    }
+    source_to_timeline = {
+        key: event["id"] for key, event in source_events.items()
     }
     mapped: list[dict[str, Any]] = []
     for voice in voices:
@@ -1703,6 +1755,25 @@ def _map_playback_voices_to_timeline(
                 if source_run_id == run_id and first_source_id <= source_event_id <= last_source_id
             ]
             last_timeline_id = max(candidates, default=first_timeline_id)
+        source_event = source_events.get((run_id, first_source_id), {})
+        source_payload = source_event.get("payload")
+        request_id = (
+            source_payload.get("request_id")
+            if isinstance(source_payload, dict)
+            else None
+        )
+        if voice.get("speaker_kind") == "player" and isinstance(request_id, str):
+            request_timeline_ids = [
+                event["id"]
+                for event in events
+                if event.get("source_run_id") == run_id
+                and isinstance(event.get("id"), int)
+                and isinstance(event.get("payload"), dict)
+                and event["payload"].get("request_id") == request_id
+            ]
+            if request_timeline_ids:
+                first_timeline_id = min(first_timeline_id, *request_timeline_ids)
+                last_timeline_id = max(last_timeline_id, *request_timeline_ids)
         mapped.append(
             {
                 **{key: value for key, value in voice.items() if key != "run_id"},

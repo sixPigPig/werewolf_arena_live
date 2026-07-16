@@ -143,6 +143,12 @@ class FailOnceTtsClient:
         yield b"\x00\x01" * 2400
 
 
+class SuccessfulTtsClient:
+    async def synthesize(self, *, speaker: str, text_chunks: list[str]):
+        del speaker, text_chunks
+        yield b"\x00\x01" * 2400
+
+
 def test_dynamic_player_job_retries_without_duplicate_audio(
     session_factory: sessionmaker[Session],
 ) -> None:
@@ -184,6 +190,52 @@ def test_dynamic_player_job_retries_without_duplicate_audio(
         assert db.query(VoiceUtteranceRecord).count() == 1
         assert db.query(VoiceAudioChunkRecord).count() == 1
         assert db.get(VoiceUtteranceRecord, utterance_id) is not None
+
+
+def test_god_view_wolf_chat_job_materializes_scoped_voice(
+    session_factory: sessionmaker[Session],
+) -> None:
+    key = seed_event(
+        session_factory,
+        event_type="action_parsed",
+        actor="阿青",
+        action="werewolf_discuss",
+        payload={
+            "choice": "3号玩家",
+            "visible_result": {
+                "target": "3号玩家",
+                "message": "今晚建议刀3号。",
+            },
+        },
+    )
+    materializer = VoiceMaterializer(
+        session_factory,
+        config=tts_config(),
+        client_factory=lambda _config: SuccessfulTtsClient(),
+    )
+
+    claimed = materializer.claim_next_job(worker_id="worker-god-view")
+
+    assert claimed == key
+    assert asyncio.run(
+        materializer.process_claimed_job(claimed, worker_id="worker-god-view")
+    ) is True
+
+    utterance_id = deterministic_voice_utterance_id(
+        key[0],
+        key[1],
+        "player",
+        audience="spectator_god_view",
+    )
+    with session_factory() as db:
+        job = db.get(VoiceMaterializationJobRecord, key)
+        utterance = db.get(VoiceUtteranceRecord, utterance_id)
+        assert job is not None and job.status == "complete"
+        assert job.audience == "spectator_god_view"
+        assert utterance is not None and utterance.status == "complete"
+        assert utterance.audience == "spectator_god_view"
+        assert utterance.action == "werewolf_discuss"
+        assert utterance.text == "今晚建议刀3号。"
 
 
 def test_dynamic_player_job_reuses_equivalent_live_audio(

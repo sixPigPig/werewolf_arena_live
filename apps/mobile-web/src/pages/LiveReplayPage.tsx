@@ -79,8 +79,7 @@ export function LiveReplayPage() {
   }, [gameId, unlockVoiceAudio, voiceEnabled]);
   const handleToggleVoice = async () => {
     if (voiceEnabled && voice.connectionState === "error") {
-      setVoiceEnabled(false);
-      window.setTimeout(() => setVoiceEnabled(true), 0);
+      await voice.retryAudio();
       return;
     }
 
@@ -152,8 +151,14 @@ export function LiveReplayPage() {
     [currentEventId, director.isPaused, playbackVoices, replaySubtitleElapsedMs],
   );
   const subtitle = useMemo(
-    () => voiceSubtitleToMobileSubtitle(voice.currentSubtitle ?? replaySubtitle),
-    [replaySubtitle, voice.currentSubtitle],
+    () =>
+      voiceSubtitleToMobileSubtitle(
+        voice.currentSubtitle ??
+          (voiceEnabled && voice.connectionState === "open"
+            ? null
+            : replaySubtitle),
+      ),
+    [replaySubtitle, voice.connectionState, voice.currentSubtitle, voiceEnabled],
   );
   const visibleTerminalEvent = terminalEventFor(stageEvents);
   const terminalEvent = terminalEventFor(allEvents);
@@ -310,8 +315,12 @@ function isVoicePlaybackBlocking(
     return false;
   }
 
-  const playbackEventId = currentItem.lastSourceEventId ?? currentItem.sourceEventId;
-  if (playbackEventId > currentEventId) {
+  const lastSourceEventId =
+    currentItem.lastSourceEventId ?? currentItem.sourceEventId;
+  if (
+    currentItem.sourceEventId > currentEventId ||
+    lastSourceEventId < currentEventId
+  ) {
     return false;
   }
 

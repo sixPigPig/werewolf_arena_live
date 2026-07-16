@@ -505,6 +505,18 @@ function parseRound(value: unknown): AdminGameRound {
       record.sheriff_runoff_votes,
       "round.sheriff_runoff_votes",
     ),
+    exile_pk_candidates: stringArray(
+      record.exile_pk_candidates,
+      "round.exile_pk_candidates",
+    ),
+    exile_runoff_votes: stringRecord(
+      record.exile_runoff_votes,
+      "round.exile_runoff_votes",
+    ),
+    exile_resolution_reason: nullableString(
+      record.exile_resolution_reason,
+      "round.exile_resolution_reason",
+    ),
     sheriff_speech_order: stringArray(
       record.sheriff_speech_order,
       "round.sheriff_speech_order",
@@ -525,6 +537,10 @@ function parseRound(value: unknown): AdminGameRound {
     sheriff_pk_speeches: speechArray(
       record.sheriff_pk_speeches,
       "round.sheriff_pk_speeches",
+    ),
+    exile_pk_speeches: speechArray(
+      record.exile_pk_speeches,
+      "round.exile_pk_speeches",
     ),
     debate: speechArray(record.debate, "round.debate"),
     sheriff_badge_target: nullableString(

@@ -86,6 +86,7 @@ const STATE_DIFF_LABELS: Record<string, string> = {
   votes: "票型",
   sheriff_votes: "警长票型",
   sheriff_runoff_votes: "PK 票型",
+  exile_runoff_votes: "放逐 PK 票型",
   exiled: "放逐",
   eliminated: "出局",
   attacked: "袭击",
@@ -97,6 +98,7 @@ const STATE_DIFF_LABELS: Record<string, string> = {
 
 const VOTE_STATE_FIELDS: Record<string, string> = {
   sheriff_runoff_vote: "sheriff_runoff_votes",
+  exile_runoff_vote: "exile_runoff_votes",
   sheriff_vote: "sheriff_votes",
   vote: "votes",
   werewolf_kill_vote: "werewolf_votes",
@@ -118,7 +120,9 @@ const STATE_KEYS_BY_ACTION: Record<string, string[]> = {
   protect: ["protected"],
   remove: ["attacked", "eliminated"],
   sheriff_pk_speech: ["sheriff_pk_speeches"],
+  exile_pk_speech: ["exile_pk_speeches"],
   sheriff_runoff_vote: ["sheriff_runoff_votes"],
+  exile_runoff_vote: ["exile_runoff_votes"],
   sheriff_speech: ["sheriff_speeches"],
   sheriff_vote: ["sheriff_votes"],
   vote: ["votes", "exiled"],
@@ -131,6 +135,7 @@ const SPEECH_STATE_FIELDS: Array<{ key: string; action: string }> = [
   { key: "debate", action: "debate" },
   { key: "sheriff_speeches", action: "sheriff_speech" },
   { key: "sheriff_pk_speeches", action: "sheriff_pk_speech" },
+  { key: "exile_pk_speeches", action: "exile_pk_speech" },
 ];
 
 export function buildLiveDebugTraces(
@@ -566,6 +571,9 @@ function impactSummary(payload: Record<string, unknown>) {
   if (recordField(payload, "sheriff_runoff_votes")) {
     summary.push("PK 票型更新");
   }
+  if (recordField(payload, "exile_runoff_votes")) {
+    summary.push("放逐 PK 票型更新");
+  }
 
   const exiled = stringField(payload, "exiled");
   if (exiled) {
@@ -592,7 +600,12 @@ function stateDiff(payload: Record<string, unknown>): LiveDebugStateDiff[] {
     });
   }
 
-  for (const key of ["votes", "sheriff_votes", "sheriff_runoff_votes"]) {
+  for (const key of [
+    "votes",
+    "sheriff_votes",
+    "sheriff_runoff_votes",
+    "exile_runoff_votes",
+  ]) {
     const votes = recordField(payload, key);
     if (votes) {
       diffs.push({

@@ -101,7 +101,10 @@ def build_database_quality_bundle(
         voice_records = list(
             db.scalars(
                 select(VoiceUtteranceRecord)
-                .where(VoiceUtteranceRecord.run_id == effective_run_id)
+                .where(
+                    VoiceUtteranceRecord.run_id == effective_run_id,
+                    VoiceUtteranceRecord.audience == "player_public",
+                )
                 .order_by(
                     VoiceUtteranceRecord.source_event_id.asc(),
                     VoiceUtteranceRecord.utterance_id.asc(),
@@ -263,6 +266,7 @@ def _voice_dict(record: VoiceUtteranceRecord) -> dict[str, Any]:
         "utterance_id": record.utterance_id,
         "run_id": record.run_id,
         "session_id": record.session_id,
+        "audience": record.audience,
         "source_event_id": record.source_event_id,
         "last_source_event_id": record.last_source_event_id,
         "speaker_kind": record.speaker_kind,

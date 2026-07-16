@@ -910,6 +910,7 @@ function RoundItem({ round }: { round: AdminGameRound }) {
   const speechGroups = [
     { label: "警长竞选发言", items: round.sheriff_speeches },
     { label: "警长平票发言", items: round.sheriff_pk_speeches },
+    { label: "放逐平票发言", items: round.exile_pk_speeches },
     { label: "白天发言", items: round.debate },
   ].filter((group) => group.items.length > 0);
   return (
@@ -956,6 +957,18 @@ function RoundItem({ round }: { round: AdminGameRound }) {
           ) : null}
           {Object.keys(round.sheriff_runoff_votes).length > 0 ? (
             <RoundFact label="加赛票型" value={formatVotes(round.sheriff_runoff_votes)} />
+          ) : null}
+          {round.exile_pk_candidates.length > 0 ? (
+            <RoundFact label="放逐 PK 候选" value={formatNames(round.exile_pk_candidates)} />
+          ) : null}
+          {Object.keys(round.exile_runoff_votes).length > 0 ? (
+            <RoundFact label="放逐二轮票型" value={formatVotes(round.exile_runoff_votes)} />
+          ) : null}
+          {round.exile_resolution_reason ? (
+            <RoundFact
+              label="放逐结论"
+              value={formatExileResolution(round.exile_resolution_reason)}
+            />
           ) : null}
           {round.sheriff_speech_order.length > 0 ? (
             <RoundFact
@@ -1296,6 +1309,17 @@ function formatVotes(votes: Record<string, string>) {
   return entries.length > 0
     ? entries.map(([voter, target]) => `${voter}→${target}`).join("、")
     : "—";
+}
+
+function formatExileResolution(reason: string) {
+  return {
+    first_vote_winner: "首轮唯一最高票放逐",
+    first_vote_tied: "首轮平票，进入 PK",
+    runoff_vote_winner: "二轮唯一最高票放逐",
+    runoff_tied: "二轮再次平票，无人被放逐",
+    no_valid_votes: "没有有效票，无人被放逐",
+    no_runoff_voters: "没有二轮投票者，无人被放逐",
+  }[reason] ?? reason;
 }
 
 function badgeLostReasonLabel(value: string) {

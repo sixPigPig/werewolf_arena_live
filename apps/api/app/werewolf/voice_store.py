@@ -62,6 +62,7 @@ class DatabaseVoiceStore:
                 utterance_id=utterance.utterance_id,
                 run_id=utterance.run_id,
                 session_id=self.session_id,
+                audience=utterance.audience,
                 source_event_id=utterance.source_event_id,
                 last_source_event_id=last_source_event_id,
                 request_id=utterance.request_id,
@@ -153,6 +154,7 @@ class DatabaseVoiceStore:
             self.db.query(VoiceMaterializationJobRecord).filter(
                 VoiceMaterializationJobRecord.run_id == record.run_id,
                 VoiceMaterializationJobRecord.session_id == self.session_id,
+                VoiceMaterializationJobRecord.audience == record.audience,
                 VoiceMaterializationJobRecord.speaker_kind == record.speaker_kind,
                 VoiceMaterializationJobRecord.source_event_id >= record.source_event_id,
                 VoiceMaterializationJobRecord.source_event_id <= record.last_source_event_id,
@@ -221,12 +223,14 @@ class DatabaseVoiceStore:
         utterance_id: str,
         *,
         excluded_actions: frozenset[str] = frozenset(),
+        allowed_audiences: frozenset[str] = frozenset({"player_public"}),
     ) -> dict[str, Any] | None:
         record = (
             self.db.query(VoiceUtteranceRecord)
             .filter(
                 VoiceUtteranceRecord.utterance_id == utterance_id,
                 VoiceUtteranceRecord.session_id == self.session_id,
+                VoiceUtteranceRecord.audience.in_(allowed_audiences),
                 VoiceUtteranceRecord.status == "complete",
                 VoiceUtteranceRecord.speaker_kind.in_(("player", "judge")),
                 VoiceUtteranceRecord.sample_rate > 0,
@@ -249,6 +253,7 @@ class DatabaseVoiceStore:
         self,
         *,
         excluded_actions: frozenset[str] = frozenset(),
+        allowed_audiences: frozenset[str] = frozenset({"player_public"}),
         include_chunks: bool = True,
     ) -> list[dict[str, Any]]:
         if not include_chunks:
@@ -271,6 +276,7 @@ class DatabaseVoiceStore:
                 )
                 .filter(
                     VoiceUtteranceRecord.session_id == self.session_id,
+                    VoiceUtteranceRecord.audience.in_(allowed_audiences),
                     VoiceUtteranceRecord.status == "complete",
                     VoiceUtteranceRecord.speaker_kind.in_(("player", "judge")),
                     VoiceUtteranceRecord.sample_rate > 0,
@@ -299,6 +305,7 @@ class DatabaseVoiceStore:
             )
             .filter(
                 VoiceUtteranceRecord.session_id == self.session_id,
+                VoiceUtteranceRecord.audience.in_(allowed_audiences),
                 VoiceUtteranceRecord.status == "complete",
                 VoiceUtteranceRecord.speaker_kind.in_(("player", "judge")),
                 VoiceUtteranceRecord.sample_rate > 0,
@@ -320,6 +327,7 @@ class DatabaseVoiceStore:
                 {
                     "utterance_id": utterance.utterance_id,
                     "run_id": utterance.run_id,
+                    "audience": utterance.audience,
                     "source_event_id": utterance.source_event_id,
                     "last_source_event_id": utterance.last_source_event_id,
                     "speaker_kind": utterance.speaker_kind,
@@ -354,7 +362,11 @@ class DatabaseVoiceStore:
             )
         return voices
 
-    def max_materialization_lag_ms(self) -> int | None:
+    def max_materialization_lag_ms(
+        self,
+        *,
+        allowed_audiences: frozenset[str] = frozenset({"player_public"}),
+    ) -> int | None:
         rows = self.db.execute(
             self.db.query(
                 VoiceUtteranceRecord.completed_at,
@@ -367,6 +379,7 @@ class DatabaseVoiceStore:
             )
             .filter(
                 VoiceUtteranceRecord.session_id == self.session_id,
+                VoiceUtteranceRecord.audience.in_(allowed_audiences),
                 VoiceUtteranceRecord.status == "complete",
                 VoiceUtteranceRecord.completed_at.is_not(None),
             )
@@ -384,6 +397,7 @@ class DatabaseVoiceStore:
         *,
         run_id: str,
         current_event_id: int,
+        audience: str = "player_public",
     ) -> dict[str, Any] | None:
         record = (
             self.db.query(VoiceUtteranceRecord)
@@ -393,6 +407,7 @@ class DatabaseVoiceStore:
             )
             .filter(
                 VoiceUtteranceRecord.run_id == run_id,
+                VoiceUtteranceRecord.audience == audience,
                 VoiceUtteranceRecord.last_source_event_id <= current_event_id,
                 VoiceUtteranceRecord.status == "complete",
                 VoiceUtteranceRecord.speaker_kind.in_(("player", "judge")),
@@ -440,6 +455,7 @@ def _utterance_record_to_dict(record: VoiceUtteranceRecord) -> dict[str, Any]:
         "utterance_id": record.utterance_id,
         "run_id": record.run_id,
         "session_id": record.session_id,
+        "audience": record.audience,
         "source_event_id": record.source_event_id,
         "last_source_event_id": record.last_source_event_id,
         "request_id": record.request_id,
@@ -478,6 +494,7 @@ def _playback_voice_from_record(
     voice = {
         "utterance_id": record.utterance_id,
         "run_id": record.run_id,
+        "audience": record.audience,
         "source_event_id": record.source_event_id,
         "last_source_event_id": record.last_source_event_id,
         "speaker_kind": record.speaker_kind,
@@ -562,7 +579,7 @@ def _playback_subtitle_timings(
     normalized_timing_text = _normalize_subtitle_text(
         "".join(str(cue.get("text", "")) for cue in subtitle_timings)
     )
-    if not subtitle_timings or normalized_timing_text == normalized_text:
+    if subtitle_timings and normalized_timing_text == normalized_text:
         return subtitle_timings
 
     duration_ms = _pcm_audio_duration_ms(
@@ -629,6 +646,7 @@ def _raise_for_incompatible_upsert(
     comparisons = (
         ("run_id", record.run_id, utterance.run_id),
         ("session_id", record.session_id, session_id),
+        ("audience", record.audience, utterance.audience),
         ("request_id", record.request_id, utterance.request_id),
         ("speaker_kind", record.speaker_kind, utterance.speaker_kind),
         ("speaker_name", record.speaker_name, utterance.speaker_name),

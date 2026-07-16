@@ -149,13 +149,15 @@ def test_admin_voice_assets_mark_runtime_usage(voice_client) -> None:
     client, _asset_dir, _session_factory = voice_client
     _login(client)
 
-    response = client.get(
-        "/api/v1/admin/judge-voice-lines",
-        params={"page_size": 100},
-    )
+    items = {}
+    for line_id in ("game_intro", "speech_prompt_seat_01", "werewolves_confirm"):
+        response = client.get(
+            "/api/v1/admin/judge-voice-lines",
+            params={"q": line_id},
+        )
+        assert response.status_code == 200
+        items.update({item["id"]: item for item in response.json()["items"]})
 
-    assert response.status_code == 200
-    items = {item["id"]: item for item in response.json()["items"]}
     assert items["game_intro"]["used"] is True
     assert items["speech_prompt_seat_01"]["used"] is True
     assert items["werewolves_confirm"]["used"] is False

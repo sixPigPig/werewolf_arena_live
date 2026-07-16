@@ -28,13 +28,15 @@ export function PlaybackPage() {
       <header className="mobile-archive-hero">
         <span>对局卷宗</span>
         <h1>移动复盘</h1>
-        <p>复核整局走势、关键轮次和观战视角下的结构化行动。</p>
+        <p>
+          复核整局走势、关键轮次和观战视角下的结构化行动；本页不播放语音，语音字幕请进入直播回放。
+        </p>
         {gameId ? (
           <Link
             className="mobile-button mobile-session-link"
             to={`/games/${gameId}/live-replay`}
           >
-            导入直播页播放
+            打开带语音字幕的直播回放
           </Link>
         ) : null}
       </header>

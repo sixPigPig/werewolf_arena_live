@@ -15,6 +15,7 @@ export const PUBLIC_SPEECH_ACTIONS = [
   "debate",
   "sheriff_speech",
   "sheriff_pk_speech",
+  "exile_pk_speech",
 ] as const;
 
 export type MobileLiveSubtitle = {
@@ -24,7 +25,7 @@ export type MobileLiveSubtitle = {
   pageIndex: number;
   pendingText: string;
   text: string;
-  tone: "judge" | "player";
+  tone: "judge" | "player" | "private";
   colorIndex: number;
 };
 
@@ -102,6 +103,15 @@ export function voiceSubtitleToMobileSubtitle(
       colorIndex: 0,
       speakerName: subtitle.speakerName,
       tone: "judge",
+    };
+  }
+
+  if (subtitle.audience === "spectator_god_view") {
+    return {
+      ...progress,
+      colorIndex: 0,
+      speakerName: subtitle.speakerName,
+      tone: "private",
     };
   }
 

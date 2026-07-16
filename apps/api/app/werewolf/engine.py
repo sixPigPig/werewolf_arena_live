@@ -45,7 +45,10 @@ from app.werewolf.judge_narration import (
     JudgeCueSpec,
     cue_spec,
     dawn_result_cue,
+    exile_no_result_cue,
     exile_result_cue,
+    exile_runoff_tied_cue,
+    exile_tie_cues,
     hunter_result_cue,
     hunter_start_cues,
     idiot_reveal_cues,
@@ -97,6 +100,8 @@ from app.werewolf.public_outcomes import (
 from app.werewolf.quality_telemetry import record_speech_quality
 from app.werewolf.rules import (
     ACTION_DEBATE,
+    ACTION_EXILE_PK_SPEECH,
+    ACTION_EXILE_RUNOFF_VOTE,
     ACTION_SHERIFF_BADGE,
     ACTION_SHERIFF_PK_SPEECH,
     ACTION_SHERIFF_RUN,
@@ -127,9 +132,9 @@ from app.werewolf.rules import (
 )
 
 
-MAX_WEREWOLF_KILL_VOTE_ROUNDS = 8
-WEREWOLF_KILL_DECISION_TIMEOUT_SECONDS = 90.0
-WEREWOLF_KILL_VOTE_ROUND_TIMEOUT_SECONDS = 15.0
+WEREWOLF_DISCUSSION_TIMEOUT_SECONDS = 15.0
+WEREWOLF_FINAL_VOTE_TIMEOUT_SECONDS = 15.0
+WEREWOLF_TIEBREAK_TIMEOUT_SECONDS = 10.0
 EventVisibility = Literal["public", "private"]
 HARD_ACTION_QUALITY_CODES = frozenset(
     {
@@ -141,7 +146,12 @@ HARD_ACTION_QUALITY_CODES = frozenset(
     }
 )
 BUFFERED_QUALITY_ACTIONS = frozenset(
-    {ACTION_SHERIFF_SPEECH, ACTION_SHERIFF_PK_SPEECH, ACTION_DEBATE}
+    {
+        ACTION_SHERIFF_SPEECH,
+        ACTION_SHERIFF_PK_SPEECH,
+        ACTION_EXILE_PK_SPEECH,
+        ACTION_DEBATE,
+    }
 )
 REQUIRED_PUBLIC_SPEECH_FALLBACK = "本轮暂不追加判断，投票时我会给出明确选择。"
 SHERIFF_SPEECH_CONTEXT_MAX_CHARS = 180
@@ -675,7 +685,13 @@ class GameEngine:
         if should_defer_deaths:
             return pending_deaths
 
-        self._announce_night_deaths(pending_deaths, round_state, round_log, active_players)
+        self._announce_night_deaths(
+            pending_deaths,
+            round_state,
+            round_log,
+            active_players,
+            transfer_sheriff_badge=False,
+        )
 
         if round_state.night_deaths:
             eliminated_names = "、".join(death.player for death in round_state.night_deaths)
@@ -711,6 +727,11 @@ class GameEngine:
             },
         )
         self._publish_dawn_result(round_state)
+        self._transfer_sheriff_badge_after_night_deaths(
+            round_state,
+            round_log,
+            active_players,
+        )
         self._refresh_winner(active_players)
 
         return None
@@ -741,14 +762,66 @@ class GameEngine:
         )
         players_by_name = self.state.player_by_name()
         candidates = non_wolves.copy()
-        previous_vote_round: dict[str, object] | None = None
-        current_votes: dict[str, str] = {}
-        latest_vote_logs: dict[str, ActionLog] = {}
-        decision_deadline = self.monotonic() + WEREWOLF_KILL_DECISION_TIMEOUT_SECONDS
+        speaking_order = self._rotating_werewolf_order(
+            active_wolves,
+            round_number=round_state.number,
+            purpose="discussion",
+        )
+        discussion_requests = [
+            self._build_player_action_request(
+                player=players_by_name[wolf_name],
+                action=ACTION_WEREWOLF_DISCUSS,
+                options=candidates,
+                result_key="target",
+                round_state=round_state,
+                phase="night",
+                extra_world_state={"werewolf_discussion_stage": "proposal"},
+            )
+            for wolf_name in speaking_order
+        ]
+        discussion_results = self._run_werewolf_vote_round(
+            discussion_requests,
+            deadline_at_monotonic=(
+                self.monotonic() + WEREWOLF_DISCUSSION_TIMEOUT_SECONDS
+            ),
+        )
+        proposals: dict[str, str] = {}
+        latest_logs: dict[str, ActionLog] = {}
+        discussion_lines: list[str] = []
+        for wolf_name, target, action_log in discussion_results:
+            message = self._werewolf_action_message(action_log)
+            proposals[wolf_name] = target
+            latest_logs[wolf_name] = action_log
+            round_log.werewolf_discussion.append(action_log)
+            round_state.werewolf_discussion.append(
+                {
+                    "round": 1,
+                    "stage": "proposal",
+                    "speaker": wolf_name,
+                    "target": target,
+                    "message": message,
+                }
+            )
+            discussion_lines.append(
+                f"{wolf_name}：建议袭击{target}。{message}".strip()
+            )
+            self._publish_werewolf_private_action(
+                round_state=round_state,
+                actor=wolf_name,
+                action=ACTION_WEREWOLF_DISCUSS,
+                target=target,
+                message=message,
+                decision_stage="proposal",
+            )
 
-        for vote_round in range(1, MAX_WEREWOLF_KILL_VOTE_ROUNDS + 1):
-            vote_logs: list[ActionLog] = []
-            previous_vote_context = self._werewolf_vote_round_context(previous_vote_round)
+        complete_unanimous_proposal = (
+            len(proposals) == len(active_wolves)
+            and len(set(proposals.values())) == 1
+        )
+        if complete_unanimous_proposal:
+            votes = proposals.copy()
+            decision_stage = "discussion_consensus"
+        else:
             vote_requests = [
                 self._build_player_action_request(
                     player=players_by_name[wolf_name],
@@ -758,96 +831,115 @@ class GameEngine:
                     round_state=round_state,
                     phase="night",
                     extra_world_state={
-                        "werewolf_previous_vote_round": previous_vote_context,
-                        "werewolf_kill_vote_round": vote_round,
+                        "werewolf_discussion": discussion_lines,
+                        "werewolf_kill_vote_stage": "final",
                     },
                 )
-                for wolf_name in active_wolves
+                for wolf_name in speaking_order
             ]
-            round_deadline = min(
-                decision_deadline,
-                self.monotonic() + WEREWOLF_KILL_VOTE_ROUND_TIMEOUT_SECONDS,
-            )
             vote_results = self._run_werewolf_vote_round(
                 vote_requests,
-                deadline_at_monotonic=round_deadline,
+                deadline_at_monotonic=(
+                    self.monotonic() + WEREWOLF_FINAL_VOTE_TIMEOUT_SECONDS
+                ),
             )
+            votes = proposals.copy()
+            vote_logs = []
+            completed_final_voters: set[str] = set()
             for wolf_name, target, action_log in vote_results:
-                current_votes[wolf_name] = target
-                latest_vote_logs[wolf_name] = action_log
+                message = self._werewolf_action_message(action_log)
+                votes[wolf_name] = target
+                latest_logs[wolf_name] = action_log
                 vote_logs.append(action_log)
-
-            round_log.werewolf_votes.append(vote_logs)
-            vote_record = self._record_werewolf_vote_round(
-                vote_round,
-                candidates,
-                current_votes,
-                expected_voters=len(active_wolves),
-            )
-            round_state.werewolf_vote_rounds.append(vote_record)
-            for wolf_name, target, _action_log in vote_results:
-                public_target = self._public_player_reference(target)
-                public_result = {"target": public_target}
-                self._publish(
-                    "action_parsed",
-                    round_number=round_state.number,
-                    phase="night",
+                completed_final_voters.add(wolf_name)
+                self._publish_werewolf_private_action(
+                    round_state=round_state,
                     actor=wolf_name,
                     action=ACTION_WEREWOLF_KILL_VOTE,
-                    payload={
-                        "choice": public_target,
-                        "result": public_result,
-                        "visible_result": public_result,
-                        "vote_round": vote_round,
-                    },
+                    target=target,
+                    message=message,
+                    decision_stage="final",
                 )
-            previous_vote_round = vote_record
-            if vote_record["unanimous"]:
-                final_target = str(vote_record["result"])
-                round_log.eliminate = next(
-                    (
-                        latest_vote_logs[wolf_name]
-                        for wolf_name in active_wolves
-                        if current_votes.get(wolf_name) == final_target
-                        and wolf_name in latest_vote_logs
-                    ),
-                    None,
-                )
-                self._publish_final_werewolf_target(
+            for wolf_name in speaking_order:
+                if wolf_name in completed_final_voters:
+                    continue
+                fallback_target = proposals.get(wolf_name)
+                if fallback_target not in candidates:
+                    fallback_target = self._deterministic_werewolf_vote_choice(
+                        round_state=round_state,
+                        wolf_name=wolf_name,
+                        candidates=candidates,
+                    )
+                votes[wolf_name] = fallback_target
+                self._publish_werewolf_private_action(
                     round_state=round_state,
-                    target=final_target,
-                    vote_round=vote_round,
+                    actor=wolf_name,
+                    action=ACTION_WEREWOLF_KILL_VOTE,
+                    target=fallback_target,
+                    message="",
+                    decision_stage="final",
                 )
-                return final_target
+            round_log.werewolf_votes.append(vote_logs)
+            decision_stage = "final_vote"
 
-            if self.monotonic() >= decision_deadline:
-                break
-
-        final_target = self._werewolf_majority_target(current_votes)
-        if final_target is not None and round_state.werewolf_vote_rounds:
-            round_state.werewolf_vote_rounds[-1]["result"] = final_target
-            round_log.eliminate = next(
-                (
-                    latest_vote_logs[wolf_name]
-                    for wolf_name in active_wolves
-                    if current_votes.get(wolf_name) == final_target
-                    and wolf_name in latest_vote_logs
-                ),
-                None,
-            )
-            self._publish_final_werewolf_target(
-                round_state=round_state,
-                target=final_target,
-                vote_round=len(round_state.werewolf_vote_rounds),
-            )
-            return final_target
-
-        self._publish_night_judge_cue(
-            round_state,
-            "werewolves_sleep",
-            "狼人请闭眼。",
+        vote_record = self._record_werewolf_vote_round(
+            1,
+            candidates,
+            votes,
+            expected_voters=len(active_wolves),
         )
-        return None
+        vote_record["stage"] = decision_stage
+        round_state.werewolf_vote_rounds.append(vote_record)
+
+        leaders = self._werewolf_highest_vote_targets(votes)
+        resolution_log: ActionLog | None = None
+        if len(leaders) == 1:
+            final_target = leaders[0]
+        elif leaders:
+            final_target, tiebreak_log, tiebreak_source = self._run_werewolf_tiebreak(
+                round_state=round_state,
+                active_wolves=active_wolves,
+                candidates=leaders,
+                discussion_lines=discussion_lines,
+                votes=votes,
+            )
+            if tiebreak_log is not None:
+                round_log.werewolf_votes.append([tiebreak_log])
+                latest_logs[tiebreak_log.actor] = tiebreak_log
+                resolution_log = tiebreak_log
+            vote_record["tiebreak"] = {
+                "triggered": True,
+                "actor": self._werewolf_tiebreaker(active_wolves, round_state.number),
+                "candidates": leaders.copy(),
+                "choice": final_target,
+                "source": tiebreak_source,
+            }
+        else:
+            final_target = None
+
+        if final_target is None:
+            self._publish_night_judge_cue(
+                round_state,
+                "werewolves_sleep",
+                "狼人请闭眼。",
+            )
+            return None
+
+        vote_record["result"] = final_target
+        round_log.eliminate = resolution_log or next(
+            (
+                latest_logs[wolf_name]
+                for wolf_name in reversed(speaking_order)
+                if votes.get(wolf_name) == final_target and wolf_name in latest_logs
+            ),
+            round_log.werewolf_discussion[0] if round_log.werewolf_discussion else None,
+        )
+        self._publish_final_werewolf_target(
+            round_state=round_state,
+            target=final_target,
+            vote_round=1,
+        )
+        return final_target
 
     def _run_werewolf_vote_round(
         self,
@@ -906,6 +998,219 @@ class GameEngine:
             if isinstance(target, str) and target in request.options:
                 completed.append((request.player.name, target, action_log))
         return completed
+
+    def _rotating_werewolf_order(
+        self,
+        active_wolves: list[str],
+        *,
+        round_number: int,
+        purpose: str,
+    ) -> list[str]:
+        original_wolves = [
+            player.name for player in self.state.players if self._is_werewolf(player)
+        ]
+        if not original_wolves:
+            return []
+        digest = hashlib.sha256(
+            f"{self.fallback_seed}:{purpose}".encode()
+        ).hexdigest()
+        start = (int(digest[:8], 16) + max(0, round_number - 1)) % len(
+            original_wolves
+        )
+        active = set(active_wolves)
+        return [
+            name
+            for offset in range(len(original_wolves))
+            if (name := original_wolves[(start + offset) % len(original_wolves)]) in active
+        ]
+
+    def _werewolf_tiebreaker(
+        self,
+        active_wolves: list[str],
+        round_number: int,
+    ) -> str:
+        order = self._rotating_werewolf_order(
+            active_wolves,
+            round_number=round_number,
+            purpose="tiebreak",
+        )
+        if not order:
+            raise RuntimeError("Cannot assign werewolf tiebreak without an active werewolf")
+        return order[0]
+
+    def _run_werewolf_tiebreak(
+        self,
+        *,
+        round_state: RoundState,
+        active_wolves: list[str],
+        candidates: list[str],
+        discussion_lines: list[str],
+        votes: dict[str, str],
+    ) -> tuple[str, ActionLog | None, str]:
+        tiebreaker = self._werewolf_tiebreaker(active_wolves, round_state.number)
+        player_label = self._public_player_reference(tiebreaker)
+        candidate_labels = [self._public_player_reference(name) for name in candidates]
+        self._publish_werewolf_tiebreak_cue(
+            round_state=round_state,
+            cue_id="werewolf_tiebreak_start",
+            visible_text=(
+                "狼队刀口出现平票。"
+                f"本夜由{player_label}行使归票权，请从"
+                f"{'、'.join(candidate_labels)}中确认最终刀口。"
+            ),
+            player=player_label,
+            candidates=candidate_labels,
+        )
+
+        vote_context = "；".join(
+            f"{self._public_player_reference(actor)}投"
+            f"{self._public_player_reference(target)}"
+            for actor, target in votes.items()
+        )
+        request = self._build_player_action_request(
+            player=self.state.player_by_name()[tiebreaker],
+            action=ACTION_WEREWOLF_KILL_VOTE,
+            options=candidates,
+            result_key="target",
+            round_state=round_state,
+            phase="night",
+            extra_world_state={
+                "werewolf_discussion": discussion_lines,
+                "werewolf_final_vote_context": vote_context,
+                "werewolf_kill_vote_stage": "tiebreak",
+            },
+        )
+        results = self._run_werewolf_vote_round(
+            [request],
+            deadline_at_monotonic=(
+                self.monotonic() + WEREWOLF_TIEBREAK_TIMEOUT_SECONDS
+            ),
+        )
+        if results:
+            _actor, target, action_log = results[0]
+            source = "model"
+            message = self._werewolf_action_message(action_log)
+            self._publish_werewolf_private_action(
+                round_state=round_state,
+                actor=tiebreaker,
+                action=ACTION_WEREWOLF_KILL_VOTE,
+                target=target,
+                message=message,
+                decision_stage="tiebreak",
+            )
+        else:
+            action_log = None
+            existing_vote = votes.get(tiebreaker)
+            if existing_vote in candidates:
+                target = existing_vote
+                source = "existing_vote"
+            else:
+                target = self._deterministic_werewolf_tiebreak_choice(
+                    round_state=round_state,
+                    tiebreaker=tiebreaker,
+                    candidates=candidates,
+                )
+                source = "seeded_fallback"
+
+        target_label = self._public_player_reference(target)
+        self._publish_werewolf_tiebreak_cue(
+            round_state=round_state,
+            cue_id="werewolf_tiebreak_result",
+            visible_text=f"{player_label}最终归票{target_label}，狼人请确认刀口。",
+            player=player_label,
+            candidates=candidate_labels,
+            target=target_label,
+        )
+        return target, action_log, source
+
+    def _deterministic_werewolf_tiebreak_choice(
+        self,
+        *,
+        round_state: RoundState,
+        tiebreaker: str,
+        candidates: list[str],
+    ) -> str:
+        material = (
+            f"{self.fallback_seed}:{round_state.number}:{tiebreaker}:werewolf_tiebreak"
+        )
+        return min(
+            candidates,
+            key=lambda candidate: hashlib.sha256(
+                f"{material}:{candidate}".encode()
+            ).hexdigest(),
+        )
+
+    def _deterministic_werewolf_vote_choice(
+        self,
+        *,
+        round_state: RoundState,
+        wolf_name: str,
+        candidates: list[str],
+    ) -> str:
+        material = f"{self.fallback_seed}:{round_state.number}:{wolf_name}:werewolf_final_vote"
+        return min(
+            candidates,
+            key=lambda candidate: hashlib.sha256(
+                f"{material}:{candidate}".encode()
+            ).hexdigest(),
+        )
+
+    def _werewolf_action_message(self, action_log: ActionLog) -> str:
+        result = action_log.lm_log.result or {}
+        message = result.get("message")
+        return self._public_text(str(message).strip()) if isinstance(message, str) else ""
+
+    def _publish_werewolf_private_action(
+        self,
+        *,
+        round_state: RoundState,
+        actor: str,
+        action: str,
+        target: str,
+        message: str,
+        decision_stage: str,
+    ) -> None:
+        public_target = self._public_player_reference(target)
+        public_result: dict[str, object] = {"target": public_target}
+        if message:
+            public_result["message"] = message
+        self._publish(
+            "action_parsed",
+            round_number=round_state.number,
+            phase="night",
+            actor=actor,
+            action=action,
+            payload={
+                "choice": public_target,
+                "result": public_result,
+                "visible_result": public_result,
+                "message": message,
+                "decision_stage": decision_stage,
+                "vote_round": 1,
+            },
+        )
+
+    def _publish_werewolf_tiebreak_cue(
+        self,
+        *,
+        round_state: RoundState,
+        cue_id: str,
+        visible_text: str,
+        player: str,
+        candidates: list[str],
+        target: str | None = None,
+    ) -> None:
+        params: dict[str, object] = {
+            "player": player,
+            "players": candidates.copy(),
+        }
+        if target is not None:
+            params["target"] = target
+        self._publish_judge_cue(
+            round_state,
+            "night",
+            cue_spec(cue_id, visible_text, params=params),
+        )
 
     def _publish_final_werewolf_target(
         self,
@@ -971,12 +1276,15 @@ class GameEngine:
         return f"第{vote_round.get('round')}轮匿名刀口：{vote_text}。"
 
     def _werewolf_majority_target(self, votes: dict[str, str]) -> str | None:
+        leaders = self._werewolf_highest_vote_targets(votes)
+        return leaders[0] if len(leaders) == 1 else None
+
+    def _werewolf_highest_vote_targets(self, votes: dict[str, str]) -> list[str]:
         tally = Counter(votes.values())
         if not tally:
-            return None
+            return []
         highest_count = max(tally.values())
-        leaders = [target for target, count in tally.items() if count == highest_count]
-        return leaders[0] if len(leaders) == 1 else None
+        return [target for target, count in tally.items() if count == highest_count]
 
     def _run_witch_phase(
         self,
@@ -1090,6 +1398,8 @@ class GameEngine:
         round_state: RoundState,
         round_log: RoundLog,
         active_players: list[str],
+        *,
+        transfer_sheriff_badge: bool = True,
     ) -> None:
         pending_night_deaths = self._record_night_deaths(deaths, round_state, active_players)
         self._resolve_night_death_aftermath(
@@ -1098,6 +1408,7 @@ class GameEngine:
             round_state,
             round_log,
             active_players,
+            transfer_sheriff_badge=transfer_sheriff_badge,
         )
 
     def _record_night_deaths(
@@ -1330,13 +1641,14 @@ class GameEngine:
             payload={"votes": votes},
         )
 
-        exiled = self._majority_vote(votes, active_players, round_state.vote_weights)
-        if exiled:
-            self._resolve_day_exile(exiled, round_state, round_log, active_players)
-        else:
-            self._announce(
-                active_players, f"第{round_state.number}轮：白天投票未形成多数，无人被放逐。"
-            )
+        if self._run_exile_vote_resolution(
+            votes,
+            round_state,
+            round_log,
+            active_players,
+        ):
+            self._publish_self_explosion_update(round_state, active_players)
+            return
         self._publish_state_updated(
             round_state=round_state,
             phase="vote",
@@ -1347,6 +1659,10 @@ class GameEngine:
                 "day_deaths": [death.to_dict() for death in round_state.day_deaths],
                 "hunter_shot": round_state.hunter_shot,
                 "idiot_revealed": round_state.idiot_revealed,
+                "exile_pk_candidates": round_state.exile_pk_candidates.copy(),
+                "exile_pk_speeches": copy.deepcopy(round_state.exile_pk_speeches),
+                "exile_runoff_votes": round_state.exile_runoff_votes.copy(),
+                "exile_resolution_reason": round_state.exile_resolution_reason,
                 "active_players": active_players.copy(),
             },
         )
@@ -1397,17 +1713,6 @@ class GameEngine:
         else:
             self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
 
-        night_death_players = {death.player for death in round_state.night_deaths}
-        for death in list(round_state.night_deaths):
-            self._maybe_transfer_sheriff_badge(
-                dead_player=death.player,
-                round_state=round_state,
-                round_log=round_log,
-                active_players=active_players,
-                phase="night",
-                excluded_badge_targets=night_death_players,
-            )
-
         self._publish_state_updated(
             round_state=round_state,
             phase="night",
@@ -1425,7 +1730,29 @@ class GameEngine:
             },
         )
         self._publish_dawn_result(round_state)
+        self._transfer_sheriff_badge_after_night_deaths(
+            round_state,
+            round_log,
+            active_players,
+        )
         self._refresh_winner(active_players)
+
+    def _transfer_sheriff_badge_after_night_deaths(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
+        night_death_players = {death.player for death in round_state.night_deaths}
+        for death in list(round_state.night_deaths):
+            self._maybe_transfer_sheriff_badge(
+                dead_player=death.player,
+                round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
+                phase="night",
+                excluded_badge_targets=night_death_players,
+            )
 
     def _publish_dawn_result(self, round_state: RoundState) -> None:
         public_players = [
@@ -1812,7 +2139,12 @@ class GameEngine:
             consecutive_self_explosions += 1
             prior_number -= 1
 
-        speech_stage = cursor.stage in {"debate", "sheriff_speech", "sheriff_pk_speech"}
+        speech_stage = cursor.stage in {
+            "debate",
+            "sheriff_speech",
+            "sheriff_pk_speech",
+            "exile_pk_speech",
+        }
         active_after = [name for name in active_players if name != actor]
         return SelfExplosionDecisionContext(
             total_self_explosions=total_self_explosions,
@@ -1854,7 +2186,12 @@ class GameEngine:
         *,
         actor: str,
     ) -> StageInterruption:
-        speech_stages = {"debate", "sheriff_speech", "sheriff_pk_speech"}
+        speech_stages = {
+            "debate",
+            "sheriff_speech",
+            "sheriff_pk_speech",
+            "exile_pk_speech",
+        }
         last_completed_speaker = (
             cursor.completed_actors[-1]
             if cursor.stage in speech_stages and cursor.completed_actors
@@ -1882,6 +2219,8 @@ class GameEngine:
             "sheriff_vote": "警下投票",
             "sheriff_pk_speech": "警长PK发言",
             "sheriff_runoff_vote": "二轮警下投票",
+            "exile_pk_speech": "放逐PK发言",
+            "exile_runoff_vote": "放逐二轮投票",
         }
         label = stage_labels.get(interruption.stage, interruption.stage)
         parts = [f"第{round_number}轮{label}因{interruption.actor}自爆而中断"]
@@ -1889,6 +2228,7 @@ class GameEngine:
             "debate",
             "sheriff_speech",
             "sheriff_pk_speech",
+            "exile_pk_speech",
         }
         if interruption.completed_actors:
             completed_label = "已完成发言" if is_speech else "已完成动作"
@@ -1911,6 +2251,8 @@ class GameEngine:
             "sheriff_vote": "警下投票",
             "sheriff_pk_speech": "PK 发言",
             "sheriff_runoff_vote": "二轮警下投票",
+            "exile_pk_speech": "放逐 PK 发言",
+            "exile_runoff_vote": "放逐二轮投票",
         }
         label = stage_labels.get(cursor.stage, cursor.stage)
         if cursor.timing == "before_actor" and cursor.current_actor:
@@ -2641,6 +2983,289 @@ class GameEngine:
             round_state.vote_weights[voter] = self._vote_weight(voter)
             logs.append(action_log)
         return votes, logs
+
+    def _run_exile_vote_resolution(
+        self,
+        votes: dict[str, str],
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> bool:
+        winners = self._weighted_plurality_winners(
+            votes,
+            round_state.vote_weights,
+            active_players,
+        )
+        if not winners:
+            self._record_no_exile(
+                round_state,
+                active_players,
+                reason_code="no_valid_votes",
+            )
+            return False
+        if len(winners) == 1:
+            round_state.exile_resolution_reason = "first_vote_winner"
+            self._resolve_day_exile(winners[0], round_state, round_log, active_players)
+            return False
+
+        pk_candidates = winners
+        round_state.exile_pk_candidates = pk_candidates.copy()
+        round_state.exile_resolution_reason = "first_vote_tied"
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="vote",
+            action="exile_pk_started",
+            payload={
+                "narration_mode": "explicit_v1",
+                "exile_pk_candidates": pk_candidates.copy(),
+                "votes": votes.copy(),
+                "vote_weights": round_state.vote_weights.copy(),
+                "exile_resolution_reason": round_state.exile_resolution_reason,
+                "active_players": active_players.copy(),
+            },
+        )
+        public_pk_candidates = [
+            self._public_player_reference(name) for name in pk_candidates
+        ]
+        tie_cues = exile_tie_cues(public_pk_candidates)
+        self._publish_judge_cues(round_state, "vote", tie_cues[:2])
+
+        if self._maybe_run_werewolf_self_explosion(
+            round_state,
+            round_log,
+            active_players,
+            PublicStageCursor(
+                stage="exile_pk_speech",
+                ordered_actors=tuple(pk_candidates),
+                timing="before_stage",
+            ),
+        ):
+            return True
+
+        players_by_name = self.state.player_by_name()
+        completed_pk_speakers: list[str] = []
+        for name in pk_candidates:
+            if self._maybe_run_werewolf_self_explosion(
+                round_state,
+                round_log,
+                active_players,
+                PublicStageCursor(
+                    stage="exile_pk_speech",
+                    ordered_actors=tuple(pk_candidates),
+                    completed_actors=tuple(completed_pk_speakers),
+                    current_actor=name,
+                    timing="before_actor",
+                ),
+            ):
+                return True
+            message, action_log = self._player_action(
+                player=players_by_name[name],
+                action=ACTION_EXILE_PK_SPEECH,
+                options=[],
+                result_key="say",
+                round_state=round_state,
+                phase="vote",
+            )
+            round_log.exile_pk_speech.append(action_log)
+            if not isinstance(message, str) or not message:
+                raise ValueError(f"{name} did not return a valid exile PK speech.")
+            round_state.exile_pk_speeches.append({"speaker": name, "message": message})
+            self._publish_action_quality_warnings(
+                round_state=round_state,
+                phase="vote",
+                actor=name,
+                action=ACTION_EXILE_PK_SPEECH,
+                text=message,
+            )
+            self._add_public_fact(
+                round_state.number,
+                "claim",
+                f"第{round_state.number}轮放逐PK发言：{name}：{message}",
+                stage="exile_pk_speech",
+                actor=name,
+                retention="critical",
+            )
+            completed_pk_speakers.append(name)
+            if self._maybe_run_werewolf_self_explosion(
+                round_state,
+                round_log,
+                active_players,
+                PublicStageCursor(
+                    stage="exile_pk_speech",
+                    ordered_actors=tuple(pk_candidates),
+                    completed_actors=tuple(completed_pk_speakers),
+                    current_actor=name,
+                    timing="after_actor",
+                ),
+            ):
+                return True
+
+        runoff_voters = [
+            name
+            for name in self._eligible_voters(active_players)
+            if name not in set(pk_candidates)
+        ]
+        if not runoff_voters:
+            self._record_no_exile(
+                round_state,
+                active_players,
+                reason_code="no_runoff_voters",
+            )
+            return False
+
+        if self._maybe_run_werewolf_self_explosion(
+            round_state,
+            round_log,
+            active_players,
+            PublicStageCursor(
+                stage="exile_runoff_vote",
+                ordered_actors=tuple(runoff_voters),
+                timing="before_stage",
+            ),
+        ):
+            return True
+
+        self._publish_judge_cue(round_state, "vote", tie_cues[2])
+        runoff_requests = [
+            self._build_player_action_request(
+                player=players_by_name[name],
+                action=ACTION_EXILE_RUNOFF_VOTE,
+                options=pk_candidates,
+                result_key="vote",
+                round_state=round_state,
+                phase="vote",
+            )
+            for name in runoff_voters
+        ]
+        for name, (vote, action_log) in zip(
+            runoff_voters,
+            self._player_actions_batch(runoff_requests),
+            strict=True,
+        ):
+            if not isinstance(vote, str) or vote not in pk_candidates:
+                raise ValueError(f"{name} did not return a valid exile runoff vote.")
+            round_state.exile_runoff_votes[name] = vote
+            round_log.exile_runoff_votes.append(action_log)
+
+        self._add_public_fact(
+            round_state.number,
+            "vote",
+            f"第{round_state.number}轮放逐PK票型："
+            + "；".join(
+                f"{voter}->{target}"
+                for voter, target in round_state.exile_runoff_votes.items()
+            ),
+            stage="exile_runoff_vote",
+            retention="important",
+            details={"votes": round_state.exile_runoff_votes.copy()},
+        )
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="vote",
+            action="exile_runoff_vote",
+            payload={
+                "narration_mode": "explicit_v1",
+                "exile_pk_candidates": pk_candidates.copy(),
+                "exile_pk_speeches": copy.deepcopy(round_state.exile_pk_speeches),
+                "exile_runoff_votes": round_state.exile_runoff_votes.copy(),
+                "vote_weights": round_state.vote_weights.copy(),
+                "active_players": active_players.copy(),
+            },
+        )
+
+        runoff_winners = self._weighted_plurality_winners(
+            round_state.exile_runoff_votes,
+            round_state.vote_weights,
+            pk_candidates,
+        )
+        if len(runoff_winners) == 1:
+            round_state.exile_resolution_reason = "runoff_vote_winner"
+            self._resolve_day_exile(
+                runoff_winners[0],
+                round_state,
+                round_log,
+                active_players,
+            )
+            return False
+
+        round_state.exile_resolution_reason = "runoff_tied"
+        self._announce(
+            active_players,
+            f"第{round_state.number}轮：放逐二轮投票仍为平票，无人被放逐。",
+        )
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="vote",
+            action="exile_runoff_tied",
+            payload={
+                "narration_mode": "explicit_v1",
+                "exile_pk_candidates": pk_candidates.copy(),
+                "exile_runoff_votes": round_state.exile_runoff_votes.copy(),
+                "exile_resolution_reason": round_state.exile_resolution_reason,
+                "active_players": active_players.copy(),
+            },
+        )
+        self._publish_judge_cue(
+            round_state,
+            "vote",
+            exile_runoff_tied_cue(public_pk_candidates),
+        )
+        return False
+
+    def _record_no_exile(
+        self,
+        round_state: RoundState,
+        active_players: list[str],
+        *,
+        reason_code: str,
+    ) -> None:
+        round_state.exile_resolution_reason = reason_code
+        if reason_code == "no_runoff_voters":
+            message = "放逐PK没有可参与二轮投票的玩家，无人被放逐。"
+        else:
+            message = "白天没有形成有效放逐票，无人被放逐。"
+        self._announce(active_players, f"第{round_state.number}轮：{message}")
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="vote",
+            action="exile_no_result",
+            payload={
+                "narration_mode": "explicit_v1",
+                "exile_pk_candidates": round_state.exile_pk_candidates.copy(),
+                "exile_pk_speeches": copy.deepcopy(round_state.exile_pk_speeches),
+                "exile_runoff_votes": round_state.exile_runoff_votes.copy(),
+                "exile_resolution_reason": reason_code,
+                "active_players": active_players.copy(),
+            },
+        )
+        self._publish_judge_cue(
+            round_state,
+            "vote",
+            exile_no_result_cue(reason_code),
+        )
+
+    def _weighted_plurality_winners(
+        self,
+        votes: dict[str, str],
+        vote_weights: dict[str, float],
+        candidate_order: list[str],
+    ) -> list[str]:
+        if not votes:
+            return []
+        candidates = set(candidate_order)
+        tally: dict[str, float] = {}
+        for voter, target in votes.items():
+            if target not in candidates:
+                continue
+            tally[target] = tally.get(target, 0.0) + vote_weights.get(voter, 1.0)
+        if not tally:
+            return []
+        top_weight = max(tally.values())
+        return [
+            candidate
+            for candidate in candidate_order
+            if tally.get(candidate) == top_weight
+        ]
 
     def _vote_weight(self, voter: str) -> float:
         if self.rule_set.sheriff_enabled and voter == self.state.sheriff:
@@ -3396,6 +4021,15 @@ class GameEngine:
                     if isinstance(entry, dict) and entry.get("message")
                 ],
                 round_state.sheriff_pk_candidates or active_players,
+            )
+        if action == ACTION_EXILE_PK_SPEECH:
+            return (
+                [
+                    str(entry.get("message") or "")
+                    for entry in round_state.exile_pk_speeches
+                    if isinstance(entry, dict) and entry.get("message")
+                ],
+                round_state.exile_pk_candidates or active_players,
             )
         return (
             [entry.message for entry in round_state.debate],
@@ -4329,7 +4963,12 @@ class GameEngine:
         return compressed_public_facts(facts)
 
     def _public_self_history(self, player_name: str) -> list[str]:
-        public_speech_stages = {"sheriff_speech", "sheriff_pk_speech", "debate"}
+        public_speech_stages = {
+            "sheriff_speech",
+            "sheriff_pk_speech",
+            "exile_pk_speech",
+            "debate",
+        }
         facts = [
             public_fact_from_dict(item)
             for item in self.state.public_facts
@@ -4533,34 +5172,6 @@ class GameEngine:
             (name for name in active_players if players_by_name[name].role == role),
             "",
         )
-
-    def _majority_vote(
-        self,
-        votes: dict[str, str],
-        active_players: list[str],
-        vote_weights: dict[str, float],
-    ) -> str | None:
-        if not votes:
-            return None
-
-        tally: dict[str, float] = {}
-        for voter, target in votes.items():
-            weight = vote_weights.get(voter, 1.0)
-            tally[target] = tally.get(target, 0.0) + weight
-        players_by_name = self.state.player_by_name()
-        total_weight = sum(
-            vote_weights.get(player, 1.0)
-            for player in active_players
-            if players_by_name[player].can_vote
-        )
-        if total_weight <= 0:
-            return None
-
-        top_weight = max(tally.values())
-        winners = [name for name, weight in tally.items() if weight == top_weight]
-        if len(winners) == 1 and top_weight > total_weight / 2:
-            return winners[0]
-        return None
 
     def _remove_player(self, active_players: list[str], player: str) -> None:
         if player in active_players:

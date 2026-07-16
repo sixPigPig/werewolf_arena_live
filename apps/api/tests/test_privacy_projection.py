@@ -144,6 +144,65 @@ def test_god_view_gets_structured_night_result_without_raw_reasoning() -> None:
     }
 
 
+def test_werewolf_discussion_is_god_view_only_and_keeps_safe_message() -> None:
+    event = _event(
+        "action_parsed",
+        action="werewolf_discuss",
+        payload={
+            "choice": "3号玩家",
+            "decision_stage": "proposal",
+            "message": "建议刀3号，他像预言家。",
+            "result": {
+                "target": "3号玩家",
+                "message": "建议刀3号，他像预言家。",
+                "reasoning": "private chain of thought",
+            },
+            "raw_response": "private",
+        },
+    )
+
+    assert project_live_event(event, "player_public") is None
+    projected = project_live_event(event, "spectator_god_view")
+
+    assert projected is not None
+    assert projected.payload == {
+        "choice": "3号玩家",
+        "decision_stage": "proposal",
+        "message": "建议刀3号，他像预言家。",
+        "result": {
+            "target": "3号玩家",
+            "message": "建议刀3号，他像预言家。",
+        },
+    }
+
+
+def test_werewolf_tiebreak_judge_cue_is_hidden_until_god_view_projection() -> None:
+    event = _event(
+        "judge_cue",
+        action="werewolf_tiebreak_start",
+        payload={
+            "schema_version": 1,
+            "cue_id": "werewolf_tiebreak_start",
+            "visible_text": "狼队刀口出现平票。本夜由2号玩家行使归票权。",
+            "static_asset_id": None,
+            "params": {
+                "player": "2号玩家",
+                "players": ["3号玩家", "4号玩家"],
+            },
+        },
+    )
+
+    assert project_live_event(event, "player_public") is None
+    projected = project_live_event(event, "spectator_god_view")
+
+    assert projected is not None
+    assert projected.payload["cue_id"] == "werewolf_tiebreak_start"
+    assert projected.payload["params"] == {
+        "player": "2号玩家",
+        "players": ["3号玩家", "4号玩家"],
+    }
+
+
 def test_night_resolution_preserves_public_death_without_cause_or_source() -> None:
     projected = project_live_event(
         _event(

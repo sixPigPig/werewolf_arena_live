@@ -37,6 +37,13 @@ STATIC_CUE_TEXT: dict[str, str] = {
     "sheriff_no_voters": "本轮没有警下投票者，警徽流失。",
     "sheriff_runoff_tied": "警长二轮投票仍未产生唯一领先者。",
     "sheriff_no_badge": "本局警徽流失，不再产生警长。",
+    "exile_tie": "放逐投票出现平票，进入 PK 环节。",
+    "exile_pk_start": "平票候选人依次进行 PK 发言。",
+    "exile_runoff_vote": "PK 发言结束，除 PK 玩家外的玩家开始二轮投票。",
+    "exile_runoff_tied": "二轮投票仍为平票，本轮无人被放逐，直接进入夜晚。",
+    "exile_no_votes": "本轮没有形成有效投票，无人被放逐。",
+    "exile_no_runoff_voters": "本轮没有可参与二轮投票的玩家，无人被放逐。",
+    "exile_no_result": "放逐投票未产生出局玩家，本轮无人被放逐。",
     "self_explosion_skip": "本轮剩余发言和放逐投票终止，直接进入夜晚。",
     "hunter_shot_start": "猎人死亡，可以发动技能。",
     "hunter_shot_choose": "请猎人选择要带走的玩家。",
@@ -140,6 +147,48 @@ def sheriff_tie_cues(pk_candidates: list[str]) -> list[JudgeCueSpec]:
             params=params,
         ),
     ]
+
+
+def exile_tie_cues(pk_candidates: list[str]) -> list[JudgeCueSpec]:
+    params: dict[str, object] = {"pk_candidates": pk_candidates.copy()}
+    return [
+        cue_spec("exile_tie", static_asset_id="exile_tie", params=params),
+        cue_spec("exile_pk_start", static_asset_id="exile_pk_start", params=params),
+        cue_spec(
+            "exile_runoff_vote",
+            static_asset_id="exile_runoff_vote",
+            params=params,
+        ),
+    ]
+
+
+def exile_no_result_cue(reason_code: str) -> JudgeCueSpec:
+    cue_id = (
+        "exile_no_runoff_voters"
+        if reason_code == "no_runoff_voters"
+        else "exile_no_votes"
+    )
+    return cue_spec(
+        cue_id,
+        static_asset_id=cue_id,
+        params={"reason_code": reason_code},
+    )
+
+
+def legacy_exile_no_result_cue() -> JudgeCueSpec:
+    return cue_spec(
+        "exile_no_result",
+        static_asset_id="exile_no_result",
+        params={"reason_code": "legacy_no_result", "legacy_synthesized": True},
+    )
+
+
+def exile_runoff_tied_cue(pk_candidates: list[str]) -> JudgeCueSpec:
+    return cue_spec(
+        "exile_runoff_tied",
+        static_asset_id="exile_runoff_tied",
+        params={"pk_candidates": pk_candidates.copy(), "reason_code": "runoff_tied"},
+    )
 
 
 def self_explosion_cues(

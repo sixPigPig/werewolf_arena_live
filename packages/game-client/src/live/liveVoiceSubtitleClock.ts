@@ -157,6 +157,7 @@ export function currentSubtitleForItem({
 
   return {
     ...display,
+    audience: item.audience ?? "player_public",
     speakerKind: item.speakerKind,
     speakerName: item.speakerName,
     utteranceId: item.utteranceId,

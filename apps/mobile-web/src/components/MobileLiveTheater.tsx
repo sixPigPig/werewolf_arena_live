@@ -462,7 +462,9 @@ function LiveSubtitle({ subtitle }: LiveSubtitleProps) {
     "mobile-live-subtitle",
     subtitle.tone === "judge"
       ? "mobile-live-subtitle-judge"
-      : `mobile-live-subtitle-player-${subtitle.colorIndex}`,
+      : subtitle.tone === "private"
+        ? "mobile-live-subtitle-private"
+        : `mobile-live-subtitle-player-${subtitle.colorIndex}`,
   ].join(" ");
 
   return (

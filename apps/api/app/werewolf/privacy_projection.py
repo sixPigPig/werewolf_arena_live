@@ -46,6 +46,8 @@ _KNOWN_PLAYER_ACTIONS = frozenset(
         "bid",
         "debate",
         "eliminate",
+        "exile_pk_speech",
+        "exile_runoff_vote",
         "hunter_shoot",
         "investigate",
         "protect",
@@ -73,6 +75,10 @@ _KNOWN_STATE_ACTIONS = frozenset(
         "day_resolution_completed",
         "debate",
         "exile_resolved",
+        "exile_no_result",
+        "exile_pk_started",
+        "exile_runoff_tied",
+        "exile_runoff_vote",
         "hunter_shot_resolved",
         "idiot_revealed",
         "night_resolved",
@@ -93,6 +99,13 @@ _KNOWN_JUDGE_CUES = frozenset(
         "dawn_deaths",
         "dawn_peaceful",
         "exile_result",
+        "exile_no_runoff_voters",
+        "exile_no_votes",
+        "exile_no_result",
+        "exile_pk_start",
+        "exile_runoff_tied",
+        "exile_runoff_vote",
+        "exile_tie",
         "guard_sleep",
         "guard_wake",
         "hunter_shot_choose",
@@ -114,6 +127,8 @@ _KNOWN_JUDGE_CUES = frozenset(
         "sheriff_runoff_vote",
         "sheriff_tie",
         "werewolf_self_explosion",
+        "werewolf_tiebreak_result",
+        "werewolf_tiebreak_start",
         "werewolves_sleep",
         "werewolves_wake",
         "witch_death",
@@ -136,7 +151,13 @@ PRIVATE_ACTIONS = frozenset(
     }
 )
 
-_PUBLIC_ONLY_HIDDEN_ACTIONS = frozenset({"witch_death"})
+_PUBLIC_ONLY_HIDDEN_ACTIONS = frozenset(
+    {
+        "werewolf_tiebreak_result",
+        "werewolf_tiebreak_start",
+        "witch_death",
+    }
+)
 
 _NEVER_EXTERNAL_EVENT_TYPES = frozenset(
     {
@@ -246,6 +267,7 @@ _ACTION_PAYLOAD_KEYS = frozenset(
         "attempt_count",
         "choice",
         "delta",
+        "decision_stage",
         "elapsed_ms",
         "fallback_choice",
         "fallback_reason",
@@ -276,6 +298,10 @@ _STATE_PAYLOAD_KEYS = frozenset(
         "debate",
         "eliminated",
         "exiled",
+        "exile_pk_candidates",
+        "exile_pk_speeches",
+        "exile_resolution_reason",
+        "exile_runoff_votes",
         "hunter_shot",
         "idiot_revealed",
         "interruption",
@@ -409,10 +435,7 @@ def _event_is_visible(event: LiveEvent, audience: ProjectionAudience) -> bool:
         )
     if audience == "player_public":
         return False
-    return event.type == "action_parsed" and event.action not in {
-        "summarize",
-        "werewolf_discuss",
-    }
+    return event.type == "action_parsed" and event.action != "summarize"
 
 
 def _action_is_known(event: LiveEvent) -> bool:

@@ -11,7 +11,9 @@ ActionBudgetKind = Literal[
     "private_text",
 ]
 
-PUBLIC_SPEECH_ACTIONS = frozenset({"debate", "sheriff_speech", "sheriff_pk_speech"})
+PUBLIC_SPEECH_ACTIONS = frozenset(
+    {"debate", "sheriff_speech", "sheriff_pk_speech", "exile_pk_speech"}
+)
 OPTIONAL_DISCRETE_ACTIONS = frozenset(
     {
         "witch_save",

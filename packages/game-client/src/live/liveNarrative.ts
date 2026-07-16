@@ -902,6 +902,7 @@ function isPublicSpeechAction(action: string | null): boolean {
     action === "debate" ||
     action === "sheriff_speech" ||
     action === "sheriff_pk_speech" ||
+    action === "exile_pk_speech" ||
     action === "summarize"
   );
 }
@@ -910,7 +911,8 @@ function isVoteAction(action: string | null): boolean {
   return (
     action === "vote" ||
     action === "sheriff_vote" ||
-    action === "sheriff_runoff_vote"
+    action === "sheriff_runoff_vote" ||
+    action === "exile_runoff_vote"
   );
 }
 

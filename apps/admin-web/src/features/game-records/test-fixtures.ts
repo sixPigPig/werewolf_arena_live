@@ -69,6 +69,9 @@ export const contractGameDetail: AdminGameDetail = {
       sheriff_votes: { 雾灯听风: "暮鸦归票" },
       sheriff_pk_candidates: [],
       sheriff_runoff_votes: {},
+      exile_pk_candidates: [],
+      exile_runoff_votes: {},
+      exile_resolution_reason: "first_vote_winner",
       sheriff_speech_order: ["暮鸦归票", "灰塔"],
       sheriff_speech_direction: "顺时针",
       speech_order: ["暮鸦归票", "灰塔"],
@@ -77,6 +80,7 @@ export const contractGameDetail: AdminGameDetail = {
         { speaker: "暮鸦归票", message: "我会先听完大家的上警理由。" },
       ],
       sheriff_pk_speeches: [],
+      exile_pk_speeches: [],
       debate: [
         { speaker: "暮鸦归票", message: "结合票型，我认为灰塔更可疑。" },
       ],

@@ -21,7 +21,9 @@ PRIVATE_ACTIONS = frozenset(
         "summarize",
     }
 )
-PUBLIC_SPEECH_ACTIONS = frozenset({"debate", "sheriff_speech", "sheriff_pk_speech"})
+PUBLIC_SPEECH_ACTIONS = frozenset(
+    {"debate", "sheriff_speech", "sheriff_pk_speech", "exile_pk_speech"}
+)
 PUBLIC_EVENT_TEXT_KEYS = frozenset(
     {
         "choice",
@@ -288,6 +290,7 @@ def _public_artifacts(
             "debate",
             "sheriff_speeches",
             "sheriff_pk_speeches",
+            "exile_pk_speeches",
             "summaries",
             "public_summary",
         ):

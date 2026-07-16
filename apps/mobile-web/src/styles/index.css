@@ -2487,6 +2487,26 @@ textarea {
   --mobile-live-subtitle-accent: #f4c76d;
 }
 
+.mobile-live-subtitle-private {
+  --mobile-live-subtitle-accent: #ff4d5a;
+}
+
+.mobile-live-subtitle-private .mobile-live-subtitle-completed {
+  color: #ff6671;
+}
+
+.mobile-live-subtitle-private .mobile-live-subtitle-active {
+  color: #ffadb3;
+  text-shadow:
+    0 0 5px #ff6671,
+    0 0 11px rgb(255 77 90 / 86%),
+    0 2px 5px rgb(0 0 0 / 72%);
+}
+
+.mobile-live-subtitle-private .mobile-live-subtitle-pending {
+  color: rgb(255 102 113 / 62%);
+}
+
 .mobile-live-subtitle-player-0 {
   --mobile-live-subtitle-accent: #8ddfd0;
 }

@@ -15,9 +15,13 @@ from app.werewolf.judge_narration import (
     JudgeCueSpec,
     cue_spec,
     dawn_result_cue,
+    exile_no_result_cue,
     exile_result_cue,
+    exile_runoff_tied_cue,
+    exile_tie_cues,
     hunter_result_cue,
     idiot_reveal_cues,
+    legacy_exile_no_result_cue,
     seat_asset_id,
     self_explosion_cues,
     sheriff_badge_cues,
@@ -33,6 +37,8 @@ DAY_ACTION_KEYS = (
     "sheriff_withdraw",
     "sheriff_pk_speech",
     "sheriff_runoff_votes",
+    "exile_pk_speech",
+    "exile_runoff_votes",
     "sheriff_votes",
     "speech_order",
     "sheriff_badge",
@@ -55,6 +61,10 @@ DAY_STAGE_STATE_KEYS = (
     "sheriff_pk_candidates",
     "sheriff_pk_speeches",
     "sheriff_runoff_votes",
+    "exile_pk_candidates",
+    "exile_pk_speeches",
+    "exile_runoff_votes",
+    "exile_resolution_reason",
     "sheriff_elected",
     "speech_order",
     "speech_order_choice",
@@ -403,6 +413,10 @@ def _public_game_round(round_state: dict[str, Any]) -> dict[str, Any]:
         "debate",
         "eliminated",
         "exiled",
+        "exile_pk_candidates",
+        "exile_pk_speeches",
+        "exile_resolution_reason",
+        "exile_runoff_votes",
         "hunter_shot",
         "idiot_revealed",
         "interruption",
@@ -552,6 +566,20 @@ def _publish_werewolf_decision_events(
         action="remove",
         payload={},
     )
+    for raw_entry in _list_or_empty(round_state.get("werewolf_discussion")):
+        if not isinstance(raw_entry, dict):
+            continue
+        actor = _optional_str(raw_entry.get("speaker"))
+        target = _optional_str(raw_entry.get("target"))
+        if not actor or not target:
+            continue
+        _publish_werewolf_discussion(
+            publish,
+            actor=actor,
+            target=target,
+            message=_optional_str(raw_entry.get("message")) or "",
+            round_number=round_number,
+        )
     if vote_rounds:
         for index, raw_vote_round in enumerate(vote_rounds):
             if not isinstance(raw_vote_round, dict):
@@ -559,15 +587,55 @@ def _publish_werewolf_decision_events(
             vote_round = raw_vote_round.get("round")
             if not isinstance(vote_round, int):
                 vote_round = index + 1
-            for actor, target in _dict_or_empty(raw_vote_round.get("votes")).items():
-                if not isinstance(actor, str) or not isinstance(target, str):
-                    continue
+            if raw_vote_round.get("stage") != "discussion_consensus":
+                for actor, target in _dict_or_empty(raw_vote_round.get("votes")).items():
+                    if not isinstance(actor, str) or not isinstance(target, str):
+                        continue
+                    _publish_werewolf_vote(
+                        publish,
+                        actor=actor,
+                        target=target,
+                        vote_round=vote_round,
+                        round_number=round_number,
+                        decision_stage="final",
+                    )
+            tiebreak = _dict_or_empty(raw_vote_round.get("tiebreak"))
+            tiebreak_actor = _optional_str(tiebreak.get("actor"))
+            tiebreak_choice = _optional_str(tiebreak.get("choice"))
+            tiebreak_candidates = [
+                str(item) for item in _list_or_empty(tiebreak.get("candidates"))
+            ]
+            if tiebreak_actor and tiebreak_choice and tiebreak_candidates:
+                _publish_werewolf_tiebreak_cue(
+                    publish,
+                    cue_id="werewolf_tiebreak_start",
+                    visible_text=(
+                        "狼队刀口出现平票。"
+                        f"本夜由{tiebreak_actor}行使归票权，请从"
+                        f"{'、'.join(tiebreak_candidates)}中确认最终刀口。"
+                    ),
+                    actor=tiebreak_actor,
+                    candidates=tiebreak_candidates,
+                    round_number=round_number,
+                )
                 _publish_werewolf_vote(
                     publish,
-                    actor=actor,
-                    target=target,
+                    actor=tiebreak_actor,
+                    target=tiebreak_choice,
                     vote_round=vote_round,
                     round_number=round_number,
+                    decision_stage="tiebreak",
+                )
+                _publish_werewolf_tiebreak_cue(
+                    publish,
+                    cue_id="werewolf_tiebreak_result",
+                    visible_text=(
+                        f"{tiebreak_actor}最终归票{tiebreak_choice}，狼人请确认刀口。"
+                    ),
+                    actor=tiebreak_actor,
+                    candidates=tiebreak_candidates,
+                    round_number=round_number,
+                    target=tiebreak_choice,
                 )
             final_target = _optional_str(raw_vote_round.get("result"))
             if final_target:
@@ -792,6 +860,57 @@ def _publish_replay_day_cues(
         for cue in cues:
             _publish_replay_cue(publish, cue, round_number=round_number, phase="day")
 
+    exile_pk_candidates = [
+        str(item)
+        for item in _list_or_empty(round_state.get("exile_pk_candidates"))
+    ]
+    exile_resolution_reason = _optional_str(round_state.get("exile_resolution_reason"))
+    if exile_pk_candidates:
+        tie_cues = exile_tie_cues(exile_pk_candidates)
+        for cue in tie_cues[:2]:
+            _publish_replay_cue(publish, cue, round_number=round_number, phase="vote")
+        if _dict_or_empty(round_state.get("exile_runoff_votes")):
+            _publish_replay_cue(
+                publish,
+                tie_cues[2],
+                round_number=round_number,
+                phase="vote",
+            )
+        if exile_resolution_reason == "runoff_tied":
+            _publish_replay_cue(
+                publish,
+                exile_runoff_tied_cue(exile_pk_candidates),
+                round_number=round_number,
+                phase="vote",
+            )
+        elif exile_resolution_reason == "no_runoff_voters":
+            _publish_replay_cue(
+                publish,
+                exile_no_result_cue(exile_resolution_reason),
+                round_number=round_number,
+                phase="vote",
+            )
+    elif exile_resolution_reason == "no_valid_votes":
+        _publish_replay_cue(
+            publish,
+            exile_no_result_cue(exile_resolution_reason),
+            round_number=round_number,
+            phase="vote",
+        )
+    elif (
+        exile_resolution_reason is None
+        and not round_state.get("exiled")
+        and not round_state.get("idiot_revealed")
+        and not round_state.get("day_ended_by_self_explosion")
+        and any(_dict_or_empty(entry) for entry in _list_or_empty(round_state.get("votes")))
+    ):
+        _publish_replay_cue(
+            publish,
+            legacy_exile_no_result_cue(),
+            round_number=round_number,
+            phase="vote",
+        )
+
     idiot = _optional_str(round_state.get("idiot_revealed"))
     if idiot:
         for cue in idiot_reveal_cues(idiot):
@@ -866,6 +985,7 @@ def _publish_werewolf_vote(
     target: str,
     vote_round: int,
     round_number: int,
+    decision_stage: str | None = None,
 ) -> None:
     result = {"target": target}
     publish(
@@ -879,7 +999,58 @@ def _publish_werewolf_vote(
             "result": result,
             "visible_result": result,
             "vote_round": vote_round,
+            **({"decision_stage": decision_stage} if decision_stage else {}),
         },
+    )
+
+
+def _publish_werewolf_discussion(
+    publish: Any,
+    *,
+    actor: str,
+    target: str,
+    message: str,
+    round_number: int,
+) -> None:
+    result = {"target": target, "message": message}
+    publish(
+        "action_parsed",
+        round_number=round_number,
+        phase="night",
+        actor=actor,
+        action="werewolf_discuss",
+        payload={
+            "choice": target,
+            "result": result,
+            "visible_result": result,
+            "message": message,
+            "decision_stage": "proposal",
+            "vote_round": 1,
+        },
+    )
+
+
+def _publish_werewolf_tiebreak_cue(
+    publish: Any,
+    *,
+    cue_id: str,
+    visible_text: str,
+    actor: str,
+    candidates: list[str],
+    round_number: int,
+    target: str | None = None,
+) -> None:
+    params: dict[str, object] = {
+        "player": actor,
+        "players": candidates.copy(),
+    }
+    if target:
+        params["target"] = target
+    _publish_replay_cue(
+        publish,
+        cue_spec(cue_id, visible_text, params=params),
+        round_number=round_number,
+        phase="night",
     )
 
 

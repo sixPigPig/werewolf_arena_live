@@ -334,6 +334,19 @@ describe("live voice stream", () => {
     ).toBe("wss://example.com/api/v1/games/runs/run-1/voice-stream?playback_ack=1");
   });
 
+  it("uses the authenticated God View voice stream for private night audio", () => {
+    expect(
+      resolveVoiceStreamUrl(
+        "run-1",
+        "https://example.com/api",
+        7,
+        "spectator_god_view",
+      ),
+    ).toBe(
+      "wss://example.com/api/v1/games/runs/run-1/god-view/voice-stream?current_event_id=7&playback_ack=1",
+    );
+  });
+
   it("groups chunks by utterance and marks completed audio", () => {
     let queue = createVoiceQueue();
     queue = enqueueVoiceMessage(queue, voiceStartMessage());
@@ -389,6 +402,18 @@ describe("live voice stream", () => {
       status: "receiving",
     });
     expect(queue.items[0].chunks).toEqual(["YWJj"]);
+  });
+
+  it("preserves private audience on live voice queue items", () => {
+    const queue = enqueueVoiceMessage(
+      createVoiceQueue(),
+      voiceStartMessage({ audience: "spectator_god_view" }),
+    );
+
+    expect(queue.items[0]).toMatchObject({
+      audience: "spectator_god_view",
+      speakerKind: "player",
+    });
   });
 
   it("records voice errors without changing queued audio", () => {

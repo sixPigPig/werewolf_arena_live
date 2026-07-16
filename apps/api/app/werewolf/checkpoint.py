@@ -452,6 +452,17 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
         debate=[debate_entry_from_dict(entry) for entry in data.get("debate", [])],
         bids=copy.deepcopy(data.get("bids", [])),
         votes=copy.deepcopy(data.get("votes", [])),
+        exile_pk_candidates=[str(item) for item in data.get("exile_pk_candidates", [])],
+        exile_pk_speeches=copy.deepcopy(data.get("exile_pk_speeches", [])),
+        exile_runoff_votes={
+            str(key): str(value)
+            for key, value in data.get("exile_runoff_votes", {}).items()
+        },
+        exile_resolution_reason=(
+            str(data["exile_resolution_reason"])
+            if data.get("exile_resolution_reason") is not None
+            else None
+        ),
         summaries=copy.deepcopy(data.get("summaries", {})),
         private_summaries=copy.deepcopy(data.get("private_summaries", {})),
         public_summary=str(data.get("public_summary") or ""),
@@ -583,6 +594,8 @@ def round_log_from_dict(data: dict[str, Any]) -> RoundLog:
         bid=action_log_groups_from_dict(data.get("bid", [])),
         debate=action_logs_from_dict(data.get("debate", [])),
         votes=action_log_groups_from_dict(data.get("votes", [])),
+        exile_pk_speech=action_logs_from_dict(data.get("exile_pk_speech", [])),
+        exile_runoff_votes=action_logs_from_dict(data.get("exile_runoff_votes", [])),
         summaries=action_logs_from_dict(data.get("summaries", [])),
         sheriff_run=action_logs_from_dict(data.get("sheriff_run", [])),
         sheriff_speech=action_logs_from_dict(data.get("sheriff_speech", [])),

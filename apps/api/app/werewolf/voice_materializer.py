@@ -5,13 +5,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 import logging
 from threading import Event
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord
 from app.models.live import (
+    GodViewLiveEventRecord,
     LiveEventRecord,
     PublicLiveEventRecord,
     VoiceAudioChunkRecord,
@@ -21,8 +22,9 @@ from app.models.live import (
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.live import LiveEvent
 from app.werewolf.live_store import format_live_datetime
-from app.werewolf.privacy_projection import project_live_event
+from app.werewolf.privacy_projection import ProjectionAudience, project_live_event
 from app.werewolf.voice import (
+    VoiceAudience,
     VoiceSpeakerConfig,
     VoiceUtterance,
     chunk_text_for_tts,
@@ -147,27 +149,34 @@ class VoiceMaterializer:
         worker_id: str,
     ) -> None:
         run_id, source_event_id, speaker_kind = key
-        utterance_id = deterministic_voice_utterance_id(
-            run_id,
-            source_event_id,
-            speaker_kind,  # type: ignore[arg-type]
-        )
         with self.session_factory() as db:
             job = db.get(VoiceMaterializationJobRecord, key)
             if job is None or job.status != "processing" or job.worker_id != worker_id:
                 raise PermanentVoiceMaterializationError("voice job ownership was lost")
-            if job.audience != "player_public":
+            if job.audience not in {"player_public", "spectator_god_view"}:
                 raise PermanentVoiceMaterializationError("voice job audience is unsupported")
+            audience = cast(VoiceAudience, job.audience)
+            utterance_id = deterministic_voice_utterance_id(
+                run_id,
+                source_event_id,
+                speaker_kind,  # type: ignore[arg-type]
+                audience=audience,
+            )
             if _complete_utterance_exists(db, utterance_id):
                 return
 
-            event_record = db.get(PublicLiveEventRecord, (run_id, source_event_id))
+            projected_record_type = (
+                PublicLiveEventRecord
+                if audience == "player_public"
+                else GodViewLiveEventRecord
+            )
+            event_record = db.get(projected_record_type, (run_id, source_event_id))
             if event_record is not None:
                 event = _live_event(event_record)
             else:
                 canonical_record = db.get(LiveEventRecord, (run_id, source_event_id))
                 event = (
-                    project_live_event(_live_event(canonical_record), "player_public")
+                    project_live_event(_live_event(canonical_record), audience)
                     if canonical_record is not None
                     else None
                 )
@@ -176,6 +185,7 @@ class VoiceMaterializer:
             player_seats, previous_night_deaths, peaceful_night = _voice_context(
                 db,
                 event,
+                audience=audience,
             )
             utterance = event_to_voice_materialization(
                 event,
@@ -186,6 +196,7 @@ class VoiceMaterializer:
                 player_seats=player_seats,
                 previous_night_deaths=previous_night_deaths,
                 peaceful_night=peaceful_night,
+                audience=audience,
             )
             if utterance is None or utterance.speaker_kind != speaker_kind:
                 raise PermanentVoiceMaterializationError("source event is no longer narratable")
@@ -420,6 +431,7 @@ def _equivalent_complete_voice_exists(
         )
         .where(
             VoiceUtteranceRecord.run_id == utterance.run_id,
+            VoiceUtteranceRecord.audience == utterance.audience,
             VoiceUtteranceRecord.speaker_kind == utterance.speaker_kind,
             VoiceUtteranceRecord.status == "complete",
         )
@@ -448,7 +460,9 @@ def _normalized_voice_text(text: str) -> str:
     return "".join(text.split())
 
 
-def _live_event(record: LiveEventRecord | PublicLiveEventRecord) -> LiveEvent:
+def _live_event(
+    record: LiveEventRecord | PublicLiveEventRecord | GodViewLiveEventRecord,
+) -> LiveEvent:
     return LiveEvent(
         id=record.event_id,
         type=record.type,
@@ -466,18 +480,25 @@ def _live_event(record: LiveEventRecord | PublicLiveEventRecord) -> LiveEvent:
 def _voice_context(
     db: Session,
     event: LiveEvent,
+    *,
+    audience: ProjectionAudience,
 ) -> tuple[dict[str, int], tuple[str, ...], bool]:
+    projected_record_type = (
+        PublicLiveEventRecord if audience == "player_public" else GodViewLiveEventRecord
+    )
     projected_records = list(
         db.scalars(
-            select(PublicLiveEventRecord)
+            select(projected_record_type)
             .where(
-                PublicLiveEventRecord.run_id == event.run_id,
-                PublicLiveEventRecord.event_id <= event.id,
+                projected_record_type.run_id == event.run_id,
+                projected_record_type.event_id <= event.id,
             )
-            .order_by(PublicLiveEventRecord.event_id.asc())
+            .order_by(projected_record_type.event_id.asc())
         )
     )
-    records: list[LiveEventRecord | PublicLiveEventRecord] = projected_records
+    records: list[
+        LiveEventRecord | PublicLiveEventRecord | GodViewLiveEventRecord
+    ] = projected_records
     if not records:
         records = list(
             db.scalars(
@@ -495,8 +516,8 @@ def _voice_context(
     for record in records:
         projected = (
             _live_event(record)
-            if isinstance(record, PublicLiveEventRecord)
-            else project_live_event(_live_event(record), "player_public")
+            if isinstance(record, (PublicLiveEventRecord, GodViewLiveEventRecord))
+            else project_live_event(_live_event(record), audience)
         )
         if projected is None:
             continue

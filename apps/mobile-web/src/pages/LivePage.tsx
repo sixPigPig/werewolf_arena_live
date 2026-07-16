@@ -68,6 +68,7 @@ export function LivePage() {
     gameId,
   );
   const voice = useLiveVoiceStream(gameId, {
+    audience: "spectator_god_view",
     currentEventId: directorSourceEventId,
     enabled: voiceEnabled,
     isPaused: director.isPaused,
@@ -258,7 +259,8 @@ function isLiveSpeakerDelta(event: LiveGameEvent) {
     event.type === "model_response_delta" &&
     (event.action === "debate" ||
       event.action === "sheriff_speech" ||
-      event.action === "sheriff_pk_speech")
+      event.action === "sheriff_pk_speech" ||
+      event.action === "exile_pk_speech")
   );
 }
 

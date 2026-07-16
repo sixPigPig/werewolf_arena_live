@@ -46,6 +46,7 @@ def stored_utterance(
     text: str,
     speaker_kind: str = "player",
     action: str = "debate",
+    audience: str = "player_public",
 ) -> VoiceUtterance:
     return VoiceUtterance(
         utterance_id=utterance_id,
@@ -57,6 +58,7 @@ def stored_utterance(
         speaker="zh_female_vv_uranus_bigtts",
         text=text,
         action=action,
+        audience=audience,
     )
 
 
@@ -210,6 +212,7 @@ def test_voice_store_lists_playback_voices_with_base64_chunks(
 
     assert [voice["utterance_id"] for voice in voices] == ["voice_first", "voice_second"]
     assert voices[0]["source_event_id"] == 4
+    assert voices[0]["audience"] == "player_public"
     assert voices[0]["duration_ms"] == 100
     assert voices[0]["chunks"] == [
         {"chunk_index": 0, "data": "Zmlyc3QtMA=="},
@@ -265,6 +268,55 @@ def test_voice_store_loads_one_public_complete_playback_voice(
         ).load_playback_voice("voice_public")
         is None
     )
+
+
+def test_voice_store_scopes_god_view_voice_away_from_public_playback(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    public = stored_utterance(
+        utterance_id="voice_public",
+        source_event_id=4,
+        text="公开发言",
+    )
+    god_view = stored_utterance(
+        utterance_id="voice_wolf_chat",
+        source_event_id=5,
+        text="今晚刀三号。",
+        action="werewolf_discuss",
+        audience="spectator_god_view",
+    )
+    for item in (public, god_view):
+        store.upsert_utterance(
+            item,
+            audio_format="pcm",
+            sample_rate=24000,
+            mime_type="audio/L16",
+        )
+        store.append_chunk(item.utterance_id, chunk_index=0, audio=b"audio")
+        store.complete_utterance(item.utterance_id, duration_ms=100)
+
+    assert [
+        voice["utterance_id"] for voice in store.list_playback_voices()
+    ] == ["voice_public"]
+    assert store.load_playback_voice("voice_wolf_chat") is None
+
+    god_view_audiences = frozenset({"player_public", "spectator_god_view"})
+    assert [
+        voice["utterance_id"]
+        for voice in store.list_playback_voices(
+            allowed_audiences=god_view_audiences,
+        )
+    ] == ["voice_public", "voice_wolf_chat"]
+    loaded = store.load_playback_voice(
+        "voice_wolf_chat",
+        allowed_audiences=god_view_audiences,
+    )
+    assert loaded is not None
+    assert loaded["audience"] == "spectator_god_view"
+    assert loaded["subtitle_timings"] == [
+        {"text": "今晚刀三号。", "start_ms": 0, "end_ms": 1}
+    ]
 
 
 def test_voice_store_lists_playback_metadata_without_loading_chunks(

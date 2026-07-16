@@ -26,6 +26,8 @@ const ACTION_TITLES: Record<string, string> = {
   sheriff_vote: "警下投票",
   sheriff_pk_speech: "PK 发言",
   sheriff_runoff_vote: "警下二轮投票",
+  exile_pk_speech: "放逐 PK 发言",
+  exile_runoff_vote: "放逐二轮投票",
   werewolf_self_explosion: "狼人自爆",
   speech_order: "发言方向",
   sheriff_badge: "警徽处理",
@@ -150,6 +152,10 @@ function normalizeRound(
     sheriff_pk_candidates: round.sheriff_pk_candidates ?? [],
     sheriff_pk_speeches: round.sheriff_pk_speeches ?? [],
     sheriff_runoff_votes: round.sheriff_runoff_votes ?? {},
+    exile_pk_candidates: round.exile_pk_candidates ?? [],
+    exile_pk_speeches: round.exile_pk_speeches ?? [],
+    exile_runoff_votes: round.exile_runoff_votes ?? {},
+    exile_resolution_reason: round.exile_resolution_reason ?? null,
     sheriff_elected: round.sheriff_elected ?? null,
     speech_order: round.speech_order ?? [],
     speech_order_choice: round.speech_order_choice ?? null,
@@ -328,6 +334,24 @@ function debugItemsFromRound(
       round.number,
       "day",
       `day-sheriff-runoff-vote-${index}`,
+      action,
+    );
+  });
+  (round.exile_pk_speech ?? []).forEach((action, index) => {
+    pushAction(
+      items,
+      round.number,
+      "day",
+      `vote-exile-pk-speech-${index}`,
+      action,
+    );
+  });
+  (round.exile_runoff_votes ?? []).forEach((action, index) => {
+    pushAction(
+      items,
+      round.number,
+      "day",
+      `vote-exile-runoff-${index}`,
       action,
     );
   });

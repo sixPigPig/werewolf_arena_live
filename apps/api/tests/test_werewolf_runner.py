@@ -187,6 +187,7 @@ class WerewolfConsensusProvider(ScriptedChineseProvider):
         save_choice: str = "不使用解药",
         poison_choice: str = "不使用毒药",
         shoot_choice: str = "不发动技能",
+        tiebreak_targets: dict[str, str] | None = None,
     ) -> None:
         self.vote_rounds = vote_rounds
         self.discussion_targets = discussion_targets or {}
@@ -194,15 +195,18 @@ class WerewolfConsensusProvider(ScriptedChineseProvider):
         self.save_choice = save_choice
         self.poison_choice = poison_choice
         self.shoot_choice = shoot_choice
+        self.tiebreak_targets = tiebreak_targets or {}
         self.vote_calls = 0
         self.actions: list[tuple[str, str, str]] = []
+        self.discussion_prompts: list[str] = []
         self.vote_prompts: list[str] = []
 
     def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
         name = _extract_actor_name(prompt)
         options = _extract_options(prompt)
-        if '"message"' in prompt and '"target"' in prompt:
+        if "狼人夜晚第一轮私密表态" in prompt:
             target = self.discussion_targets.get(name, options[0])
+            self.discussion_prompts.append(prompt)
             self.actions.append(("werewolf_discuss", name, target))
             return json.dumps(
                 {
@@ -212,7 +216,18 @@ class WerewolfConsensusProvider(ScriptedChineseProvider):
                 },
                 ensure_ascii=False,
             )
-        if '"target"' in prompt:
+        if "狼人夜晚平票归票" in prompt:
+            target = self.tiebreak_targets.get(name, options[0])
+            self.actions.append(("werewolf_kill_tiebreak", name, target))
+            return json.dumps(
+                {
+                    "reasoning": "从平票目标中完成归票。",
+                    "target": target,
+                    "message": f"最终归票{target}。",
+                },
+                ensure_ascii=False,
+            )
+        if "狼人夜晚最终表态与狼刀投票" in prompt:
             self.vote_prompts.append(prompt)
             wolves_in_round = max(1, len(self.vote_rounds[0]))
             round_index = min(self.vote_calls // wolves_in_round, len(self.vote_rounds) - 1)
@@ -220,7 +235,11 @@ class WerewolfConsensusProvider(ScriptedChineseProvider):
             self.vote_calls += 1
             self.actions.append(("werewolf_kill_vote", name, target))
             return json.dumps(
-                {"reasoning": "形成统一刀口。", "target": target},
+                {
+                    "reasoning": "形成最终刀口。",
+                    "target": target,
+                    "message": f"最终选择{target}。",
+                },
                 ensure_ascii=False,
             )
         if '"protect"' in prompt and self.protect_choice:
@@ -322,6 +341,31 @@ class SheriffFlowProvider(ScriptedChineseProvider):
             else:
                 choice = options[0] if options else "1"
             return json.dumps({"reasoning": "测试放逐票。", "vote": choice}, ensure_ascii=False)
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class ExilePkProvider(ScriptedChineseProvider):
+    def __init__(self, runoff_vote_targets: dict[str, str]) -> None:
+        self.runoff_vote_targets = runoff_vote_targets
+        self.actions: list[tuple[str, str]] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        name = _extract_actor_name(prompt)
+        if "行动：白天放逐 PK 发言" in prompt:
+            self.actions.append(("exile_pk_speech", name))
+            return json.dumps(
+                {"reasoning": "争取留在场上。", "say": f"{name} 放逐 PK 发言。"},
+                ensure_ascii=False,
+            )
+        if "行动：白天放逐二轮投票" in prompt:
+            self.actions.append(("exile_runoff_vote", name))
+            return json.dumps(
+                {
+                    "reasoning": "根据 PK 发言完成二轮投票。",
+                    "vote": self.runoff_vote_targets[name],
+                },
+                ensure_ascii=False,
+            )
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
@@ -486,6 +530,11 @@ class BarrierActionProvider(ScriptedChineseProvider):
                 {
                     "reasoning": "并发批量测试。",
                     self.result_key: self.response_value_by_actor[name],
+                    **(
+                        {"message": f"建议选择{self.response_value_by_actor[name]}。"}
+                        if self.result_key == "target"
+                        else {}
+                    ),
                 },
                 ensure_ascii=False,
             )
@@ -498,7 +547,8 @@ class BarrierActionProvider(ScriptedChineseProvider):
             "sheriff_vote": "行动：警长投票。",
             "sheriff_runoff_vote": "行动：二轮警下投票。",
             "werewolf_self_explosion": "行动：狼人自爆判断。",
-            "werewolf_kill_vote": "行动：狼人夜晚狼刀投票。",
+            "werewolf_discuss": "行动：狼人夜晚第一轮私密表态。",
+            "werewolf_kill_vote": "行动：狼人夜晚最终表态与狼刀投票。",
             "summarize": "行动：回合总结。",
         }
         marker = marker_by_action.get(self.action_key)
@@ -1272,6 +1322,27 @@ def test_round_state_deserializes_werewolf_consensus_fields() -> None:
     serialized = round_state.to_dict()
     assert serialized["werewolf_discussion"] == payload["werewolf_discussion"]
     assert serialized["werewolf_vote_rounds"] == payload["werewolf_vote_rounds"]
+
+
+def test_round_state_deserializes_exile_pk_fields() -> None:
+    payload = {
+        "number": 1,
+        "players": ["Alice", "Bob", "Cora"],
+        "exile_pk_candidates": ["Alice", "Bob"],
+        "exile_pk_speeches": [
+            {"speaker": "Alice", "message": "请不要放逐我。"}
+        ],
+        "exile_runoff_votes": {"Cora": "Bob"},
+        "exile_resolution_reason": "runoff_vote_winner",
+    }
+
+    round_state = round_state_from_dict(payload)
+
+    assert round_state.exile_pk_candidates == ["Alice", "Bob"]
+    assert round_state.exile_pk_speeches == payload["exile_pk_speeches"]
+    assert round_state.exile_runoff_votes == {"Cora": "Bob"}
+    assert round_state.exile_resolution_reason == "runoff_vote_winner"
+    assert round_state.to_dict()["exile_runoff_votes"] == {"Cora": "Bob"}
 
 
 def test_round_log_serializes_werewolf_consensus_logs() -> None:
@@ -2108,7 +2179,7 @@ def test_round_log_deserializes_werewolf_consensus_logs() -> None:
     ]
 
 
-def test_werewolf_kill_vote_requests_active_wolves_concurrently() -> None:
+def test_werewolf_discussion_requests_active_wolves_concurrently() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_parallel_werewolf_kill_vote",
@@ -2122,7 +2193,7 @@ def test_werewolf_kill_vote_requests_active_wolves_concurrently() -> None:
     non_wolves = [player.name for player in state.players if player.role != "狼人"]
     target = non_wolves[0]
     provider = BarrierActionProvider(
-        action_key="werewolf_kill_vote",
+        action_key="werewolf_discuss",
         result_key="target",
         response_value_by_actor={wolf: target for wolf in active_wolves},
         expected_calls=len(active_wolves),
@@ -2140,11 +2211,13 @@ def test_werewolf_kill_vote_requests_active_wolves_concurrently() -> None:
     )
 
     assert attacked == target
-    assert [
-        actor for action, actor in provider.actions if action == "werewolf_kill_vote"
-    ] == active_wolves
+    discussion_actors = [
+        actor for action, actor in provider.actions if action == "werewolf_discuss"
+    ]
+    assert set(discussion_actors) == set(active_wolves)
     assert round_state.werewolf_vote_rounds[0]["votes"] == {wolf: target for wolf in active_wolves}
-    assert [log.actor for log in round_log.werewolf_votes[0]] == active_wolves
+    assert {log.actor for log in round_log.werewolf_discussion} == set(active_wolves)
+    assert round_log.werewolf_votes == []
 
 
 def _extract_options(prompt: str) -> list[str]:
@@ -3090,6 +3163,28 @@ def test_sheriff_action_logs_serialize_new_election_steps() -> None:
             lm_log=LmLog(prompt="prompt", raw_response="{}", result={"sheriff_vote": "Alice"}),
         )
     )
+    log.exile_pk_speech.append(
+        ActionLog(
+            actor="Alice",
+            action="exile_pk_speech",
+            options=[],
+            choice="我不该被放逐。",
+            lm_log=LmLog(
+                prompt="prompt",
+                raw_response="{}",
+                result={"say": "我不该被放逐。"},
+            ),
+        )
+    )
+    log.exile_runoff_votes.append(
+        ActionLog(
+            actor="Bob",
+            action="exile_runoff_vote",
+            options=["Alice", "Cora"],
+            choice="Alice",
+            lm_log=LmLog(prompt="prompt", raw_response="{}", result={"vote": "Alice"}),
+        )
+    )
 
     payload = log.to_dict()
 
@@ -3097,6 +3192,8 @@ def test_sheriff_action_logs_serialize_new_election_steps() -> None:
     assert payload["sheriff_withdraw"][0]["choice"] == "不退水"
     assert payload["sheriff_pk_speech"][0]["action"] == "sheriff_pk_speech"
     assert payload["sheriff_runoff_votes"][0]["choice"] == "Alice"
+    assert payload["exile_pk_speech"][0]["action"] == "exile_pk_speech"
+    assert payload["exile_runoff_votes"][0]["choice"] == "Alice"
 
 
 def test_sheriff_prompt_actions_render_chinese_instructions() -> None:
@@ -3117,6 +3214,10 @@ def test_sheriff_prompt_actions_render_chinese_instructions() -> None:
     vote_prompt, vote_schema = build_prompt("sheriff_vote", world_state)
     pk_prompt, pk_schema = build_prompt("sheriff_pk_speech", world_state)
     runoff_prompt, runoff_schema = build_prompt("sheriff_runoff_vote", world_state)
+    exile_pk_prompt, exile_pk_schema = build_prompt("exile_pk_speech", world_state)
+    exile_runoff_prompt, exile_runoff_schema = build_prompt(
+        "exile_runoff_vote", world_state
+    )
     order_prompt, order_schema = build_prompt("speech_order", world_state)
     badge_prompt, badge_schema = build_prompt("sheriff_badge", world_state)
 
@@ -3131,6 +3232,10 @@ def test_sheriff_prompt_actions_render_chinese_instructions() -> None:
     assert "PK 发言" in pk_prompt
     assert pk_schema["required"] == ["reasoning", "say"]
     assert "二轮警下投票" in runoff_prompt
+    assert "放逐 PK 发言" in exile_pk_prompt
+    assert exile_pk_schema["required"] == ["reasoning", "say"]
+    assert "放逐二轮投票" in exile_runoff_prompt
+    assert exile_runoff_schema["required"] == ["reasoning", "vote"]
     assert runoff_schema["required"] == ["reasoning", "sheriff_vote"]
     assert "发言方向" in order_prompt
     assert order_schema["required"] == ["reasoning", "speech_order"]
@@ -5050,6 +5155,7 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
         rule_set=rule_set,
     )
     active_players = [player.name for player in state.players]
+    initial_players = active_players.copy()
     sheriff = active_players[0]
     second_candidate = active_players[1]
     provider = SheriffFlowProvider(
@@ -5078,7 +5184,7 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
     assert round_state.sheriff_candidates == [sheriff, second_candidate]
     assert set(round_state.sheriff_votes.values()) == {sheriff}
     assert round_state.speech_order[-1] == sheriff
-    assert round_state.speech_order[:-1] == active_players[1:]
+    assert round_state.speech_order[:-1] == initial_players[1:]
     assert round_log.sheriff_run
     assert round_log.sheriff_votes
     assert round_log.speech_order is not None
@@ -5097,8 +5203,8 @@ def test_12_player_first_day_elects_sheriff_and_uses_sheriff_speech_order() -> N
     assert election_event["payload"]["narration_mode"] == "explicit_v1"
     assert election_event["payload"]["sheriff"] == sheriff
     assert election_event["payload"]["sheriff_candidates"] == [sheriff, second_candidate]
-    assert election_event["payload"]["sheriff_voters"] == active_players[2:]
-    assert election_event["payload"]["active_players"] == active_players
+    assert election_event["payload"]["sheriff_voters"] == initial_players[2:]
+    assert election_event["payload"]["active_players"] == initial_players
     assert election_event["payload"]["sheriff_election"]["outcome"] == "elected"
     assert election_event["payload"]["sheriff_election"]["reason_code"] == "first_vote_winner"
     assert sink.events.index(election_event) < sink.events.index(direction_request)
@@ -5580,6 +5686,7 @@ def test_sheriff_election_limits_speeches_to_candidates_and_votes_to_off_sheriff
         rule_set=rule_set,
     )
     active_players = [player.name for player in state.players]
+    initial_players = active_players.copy()
     first_candidate = active_players[0]
     withdrawn_candidate = active_players[1]
     voter = active_players[2]
@@ -5603,7 +5710,7 @@ def test_sheriff_election_limits_speeches_to_candidates_and_votes_to_off_sheriff
     assert set(round_state.sheriff_speech_order) == {first_candidate, withdrawn_candidate}
     assert round_state.sheriff_withdrawn == [withdrawn_candidate]
     assert round_state.sheriff_final_candidates == [first_candidate]
-    assert round_state.sheriff_voters == active_players[2:]
+    assert round_state.sheriff_voters == initial_players[2:]
     assert round_state.sheriff_votes == {}
     assert round_state.sheriff_elected == first_candidate
     assert state.sheriff == first_candidate
@@ -5803,7 +5910,7 @@ def test_sheriff_badge_is_lost_when_all_players_run_and_multiple_candidates_rema
     assert no_voters_cue["payload"]["params"]["reason_code"] == "no_off_sheriff_voters"
 
 
-def test_sheriff_vote_counts_as_one_and_half_votes() -> None:
+def test_sheriff_vote_counts_as_one_and_half_votes_for_plurality() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_sheriff_weight",
@@ -5828,10 +5935,12 @@ def test_sheriff_vote_counts_as_one_and_half_votes() -> None:
         active_players[3]: 1.0,
     }
 
-    assert engine._majority_vote(votes, active_players, weights) == active_players[1]
+    assert engine._weighted_plurality_winners(votes, weights, active_players) == [
+        active_players[1]
+    ]
 
 
-def test_majority_vote_requires_majority_of_active_vote_weight() -> None:
+def test_unique_highest_vote_wins_without_majority() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_active_vote_weight",
@@ -5847,10 +5956,12 @@ def test_majority_vote_requires_majority_of_active_vote_weight() -> None:
     votes = {active_players[0]: active_players[1]}
     weights = {name: 1.0 for name in active_players}
 
-    assert engine._majority_vote(votes, active_players, weights) is None
+    assert engine._weighted_plurality_winners(votes, weights, active_players) == [
+        active_players[1]
+    ]
 
 
-def test_majority_vote_threshold_uses_eligible_voters_not_revealed_idiot() -> None:
+def test_plurality_vote_ignores_invalid_targets() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_majority_eligible_voters",
@@ -5873,7 +5984,165 @@ def test_majority_vote_threshold_uses_eligible_voters_not_revealed_idiot() -> No
     }
     weights = {name: 1.0 for name in eligible_players}
 
-    assert engine._majority_vote(votes, active_players, weights) == eligible_players[2]
+    votes[eligible_players[1]] = "已出局玩家"
+
+    assert engine._weighted_plurality_winners(votes, weights, active_players) == [
+        eligible_players[2]
+    ]
+
+
+def test_exile_resolution_exiles_unique_highest_vote_below_half() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_exile_plurality",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=62,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    target = next(player.name for player in state.players if player.role == "村民")
+    voter = next(name for name in active_players if name != target)
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.vote_weights[voter] = 1.0
+    round_log = RoundLog(number=1)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    interrupted = engine._run_exile_vote_resolution(
+        {voter: target},
+        round_state,
+        round_log,
+        active_players,
+    )
+
+    assert interrupted is False
+    assert round_state.exiled == target
+    assert round_state.exile_resolution_reason == "first_vote_winner"
+    assert target not in active_players
+    assert any(event["action"] == "exile_result" for event in sink.events)
+
+
+def test_exile_first_tie_runs_pk_and_runoff_with_candidates_excluded() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_exile_pk",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=63,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    first_candidate, second_candidate = active_players[:2]
+    runoff_voters = active_players[2:]
+    runoff_targets = {
+        voter: first_candidate if index < 4 else second_candidate
+        for index, voter in enumerate(runoff_voters)
+    }
+    provider = ExilePkProvider(runoff_targets)
+    round_state = RoundState(number=1, players=active_players.copy())
+    first_votes = {
+        active_players[2]: first_candidate,
+        active_players[3]: second_candidate,
+    }
+    round_state.vote_weights = {name: 1.0 for name in active_players}
+    round_log = RoundLog(number=1)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    interrupted = engine._run_exile_vote_resolution(
+        first_votes,
+        round_state,
+        round_log,
+        active_players,
+    )
+
+    assert interrupted is False
+    assert round_state.exile_pk_candidates == [first_candidate, second_candidate]
+    assert [entry["speaker"] for entry in round_state.exile_pk_speeches] == [
+        first_candidate,
+        second_candidate,
+    ]
+    assert round_state.exile_runoff_votes == runoff_targets
+    assert round_state.exile_resolution_reason == "runoff_vote_winner"
+    assert round_state.exiled == first_candidate
+    assert {
+        actor for action, actor in provider.actions if action == "exile_runoff_vote"
+    } == set(runoff_voters)
+    assert not set(round_state.exile_pk_candidates) & {
+        actor for action, actor in provider.actions if action == "exile_runoff_vote"
+    }
+    cue_actions = [
+        event["action"] for event in sink.events if event["type"] == "judge_cue"
+    ]
+    assert cue_actions[-4:] == [
+        "exile_tie",
+        "exile_pk_start",
+        "exile_runoff_vote",
+        "exile_result",
+    ]
+
+
+def test_exile_runoff_tie_announces_no_exile() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_exile_runoff_tie",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=64,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    first_candidate, second_candidate = active_players[:2]
+    runoff_voters = active_players[2:]
+    runoff_targets = {
+        voter: first_candidate if index % 2 == 0 else second_candidate
+        for index, voter in enumerate(runoff_voters)
+    }
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.vote_weights = {name: 1.0 for name in active_players}
+    round_log = RoundLog(number=1)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=ExilePkProvider(runoff_targets),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    interrupted = engine._run_exile_vote_resolution(
+        {
+            active_players[2]: first_candidate,
+            active_players[3]: second_candidate,
+        },
+        round_state,
+        round_log,
+        active_players,
+    )
+
+    assert interrupted is False
+    assert round_state.exiled is None
+    assert round_state.exile_resolution_reason == "runoff_tied"
+    assert active_players == [player.name for player in state.players]
+    no_exile_cue = next(
+        event
+        for event in sink.events
+        if event["type"] == "judge_cue" and event["action"] == "exile_runoff_tied"
+    )
+    assert "无人被放逐" in no_exile_cue["payload"]["visible_text"]
 
 
 def test_dead_sheriff_can_transfer_badge() -> None:
@@ -6042,10 +6311,17 @@ def test_first_night_dead_elected_sheriff_transfers_badge_after_death_announceme
         candidates={dead_sheriff},
         badge_choice=new_sheriff,
     )
+    sink = CapturingEventSink()
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
     state.rounds.append(round_state)
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
 
     pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
     engine._run_day_phase(round_state, round_log, active_players, pending_deaths)
@@ -6077,6 +6353,82 @@ def test_first_night_dead_elected_sheriff_transfers_badge_after_death_announceme
     )
     assert election_index < night_death_index < badge_index
 
+    def event_index(event_type: str, action: str) -> int:
+        return next(
+            index
+            for index, event in enumerate(sink.events)
+            if event["type"] == event_type and event.get("action") == action
+        )
+
+    assert (
+        event_index("state_updated", "sheriff_election_resolved")
+        < event_index("state_updated", "night_resolved")
+        < event_index("judge_cue", "dawn_deaths")
+        < event_index("judge_cue", "badge_owner_out")
+        < event_index("action_requested", "sheriff_badge")
+        < event_index("state_updated", "sheriff_badge_resolved")
+        < event_index("judge_cue", "badge_transfer")
+    )
+
+
+def test_later_night_dead_sheriff_is_announced_before_badge_transfer() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_later_night_sheriff_badge_order",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=67,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    villagers = [player for player in state.players if player.role == "村民"]
+    dead_sheriff = villagers[0].name
+    new_sheriff = villagers[1].name
+    state.sheriff = dead_sheriff
+    state.player_by_name()[dead_sheriff].is_sheriff = True
+    provider = FirstNightSheriffDeathProvider(
+        remove_target=dead_sheriff,
+        candidates=set(),
+        badge_choice=new_sheriff,
+    )
+    sink = CapturingEventSink()
+    round_state = RoundState(
+        number=2,
+        players=active_players.copy(),
+        sheriff=dead_sheriff,
+    )
+    round_log = RoundLog(number=2)
+    state.rounds.append(round_state)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+
+    assert pending_deaths is None
+    assert round_state.night_deaths[0].player == dead_sheriff
+    assert state.sheriff == new_sheriff
+    night_update_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated" and event.get("action") == "night_resolved"
+    )
+    dawn_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "judge_cue" and event.get("action") == "dawn_deaths"
+    )
+    badge_owner_out_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "judge_cue" and event.get("action") == "badge_owner_out"
+    )
+    assert night_update_index < dawn_index < badge_owner_out_index
+
 
 def test_werewolf_consensus_first_vote_sets_attacked() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
@@ -6103,24 +6455,27 @@ def test_werewolf_consensus_first_vote_sets_attacked() -> None:
 
     assert pending_deaths is None
     assert round_state.attacked == target
-    assert round_state.werewolf_vote_rounds == [
-        {
-            "round": 1,
-            "candidates": [player.name for player in state.players if player.role != "狼人"],
-            "votes": {wolf: target for wolf in wolves},
-            "tally": {target: len(wolves)},
-            "unanimous": True,
-            "result": target,
-        }
-    ]
-    assert round_state.werewolf_discussion == []
-    assert round_log.werewolf_discussion == []
-    assert len(round_log.werewolf_votes) == 1
-    assert [log.actor for log in round_log.werewolf_votes[0]] == wolves
-    assert round_log.eliminate is round_log.werewolf_votes[0][0]
+    assert len(round_state.werewolf_vote_rounds) == 1
+    vote_record = round_state.werewolf_vote_rounds[0]
+    assert vote_record == {
+        "round": 1,
+        "candidates": [player.name for player in state.players if player.role != "狼人"],
+        "votes": {entry["speaker"]: target for entry in round_state.werewolf_discussion},
+        "tally": {target: len(wolves)},
+        "unanimous": True,
+        "result": target,
+        "stage": "discussion_consensus",
+    }
+    assert len(round_state.werewolf_discussion) == len(wolves)
+    assert all(entry["stage"] == "proposal" for entry in round_state.werewolf_discussion)
+    assert {entry["speaker"] for entry in round_state.werewolf_discussion} == set(wolves)
+    assert {entry["target"] for entry in round_state.werewolf_discussion} == {target}
+    assert len(round_log.werewolf_discussion) == len(wolves)
+    assert round_log.werewolf_votes == []
+    assert round_log.eliminate in round_log.werewolf_discussion
 
 
-def test_werewolf_consensus_revotes_until_unanimous() -> None:
+def test_werewolf_disagreement_runs_one_final_vote() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_wolf_consensus_revoting",
@@ -6139,15 +6494,12 @@ def test_werewolf_consensus_revotes_until_unanimous() -> None:
     round_log = RoundLog(number=1)
     provider = WerewolfConsensusProvider(
         vote_rounds=[
-            {
-                wolves[0]: first_target,
-                wolves[1]: second_target,
-                wolves[2]: first_target,
-                wolves[3]: second_target,
-            },
             {wolf: final_target for wolf in wolves},
         ],
-        discussion_targets={wolf: first_target for wolf in wolves},
+        discussion_targets={
+            wolf: first_target if index % 2 == 0 else second_target
+            for index, wolf in enumerate(wolves)
+        },
     )
     state.sheriff = next(player.name for player in state.players if player.name != final_target)
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
@@ -6156,22 +6508,20 @@ def test_werewolf_consensus_revotes_until_unanimous() -> None:
 
     assert pending_deaths is None
     assert round_state.attacked == final_target
-    assert [entry["round"] for entry in round_state.werewolf_vote_rounds] == [1, 2]
-    assert round_state.werewolf_vote_rounds[0]["unanimous"] is False
-    assert round_state.werewolf_vote_rounds[0]["result"] is None
-    assert round_state.werewolf_vote_rounds[1]["unanimous"] is True
-    assert round_state.werewolf_vote_rounds[1]["result"] == final_target
-    assert round_state.werewolf_vote_rounds[1]["candidates"] == non_wolves
-    assert len(round_log.werewolf_votes) == 2
-    second_round_prompts = provider.vote_prompts[len(wolves) :]
-    assert len(second_round_prompts) == len(wolves)
-    assert all("第1轮匿名刀口" in prompt for prompt in second_round_prompts)
-    assert all("2票" in prompt for prompt in second_round_prompts)
-    assert all(" -> " not in prompt for prompt in second_round_prompts)
-    assert not any(action == "werewolf_discuss" for action, _actor, _target in provider.actions)
+    assert len(round_state.werewolf_vote_rounds) == 1
+    assert round_state.werewolf_vote_rounds[0]["stage"] == "final_vote"
+    assert round_state.werewolf_vote_rounds[0]["unanimous"] is True
+    assert round_state.werewolf_vote_rounds[0]["result"] == final_target
+    assert round_state.werewolf_vote_rounds[0]["candidates"] == non_wolves
+    assert len(round_log.werewolf_discussion) == len(wolves)
+    assert len(round_log.werewolf_votes) == 1
+    assert len(provider.vote_prompts) == len(wolves)
+    assert all("完整狼队密聊" in prompt for prompt in provider.vote_prompts)
+    assert all("不会继续进行第三轮投票" in prompt for prompt in provider.vote_prompts)
+    assert all("归票权" not in prompt or "你不知道谁会获得归票权" in prompt for prompt in provider.vote_prompts)
 
 
-def test_werewolf_consensus_can_converge_on_third_vote() -> None:
+def test_werewolf_tie_uses_one_hidden_tiebreak_request_instead_of_third_vote() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_wolf_consensus_third_vote",
@@ -6192,16 +6542,13 @@ def test_werewolf_consensus_can_converge_on_third_vote() -> None:
                 wolves[1]: targets[1],
                 wolves[2]: targets[0],
                 wolves[3]: targets[1],
-            },
-            {
-                wolves[0]: targets[0],
-                wolves[1]: targets[1],
-                wolves[2]: targets[1],
-                wolves[3]: targets[0],
-            },
-            {wolf: targets[1] for wolf in wolves},
+            }
         ],
-        discussion_targets={wolf: targets[0] for wolf in wolves},
+        discussion_targets={
+            wolf: targets[0] if index % 2 == 0 else targets[1]
+            for index, wolf in enumerate(wolves)
+        },
+        tiebreak_targets={wolf: targets[1] for wolf in wolves},
     )
     state.sheriff = next(player.name for player in state.players if player.name != targets[1])
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
@@ -6210,13 +6557,20 @@ def test_werewolf_consensus_can_converge_on_third_vote() -> None:
 
     assert pending_deaths is None
     assert round_state.attacked == targets[1]
-    assert len(round_state.werewolf_vote_rounds) == 3
-    assert round_state.werewolf_vote_rounds[2]["unanimous"] is True
+    assert len(round_state.werewolf_vote_rounds) == 1
+    assert round_state.werewolf_vote_rounds[0]["result"] == targets[1]
+    tiebreak = round_state.werewolf_vote_rounds[0]["tiebreak"]
+    assert tiebreak["triggered"] is True
+    assert tiebreak["actor"] == engine._werewolf_tiebreaker(wolves, 1)
+    assert set(tiebreak["candidates"]) == set(targets[:2])
+    assert tiebreak["choice"] == targets[1]
+    assert tiebreak["source"] == "model"
+    assert len([action for action in provider.actions if action[0] == "werewolf_kill_vote"]) == len(wolves)
+    assert len([action for action in provider.actions if action[0] == "werewolf_kill_tiebreak"]) == 1
+    assert len(round_log.werewolf_votes) == 2
 
 
-def test_werewolf_consensus_uses_unique_highest_vote_after_final_round(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_werewolf_consensus_uses_unique_highest_vote_after_final_round() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_wolf_consensus_majority",
@@ -6232,11 +6586,13 @@ def test_werewolf_consensus_uses_unique_highest_vote_after_final_round(
     votes = {
         wolf: majority_target if index < 3 else minority_target for index, wolf in enumerate(wolves)
     }
-    provider = WerewolfConsensusProvider(vote_rounds=[votes])
+    provider = WerewolfConsensusProvider(
+        vote_rounds=[votes],
+        discussion_targets=votes,
+    )
     active_players = [player.name for player in state.players]
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
-    monkeypatch.setattr("app.werewolf.engine.MAX_WEREWOLF_KILL_VOTE_ROUNDS", 1)
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
 
     attacked = engine._run_werewolf_kill_consensus(
@@ -6250,6 +6606,7 @@ def test_werewolf_consensus_uses_unique_highest_vote_after_final_round(
     assert attacked == majority_target
     assert round_state.werewolf_vote_rounds[0]["unanimous"] is False
     assert round_state.werewolf_vote_rounds[0]["result"] == majority_target
+    assert "tiebreak" not in round_state.werewolf_vote_rounds[0]
     assert round_log.eliminate is not None
     assert round_log.eliminate.choice == majority_target
 
@@ -6274,11 +6631,26 @@ def test_werewolf_consensus_ignores_timed_out_wolf_and_uses_completed_majority(
         ) -> str:
             del model, temperature, call_options
             actor = _extract_actor_name(prompt)
-            if actor == self.offline_wolf:
+            options = _extract_options(prompt)
+            if "狼人夜晚第一轮私密表态" in prompt:
+                proposal = options[1] if actor == self.offline_wolf else self.target
+                return json.dumps(
+                    {
+                        "reasoning": "先形成不同建议以进入最终投票。",
+                        "target": proposal,
+                        "message": f"建议选择{proposal}。",
+                    },
+                    ensure_ascii=False,
+                )
+            if actor == self.offline_wolf and "狼人夜晚最终表态" in prompt:
                 self.started.set()
                 self.release.wait(timeout=1.0)
             return json.dumps(
-                {"reasoning": "选择当前多数刀口。", "target": self.target},
+                {
+                    "reasoning": "选择当前多数刀口。",
+                    "target": self.target,
+                    "message": f"最终选择{self.target}。",
+                },
                 ensure_ascii=False,
             )
 
@@ -6298,7 +6670,7 @@ def test_werewolf_consensus_ignores_timed_out_wolf_and_uses_completed_majority(
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
     monkeypatch.setattr(
-        "app.werewolf.engine.WEREWOLF_KILL_DECISION_TIMEOUT_SECONDS",
+        "app.werewolf.engine.WEREWOLF_FINAL_VOTE_TIMEOUT_SECONDS",
         0.05,
     )
     engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
@@ -6313,10 +6685,69 @@ def test_werewolf_consensus_ignores_timed_out_wolf_and_uses_completed_majority(
 
     assert provider.started.is_set()
     assert attacked == target
-    assert round_state.werewolf_vote_rounds[0]["tally"] == {target: 3}
+    assert round_state.werewolf_vote_rounds[0]["tally"] == {
+        target: 3,
+        non_wolves[1]: 1,
+    }
     assert round_state.werewolf_vote_rounds[0]["unanimous"] is False
     assert len(round_log.werewolf_votes[0]) == 3
     provider.release.set()
+
+
+def test_werewolf_consensus_all_model_timeouts_use_replay_stable_fallback() -> None:
+    class AlwaysTimedOutProvider(ScriptedChineseProvider):
+        def complete_json(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            temperature: float,
+            call_options: object | None = None,
+        ) -> str:
+            del model, prompt, temperature, call_options
+            raise ModelDeadlineExceeded("test timeout")
+
+    rule_set = get_rule_set("classic_8")
+
+    def run_once(session_id: str) -> tuple[str | None, dict[str, object], list[str]]:
+        state = initialize_game_state(
+            session_id=session_id,
+            villager_model="villager-model",
+            werewolf_model="wolf-model",
+            seed=512,
+            rule_set=rule_set,
+        )
+        wolves = [player.name for player in state.players if player.role == "狼人"]
+        non_wolves = [player.name for player in state.players if player.role != "狼人"]
+        active_players = [player.name for player in state.players]
+        round_state = RoundState(number=1, players=active_players.copy())
+        engine = GameEngine(
+            state=state,
+            provider=AlwaysTimedOutProvider(),
+            max_rounds=8,
+            rule_set=rule_set,
+        )
+
+        attacked = engine._run_werewolf_kill_consensus(
+            round_state,
+            RoundLog(number=1),
+            active_players,
+            wolves,
+            non_wolves,
+        )
+
+        return attacked, round_state.werewolf_vote_rounds[0], wolves
+
+    first_attacked, first_record, first_wolves = run_once("session_timeout_fallback_a")
+    second_attacked, second_record, second_wolves = run_once("session_timeout_fallback_b")
+
+    assert first_attacked is not None
+    assert first_attacked == second_attacked
+    assert first_record == second_record
+    assert first_wolves == second_wolves
+    assert set(first_record["votes"]) == set(first_wolves)
+    assert first_record["stage"] == "final_vote"
+    assert first_record["result"] == first_attacked
 
 
 def test_werewolf_vote_round_context_is_anonymous() -> None:
@@ -6348,9 +6779,7 @@ def test_werewolf_vote_round_context_is_anonymous() -> None:
     assert "2号玩家 ->" not in context
 
 
-def test_werewolf_consensus_tied_highest_vote_results_in_no_kill(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_werewolf_consensus_tied_highest_vote_triggers_private_judge_tiebreak() -> None:
     rule_set = get_rule_set("classic_8")
     state = initialize_game_state(
         session_id="session_test_wolf_consensus_limit",
@@ -6367,23 +6796,44 @@ def test_werewolf_consensus_tied_highest_vote_results_in_no_kill(
     provider = WerewolfConsensusProvider(
         vote_rounds=[
             {wolves[0]: non_wolves[0], wolves[1]: non_wolves[1]},
-            {wolves[0]: non_wolves[0], wolves[1]: non_wolves[1]},
         ],
-        discussion_targets={wolf: non_wolves[0] for wolf in wolves},
+        discussion_targets={
+            wolves[0]: non_wolves[0],
+            wolves[1]: non_wolves[1],
+        },
+        tiebreak_targets={wolf: non_wolves[1] for wolf in wolves},
     )
-    monkeypatch.setattr("app.werewolf.engine.MAX_WEREWOLF_KILL_VOTE_ROUNDS", 2)
-    engine = GameEngine(state=state, provider=provider, max_rounds=8, rule_set=rule_set)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
 
     pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
 
     assert pending_deaths is None
-    assert round_state.attacked is None
+    assert round_state.attacked == non_wolves[1]
     assert round_state.werewolf_vote_rounds[-1]["tally"] == {
         non_wolves[0]: 1,
         non_wolves[1]: 1,
     }
-    assert round_state.werewolf_vote_rounds[-1]["result"] is None
-    assert round_log.eliminate is None
+    assert round_state.werewolf_vote_rounds[-1]["result"] == non_wolves[1]
+    assert round_state.werewolf_vote_rounds[-1]["tiebreak"]["triggered"] is True
+    tiebreak_cues = [
+        event
+        for event in sink.events
+        if event["type"] == "judge_cue"
+        and event["action"] in {"werewolf_tiebreak_start", "werewolf_tiebreak_result"}
+    ]
+    assert [event["action"] for event in tiebreak_cues] == [
+        "werewolf_tiebreak_start",
+        "werewolf_tiebreak_result",
+    ]
+    assert "归票权" in tiebreak_cues[0]["payload"]["visible_text"]
+    assert round_log.eliminate is not None
 
 
 def test_guard_protects_consensus_werewolf_attack() -> None:
@@ -6811,22 +7261,27 @@ def test_werewolf_consensus_live_events_publish_only_safe_vote_results() -> None
         and event["type"] in private_decision_event_types
     ]
     assert private_events == []
-    assert [
+    discussion_actors = [
         event["actor"]
         for event in event_sink.events
-        if event["action"] == "werewolf_kill_vote" and event["type"] == "action_parsed"
-    ] == wolves
+        if event["action"] == "werewolf_discuss" and event["type"] == "action_parsed"
+    ]
+    assert discussion_actors == [entry["speaker"] for entry in round_state.werewolf_discussion]
+    assert set(discussion_actors) == set(wolves)
+    assert not any(
+        event["action"] == "werewolf_kill_vote" and event["type"] == "action_parsed"
+        for event in event_sink.events
+    )
     public_target = f"{[player.name for player in state.players].index(target) + 1}号玩家"
     assert all(
-        event["payload"]
-        == {
-            "choice": public_target,
-            "result": {"target": public_target},
-            "visible_result": {"target": public_target},
-            "vote_round": 1,
-        }
+        event["payload"]["choice"] == public_target
+        and event["payload"]["result"]["target"] == public_target
+        and event["payload"]["visible_result"]["target"] == public_target
+        and event["payload"]["decision_stage"] == "proposal"
+        and event["payload"]["vote_round"] == 1
+        and isinstance(event["payload"]["message"], str)
         for event in event_sink.events
-        if event["action"] == "werewolf_kill_vote" and event["type"] == "action_parsed"
+        if event["action"] == "werewolf_discuss" and event["type"] == "action_parsed"
     )
     final_event = next(
         event
@@ -6858,18 +7313,16 @@ def test_werewolf_consensus_live_events_publish_only_safe_vote_results() -> None
         "vote_round": 1,
         "final_target": True,
     }
-    assert not any(event["action"] == "werewolf_discuss" for event in event_sink.events)
     safe_wolf_events = [
         event
         for event in event_sink.events
-        if event["action"] in {"werewolf_kill_vote", "remove"} and event["type"] == "action_parsed"
+        if event["action"] in {"werewolf_discuss", "werewolf_kill_vote", "remove"}
+        and event["type"] == "action_parsed"
     ]
-    assert "message" not in str(safe_wolf_events)
     assert "reasoning" not in str(safe_wolf_events)
     assert "raw_response" not in str(safe_wolf_events)
-    assert round_log.werewolf_discussion == []
-    assert len(round_log.werewolf_votes) == 1
-    assert [log.actor for log in round_log.werewolf_votes[0]] == wolves
+    assert len(round_log.werewolf_discussion) == len(wolves)
+    assert round_log.werewolf_votes == []
 
 
 def _read_db_outputs(

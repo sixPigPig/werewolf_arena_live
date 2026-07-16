@@ -97,12 +97,16 @@ export type AdminGameRound = {
   sheriff_votes: Record<string, string>;
   sheriff_pk_candidates: string[];
   sheriff_runoff_votes: Record<string, string>;
+  exile_pk_candidates: string[];
+  exile_runoff_votes: Record<string, string>;
+  exile_resolution_reason: string | null;
   sheriff_speech_order: string[];
   sheriff_speech_direction: string | null;
   speech_order: string[];
   speech_order_choice: string | null;
   sheriff_speeches: AdminGameSpeech[];
   sheriff_pk_speeches: AdminGameSpeech[];
+  exile_pk_speeches: AdminGameSpeech[];
   debate: AdminGameSpeech[];
   sheriff_badge_target: string | null;
   sheriff_badge_lost: boolean;

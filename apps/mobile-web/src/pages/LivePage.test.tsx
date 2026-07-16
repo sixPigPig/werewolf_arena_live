@@ -913,6 +913,38 @@ describe("LivePage", () => {
     ).toBeVisible();
   });
 
+  it("renders private live voice subtitles in the red private style", async () => {
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent],
+      latestEvent: gameStartedEvent,
+    });
+    gameClientMocks.useLiveVoiceStream.mockReturnValue({
+      connectionState: "open",
+      currentItem: {
+        lastSourceEventId: 1,
+        sourceEventId: 1,
+        status: "playing",
+      },
+      currentSpeakerName: "1号玩家",
+      currentSubtitle: {
+        audience: "spectator_god_view",
+        speakerKind: "player",
+        speakerName: "1号玩家",
+        text: "今晚建议刀3号。",
+        utteranceId: "voice-private",
+      },
+      errors: [],
+      unlockAudio,
+    });
+
+    renderLiveRoute();
+
+    const subtitle = await screen.findByRole("status", { name: "直播字幕" });
+    expect(subtitle).toHaveClass("mobile-live-subtitle-private");
+    expect(subtitle).not.toHaveClass("mobile-live-subtitle-player-0");
+  });
+
   it("styles mobile live subtitles as a full-width single-line KTV HUD", () => {
     const styles = readFileSync("src/styles/index.css", "utf8");
     const seatStageRule =
@@ -931,6 +963,8 @@ describe("LivePage", () => {
       styles.match(/(?:^|\n)\.mobile-live-subtitle-pending\s*{[^}]+}/)?.[0] ?? "";
     const judgeRule =
       styles.match(/(?:^|\n)\.mobile-live-subtitle-judge\s*{[^}]+}/)?.[0] ?? "";
+    const privateRule =
+      styles.match(/(?:^|\n)\.mobile-live-subtitle-private\s*{[^}]+}/)?.[0] ?? "";
     const playerZeroRule =
       styles.match(/(?:^|\n)\.mobile-live-subtitle-player-0\s*{[^}]+}/)?.[0] ?? "";
     const shortScreenRule =
@@ -969,6 +1003,7 @@ describe("LivePage", () => {
     expect(completedTextRule).toContain("var(--mobile-live-subtitle-accent)");
     expect(pendingTextRule).toContain("62%");
     expect(judgeRule).toContain("--mobile-live-subtitle-accent: #f4c76d");
+    expect(privateRule).toContain("--mobile-live-subtitle-accent: #ff4d5a");
     expect(playerZeroRule).toContain("--mobile-live-subtitle-accent: #8ddfd0");
     expect(styles).toContain(".mobile-live-subtitle-player-7");
     expect(playerAccents).not.toContain("");

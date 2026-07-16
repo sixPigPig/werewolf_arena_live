@@ -274,6 +274,51 @@ describe("deriveMobileLiveFocusPresentation", () => {
     expect(presentation.targetName).toBe("7号 平民C");
   });
 
+  it("shows each private wolf proposal in God View", () => {
+    const { presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "action_parsed",
+        round: 1,
+        phase: "night",
+        actor: "1号 狼人A",
+        action: "werewolf_discuss",
+        payload: {
+          choice: "4号玩家",
+          message: "建议刀4号，他像预言家。",
+          decision_stage: "proposal",
+        },
+      }),
+    ]);
+
+    expect(presentation.kind).toBe("night-action");
+    expect(presentation.eyebrow).toBe("狼队密聊");
+    expect(presentation.title).toBe("建议刀4号，他像预言家。");
+    expect(presentation.detail).toBe("建议袭击 4号");
+    expect(presentation.actorName).toBe("1号 狼人A");
+  });
+
+  it("shows the judge revealing tiebreak authority only when a tie occurs", () => {
+    const visibleText =
+      "狼队刀口出现平票。本夜由1号玩家行使归票权，请从4号玩家、7号玩家中确认最终刀口。";
+    const { presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "judge_cue",
+        round: 1,
+        phase: "night",
+        action: "werewolf_tiebreak_start",
+        payload: { visible_text: visibleText },
+      }),
+    ]);
+
+    expect(presentation.eyebrow).toBe("法官提示");
+    expect(presentation.title).toBe(visibleText);
+    expect(presentation.detail).toBe("夜间流程");
+  });
+
   it("keeps a private action visible while the model is still responding", () => {
     const { presentation } = focusFor([
       STARTED,
@@ -748,6 +793,19 @@ describe("deriveMobileLiveFocusPresentation", () => {
       }),
     ]).presentation;
 
+    const exilePk = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "model_response_delta",
+        round: 1,
+        phase: "vote",
+        actor: "4号 预言家",
+        action: "exile_pk_speech",
+        payload: { visible_text: "这是我的放逐 PK 发言" },
+      }),
+    ]).presentation;
+
     expect(daytime).toMatchObject({
       kind: "speech",
       actorName: "1号 狼人A",
@@ -763,6 +821,35 @@ describe("deriveMobileLiveFocusPresentation", () => {
       kind: "speech",
       eyebrow: "警长竞选 PK 发言",
       title: "4号 预言家警长竞选 PK 发言",
+    });
+    expect(exilePk).toMatchObject({
+      kind: "speech",
+      eyebrow: "放逐 PK 发言",
+      title: "4号 预言家放逐 PK 发言",
+    });
+  });
+
+  it("presents a tied runoff judge result as an explicit no-exile outcome", () => {
+    const { presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "judge_cue",
+        round: 1,
+        phase: "vote",
+        action: "exile_runoff_tied",
+        payload: {
+          cue_id: "exile_runoff_tied",
+          visible_text: "二轮投票仍为平票，本轮无人被放逐，直接进入夜晚。",
+        },
+      }),
+    ]);
+
+    expect(presentation).toMatchObject({
+      kind: "waiting",
+      tone: "danger",
+      eyebrow: "法官提示",
+      title: "二轮投票仍为平票，本轮无人被放逐，直接进入夜晚。",
     });
   });
 

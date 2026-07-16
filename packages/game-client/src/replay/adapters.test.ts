@@ -407,6 +407,12 @@ describe("normalizeGameReplay", () => {
               { speaker: "Cora", message: "我进入 PK。" },
             ],
             sheriff_runoff_votes: { Bob: "Cora" },
+            exile_pk_candidates: ["Bob", "Cora"],
+            exile_pk_speeches: [
+              { speaker: "Bob", message: "请听完我的 PK 发言。" },
+            ],
+            exile_runoff_votes: { Alice: "Bob" },
+            exile_resolution_reason: "runoff_vote_winner",
             sheriff_elected: "Alice",
             speech_order: ["Alice", "Bob", "Cora"],
             speech_order_choice: "clockwise",
@@ -440,6 +446,12 @@ describe("normalizeGameReplay", () => {
       { speaker: "Cora", message: "我进入 PK。" },
     ]);
     expect(round.sheriff_runoff_votes).toEqual({ Bob: "Cora" });
+    expect(round.exile_pk_candidates).toEqual(["Bob", "Cora"]);
+    expect(round.exile_pk_speeches).toEqual([
+      { speaker: "Bob", message: "请听完我的 PK 发言。" },
+    ]);
+    expect(round.exile_runoff_votes).toEqual({ Alice: "Bob" });
+    expect(round.exile_resolution_reason).toBe("runoff_vote_winner");
     expect(round.sheriff_elected).toBe("Alice");
     expect(round.speech_order).toEqual(["Alice", "Bob", "Cora"]);
     expect(round.speech_order_choice).toBe("clockwise");
@@ -468,6 +480,10 @@ describe("normalizeGameReplay", () => {
     expect(round.sheriff_pk_candidates).toEqual([]);
     expect(round.sheriff_pk_speeches).toEqual([]);
     expect(round.sheriff_runoff_votes).toEqual({});
+    expect(round.exile_pk_candidates).toEqual([]);
+    expect(round.exile_pk_speeches).toEqual([]);
+    expect(round.exile_runoff_votes).toEqual({});
+    expect(round.exile_resolution_reason).toBeNull();
     expect(round.sheriff_elected).toBeNull();
     expect(round.sheriff_election_resolution).toBeNull();
     expect(round.sheriff_badge_resolution).toBeNull();
@@ -628,6 +644,32 @@ describe("normalizeGameReplay", () => {
               },
             },
           ],
+          exile_pk_speech: [
+            {
+              actor: "Bob",
+              action: "exile_pk_speech",
+              options: [],
+              choice: "我不该被放逐。",
+              lm_log: {
+                prompt: "请发表放逐 PK 发言。",
+                raw_response: '{"say":"我不该被放逐。"}',
+                result: { say: "我不该被放逐。" },
+              },
+            },
+          ],
+          exile_runoff_votes: [
+            {
+              actor: "Alice",
+              action: "exile_runoff_vote",
+              options: ["Bob", "Cora"],
+              choice: "Bob",
+              lm_log: {
+                prompt: "请选择放逐二轮候选人。",
+                raw_response: '{"vote":"Bob"}',
+                result: { vote: "Bob" },
+              },
+            },
+          ],
           speech_order: {
             actor: "Alice",
             action: "speech_order",
@@ -690,6 +732,16 @@ describe("normalizeGameReplay", () => {
         id: "round-1-day-sheriff-runoff-vote-0",
         phase: "day",
         title: "警下二轮投票",
+      },
+      {
+        id: "round-1-vote-exile-pk-speech-0",
+        phase: "day",
+        title: "放逐 PK 发言",
+      },
+      {
+        id: "round-1-vote-exile-runoff-0",
+        phase: "day",
+        title: "放逐二轮投票",
       },
       {
         id: "round-1-day-speech-order",

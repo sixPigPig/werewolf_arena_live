@@ -11,7 +11,14 @@ from typing import Any, Literal
 from app.werewolf.live import LiveEvent
 
 SpeakerKind = Literal["player", "judge"]
-PUBLIC_SPEECH_ACTIONS = {"debate", "sheriff_speech", "sheriff_pk_speech"}
+VoiceAudience = Literal["player_public", "spectator_god_view"]
+PUBLIC_SPEECH_ACTIONS = {
+    "debate",
+    "sheriff_speech",
+    "sheriff_pk_speech",
+    "exile_pk_speech",
+}
+GOD_VIEW_PRIVATE_SPEECH_ACTIONS = {"werewolf_discuss", "werewolf_kill_vote"}
 PUBLIC_WINNER_ASSETS = {
     "好人阵营": ("游戏结束，好人阵营获胜。", "game_over_villagers"),
     "狼人阵营": ("游戏结束，狼人阵营获胜。", "game_over_wolves"),
@@ -24,6 +31,13 @@ USED_STATIC_JUDGE_VOICE_ASSET_IDS = frozenset(
         "dawn_peaceful",
         "dawn_start",
         "exile_vote_start",
+        "exile_tie",
+        "exile_pk_start",
+        "exile_runoff_vote",
+        "exile_runoff_tied",
+        "exile_no_votes",
+        "exile_no_result",
+        "exile_no_runoff_voters",
         "game_intro",
         "game_resume",
         "game_over_third_party",
@@ -88,6 +102,7 @@ class VoiceUtterance:
     action: str | None
     last_source_event_id: int | None = None
     static_asset_id: str | None = None
+    audience: VoiceAudience = "player_public"
 
 
 @dataclass(frozen=True)
@@ -154,8 +169,25 @@ def is_public_complete_speech_event(event: LiveEvent) -> bool:
     )
 
 
-def voice_job_candidate(event: LiveEvent) -> SpeakerKind | None:
-    """Classify durable voice outbox candidates without inspecting private text."""
+def is_god_view_private_speech_event(event: LiveEvent) -> bool:
+    if event.type != "action_parsed" or event.action not in GOD_VIEW_PRIVATE_SPEECH_ACTIONS:
+        return False
+    visible_result = event.payload.get("visible_result")
+    return (
+        isinstance(visible_result, dict)
+        and isinstance(visible_result.get("message"), str)
+        and bool(visible_result["message"].strip())
+    )
+
+
+def voice_job_candidate(
+    event: LiveEvent,
+    *,
+    audience: VoiceAudience = "player_public",
+) -> SpeakerKind | None:
+    """Classify durable voice outbox candidates for one audience projection."""
+    if audience == "spectator_god_view" and is_god_view_private_speech_event(event):
+        return "player"
     if is_public_complete_speech_event(event):
         return "player"
     if event.type in {
@@ -167,7 +199,7 @@ def voice_job_candidate(event: LiveEvent) -> SpeakerKind | None:
         "game_canceled",
     }:
         return "judge"
-    if event.type == "phase_started" and event.phase in {"night", "day", "vote", "summary"}:
+    if event.type == "phase_started" and event.phase in {"night", "day", "vote"}:
         if event.phase == "day" and event.payload.get("narration_mode") == "explicit_v1":
             return None
         return "judge"
@@ -178,9 +210,12 @@ def deterministic_voice_utterance_id(
     run_id: str,
     source_event_id: int,
     speaker_kind: SpeakerKind,
+    *,
+    audience: VoiceAudience = "player_public",
 ) -> str:
+    audience_suffix = "" if audience == "player_public" else f":{audience}"
     digest = hashlib.sha256(
-        f"{run_id}:{source_event_id}:{speaker_kind}".encode()
+        f"{run_id}:{source_event_id}:{speaker_kind}{audience_suffix}".encode()
     ).hexdigest()[:24]
     return f"voice_{digest}"
 
@@ -214,6 +249,27 @@ def event_to_voice_utterance(
     previous_night_deaths: Sequence[str] = (),
     peaceful_night: bool = False,
 ) -> VoiceUtterance | None:
+    if is_god_view_private_speech_event(event):
+        visible_result = event.payload.get("visible_result")
+        visible_text = (
+            str(visible_result.get("message") or "")
+            if isinstance(visible_result, dict)
+            else ""
+        ).strip()
+        if not visible_text:
+            return None
+        return VoiceUtterance(
+            utterance_id=f"voice_{uuid.uuid4().hex[:12]}",
+            run_id=event.run_id,
+            source_event_id=event.id,
+            request_id=None,
+            speaker_kind="player",
+            speaker_name=_player_label(event.actor, player_seats, fallback="当前狼人"),
+            speaker=config.player_speaker,
+            text=visible_text,
+            action=event.action,
+        )
+
     if is_public_complete_speech_event(event) or is_public_speech_event(event):
         if is_public_complete_speech_event(event):
             visible_result = event.payload.get("visible_result")
@@ -269,8 +325,9 @@ def event_to_voice_materialization(
     player_seats: Mapping[str, int] | None = None,
     previous_night_deaths: Sequence[str] = (),
     peaceful_night: bool = False,
+    audience: VoiceAudience = "player_public",
 ) -> VoiceUtterance | None:
-    candidate = voice_job_candidate(event)
+    candidate = voice_job_candidate(event, audience=audience)
     if candidate is None:
         return None
     utterance = event_to_voice_utterance(
@@ -288,7 +345,9 @@ def event_to_voice_materialization(
             event.run_id,
             event.id,
             candidate,
+            audience=audience,
         ),
+        audience=audience,
     )
 
 
@@ -305,6 +364,7 @@ def build_voice_messages(
     audio_format: str,
     sample_rate: int,
     chunk_index: int,
+    audience: VoiceAudience = "player_public",
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     start_message: dict[str, Any] = {
         "type": "voice_start",
@@ -312,6 +372,7 @@ def build_voice_messages(
         "source_event_id": source_event_id,
         "speaker_kind": speaker_kind,
         "speaker_name": speaker_name,
+        "audience": audience,
         "mime_type": mime_type,
         "audio_format": audio_format,
         "sample_rate": sample_rate,
@@ -386,8 +447,6 @@ def _judge_cue_for_event(
         return JudgeVoiceCue("天亮了，所有玩家请睁眼。", "dawn_start")
     if event.type == "phase_started" and event.phase == "vote":
         return JudgeVoiceCue("发言结束，进入放逐投票。", "exile_vote_start")
-    if event.type == "phase_started" and event.phase == "summary":
-        return JudgeVoiceCue("现在公布本轮结算。")
     if event.type == "action_requested" and event.phase == "night":
         night_action_cue = NIGHT_ACTION_JUDGE_CUES.get(event.action or "")
         if night_action_cue is not None:

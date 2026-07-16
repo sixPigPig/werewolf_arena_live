@@ -969,6 +969,7 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
         "utterance_id",
         "run_id",
         "session_id",
+        "audience",
         "source_event_id",
         "last_source_event_id",
         "request_id",
@@ -995,6 +996,7 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
     _assert_string_column(table.c.run_id, length=32, nullable=False)
     assert table.c.session_id.index is True
     _assert_string_column(table.c.session_id, length=32, nullable=False)
+    _assert_string_column(table.c.audience, length=32, nullable=False)
     assert table.c.source_event_id.nullable is False
     assert table.c.last_source_event_id.nullable is False
     _assert_string_column(table.c.request_id, length=80, nullable=True)
@@ -1020,6 +1022,11 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
     _assert_index(table, "ix_voice_utterances_request_id", ["request_id"])
     _assert_index(table, "ix_voice_utterances_text_hash", ["text_hash"])
     _assert_index(table, "ix_voice_utterances_status", ["status"])
+    _assert_index(
+        table,
+        "ix_voice_utterances_session_audience",
+        ["session_id", "audience"],
+    )
 
 
 def test_voice_audio_chunk_table_matches_expected_schema() -> None:
