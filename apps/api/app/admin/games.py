@@ -116,13 +116,8 @@ def list_admin_games(
                 LiveRunRecord.session_id == GameSessionRecord.session_id,
                 or_(
                     LiveRunRecord.run_id.ilike(pattern, escape="\\"),
-                    and_(
-                        terminal_game,
-                        or_(
-                            LiveRunRecord.villager_model.ilike(pattern, escape="\\"),
-                            LiveRunRecord.werewolf_model.ilike(pattern, escape="\\"),
-                        ),
-                    ),
+                    LiveRunRecord.villager_model.ilike(pattern, escape="\\"),
+                    LiveRunRecord.werewolf_model.ilike(pattern, escape="\\"),
                 ),
             )
         )

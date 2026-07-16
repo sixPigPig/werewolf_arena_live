@@ -55,6 +55,7 @@ const PHASE_LABELS: Record<string, string> = {
 
 const ACTION_LABELS: Record<string, string> = {
   debate: "白天发言",
+  summarize: "轮次总结",
   sheriff_speech: "警长竞选发言",
   sheriff_run: "上警",
   vote: "放逐投票",

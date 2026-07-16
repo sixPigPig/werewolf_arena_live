@@ -275,10 +275,10 @@ function RunListItem({ run }: { run: AdminLiveRunListItem }) {
       </div>
       <div className="live-run-admin-models">
         <strong title={run.villager_model ?? undefined}>
-          {run.villager_model ?? "模型未公开"}
+          {run.villager_model ?? "好人模型未记录"}
         </strong>
         <small title={run.werewolf_model ?? undefined}>
-          {run.werewolf_model ?? "终局后显示模型"}
+          {run.werewolf_model ?? "狼人模型未记录"}
         </small>
       </div>
       <div className="live-run-admin-progress">

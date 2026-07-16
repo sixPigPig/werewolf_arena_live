@@ -7,6 +7,10 @@ import type {
   AdminGameEvent,
   AdminGameList,
   AdminGameListItem,
+  AdminGameModelRequestDetail,
+  AdminGameModelRequestList,
+  AdminGameModelRequestSummary,
+  AdminGameModelRequestStatus,
   AdminGamePlayer,
   AdminGameRound,
   AdminGameRuleSet,
@@ -34,6 +38,34 @@ const QUALITY_EVALUATION_STATUSES: AdminQualityEvaluationStatus[] = [
 const QUALITY_DATA_STATUSES: AdminQualityDataStatus[] = [
   "collecting", "available", "partial", "legacy", "unavailable",
 ];
+const MODEL_REQUEST_STATUSES: AdminGameModelRequestStatus[] = [
+  "pending",
+  "completed",
+  "failed",
+  "response_missing",
+];
+const MODEL_REQUEST_SUMMARY_KEYS = [
+  "request_id",
+  "round_number",
+  "phase",
+  "actor",
+  "action",
+  "model",
+  "status",
+  "attempt_count",
+  "invalid_attempt_count",
+  "run_id",
+  "event_id",
+  "created_at",
+] as const;
+const MODEL_REQUEST_DETAIL_KEYS = [
+  ...MODEL_REQUEST_SUMMARY_KEYS,
+  "prompt",
+  "raw_response",
+  "parsed_output",
+  "raw_choice",
+  "error",
+] as const;
 const SENSITIVE_RESPONSE_KEYS = new Set([
   "state",
   "logs",
@@ -109,20 +141,11 @@ export function parseAdminGameDetail(value: unknown): AdminGameDetail {
     if (base.winner !== null) {
       throw invalidContract("未完成或可恢复对局不得公开胜方");
     }
-    if (players.some((player) => player.role !== null || player.model !== null)) {
-      throw invalidContract("未完成或可恢复对局不得公开玩家角色或模型");
+    if (players.some((player) => player.role !== null)) {
+      throw invalidContract("未完成或可恢复对局不得公开玩家角色");
     }
     if (recentEvents.length > 0 || diagnostics.last_event !== null) {
       throw invalidContract("未完成或可恢复对局不得公开事件元数据");
-    }
-    if (
-      [base.latest_run, ...runs].some(
-        (run) =>
-          run !== null &&
-          (run.villager_model !== null || run.werewolf_model !== null),
-      )
-    ) {
-      throw invalidContract("未完成或可恢复对局不得公开运行模型");
     }
     if (rounds.some((round) => !round.success)) {
       throw invalidContract("未完成或可恢复对局不得返回未完成轮次");
@@ -283,6 +306,79 @@ export function parseAdminGameDebug(value: unknown): AdminGameDebug {
   };
 }
 
+export function parseAdminGameModelRequestList(
+  value: unknown,
+): AdminGameModelRequestList {
+  const record = recordValue(value);
+  rejectUnexpectedKeys(record, ["session_id", "items"], "model_requests");
+  const items = arrayValue(record.items, "model_requests.items");
+  if (items.length > 1000) {
+    throw invalidContract("model_requests.items 超过 1000 条上限");
+  }
+  return {
+    session_id: requiredString(record.session_id, "model_requests.session_id"),
+    items: items.map((item, index) => {
+      const summary = recordValue(item);
+      rejectUnexpectedKeys(
+        summary,
+        MODEL_REQUEST_SUMMARY_KEYS,
+        `model_requests.items.${index}`,
+      );
+      return parseModelRequestSummary(summary, `model_requests.items.${index}`);
+    }),
+  };
+}
+
+export function parseAdminGameModelRequestDetail(
+  value: unknown,
+): AdminGameModelRequestDetail {
+  const record = recordValue(value);
+  rejectUnexpectedKeys(record, MODEL_REQUEST_DETAIL_KEYS, "model_request");
+  return {
+    ...parseModelRequestSummary(record, "model_request"),
+    prompt: nullableString(record.prompt, "model_request.prompt"),
+    raw_response: nullableString(
+      record.raw_response,
+      "model_request.raw_response",
+    ),
+    parsed_output: nullableString(
+      record.parsed_output,
+      "model_request.parsed_output",
+    ),
+    raw_choice: nullableString(record.raw_choice, "model_request.raw_choice"),
+    error: nullableString(record.error, "model_request.error"),
+  };
+}
+
+function parseModelRequestSummary(
+  record: Record<string, unknown>,
+  path: string,
+): AdminGameModelRequestSummary {
+  return {
+    request_id: requiredString(record.request_id, `${path}.request_id`),
+    round_number: nullableNonNegativeInteger(
+      record.round_number,
+      `${path}.round_number`,
+    ),
+    phase: nullableString(record.phase, `${path}.phase`),
+    actor: nullableString(record.actor, `${path}.actor`),
+    action: requiredString(record.action, `${path}.action`),
+    model: nullableString(record.model, `${path}.model`),
+    status: enumValue(record.status, MODEL_REQUEST_STATUSES, `${path}.status`),
+    attempt_count: nonNegativeInteger(
+      record.attempt_count,
+      `${path}.attempt_count`,
+    ),
+    invalid_attempt_count: nonNegativeInteger(
+      record.invalid_attempt_count,
+      `${path}.invalid_attempt_count`,
+    ),
+    run_id: nullableString(record.run_id, `${path}.run_id`),
+    event_id: nullableNonNegativeInteger(record.event_id, `${path}.event_id`),
+    created_at: nullableDateString(record.created_at, `${path}.created_at`),
+  };
+}
+
 function parseGameListItemRecord(value: unknown): AdminGameListItem {
   const record = recordValue(value);
   const status = enumValue(record.status, SESSION_STATUSES, "status");
@@ -304,14 +400,6 @@ function parseGameListItemRecord(value: unknown): AdminGameListItem {
     item.winner !== null
   ) {
     throw invalidContract("未完成或可恢复对局不得公开胜方");
-  }
-  if (
-    (item.status !== "complete" || item.resumable) &&
-    item.latest_run !== null &&
-    (item.latest_run.villager_model !== null ||
-      item.latest_run.werewolf_model !== null)
-  ) {
-    throw invalidContract("未完成或可恢复对局不得公开最新运行模型");
   }
   return item;
 }
@@ -544,6 +632,18 @@ function recordValue(value: unknown): Record<string, unknown> {
     throw invalidContract("响应不是对象");
   }
   return value as Record<string, unknown>;
+}
+
+function rejectUnexpectedKeys(
+  record: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+) {
+  const allowedKeys = new Set(allowed);
+  const unexpected = Object.keys(record).find((key) => !allowedKeys.has(key));
+  if (unexpected) {
+    throw invalidContract(`${path}.${unexpected} 不允许出现在响应中`);
+  }
 }
 
 function arrayValue(value: unknown, field: string): unknown[] {

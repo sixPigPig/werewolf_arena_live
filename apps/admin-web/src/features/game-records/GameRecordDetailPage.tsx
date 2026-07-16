@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { isAdminApiError } from "@/api/problem-details";
@@ -7,7 +7,9 @@ import { useAdminSession } from "@/features/auth/session-context";
 import {
   getAdminGame,
   getAdminGameDebug,
+  getAdminGameModelRequest,
   getAdminGameQualityIssues,
+  listAdminGameModelRequests,
   retryAdminGameQualityEvaluation,
 } from "@/features/game-records/api";
 import {
@@ -32,6 +34,8 @@ import { adminGameKeys } from "@/features/game-records/query-keys";
 import type {
   AdminGameDeath,
   AdminGameEvent,
+  AdminGameModelRequestDetail,
+  AdminGameModelRequestSummary,
   AdminGameQualityEvaluation,
   AdminGameQualityIssues,
   AdminGameRound,
@@ -54,6 +58,13 @@ export default function GameRecordDetailPage() {
   const [qualityIssuesRequestedFor, setQualityIssuesRequestedFor] = useState<
     string | null
   >(null);
+  const [selectedModelRequestId, setSelectedModelRequestId] = useState<
+    string | null
+  >(null);
+  const closeModelRequestDrawer = useCallback(
+    () => setSelectedModelRequestId(null),
+    [],
+  );
   const qualityIssuesRequested = Boolean(
     sessionId && qualityIssuesRequestedFor === sessionId,
   );
@@ -91,6 +102,28 @@ export default function GameRecordDetailPage() {
     ),
     queryFn: ({ signal }) => getAdminGameQualityIssues(sessionId!, signal),
     queryKey: adminGameKeys.qualityIssues(sessionId ?? "missing"),
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const modelRequestsQuery = useQuery({
+    enabled: Boolean(sessionId && canReadDebug && gameQuery.isSuccess),
+    queryFn: ({ signal }) => listAdminGameModelRequests(sessionId!, signal),
+    queryKey: adminGameKeys.modelRequests(sessionId ?? "missing"),
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const modelRequestDetailQuery = useQuery({
+    enabled: Boolean(sessionId && canReadDebug && selectedModelRequestId),
+    queryFn: ({ signal }) =>
+      getAdminGameModelRequest(sessionId!, selectedModelRequestId!, signal),
+    queryKey: adminGameKeys.modelRequest(
+      sessionId ?? "missing",
+      selectedModelRequestId ?? "missing",
+    ),
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -270,7 +303,7 @@ export default function GameRecordDetailPage() {
                   </span>
                   <span className="game-player-role">
                     <strong>{player.role ?? "未公开"}</strong>
-                    <small>{player.model ?? "模型未公开"}</small>
+                    <small>{player.model ?? "模型未记录"}</small>
                   </span>
                 </li>
               ))}
@@ -297,6 +330,14 @@ export default function GameRecordDetailPage() {
         ) : (
           <PanelEmpty text="该对局还没有公开轮次摘要。" />
         )}
+        <ModelRequestIndex
+          canReadDebug={canReadDebug}
+          error={modelRequestsQuery.isError ? modelRequestsQuery.error : null}
+          items={modelRequestsQuery.data?.items ?? []}
+          onOpen={setSelectedModelRequestId}
+          onRetry={() => void modelRequestsQuery.refetch()}
+          pending={modelRequestsQuery.isPending}
+        />
       </section>
 
       <PublicOutcomePanel quality={game.p2_quality} />
@@ -329,6 +370,19 @@ export default function GameRecordDetailPage() {
           />
         )}
       </section>
+      {selectedModelRequestId ? (
+        <ModelRequestDrawer
+          error={
+            modelRequestDetailQuery.isError
+              ? modelRequestDetailQuery.error
+              : null
+          }
+          onClose={closeModelRequestDrawer}
+          pending={modelRequestDetailQuery.isPending}
+          request={modelRequestDetailQuery.data ?? null}
+          requestId={selectedModelRequestId}
+        />
+      ) : null}
     </div>
   );
 }
@@ -353,7 +407,7 @@ function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
         />
       ) : (
         <>
-          <div className="game-detail-metrics">
+          <div className="game-detail-metrics game-quality-metrics">
             <article>
               <span>阵容模式 / 修复</span>
               <strong>{qualityPolicyLabel(quality.lineup_quality.policy_mode)}</strong>
@@ -395,7 +449,7 @@ function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
             </article>
           </div>
           {quality.lineup_quality.violations.length > 0 ? (
-            <ul aria-label="阵容质量违规" className="game-event-list">
+            <ul aria-label="阵容质量违规" className="game-quality-list">
               {quality.lineup_quality.violations.map((violation, index) => (
                 <li key={`${violation.code}-${index}`}>
                   <strong title={violation.code}>{qualityCodeLabel(violation.code)}</strong>
@@ -407,7 +461,7 @@ function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
               ))}
             </ul>
           ) : null}
-          <ul aria-label="P2 质量门槛" className="game-event-list">
+          <ul aria-label="P2 质量门槛" className="game-quality-list">
             {quality.quality_gates.map((gate) => (
               <li key={gate.gate}>
                 <strong>
@@ -459,7 +513,7 @@ function GameP3QualityPanel({
       quality.data_status === "legacy");
   return (
     <section aria-labelledby="game-p3-title" className="game-detail-panel">
-      <div className="dashboard-panel-heading">
+      <div className="game-quality-heading">
         <div>
           <span className="page-kicker">P3 质量评估</span>
           <h2 id="game-p3-title">P3 质量评估</h2>
@@ -473,7 +527,7 @@ function GameP3QualityPanel({
         </span>
       </div>
 
-      <dl className="dashboard-breakdown" aria-label="P3 来源覆盖">
+      <dl className="game-quality-coverage" aria-label="P3 来源覆盖">
         <div><dt>状态 / 日志</dt><dd>{qualitySourceStatusLabel(quality.source_coverage.state)} / {qualitySourceStatusLabel(quality.source_coverage.logs)}</dd></div>
         <div><dt>事件</dt><dd>{qualitySourceStatusLabel(quality.source_coverage.events)}</dd></div>
         <div><dt>语音 / 字幕</dt><dd>{qualitySourceStatusLabel(quality.source_coverage.voice)} / {qualitySourceStatusLabel(quality.source_coverage.subtitles)}</dd></div>
@@ -481,7 +535,7 @@ function GameP3QualityPanel({
       </dl>
 
       {quality.evaluation_status === "completed" ? (
-        <div className="game-detail-metrics">
+        <div className="game-detail-metrics game-quality-metrics">
           <article>
             <span>事实</span>
             <strong>{ratioLabel(quality.facts.critical_recorded_count, quality.facts.critical_opportunity_count)}</strong>
@@ -568,7 +622,7 @@ function GameP3QualityPanel({
           ) : null}
           {issues && !issuesPending && !issuesError ? (
             issues.items.length > 0 ? (
-              <ul aria-label="P3 安全问题坐标" className="game-event-list">
+              <ul aria-label="P3 安全问题坐标" className="game-quality-list">
                 {issues.items.map((issue) => (
                   <li key={issue.issue_id}>
                     <strong title={issue.code}>
@@ -642,7 +696,7 @@ function PublicOutcomePanel({ quality }: { quality: AdminGameP2Quality }) {
         title="公开结算链"
       />
       {quality.public_outcomes.length > 0 ? (
-        <ol aria-label="公开结算链" className="game-event-list">
+        <ol aria-label="公开结算链" className="game-public-outcome-list">
           {quality.public_outcomes.map((outcome) => (
             <li key={outcome.event_id}>
               <strong>
@@ -820,9 +874,7 @@ function RunItem({
         <div>
           <dt>模型</dt>
           <dd>
-            {run.villager_model && run.werewolf_model
-              ? `${run.villager_model} / ${run.werewolf_model}`
-              : "模型未公开"}
+            {formatRunModels(run)}
           </dd>
         </div>
         <div>
@@ -844,6 +896,13 @@ function RunItem({
       </dl>
     </li>
   );
+}
+
+function formatRunModels(run: AdminGameRun) {
+  if (run.villager_model && run.villager_model === run.werewolf_model) {
+    return run.villager_model;
+  }
+  return `好人：${run.villager_model ?? "未记录"} · 狼人：${run.werewolf_model ?? "未记录"}`;
 }
 
 function RoundItem({ round }: { round: AdminGameRound }) {
@@ -947,6 +1006,285 @@ function RoundItem({ round }: { round: AdminGameRound }) {
       </div>
     </li>
   );
+}
+
+function ModelRequestIndex({
+  canReadDebug,
+  error,
+  items,
+  onOpen,
+  onRetry,
+  pending,
+}: {
+  canReadDebug: boolean;
+  error: Error | null;
+  items: AdminGameModelRequestSummary[];
+  onOpen: (requestId: string) => void;
+  onRetry: () => void;
+  pending: boolean;
+}) {
+  if (!canReadDebug) {
+    return (
+      <section className="game-model-request-index is-restricted">
+        <h3>模型请求记录</h3>
+        <p>输入输出包含私密推理，需要 games.debug.read 权限。</p>
+      </section>
+    );
+  }
+  if (pending) {
+    return (
+      <section
+        aria-live="polite"
+        className="game-model-request-index"
+        role="status"
+      >
+        <h3>模型请求记录</h3>
+        <p>正在读取请求索引...</p>
+      </section>
+    );
+  }
+  if (error) {
+    return (
+      <section className="game-model-request-index is-error" role="alert">
+        <h3>模型请求记录加载失败</h3>
+        <p>{error.message}</p>
+        <button onClick={onRetry} type="button">重新加载</button>
+      </section>
+    );
+  }
+  if (items.length === 0) {
+    return (
+      <section className="game-model-request-index">
+        <h3>模型请求记录</h3>
+        <p>该对局没有持久化的模型请求。</p>
+      </section>
+    );
+  }
+  return (
+    <section className="game-model-request-index">
+      <div className="game-model-request-index-heading">
+        <div>
+          <h3>模型请求记录</h3>
+          <p>展开轮次并点击任一请求，可在右侧查看输入、输出和模型信息。</p>
+        </div>
+        <strong>{items.length} 次</strong>
+      </div>
+      <div className="game-model-request-groups">
+        {groupModelRequests(items).map((group) => (
+          <details key={group.key}>
+            <summary>
+              <span>{group.label}</span>
+              <strong>{group.items.length} 次请求</strong>
+            </summary>
+            <div className="game-model-request-buttons">
+              {group.items.map((item) => (
+                <button
+                  aria-label={`查看模型请求 ${item.request_id}`}
+                  className={`game-model-request-button is-${item.status}`}
+                  key={item.request_id}
+                  onClick={() => onOpen(item.request_id)}
+                  type="button"
+                >
+                  <span>
+                    <strong>
+                      {item.actor ?? "系统"} · {actionLabel(item.action)}
+                    </strong>
+                    <small>
+                      {item.model ?? "模型未记录"}
+                      {item.phase ? ` · ${phaseLabel(item.phase)}` : ""}
+                    </small>
+                    <code>{item.request_id}</code>
+                  </span>
+                  <em>{modelRequestStatusLabel(item.status)}</em>
+                </button>
+              ))}
+            </div>
+          </details>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ModelRequestDrawer({
+  error,
+  onClose,
+  pending,
+  request,
+  requestId,
+}: {
+  error: Error | null;
+  onClose: () => void;
+  pending: boolean;
+  request: AdminGameModelRequestDetail | null;
+  requestId: string;
+}) {
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+      document.body.style.overflow = previousOverflow;
+      opener?.focus();
+    };
+  }, [onClose]);
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      drawerRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
+  };
+
+  return (
+    <div
+      className="game-model-request-drawer-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <aside
+        aria-labelledby="game-model-request-drawer-title"
+        aria-modal="true"
+        className="game-model-request-drawer"
+        onKeyDown={handleKeyDown}
+        ref={drawerRef}
+        role="dialog"
+      >
+        <header>
+          <div>
+            <span>模型请求</span>
+            <h2 id="game-model-request-drawer-title">
+              {request ? `${request.actor ?? "系统"} · ${actionLabel(request.action)}` : "请求详情"}
+            </h2>
+            <code>{requestId}</code>
+          </div>
+          <button
+            aria-label="关闭模型请求详情"
+            onClick={onClose}
+            ref={closeButtonRef}
+            type="button"
+          >
+            ×
+          </button>
+        </header>
+        {pending ? (
+          <div aria-live="polite" className="game-model-request-drawer-state" role="status">
+            正在读取输入输出...
+          </div>
+        ) : error ? (
+          <div className="game-model-request-drawer-state is-error" role="alert">
+            <strong>请求详情读取失败</strong>
+            <p>{error.message}</p>
+          </div>
+        ) : request ? (
+          <div className="game-model-request-drawer-content">
+            <dl className="game-model-request-metadata">
+              <div><dt>模型</dt><dd>{request.model ?? "未记录"}</dd></div>
+              <div><dt>状态</dt><dd>{modelRequestStatusLabel(request.status)}</dd></div>
+              <div><dt>轮次 / 阶段</dt><dd>{request.round_number === null ? "未归类" : `第 ${request.round_number} 轮`}{request.phase ? ` · ${phaseLabel(request.phase)}` : ""}</dd></div>
+              <div><dt>请求尝试</dt><dd>{request.attempt_count} 次{request.invalid_attempt_count > 0 ? ` · 无效 ${request.invalid_attempt_count} 次` : ""}</dd></div>
+              <div><dt>运行 / 事件</dt><dd>{request.run_id ?? "未记录"}{request.event_id === null ? "" : ` · #${request.event_id}`}</dd></div>
+              <div><dt>发起时间</dt><dd>{request.created_at ? formatDateTime(request.created_at) : "未记录"}</dd></div>
+            </dl>
+            {request.error ? (
+              <section className="game-model-request-block is-error">
+                <h3>请求错误</h3>
+                <pre>{request.error}</pre>
+              </section>
+            ) : null}
+            <ModelRequestBlock
+              empty="该次请求没有持久化输入。"
+              title="输入 Prompt"
+              value={request.prompt}
+            />
+            <ModelRequestBlock
+              empty="该次请求没有持久化原始输出。"
+              title="原始输出"
+              value={request.raw_response}
+            />
+            <ModelRequestBlock
+              empty="该次请求没有可显示的解析输出。"
+              title="解析输出"
+              value={request.parsed_output}
+            />
+            {request.raw_choice ? (
+              <ModelRequestBlock
+                empty=""
+                title="原始选择"
+                value={request.raw_choice}
+              />
+            ) : null}
+          </div>
+        ) : null}
+      </aside>
+    </div>
+  );
+}
+
+function ModelRequestBlock({
+  empty,
+  title,
+  value,
+}: {
+  empty: string;
+  title: string;
+  value: string | null;
+}) {
+  return (
+    <section className="game-model-request-block">
+      <h3>{title}</h3>
+      {value ? <pre>{value}</pre> : <p>{empty}</p>}
+    </section>
+  );
+}
+
+function groupModelRequests(items: AdminGameModelRequestSummary[]) {
+  const groups = new Map<string, AdminGameModelRequestSummary[]>();
+  for (const item of items) {
+    const key = item.round_number === null ? "unassigned" : String(item.round_number);
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+  return [...groups.entries()].map(([key, requests]) => ({
+    key,
+    label: key === "unassigned" ? "未归类轮次" : `第 ${key} 轮`,
+    items: requests,
+  }));
+}
+
+function modelRequestStatusLabel(status: AdminGameModelRequestSummary["status"]) {
+  return {
+    pending: "等待返回",
+    completed: "已完成",
+    failed: "失败",
+    response_missing: "响应未记录",
+  }[status];
 }
 
 function formatNames(values: string[]) {

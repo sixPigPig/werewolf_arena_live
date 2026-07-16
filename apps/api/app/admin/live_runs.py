@@ -230,14 +230,8 @@ def _base_run_query() -> Select[Any]:
             LiveRunRecord.run_id,
             LiveRunRecord.session_id,
             LiveRunRecord.status,
-            case(
-                (reveal_terminal_metadata, LiveRunRecord.villager_model),
-                else_=None,
-            ).label("villager_model"),
-            case(
-                (reveal_terminal_metadata, LiveRunRecord.werewolf_model),
-                else_=None,
-            ).label("werewolf_model"),
+            LiveRunRecord.villager_model,
+            LiveRunRecord.werewolf_model,
             LiveRunRecord.max_rounds,
             LiveRunRecord.rule_set_id,
             LiveRunRecord.rule_set_revision_id,

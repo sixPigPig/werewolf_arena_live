@@ -13,6 +13,8 @@ import {
   contractGameDebug,
   contractGameDetail,
   contractGameItem,
+  contractGameModelRequestDetail,
+  contractGameModelRequests,
 } from "@/features/game-records/test-fixtures";
 import { routes } from "@/routes";
 
@@ -41,6 +43,20 @@ function session(permissions: string[]) {
     csrf_token: "csrf-games",
     session_expires_at: "2999-01-01T00:00:00Z",
   };
+}
+
+function modelRequestFixtureResponse(url: string) {
+  if (url.endsWith("/api/v1/admin/games/game_1234abcd/model-requests")) {
+    return jsonResponse(contractGameModelRequests);
+  }
+  if (
+    url.endsWith(
+      "/api/v1/admin/games/game_1234abcd/model-requests/req_contract_model_1",
+    )
+  ) {
+    return jsonResponse(contractGameModelRequestDetail);
+  }
+  return null;
 }
 
 describe("admin game record flow", () => {
@@ -77,8 +93,6 @@ describe("admin game record flow", () => {
                     ...contractGameItem.latest_run,
                     status: runStatus ?? "completed",
                     has_error: runStatus === "failed",
-                    villager_model: null,
-                    werewolf_model: null,
                   },
                 }
               : contractGameItem,
@@ -283,11 +297,9 @@ describe("admin game record flow", () => {
       latest_run: {
         ...contractGameDetail.latest_run,
         has_error: true,
-        villager_model: null,
-        werewolf_model: null,
       },
       players: [
-        { ...contractGameDetail.players[0], role: null, model: null },
+        { ...contractGameDetail.players[0], role: null },
       ],
       rounds: contractGameDetail.rounds.map((round) => ({
         ...round,
@@ -307,8 +319,6 @@ describe("admin game record flow", () => {
       runs: contractGameDetail.runs.map((run) => ({
         ...run,
         has_error: true,
-        villager_model: null,
-        werewolf_model: null,
       })),
     };
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
@@ -332,13 +342,19 @@ describe("admin game record flow", () => {
     expect(
       within(
         screen.getByRole("list", { name: "玩家与角色结果" }),
-      ).getByText("模型未公开"),
+      ).getByText("deepseek-v4-flash"),
     ).toBeInTheDocument();
     expect(screen.getByText("雾灯听风")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "P2 对局质量" }),
     ).toBeInTheDocument();
     expect(screen.getByText("自动修复")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "P2 质量门槛" })).toHaveClass(
+      "game-quality-list",
+    );
+    expect(screen.getByLabelText("P3 来源覆盖")).toHaveClass(
+      "game-quality-coverage",
+    );
     expect(screen.getByText("分析 · 控场")).toBeInTheDocument();
     expect(
       screen.getByText("我会先听完大家的上警理由。"),
@@ -352,6 +368,9 @@ describe("admin game record flow", () => {
     expect(
       screen.getByRole("heading", { name: "公开结算链" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "公开结算链" })).toHaveClass(
+      "game-public-outcome-list",
+    );
     expect(screen.getByText(/2号玩家夜间出局/)).toBeInTheDocument();
     expect(
       screen.getByText(/2号玩家发动猎人技能带走5号玩家/),
@@ -368,6 +387,61 @@ describe("admin game record flow", () => {
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).endsWith("/debug")),
     ).toBe(false);
+  });
+
+  it("opens model request input and output in an audited right drawer", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["games.read", "games.debug.read"]));
+      }
+      if (url.endsWith("/api/v1/admin/games/game_1234abcd")) {
+        return jsonResponse(contractGameDetail);
+      }
+      const modelResponse = modelRequestFixtureResponse(url);
+      if (modelResponse) return modelResponse;
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/operations/games/game_1234abcd");
+
+    expect(await screen.findByText("2 次")).toBeInTheDocument();
+    await user.click(screen.getByText("第 1 轮", { selector: "summary span" }));
+    const requestButton = screen.getByRole("button", {
+      name: "查看模型请求 req_contract_model_1",
+    });
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith("/model-requests/req_contract_model_1"),
+      ),
+    ).toBe(false);
+
+    await user.click(requestButton);
+    const drawer = await screen.findByRole("dialog", {
+      name: "暮鸦归票 · 白天发言",
+    });
+    expect(within(drawer).getByText("deepseek-v4-flash")).toBeInTheDocument();
+    expect(
+      within(drawer).getByText("你正在进行一局狼人杀。请发表白天发言。"),
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByText(
+        '{"reasoning":"分析票型","say":"我会投给灰塔。"}',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "关闭模型请求详情" }),
+    ).toHaveFocus();
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).endsWith("/model-requests/req_contract_model_1"),
+      ),
+    ).toHaveLength(1);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: /暮鸦归票/ })).toBeNull();
+    expect(requestButton).toHaveFocus();
   });
 
   it("renders unavailable P2 quality and outcome empty states", async () => {
@@ -427,6 +501,8 @@ describe("admin game record flow", () => {
       if (url.endsWith("/api/v1/admin/games/game_1234abcd/debug")) {
         return jsonResponse(contractGameDebug);
       }
+      const modelResponse = modelRequestFixtureResponse(url);
+      if (modelResponse) return modelResponse;
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -481,6 +557,8 @@ describe("admin game record flow", () => {
           ],
         });
       }
+      const modelResponse = modelRequestFixtureResponse(url);
+      if (modelResponse) return modelResponse;
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -543,6 +621,8 @@ describe("admin game record flow", () => {
           status: "pending",
         });
       }
+      const modelResponse = modelRequestFixtureResponse(url);
+      if (modelResponse) return modelResponse;
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -583,6 +663,8 @@ describe("admin game record flow", () => {
           503,
         );
       }
+      const modelResponse = modelRequestFixtureResponse(url);
+      if (modelResponse) return modelResponse;
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);

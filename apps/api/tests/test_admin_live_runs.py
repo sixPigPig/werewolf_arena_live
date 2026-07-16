@@ -705,12 +705,12 @@ def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelist
         "pages": 2,
     }
     failed_item, running_item = payload["items"]
-    assert failed_item["villager_model"] is None
-    assert failed_item["werewolf_model"] is None
+    assert failed_item["villager_model"] == "SENTINEL_FAILED_MODEL"
+    assert failed_item["werewolf_model"] == "SENTINEL_FAILED_WOLF_MODEL"
     assert failed_item["winner"] is None
     assert failed_item["is_stale"] is False
-    assert running_item["villager_model"] is None
-    assert running_item["werewolf_model"] is None
+    assert running_item["villager_model"] == "SENTINEL_RUNNING_MODEL"
+    assert running_item["werewolf_model"] == "SENTINEL_RUNNING_WOLF_MODEL"
     assert running_item["winner"] is None
     assert running_item["game"] == {
         "status": "partial",
@@ -810,11 +810,7 @@ def test_admin_live_run_list_is_batched_filterable_stable_and_strictly_whitelist
 
     serialized = json.dumps(payload, ensure_ascii=False)
     for marker in (
-        "SENTINEL_RUNNING_MODEL",
-        "SENTINEL_RUNNING_WOLF_MODEL",
         "SENTINEL_RUNNING_WINNER",
-        "SENTINEL_FAILED_MODEL",
-        "SENTINEL_FAILED_WOLF_MODEL",
         "SENTINEL_FAILED_WINNER",
         "SENTINEL_RUN_KEY",
         "SENTINEL_PLAYER_NAME",
@@ -1083,7 +1079,7 @@ def test_completed_terminal_detail_returns_only_bounded_safe_event_metadata(
         ("completed", "complete", True),
     ],
 )
-def test_non_revealable_detail_redacts_models_identity_and_generalizes_activity(
+def test_non_revealable_detail_exposes_models_but_redacts_identity_and_activity(
     context: AdminLiveRunsContext,
     monkeypatch: pytest.MonkeyPatch,
     run_status: str,
@@ -1144,8 +1140,8 @@ def test_non_revealable_detail_redacts_models_identity_and_generalizes_activity(
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["villager_model"] is None
-    assert payload["werewolf_model"] is None
+    assert payload["villager_model"] == "SENTINEL_PRIVATE_MODEL"
+    assert payload["werewolf_model"] == "SENTINEL_PRIVATE_WOLF_MODEL"
     assert payload["winner"] is None
     assert [item["type"] for item in payload["recent_events"]] == [
         "run_started",
@@ -1161,8 +1157,6 @@ def test_non_revealable_detail_redacts_models_identity_and_generalizes_activity(
 
     serialized = json.dumps(payload, ensure_ascii=False)
     for marker in (
-        "SENTINEL_PRIVATE_MODEL",
-        "SENTINEL_PRIVATE_WOLF_MODEL",
         "SENTINEL_PRIVATE_WINNER",
         "SENTINEL_EVENT_ACTOR",
         "SENTINEL_EVENT_ACTION",
@@ -1302,7 +1296,7 @@ def test_live_run_detail_and_debug_return_problem_404(
     assert debug.json()["code"] == "admin_live_run_not_found"
 
 
-def test_admin_games_do_not_expose_or_probe_partial_or_historical_run_metadata(
+def test_admin_games_expose_partial_models_but_redact_results_and_historical_rules(
     context: AdminLiveRunsContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1349,9 +1343,11 @@ def test_admin_games_do_not_expose_or_probe_partial_or_historical_run_metadata(
     )
 
     assert item["winner"] is None
-    assert item["latest_run"]["villager_model"] is None
-    assert item["latest_run"]["werewolf_model"] is None
-    assert model_probe.json()["items"] == []
+    assert item["latest_run"]["villager_model"] == "SENTINEL_GAME_MODEL_ORACLE"
+    assert item["latest_run"]["werewolf_model"] == "SENTINEL_GAME_WOLF_ORACLE"
+    assert [entry["session_id"] for entry in model_probe.json()["items"]] == [
+        "game_00000050"
+    ]
     assert winner_probe.json()["items"] == []
     assert winner_filter.json()["items"] == []
     assert [entry["session_id"] for entry in historical_rule_filter.json()["items"]] == [

@@ -146,6 +146,40 @@ export type AdminGameDebug = {
   run_errors: Array<{ run_id: string; error: string }>;
 };
 
+export type AdminGameModelRequestStatus =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "response_missing";
+
+export type AdminGameModelRequestSummary = {
+  request_id: string;
+  round_number: number | null;
+  phase: string | null;
+  actor: string | null;
+  action: string;
+  model: string | null;
+  status: AdminGameModelRequestStatus;
+  attempt_count: number;
+  invalid_attempt_count: number;
+  run_id: string | null;
+  event_id: number | null;
+  created_at: string | null;
+};
+
+export type AdminGameModelRequestList = {
+  session_id: string;
+  items: AdminGameModelRequestSummary[];
+};
+
+export type AdminGameModelRequestDetail = AdminGameModelRequestSummary & {
+  prompt: string | null;
+  raw_response: string | null;
+  parsed_output: string | null;
+  raw_choice: string | null;
+  error: string | null;
+};
+
 export type AdminQualityEvaluationStatus =
   | "not_scheduled"
   | "pending"

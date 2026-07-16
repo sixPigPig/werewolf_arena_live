@@ -2,7 +2,9 @@ import {
   deleteAdminGame,
   getAdminGame,
   getAdminGameDebug,
+  getAdminGameModelRequest,
   getAdminGameQualityIssues,
+  listAdminGameModelRequests,
   listAdminGames,
   retryAdminGameQualityEvaluation,
 } from "@/features/game-records/api";
@@ -11,12 +13,16 @@ import {
   parseAdminGameDebug,
   parseAdminGameDetail,
   parseAdminGameList,
+  parseAdminGameModelRequestDetail,
+  parseAdminGameModelRequestList,
   parseAdminGameQualityIssues,
 } from "@/features/game-records/parsers";
 import {
   contractGameDebug,
   contractGameDetail,
   contractGameItem,
+  contractGameModelRequestDetail,
+  contractGameModelRequests,
 } from "@/features/game-records/test-fixtures";
 
 describe("admin game records contract", () => {
@@ -36,6 +42,32 @@ describe("admin game records contract", () => {
     });
     expect(parseAdminGameDetail(contractGameDetail)).toEqual(contractGameDetail);
     expect(parseAdminGameDebug(contractGameDebug)).toEqual(contractGameDebug);
+    expect(parseAdminGameModelRequestList(contractGameModelRequests)).toEqual(
+      contractGameModelRequests,
+    );
+    expect(
+      parseAdminGameModelRequestDetail(contractGameModelRequestDetail),
+    ).toEqual(contractGameModelRequestDetail);
+  });
+
+  it("keeps model request summaries metadata-only and strictly parses details", () => {
+    expect(() =>
+      parseAdminGameModelRequestList({
+        ...contractGameModelRequests,
+        items: [
+          {
+            ...contractGameModelRequests.items[0],
+            prompt: "private prompt",
+          },
+        ],
+      }),
+    ).toThrow(/prompt/);
+    expect(() =>
+      parseAdminGameModelRequestDetail({
+        ...contractGameModelRequestDetail,
+        api_key: "private key",
+      }),
+    ).toThrow(/api_key/);
   });
 
   it("accepts the redacted partial/resumable detail contract", () => {
@@ -47,12 +79,10 @@ describe("admin game records contract", () => {
         resumable: true,
         latest_run: {
           ...contractGameDetail.latest_run,
-          villager_model: null,
-          werewolf_model: null,
         },
         rule_set: { ...contractGameDetail.rule_set, player_count: null },
         players: [
-          { ...contractGameDetail.players[0], role: null, model: null },
+          { ...contractGameDetail.players[0], role: null },
         ],
         rounds: contractGameDetail.rounds.map((round) => ({
           ...round,
@@ -71,8 +101,6 @@ describe("admin game records contract", () => {
         diagnostics: { ...contractGameDetail.diagnostics, last_event: null },
         runs: contractGameDetail.runs.map((run) => ({
           ...run,
-          villager_model: null,
-          werewolf_model: null,
         })),
       }),
     ).toMatchObject({
@@ -80,10 +108,18 @@ describe("admin game records contract", () => {
       winner: null,
       resumable: true,
       rule_set: { player_count: null },
-      players: [{ role: null, model: null }],
-      latest_run: { villager_model: null, werewolf_model: null },
+      players: [{ role: null, model: "deepseek-v4-flash" }],
+      latest_run: {
+        villager_model: "deepseek-v4-flash",
+        werewolf_model: "doubao-seed-1-6-flash",
+      },
       rounds: [{ night_deaths: [{ cause: null, source: null }] }],
-      runs: [{ villager_model: null, werewolf_model: null }],
+      runs: [
+        {
+          villager_model: "deepseek-v4-flash",
+          werewolf_model: "doubao-seed-1-6-flash",
+        },
+      ],
       recent_events: [],
       diagnostics: { last_event: null },
     });
@@ -110,12 +146,12 @@ describe("admin game records contract", () => {
         pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
       }),
     ).toThrow(/状态/);
-    expect(() =>
+    expect(
       parseAdminGameList({
         items: [{ ...contractGameItem, status: "partial", winner: null }],
         pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
-      }),
-    ).toThrow(/最新运行模型/);
+      }).items[0].latest_run?.villager_model,
+    ).toBe("deepseek-v4-flash");
     expect(() =>
       parseAdminGameList({
         items: [
@@ -204,11 +240,9 @@ describe("admin game records contract", () => {
       winner: null,
       latest_run: {
         ...contractGameDetail.latest_run,
-        villager_model: null,
-        werewolf_model: null,
       },
       players: [
-        { ...contractGameDetail.players[0], role: null, model: null },
+        { ...contractGameDetail.players[0], role: null },
       ],
       rounds: contractGameDetail.rounds.map((round) => ({
         ...round,
@@ -222,16 +256,14 @@ describe("admin game records contract", () => {
       diagnostics: { ...contractGameDetail.diagnostics, last_event: null },
       runs: contractGameDetail.runs.map((run) => ({
         ...run,
-        villager_model: null,
-        werewolf_model: null,
       })),
     };
     expect(() =>
       parseAdminGameDetail({
         ...redacted,
-        players: [{ ...redacted.players[0], model: "private-model" }],
+        players: [{ ...redacted.players[0], role: "预言家" }],
       }),
-    ).toThrow(/角色或模型/);
+    ).toThrow(/角色/);
     expect(() =>
       parseAdminGameDetail({
         ...redacted,
@@ -250,12 +282,6 @@ describe("admin game records contract", () => {
         recent_events: contractGameDetail.recent_events,
       }),
     ).toThrow(/事件元数据/);
-    expect(() =>
-      parseAdminGameDetail({
-        ...redacted,
-        runs: contractGameDetail.runs,
-      }),
-    ).toThrow(/运行模型/);
     expect(() =>
       parseAdminGameDetail({
         ...redacted,
@@ -305,21 +331,31 @@ describe("admin game records contract", () => {
     expect(options.credentials).toBe("include");
   });
 
-  it("uses independent encoded detail and debug endpoints", async () => {
+  it("uses independent encoded detail, debug and model request endpoints", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(contractGameDetail))
-      .mockResolvedValueOnce(jsonResponse(contractGameDebug));
+      .mockResolvedValueOnce(jsonResponse(contractGameDebug))
+      .mockResolvedValueOnce(jsonResponse(contractGameModelRequests))
+      .mockResolvedValueOnce(jsonResponse(contractGameModelRequestDetail));
     vi.stubGlobal("fetch", fetchMock);
 
     await getAdminGame("game/unsafe");
     await getAdminGameDebug("game/unsafe");
+    await listAdminGameModelRequests("game/unsafe");
+    await getAdminGameModelRequest("game/unsafe", "req/unsafe");
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
       "/api/v1/admin/games/game%2Funsafe",
     );
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
       "/api/v1/admin/games/game%2Funsafe/debug",
+    );
+    expect(String(fetchMock.mock.calls[2]?.[0])).toBe(
+      "/api/v1/admin/games/game%2Funsafe/model-requests",
+    );
+    expect(String(fetchMock.mock.calls[3]?.[0])).toBe(
+      "/api/v1/admin/games/game%2Funsafe/model-requests/req%2Funsafe",
     );
   });
 

@@ -1006,8 +1006,8 @@ def test_run_status_filter_only_matches_the_latest_run(
     assert [item["session_id"] for item in completed.json()["items"]] == [session_id]
     assert completed.json()["items"][0]["latest_run"]["run_id"] == "run_000000000041"
     assert completed.json()["items"][0]["latest_run"]["status"] == "completed"
-    assert completed.json()["items"][0]["latest_run"]["villager_model"] is None
-    assert completed.json()["items"][0]["latest_run"]["werewolf_model"] is None
+    assert completed.json()["items"][0]["latest_run"]["villager_model"] == "model-new"
+    assert completed.json()["items"][0]["latest_run"]["werewolf_model"] == "model-new"
 
 
 def test_admin_game_detail_is_strictly_whitelisted_bounded_and_hides_partial_roles(
@@ -1116,11 +1116,20 @@ def test_admin_game_detail_is_strictly_whitelisted_bounded_and_hides_partial_rol
     }
     assert partial.status_code == 200
     assert all(player["role"] is None for player in partial.json()["players"])
-    assert all(player["model"] is None for player in partial.json()["players"])
-    assert partial.json()["latest_run"]["villager_model"] is None
-    assert partial.json()["latest_run"]["werewolf_model"] is None
-    assert all(run["villager_model"] is None for run in partial.json()["runs"])
-    assert all(run["werewolf_model"] is None for run in partial.json()["runs"])
+    assert [player["model"] for player in partial.json()["players"]] == [
+        "SENTINEL_VILLAGER_MODEL",
+        "SENTINEL_WOLF_MODEL",
+    ]
+    assert partial.json()["latest_run"]["villager_model"] == "SENTINEL_VILLAGER_MODEL"
+    assert partial.json()["latest_run"]["werewolf_model"] == "SENTINEL_WOLF_MODEL"
+    assert all(
+        run["villager_model"] == "SENTINEL_VILLAGER_MODEL"
+        for run in partial.json()["runs"]
+    )
+    assert all(
+        run["werewolf_model"] == "SENTINEL_WOLF_MODEL"
+        for run in partial.json()["runs"]
+    )
     assert partial.json()["recent_events"] == []
     assert partial.json()["diagnostics"]["last_event"] is None
     assert partial.json()["diagnostics"]["event_count"] == 3
@@ -1130,16 +1139,14 @@ def test_admin_game_detail_is_strictly_whitelisted_bounded_and_hides_partial_rol
     ]
     assert resumable.status_code == 200
     assert all(player["role"] is None for player in resumable.json()["players"])
-    assert all(player["model"] is None for player in resumable.json()["players"])
-    assert resumable.json()["latest_run"]["villager_model"] is None
-    assert resumable.json()["latest_run"]["werewolf_model"] is None
+    assert all(player["model"] == "model-alpha" for player in resumable.json()["players"])
+    assert resumable.json()["latest_run"]["villager_model"] == "model-alpha"
+    assert resumable.json()["latest_run"]["werewolf_model"] == "model-alpha"
     assert resumable.json()["recent_events"] == []
     assert resumable.json()["diagnostics"]["last_event"] is None
 
     partial_serialized = json.dumps(partial.json(), ensure_ascii=False)
     for private_marker in (
-        "SENTINEL_VILLAGER_MODEL",
-        "SENTINEL_WOLF_MODEL",
         "SENTINEL_GUARD_ACTOR",
         "SENTINEL_SEER_ACTOR",
         "SENTINEL_WITCH_ACTOR",
@@ -1301,6 +1308,175 @@ def test_game_debug_requires_debug_permission_returns_safe_summaries_and_audits(
     assert audit.resource_id == "game_00000020"
     assert audit.result == "success"
     assert audit.after == {"game_error_present": True, "run_error_count": 20}
+
+
+def test_game_model_requests_require_debug_permission_are_deduped_and_audited(
+    context: AdminGamesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_at = datetime(2026, 7, 10, 15, tzinfo=UTC)
+    session_id = "game_00000021"
+    run_id = "run_000000000021"
+    request_id = "req_model_detail_21"
+    event_only_request_id = "req_failed_event_21"
+    _seed_game(
+        context,
+        session_id=session_id,
+        run_id=run_id,
+        created_at=created_at,
+    )
+    model_action = {
+        "actor": "张三",
+        "action": "debate",
+        "attempt_count": 2,
+        "raw_choice": "SENTINEL_RAW_CHOICE",
+        "lm_log": {
+            "request_id": request_id,
+            "prompt": "SENTINEL_MODEL_PROMPT",
+            "raw_response": '{"say":"SENTINEL_MODEL_OUTPUT"}',
+            "result": {
+                "reasoning": "SENTINEL_PRIVATE_REASONING",
+                "say": "SENTINEL_MODEL_OUTPUT",
+            },
+            "invalid_attempts": [{"reason": "invalid json"}],
+            "api_key": "SENTINEL_LOG_API_KEY",
+        },
+    }
+    with context.session_factory() as db:
+        replay = db.get(GameReplayPayload, session_id)
+        assert replay is not None
+        replay.logs = [
+            {
+                "number": 1,
+                "debate": [model_action],
+                "duplicate_reference": model_action,
+            }
+        ]
+        db.add_all(
+            [
+                LiveEventRecord(
+                    run_id=run_id,
+                    event_id=2,
+                    session_id=session_id,
+                    type="model_request_started",
+                    round=1,
+                    phase="vote",
+                    actor="李四",
+                    action="vote",
+                    payload={
+                        "request_id": event_only_request_id,
+                        "model": "model-event-only",
+                    },
+                    created_at=created_at + timedelta(seconds=2),
+                ),
+                LiveEventRecord(
+                    run_id=run_id,
+                    event_id=3,
+                    session_id=session_id,
+                    type="model_request_failed",
+                    round=1,
+                    phase="vote",
+                    actor="李四",
+                    action="vote",
+                    payload={
+                        "request_id": event_only_request_id,
+                        "model": "model-event-only",
+                        "message": "SENTINEL_MODEL_FAILURE",
+                    },
+                    created_at=created_at + timedelta(seconds=3),
+                ),
+            ]
+        )
+        db.commit()
+
+    _login(context, monkeypatch, role="viewer")
+    forbidden = context.client.get(
+        f"/api/v1/admin/games/{session_id}/model-requests"
+    )
+    assert forbidden.status_code == 403
+    assert forbidden.json()["code"] == "admin_permission_denied"
+
+    _login(context, monkeypatch, role="operator")
+    list_response = context.client.get(
+        f"/api/v1/admin/games/{session_id}/model-requests",
+        headers={"X-Request-ID": "game-model-requests-1"},
+    )
+    assert list_response.status_code == 200, list_response.text
+    payload = list_response.json()
+    assert payload["session_id"] == session_id
+    assert len(payload["items"]) == 2
+    items = {item["request_id"]: item for item in payload["items"]}
+    assert items[request_id] == {
+        "request_id": request_id,
+        "round_number": 1,
+        "phase": None,
+        "actor": "张三",
+        "action": "debate",
+        "model": "model-alpha",
+        "status": "completed",
+        "attempt_count": 2,
+        "invalid_attempt_count": 1,
+        "run_id": None,
+        "event_id": None,
+        "created_at": None,
+    }
+    assert items[event_only_request_id]["status"] == "failed"
+    assert items[event_only_request_id]["model"] == "model-event-only"
+    list_serialized = json.dumps(payload, ensure_ascii=False)
+    assert "SENTINEL_MODEL_PROMPT" not in list_serialized
+    assert "SENTINEL_MODEL_OUTPUT" not in list_serialized
+    assert list_response.headers["cache-control"] == "no-store"
+    assert list_response.headers["x-request-id"] == "game-model-requests-1"
+
+    detail_response = context.client.get(
+        f"/api/v1/admin/games/{session_id}/model-requests/{request_id}",
+        headers={"X-Request-ID": "game-model-request-detail-1"},
+    )
+    assert detail_response.status_code == 200, detail_response.text
+    detail = detail_response.json()
+    assert detail["prompt"] == "SENTINEL_MODEL_PROMPT"
+    assert detail["raw_response"] == '{"say":"SENTINEL_MODEL_OUTPUT"}'
+    assert json.loads(detail["parsed_output"]) == {
+        "reasoning": "SENTINEL_PRIVATE_REASONING",
+        "say": "SENTINEL_MODEL_OUTPUT",
+    }
+    assert detail["raw_choice"] == "SENTINEL_RAW_CHOICE"
+    assert "SENTINEL_LOG_API_KEY" not in json.dumps(detail, ensure_ascii=False)
+    assert detail_response.headers["cache-control"] == "no-store"
+
+    missing = context.client.get(
+        f"/api/v1/admin/games/{session_id}/model-requests/req_missing_21"
+    )
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "admin_game_model_request_not_found"
+
+    with context.session_factory() as db:
+        audits = list(
+            db.scalars(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.action.in_(
+                        (
+                            "admin.game.model_requests.list",
+                            "admin.game.model_request.read",
+                        )
+                    )
+                )
+                .order_by(AuditEvent.created_at.asc())
+            )
+        )
+    audit_by_action = {audit.action: audit for audit in audits}
+    assert set(audit_by_action) == {
+        "admin.game.model_requests.list",
+        "admin.game.model_request.read",
+    }
+    assert audit_by_action["admin.game.model_requests.list"].after == {
+        "request_count": 2
+    }
+    detail_audit = audit_by_action["admin.game.model_request.read"]
+    assert detail_audit.resource_type == "game_model_request"
+    assert detail_audit.resource_id == request_id
+    assert detail_audit.after == {"session_id": session_id}
 
 
 def test_quality_summary_is_safe_and_issues_require_explicit_debug_read(

@@ -69,7 +69,7 @@ describe("admin live runs contract", () => {
     ).toThrow(/不允许/);
   });
 
-  it("rejects inline debug, unsafe active events and terminal-only fields", () => {
+  it("rejects inline debug, unsafe active events and terminal-only results", () => {
     expect(() =>
       parseAdminLiveRunDetail({
         ...contractLiveRunDetail,
@@ -98,14 +98,14 @@ describe("admin live runs contract", () => {
         pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
       }),
     ).toThrow(/胜方/);
-    expect(() =>
+    expect(
       parseAdminLiveRunList({
         items: [
-          { ...contractActiveLiveRunItem, villager_model: "private-model" },
+          { ...contractActiveLiveRunItem, villager_model: "active-model" },
         ],
         pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
-      }),
-    ).toThrow(/模型/);
+      }).items[0].villager_model,
+    ).toBe("active-model");
   });
 
   it("accepts explicit P2 empty states and rejects private diagnostic fields", () => {

@@ -231,16 +231,8 @@ function parseListItem(value: unknown): AdminLiveRunListItem {
   };
   const canRevealResult =
     item.status === "completed" && item.game?.terminal === true;
-  const canRevealModels =
-    item.status === "completed" && item.game?.terminal === true;
   if (!canRevealResult && item.winner !== null) {
     throw invalidContract("未安全终局的运行不得公开胜方");
-  }
-  if (
-    !canRevealModels &&
-    (item.villager_model !== null || item.werewolf_model !== null)
-  ) {
-    throw invalidContract("未成功终局的运行不得公开模型配置");
   }
   if (!isActiveStatus(item.status) && item.is_stale) {
     throw invalidContract("已终止运行不得标记为可能失联");

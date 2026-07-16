@@ -227,11 +227,11 @@ export default function LiveRunDetailPage() {
           <dl className="live-run-definition-list">
             <div>
               <dt>好人阵营</dt>
-              <dd>{run.villager_model ?? "终局后显示"}</dd>
+              <dd>{run.villager_model ?? "未记录"}</dd>
             </div>
             <div>
               <dt>狼人阵营</dt>
-              <dd>{run.werewolf_model ?? "终局后显示"}</dd>
+              <dd>{run.werewolf_model ?? "未记录"}</dd>
             </div>
             <div>
               <dt>规则 ID</dt>

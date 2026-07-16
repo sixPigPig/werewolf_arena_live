@@ -9,6 +9,10 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.admin.audit import record_audit_event
+from app.admin.game_model_requests import (
+    AdminGameModelRequestRecord,
+    load_admin_game_model_requests,
+)
 from app.admin.games import (
     AdminGameDetailData,
     AdminGameEventRow,
@@ -35,6 +39,9 @@ from app.api.schemas.admin_games import (
     AdminGameEventSummary,
     AdminGameListItem,
     AdminGameListResponse,
+    AdminGameModelRequestDetail,
+    AdminGameModelRequestListResponse,
+    AdminGameModelRequestSummary,
     AdminGameRunSummary,
     AdminGameRunStatus,
     AdminGameSort,
@@ -71,6 +78,7 @@ from app.werewolf.replay import SESSION_ID_RE
 
 router = APIRouter()
 RecoverableDatabaseError = (OperationalError, ProgrammingError)
+MODEL_REQUEST_ID_RE = r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}"
 
 
 @router.get("/games", response_model=AdminGameListResponse)
@@ -161,6 +169,96 @@ def get_game(
         raise _not_found()
     _set_private_headers(request, response)
     return _detail_response(detail, quality_record=quality_record)
+
+
+@router.get(
+    "/games/{session_id}/model-requests",
+    response_model=AdminGameModelRequestListResponse,
+)
+def list_game_model_requests(
+    session_id: Annotated[str, Path(pattern=SESSION_ID_RE)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.GAMES_DEBUG_READ)),
+    ],
+) -> AdminGameModelRequestListResponse:
+    try:
+        if db.get(GameSessionRecord, session_id) is None:
+            raise _not_found()
+        records = load_admin_game_model_requests(db, session_id=session_id) or []
+        result = AdminGameModelRequestListResponse(
+            session_id=session_id,
+            items=[_model_request_summary(record) for record in records],
+        )
+        record_audit_event(
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.game.model_requests.list",
+            resource_type="game_session",
+            resource_id=session_id,
+            result="success",
+            after={"request_count": len(records)},
+        )
+        db.commit()
+    except AdminAPIProblem:
+        db.rollback()
+        raise
+    except RecoverableDatabaseError as exc:
+        db.rollback()
+        raise _database_unavailable() from exc
+    _set_private_headers(request, response)
+    return result
+
+
+@router.get(
+    "/games/{session_id}/model-requests/{model_request_id}",
+    response_model=AdminGameModelRequestDetail,
+)
+def get_game_model_request(
+    session_id: Annotated[str, Path(pattern=SESSION_ID_RE)],
+    model_request_id: Annotated[str, Path(pattern=MODEL_REQUEST_ID_RE)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.GAMES_DEBUG_READ)),
+    ],
+) -> AdminGameModelRequestDetail:
+    try:
+        if db.get(GameSessionRecord, session_id) is None:
+            raise _not_found()
+        records = load_admin_game_model_requests(db, session_id=session_id) or []
+        record = next(
+            (item for item in records if item.request_id == model_request_id),
+            None,
+        )
+        if record is None:
+            raise _model_request_not_found()
+        result = _model_request_detail(record)
+        record_audit_event(
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.game.model_request.read",
+            resource_type="game_model_request",
+            resource_id=model_request_id,
+            result="success",
+            after={"session_id": session_id},
+        )
+        db.commit()
+    except AdminAPIProblem:
+        db.rollback()
+        raise
+    except RecoverableDatabaseError as exc:
+        db.rollback()
+        raise _database_unavailable() from exc
+    _set_private_headers(request, response)
+    return result
 
 
 @router.delete("/games/{session_id}", status_code=204)
@@ -520,11 +618,7 @@ def _detail_response(
             reveal_terminal_metadata=reveal_terminal_metadata,
         ),
         runs=[
-            _run_summary(
-                run,
-                detail.event_counts,
-                reveal_models=reveal_terminal_metadata,
-            )
+            _run_summary(run, detail.event_counts)
             for run in detail.runs
         ],
         recent_events=recent_events,
@@ -605,11 +699,7 @@ def _list_item(
         created_at=_as_utc(record.created_at),
         updated_at=_as_utc(record.updated_at),
         latest_run=(
-            _run_summary(
-                latest_run,
-                event_counts,
-                reveal_models=_is_terminal_game(record),
-            )
+            _run_summary(latest_run, event_counts)
             if latest_run is not None
             else None
         ),
@@ -623,18 +713,12 @@ def _is_terminal_game(record: AdminGameRow) -> bool:
 def _run_summary(
     run: AdminGameRunRow,
     event_counts: dict[str, int],
-    *,
-    reveal_models: bool = True,
 ) -> AdminGameRunSummary:
     return AdminGameRunSummary(
         run_id=run.run_id,
         status=_safe_text(run.status, max_length=20),
-        villager_model=(
-            _optional_text(run.villager_model, max_length=120) if reveal_models else None
-        ),
-        werewolf_model=(
-            _optional_text(run.werewolf_model, max_length=120) if reveal_models else None
-        ),
+        villager_model=_optional_text(run.villager_model, max_length=120),
+        werewolf_model=_optional_text(run.werewolf_model, max_length=120),
         max_rounds=max(0, int(run.max_rounds or 0)),
         created_at=_as_utc(run.created_at),
         started_at=_optional_utc(run.started_at),
@@ -657,6 +741,38 @@ def _event_summary(event: AdminGameEventRow) -> AdminGameEventSummary:
     )
 
 
+def _model_request_summary(
+    record: AdminGameModelRequestRecord,
+) -> AdminGameModelRequestSummary:
+    return AdminGameModelRequestSummary(
+        request_id=record.request_id,
+        round_number=record.round_number,
+        phase=record.phase,
+        actor=record.actor,
+        action=record.action,
+        model=record.model,
+        status=record.status,
+        attempt_count=record.attempt_count,
+        invalid_attempt_count=record.invalid_attempt_count,
+        run_id=record.run_id,
+        event_id=record.event_id,
+        created_at=_optional_utc(record.created_at),
+    )
+
+
+def _model_request_detail(
+    record: AdminGameModelRequestRecord,
+) -> AdminGameModelRequestDetail:
+    return AdminGameModelRequestDetail(
+        **_model_request_summary(record).model_dump(),
+        prompt=record.prompt,
+        raw_response=record.raw_response,
+        parsed_output=record.parsed_output,
+        raw_choice=record.raw_choice,
+        error=record.error,
+    )
+
+
 def _player_summaries(
     state: dict[str, Any],
     *,
@@ -674,11 +790,7 @@ def _player_summaries(
                 "seat": seat,
                 "name": _safe_text(item.get("name"), max_length=120),
                 "profile_id": _optional_text(item.get("profile_id"), max_length=36),
-                "model": (
-                    _optional_text(item.get("model"), max_length=120)
-                    if reveal_terminal_metadata
-                    else None
-                ),
+                "model": _optional_text(item.get("model"), max_length=120),
                 "role": (
                     _optional_text(item.get("role"), max_length=80)
                     if reveal_terminal_metadata
@@ -989,6 +1101,15 @@ def _not_found() -> AdminAPIProblem:
         code="admin_game_not_found",
         title="Game not found",
         detail="The requested game session does not exist.",
+    )
+
+
+def _model_request_not_found() -> AdminAPIProblem:
+    return AdminAPIProblem(
+        status_code=404,
+        code="admin_game_model_request_not_found",
+        title="Model request not found",
+        detail="The requested model request is not available for this game session.",
     )
 
 

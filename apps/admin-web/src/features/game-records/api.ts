@@ -3,6 +3,8 @@ import {
   parseAdminGameDebug,
   parseAdminGameDetail,
   parseAdminGameList,
+  parseAdminGameModelRequestDetail,
+  parseAdminGameModelRequestList,
   parseAdminGameQualityIssues,
   parseAdminGameQualityRetry,
 } from "@/features/game-records/parsers";
@@ -11,6 +13,8 @@ import type {
   AdminGameDetail,
   AdminGameList,
   AdminGameListParams,
+  AdminGameModelRequestDetail,
+  AdminGameModelRequestList,
   AdminGameQualityIssues,
   AdminGameQualityRetry,
 } from "@/features/game-records/types";
@@ -81,6 +85,29 @@ export async function getAdminGameDebug(
     { signal },
   );
   return parseAdminGameDebug(value);
+}
+
+export async function listAdminGameModelRequests(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<AdminGameModelRequestList> {
+  const value = await adminApiFetch<unknown>(
+    `${ADMIN_GAMES_PATH}/${encodeURIComponent(sessionId)}/model-requests`,
+    { signal },
+  );
+  return parseAdminGameModelRequestList(value);
+}
+
+export async function getAdminGameModelRequest(
+  sessionId: string,
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<AdminGameModelRequestDetail> {
+  const value = await adminApiFetch<unknown>(
+    `${ADMIN_GAMES_PATH}/${encodeURIComponent(sessionId)}/model-requests/${encodeURIComponent(requestId)}`,
+    { signal },
+  );
+  return parseAdminGameModelRequestDetail(value);
 }
 
 export async function getAdminGameQualityIssues(

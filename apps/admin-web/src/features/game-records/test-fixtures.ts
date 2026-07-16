@@ -2,6 +2,8 @@ import type {
   AdminGameDebug,
   AdminGameDetail,
   AdminGameListItem,
+  AdminGameModelRequestDetail,
+  AdminGameModelRequestList,
 } from "@/features/game-records/types";
 
 export const contractRun = {
@@ -293,4 +295,51 @@ export const contractGameDebug: AdminGameDebug = {
   run_errors: [
     { run_id: contractRun.run_id, error: "Upstream request timed out" },
   ],
+};
+
+export const contractGameModelRequests: AdminGameModelRequestList = {
+  session_id: contractGameItem.session_id,
+  items: [
+    {
+      request_id: "req_contract_model_1",
+      round_number: 1,
+      phase: "day",
+      actor: "暮鸦归票",
+      action: "debate",
+      model: "deepseek-v4-flash",
+      status: "completed",
+      attempt_count: 1,
+      invalid_attempt_count: 0,
+      run_id: contractRun.run_id,
+      event_id: 4,
+      created_at: "2026-07-10T01:02:00Z",
+    },
+    {
+      request_id: "req_contract_model_2",
+      round_number: 1,
+      phase: "vote",
+      actor: "雾灯听风",
+      action: "vote",
+      model: "doubao-seed-1-6-flash",
+      status: "failed",
+      attempt_count: 3,
+      invalid_attempt_count: 1,
+      run_id: contractRun.run_id,
+      event_id: 5,
+      created_at: "2026-07-10T01:02:30Z",
+    },
+  ],
+};
+
+export const contractGameModelRequestDetail: AdminGameModelRequestDetail = {
+  ...contractGameModelRequests.items[0],
+  prompt: "你正在进行一局狼人杀。请发表白天发言。",
+  raw_response: '{"reasoning":"分析票型","say":"我会投给灰塔。"}',
+  parsed_output: JSON.stringify(
+    { reasoning: "分析票型", say: "我会投给灰塔。" },
+    null,
+    2,
+  ),
+  raw_choice: "我会投给灰塔。",
+  error: null,
 };

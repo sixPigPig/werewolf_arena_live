@@ -27,6 +27,12 @@ AdminQualityDataStatus = Literal[
     "unavailable",
 ]
 AdminQualityVerdict = Literal["pass", "warn", "fail", "unavailable"]
+AdminGameModelRequestStatus = Literal[
+    "pending",
+    "completed",
+    "failed",
+    "response_missing",
+]
 AdminGameSort = Literal[
     "created_at",
     "-created_at",
@@ -273,6 +279,34 @@ class AdminGameDetailResponse(AdminGameListItem):
     diagnostics: AdminGameDiagnostics
     p2_quality: AdminGameP2QualityV1
     quality_evaluation: AdminGameQualityEvaluationSummary
+
+
+class AdminGameModelRequestSummary(BaseModel):
+    request_id: str = Field(max_length=80)
+    round_number: int | None = Field(default=None, ge=0)
+    phase: str | None = Field(default=None, max_length=40)
+    actor: str | None = Field(default=None, max_length=120)
+    action: str = Field(max_length=80)
+    model: str | None = Field(default=None, max_length=120)
+    status: AdminGameModelRequestStatus
+    attempt_count: int = Field(ge=0)
+    invalid_attempt_count: int = Field(ge=0)
+    run_id: str | None = Field(default=None, max_length=32)
+    event_id: int | None = Field(default=None, ge=0)
+    created_at: datetime | None
+
+
+class AdminGameModelRequestListResponse(BaseModel):
+    session_id: str = Field(max_length=32)
+    items: list[AdminGameModelRequestSummary] = Field(max_length=1000)
+
+
+class AdminGameModelRequestDetail(AdminGameModelRequestSummary):
+    prompt: str | None = Field(default=None, max_length=200_000)
+    raw_response: str | None = Field(default=None, max_length=200_000)
+    parsed_output: str | None = Field(default=None, max_length=200_000)
+    raw_choice: str | None = Field(default=None, max_length=200_000)
+    error: str | None = Field(default=None, max_length=4_000)
 
 
 class AdminGameRunErrorSummary(BaseModel):

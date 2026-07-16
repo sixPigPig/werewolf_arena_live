@@ -210,7 +210,8 @@ describe("admin live run flow", () => {
     expect(screen.getAllByText("样本不足")).toHaveLength(2);
     expect(screen.getByText(/样本 18 · 最大值 13200 ms/)).toBeInTheDocument();
     expect(screen.getByText(/需要 runs.debug.read 权限/)).toBeInTheDocument();
-    expect(screen.getAllByText("终局后显示")).toHaveLength(2);
+    expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
+    expect(screen.getByText("doubao-seed-1-6-flash")).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).endsWith("/debug")),
     ).toBe(false);
