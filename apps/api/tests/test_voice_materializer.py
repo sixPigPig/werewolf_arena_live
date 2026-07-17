@@ -109,6 +109,7 @@ def test_static_judge_job_avoids_external_tts(
             mime_type="audio/mpeg",
             sample_rate=24000,
             subtitle_timings=[{"text": "昨夜平安夜。", "start_ms": 0, "end_ms": 800}],
+            duration_ms=950,
         ),
     )
     claimed = materializer.claim_next_job(worker_id="worker-a")
@@ -125,10 +126,107 @@ def test_static_judge_job_avoids_external_tts(
         chunk = db.get(VoiceAudioChunkRecord, (utterance_id, 0))
         assert job is not None and job.status == "complete"
         assert utterance is not None and utterance.status == "complete"
+        assert utterance.duration_ms == 950
         assert utterance.subtitle_timings == [
             {"text": "昨夜平安夜。", "start_ms": 0, "end_ms": 800}
         ]
         assert chunk is not None and bytes(chunk.audio) == b"static-audio"
+
+
+def test_game_completed_materializes_exactly_one_terminal_judge_voice(
+    session_factory: sessionmaker[Session],
+) -> None:
+    key = seed_event(
+        session_factory,
+        event_type="game_completed",
+        payload={"winner": "好人阵营", "terminal_keep_from_event_id": 2},
+    )
+    materializer = VoiceMaterializer(
+        session_factory,
+        config=tts_config(enabled=False),
+        asset_loader=lambda _db, asset_id: StaticJudgeVoiceAsset(
+            audio=b"terminal-audio",
+            audio_format="mp3",
+            mime_type="audio/mpeg",
+            sample_rate=24000,
+            subtitle_timings=[
+                {"text": "游戏结束，好人阵营获胜。", "start_ms": 0, "end_ms": 900}
+            ],
+            duration_ms=1000,
+        )
+        if asset_id == "game_over_villagers"
+        else None,
+    )
+
+    claimed = materializer.claim_next_job(worker_id="worker-terminal")
+    assert claimed == key
+    assert asyncio.run(
+        materializer.process_claimed_job(claimed, worker_id="worker-terminal")
+    ) is True
+
+    utterance_id = deterministic_voice_utterance_id(key[0], key[1], "judge")
+    with session_factory() as db:
+        utterances = db.query(VoiceUtteranceRecord).all()
+        assert len(utterances) == 1
+        assert utterances[0].utterance_id == utterance_id
+        assert utterances[0].duration_ms == 1000
+        assert db.query(VoiceMaterializationJobRecord).count() == 1
+
+
+def test_canonical_hunter_result_enqueues_and_persists_semantic_voice_identity(
+    session_factory: sessionmaker[Session],
+) -> None:
+    presentation_id = "hp_0123456789abcdef01234567"
+    key = seed_event(
+        session_factory,
+        event_type="state_updated",
+        action="hunter_shot_resolved",
+        payload={
+            "presentation_id": presentation_id,
+            "hunter_shot_status": "skipped",
+            "hunter_shot": None,
+            "active_players": ["1号玩家", "2号玩家"],
+        },
+    )
+    materializer = VoiceMaterializer(
+        session_factory,
+        config=tts_config(enabled=False),
+        asset_loader=lambda _db, asset_id: StaticJudgeVoiceAsset(
+            audio=b"hunter-skipped-audio",
+            audio_format="mp3",
+            mime_type="audio/mpeg",
+            sample_rate=24000,
+            subtitle_timings=[
+                {"text": "猎人选择不发动技能。", "start_ms": 0, "end_ms": 800}
+            ],
+            duration_ms=900,
+        )
+        if asset_id == "hunter_shot_skipped"
+        else None,
+    )
+
+    claimed = materializer.claim_next_job(worker_id="worker-hunter-result")
+    assert claimed == key
+    assert asyncio.run(
+        materializer.process_claimed_job(
+            claimed,
+            worker_id="worker-hunter-result",
+        )
+    ) is True
+
+    utterance_id = deterministic_voice_utterance_id(key[0], key[1], "judge")
+    with session_factory() as db:
+        job = db.get(VoiceMaterializationJobRecord, key)
+        utterance = db.get(VoiceUtteranceRecord, utterance_id)
+        assert job is not None and job.status == "complete"
+        assert utterance is not None and utterance.status == "complete"
+        assert utterance.presentation_id == presentation_id
+        playback = DatabaseVoiceStore(
+            db,
+            session_id="game_materializer",
+        ).load_playback_voice(utterance_id)
+        assert playback is not None
+        assert playback["presentation_id"] == presentation_id
 
 
 class FailOnceTtsClient:

@@ -10,7 +10,12 @@ from typing import Any, Literal
 
 from app.rule_sets.telemetry import record_rule_checkpoint_failure
 from app.rule_sets.types import CompiledRuleSet
-from app.werewolf.lm import LmLog, ModelProvider, parse_json_object
+from app.werewolf.lm import (
+    LmLog,
+    ModelProvider,
+    parse_json_object,
+    safe_attempt_outcomes,
+)
 from app.werewolf.models import (
     ActionLog,
     DebateEntry,
@@ -25,6 +30,7 @@ from app.werewolf.models import (
     SheriffElectionResolution,
     StageInterruption,
 )
+from app.werewolf.public_facts import public_fact_dicts_from_value
 from app.werewolf.public_outcomes import (
     conservative_legacy_outcomes,
     public_outcome_event_from_dict,
@@ -33,6 +39,29 @@ from app.werewolf.public_outcomes import (
 RESUME_CHECKPOINT_FILE = "resume_checkpoint.json"
 CHECKPOINT_SCHEMA_VERSION = 2
 SUPPORTED_CHECKPOINT_SCHEMA_VERSIONS = frozenset({1, 2})
+TERMINAL_SETTLEMENT_SCHEMA_VERSION = "settlement_v1"
+TERMINAL_SETTLEMENT_STAGES = frozenset(
+    {
+        "outcome_applied",
+        "hunter_choice_accepted",
+        "candidate_cleared",
+        "winner_committed",
+    }
+)
+TERMINAL_SETTLEMENT_STATUSES = frozenset(
+    {"pending", "choice_accepted", "applied"}
+)
+TERMINAL_HUNTER_PRESENTATION_KIND = "hunter_shot_result"
+TERMINAL_HUNTER_PRESENTATION_STATUSES = frozenset({"shot", "skipped"})
+NO_HUNTER_SHOT_CHOICE = "不发动技能"
+_TERMINAL_HUNTER_PRESENTATION_ID_PATTERN = re.compile(r"hp_[0-9a-f]{24}")
+_TERMINAL_PRIMARY_PRESENTATION_ID_PATTERN = re.compile(r"pp_[0-9a-f]{24}")
+TERMINAL_PRIMARY_PRESENTATION_KINDS = frozenset(
+    {"exile_result", "night_result", "self_explosion_result"}
+)
+TERMINAL_CONTINUATION_KINDS = frozenset(
+    {"day_exile_aftermath", "night_death_aftermath", "none"}
+)
 _CONTENT_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 _EXECUTION_RUN_PARAM_NAMES = (
     "villager_model",
@@ -255,6 +284,279 @@ def valid_cached_model_responses(
     ]
 
 
+def terminal_settlement_from_checkpoint(
+    checkpoint: Mapping[str, object],
+) -> dict[str, Any] | None:
+    """Return a validated mid-settlement snapshot, when one is present.
+
+    The field is optional so schema-v1/v2 round-start checkpoints remain fully
+    backward compatible.  A present but malformed snapshot is rejected instead
+    of silently replaying the whole round and duplicating a decisive outcome.
+    """
+
+    raw = checkpoint.get("terminal_settlement")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ResumeCheckpointError("invalid_structure")
+    if raw.get("settlement_schema_version") != TERMINAL_SETTLEMENT_SCHEMA_VERSION:
+        raise ResumeCheckpointError("invalid_structure")
+    if raw.get("stage") not in TERMINAL_SETTLEMENT_STAGES:
+        raise ResumeCheckpointError("invalid_structure")
+    primary_action_id = raw.get("primary_outcome_action_id")
+    cursor = raw.get("settlement_cursor")
+    settlements = raw.get("settlements")
+    canceled_action_ids = raw.get("canceled_action_ids")
+    state = raw.get("state")
+    logs = raw.get("logs")
+    active_players = raw.get("active_players")
+    if (
+        not isinstance(primary_action_id, str)
+        or not primary_action_id
+        or type(cursor) is not int
+        or cursor < 0
+        or not isinstance(settlements, list)
+        or not isinstance(canceled_action_ids, list)
+        or not isinstance(state, Mapping)
+        or not isinstance(logs, list)
+        or not isinstance(active_players, list)
+        or not all(isinstance(item, str) and item for item in canceled_action_ids)
+        or not all(isinstance(item, str) and item for item in active_players)
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+    if cursor > len(settlements):
+        raise ResumeCheckpointError("invalid_structure")
+    primary_presentation = raw.get("primary_presentation")
+    _validate_terminal_primary_presentation(primary_presentation)
+    _validate_terminal_primary_presentation_payload(
+        raw.get("primary_presentation_payload"),
+        presentation=primary_presentation,
+    )
+    _validate_terminal_continuation(
+        raw.get("continuation"),
+        stage=raw.get("stage"),
+    )
+    settlement_ids: set[str] = set()
+    for item in settlements:
+        if not isinstance(item, Mapping):
+            raise ResumeCheckpointError("invalid_structure")
+        settlement_id = item.get("settlement_id")
+        kind = item.get("kind")
+        actor = item.get("actor")
+        status = item.get("status")
+        if (
+            not isinstance(settlement_id, str)
+            or not settlement_id
+            or settlement_id in settlement_ids
+            or kind not in {"death_batch", "hunter_shot"}
+            or (actor is not None and (not isinstance(actor, str) or not actor))
+            or status not in TERMINAL_SETTLEMENT_STATUSES
+        ):
+            raise ResumeCheckpointError("invalid_structure")
+        settlement_ids.add(settlement_id)
+        if status == "choice_accepted" and "accepted_choice" not in item:
+            raise ResumeCheckpointError("invalid_structure")
+        presentation = item.get("presentation")
+        if presentation is not None:
+            _validate_terminal_hunter_presentation(
+                item=item,
+                kind=kind,
+                status=status,
+                presentation=presentation,
+            )
+    return copy.deepcopy(dict(raw))
+
+
+def _validate_terminal_primary_presentation(presentation: object) -> None:
+    if presentation is None:
+        return
+    if (
+        not isinstance(presentation, Mapping)
+        or set(presentation) != {"presentation_id", "kind"}
+        or presentation.get("kind") not in TERMINAL_PRIMARY_PRESENTATION_KINDS
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+    presentation_id = presentation.get("presentation_id")
+    if (
+        not isinstance(presentation_id, str)
+        or _TERMINAL_PRIMARY_PRESENTATION_ID_PATTERN.fullmatch(presentation_id) is None
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+
+
+def _validate_terminal_primary_presentation_payload(
+    payload: object,
+    *,
+    presentation: object,
+) -> None:
+    if payload is None:
+        return
+    if not isinstance(payload, Mapping) or not isinstance(presentation, Mapping):
+        raise ResumeCheckpointError("invalid_structure")
+    kind = presentation.get("kind")
+    common_keys = {
+        "active_players",
+        "public_outcome_events",
+        "public_outcome_next_sequence",
+    }
+    kind_keys = {
+        "exile_result": {"exiled", "day_deaths"},
+        "night_result": {"night_deaths"},
+        "self_explosion_result": {
+            "werewolf_self_exploded",
+            "day_ended_by_self_explosion",
+            "day_deaths",
+        },
+    }.get(kind)
+    active_players = payload.get("active_players")
+    public_outcomes = payload.get("public_outcome_events")
+    next_sequence = payload.get("public_outcome_next_sequence")
+    if (
+        kind_keys is None
+        or set(payload) != common_keys | kind_keys
+        or not isinstance(active_players, list)
+        or not all(isinstance(item, str) and item for item in active_players)
+        or not isinstance(public_outcomes, list)
+        or not all(_valid_frozen_public_outcome(item) for item in public_outcomes)
+        or type(next_sequence) is not int
+        or next_sequence < 1
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+    deaths_key = "night_deaths" if kind == "night_result" else "day_deaths"
+    if not _valid_frozen_primary_deaths(payload.get(deaths_key)):
+        raise ResumeCheckpointError("invalid_structure")
+    if kind == "exile_result" and not isinstance(payload.get("exiled"), str):
+        raise ResumeCheckpointError("invalid_structure")
+    if kind == "self_explosion_result" and (
+        not isinstance(payload.get("werewolf_self_exploded"), str)
+        or type(payload.get("day_ended_by_self_explosion")) is not bool
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+
+
+def _valid_frozen_primary_deaths(value: object) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, Mapping)
+        and set(item) == {"player", "cause", "source"}
+        and isinstance(item.get("player"), str)
+        and bool(item.get("player"))
+        and isinstance(item.get("cause"), str)
+        and bool(item.get("cause"))
+        and item.get("cause") != "hunter_shot"
+        and (item.get("source") is None or isinstance(item.get("source"), str))
+        for item in value
+    )
+
+
+def _valid_frozen_public_outcome(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    required = {
+        "schema_version",
+        "event_id",
+        "sequence",
+        "kind",
+        "actor_player_id",
+        "target_player_id",
+        "outcome",
+        "caused_by_event_id",
+        "occurred_phase",
+    }
+    return (
+        set(value) == required
+        and value.get("schema_version") == 1
+        and isinstance(value.get("event_id"), str)
+        and bool(value.get("event_id"))
+        and type(value.get("sequence")) is int
+        and value.get("sequence", 0) > 0
+        and value.get("kind") != "hunter_shot"
+        and isinstance(value.get("outcome"), str)
+        and isinstance(value.get("occurred_phase"), str)
+    )
+
+
+def _validate_terminal_continuation(
+    continuation: object,
+    *,
+    stage: object,
+) -> None:
+    if continuation is None:
+        if stage == "candidate_cleared":
+            raise ResumeCheckpointError("invalid_structure")
+        return
+    if (
+        not isinstance(continuation, Mapping)
+        or set(continuation)
+        != {
+            "kind",
+            "status",
+            "skip_exile_last_words",
+            "transfer_sheriff_badge",
+        }
+        or continuation.get("kind") not in TERMINAL_CONTINUATION_KINDS
+        or continuation.get("status") not in {"pending", "applied"}
+        or type(continuation.get("skip_exile_last_words")) is not bool
+        or type(continuation.get("transfer_sheriff_badge")) is not bool
+        or (
+            stage == "candidate_cleared"
+            and continuation.get("status") != "applied"
+        )
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+
+
+def _validate_terminal_hunter_presentation(
+    *,
+    item: Mapping[str, object],
+    kind: object,
+    status: object,
+    presentation: object,
+) -> None:
+    """Strictly validate the optional, recoverable public result envelope.
+
+    Older settlement_v1 checkpoints predate this field and remain readable.
+    Once the field is present, however, its stable identity and semantic result
+    must agree with the accepted hunter choice so recovery cannot publish an
+    invented or contradictory result.
+    """
+
+    if (
+        kind != "hunter_shot"
+        or status not in {"choice_accepted", "applied"}
+        or not isinstance(presentation, Mapping)
+        or set(presentation) != {
+            "presentation_id",
+            "kind",
+            "hunter_shot_status",
+            "hunter_shot",
+        }
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+    presentation_id = presentation.get("presentation_id")
+    presentation_kind = presentation.get("kind")
+    shot_status = presentation.get("hunter_shot_status")
+    shot_target = presentation.get("hunter_shot")
+    accepted_choice = item.get("accepted_choice")
+    if (
+        not isinstance(presentation_id, str)
+        or _TERMINAL_HUNTER_PRESENTATION_ID_PATTERN.fullmatch(presentation_id) is None
+        or presentation_kind != TERMINAL_HUNTER_PRESENTATION_KIND
+        or shot_status not in TERMINAL_HUNTER_PRESENTATION_STATUSES
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+    if shot_status == "skipped":
+        if shot_target is not None or accepted_choice != NO_HUNTER_SHOT_CHOICE:
+            raise ResumeCheckpointError("invalid_structure")
+        return
+    if (
+        not isinstance(shot_target, str)
+        or not shot_target
+        or shot_target == NO_HUNTER_SHOT_CHOICE
+        or accepted_choice != shot_target
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+
+
 class ResumeCheckpointManager:
     def __init__(
         self,
@@ -264,6 +566,7 @@ class ResumeCheckpointManager:
         compiled_rule_set: CompiledRuleSet,
         run_params: dict[str, Any],
         logs_prefix: list[RoundLog] | None = None,
+        initial_checkpoint: Mapping[str, object] | None = None,
     ) -> None:
         self.record_store = record_store
         self.session_id = session_id
@@ -281,7 +584,16 @@ class ResumeCheckpointManager:
             }
         )
         self._logs_prefix = tuple(copy.deepcopy(logs_prefix or []))
-        self._checkpoint: dict[str, Any] | None = None
+        self._checkpoint = (
+            copy.deepcopy(dict(initial_checkpoint))
+            if initial_checkpoint is not None
+            else None
+        )
+        self._terminal_recovery_active = bool(
+            initial_checkpoint is not None
+            and isinstance(initial_checkpoint.get("terminal_settlement"), Mapping)
+        )
+        self._terminal_recovery_logs_source: list[RoundLog] | None = None
 
     def start_round(
         self,
@@ -292,6 +604,18 @@ class ResumeCheckpointManager:
         active_players: list[str],
         rng_state: object,
     ) -> None:
+        if self._terminal_recovery_active:
+            # During terminal-settlement recovery, ``logs`` is the complete
+            # restored history rather than the post-resume delta used by a
+            # normal round. Keep its live objects until recovery reaches the
+            # next round so aftermath updates (for example sheriff badge and
+            # summaries) become the durable prefix without duplicating it.
+            if self._terminal_recovery_logs_source is not None:
+                self._logs_prefix = tuple(
+                    copy.deepcopy(self._terminal_recovery_logs_source)
+                )
+            self._terminal_recovery_active = False
+            self._terminal_recovery_logs_source = None
         state_payload = state.to_dict()
         state_payload["rule_set"] = copy.deepcopy(self.rule_set_snapshot)
         self._checkpoint = {
@@ -359,6 +683,42 @@ class ResumeCheckpointManager:
         self._checkpoint["last_error"] = error
         self._save()
 
+    def record_terminal_settlement(
+        self,
+        *,
+        state: GameState,
+        logs: list[RoundLog],
+        active_players: list[str],
+        terminal_settlement: Mapping[str, object],
+    ) -> None:
+        if self._checkpoint is None:
+            return
+        state_payload = state.to_dict()
+        state_payload["rule_set"] = copy.deepcopy(self.rule_set_snapshot)
+        snapshot = copy.deepcopy(dict(terminal_settlement))
+        snapshot["state"] = state_payload
+        if self._terminal_recovery_active:
+            # The engine temporarily points ``self.logs`` at the restored
+            # complete history while settling the interrupted outcome.
+            # Remember that list by reference until ``start_round`` so later
+            # recovery-aftermath mutations are also carried forward.
+            self._terminal_recovery_logs_source = logs
+            checkpoint_logs = logs
+        else:
+            checkpoint_logs = [*self._logs_prefix, *logs]
+        snapshot["logs"] = [log.to_dict() for log in checkpoint_logs]
+        snapshot["active_players"] = active_players.copy()
+        validated = terminal_settlement_from_checkpoint(
+            {"terminal_settlement": snapshot}
+        )
+        if validated is None:
+            raise ResumeCheckpointError("invalid_structure")
+        self._checkpoint["terminal_settlement"] = validated
+        self._checkpoint["active_players"] = active_players.copy()
+        self._checkpoint["failed_request"] = None
+        self._checkpoint["last_error"] = None
+        self._save()
+
     def _save(self) -> None:
         if self._checkpoint is None:
             return
@@ -377,7 +737,10 @@ def game_state_from_dict(data: dict[str, Any]) -> GameState:
         sheriff_badge_lost=bool(data.get("sheriff_badge_lost", False)),
         sheriff_pre_election_bomb_count=int(data.get("sheriff_pre_election_bomb_count", 0)),
         sheriff_election_pending=bool(data.get("sheriff_election_pending", False)),
-        public_facts=copy.deepcopy(data.get("public_facts", [])),
+        public_facts=public_fact_dicts_from_value(
+            data.get("public_facts"),
+            include_details=True,
+        ),
         public_fact_opportunities=copy.deepcopy(
             data.get("public_fact_opportunities", [])
         ),
@@ -616,6 +979,10 @@ def round_log_from_dict(data: dict[str, Any]) -> RoundLog:
         speech_order=optional_action_log_from_dict(data.get("speech_order")),
         sheriff_badge=optional_action_log_from_dict(data.get("sheriff_badge")),
         werewolf_self_explosion=optional_action_log_from_dict(data.get("werewolf_self_explosion")),
+        werewolf_self_explosion_decisions=action_logs_from_dict(
+            data.get("werewolf_self_explosion_decisions", [])
+        ),
+        canceled_actions=action_logs_from_dict(data.get("canceled_actions", [])),
         werewolf_discussion=action_logs_from_dict(data.get("werewolf_discussion", [])),
         werewolf_votes=action_log_groups_from_dict(data.get("werewolf_votes", [])),
     )
@@ -656,7 +1023,11 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
             prompt=str(lm_log_data.get("prompt") or ""),
             raw_response=str(lm_log_data.get("raw_response") or ""),
             result=lm_log_data.get("result", lm_log_data.get("parsed")),
+            action_id=lm_log_data.get("action_id"),
             request_id=lm_log_data.get("request_id"),
+            attempt_outcomes=safe_attempt_outcomes(
+                lm_log_data.get("attempt_outcomes")
+            ),
             invalid_attempts=copy.deepcopy(lm_log_data.get("invalid_attempts", [])),
             raw_choice=lm_log_data.get("raw_choice"),
             choice_normalization_kind=lm_log_data.get("choice_normalization_kind"),
@@ -667,11 +1038,7 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
         attempt_count=int(data.get("attempt_count") or 1),
         decision_schema=decision_schema,
         decision_audit=(
-            {
-                str(key): str(value)
-                for key, value in data["decision_audit"].items()
-                if isinstance(key, str) and isinstance(value, str)
-            }
+            copy.deepcopy(data["decision_audit"])
             if isinstance(data.get("decision_audit"), dict)
             else None
         ),
@@ -686,6 +1053,10 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
         speech_quality_initial_codes=[
             str(item) for item in data.get("speech_quality_initial_codes", [])
         ],
+        speech_quality_retry_duration_ms=max(
+            0,
+            int(data.get("speech_quality_retry_duration_ms") or 0),
+        ),
         execution_status=_execution_status_from_dict(data),
         duration_ms=max(0, int(data.get("duration_ms") or 0)),
         budget_ms=(
@@ -708,9 +1079,9 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
 
 def _execution_status_from_dict(
     data: dict[str, Any],
-) -> Literal["completed", "timed_out", "fallback", "failed"]:
+) -> Literal["completed", "timed_out", "fallback", "canceled", "failed"]:
     value = str(data.get("execution_status") or "completed")
-    if value in {"completed", "timed_out", "fallback", "failed"}:
+    if value in {"completed", "timed_out", "fallback", "canceled", "failed"}:
         return value  # type: ignore[return-value]
     return "completed"
 

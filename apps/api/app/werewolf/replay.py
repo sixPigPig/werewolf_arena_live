@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 SESSION_ID_RE = r"^game_[0-9a-f]{8}$"
 _SESSION_PATTERN = re.compile(SESSION_ID_RE)
+LIVE_COMPLETION_RECEIPT_KEY = "_live_completion_receipt_v1"
 
 
 class ReplayNotFoundError(Exception):
@@ -105,10 +106,12 @@ class DatabaseReplayStore:
         )
         if payload_session_id != session_id:
             raise ReplayNotFoundError
+        public_state = copy.deepcopy(state)
+        public_state.pop(LIVE_COMPLETION_RECEIPT_KEY, None)
         return {
             "session_id": session_id,
             "status": record.status,
-            "state": copy.deepcopy(state),
+            "state": public_state,
             "logs": copy.deepcopy(logs),
             "resumable": _valid_checkpoint_or_none(session_id, payload.checkpoint) is not None,
         }
@@ -128,6 +131,69 @@ class DatabaseReplayStore:
             state=state.to_dict(),
             logs=[log.to_dict() for log in logs],
         )
+
+    def save_game_with_live_completion(
+        self,
+        state: GameState,
+        logs: list[RoundLog],
+        *,
+        run_id: str,
+        terminal_keep_from_event_id: int,
+    ) -> None:
+        if (
+            not isinstance(run_id, str)
+            or not run_id
+            or type(terminal_keep_from_event_id) is not int
+            or terminal_keep_from_event_id < 1
+            or not state.winner
+            or (self.run_id is not None and self.run_id != run_id)
+        ):
+            raise ValueError("invalid live completion receipt")
+        state_payload = state.to_dict()
+        state_payload[LIVE_COMPLETION_RECEIPT_KEY] = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "session_id": state.session_id,
+            "winner": state.winner,
+            "terminal_keep_from_event_id": terminal_keep_from_event_id,
+        }
+        self.save_game_payload(
+            state=state_payload,
+            logs=[log.to_dict() for log in logs],
+        )
+
+    def load_live_completion_receipt(
+        self,
+        session_id: str,
+        *,
+        run_id: str,
+    ) -> dict[str, object] | None:
+        self._validate_session_id(session_id)
+        record = self.db.get(GameSessionRecord, session_id)
+        payload = self.db.get(GameReplayPayload, session_id)
+        if record is None or payload is None or record.status != "complete":
+            return None
+        receipt = payload.state.get(LIVE_COMPLETION_RECEIPT_KEY)
+        if not isinstance(receipt, dict):
+            return None
+        winner = receipt.get("winner")
+        terminal_keep = receipt.get("terminal_keep_from_event_id")
+        if (
+            receipt.get("schema_version") != 1
+            or receipt.get("run_id") != run_id
+            or receipt.get("session_id") != session_id
+            or not isinstance(winner, str)
+            or not winner
+            or winner != record.winner
+            or winner != payload.state.get("winner")
+            or type(terminal_keep) is not int
+            or terminal_keep < 1
+        ):
+            return None
+        return {
+            "winner": winner,
+            "terminal_keep_from_event_id": terminal_keep,
+        }
 
     def save_game_payload(self, *, state: dict[str, Any], logs: list[Any]) -> None:
         session_id, state, logs, rounds = _validated_game_payload(state=state, logs=logs)

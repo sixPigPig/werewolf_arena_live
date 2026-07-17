@@ -1,7 +1,10 @@
+import pytest
+
 from app.werewolf.debate_realism import (
     SpeechMissionV1,
     assign_speech_mission,
     catchphrases_from_personality,
+    contradictory_role_targets,
     debate_guidance_for_turn,
     dialogue_quality_warnings,
     evaluate_speech_quality,
@@ -9,6 +12,9 @@ from app.werewolf.debate_realism import (
     lineup_quality_warnings_from_players,
     proposition_signatures,
     repeated_phrase_candidates,
+    speech_character_limit,
+    speech_length_violation,
+    truncate_speech_to_complete_sentence,
 )
 from app.werewolf.player_configs import PlayerConfig
 
@@ -18,6 +24,68 @@ ANALYTICAL_PERSONALITY = (
     "角色简介: 沉稳控场，喜欢先盘逻辑再给站边。\n"
     "常用表达: 我先盘票型；这里不急着站死"
 )
+
+
+def test_contradictory_role_targets_compares_each_target_independently() -> None:
+    assert contradictory_role_targets("3号是查杀，5号是好人。") == set()
+    assert contradictory_role_targets("预言家查杀5号，但5号也是金水。") == {"5"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "3号说5号是查杀，但我认为5号是好人。",
+        "3号声称‘5号是金水’，不过我认为5号像狼人。",
+        "我转述3号的结论：5号是查杀，而我认为5号是好人。",
+        "他说5号是金水，但我仍然认5号是狼。",
+    ],
+)
+def test_contradictory_role_targets_ignores_reported_claims(text: str) -> None:
+    assert contradictory_role_targets(text) == set()
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [
+        ("sheriff_speech", 180),
+        ("debate", 220),
+        ("sheriff_pk_speech", 180),
+        ("exile_pk_speech", 180),
+        ("exile_last_words", 150),
+        ("werewolf_discuss", 60),
+        ("werewolf_kill_vote", 60),
+        ("vote", None),
+    ],
+)
+def test_speech_character_limit_uses_the_reviewed_action_budget(
+    action: str,
+    expected: int | None,
+) -> None:
+    assert speech_character_limit(action) == expected
+
+
+def test_speech_length_violation_is_deterministic() -> None:
+    assert speech_length_violation("debate", "我" * 220) is None
+    assert speech_length_violation("debate", "我" * 221) == "speech_too_long"
+
+
+def test_truncate_speech_prefers_a_complete_sentence() -> None:
+    text = "第一句保留。第二句也完整！第三句会超过预算而不应出现。"
+
+    assert truncate_speech_to_complete_sentence(text, max_chars=16) == "第一句保留。第二句也完整！"
+
+
+def test_truncate_speech_uses_safe_fallback_without_sentence_boundary() -> None:
+    fallback = "本轮只保留当前票口。"
+
+    assert (
+        truncate_speech_to_complete_sentence(
+            "没有任何句号的超长模型输出" * 20,
+            max_chars=20,
+            fallback=fallback,
+        )
+        == fallback
+    )
 
 
 def test_repeated_phrase_candidates_detects_round_level_repetition() -> None:

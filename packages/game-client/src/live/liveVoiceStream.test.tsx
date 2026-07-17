@@ -226,11 +226,13 @@ function emitReadyUtterance(
     audioFormat = "mp3",
     data = "YWJj",
     mimeType = "audio/mpeg",
+    presentationId,
     sampleRate = 24000,
   }: {
     audioFormat?: string;
     data?: string;
     mimeType?: string;
+    presentationId?: string;
     sampleRate?: number;
   } = {},
 ) {
@@ -238,6 +240,7 @@ function emitReadyUtterance(
     type: "voice_start",
     utterance_id: utteranceId,
     source_event_id: sourceEventId,
+    ...(presentationId ? { presentation_id: presentationId } : {}),
     speaker_kind: "player",
     speaker_name: "阿青",
     mime_type: mimeType,
@@ -616,6 +619,105 @@ describe("live voice stream", () => {
     expect(result.current.currentItem).toBeNull();
   });
 
+  it("preempts and individually acknowledges voices outside the terminal keep window", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubObjectUrls(["blob:preempted"]);
+    const { audioElements, pause, play } = stubAudioElement();
+
+    const { rerender, result } = renderHook(
+      ({
+        currentEventId,
+        terminalEventId,
+        terminalKeepFromEventId,
+      }: {
+        currentEventId: number;
+        terminalEventId?: number;
+        terminalKeepFromEventId?: number;
+      }) =>
+        useLiveVoiceStream("run-1", {
+          currentEventId,
+          enabled: true,
+          isPaused: false,
+          terminalEventId,
+          terminalKeepFromEventId,
+        }),
+      {
+        initialProps: {
+          currentEventId: 4,
+          terminalEventId: undefined as number | undefined,
+          terminalKeepFromEventId: undefined as number | undefined,
+        },
+      },
+    );
+    const socket = MockWebSocket.instances[0];
+    act(() => {
+      socket.onopen?.();
+      emitReadyUtterance(socket, "voice-before", 4);
+    });
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    rerender({
+      currentEventId: 10,
+      terminalEventId: 10,
+      terminalKeepFromEventId: 8,
+    });
+
+    await waitFor(() => {
+      expect(socket.send).toHaveBeenCalledWith(
+        JSON.stringify({ type: "voice_played", utterance_id: "voice-before" }),
+      );
+    });
+    expect(pause).toHaveBeenCalled();
+    expect(result.current.currentItem).toBeNull();
+
+    act(() => {
+      socket.emit(
+        voiceStartMessage({
+          utterance_id: "voice-late-before",
+          source_event_id: 6,
+        }),
+      );
+      socket.emit(
+        audioChunkMessage({
+          utterance_id: "voice-late-before",
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(socket.send).toHaveBeenCalledWith(
+        JSON.stringify({
+          type: "voice_played",
+          utterance_id: "voice-late-before",
+        }),
+      );
+    });
+
+    act(() => {
+      socket.emit(
+        voiceStartMessage({
+          utterance_id: "voice-overlap",
+          source_event_id: 7,
+          last_source_event_id: 8,
+        }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(result.current.currentItem).toMatchObject({
+        utteranceId: "voice-overlap",
+        sourceEventId: 7,
+        lastSourceEventId: 8,
+      }),
+    );
+    const acks = socket.send.mock.calls.map(([message]) => JSON.parse(String(message)));
+    expect(acks).toEqual([
+      { type: "voice_played", utterance_id: "voice-before" },
+      { type: "voice_played", utterance_id: "voice-late-before" },
+    ]);
+    expect(audioElements).toHaveLength(1);
+  });
+
   it("does not connect until enabled", () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
 
@@ -834,6 +936,98 @@ describe("live voice stream", () => {
     expect(MockWebSocket.instances[1].url).toContain(
       "/api/v1/games/runs/run-2/voice-stream",
     );
+  });
+
+  it("acks but does not replay a child-run voice after its presentation completed in the parent run", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubObjectUrls(["blob:parent-presentation"]);
+    const { audioElements, play } = stubAudioElement();
+    const presentationId = "game_same:hunter:settlement-1";
+    const { rerender, result } = renderHook(
+      ({ runId }: { runId: string }) =>
+        useLiveVoiceStream(runId, {
+          currentEventId: 4,
+          enabled: true,
+          isPaused: false,
+        }),
+      { initialProps: { runId: "run-parent" } },
+    );
+    const parentSocket = MockWebSocket.instances[0];
+    act(() => {
+      parentSocket.onopen?.();
+      emitReadyUtterance(parentSocket, "voice-parent", 4, {
+        presentationId,
+      });
+    });
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      audioElements[0].dispatchEvent(new Event("ended"));
+    });
+    await waitFor(() => expect(result.current.currentItem).toBeNull());
+
+    rerender({ runId: "run-child" });
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(2));
+    const childSocket = MockWebSocket.instances[1];
+    act(() => {
+      childSocket.onopen?.();
+      emitReadyUtterance(childSocket, "voice-child", 4, {
+        presentationId,
+      });
+    });
+
+    await waitFor(() =>
+      expect(childSocket.send).toHaveBeenCalledWith(
+        JSON.stringify({ type: "voice_played", utterance_id: "voice-child" }),
+      ),
+    );
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(audioElements).toHaveLength(1);
+    expect(result.current.currentItem).toBeNull();
+    expect(result.current.currentSubtitle).toBeNull();
+  });
+
+  it("plays the child-run voice when the parent presentation never actually played", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubObjectUrls(["blob:child-presentation"]);
+    const { audioElements, play } = stubAudioElement();
+    const presentationId = "game_same:hunter:settlement-2";
+    const { rerender, result } = renderHook(
+      ({ currentEventId, runId }) =>
+        useLiveVoiceStream(runId, {
+          currentEventId,
+          enabled: true,
+          isPaused: false,
+        }),
+      {
+        initialProps: {
+          currentEventId: 4,
+          runId: "run-parent",
+        },
+      },
+    );
+    act(() => {
+      emitReadyUtterance(MockWebSocket.instances[0], "voice-parent", 5, {
+        presentationId,
+      });
+    });
+    expect(play).not.toHaveBeenCalled();
+
+    rerender({ currentEventId: 5, runId: "run-child" });
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(2));
+    act(() => {
+      emitReadyUtterance(MockWebSocket.instances[1], "voice-child", 5, {
+        presentationId,
+      });
+    });
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    expect(audioElements).toHaveLength(1);
+    expect(result.current.currentItem).toMatchObject({
+      utteranceId: "voice-child",
+      presentationId,
+      status: "playing",
+    });
   });
 
   it("resets queued speakers and errors when disabled", async () => {

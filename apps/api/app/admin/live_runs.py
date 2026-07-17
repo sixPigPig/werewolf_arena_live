@@ -197,14 +197,44 @@ def get_admin_live_run_detail(db: Session, run_id: str) -> AdminLiveRunDetailDat
             LiveRunRecord.run_id == record.run_id
         )
     )
-    diagnostic_events = [
-        {"type": event_type, "payload": {}}
-        for (event_type,) in db.execute(
-            select(LiveEventRecord.type)
+    diagnostic_rows = list(
+        db.execute(
+            select(LiveEventRecord.event_id, LiveEventRecord.type)
             .where(LiveEventRecord.run_id == run_id)
             .order_by(LiveEventRecord.event_id.asc())
             .limit(5000)
         )
+    )
+    safe_payloads: dict[int, dict[str, str]] = {}
+    if diagnostic_rows and any(
+        event_type in _P2_DIAGNOSTIC_PAYLOAD_EVENT_TYPES
+        for _event_id, event_type in diagnostic_rows
+    ):
+        last_diagnostic_event_id = diagnostic_rows[-1][0]
+        for event_id, event_type, action_id, request_id, attempt_result in db.execute(
+            select(
+                LiveEventRecord.event_id,
+                LiveEventRecord.type,
+                LiveEventRecord.payload["action_id"].as_string(),
+                LiveEventRecord.payload["request_id"].as_string(),
+                LiveEventRecord.payload["attempt_result"].as_string(),
+            )
+            .where(
+                LiveEventRecord.run_id == run_id,
+                LiveEventRecord.event_id <= last_diagnostic_event_id,
+                LiveEventRecord.type.in_(_P2_DIAGNOSTIC_PAYLOAD_EVENT_TYPES),
+            )
+            .order_by(LiveEventRecord.event_id.asc())
+        ):
+            safe_payloads[event_id] = _safe_p2_diagnostic_payload(
+                event_type=event_type,
+                action_id=action_id,
+                request_id=request_id,
+                attempt_result=attempt_result,
+            )
+    diagnostic_events = [
+        {"type": event_type, "payload": safe_payloads.get(event_id, {})}
+        for event_id, event_type in diagnostic_rows
     ]
     return AdminLiveRunDetailData(
         record=record,
@@ -386,6 +416,46 @@ _ACTIVITY_EVENT_TYPES = {
 }
 _KNOWN_EVENT_TYPES = _LIFECYCLE_EVENT_TYPES | _WARNING_EVENT_TYPES | _ACTIVITY_EVENT_TYPES
 _SAFE_PHASES = {"night", "day", "vote", "summary"}
+_P2_DIAGNOSTIC_PAYLOAD_EVENT_TYPES = {
+    "model_request_started",
+    "model_attempt_completed",
+    "model_request_failed",
+    "model_response_received",
+}
+_P2_ATTEMPT_RESULTS = {
+    "valid_response",
+    "invalid_response",
+    "timed_out",
+    "canceled",
+    "transport_failed",
+}
+
+
+def _safe_p2_diagnostic_payload(
+    *,
+    event_type: object,
+    action_id: object,
+    request_id: object,
+    attempt_result: object,
+) -> dict[str, str]:
+    if event_type not in _P2_DIAGNOSTIC_PAYLOAD_EVENT_TYPES:
+        return {}
+    payload: dict[str, str] = {}
+    if _is_safe_diagnostic_id(action_id):
+        payload["action_id"] = action_id
+    if _is_safe_diagnostic_id(request_id):
+        payload["request_id"] = request_id
+    if attempt_result in _P2_ATTEMPT_RESULTS:
+        payload["attempt_result"] = attempt_result
+    return payload
+
+
+def _is_safe_diagnostic_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 128
+        and all(character.isascii() and (character.isalnum() or character in "_.:-") for character in value)
+    )
 
 
 def _safe_event_rows(

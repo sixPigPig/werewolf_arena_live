@@ -972,6 +972,7 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
         "audience",
         "source_event_id",
         "last_source_event_id",
+        "presentation_id",
         "request_id",
         "speaker_kind",
         "speaker_name",
@@ -999,6 +1000,7 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
     _assert_string_column(table.c.audience, length=32, nullable=False)
     assert table.c.source_event_id.nullable is False
     assert table.c.last_source_event_id.nullable is False
+    _assert_string_column(table.c.presentation_id, length=64, nullable=True)
     _assert_string_column(table.c.request_id, length=80, nullable=True)
     _assert_string_column(table.c.speaker_kind, length=20, nullable=False)
     _assert_string_column(table.c.speaker_name, length=120, nullable=False)

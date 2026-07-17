@@ -15,11 +15,12 @@ from app.models.game_session import GameReplayPayload
 from app.models.live import LiveEventRecord, LiveRunRecord
 from app.rule_sets.types import CompiledRuleSet
 from app.werewolf.live import LiveRunRegistry
+from app.werewolf.models import GameState
 from app.werewolf.orphan_reaper import (
     run_live_run_reaper,
     run_next_orphan_recovery,
 )
-from app.werewolf.replay import DatabaseReplayStore
+from app.werewolf.replay import DatabaseReplayStore, LIVE_COMPLETION_RECEIPT_KEY
 from tests.rule_set_fixtures import (
     complete_resume_checkpoint,
     managed_official_compiled_rule_set,
@@ -605,6 +606,80 @@ def test_reaper_fails_orphan_without_checkpoint_and_cancels_pending_stop() -> No
         assert failed.recovery_last_error == ("Orphaned live run has no valid resume checkpoint")
         assert canceled is not None
         assert canceled.status == "canceled"
+
+
+def test_reaper_completes_committed_replay_without_resuming_game() -> None:
+    session_factory = _session_factory()
+    session_id = "game_6350abcd"
+    _owner, run_id = _seed_orphan(
+        session_factory,
+        session_id=session_id,
+        with_checkpoint=False,
+    )
+    state = GameState(
+        session_id=session_id,
+        players=[],
+        rule_set=managed_official_compiled_rule_set("starter_6").snapshot,
+        winner="好人阵营",
+    )
+    with session_factory() as db:
+        store = DatabaseReplayStore(db)
+        store.save_game_with_live_completion(
+            state,
+            [],
+            run_id=run_id,
+            terminal_keep_from_event_id=2,
+        )
+        loaded = store.load_session(session_id)
+        assert LIVE_COMPLETION_RECEIPT_KEY not in loaded["state"]
+
+    reaper = LiveRunRegistry(
+        live_store=SessionLiveStore(session_factory),
+        worker_id="worker-reaper",
+    )
+    executor_calls: list[str] = []
+
+    result = run_next_orphan_recovery(
+        session_factory,
+        reaper,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=lambda run, _registry: executor_calls.append(run.run_id),
+    )
+    repeated = run_next_orphan_recovery(
+        session_factory,
+        reaper,
+        stale_grace_seconds=0,
+        backoff_seconds=30,
+        max_attempts=3,
+        execute_recovery=lambda run, _registry: executor_calls.append(run.run_id),
+    )
+
+    assert result is not None
+    assert result.run_id == run_id
+    assert result.outcome == "resumed"
+    assert executor_calls == []
+    assert repeated is None
+    with session_factory() as db:
+        saved = db.get(LiveRunRecord, run_id)
+        events = list(
+            db.query(LiveEventRecord)
+            .filter(LiveEventRecord.run_id == run_id)
+            .order_by(LiveEventRecord.event_id)
+        )
+        assert saved is not None
+        assert saved.status == "completed"
+        assert saved.winner == "好人阵营"
+        assert [(event.event_id, event.type) for event in events] == [
+            (1, "run_created"),
+            (2, "run_started"),
+            (3, "game_completed"),
+        ]
+        assert events[-1].payload == {
+            "winner": "好人阵营",
+            "terminal_keep_from_event_id": 2,
+        }
 
 
 def test_reaper_respects_backoff_and_max_attempts() -> None:

@@ -1956,10 +1956,18 @@ def _run_game_in_background(
     finally:
         db.close()
 
+    terminal_keep_from_event_id = _terminal_boundary_from_completed_result(result)
+    if terminal_keep_from_event_id is None:
+        registry.mark_failed(
+            run_id,
+            error="Live game completed without a terminal event boundary",
+        )
+        return
     registry.mark_completed(
         run_id,
         winner=result.winner,
         p2_diagnostics=getattr(result, "p2_diagnostics", None),
+        terminal_keep_from_event_id=terminal_keep_from_event_id,
     )
 
 
@@ -2006,11 +2014,24 @@ def _resume_game_in_background(
     finally:
         db.close()
 
+    terminal_keep_from_event_id = _terminal_boundary_from_completed_result(result)
+    if terminal_keep_from_event_id is None:
+        registry.mark_failed(
+            run_id,
+            error="Live game completed without a terminal event boundary",
+        )
+        return
     registry.mark_completed(
         run_id,
         winner=result.winner,
         p2_diagnostics=getattr(result, "p2_diagnostics", None),
+        terminal_keep_from_event_id=terminal_keep_from_event_id,
     )
+
+
+def _terminal_boundary_from_completed_result(result: object) -> int | None:
+    value = getattr(result, "terminal_keep_from_event_id", None)
+    return value if type(value) is int and value > 0 else None
 
 
 def _event_stream(

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from collections.abc import Generator
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -10,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
+from app.rule_sets.snapshots import resolve_rule_set_snapshot
 from app.werewolf.checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     ReplayThenLiveProvider,
@@ -20,11 +24,13 @@ from app.werewolf.checkpoint import (
     round_log_from_dict,
     round_state_from_dict,
     resolved_rule_set_from_checkpoint,
+    terminal_settlement_from_checkpoint,
 )
-from app.werewolf.engine import initialize_game_state
+from app.werewolf.engine import GameEngine, NO_HUNTER_SHOT, initialize_game_state
 from app.werewolf.lm import LmLog
 from app.werewolf.models import (
     ActionLog,
+    DeathEvent,
     GameState,
     Player,
     RoundLog,
@@ -34,7 +40,11 @@ from app.werewolf.models import (
     StageInterruption,
 )
 from app.werewolf.replay import DatabaseReplayStore
-from app.werewolf.rules import get_rule_set
+from app.werewolf.rules import (
+    WIN_CONDITION_WOLVES_GTE_OTHERS,
+    get_rule_set,
+    rule_set_snapshot,
+)
 from app.werewolf.runner import GameRunError, resume_game, run_game
 from tests.rule_set_fixtures import (
     complete_resume_checkpoint,
@@ -146,6 +156,99 @@ class CapturingEventSink:
 
     def publish(self, event_type: str, **kwargs: object) -> None:
         self.events.append({"type": event_type, **kwargs})
+
+
+class IdCapturingEventSink(CapturingEventSink):
+    def publish(self, event_type: str, **kwargs: object) -> object:
+        super().publish(event_type, **kwargs)
+        return SimpleNamespace(id=len(self.events))
+
+
+class CrashBeforeHunterPresentationSink(IdCapturingEventSink):
+    def publish(self, event_type: str, **kwargs: object) -> object:
+        if event_type == "state_updated" and kwargs.get("action") == "hunter_shot_resolved":
+            raise RuntimeError("worker crashed before publishing hunter result")
+        return super().publish(event_type, **kwargs)
+
+
+class CrashAfterHunterPresentationSink(IdCapturingEventSink):
+    def publish(self, event_type: str, **kwargs: object) -> object:
+        event = super().publish(event_type, **kwargs)
+        if event_type == "state_updated" and kwargs.get("action") == "hunter_shot_resolved":
+            raise RuntimeError("worker crashed after publishing hunter result")
+        return event
+
+
+class CrashBeforeExileLastWordsResultSink(IdCapturingEventSink):
+    def publish(self, event_type: str, **kwargs: object) -> object:
+        if event_type == "state_updated" and kwargs.get("action") == "exile_last_words":
+            raise RuntimeError("worker crashed before publishing exile last words result")
+        return super().publish(event_type, **kwargs)
+
+
+class CrashAfterExileLastWordsResultSink(IdCapturingEventSink):
+    def publish(self, event_type: str, **kwargs: object) -> object:
+        event = super().publish(event_type, **kwargs)
+        if event_type == "state_updated" and kwargs.get("action") == "exile_last_words":
+            raise RuntimeError("worker crashed after publishing exile last words result")
+        return event
+
+
+class CrashOnRoundStartedSink(IdCapturingEventSink):
+    def __init__(self, *, round_number: int) -> None:
+        super().__init__()
+        self.round_number = round_number
+
+    def publish(self, event_type: str, **kwargs: object) -> object:
+        if (
+            event_type == "round_started"
+            and kwargs.get("round_number") == self.round_number
+        ):
+            raise RuntimeError("worker crashed in the next round after terminal recovery")
+        return super().publish(event_type, **kwargs)
+
+
+class RejectingProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_json(self, **_kwargs: object) -> str:
+        self.calls += 1
+        raise AssertionError("terminal settlement recovery must not request the model")
+
+
+class PendingHunterRecoveryProvider:
+    def __init__(self, *, shoot_choice: str) -> None:
+        self.shoot_choice = shoot_choice
+        self.actions: list[str] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        if '"shoot"' not in prompt:
+            raise AssertionError("terminal recovery must only request the pending hunter shot")
+        self.actions.append("hunter_shoot")
+        return json.dumps(
+            {"reasoning": "恢复合法猎人结算。", "shoot": self.shoot_choice},
+            ensure_ascii=False,
+        )
+
+
+class BadgeOnlyRecoveryProvider:
+    def __init__(self, *, badge_target: str) -> None:
+        self.badge_target = badge_target
+        self.actions: list[str] = []
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        del model, temperature
+        if '"badge"' not in prompt:
+            raise AssertionError(
+                "cleared terminal recovery must not replay hunter or other model actions"
+            )
+        self.actions.append("sheriff_badge")
+        return json.dumps(
+            {"reasoning": "恢复未完成的警徽结算。", "badge": self.badge_target},
+            ensure_ascii=False,
+        )
 
 
 def test_resume_checkpoint_manager_persists_checkpoint_to_record_store() -> None:
@@ -545,6 +648,1581 @@ def test_resume_game_replays_cached_model_responses_without_catalog_lookup(
     with pytest.raises(ResumeCheckpointError):
         record_store.load_resume_checkpoint(result.session_id)
     assert record_store.load_session(result.session_id)["status"] == "complete"
+
+
+def _persist_terminal_settlement_checkpoint(
+    *,
+    record_store: DatabaseReplayStore,
+    state: GameState,
+    round_state: RoundState,
+    round_log: RoundLog,
+    active_players: list[str],
+    terminal_settlement: dict[str, object],
+) -> None:
+    compiled = legacy_official_compiled_rule_set(state.rule_set["id"])
+    manager = ResumeCheckpointManager(
+        record_store=record_store,
+        session_id=state.session_id,
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+    )
+    manager.start_round(
+        state=state,
+        logs=[],
+        round_number=round_state.number,
+        active_players=round_state.players,
+        rng_state=None,
+    )
+    state.rounds.append(round_state)
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active_players.copy()
+    manager.record_terminal_settlement(
+        state=state,
+        logs=[round_log],
+        active_players=active_players,
+        terminal_settlement=terminal_settlement,
+    )
+
+
+def _primary_terminal_settlement(*, stage: str) -> dict[str, object]:
+    return {
+        "settlement_schema_version": "settlement_v1",
+        "stage": stage,
+        "primary_outcome_action_id": "outcome:test:vote:exile",
+        "settlement_cursor": 1,
+        "settlements": [
+            {
+                "settlement_id": "settlement:test:primary",
+                "kind": "death_batch",
+                "actor": "2号玩家",
+                "status": "applied",
+                "accepted_choice": None,
+                "details": {"phase": "vote"},
+            }
+        ],
+        "canceled_action_ids": [],
+    }
+
+
+def _hunter_presentation_id(session_id: str, settlement_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{session_id}:{settlement_id}:presentation".encode()
+    ).hexdigest()[:24]
+    return f"hp_{digest}"
+
+
+def _primary_presentation_id(session_id: str, action_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{session_id}:{action_id}:presentation".encode()
+    ).hexdigest()[:24]
+    return f"pp_{digest}"
+
+
+def test_resume_terminal_outcome_applied_commits_winner_without_replaying_action(
+    record_store: DatabaseReplayStore,
+) -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="game_a0010001",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    goods = [player for player in state.players if player.role != "狼人"][:2]
+    before = [wolf.name, *(player.name for player in goods)]
+    active = [player.name for player in goods]
+    round_state = RoundState(
+        number=1,
+        players=before,
+        exiled=wolf.name,
+        day_deaths=[DeathEvent(wolf.name, "vote_exile", "投票")],
+    )
+    _persist_terminal_settlement_checkpoint(
+        record_store=record_store,
+        state=state,
+        round_state=round_state,
+        round_log=RoundLog(number=1),
+        active_players=active,
+        terminal_settlement=_primary_terminal_settlement(stage="outcome_applied"),
+    )
+    provider = RejectingProvider()
+    sink = IdCapturingEventSink()
+
+    result = resume_game(
+        session_id=state.session_id,
+        record_store=record_store,
+        provider=provider,
+        event_sink=sink,
+    )
+
+    assert result.winner == "好人阵营"
+    assert result.terminal_keep_from_event_id == 2
+    assert provider.calls == 0
+    assert [event["type"] for event in sink.events] == [
+        "game_resumed",
+        "state_updated",
+        "state_updated",
+    ]
+    assert sink.events[0]["payload"]["terminal_recovery"] is True
+    primary, folded = sink.events[1:]
+    assert primary["action"] == "exile_resolved"
+    assert primary["payload"]["exiled"] == wolf.name
+    assert primary["payload"]["presentation_id"] == _primary_presentation_id(
+        state.session_id,
+        "outcome:test:vote:exile",
+    )
+    assert folded["action"] == "day_resolution_completed"
+    assert folded["payload"]["exiled"] == wolf.name
+    assert folded["payload"]["public_summary"]
+    assert "presentation_id" not in folded["payload"]
+    replay = record_store.load_session(state.session_id)
+    assert replay["state"]["rounds"][0]["exiled"] == wolf.name
+
+
+def test_resume_winner_committed_only_finishes_without_restoring_aftermath(
+    record_store: DatabaseReplayStore,
+) -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="game_a0010002",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    goods = [player for player in state.players if player.role != "狼人"][:2]
+    before = [wolf.name, *(player.name for player in goods)]
+    active = [player.name for player in goods]
+    state.winner = "好人阵营"
+    round_state = RoundState(
+        number=1,
+        players=before,
+        exiled=wolf.name,
+        day_deaths=[DeathEvent(wolf.name, "vote_exile", "投票")],
+    )
+    _persist_terminal_settlement_checkpoint(
+        record_store=record_store,
+        state=state,
+        round_state=round_state,
+        round_log=RoundLog(number=1),
+        active_players=active,
+        terminal_settlement=_primary_terminal_settlement(stage="winner_committed"),
+    )
+    provider = RejectingProvider()
+    sink = IdCapturingEventSink()
+
+    result = resume_game(
+        session_id=state.session_id,
+        record_store=record_store,
+        provider=provider,
+        event_sink=sink,
+    )
+
+    assert result.winner == "好人阵营"
+    assert result.terminal_keep_from_event_id == 2
+    assert provider.calls == 0
+    assert [event["type"] for event in sink.events] == [
+        "game_resumed",
+        "state_updated",
+        "state_updated",
+    ]
+    assert sink.events[0]["payload"]["terminal_recovery"] is True
+    primary, folded = sink.events[1:]
+    assert primary["action"] == "exile_resolved"
+    assert primary["payload"]["presentation_id"] == _primary_presentation_id(
+        state.session_id,
+        "outcome:test:vote:exile",
+    )
+    assert folded["action"] == "day_resolution_completed"
+    assert folded["payload"]["public_summary"]
+    assert "presentation_id" not in folded["payload"]
+
+
+def test_resume_accepted_hunter_choice_applies_shot_without_requesting_hunter(
+    record_store: DatabaseReplayStore,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="game_a0010003",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    hunter = next(player for player in state.players if player.role == "猎人")
+    civilian = next(player for player in state.players if player.role == "村民")
+    before = [wolf.name, hunter.name, civilian.name]
+    active = [wolf.name, civilian.name]
+    round_state = RoundState(
+        number=1,
+        players=before,
+        exiled=hunter.name,
+        day_deaths=[DeathEvent(hunter.name, "vote_exile", "投票")],
+    )
+    round_log = RoundLog(
+        number=1,
+        hunter_shoot=ActionLog(
+            actor=hunter.name,
+            action="hunter_shoot",
+            options=[wolf.name, civilian.name, "不发动技能"],
+            choice=wolf.name,
+            lm_log=LmLog(
+                prompt="cached hunter prompt",
+                raw_response=json.dumps(
+                    {"reasoning": "已接受的猎人选择。", "shoot": wolf.name},
+                    ensure_ascii=False,
+                ),
+                result={"reasoning": "已接受的猎人选择。", "shoot": wolf.name},
+                action_id="act_terminal_hunter",
+                request_id="req_terminal_hunter",
+            ),
+        ),
+    )
+    settlement = _primary_terminal_settlement(stage="hunter_choice_accepted")
+    settlement["terminal_keep_from_event_id"] = 77
+    settlement["settlements"].append(
+        {
+            "settlement_id": "settlement:test:hunter",
+            "kind": "hunter_shot",
+            "actor": hunter.name,
+            "status": "choice_accepted",
+            "accepted_choice": wolf.name,
+            "details": {
+                "actor": hunter.name,
+                "death_cause": "vote_exile",
+                "phase": "vote",
+                "excluded_shot_targets": [],
+                "excluded_badge_targets": [],
+                "transfer_sheriff_badge": False,
+            },
+        }
+    )
+    _persist_terminal_settlement_checkpoint(
+        record_store=record_store,
+        state=state,
+        round_state=round_state,
+        round_log=round_log,
+        active_players=active,
+        terminal_settlement=settlement,
+    )
+    provider = RejectingProvider()
+    sink = IdCapturingEventSink()
+
+    result = resume_game(
+        session_id=state.session_id,
+        record_store=record_store,
+        provider=provider,
+        event_sink=sink,
+    )
+
+    assert result.winner == "好人阵营"
+    assert result.terminal_keep_from_event_id == 2
+    assert provider.calls == 0
+    assert [event["type"] for event in sink.events].count("action_requested") == 0
+    hunter_results = [
+        event
+        for event in sink.events
+        if event.get("action") == "hunter_shot_resolved"
+    ]
+    assert len(hunter_results) == 1
+    assert hunter_results[0]["payload"]["presentation_id"] == _hunter_presentation_id(
+        state.session_id,
+        "settlement:test:hunter",
+    )
+    replay = record_store.load_session(state.session_id)
+    assert replay["state"]["rounds"][0]["hunter_shot"] == wolf.name
+    assert replay["logs"][0]["hunter_shoot"]["choice"] == wolf.name
+
+
+def test_terminal_hunter_no_shot_cue_starts_live_terminal_keep_interval() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="game_a0010004",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    hunter = next(player for player in state.players if player.role == "猎人")
+    civilian = next(player for player in state.players if player.role == "村民")
+    active = [wolf.name, civilian.name]
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active.copy()
+    round_state = RoundState(
+        number=1,
+        players=[wolf.name, hunter.name, civilian.name],
+        exiled=hunter.name,
+        day_deaths=[DeathEvent(hunter.name, "vote_exile", "投票")],
+    )
+    round_log = RoundLog(number=1)
+    settlement = _primary_terminal_settlement(stage="outcome_applied")
+    settlement["settlements"].append(
+        {
+            "settlement_id": "settlement:test:hunter:no-shot",
+            "kind": "hunter_shot",
+            "actor": hunter.name,
+            "status": "pending",
+            "accepted_choice": None,
+            "details": {"phase": "vote"},
+        }
+    )
+    sink = IdCapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=RejectingProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    engine._terminal_settlement = settlement
+
+    engine._accept_terminal_hunter_choice(
+        hunter=hunter,
+        shot=NO_HUNTER_SHOT,
+        round_state=round_state,
+        round_log=round_log,
+        active_players=active,
+        death_cause="vote_exile",
+        phase="vote",
+        excluded_shot_targets=set(),
+        excluded_badge_targets=None,
+        transfer_sheriff_badge=False,
+    )
+
+    engine._apply_hunter_shot_choice(
+        hunter=hunter,
+        shot=NO_HUNTER_SHOT,
+        round_state=round_state,
+        round_log=round_log,
+        active_players=active,
+        phase="vote",
+        excluded_badge_targets=None,
+        transfer_sheriff_badge=False,
+    )
+
+    assert engine.terminal_keep_from_event_id == 1
+    assert [(event["type"], event.get("action")) for event in sink.events] == [
+        ("state_updated", "hunter_shot_resolved")
+    ]
+    assert sink.events[0]["payload"]["hunter_shot_status"] == "skipped"
+    assert sink.events[0]["payload"]["hunter_shot"] is None
+    assert sink.events[0]["payload"]["presentation_id"] == (
+        _hunter_presentation_id(
+            state.session_id,
+            "settlement:test:hunter:no-shot",
+        )
+    )
+
+
+@pytest.mark.parametrize("takes_shot", [True, False])
+def test_nonterminal_hunter_choice_still_publishes_canonical_result(
+    takes_shot: bool,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="game_nonterminal_hunter_result",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    hunter = next(player for player in state.players if player.role == "猎人")
+    seer = next(player for player in state.players if player.role == "预言家")
+    civilians = [player for player in state.players if player.role == "村民"][:3]
+    active = [wolf.name, seer.name, *(player.name for player in civilians)]
+    shot = civilians[0].name if takes_shot else NO_HUNTER_SHOT
+    round_state = RoundState(
+        number=2,
+        players=[hunter.name, *active],
+        day_deaths=[DeathEvent(hunter.name, "vote_exile", "投票")],
+    )
+    sink = IdCapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=RejectingProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    engine._apply_hunter_shot_choice(
+        hunter=hunter,
+        shot=shot,
+        round_state=round_state,
+        round_log=RoundLog(number=2),
+        active_players=active,
+        phase="vote",
+        excluded_badge_targets=None,
+        transfer_sheriff_badge=False,
+    )
+
+    assert engine._terminal_settlement is None
+    assert engine.terminal_keep_from_event_id is None
+    assert len(sink.events) == 1
+    result = sink.events[0]
+    assert result["type"] == "state_updated"
+    assert result["action"] == "hunter_shot_resolved"
+    assert result["payload"]["hunter_shot_status"] == (
+        "shot" if takes_shot else "skipped"
+    )
+    assert result["payload"]["hunter_shot"] == (
+        civilians[0].name if takes_shot else None
+    )
+    assert "presentation_id" not in result["payload"]
+
+
+@pytest.mark.parametrize("takes_shot", [True, False])
+@pytest.mark.parametrize("crash_after_publish", [False, True])
+def test_hunter_result_is_republished_from_applied_checkpoint_after_publish_crash(
+    record_store: DatabaseReplayStore,
+    takes_shot: bool,
+    crash_after_publish: bool,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    compiled = legacy_official_compiled_rule_set(rule_set.id)
+    state = initialize_game_state(
+        session_id="game_a0010005",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    hunter = next(player for player in state.players if player.role == "猎人")
+    civilian = next(player for player in state.players if player.role == "村民")
+    before = [wolf.name, hunter.name, civilian.name]
+    active = [wolf.name, civilian.name]
+    shot = wolf.name if takes_shot else NO_HUNTER_SHOT
+    settlement_id = "settlement:test:hunter:crash-before-publish"
+    presentation_id = _hunter_presentation_id(state.session_id, settlement_id)
+    round_state = RoundState(
+        number=1,
+        players=before,
+        exiled=hunter.name,
+        day_deaths=[DeathEvent(hunter.name, "vote_exile", "投票")],
+    )
+    round_log = RoundLog(
+        number=1,
+        hunter_shoot=ActionLog(
+            actor=hunter.name,
+            action="hunter_shoot",
+            options=[wolf.name, civilian.name, NO_HUNTER_SHOT],
+            choice=shot,
+            lm_log=LmLog(
+                prompt="cached hunter prompt",
+                raw_response=json.dumps(
+                    {"reasoning": "已接受的猎人选择。", "shoot": shot},
+                    ensure_ascii=False,
+                ),
+                result={"reasoning": "已接受的猎人选择。", "shoot": shot},
+                action_id="act_terminal_hunter_crash",
+                request_id="req_terminal_hunter_crash",
+            ),
+        ),
+    )
+    checkpoint_manager = ResumeCheckpointManager(
+        record_store=record_store,
+        session_id=state.session_id,
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+    )
+    checkpoint_manager.start_round(
+        state=state,
+        logs=[],
+        round_number=1,
+        active_players=before,
+        rng_state=None,
+    )
+    state.rounds.append(round_state)
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active.copy()
+    settlement = _primary_terminal_settlement(stage="hunter_choice_accepted")
+    settlement["settlements"].append(
+        {
+            "settlement_id": settlement_id,
+            "kind": "hunter_shot",
+            "actor": hunter.name,
+            "status": "choice_accepted",
+            "accepted_choice": shot,
+            "presentation": {
+                "presentation_id": presentation_id,
+                "kind": "hunter_shot_result",
+                "hunter_shot_status": "shot" if takes_shot else "skipped",
+                "hunter_shot": wolf.name if takes_shot else None,
+            },
+            "details": {
+                "actor": hunter.name,
+                "death_cause": "vote_exile",
+                "phase": "vote",
+                "excluded_shot_targets": [],
+                "excluded_badge_targets": [],
+                "transfer_sheriff_badge": False,
+            },
+        }
+    )
+    parent_sink = (
+        CrashAfterHunterPresentationSink()
+        if crash_after_publish
+        else CrashBeforeHunterPresentationSink()
+    )
+    engine = GameEngine(
+        state=state,
+        provider=RejectingProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=parent_sink,
+        checkpoint_manager=checkpoint_manager,
+    )
+    engine.logs = [round_log]
+    engine._terminal_settlement = settlement
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "worker crashed after publishing hunter result"
+            if crash_after_publish
+            else "worker crashed before publishing hunter result"
+        ),
+    ):
+        engine._apply_hunter_shot_choice(
+            hunter=hunter,
+            shot=shot,
+            round_state=round_state,
+            round_log=round_log,
+            active_players=active,
+            phase="vote",
+            excluded_badge_targets=None,
+            transfer_sheriff_badge=False,
+        )
+
+    checkpoint = record_store.load_resume_checkpoint(state.session_id)
+    persisted = terminal_settlement_from_checkpoint(checkpoint)
+    assert persisted is not None
+    assert persisted["stage"] == "outcome_applied"
+    hunter_settlement = persisted["settlements"][-1]
+    assert hunter_settlement["status"] == "applied"
+    assert hunter_settlement["presentation"] == {
+        "presentation_id": presentation_id,
+        "kind": "hunter_shot_result",
+        "hunter_shot_status": "shot" if takes_shot else "skipped",
+        "hunter_shot": wolf.name if takes_shot else None,
+    }
+    assert persisted["state"]["rounds"][0]["hunter_shot"] == (
+        wolf.name if takes_shot else None
+    )
+
+    provider = RejectingProvider()
+    recovery_sink = IdCapturingEventSink()
+    result = resume_game(
+        session_id=state.session_id,
+        record_store=record_store,
+        provider=provider,
+        event_sink=recovery_sink,
+    )
+
+    assert result.winner == ("好人阵营" if takes_shot else "狼人阵营")
+    assert result.terminal_keep_from_event_id == 2
+    assert provider.calls == 0
+    hunter_results = [
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "hunter_shot_resolved"
+    ]
+    assert len(hunter_results) == 1
+    assert hunter_results[0]["type"] == "state_updated"
+    assert hunter_results[0]["payload"]["presentation_id"] == presentation_id
+    assert hunter_results[0]["payload"]["hunter_shot_status"] == (
+        "shot" if takes_shot else "skipped"
+    )
+    assert hunter_results[0]["payload"]["hunter_shot"] == (
+        wolf.name if takes_shot else None
+    )
+    primary_results = [
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "exile_resolved"
+        and "presentation_id" in event["payload"]
+    ]
+    assert len(primary_results) == 1
+    assert primary_results[0]["payload"]["presentation_id"] == (
+        _primary_presentation_id(state.session_id, "outcome:test:vote:exile")
+    )
+    assert primary_results[0]["payload"]["day_deaths"] == [
+        {"player": hunter.name, "cause": "vote_exile", "source": "投票"},
+    ]
+    recovered_final_state = next(
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "day_resolution_completed"
+    )
+    assert recovered_final_state["payload"]["hunter_shot"] == (
+        wolf.name if takes_shot else None
+    )
+    assert recovered_final_state["payload"]["public_summary"]
+    assert "presentation_id" not in recovered_final_state["payload"]
+    assert (
+        recovery_sink.events.index(primary_results[0])
+        < recovery_sink.events.index(hunter_results[0])
+        < recovery_sink.events.index(recovered_final_state)
+    )
+    parent_hunter_results = [
+        event
+        for event in parent_sink.events
+        if event.get("action") == "hunter_shot_resolved"
+    ]
+    assert len(parent_hunter_results) == (1 if crash_after_publish else 0)
+    if parent_hunter_results:
+        assert parent_hunter_results[0]["payload"]["presentation_id"] == presentation_id
+    assert not any(event["type"] == "judge_cue" for event in recovery_sink.events)
+
+
+@pytest.mark.parametrize("crash_after_publish", [False, True])
+def test_recovery_continues_when_hunter_clears_wolves_parity_candidate(
+    record_store: DatabaseReplayStore,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_after_publish: bool,
+) -> None:
+    rule_set = replace(
+        get_rule_set("classic_12_seer_witch_hunter_idiot"),
+        win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
+    )
+    compiled = resolve_rule_set_snapshot(rule_set_snapshot(rule_set))
+    state = initialize_game_state(
+        session_id=(
+            "game_cc000002"
+            if crash_after_publish
+            else "game_cc000001"
+        ),
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolves = [player for player in state.players if player.role == "狼人"][:2]
+    hunter = next(player for player in state.players if player.role == "猎人")
+    civilians = [player for player in state.players if player.role == "村民"][:2]
+    before = [
+        wolves[0].name,
+        wolves[1].name,
+        hunter.name,
+        civilians[0].name,
+        civilians[1].name,
+    ]
+    active = [
+        wolves[0].name,
+        wolves[1].name,
+        civilians[0].name,
+        civilians[1].name,
+    ]
+    state.sheriff = hunter.name
+    hunter.is_sheriff = True
+    round_state = RoundState(
+        number=2,
+        players=before,
+        exiled=hunter.name,
+        day_deaths=[DeathEvent(hunter.name, "vote_exile", "投票")],
+    )
+    round_log = RoundLog(number=2)
+    checkpoint_manager = ResumeCheckpointManager(
+        record_store=record_store,
+        session_id=state.session_id,
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+    )
+    checkpoint_manager.start_round(
+        state=state,
+        logs=[],
+        round_number=round_state.number,
+        active_players=before,
+        rng_state=None,
+    )
+    state.rounds.append(round_state)
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active.copy()
+    parent_sink = (
+        CrashAfterHunterPresentationSink()
+        if crash_after_publish
+        else CrashBeforeHunterPresentationSink()
+    )
+    engine = GameEngine(
+        state=state,
+        provider=RejectingProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=parent_sink,
+        checkpoint_manager=checkpoint_manager,
+    )
+    engine.logs = [round_log]
+    engine._begin_terminal_settlement(
+        round_state=round_state,
+        active_players=active,
+        phase="vote",
+        primary_actor=hunter.name,
+        hunter_contexts=[
+            {
+                "actor": hunter.name,
+                "death_cause": "vote_exile",
+                "phase": "vote",
+                "excluded_shot_targets": [],
+                "excluded_badge_targets": [],
+                "transfer_sheriff_badge": False,
+            }
+        ],
+        continuation_kind="day_exile_aftermath",
+        continuation_transfer_sheriff_badge=True,
+        skip_exile_last_words=True,
+    )
+    engine._accept_terminal_hunter_choice(
+        hunter=hunter,
+        shot=wolves[0].name,
+        round_state=round_state,
+        round_log=round_log,
+        active_players=active,
+        death_cause="vote_exile",
+        phase="vote",
+        excluded_shot_targets=set(),
+        excluded_badge_targets=None,
+        transfer_sheriff_badge=False,
+    )
+    engine._publish_terminal_primary_presentation(
+        round_state=round_state,
+        active_players=active,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "worker crashed after publishing hunter result"
+            if crash_after_publish
+            else "worker crashed before publishing hunter result"
+        ),
+    ):
+        engine._apply_hunter_shot_choice(
+            hunter=hunter,
+            shot=wolves[0].name,
+            round_state=round_state,
+            round_log=round_log,
+            active_players=active,
+            phase="vote",
+            excluded_badge_targets=None,
+            transfer_sheriff_badge=False,
+        )
+
+    persisted = terminal_settlement_from_checkpoint(
+        record_store.load_resume_checkpoint(state.session_id)
+    )
+    assert persisted is not None
+    assert persisted["stage"] == "outcome_applied"
+    assert persisted["continuation"] == {
+        "kind": "day_exile_aftermath",
+        "status": "pending",
+        "skip_exile_last_words": True,
+        "transfer_sheriff_badge": True,
+    }
+    restored_state = game_state_from_dict(persisted["state"])
+    restored_logs = [round_log_from_dict(item) for item in persisted["logs"]]
+    restored_active = [str(name) for name in persisted["active_players"]]
+    recovery_provider = BadgeOnlyRecoveryProvider(badge_target=civilians[0].name)
+    recovery_sink = IdCapturingEventSink()
+    recovery_engine = GameEngine(
+        state=restored_state,
+        provider=recovery_provider,
+        max_rounds=8,
+        rule_set=compiled.rule_set,
+        event_sink=recovery_sink,
+        checkpoint_manager=checkpoint_manager,
+    )
+    monkeypatch.setattr(recovery_engine, "_run_private_round_memories", lambda *_: None)
+
+    recovery_engine.recover_terminal_settlement(
+        persisted,
+        logs=restored_logs,
+        active_players=restored_active,
+    )
+
+    assert restored_state.winner == ""
+    assert restored_active == [
+        wolves[1].name,
+        civilians[0].name,
+        civilians[1].name,
+    ]
+    assert restored_state.sheriff == civilians[0].name
+    assert recovery_provider.actions == ["sheriff_badge"]
+    assert restored_state.rounds[-1].exile_last_words is None
+    assert restored_state.rounds[-1].success is True
+    recovery_actions = [
+        event.get("action")
+        for event in recovery_sink.events
+        if event["type"] == "state_updated"
+    ]
+    assert recovery_actions.index("exile_resolved") < recovery_actions.index(
+        "hunter_shot_resolved"
+    )
+    primary = next(
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "exile_resolved"
+    )
+    hunter_result = next(
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "hunter_shot_resolved"
+    )
+    assert str(primary["payload"]["presentation_id"]).startswith("pp_")
+    assert str(hunter_result["payload"]["presentation_id"]).startswith("hp_")
+    assert not any(
+        event.get("action") in {"hunter_shoot", "exile_last_words"}
+        for event in recovery_sink.events
+    )
+    completed = terminal_settlement_from_checkpoint(
+        record_store.load_resume_checkpoint(state.session_id)
+    )
+    assert completed is not None
+    assert completed["stage"] == "candidate_cleared"
+    assert completed["continuation"]["status"] == "applied"
+
+
+def test_second_resume_after_cleared_terminal_candidate_preserves_prior_logs(
+    record_store: DatabaseReplayStore,
+) -> None:
+    rule_set = replace(
+        get_rule_set("classic_12_seer_witch_hunter_idiot"),
+        win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
+    )
+    compiled = resolve_rule_set_snapshot(rule_set_snapshot(rule_set))
+    state = initialize_game_state(
+        session_id="game_cc000003",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolves = [player for player in state.players if player.role == "狼人"][:2]
+    hunter = next(player for player in state.players if player.role == "猎人")
+    civilians = [player for player in state.players if player.role == "村民"][:2]
+    before = [
+        wolves[0].name,
+        wolves[1].name,
+        hunter.name,
+        civilians[0].name,
+        civilians[1].name,
+    ]
+    active = [wolves[1].name, civilians[0].name, civilians[1].name]
+    state.sheriff = hunter.name
+    hunter.is_sheriff = True
+    hunter.hunter_can_shoot = False
+    round_state = RoundState(
+        number=1,
+        players=before,
+        exiled=hunter.name,
+        day_deaths=[
+            DeathEvent(hunter.name, "vote_exile", "投票"),
+            DeathEvent(wolves[0].name, "hunter_shot", "猎人开枪"),
+        ],
+        hunter_shot=wolves[0].name,
+    )
+    hunter_response = json.dumps(
+        {"reasoning": "终局候选反转。", "shoot": wolves[0].name},
+        ensure_ascii=False,
+    )
+    round_log = RoundLog(
+        number=1,
+        hunter_shoot=ActionLog(
+            actor=hunter.name,
+            action="hunter_shoot",
+            options=[wolves[0].name, wolves[1].name, *active[1:], NO_HUNTER_SHOT],
+            choice=wolves[0].name,
+            lm_log=LmLog(
+                prompt="persisted hunter prompt",
+                raw_response=hunter_response,
+                result={"reasoning": "终局候选反转。", "shoot": wolves[0].name},
+                action_id="act_double_resume_hunter",
+                request_id="req_double_resume_hunter",
+            ),
+        ),
+    )
+    settlement_id = "settlement:double-resume:hunter"
+    settlement = {
+        "settlement_schema_version": "settlement_v1",
+        "stage": "outcome_applied",
+        "primary_outcome_action_id": "outcome:double-resume:vote:exile",
+        "settlement_cursor": 2,
+        "settlements": [
+            {
+                "settlement_id": "settlement:double-resume:primary",
+                "kind": "death_batch",
+                "actor": hunter.name,
+                "status": "applied",
+                "accepted_choice": None,
+                "details": {"phase": "vote"},
+            },
+            {
+                "settlement_id": settlement_id,
+                "kind": "hunter_shot",
+                "actor": hunter.name,
+                "status": "applied",
+                "accepted_choice": wolves[0].name,
+                "details": {
+                    "actor": hunter.name,
+                    "death_cause": "vote_exile",
+                    "phase": "vote",
+                    "excluded_shot_targets": [],
+                    "excluded_badge_targets": [],
+                    "transfer_sheriff_badge": False,
+                },
+                "presentation": {
+                    "presentation_id": _hunter_presentation_id(
+                        state.session_id,
+                        settlement_id,
+                    ),
+                    "kind": "hunter_shot_result",
+                    "hunter_shot_status": "shot",
+                    "hunter_shot": wolves[0].name,
+                },
+            },
+        ],
+        "canceled_action_ids": [],
+        "continuation": {
+            "kind": "day_exile_aftermath",
+            "status": "pending",
+            "skip_exile_last_words": True,
+            "transfer_sheriff_badge": True,
+        },
+    }
+    checkpoint_manager = ResumeCheckpointManager(
+        record_store=record_store,
+        session_id=state.session_id,
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+    )
+    checkpoint_manager.start_round(
+        state=state,
+        logs=[],
+        round_number=1,
+        active_players=before,
+        rng_state=None,
+    )
+    state.rounds.append(round_state)
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active.copy()
+    checkpoint_manager.record_terminal_settlement(
+        state=state,
+        logs=[round_log],
+        active_players=active,
+        terminal_settlement=settlement,
+    )
+
+    with pytest.raises(
+        GameRunError,
+        match="worker crashed in the next round after terminal recovery",
+    ):
+        resume_game(
+            session_id=state.session_id,
+            record_store=record_store,
+            provider=ScriptedProvider(),
+            event_sink=CrashOnRoundStartedSink(round_number=2),
+        )
+
+    second_checkpoint = record_store.load_resume_checkpoint(state.session_id)
+    assert second_checkpoint["round_number"] == 2
+    assert "terminal_settlement" not in second_checkpoint
+    prior_logs = second_checkpoint["logs_before_round"]
+    assert [log["number"] for log in prior_logs] == [1]
+    assert prior_logs[0]["hunter_shoot"]["choice"] == wolves[0].name
+    badge_choice = prior_logs[0]["sheriff_badge"]["choice"]
+    assert badge_choice in active
+    assert len(prior_logs[0]["summaries"]) == 3
+
+    result = resume_game(
+        session_id=state.session_id,
+        record_store=record_store,
+        provider=ScriptedProvider(),
+    )
+
+    assert result.winner == "狼人阵营"
+    replay = record_store.load_session(state.session_id)
+    assert [log["number"] for log in replay["logs"]] == [1, 2]
+    restored_prior_log = replay["logs"][0]
+    assert restored_prior_log["hunter_shoot"]["choice"] == wolves[0].name
+    assert restored_prior_log["sheriff_badge"]["choice"] == badge_choice
+    assert len(restored_prior_log["summaries"]) == 3
+
+
+@pytest.mark.parametrize("crash_after_publish", [False, True])
+def test_pending_terminal_hunter_recovery_preserves_exile_last_words_across_publish_crash(
+    record_store: DatabaseReplayStore,
+    crash_after_publish: bool,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    compiled = legacy_official_compiled_rule_set(rule_set.id)
+    state = initialize_game_state(
+        session_id="game_ad000002" if crash_after_publish else "game_ad000001",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    hunter = next(player for player in state.players if player.role == "猎人")
+    seer = next(player for player in state.players if player.role == "预言家")
+    civilian = next(player for player in state.players if player.role == "村民")
+    before = [wolf.name, hunter.name, seer.name, civilian.name]
+    active = before.copy()
+    state.sheriff = seer.name
+    seer.is_sheriff = True
+    round_state = RoundState(number=2, players=before.copy())
+    round_log = RoundLog(number=2)
+    checkpoint_manager = ResumeCheckpointManager(
+        record_store=record_store,
+        session_id=state.session_id,
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+    )
+    checkpoint_manager.start_round(
+        state=state,
+        logs=[],
+        round_number=round_state.number,
+        active_players=before,
+        rng_state=None,
+    )
+    state.rounds.append(round_state)
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = before.copy()
+    parent_provider = ScriptedProvider()
+    parent_sink = (
+        CrashAfterExileLastWordsResultSink()
+        if crash_after_publish
+        else CrashBeforeExileLastWordsResultSink()
+    )
+    engine = GameEngine(
+        state=state,
+        provider=parent_provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=parent_sink,
+        checkpoint_manager=checkpoint_manager,
+    )
+    engine.logs = [round_log]
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "worker crashed after publishing exile last words result"
+            if crash_after_publish
+            else "worker crashed before publishing exile last words result"
+        ),
+    ):
+        engine._resolve_day_exile(
+            hunter.name,
+            round_state,
+            round_log,
+            active,
+        )
+
+    assert parent_provider.calls == 1
+    assert active == [wolf.name, seer.name, civilian.name]
+    persisted = terminal_settlement_from_checkpoint(
+        record_store.load_resume_checkpoint(state.session_id)
+    )
+    assert persisted is not None
+    assert persisted["stage"] == "outcome_applied"
+    assert persisted["continuation"] == {
+        "kind": "day_exile_aftermath",
+        "status": "pending",
+        "skip_exile_last_words": False,
+        "transfer_sheriff_badge": True,
+    }
+    assert persisted["settlements"][-1]["status"] == "pending"
+    persisted_round = persisted["state"]["rounds"][-1]
+    assert persisted_round["exile_last_words"] == {
+        "player": hunter.name,
+        "message": "我会继续观察。",
+        "status": "completed",
+        "reason_code": "completed",
+    }
+    persisted_last_words_log = persisted["logs"][-1]["exile_last_words"]
+    assert persisted_last_words_log["choice"] == "我会继续观察。"
+    parent_speech = next(
+        event
+        for event in parent_sink.events
+        if event["type"] == "action_parsed"
+        and event.get("action") == "exile_last_words"
+    )
+    assert str(parent_speech["payload"]["presentation_id"]).startswith("lws_")
+    parent_results = [
+        event
+        for event in parent_sink.events
+        if event["type"] == "state_updated"
+        and event.get("action") == "exile_last_words"
+    ]
+    assert len(parent_results) == (1 if crash_after_publish else 0)
+    if parent_results:
+        assert str(parent_results[0]["payload"]["presentation_id"]).startswith(
+            "lwr_"
+        )
+
+    recovery_provider = PendingHunterRecoveryProvider(shoot_choice=wolf.name)
+    recovery_sink = IdCapturingEventSink()
+    result = resume_game(
+        session_id=state.session_id,
+        record_store=record_store,
+        provider=recovery_provider,
+        event_sink=recovery_sink,
+    )
+
+    assert result.winner == "好人阵营"
+    assert result.terminal_keep_from_event_id == 2
+    assert recovery_provider.actions == ["hunter_shoot"]
+    recovered_primary = next(
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "exile_resolved"
+    )
+    recovered_speech = next(
+        event
+        for event in recovery_sink.events
+        if event["type"] == "action_parsed"
+        and event.get("action") == "exile_last_words"
+    )
+    recovered_last_words = next(
+        event
+        for event in recovery_sink.events
+        if event["type"] == "state_updated"
+        and event.get("action") == "exile_last_words"
+    )
+    hunter_request = next(
+        event
+        for event in recovery_sink.events
+        if event["type"] == "action_requested"
+        and event.get("action") == "hunter_shoot"
+    )
+    recovered_hunter = next(
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "hunter_shot_resolved"
+    )
+    assert recovered_speech["payload"] == parent_speech["payload"]
+    assert recovered_last_words["payload"]["exile_last_words"] == (
+        persisted_round["exile_last_words"]
+    )
+    speech_presentation_ids = {
+        str(event["payload"]["presentation_id"])
+        for event in [parent_speech, recovered_speech]
+    }
+    result_presentation_ids = {
+        str(event["payload"]["presentation_id"])
+        for event in [*parent_results, recovered_last_words]
+    }
+    assert len(speech_presentation_ids) == 1
+    assert len(result_presentation_ids) == 1
+    assert (
+        recovery_sink.events.index(recovered_primary)
+        < recovery_sink.events.index(recovered_speech)
+        < recovery_sink.events.index(recovered_last_words)
+        < recovery_sink.events.index(hunter_request)
+        < recovery_sink.events.index(recovered_hunter)
+    )
+    replay = record_store.load_session(state.session_id)
+    replay_round = replay["state"]["rounds"][-1]
+    assert replay_round["exile_last_words"] == persisted_round["exile_last_words"]
+    assert replay["logs"][-1]["exile_last_words"]["choice"] == "我会继续观察。"
+
+
+@pytest.mark.parametrize("crash_after_publish", [False, True])
+def test_recovery_replays_frozen_primary_before_terminal_hunter_result(
+    record_store: DatabaseReplayStore,
+    crash_after_publish: bool,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    compiled = legacy_official_compiled_rule_set(rule_set.id)
+    state = initialize_game_state(
+        session_id="game_bf000002" if crash_after_publish else "game_bf000001",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    hunter = next(player for player in state.players if player.role == "猎人")
+    seer = next(player for player in state.players if player.role == "预言家")
+    civilian = next(player for player in state.players if player.role == "村民")
+    before = [wolf.name, hunter.name, seer.name, civilian.name]
+    active = [wolf.name, seer.name, civilian.name]
+    state.sheriff = seer.name
+    seer.is_sheriff = True
+    round_state = RoundState(
+        number=2,
+        players=before,
+        exiled=hunter.name,
+        day_deaths=[DeathEvent(hunter.name, "vote_exile", "投票")],
+    )
+    round_log = RoundLog(number=2)
+    checkpoint_manager = ResumeCheckpointManager(
+        record_store=record_store,
+        session_id=state.session_id,
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+    )
+    checkpoint_manager.start_round(
+        state=state,
+        logs=[],
+        round_number=round_state.number,
+        active_players=before,
+        rng_state=None,
+    )
+    state.rounds.append(round_state)
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active.copy()
+    parent_sink = (
+        CrashAfterHunterPresentationSink()
+        if crash_after_publish
+        else CrashBeforeHunterPresentationSink()
+    )
+    engine = GameEngine(
+        state=state,
+        provider=RejectingProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=parent_sink,
+        checkpoint_manager=checkpoint_manager,
+    )
+    engine.logs = [round_log]
+    engine._append_public_outcome(
+        round_state=round_state,
+        kind="exile",
+        target_player=hunter.name,
+        outcome="eliminated",
+        phase="vote",
+    )
+    engine._begin_terminal_settlement(
+        round_state=round_state,
+        active_players=active,
+        phase="vote",
+        primary_actor=hunter.name,
+        hunter_contexts=[
+            {
+                "actor": hunter.name,
+                "death_cause": "vote_exile",
+                "phase": "vote",
+                "excluded_shot_targets": [],
+                "excluded_badge_targets": [],
+                "transfer_sheriff_badge": False,
+            }
+        ],
+        continuation_kind="day_exile_aftermath",
+        continuation_transfer_sheriff_badge=True,
+        skip_exile_last_words=False,
+    )
+    engine._accept_terminal_hunter_choice(
+        hunter=hunter,
+        shot=wolf.name,
+        round_state=round_state,
+        round_log=round_log,
+        active_players=active,
+        death_cause="vote_exile",
+        phase="vote",
+        excluded_shot_targets=set(),
+        excluded_badge_targets=None,
+        transfer_sheriff_badge=False,
+    )
+    engine._publish_terminal_primary_presentation(
+        round_state=round_state,
+        active_players=active,
+    )
+    parent_primary = next(
+        event
+        for event in parent_sink.events
+        if event.get("action") == "exile_resolved"
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "worker crashed after publishing hunter result"
+            if crash_after_publish
+            else "worker crashed before publishing hunter result"
+        ),
+    ):
+        engine._apply_hunter_shot_choice(
+            hunter=hunter,
+            shot=wolf.name,
+            round_state=round_state,
+            round_log=round_log,
+            active_players=active,
+            phase="vote",
+            excluded_badge_targets=None,
+            transfer_sheriff_badge=False,
+        )
+
+    persisted = terminal_settlement_from_checkpoint(
+        record_store.load_resume_checkpoint(state.session_id)
+    )
+    assert persisted is not None
+    frozen = persisted["primary_presentation_payload"]
+    assert frozen["day_deaths"] == [
+        {"player": hunter.name, "cause": "vote_exile", "source": "投票"},
+    ]
+    assert frozen["active_players"] == [wolf.name, seer.name, civilian.name]
+    assert [event["kind"] for event in frozen["public_outcome_events"]] == [
+        "exile"
+    ]
+
+    provider = RejectingProvider()
+    recovery_sink = IdCapturingEventSink()
+    result = resume_game(
+        session_id=state.session_id,
+        record_store=record_store,
+        provider=provider,
+        event_sink=recovery_sink,
+    )
+
+    assert result.winner == "好人阵营"
+    assert result.terminal_keep_from_event_id == 2
+    assert provider.calls == 0
+    recovered_primary = next(
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "exile_resolved"
+    )
+    recovered_hunter = next(
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "hunter_shot_resolved"
+    )
+    folded = next(
+        event
+        for event in recovery_sink.events
+        if event.get("action") == "day_resolution_completed"
+    )
+    assert recovered_primary["payload"] == parent_primary["payload"]
+    assert recovered_primary["payload"]["day_deaths"] == [
+        {"player": hunter.name, "cause": "vote_exile", "source": "投票"},
+    ]
+    assert recovered_hunter["payload"]["day_deaths"] == [
+        {"player": hunter.name, "cause": "vote_exile", "source": "投票"},
+        {"player": wolf.name, "cause": "hunter_shot", "source": hunter.name},
+    ]
+    assert folded["payload"]["day_deaths"] == recovered_hunter["payload"][
+        "day_deaths"
+    ]
+    assert (
+        recovery_sink.events.index(recovered_primary)
+        < recovery_sink.events.index(recovered_hunter)
+        < recovery_sink.events.index(folded)
+    )
+
+
+def test_terminal_hunter_presentation_validation_is_strict_but_optional_for_legacy() -> None:
+    legacy = _primary_terminal_settlement(stage="hunter_choice_accepted")
+    legacy.update({"state": {}, "logs": [], "active_players": ["1号玩家"]})
+    legacy["settlements"].append(
+        {
+            "settlement_id": "settlement:test:hunter:legacy",
+            "kind": "hunter_shot",
+            "actor": "1号玩家",
+            "status": "choice_accepted",
+            "accepted_choice": NO_HUNTER_SHOT,
+            "details": {"phase": "vote"},
+        }
+    )
+
+    assert terminal_settlement_from_checkpoint({"terminal_settlement": legacy}) is not None
+
+    with_primary = copy.deepcopy(legacy)
+    with_primary["primary_presentation"] = {
+        "presentation_id": "pp_0123456789abcdef01234567",
+        "kind": "exile_result",
+    }
+    assert (
+        terminal_settlement_from_checkpoint({"terminal_settlement": with_primary})
+        is not None
+    )
+
+    with_frozen_payload = copy.deepcopy(with_primary)
+    with_frozen_payload["primary_presentation_payload"] = {
+        "exiled": "1号玩家",
+        "day_deaths": [
+            {"player": "1号玩家", "cause": "vote_exile", "source": "投票"}
+        ],
+        "active_players": ["2号玩家"],
+        "public_outcome_events": [],
+        "public_outcome_next_sequence": 1,
+    }
+    assert (
+        terminal_settlement_from_checkpoint(
+            {"terminal_settlement": with_frozen_payload}
+        )
+        is not None
+    )
+
+    malformed_frozen_payload = copy.deepcopy(with_frozen_payload)
+    malformed_frozen_payload["primary_presentation_payload"]["day_deaths"] = [
+        {"player": "2号玩家", "cause": "hunter_shot", "source": "1号玩家"}
+    ]
+    with pytest.raises(ResumeCheckpointError, match="structure is invalid"):
+        terminal_settlement_from_checkpoint(
+            {"terminal_settlement": malformed_frozen_payload}
+        )
+
+    malformed_primary = copy.deepcopy(with_primary)
+    malformed_primary["primary_presentation"]["presentation_id"] = "exile-result-1"
+    with pytest.raises(ResumeCheckpointError, match="structure is invalid"):
+        terminal_settlement_from_checkpoint(
+            {"terminal_settlement": malformed_primary}
+        )
+
+    malformed = copy.deepcopy(legacy)
+    malformed["settlements"][-1]["presentation"] = {
+        "presentation_id": "not-an-opaque-presentation-id",
+        "kind": "hunter_shot_result",
+        "hunter_shot_status": "shot",
+        "hunter_shot": "2号玩家",
+    }
+
+    with pytest.raises(ResumeCheckpointError, match="structure is invalid"):
+        terminal_settlement_from_checkpoint({"terminal_settlement": malformed})
+
+
+def test_resume_deferred_hunter_settlement_after_last_wolf_self_explosion(
+    record_store: DatabaseReplayStore,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="game_a0010004",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    hunter = next(player for player in state.players if player.role == "猎人")
+    seer = next(player for player in state.players if player.role == "预言家")
+    civilian = next(player for player in state.players if player.role == "村民")
+    before = [wolf.name, hunter.name, seer.name, civilian.name]
+    active = [seer.name, civilian.name]
+    round_state = RoundState(
+        number=1,
+        players=before,
+        werewolf_self_exploded=wolf.name,
+        day_ended_by_self_explosion=True,
+        day_deaths=[DeathEvent(wolf.name, "werewolf_self_explosion", wolf.name)],
+        night_deaths=[DeathEvent(hunter.name, "werewolf_attack", "狼人")],
+    )
+    settlement = {
+        "settlement_schema_version": "settlement_v1",
+        "stage": "outcome_applied",
+        "primary_outcome_action_id": "outcome:test:night:death_batch",
+        "settlement_cursor": 1,
+        "settlements": [
+            {
+                "settlement_id": "settlement:test:primary",
+                "kind": "death_batch",
+                "actor": None,
+                "status": "applied",
+                "accepted_choice": None,
+                "details": {"phase": "night"},
+            },
+            {
+                "settlement_id": "settlement:test:hunter",
+                "kind": "hunter_shot",
+                "actor": hunter.name,
+                "status": "pending",
+                "accepted_choice": None,
+                "details": {
+                    "actor": hunter.name,
+                    "death_cause": "werewolf_attack",
+                    "phase": "night",
+                    "excluded_shot_targets": [hunter.name],
+                    "excluded_badge_targets": [hunter.name],
+                    "transfer_sheriff_badge": False,
+                },
+            },
+        ],
+        "canceled_action_ids": [],
+    }
+    _persist_terminal_settlement_checkpoint(
+        record_store=record_store,
+        state=state,
+        round_state=round_state,
+        round_log=RoundLog(number=1),
+        active_players=active,
+        terminal_settlement=settlement,
+    )
+    provider = PendingHunterRecoveryProvider(shoot_choice=civilian.name)
+    sink = IdCapturingEventSink()
+
+    result = resume_game(
+        session_id=state.session_id,
+        record_store=record_store,
+        provider=provider,
+        event_sink=sink,
+    )
+
+    assert result.winner == "好人阵营"
+    assert provider.actions == ["hunter_shoot"]
+    assert [
+        event.get("action")
+        for event in sink.events
+        if event["type"] == "action_requested"
+    ] == ["hunter_shoot"]
+    replay = record_store.load_session(state.session_id)
+    restored_round = replay["state"]["rounds"][0]
+    assert restored_round["werewolf_self_exploded"] == wolf.name
+    assert [death["player"] for death in restored_round["day_deaths"]] == [wolf.name]
+    assert [death["player"] for death in restored_round["night_deaths"]] == [
+        hunter.name,
+        civilian.name,
+    ]
+    assert restored_round["hunter_shot"] == civilian.name
 
 
 def test_complete_v1_resume_normalizes_only_when_next_round_is_written(

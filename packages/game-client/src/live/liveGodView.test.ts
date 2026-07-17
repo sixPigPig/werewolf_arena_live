@@ -8,8 +8,8 @@ function event(partial: Partial<LiveGameEvent>): LiveGameEvent {
   return {
     id: partial.id ?? 1,
     type: partial.type ?? "game_started",
-    run_id: "run_1234abcd",
-    session_id: "game_1200abcd",
+    run_id: partial.run_id ?? "run_1234abcd",
+    session_id: partial.session_id ?? "game_1200abcd",
     created_at: partial.created_at ?? "2026-04-24T12:00:00Z",
     round: partial.round ?? null,
     phase: partial.phase ?? null,
@@ -502,6 +502,243 @@ describe("deriveGodViewState", () => {
     });
     expect(state.eventLines[0]?.text).toBe("2号 夜晚死亡，1号 夜晚死亡");
     expect(state.eventLines[0]?.text).not.toBe("平安夜");
+  });
+
+  it("folds parent and child hunter-shot presentations into one display result", () => {
+    const presentationId =
+      "settlement:game_hunter:2:day:1号猎人:hunter:1号猎人:presentation";
+    const shotPayload = {
+      presentation_id: presentationId,
+      hunter_shot_status: "shot",
+      hunter_shot: "2号平民A",
+      day_deaths: [
+        { player: "1号猎人", cause: "vote_exile", source: null },
+        { player: "2号平民A", cause: "hunter_shot", source: "1号猎人" },
+      ],
+      active_players: ["3号平民B", "4号狼人"],
+    };
+    const events = [
+      event({
+        id: 1,
+        run_id: "run-parent",
+        session_id: "game_hunter",
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "1号猎人", role: "hunter", model: "test-model" },
+            { name: "2号平民A", role: "villager", model: "test-model" },
+            { name: "3号平民B", role: "villager", model: "test-model" },
+            { name: "4号狼人", role: "werewolf", model: "test-model" },
+          ],
+        },
+      }),
+      event({
+        id: 10,
+        run_id: "run-parent",
+        session_id: "game_hunter",
+        type: "state_updated",
+        round: 2,
+        phase: "day",
+        actor: "1号猎人",
+        action: "hunter_shot_resolved",
+        payload: shotPayload,
+      }),
+      event({
+        id: 11,
+        run_id: "run-child",
+        session_id: "game_hunter",
+        type: "game_resumed",
+        round: 2,
+        phase: "day",
+      }),
+      event({
+        id: 12,
+        run_id: "run-child",
+        session_id: "game_hunter",
+        type: "state_updated",
+        round: 2,
+        phase: "day",
+        actor: "1号猎人",
+        action: "hunter_shot_resolved",
+        payload: shotPayload,
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "猎人恢复测试");
+    const shotLines = state.eventLines.filter(
+      (line) => line.text === "猎人带走 2号",
+    );
+    const shotMarks = state.replayMarks.filter(
+      (line) => line.text === "猎人带走 2号",
+    );
+
+    expect(shotLines).toEqual([expect.objectContaining({ id: 12 })]);
+    expect(shotMarks).toEqual([expect.objectContaining({ id: 12 })]);
+    expect(
+      state.skillTriggers.filter((trigger) => trigger.label === "猎人带走"),
+    ).toEqual([expect.objectContaining({ id: 12 })]);
+    expect(
+      state.deaths.filter((death) => death.player === "2号平民A"),
+    ).toHaveLength(1);
+    expect(state.players.find((player) => player.name === "2号平民A")).toMatchObject({
+      isAlive: false,
+    });
+    expect(state.players.find((player) => player.name === "3号平民B")).toMatchObject({
+      isAlive: true,
+    });
+    expect(state.progress.totalAlive).toBe(2);
+  });
+
+  it("folds parent and child hunter no-shot presentations into one explicit result", () => {
+    const presentationId =
+      "settlement:game_hunter_skip:2:day:1号猎人:hunter:1号猎人:presentation";
+    const skippedPayload = {
+      presentation_id: presentationId,
+      hunter_shot_status: "skipped",
+      hunter_shot: null,
+      day_deaths: [
+        { player: "1号猎人", cause: "vote_exile", source: null },
+      ],
+      active_players: ["2号平民", "3号狼人"],
+    };
+    const events = [
+      event({
+        id: 1,
+        run_id: "run-parent",
+        session_id: "game_hunter_skip",
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "1号猎人", role: "hunter", model: "test-model" },
+            { name: "2号平民", role: "villager", model: "test-model" },
+            { name: "3号狼人", role: "werewolf", model: "test-model" },
+          ],
+        },
+      }),
+      event({
+        id: 20,
+        run_id: "run-parent",
+        session_id: "game_hunter_skip",
+        type: "state_updated",
+        round: 2,
+        phase: "day",
+        actor: "1号猎人",
+        action: "hunter_shot_resolved",
+        payload: skippedPayload,
+      }),
+      event({
+        id: 21,
+        run_id: "run-child",
+        session_id: "game_hunter_skip",
+        type: "game_resumed",
+        round: 2,
+        phase: "day",
+      }),
+      event({
+        id: 22,
+        run_id: "run-child",
+        session_id: "game_hunter_skip",
+        type: "state_updated",
+        round: 2,
+        phase: "day",
+        actor: "1号猎人",
+        action: "hunter_shot_resolved",
+        payload: skippedPayload,
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "猎人不发动恢复测试");
+    const skippedLines = state.eventLines.filter(
+      (line) => line.text === "猎人选择不发动技能",
+    );
+    const skippedMarks = state.replayMarks.filter(
+      (line) => line.text === "猎人选择不发动技能",
+    );
+
+    expect(skippedLines).toEqual([expect.objectContaining({ id: 22 })]);
+    expect(skippedMarks).toEqual([expect.objectContaining({ id: 22 })]);
+    expect(
+      state.skillTriggers.filter((trigger) => trigger.label === "猎人带走"),
+    ).toHaveLength(0);
+    expect(state.players.find((player) => player.name === "1号猎人")).toMatchObject({
+      isAlive: false,
+    });
+    expect(state.players.find((player) => player.name === "2号平民")).toMatchObject({
+      isAlive: true,
+    });
+    expect(state.progress.totalAlive).toBe(2);
+  });
+
+  it("folds a recovered primary exile presentation without dropping its final state", () => {
+    const presentationId =
+      "settlement:game_exile:3:vote:2号平民:primary:presentation";
+    const exilePayload = {
+      presentation_id: presentationId,
+      exiled: "2号平民",
+      day_deaths: [
+        { player: "2号平民", cause: "vote_exile", source: null },
+      ],
+      active_players: ["1号狼人", "3号预言家"],
+    };
+    const events = [
+      event({
+        id: 1,
+        run_id: "run-parent",
+        session_id: "game_exile",
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "1号狼人", role: "werewolf", model: "test-model" },
+            { name: "2号平民", role: "villager", model: "test-model" },
+            { name: "3号预言家", role: "seer", model: "test-model" },
+          ],
+        },
+      }),
+      event({
+        id: 30,
+        run_id: "run-parent",
+        session_id: "game_exile",
+        type: "state_updated",
+        round: 3,
+        phase: "vote",
+        action: "exile_resolved",
+        payload: exilePayload,
+      }),
+      event({
+        id: 31,
+        run_id: "run-child",
+        session_id: "game_exile",
+        type: "game_resumed",
+        round: 3,
+        phase: "vote",
+      }),
+      event({
+        id: 32,
+        run_id: "run-child",
+        session_id: "game_exile",
+        type: "state_updated",
+        round: 3,
+        phase: "vote",
+        action: "exile_resolved",
+        payload: exilePayload,
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "放逐恢复测试");
+    const exileLines = state.eventLines.filter(
+      (line) => line.text === "2号 被放逐",
+    );
+    const exileMarks = state.replayMarks.filter(
+      (line) => line.text === "2号 被放逐",
+    );
+
+    expect(exileLines).toEqual([expect.objectContaining({ id: 32 })]);
+    expect(exileMarks).toEqual([expect.objectContaining({ id: 32 })]);
+    expect(state.players.find((player) => player.name === "2号平民")).toMatchObject({
+      isAlive: false,
+      exitKind: "day-exile",
+    });
+    expect(state.progress.totalAlive).toBe(2);
   });
 
   it("derives sheriff rule state and neutral win pressure", () => {

@@ -174,8 +174,307 @@ def test_prompt_renders_public_facts() -> None:
         },
     )
 
-    assert "公开事实记录" in prompt
+    assert "未分类公开记录（非引擎确认）" in prompt
     assert "7号玩家警上声明6号玩家为好人。" in prompt
+
+
+def test_prompt_partitions_public_facts_by_trust_class() -> None:
+    prompt, _schema = build_prompt(
+        "debate",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "public_facts": [
+                {
+                    "round_number": 3,
+                    "category": "death",
+                    "trust_class": "engine_fact",
+                    "text": "第3轮，5号玩家被放逐。",
+                },
+                {
+                    "round_number": 3,
+                    "category": "claim",
+                    "trust_class": "player_claim",
+                    "text": "5号玩家遗言声称8号玩家是狼人。",
+                },
+                {
+                    "round_number": 1,
+                    "category": "claim",
+                    "text": "历史记录称2号玩家是预言家。",
+                },
+            ],
+        },
+    )
+
+    assert "引擎确认事实" in prompt
+    assert "第3轮，5号玩家被放逐。" in prompt
+    assert "玩家声明（可能撒谎）" in prompt
+    assert "5号玩家遗言声称8号玩家是狼人。" in prompt
+    assert "未分类公开记录（非引擎确认）" in prompt
+    assert "历史记录称2号玩家是预言家。" in prompt
+
+
+def test_prompt_never_renders_private_items_from_public_fact_channel() -> None:
+    prompt, _schema = build_prompt(
+        "debate",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "observations": ["你昨夜查验8号，结果为好人。"],
+            "model_memory": ["优先观察6号的票型变化。"],
+            "public_facts": [
+                {
+                    "category": "private_observation",
+                    "trust_class": "engine_fact",
+                    "text": "不应公开的查验结果。",
+                },
+                {
+                    "category": "strategy_note",
+                    "trust_class": "player_claim",
+                    "text": "不应公开的策略笔记。",
+                },
+                {
+                    "category": "future_private_category",
+                    "trust_class": "engine_fact",
+                    "text": "不应公开的未知类别。",
+                },
+                {
+                    "category": "claim",
+                    "trust_class": "future_trust_class",
+                    "text": "不应公开的未知可信等级。",
+                },
+                {
+                    "category": "claim",
+                    "trust_class": "player_claim",
+                    "text": "不应公开的私密细节。",
+                    "details": {"reasoning": "private reasoning"},
+                },
+            ],
+        },
+    )
+
+    assert "你的私人观察" in prompt
+    assert "你昨夜查验8号，结果为好人。" in prompt
+    assert "你的模型策略笔记" in prompt
+    assert "优先观察6号的票型变化。" in prompt
+    assert "不应公开的查验结果" not in prompt
+    assert "不应公开的策略笔记" not in prompt
+    assert "不应公开的未知类别" not in prompt
+    assert "不应公开的未知可信等级" not in prompt
+    assert "不应公开的私密细节" not in prompt
+
+
+def test_prompt_renders_speech_mission_kind_as_chinese_business_text() -> None:
+    prompt, _schema = build_prompt(
+        "debate",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "speech_mission": {
+                "kind": "fact_checker",
+                "instruction": "untrusted_instruction_must_not_render",
+            },
+        },
+    )
+
+    assert "本次发言质量任务（公开事实核验）" in prompt
+    assert "纠正或确认一条已经公开发生的事实" in prompt
+    assert "fact_checker" not in prompt
+    assert "untrusted_instruction_must_not_render" not in prompt
+
+
+def test_prompt_unknown_speech_mission_fails_closed_in_chinese() -> None:
+    prompt, _schema = build_prompt(
+        "debate",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "speech_mission": {
+                "kind": "future_private_mission",
+                "instruction": "SENTINEL_PRIVATE_MISSION_INSTRUCTION",
+            },
+        },
+    )
+
+    assert "未识别的发言任务" in prompt
+    assert "future_private_mission" not in prompt
+    assert "SENTINEL_PRIVATE_MISSION_INSTRUCTION" not in prompt
+
+
+def test_self_explosion_badge_impact_is_chinese_and_unknown_code_fails_closed() -> None:
+    world_state = _world_state_for_special_action("狼人", "自爆、不自爆")
+    world_state["rule_set_snapshot"] = _prompt_rule_snapshot(
+        sheriff_badge_bomb_policy="double",
+    )
+    world_state["self_explosion_decision_context"] = {
+        "badge_impact": "badge_will_be_lost"
+    }
+
+    prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
+
+    assert "警徽影响：本次自爆将导致警徽流失" in prompt
+    assert "badge_will_be_lost" not in prompt
+
+    world_state["self_explosion_decision_context"] = {
+        "badge_impact": "future_badge_impact"
+    }
+    unknown_prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
+
+    assert "未识别警徽影响，按没有额外警徽收益处理" in unknown_prompt
+    assert "future_badge_impact" not in unknown_prompt
+
+
+def test_self_explosion_benefit_enum_values_have_chinese_explanations() -> None:
+    prompt, _schema = build_prompt(
+        "werewolf_self_explosion",
+        _world_state_for_special_action("狼人", "自爆、不自爆"),
+    )
+
+    expected_labels = {
+        "immediate_win": "立即取得对局胜利",
+        "secure_badge_denial": "确保对方无法获得或保留警徽收益",
+        "protect_last_hidden_wolf": "保护最后一名仍隐藏身份的狼人",
+        "deny_confirmed_public_information": "阻止好人获得即将公开的确定信息",
+        "force_valuable_night": "强制进入对狼人有明确价值的夜晚",
+        "none": "没有足以支持自爆的明确收益",
+    }
+    for value, label in expected_labels.items():
+        assert f"{value}={label}" in prompt
+
+
+@pytest.mark.parametrize(
+    ("death_cause", "expected"),
+    [
+        ("vote_exile", "被白天投票放逐"),
+        ("werewolf_attack", "被狼人夜间袭击"),
+        ("witch_poison", "被女巫使用毒药"),
+        ("hunter_shot", "被猎人开枪带走"),
+        ("werewolf_self_explosion", "因狼人自爆出局"),
+    ],
+)
+def test_prompt_renders_death_cause_as_chinese(
+    death_cause: str,
+    expected: str,
+) -> None:
+    prompt, _schema = build_prompt(
+        "exile_last_words",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "hard_state": {
+                "actor_alive": False,
+                "death_cause": death_cause,
+                "current_action": "exile_last_words",
+            },
+        },
+    )
+
+    assert expected in prompt
+    assert death_cause not in prompt
+    assert "驱逐遗言" in prompt
+
+
+def test_prompt_unknown_state_code_fails_closed_without_leaking_value(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    prompt, _schema = build_prompt(
+        "exile_last_words",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "hard_state": {
+                "actor_alive": False,
+                "death_cause": "future_custom_cause",
+                "current_action": "future_custom_action",
+                "phase": "future_custom_phase",
+                "status": "future_custom_status",
+                "reason": "future_custom_reason",
+            },
+        },
+    )
+
+    assert "因未识别的规则原因出局" in prompt
+    assert "未识别的规则阶段" in prompt
+    assert "未识别的流程状态" in prompt
+    assert "未识别的规则原因" in prompt
+    assert "future_custom" not in prompt
+    assert "unknown_prompt_state_code" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "unknown_value",
+    ["future/custom", "future custom", "404", "../future", "future.custom"],
+)
+def test_prompt_unknown_non_chinese_state_value_always_fails_closed(
+    unknown_value: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    prompt, _schema = build_prompt(
+        "exile_last_words",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "hard_state": {
+                "actor_alive": False,
+                "death_cause": unknown_value,
+                "current_action": unknown_value,
+                "phase": unknown_value,
+                "status": unknown_value,
+                "reason": unknown_value,
+            },
+        },
+    )
+
+    assert unknown_value not in prompt
+    assert "因未识别的规则原因出局" in prompt
+    assert "未识别的规则阶段" in prompt
+    assert "未识别的流程状态" in prompt
+    assert "unknown_prompt_state_code" in caplog.text
+
+
+def test_prompt_allows_explicit_custom_chinese_state_text() -> None:
+    prompt, _schema = build_prompt(
+        "exile_last_words",
+        {
+            **_world_state_for_special_action("村民", ""),
+            "hard_state": {
+                "actor_alive": False,
+                "death_cause": "因自定义角色技能出局",
+            },
+        },
+    )
+
+    assert "你的出局原因：因自定义角色技能出局" in prompt
+
+
+def test_prompt_renders_hunter_and_terminal_hard_state_constraints() -> None:
+    prompt, _schema = build_prompt(
+        "debate",
+        {
+            **_world_state_for_special_action("猎人", ""),
+            "hard_state": {
+                "actor_alive": True,
+                "hunter_death_trigger_active": False,
+                "terminal_after_current_action": True,
+            },
+        },
+    )
+
+    assert "存活状态下不能主动开枪" in prompt
+    assert "不存在下一轮或下一夜" in prompt
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [
+        ("debate", "不超过 220 个汉字"),
+        ("sheriff_speech", "不超过 180 个汉字"),
+        ("sheriff_pk_speech", "不超过 180 个汉字"),
+        ("exile_pk_speech", "不超过 180 个汉字"),
+        ("exile_last_words", "不超过 150 个汉字"),
+        ("werewolf_kill_vote", "不超过 60 个汉字"),
+    ],
+)
+def test_prompt_states_the_reviewed_speech_budget(action: str, expected: str) -> None:
+    prompt, _schema = build_prompt(
+        action,
+        _world_state_for_special_action("狼人", "Alice、Bob"),
+    )
+
+    assert expected in prompt
 
 
 def test_prompt_renders_public_self_history() -> None:
@@ -733,6 +1032,7 @@ def test_generate_action_with_events_does_not_schedule_retry_on_final_invalid_at
             "actor": "Alice",
             "action": "witch_poison",
         },
+        action_id_factory=lambda: "act_final_invalid",
         request_id_factory=lambda: "req_final_invalid",
         enable_progress_ticks=False,
     )
@@ -743,9 +1043,14 @@ def test_generate_action_with_events_does_not_schedule_retry_on_final_invalid_at
             "value": "10号玩家",
             "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
             "result_key": "poison",
+            "action_id": "act_final_invalid",
+            "request_id": "req_final_invalid",
         }
     ]
-    assert [event["type"] for event in sink.events] == ["model_request_started"]
+    assert [event["type"] for event in sink.events] == [
+        "model_request_started",
+        "model_attempt_completed",
+    ]
 
 
 def test_generate_action_with_events_classifies_empty_content_and_retries_safely() -> None:
@@ -809,6 +1114,7 @@ def test_generate_action_with_events_publishes_sanitized_started_before_model_ou
             "actor": "Alice",
             "action": "debate",
         },
+        action_id_factory=lambda: "act_started",
         request_id_factory=lambda: "req_started",
         enable_progress_ticks=False,
     )
@@ -819,6 +1125,7 @@ def test_generate_action_with_events_publishes_sanitized_started_before_model_ou
     started = sink.events[0]
     assert started["type"] == "model_request_started"
     assert started["payload"] == {
+        "action_id": "act_started",
         "request_id": "req_started",
         "model": "deepseek-chat",
         "message": "玩家正在组织公开发言...",
@@ -874,6 +1181,7 @@ def test_generate_action_with_events_falls_back_when_stream_fails_before_output(
             "actor": "Alice",
             "action": "debate",
         },
+        action_id_factory=lambda: "act_stream_fallback",
         request_id_factory=lambda: "req_stream_fallback",
         enable_progress_ticks=False,
     )
@@ -882,7 +1190,10 @@ def test_generate_action_with_events_falls_back_when_stream_fails_before_output(
     assert log.raw_response == '{"reasoning":"完整响应","say":"流式失败后完整返回"}'
     assert provider.stream_calls == 1
     assert provider.complete_calls == 1
-    assert [event["type"] for event in sink.events] == ["model_request_started"]
+    assert [event["type"] for event in sink.events] == [
+        "model_request_started",
+        "model_attempt_completed",
+    ]
 
 
 def test_generate_action_with_events_publishes_failure_and_stops_progress_on_partial_stream_error(
@@ -930,6 +1241,7 @@ def test_generate_action_with_events_publishes_failure_and_stops_progress_on_par
                 "actor": "Alice",
                 "action": "debate",
             },
+            action_id_factory=lambda: "act_stream_fail",
             request_id_factory=lambda: "req_stream_fail",
         )
 
@@ -939,9 +1251,11 @@ def test_generate_action_with_events_publishes_failure_and_stops_progress_on_par
     failed_events = [event for event in sink.events if event["type"] == "model_request_failed"]
     assert len(failed_events) == 1
     assert failed_events[0]["payload"] == {
+        "action_id": "act_stream_fail",
         "request_id": "req_stream_fail",
         "model": "deepseek-chat",
         "message": "模型请求失败，正在中止本次行动",
+        "attempt_result": "transport_failed",
     }
 
 
@@ -967,15 +1281,18 @@ def test_generate_action_with_events_sanitizes_public_failure_error() -> None:
                 "actor": "Alice",
                 "action": "debate",
             },
+            action_id_factory=lambda: "act_leaky_fail",
             request_id_factory=lambda: "req_leaky_fail",
             enable_progress_ticks=False,
         )
 
     failed_event = next(event for event in sink.events if event["type"] == "model_request_failed")
     assert failed_event["payload"] == {
+        "action_id": "act_leaky_fail",
         "request_id": "req_leaky_fail",
         "model": "deepseek-chat",
         "message": "模型请求失败，正在中止本次行动",
+        "attempt_result": "transport_failed",
     }
     public_payload = json.dumps(failed_event["payload"], ensure_ascii=False)
     assert "prompt" not in public_payload
@@ -1001,6 +1318,7 @@ def test_generate_action_with_events_publishes_failure_on_complete_error() -> No
                 "actor": "Alice",
                 "action": "debate",
             },
+            action_id_factory=lambda: "act_complete_fail",
             request_id_factory=lambda: "req_complete_fail",
             enable_progress_ticks=False,
         )
@@ -1010,9 +1328,11 @@ def test_generate_action_with_events_publishes_failure_on_complete_error() -> No
         "model_request_failed",
     ]
     assert sink.events[1]["payload"] == {
+        "action_id": "act_complete_fail",
         "request_id": "req_complete_fail",
         "model": "deepseek-chat",
         "message": "模型请求失败，正在中止本次行动",
+        "attempt_result": "transport_failed",
     }
 
 

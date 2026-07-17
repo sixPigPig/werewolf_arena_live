@@ -46,6 +46,7 @@ from app.werewolf.rules import (
     ACTION_WEREWOLF_SELF_EXPLOSION,
     ACTION_WITCH_POISON,
     MODEL_GROUP_WEREWOLF,
+    WIN_CONDITION_WOLVES_GTE_OTHERS,
     get_rule_set,
 )
 from app.werewolf.runner import GameRunError, run_game
@@ -508,6 +509,31 @@ class RecordingCheckpointManager:
         self.failures.append(dict(kwargs))
 
 
+class TerminalCheckpointRecorder(RecordingCheckpointManager):
+    def __init__(self) -> None:
+        super().__init__()
+        self.terminal_snapshots: list[dict[str, object]] = []
+
+    def record_terminal_settlement(
+        self,
+        *,
+        state: object,
+        logs: list[RoundLog],
+        active_players: list[str],
+        terminal_settlement: object,
+    ) -> None:
+        assert hasattr(state, "to_dict")
+        assert isinstance(terminal_settlement, dict)
+        self.terminal_snapshots.append(
+            {
+                "state": copy.deepcopy(state.to_dict()),  # type: ignore[union-attr]
+                "logs": [copy.deepcopy(log.to_dict()) for log in logs],
+                "active_players": active_players.copy(),
+                "terminal_settlement": copy.deepcopy(terminal_settlement),
+            }
+        )
+
+
 class BarrierActionProvider(ScriptedChineseProvider):
     def __init__(
         self,
@@ -574,6 +600,30 @@ class BlockingSelfExplosionProvider(ScriptedChineseProvider):
             raise TimeoutError("self-explosion test provider was not released")
         return json.dumps(
             {"reasoning": "后台判断完成。", "self_explode": "不自爆"},
+            ensure_ascii=False,
+        )
+
+
+class AuditedBarrierSelfExplosionProvider(BarrierActionProvider):
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"self_explode"' not in prompt or not self._matches_action(prompt):
+            return super().complete_json(
+                model=model,
+                prompt=prompt,
+                temperature=temperature,
+            )
+        actor = _extract_actor_name(prompt)
+        self.actions.append((self.action_key, actor))
+        self.barrier.wait(timeout=1.0)
+        choice = self.response_value_by_actor[actor]
+        return json.dumps(
+            {
+                "reasoning": "并发自爆审计测试。",
+                "self_explode": choice,
+                "benefit_type": "立即获胜" if choice == "自爆" else "无收益",
+                "expected_gain": "完成当前阵营目标",
+                "primary_risk": "失去后续行动空间",
+            },
             ensure_ascii=False,
         )
 
@@ -864,6 +914,35 @@ class FirstNightSelfExplosionProvider(SelfExplosionProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
 
+class FirstNightHunterSelfExplosionProvider(FirstNightSelfExplosionProvider):
+    def __init__(
+        self,
+        *,
+        remove_target: str,
+        shoot_choice: str,
+        self_exploders: list[str],
+        candidates: set[str],
+    ) -> None:
+        super().__init__(
+            remove_target=remove_target,
+            self_exploders=self_exploders,
+            candidates=candidates,
+        )
+        self.shoot_choice = shoot_choice
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"shoot"' in prompt:
+            actor = _extract_actor_name(prompt)
+            self.actions.append(("hunter_shoot", actor))
+            options = _extract_options(prompt)
+            choice = self.shoot_choice if self.shoot_choice in options else NO_HUNTER_SHOT
+            return json.dumps(
+                {"reasoning": "结算首夜死亡技能。", "shoot": choice},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
 class FirstNightSheriffDeathProvider(SheriffFlowProvider):
     def __init__(self, *, remove_target: str, candidates: set[str], badge_choice: str) -> None:
         super().__init__(
@@ -984,6 +1063,32 @@ class FirstNightHunterShotBadgeProvider(SheriffFlowProvider):
             choice = self.shoot_choice if self.shoot_choice in options else "不发动技能"
             return json.dumps(
                 {"reasoning": "猎人开枪带走警长。", "shoot": choice},
+                ensure_ascii=False,
+            )
+        return super().complete_json(model=model, prompt=prompt, temperature=temperature)
+
+
+class DeferredHunterElectionProvider(SheriffFlowProvider):
+    def __init__(
+        self,
+        *,
+        shoot_choice: str,
+        candidates: set[str] | None = None,
+    ) -> None:
+        super().__init__(
+            candidates=candidates or set(),
+            sheriff_vote_targets={},
+        )
+        self.shoot_choice = shoot_choice
+
+    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+        if '"shoot"' in prompt:
+            actor = _extract_actor_name(prompt)
+            self.actions.append(("hunter_shoot", actor))
+            options = _extract_options(prompt)
+            choice = self.shoot_choice if self.shoot_choice in options else NO_HUNTER_SHOT
+            return json.dumps(
+                {"reasoning": "结算首夜死亡技能。", "shoot": choice},
                 ensure_ascii=False,
             )
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
@@ -1498,15 +1603,179 @@ def test_terminal_exile_skips_private_round_memories(
     engine._run_day_phase(round_state, round_log, active_players)
 
     assert state.winner == "狼人阵营"
-    assert provider.calls >= 1
+    assert provider.calls == 0
+    assert round_state.exile_last_words is None
     assert round_log.summaries == []
     assert round_state.private_summaries == {}
     assert round_state.public_summary == f"第2轮；{target}被放逐。"
-    assert any(
+    assert not any(
         event["type"] == "state_updated" and event["action"] == "public_round_brief"
         for event in sink.events
     )
     assert all(event.get("action") != "summarize" for event in sink.events)
+
+
+@pytest.mark.parametrize(
+    ("exiled_role", "expected_winner"),
+    [
+        (WEREWOLF, "好人阵营"),
+        (SEER, "狼人阵营"),
+        ("村民", "狼人阵营"),
+    ],
+)
+def test_terminal_exile_skips_last_words_and_badge_for_every_slaughter_side(
+    exiled_role: str,
+    expected_winner: str,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id=f"terminal_exile_{exiled_role}",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    seer = next(player for player in state.players if player.role == SEER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, seer.name, civilian.name]
+    exiled = next(
+        player for player in (wolf, seer, civilian) if player.role == exiled_role
+    )
+    state.sheriff = exiled.name
+    exiled.is_sheriff = True
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active_players.copy()
+    provider = FakeProvider(
+        [
+            {"reasoning": "不应请求遗言。", "say": "不应发布。"},
+            {"reasoning": "不应请求警徽。", "badge": "撕毁警徽"},
+        ]
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+
+    engine._resolve_day_exile(exiled.name, round_state, round_log, active_players)
+
+    assert state.winner == expected_winner
+    assert provider.calls == 0
+    assert round_state.exile_last_words is None
+    assert round_log.sheriff_badge is None
+    assert not any(
+        event.get("action") in {ACTION_EXILE_LAST_WORDS, "sheriff_badge"}
+        for event in sink.events
+    )
+
+
+def test_terminal_night_death_skips_dead_sheriff_badge_action() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="terminal_night_sheriff",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    seer = next(player for player in state.players if player.role == SEER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, seer.name, civilian.name]
+    state.sheriff = seer.name
+    seer.is_sheriff = True
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active_players.copy()
+    provider = FakeProvider([{"reasoning": "不应请求警徽。", "badge": civilian.name}])
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+
+    engine._announce_night_deaths(
+        [DeathEvent(seer.name, "werewolf_attack", "狼人")],
+        round_state,
+        round_log,
+        active_players,
+    )
+
+    assert state.winner == "狼人阵营"
+    assert provider.calls == 0
+    assert round_log.sheriff_badge is None
+    assert not any(event.get("action") == "sheriff_badge" for event in sink.events)
+
+
+def test_projected_terminal_structure_rejects_non_settlement_player_action() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="terminal_candidate_action_guard",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    seer = next(player for player in state.players if player.role == SEER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    active_players = [wolf.name, seer.name, civilian.name]
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active_players.copy()
+    provider = FakeProvider([{"reasoning": "不应调用。", "say": "不应发布。"}])
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    engine._remove_player(active_players, civilian.name)
+    assert state.winner == ""
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot request player action after game is terminal",
+    ):
+        engine._player_action(
+            player=seer,
+            action=ACTION_DEBATE,
+            options=[],
+            result_key="say",
+            round_state=RoundState(number=2, players=active_players.copy()),
+            phase="day",
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot request player action after game is terminal",
+    ):
+        engine._player_action(
+            player=hunter,
+            action="hunter_shoot",
+            options=[wolf.name, NO_HUNTER_SHOT],
+            result_key="shoot",
+            round_state=RoundState(number=2, players=active_players.copy()),
+            phase="vote",
+        )
+
+    assert provider.calls == 0
+    assert sink.events == []
 
 
 def test_terminal_hunter_shot_waits_for_shot_then_completes(
@@ -1532,11 +1801,13 @@ def test_terminal_hunter_shot_waits_for_shot_then_completes(
         poison_choice="不使用毒药",
         shoot_choice=wolf.name,
     )
+    sink = CapturingEventSink()
     engine = GameEngine(
         state=state,
         provider=provider,
         max_rounds=8,
         rule_set=rule_set,
+        event_sink=sink,
     )
     votes = {
         wolf.name: hunter.name,
@@ -1555,8 +1826,179 @@ def test_terminal_hunter_shot_waits_for_shot_then_completes(
     assert active_players == [civilian.name]
     assert state.winner == "好人阵营"
     assert provider.actions == ["hunter_shoot"]
+    assert round_state.exile_last_words is None
     assert round_log.summaries == []
     assert round_state.private_summaries == {}
+    final_state = next(
+        event
+        for event in reversed(sink.events)
+        if event["type"] == "state_updated"
+        and event.get("action") == "day_resolution_completed"
+    )
+    assert round_state.public_summary
+    assert final_state["payload"]["public_summary"] == round_state.public_summary
+    assert "presentation_id" not in final_state["payload"]
+
+
+def test_day_hunter_shot_terminal_freezes_exile_primary_before_shot() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="day_hunter_shot_makes_terminal",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    seer = next(player for player in state.players if player.role == SEER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, hunter.name, seer.name, civilian.name]
+    state.sheriff = seer.name
+    seer.is_sheriff = True
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active_players.copy()
+    provider = FakeProvider(
+        [
+            {"reasoning": "留下最后判断。", "say": "请好人继续按公开票型推进。"},
+            {"reasoning": "带走最后一狼。", "shoot": wolf.name},
+        ]
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+
+    engine._resolve_day_exile(
+        hunter.name,
+        round_state,
+        round_log,
+        active_players,
+    )
+
+    assert state.winner == "好人阵营"
+    assert round_state.exile_last_words is not None
+    assert round_state.hunter_shot == wolf.name
+    primary_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated"
+        and event.get("action") == "exile_resolved"
+        and "presentation_id" in event["payload"]
+    )
+    hunter_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated"
+        and event.get("action") == "hunter_shot_resolved"
+    )
+    primary = sink.events[primary_index]
+    assert primary["payload"]["day_deaths"] == [
+        {"player": hunter.name, "cause": "vote_exile", "source": "投票"},
+    ]
+    assert primary_index < hunter_index
+    assert engine.terminal_keep_from_event_id == primary_index + 1
+    assert not any(
+        event["type"] == "judge_cue" and event.get("action") == "exile_result"
+        for event in sink.events
+    )
+
+
+def test_wolves_parity_candidate_cleared_by_hunter_continues_without_last_words() -> None:
+    rule_set = replace(
+        get_rule_set("classic_12_seer_witch_hunter_idiot"),
+        win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
+    )
+    state = initialize_game_state(
+        session_id="terminal_candidate_cleared_by_hunter",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    wolves = [player for player in state.players if player.role == WEREWOLF][:2]
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    civilians = [player for player in state.players if player.role == "村民"][:2]
+    active_players = [
+        wolves[0].name,
+        wolves[1].name,
+        hunter.name,
+        civilians[0].name,
+        civilians[1].name,
+    ]
+    state.sheriff = hunter.name
+    hunter.is_sheriff = True
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active_players.copy()
+    provider = HunterShotBadgeProvider(
+        remove_target=hunter.name,
+        save_choice="不使用解药",
+        poison_choice="不使用毒药",
+        shoot_choice=wolves[0].name,
+        badge_choice=civilians[0].name,
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+
+    engine._resolve_day_exile(
+        hunter.name,
+        round_state,
+        round_log,
+        active_players,
+    )
+
+    assert state.winner == ""
+    assert active_players == [
+        wolves[1].name,
+        civilians[0].name,
+        civilians[1].name,
+    ]
+    assert round_state.exile_last_words is None
+    assert round_state.hunter_shot == wolves[0].name
+    assert provider.actions == ["hunter_shoot", "sheriff_badge"]
+    assert state.sheriff == civilians[0].name
+    assert engine._terminal_settlement is None
+    state_updates = [
+        event
+        for event in sink.events
+        if event["type"] == "state_updated"
+    ]
+    primary_index = next(
+        index
+        for index, event in enumerate(state_updates)
+        if event.get("action") == "exile_resolved"
+    )
+    hunter_index = next(
+        index
+        for index, event in enumerate(state_updates)
+        if event.get("action") == "hunter_shot_resolved"
+    )
+    assert primary_index < hunter_index
+    assert str(state_updates[primary_index]["payload"]["presentation_id"]).startswith(
+        "pp_"
+    )
+    assert str(state_updates[hunter_index]["payload"]["presentation_id"]).startswith(
+        "hp_"
+    )
+    assert not any(
+        event.get("action") == ACTION_EXILE_LAST_WORDS for event in sink.events
+    )
 
 
 def test_terminal_self_explosion_skips_remaining_day_actions(
@@ -1577,11 +2019,13 @@ def test_terminal_self_explosion_skips_remaining_day_actions(
     round_state = RoundState(number=2, players=active_players.copy())
     round_log = RoundLog(number=2)
     provider = SelfExplosionProvider(self_exploders=[wolf.name], candidates=set())
+    sink = CapturingEventSink()
     engine = GameEngine(
         state=state,
         provider=provider,
         max_rounds=8,
         rule_set=rule_set,
+        event_sink=sink,
     )
     monkeypatch.setattr(engine, "_run_sheriff_election_if_needed", lambda *_: False)
     monkeypatch.setattr(
@@ -1598,6 +2042,20 @@ def test_terminal_self_explosion_skips_remaining_day_actions(
     assert round_state.votes == []
     assert round_log.summaries == []
     assert round_state.private_summaries == {}
+    self_explosion_updates = [
+        event
+        for event in sink.events
+        if event["type"] == "state_updated"
+        and event.get("action") == ACTION_WEREWOLF_SELF_EXPLOSION
+    ]
+    assert len(self_explosion_updates) == 1
+    assert round_state.public_summary
+    assert self_explosion_updates[0]["payload"]["public_summary"] == (
+        round_state.public_summary
+    )
+    assert str(self_explosion_updates[0]["payload"]["presentation_id"]).startswith(
+        "pp_"
+    )
 
 
 def test_exile_last_words_run_before_hunter_and_badge_settlement() -> None:
@@ -1730,7 +2188,11 @@ def test_terminal_deferred_night_deaths_skip_debate(
         max_rounds=8,
         rule_set=rule_set,
     )
-    monkeypatch.setattr(engine, "_run_sheriff_election_if_needed", lambda *_: False)
+    monkeypatch.setattr(
+        engine,
+        "_run_sheriff_election_if_needed",
+        lambda *_: pytest.fail("inevitably terminal first-night deaths must skip election"),
+    )
     monkeypatch.setattr(
         engine,
         "_run_debate_phase",
@@ -1748,6 +2210,298 @@ def test_terminal_deferred_night_deaths_skip_debate(
     assert active_players == [wolf.name, civilian.name]
     assert state.winner == "狼人阵营"
     assert provider.calls == 0
+
+
+def test_first_night_deferred_hunter_death_skips_sheriff_when_every_branch_is_terminal() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="terminal_deferred_hunter_all_branches",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, hunter.name, civilian.name]
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active_players.copy()
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    state.rounds.append(round_state)
+    provider = DeferredHunterElectionProvider(shoot_choice=wolf.name)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    pending_deaths = [DeathEvent(hunter.name, "werewolf_attack", "狼人")]
+
+    assert engine._deferred_deaths_are_inevitably_terminal(
+        pending_deaths,
+        active_players,
+    )
+
+    engine._run_day_phase(
+        round_state,
+        round_log,
+        active_players,
+        pending_deaths,
+    )
+
+    assert provider.actions == [("hunter_shoot", hunter.name)]
+    assert round_log.sheriff_run == []
+    assert round_state.sheriff_election_resolution is None
+    assert [death.to_dict() for death in round_state.night_deaths] == [
+        {"player": hunter.name, "cause": "werewolf_attack", "source": "狼人"},
+        {"player": wolf.name, "cause": "hunter_shot", "source": hunter.name},
+    ]
+    assert active_players == [civilian.name]
+    assert state.winner == "好人阵营"
+    assert not any(
+        event.get("action")
+        in {
+            "sheriff_run",
+            "sheriff_speech",
+            "sheriff_withdraw",
+            "sheriff_vote",
+            "sheriff_election_resolved",
+        }
+        for event in sink.events
+    )
+    night_updates = [
+        event
+        for event in sink.events
+        if event["type"] == "state_updated"
+        and event.get("action") == "night_resolved"
+    ]
+    assert len(night_updates) == 2
+    primary_update = next(
+        event for event in night_updates if "presentation_id" in event["payload"]
+    )
+    final_update = next(
+        event for event in night_updates if "presentation_id" not in event["payload"]
+    )
+    assert primary_update["payload"]["night_deaths"] == [
+        {"player": hunter.name, "cause": "werewolf_attack", "source": "狼人"},
+    ]
+    assert final_update["payload"]["night_deaths"] == [
+        {"player": hunter.name, "cause": "werewolf_attack", "source": "狼人"},
+        {"player": wolf.name, "cause": "hunter_shot", "source": hunter.name},
+    ]
+    primary_index = sink.events.index(primary_update)
+    hunter_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated"
+        and event.get("action") == "hunter_shot_resolved"
+    )
+    final_index = sink.events.index(final_update)
+    assert primary_index < hunter_index < final_index
+    assert round_state.public_summary
+    assert final_update["payload"]["public_summary"] == round_state.public_summary
+    assert final_update["payload"]["narration_mode"] == "explicit_v1"
+
+
+def test_first_night_deferred_hunter_death_keeps_sheriff_first_when_a_branch_continues() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="nonterminal_deferred_hunter_branch",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    seer = next(player for player in state.players if player.role == SEER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, hunter.name, seer.name, civilian.name]
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active_players.copy()
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    state.rounds.append(round_state)
+    provider = DeferredHunterElectionProvider(
+        shoot_choice=wolf.name,
+        candidates={seer.name},
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    pending_deaths = [DeathEvent(hunter.name, "werewolf_attack", "狼人")]
+
+    assert not engine._deferred_deaths_are_inevitably_terminal(
+        pending_deaths,
+        active_players,
+    )
+
+    engine._run_day_phase(
+        round_state,
+        round_log,
+        active_players,
+        pending_deaths,
+    )
+
+    assert {
+        actor for action, actor in provider.actions if action == "sheriff_run"
+    } == set(round_state.players)
+    assert provider.actions.count(("hunter_shoot", hunter.name)) == 1
+    assert round_state.sheriff_elected == seer.name
+    assert [death.to_dict() for death in round_state.night_deaths] == [
+        {"player": hunter.name, "cause": "werewolf_attack", "source": "狼人"},
+        {"player": wolf.name, "cause": "hunter_shot", "source": hunter.name},
+    ]
+    assert active_players == [seer.name, civilian.name]
+    assert state.winner == "好人阵营"
+    election_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated"
+        and event.get("action") == "sheriff_election_resolved"
+    )
+    hunter_request_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "action_requested"
+        and event.get("action") == "hunter_shoot"
+    )
+    night_updates = [
+        (index, event)
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated"
+        and event.get("action") == "night_resolved"
+    ]
+    assert len(night_updates) == 2
+    primary_index, primary_update = next(
+        item for item in night_updates if "presentation_id" in item[1]["payload"]
+    )
+    final_index, final_update = next(
+        item for item in night_updates if "presentation_id" not in item[1]["payload"]
+    )
+    hunter_result_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "state_updated"
+        and event.get("action") == "hunter_shot_resolved"
+    )
+    assert election_index < primary_index < hunter_request_index < hunter_result_index
+    assert hunter_result_index < final_index
+    assert primary_update["payload"]["night_deaths"] == [
+        {"player": hunter.name, "cause": "werewolf_attack", "source": "狼人"},
+    ]
+    assert final_update["payload"]["night_deaths"] == [
+        {"player": hunter.name, "cause": "werewolf_attack", "source": "狼人"},
+        {"player": wolf.name, "cause": "hunter_shot", "source": hunter.name},
+    ]
+    assert engine.terminal_keep_from_event_id == primary_index + 1
+
+
+def test_last_wolf_self_explosion_does_not_commit_before_deferred_hunter_settlement() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="deferred_hunter_last_wolf_self_explosion",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    seer = next(player for player in state.players if player.role == SEER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, hunter.name, seer.name, civilian.name]
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active_players.copy()
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+    state.rounds.append(round_state)
+    provider = FirstNightHunterSelfExplosionProvider(
+        remove_target=hunter.name,
+        shoot_choice=civilian.name,
+        self_exploders=[wolf.name],
+        candidates={seer.name},
+    )
+    checkpoint = TerminalCheckpointRecorder()
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        checkpoint_manager=checkpoint,
+    )
+    pending_deaths = [DeathEvent(hunter.name, "werewolf_attack", "狼人")]
+
+    assert not engine._deferred_deaths_are_inevitably_terminal(
+        pending_deaths,
+        active_players,
+    )
+
+    engine._run_day_phase(
+        round_state,
+        round_log,
+        active_players,
+        pending_deaths,
+    )
+
+    assert provider.actions.count(("hunter_shoot", hunter.name)) == 1
+    assert round_state.werewolf_self_exploded == wolf.name
+    assert [death.to_dict() for death in round_state.day_deaths] == [
+        {"player": wolf.name, "cause": "werewolf_self_explosion", "source": wolf.name}
+    ]
+    assert [death.to_dict() for death in round_state.night_deaths] == [
+        {"player": hunter.name, "cause": "werewolf_attack", "source": "狼人"},
+        {"player": civilian.name, "cause": "hunter_shot", "source": hunter.name},
+    ]
+    assert active_players == [seer.name]
+    assert state.winner == "好人阵营"
+    assert not any(action == "sheriff_badge" for action, _actor in provider.actions)
+    assert round_log.summaries == []
+    assert round_state.private_summaries == {}
+    assert checkpoint.terminal_snapshots
+    first_snapshot = checkpoint.terminal_snapshots[0]
+    snapshot_state = first_snapshot["state"]
+    assert isinstance(snapshot_state, dict)
+    snapshot_round = snapshot_state["rounds"][-1]
+    assert [death["player"] for death in snapshot_round["night_deaths"]] == [hunter.name]
+    terminal_settlement = first_snapshot["terminal_settlement"]
+    assert isinstance(terminal_settlement, dict)
+    settlements = terminal_settlement["settlements"]
+    assert any(
+        settlement["kind"] == "hunter_shot"
+        and settlement["actor"] == hunter.name
+        and settlement["status"] == "pending"
+        for settlement in settlements
+    )
+    for snapshot in checkpoint.terminal_snapshots:
+        snapshot_settlement = snapshot["terminal_settlement"]
+        snapshot_state = snapshot["state"]
+        assert isinstance(snapshot_settlement, dict)
+        assert isinstance(snapshot_state, dict)
+        if snapshot_settlement["stage"] == "winner_committed":
+            assert snapshot_state["rounds"][-1]["night_deaths"]
+    requested_actions = [
+        event.get("action")
+        for event in sink.events
+        if event["type"] == "action_requested"
+        and event.get("action")
+        in {"hunter_shoot", "sheriff_badge", "debate", "vote", "summarize"}
+    ]
+    assert requested_actions == ["hunter_shoot"]
 
 
 def test_terminal_witch_multi_death_resolves_all_deaths_before_win_check() -> None:
@@ -1845,13 +2599,17 @@ def test_decisive_state_precedes_game_completed_without_model_events_between(
     }
 
     assert decisive_index < completed_index
+    assert engine.terminal_keep_from_event_id == decisive_index + 1
     model_events = [
         event
         for event in sink.events[decisive_index + 1 : completed_index]
         if event["type"] in model_event_types
     ]
-    assert model_events
-    assert all(event.get("action") == ACTION_EXILE_LAST_WORDS for event in model_events)
+    assert model_events == []
+    assert not any(
+        event["type"] == "state_updated" and event.get("action") == "public_round_brief"
+        for event in sink.events[decisive_index + 1 : completed_index]
+    )
 
 
 def test_player_action_is_rejected_after_winner_is_set() -> None:
@@ -1920,7 +2678,11 @@ def test_world_state_includes_public_facts_for_late_day_actions() -> None:
 
     world_state = engine._world_state(players["1号玩家"], [], round_state)
 
-    assert "7号玩家警上声明6号玩家为好人。" in world_state["public_facts"]
+    assert any(
+        fact["text"] == "7号玩家警上声明6号玩家为好人。"
+        and fact["trust_class"] == "legacy_unclassified"
+        for fact in world_state["public_facts"]
+    )
 
 
 def test_fact_prompt_coverage_uses_the_same_public_seat_projection() -> None:
@@ -1973,7 +2735,11 @@ def test_fact_prompt_coverage_uses_the_same_public_seat_projection() -> None:
         phase="day",
     )
 
-    assert "1号玩家投票给2号玩家。" in request.world_state["public_facts"]
+    assert any(
+        fact["text"] == "1号玩家投票给2号玩家。"
+        and fact["trust_class"] == "legacy_unclassified"
+        for fact in request.world_state["public_facts"]
+    )
     assert request.fact_prompt_coverage["expected_critical_count"] == 1
     assert request.fact_prompt_coverage["included_critical_count"] == 1
 
@@ -2902,8 +3668,9 @@ class CapturingEventSink:
     def __init__(self) -> None:
         self.events: list[dict[str, object]] = []
 
-    def publish(self, event_type: str, **kwargs: object) -> None:
+    def publish(self, event_type: str, **kwargs: object) -> object:
         self.events.append({"type": event_type, **kwargs})
+        return SimpleNamespace(id=len(self.events))
 
 
 def test_run_game_publishes_live_events(record_store: DatabaseReplayStore) -> None:
@@ -3580,7 +4347,7 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     active_players = [player.name for player in state.players]
     active_wolves = [player.name for player in state.players if player.role == "狼人"]
     exploding_wolf = active_wolves[1]
-    provider = BarrierActionProvider(
+    provider = AuditedBarrierSelfExplosionProvider(
         action_key="werewolf_self_explosion",
         result_key="self_explode",
         response_value_by_actor={
@@ -3633,7 +4400,28 @@ def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
     ] == active_wolves
     assert round_state.werewolf_self_exploded == exploding_wolf
     assert round_log.werewolf_self_explosion is not None
-    assert round_log.werewolf_self_explosion.decision_schema == "legacy"
+    assert round_log.werewolf_self_explosion.decision_schema == "v2"
+    assert len(round_log.werewolf_self_explosion_decisions) == len(active_wolves)
+    assert {
+        log.decision_audit["benefit_type"]
+        for log in round_log.werewolf_self_explosion_decisions
+        if log.decision_audit is not None
+    } == {"immediate_win", "none"}
+    assert all(
+        log.decision_audit is not None
+        and log.decision_audit["decision_schema"] == "v2"
+        and log.decision_audit["execution_status"] == "completed"
+        and isinstance(log.decision_audit["duration_ms"], int)
+        and str(log.decision_audit["window_id"]).startswith(
+            "r1:self-explosion:debate:before-stage:"
+        )
+        for log in round_log.werewolf_self_explosion_decisions
+    )
+    restored_log = round_log_from_dict(round_log.to_dict())
+    assert len(restored_log.werewolf_self_explosion_decisions) == len(active_wolves)
+    assert [
+        log.decision_audit for log in restored_log.werewolf_self_explosion_decisions
+    ] == [log.decision_audit for log in round_log.werewolf_self_explosion_decisions]
     assert round_state.sheriff_election_resolution is not None
     assert round_state.sheriff_election_resolution.outcome == "postponed"
     assert (
@@ -3765,7 +4553,18 @@ def test_self_explosion_interrupts_unpublished_public_speech_immediately() -> No
 
     assert round_state.werewolf_self_exploded == exploding_wolf
     assert round_state.debate == []
-    assert any(event["type"] == "public_action_cancelled" for event in sink.events)
+    canceled_event = next(
+        event for event in sink.events if event["type"] == "public_action_cancelled"
+    )
+    assert len(round_log.canceled_actions) == 1
+    canceled_action = round_log.canceled_actions[0]
+    assert canceled_action.action == ACTION_DEBATE
+    assert canceled_action.execution_status == "canceled"
+    assert canceled_action.fallback_reason == "canceled_self_explosion"
+    # The interrupt happens before the provider call starts, so this logical
+    # cancellation correctly has no provider-attempt outcome.
+    assert canceled_action.lm_log.attempt_outcomes == []
+    assert canceled_event["payload"]["action_id"] == canceled_action.lm_log.action_id
     assert not any(
         event["type"] == "model_response_delta"
         and event.get("action") == ACTION_DEBATE
@@ -4626,6 +5425,25 @@ def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
     assert "repeated_debate_phrase" in action_log.speech_quality_initial_codes
     assert action_log.speech_quality_report is not None
     assert action_log.speech_quality_report["requires_rewrite"] is False
+    assert len(action_log.lm_log.attempt_outcomes) == 2
+    assert {
+        outcome["request_id"] for outcome in action_log.lm_log.attempt_outcomes
+    } == {
+        event["payload"]["request_id"]
+        for event in sink.events
+        if event["type"] == "model_attempt_completed"
+    }
+    attempt_events = [
+        event
+        for event in sink.events
+        if event["type"] == "model_attempt_completed"
+    ]
+    assert len(attempt_events) == 2
+    assert {
+        event["payload"]["action_id"]
+        for event in attempt_events
+        if isinstance(event.get("payload"), dict)
+    } == {action_log.lm_log.action_id}
     assert "所以我仍然保持这个判断" not in str(action_log.to_dict())
 
 
@@ -4698,6 +5516,151 @@ def test_public_speech_quality_retry_exhaustion_publishes_only_second_draft() ->
     assert action_log.speech_quality_report["requires_rewrite"] is True
 
 
+def test_public_speech_length_retry_exhaustion_keeps_only_complete_accepted_text() -> None:
+    overlong = "保留结论。" + ("甲" * 260) + "SENTINEL_OVERLONG_TAIL"
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_speech_length_exhausted",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    provider = FakeProvider(
+        [
+            {"reasoning": "第一稿过长。", "say": overlong},
+            {"reasoning": "第二稿仍过长。", "say": overlong},
+        ]
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=1, players=[player.name for player in state.players])
+
+    message, action_log = engine._player_action(
+        player=state.players[0],
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert provider.calls == 2
+    assert message == "保留结论。"
+    assert action_log.choice == "保留结论。"
+    assert action_log.lm_log.result == {"say": "保留结论。"}
+    assert action_log.lm_log.raw_response == ""
+    assert "第二稿仍过长" not in str(action_log.to_dict())
+    assert "SENTINEL_OVERLONG_TAIL" not in str(sink.events)
+    assert "SENTINEL_OVERLONG_TAIL" not in str(action_log.to_dict())
+
+
+def test_hunter_future_shot_retry_exhaustion_uses_safe_fallback_without_draft_leak() -> None:
+    illegal_speech = "下一夜我会开枪带走1号玩家。SENTINEL_ILLEGAL_HUNTER_PLAN"
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="session_test_hunter_hard_rule_exhausted",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    provider = FakeProvider(
+        [
+            {"reasoning": "错误技能计划。", "say": illegal_speech},
+            {"reasoning": "仍未修正。", "say": illegal_speech},
+        ]
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=1, players=[player.name for player in state.players])
+
+    message, action_log = engine._player_action(
+        player=hunter,
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert provider.calls == 2
+    assert message == "本轮暂不追加判断，投票时我会给出明确选择。"
+    assert action_log.choice == message
+    assert action_log.lm_log.result == {"say": message}
+    assert action_log.lm_log.raw_response == ""
+    assert "仍未修正" not in str(action_log.to_dict())
+    assert "hunter_claims_voluntary_future_shot" in action_log.speech_quality_initial_codes
+    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" not in str(sink.events)
+    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" not in str(action_log.to_dict())
+
+
+@pytest.mark.parametrize("action", ["werewolf_discuss", "werewolf_kill_vote"])
+def test_werewolf_private_message_enforces_sixty_character_budget_without_leak(
+    action: str,
+) -> None:
+    overlong = "狼队结论。" + ("甲" * 80) + "SENTINEL_PRIVATE_OVERLONG"
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id=f"session_test_werewolf_private_length_{action}",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260717,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    target = next(player for player in state.players if player.role != WEREWOLF)
+    provider = FakeProvider(
+        [
+            {"reasoning": "第一稿过长。", "target": target.name, "message": overlong},
+            {"reasoning": "第二稿仍过长。", "target": target.name, "message": overlong},
+        ]
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=1, players=[player.name for player in state.players])
+
+    choice, action_log = engine._player_action(
+        player=wolf,
+        action=action,
+        options=[target.name],
+        result_key="target",
+        round_state=round_state,
+        phase="night",
+    )
+
+    assert provider.calls == 2
+    assert choice == target.name
+    assert action_log.lm_log.result is not None
+    assert action_log.lm_log.result == {
+        "target": target.name,
+        "message": "狼队结论。",
+    }
+    assert action_log.lm_log.raw_response == ""
+    assert sink.events == []
+    assert "第二稿仍过长" not in str(action_log.to_dict())
+    assert "SENTINEL_PRIVATE_OVERLONG" not in str(action_log.to_dict())
+
+
 def test_optional_action_timeout_uses_safe_abstain_and_records_execution() -> None:
     class TimeoutProvider:
         def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
@@ -4739,6 +5702,9 @@ def test_optional_action_timeout_uses_safe_abstain_and_records_execution() -> No
     assert action_log.fallback_choice == NO_WITCH_POISON
     assert action_log.fallback_reason == "timeout_optional_abstain"
     assert action_log.budget_ms == 12000
+    assert [
+        outcome["attempt_result"] for outcome in action_log.lm_log.attempt_outcomes
+    ] == ["timed_out"]
 
 
 def test_required_timeout_choice_is_deterministic_and_order_independent() -> None:
@@ -4834,6 +5800,9 @@ def test_public_speech_timeout_uses_neutral_text_without_hidden_claims() -> None
     assert "查验" not in str(action_log.to_dict())
     assert "狼人" not in str(action_log.lm_log.result)
     assert "test timeout" not in str(sink.events)
+    assert [
+        outcome["attempt_result"] for outcome in action_log.lm_log.attempt_outcomes
+    ] == ["timed_out"]
 
 
 def test_batch_deadline_falls_back_in_request_order_and_drops_late_events() -> None:
@@ -4909,6 +5878,10 @@ def test_batch_deadline_falls_back_in_request_order_and_drops_late_events() -> N
     assert not provider.finished.is_set()
     assert results[0][0] in active_players[2:]
     assert results[0][1].fallback_reason == "batch_deadline_deterministic_legal_choice"
+    assert [
+        outcome["attempt_result"]
+        for outcome in results[0][1].lm_log.attempt_outcomes
+    ] == ["timed_out"]
     assert results[1][0] == active_players[2]
     assert [action_log.actor for _, action_log in results] == active_players[:2]
     parsed_actors = [
@@ -7710,7 +8683,15 @@ def _read_db_outputs(
 def _without_request_ids(value):
     if isinstance(value, dict):
         return {
-            key: _without_request_ids(child) for key, child in value.items() if key != "request_id"
+            key: _without_request_ids(child)
+            for key, child in value.items()
+            if key
+            not in {
+                "request_id",
+                "duration_ms",
+                "first_token_ms",
+                "speech_quality_retry_duration_ms",
+            }
         }
     if isinstance(value, list):
         return [_without_request_ids(child) for child in value]

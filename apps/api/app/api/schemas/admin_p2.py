@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 AdminP2DataStatus = Literal["legacy", "collecting", "available", "unavailable"]
@@ -37,6 +37,23 @@ class AdminP2ChoiceNormalizationV1(BaseModel):
     public_label_count: int
     invalid_count: int
     other_count: int
+
+
+class AdminP2ProviderAttemptOutcomesV1(BaseModel):
+    attempt_count: int = Field(default=0, ge=0)
+    valid_response_count: int = Field(default=0, ge=0)
+    invalid_response_count: int = Field(default=0, ge=0)
+    timed_out_count: int = Field(default=0, ge=0)
+    canceled_count: int = Field(default=0, ge=0)
+    transport_failed_count: int = Field(default=0, ge=0)
+
+
+class AdminP2LogicalActionOutcomesV1(BaseModel):
+    action_count: int = Field(default=0, ge=0)
+    completed_count: int = Field(default=0, ge=0)
+    fallback_count: int = Field(default=0, ge=0)
+    canceled_count: int = Field(default=0, ge=0)
+    failed_count: int = Field(default=0, ge=0)
 
 
 class AdminP2LineupViolationV1(BaseModel):
@@ -91,6 +108,12 @@ class AdminRunP2DiagnosticsV1(BaseModel):
     performance: AdminP2PerformanceV1
     speech_quality: AdminP2SpeechQualityV1
     choice_normalization: AdminP2ChoiceNormalizationV1
+    provider_attempt_outcomes: AdminP2ProviderAttemptOutcomesV1 = Field(
+        default_factory=AdminP2ProviderAttemptOutcomesV1
+    )
+    logical_action_outcomes: AdminP2LogicalActionOutcomesV1 = Field(
+        default_factory=AdminP2LogicalActionOutcomesV1
+    )
 
 
 class AdminGameP2QualityV1(BaseModel):
@@ -100,6 +123,12 @@ class AdminGameP2QualityV1(BaseModel):
     speech_quality: AdminP2SpeechQualityV1
     performance: AdminP2PerformanceV1
     choice_normalization: AdminP2ChoiceNormalizationV1
+    provider_attempt_outcomes: AdminP2ProviderAttemptOutcomesV1 = Field(
+        default_factory=AdminP2ProviderAttemptOutcomesV1
+    )
+    logical_action_outcomes: AdminP2LogicalActionOutcomesV1 = Field(
+        default_factory=AdminP2LogicalActionOutcomesV1
+    )
     public_outcomes: list[AdminPublicOutcomeEventV1]
     public_outcome_summary_mismatch_count: int
     quality_gates: list[AdminP2QualityGateV1]

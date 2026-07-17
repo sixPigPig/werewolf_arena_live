@@ -118,6 +118,24 @@ def test_game_resumed_uses_resume_judge_voice() -> None:
     assert is_static_judge_voice_asset_used("game_resume") is True
 
 
+def test_terminal_recovery_does_not_create_resume_judge_voice() -> None:
+    event = live_event(
+        10,
+        "game_resumed",
+        payload={"resume_from_round": 4, "terminal_recovery": True},
+    )
+
+    assert voice_job_candidate(event) is None
+    assert (
+        event_to_voice_materialization(
+            event,
+            VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+            player_seats={},
+        )
+        is None
+    )
+
+
 def test_voice_job_candidate_rejects_private_and_delta_events() -> None:
     public_delta = live_event(
         10,
@@ -482,6 +500,132 @@ def test_event_to_judge_voice_utterance_for_phase_start_is_short() -> None:
 
 
 @pytest.mark.parametrize(
+    ("shot_status", "shot_target", "expected_text", "expected_asset_id"),
+    [
+        ("shot", "8号玩家", "8号玩家 被猎人带走，出局。", "hunter_shot_result_seat_08"),
+        ("skipped", None, "猎人选择不发动技能。", "hunter_shot_skipped"),
+    ],
+)
+def test_canonical_hunter_result_is_durable_judge_voice_with_presentation_id(
+    shot_status: str,
+    shot_target: str | None,
+    expected_text: str,
+    expected_asset_id: str | None,
+) -> None:
+    event = live_event(
+        18,
+        "state_updated",
+        action="hunter_shot_resolved",
+        payload={
+            # This catches the required precedence over a folded exile field.
+            "exiled": "3号玩家",
+            "presentation_id": "hp_0123456789abcdef01234567",
+            "hunter_shot_status": shot_status,
+            "hunter_shot": shot_target,
+        },
+    )
+
+    utterance = event_to_voice_materialization(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+    )
+
+    assert voice_job_candidate(event) == "judge"
+    assert utterance is not None
+    assert utterance.presentation_id == "hp_0123456789abcdef01234567"
+    assert utterance.text == expected_text
+    assert utterance.static_asset_id == expected_asset_id
+
+
+def test_nonterminal_hunter_result_is_narrated_without_presentation_id() -> None:
+    event = live_event(
+        19,
+        "state_updated",
+        action="hunter_shot_resolved",
+        payload={"hunter_shot_status": "skipped", "hunter_shot": None},
+    )
+
+    utterance = event_to_voice_materialization(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+    )
+
+    assert utterance is not None
+    assert utterance.presentation_id is None
+    assert utterance.text == "猎人选择不发动技能。"
+    assert utterance.static_asset_id == "hunter_shot_skipped"
+
+
+@pytest.mark.parametrize(
+    ("action", "payload", "expected_text", "expected_asset_id"),
+    [
+        (
+            "exile_resolved",
+            {"exiled": "3号玩家"},
+            "3号玩家 得票最高，被放逐出局。",
+            "exile_result_seat_03",
+        ),
+        (
+            "night_resolved",
+            {
+                "night_deaths": [
+                    {
+                        "player": "8号玩家",
+                        "cause": "werewolf_attack",
+                        "source": "狼人",
+                    }
+                ]
+            },
+            "昨夜死亡的玩家是 8号玩家。",
+            None,
+        ),
+        (
+            "werewolf_self_explosion",
+            {"werewolf_self_exploded": "5号玩家"},
+            "5号玩家 发动狼人自爆。",
+            "werewolf_self_explosion_seat_05",
+        ),
+    ],
+)
+def test_terminal_primary_result_is_durable_judge_voice_with_presentation_id(
+    action: str,
+    payload: dict[str, object],
+    expected_text: str,
+    expected_asset_id: str | None,
+) -> None:
+    presentation_id = "pp_0123456789abcdef01234567"
+    event = live_event(
+        20,
+        "state_updated",
+        action=action,
+        payload={**payload, "presentation_id": presentation_id},
+    )
+
+    utterance = event_to_voice_materialization(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+    )
+
+    assert voice_job_candidate(event) == "judge"
+    assert utterance is not None
+    assert utterance.presentation_id == presentation_id
+    assert utterance.text == expected_text
+    assert utterance.static_asset_id == expected_asset_id
+
+    folded = live_event(
+        21,
+        "state_updated",
+        action=action,
+        payload={**payload, "narration_mode": "explicit_v1"},
+    )
+    assert voice_job_candidate(folded) is None
+    assert event_to_voice_materialization(
+        folded,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+    ) is None
+
+
+@pytest.mark.parametrize(
     ("action", "expected_text", "expected_asset_id"),
     [
         ("remove", "狼人请选择今晚袭击的目标。", "werewolves_choose"),
@@ -742,10 +886,12 @@ def test_voice_messages_serialize_audio_chunks() -> None:
         audio_format="pcm",
         sample_rate=24000,
         chunk_index=3,
+        presentation_id="hp_0123456789abcdef01234567",
     )
 
     assert start["type"] == "voice_start"
     assert start["source_event_id"] == 10
+    assert start["presentation_id"] == "hp_0123456789abcdef01234567"
     assert start["audience"] == "player_public"
     assert start["audio_format"] == "pcm"
     assert start["sample_rate"] == 24000

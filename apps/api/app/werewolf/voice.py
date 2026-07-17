@@ -20,6 +20,11 @@ PUBLIC_SPEECH_ACTIONS = {
     "exile_last_words",
 }
 GOD_VIEW_PRIVATE_SPEECH_ACTIONS = {"werewolf_discuss", "werewolf_kill_vote"}
+PRIMARY_PRESENTATION_STATE_ACTIONS = {
+    "exile_resolved",
+    "night_resolved",
+    "werewolf_self_explosion",
+}
 PUBLIC_WINNER_ASSETS = {
     "好人阵营": ("游戏结束，好人阵营获胜。", "game_over_villagers"),
     "狼人阵营": ("游戏结束，狼人阵营获胜。", "game_over_wolves"),
@@ -58,6 +63,7 @@ USED_STATIC_JUDGE_VOICE_ASSET_IDS = frozenset(
         "sheriff_tie",
         "self_explosion_skip",
         "hunter_shot_choose",
+        "hunter_shot_skipped",
         "hunter_shot_start",
         "idiot_stays",
         "werewolves_choose",
@@ -102,6 +108,7 @@ class VoiceUtterance:
     speaker: str
     text: str
     action: str | None
+    presentation_id: str | None = None
     last_source_event_id: int | None = None
     static_asset_id: str | None = None
     audience: VoiceAudience = "player_public"
@@ -188,10 +195,20 @@ def voice_job_candidate(
     audience: VoiceAudience = "player_public",
 ) -> SpeakerKind | None:
     """Classify durable voice outbox candidates for one audience projection."""
+    if event.type == "game_resumed" and event.payload.get("terminal_recovery") is True:
+        return None
     if audience == "spectator_god_view" and is_god_view_private_speech_event(event):
         return "player"
     if is_public_complete_speech_event(event):
         return "player"
+    if event.type == "state_updated" and event.action == "hunter_shot_resolved":
+        return "judge"
+    if (
+        event.type == "state_updated"
+        and event.action in PRIMARY_PRESENTATION_STATE_ACTIONS
+        and bool(_string_payload(event, "presentation_id"))
+    ):
+        return "judge"
     if event.type in {
         "game_started",
         "game_resumed",
@@ -251,6 +268,7 @@ def event_to_voice_utterance(
     previous_night_deaths: Sequence[str] = (),
     peaceful_night: bool = False,
 ) -> VoiceUtterance | None:
+    presentation_id = _string_payload(event, "presentation_id") or None
     if is_god_view_private_speech_event(event):
         visible_result = event.payload.get("visible_result")
         visible_text = (
@@ -270,6 +288,7 @@ def event_to_voice_utterance(
             speaker=config.player_speaker,
             text=visible_text,
             action=event.action,
+            presentation_id=presentation_id,
         )
 
     if is_public_complete_speech_event(event) or is_public_speech_event(event):
@@ -295,6 +314,7 @@ def event_to_voice_utterance(
             speaker=config.player_speaker,
             text=visible_text,
             action=event.action,
+            presentation_id=presentation_id,
         )
 
     judge_cue = _judge_cue_for_event(
@@ -316,6 +336,7 @@ def event_to_voice_utterance(
         speaker=config.judge_speaker,
         text=judge_cue.text,
         action=event.action,
+        presentation_id=presentation_id,
         static_asset_id=judge_cue.static_asset_id,
     )
 
@@ -367,6 +388,7 @@ def build_voice_messages(
     sample_rate: int,
     chunk_index: int,
     audience: VoiceAudience = "player_public",
+    presentation_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     start_message: dict[str, Any] = {
         "type": "voice_start",
@@ -381,6 +403,8 @@ def build_voice_messages(
     }
     if last_source_event_id is not None:
         start_message["last_source_event_id"] = last_source_event_id
+    if presentation_id:
+        start_message["presentation_id"] = presentation_id
 
     return (
         start_message,
@@ -434,6 +458,8 @@ def _judge_cue_for_event(
     if event.type == "game_started":
         return JudgeVoiceCue("本局游戏开始，请所有玩家确认自己的身份牌。", "game_intro")
     if event.type == "game_resumed":
+        if event.payload.get("terminal_recovery") is True:
+            return None
         return JudgeVoiceCue("本局游戏继续。", "game_resume")
     if event.type == "phase_started" and event.phase == "night":
         return JudgeVoiceCue("夜晚降临，所有玩家请闭眼。", "night_start")
@@ -489,6 +515,32 @@ def _state_update_judge_cue(
     event: LiveEvent,
     player_seats: Mapping[str, int] | None,
 ) -> JudgeVoiceCue | None:
+    if event.action == "hunter_shot_resolved":
+        shot_status = _string_payload(event, "hunter_shot_status")
+        hunter_shot = _string_payload(event, "hunter_shot")
+        if shot_status == "shot" and hunter_shot:
+            return JudgeVoiceCue(
+                f"{_player_label(hunter_shot, player_seats, fallback='该玩家')} 被猎人带走，出局。",
+                _seat_asset_id("hunter_shot_result", hunter_shot, player_seats),
+            )
+        if shot_status == "skipped" and not hunter_shot:
+            return JudgeVoiceCue("猎人选择不发动技能。", "hunter_shot_skipped")
+        return None
+
+    if event.action == "night_resolved":
+        night_deaths = event.payload.get("night_deaths")
+        death_names = [
+            player
+            for item in night_deaths
+            if isinstance(item, Mapping)
+            and isinstance((player := item.get("player")), str)
+            and player
+        ] if isinstance(night_deaths, list) else []
+        if death_names:
+            return JudgeVoiceCue(
+                f"昨夜死亡的玩家是 {_join_player_labels(death_names, player_seats)}。"
+            )
+
     sheriff_speech_order = _string_list_payload(event, "sheriff_speech_order")
     sheriff_speech_direction = _string_payload(event, "sheriff_speech_direction")
     if sheriff_speech_order and sheriff_speech_direction:

@@ -1,0 +1,51 @@
+{
+  "source_run_id": "run_2d12b755578b",
+  "source_session_id": "game_d8a3c680",
+  "rule_set_id": "classic_12_seer_witch_hunter_idiot",
+  "seed": 20260717,
+  "terminal": {
+    "round_number": 1,
+    "players": {
+      "wolf_sheriff": {
+        "seat": "1号玩家",
+        "source_alias": "祁野",
+        "role": "狼人"
+      },
+      "last_civilian": {
+        "seat": "2号玩家",
+        "source_alias": "卓然",
+        "role": "村民"
+      },
+      "surviving_hunter": {
+        "seat": "3号玩家",
+        "source_alias": "唐糖",
+        "role": "猎人"
+      }
+    },
+    "active_before": [
+      "1号玩家",
+      "2号玩家",
+      "3号玩家"
+    ],
+    "votes": {
+      "1号玩家": "2号玩家",
+      "2号玩家": "1号玩家",
+      "3号玩家": "2号玩家"
+    },
+    "exiled": "2号玩家",
+    "active_after": [
+      "1号玩家",
+      "3号玩家"
+    ],
+    "winner": "狼人阵营"
+  },
+  "forbidden_post_terminal_actions": [
+    "exile_last_words",
+    "sheriff_badge",
+    "summarize"
+  ],
+  "forbidden_post_terminal_phases": [
+    "last_words",
+    "summary"
+  ]
+}

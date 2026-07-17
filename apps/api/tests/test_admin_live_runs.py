@@ -1110,6 +1110,58 @@ def test_completed_terminal_detail_returns_only_bounded_safe_event_metadata(
     assert all("voice_audio_chunks" not in sql for sql in statements)
 
 
+def test_detail_counts_failed_provider_attempt_from_safe_event_fields_only(
+    context: AdminLiveRunsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_at = datetime(2026, 7, 11, 12, 30, tzinfo=UTC)
+    run_id = "run_000000000011"
+    _seed_run(
+        context,
+        run_id=run_id,
+        session_id="game_00000011",
+        created_at=created_at,
+        event_types=["model_request_started", "model_request_failed"],
+        event_phases=["day", "day"],
+    )
+    with context.session_factory() as db:
+        started = db.get(LiveEventRecord, {"run_id": run_id, "event_id": 1})
+        failed = db.get(LiveEventRecord, {"run_id": run_id, "event_id": 2})
+        assert started is not None
+        assert failed is not None
+        started.payload = {
+            "action_id": "act_safe_1",
+            "request_id": "req_safe_1",
+            "prompt": "SENTINEL_PRIVATE_PROMPT",
+        }
+        failed.payload = {
+            "action_id": "act_safe_1",
+            "request_id": "req_safe_1",
+            "attempt_result": "transport_failed",
+            "error": "SENTINEL_PRIVATE_PROVIDER_ERROR",
+            "raw_response": "SENTINEL_PRIVATE_RESPONSE",
+        }
+        db.commit()
+    _login(context, monkeypatch, role="viewer")
+
+    response = context.client.get(f"/api/v1/admin/live-runs/{run_id}")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["p2_diagnostics"]["provider_attempt_outcomes"] == {
+        "attempt_count": 1,
+        "valid_response_count": 0,
+        "invalid_response_count": 0,
+        "timed_out_count": 0,
+        "canceled_count": 0,
+        "transport_failed_count": 1,
+    }
+    assert payload["p2_diagnostics"]["performance"]["request_count"] == 1
+    assert payload["p2_diagnostics"]["performance"]["active_request_count"] == 0
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "SENTINEL_PRIVATE" not in serialized
+
+
 @pytest.mark.parametrize(
     ("run_status", "game_status", "resumable"),
     [
@@ -1205,7 +1257,9 @@ def test_non_revealable_detail_exposes_models_but_redacts_identity_and_activity(
         assert marker not in serialized
     assert all("live_events.actor" not in sql for sql in statements)
     assert all("live_events.action" not in sql for sql in statements)
-    assert all("live_events.payload" not in sql for sql in statements)
+    payload_statements = [sql for sql in statements if "live_events.payload" in sql]
+    assert payload_statements
+    assert all("json_extract(live_events.payload" in sql for sql in payload_statements)
 
     model_probe = context.client.get(
         "/api/v1/admin/live-runs",

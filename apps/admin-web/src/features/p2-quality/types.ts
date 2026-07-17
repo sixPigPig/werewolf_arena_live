@@ -34,12 +34,31 @@ export type AdminP2ChoiceNormalization = {
   other_count: number;
 };
 
+export type AdminP2ProviderAttemptOutcomes = {
+  attempt_count: number;
+  valid_response_count: number;
+  invalid_response_count: number;
+  timed_out_count: number;
+  canceled_count: number;
+  transport_failed_count: number;
+};
+
+export type AdminP2LogicalActionOutcomes = {
+  action_count: number;
+  completed_count: number;
+  fallback_count: number;
+  canceled_count: number;
+  failed_count: number;
+};
+
 export type AdminRunP2Diagnostics = {
   schema_version: 1;
   data_status: AdminP2DataStatus;
   performance: AdminP2Performance;
   speech_quality: AdminP2SpeechQuality;
   choice_normalization: AdminP2ChoiceNormalization;
+  provider_attempt_outcomes: AdminP2ProviderAttemptOutcomes;
+  logical_action_outcomes: AdminP2LogicalActionOutcomes;
 };
 
 export type AdminP2LineupViolation = {

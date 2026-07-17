@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import re
 
-from app.werewolf.debate_realism import dialogue_quality_warnings
+from app.werewolf.debate_realism import (
+    contradictory_role_targets,
+    dialogue_quality_warnings,
+)
 
 
 _SEER_SELF_CLAIM_RE = re.compile(
@@ -22,6 +25,28 @@ _FUTURE_INVESTIGATION_RE = re.compile(
 )
 _OTHER_BADGE_FLOW_OWNER_RE = re.compile(
     r"(?:\d{1,2}号(?:玩家)?|你|他|她)(?:自己)?(?:刚才|提出|说)?的?$"
+)
+_SHERIFF_ELECTION_SPEECH_ACTIONS = frozenset(
+    {"sheriff_speech", "sheriff_pk_speech"}
+)
+_FUTURE_HUNTER_SHOT_RE = re.compile(
+    r"(?:今晚|今夜|明晚|下一晚|下一夜|下个夜晚|明天晚上)"
+    r"[^。！？；\n]{0,16}(?:开枪|带走|崩|枪)"
+)
+_FUTURE_STAGE_RE = re.compile(r"明天|下一轮|下一夜|下一晚|明晚|下个夜晚")
+_NEGATED_FUTURE_STAGE_RE = re.compile(
+    r"(?:没有|不存在|不会有|不再有|不一定有)(?:明天|下一轮|下一夜|下一晚|明晚|下个夜晚)"
+)
+_FUTURE_ACTION_RE = re.compile(
+    r"(?:明天|下一轮|下一夜|下一晚|明晚|下个夜晚)"
+    r"[^。！？；\n]{0,20}(?:投|票|查验|验人|开枪|带走|用药|毒|救|发言|解释|守护|保护)"
+)
+DETERMINISTIC_HARD_RULE_CODES = frozenset(
+    {
+        "hunter_claims_voluntary_future_shot",
+        "claims_future_round_after_terminal",
+        "claims_illegal_post_death_action",
+    }
 )
 
 
@@ -53,6 +78,7 @@ def action_quality_warnings(
     personality: str = "",
     eligibility: dict[str, object] | None = None,
     role: str = "",
+    hard_state: dict[str, object] | None = None,
 ) -> list[str]:
     warnings: list[str] = []
     normalized = text.replace(" ", "")
@@ -72,7 +98,7 @@ def action_quality_warnings(
             if claims_non_seer or (role != "预言家" and not claims_seer):
                 warnings.append("sheriff_speech_investigation_plan_without_seer_claim")
 
-    if eligibility is not None:
+    if eligibility is not None and action in _SHERIFF_ELECTION_SPEECH_ACTIONS:
         original_voters = eligibility.get("original_voters")
         no_sheriff_voters = isinstance(original_voters, list) and not original_voters
         appeals_for_sheriff_vote = "警下" in normalized and any(
@@ -106,10 +132,29 @@ def action_quality_warnings(
             warnings.append("assumes_future_round_in_endgame")
             warnings.append("ignores_terminal_risk")
 
-    if ("查杀" in normalized and "好人" in normalized) or (
-        "金水" in normalized and "狼人" in normalized
-    ):
+    if contradictory_role_targets(text):
         warnings.append("role_term_contradiction")
+
+    hard_state = hard_state if isinstance(hard_state, dict) else {}
+    if (
+        role == "猎人"
+        and hard_state.get("hunter_death_trigger_active") is not True
+        and _FUTURE_HUNTER_SHOT_RE.search(normalized) is not None
+    ):
+        warnings.append("hunter_claims_voluntary_future_shot")
+
+    if (
+        hard_state.get("terminal_after_current_action") is True
+        and _claims_future_action(normalized)
+    ):
+        warnings.append("claims_future_round_after_terminal")
+
+    if (
+        hard_state.get("actor_alive") is False
+        and action != "hunter_shoot"
+        and _claims_future_action(normalized)
+    ):
+        warnings.append("claims_illegal_post_death_action")
 
     if actor:
         actor_number = actor.replace("玩家", "")
@@ -137,3 +182,11 @@ def action_quality_warnings(
                 warnings.append(warning)
 
     return warnings
+
+
+def _claims_future_action(text: str) -> bool:
+    without_negated_markers = _NEGATED_FUTURE_STAGE_RE.sub("", text)
+    return (
+        _FUTURE_STAGE_RE.search(without_negated_markers) is not None
+        and _FUTURE_ACTION_RE.search(without_negated_markers) is not None
+    )

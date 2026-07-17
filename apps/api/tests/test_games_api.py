@@ -3534,8 +3534,11 @@ def test_run_game_in_background_publishes_registry_and_engine_events_directly(
         assert record_store.fence_token == 1
         assert compiled_rule_set is compiled
         assert "rule_set_id" not in kwargs
-        event_sink.publish("phase_started", phase="night")
-        return SimpleNamespace(winner="狼人阵营")
+        decisive_event = event_sink.publish("phase_started", phase="night")
+        return SimpleNamespace(
+            winner="狼人阵营",
+            terminal_keep_from_event_id=decisive_event.id,
+        )
 
     monkeypatch.setattr("app.api.routes.games.run_game", fake_run_game)
     monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
@@ -3574,6 +3577,54 @@ def test_run_game_in_background_publishes_registry_and_engine_events_directly(
         "run_started",
         "phase_started",
         "game_completed",
+    ]
+    assert saved_events[-1].payload == {
+        "winner": "狼人阵营",
+        "terminal_keep_from_event_id": 3,
+    }
+
+
+def test_run_game_in_background_rejects_completion_without_terminal_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compiled = managed_official_compiled_rule_set("classic_8")
+    registry = LiveRunRegistry(live_store=SessionLiveStore(TestingSessionLocal))
+    run = registry.create_run(
+        session_id="game_1200abce",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+        rule_set_id=compiled.rule_set.id,
+        rule_set_revision_id=compiled.revision_id,
+        rule_set_revision_no=compiled.revision_no,
+        rule_set_content_hash=compiled.content_hash,
+        rule_set=compiled.snapshot,
+    )
+
+    def fake_run_game(**_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(winner="狼人阵营")
+
+    monkeypatch.setattr("app.api.routes.games.run_game", fake_run_game)
+    monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
+
+    _run_game_in_background(
+        run_id=run.run_id,
+        registry=registry,
+        session_id=run.session_id,
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=None,
+        max_rounds=8,
+        compiled=compiled,
+    )
+
+    failed = registry.get_run(run.run_id)
+    assert failed.status == "failed"
+    assert [event.type for event in failed.events] == [
+        "run_created",
+        "run_started",
+        "game_failed",
     ]
 
 
@@ -4465,7 +4516,7 @@ def test_get_game_playback_adds_static_judge_voice_without_saved_voice_rows(
             "mime_type": "audio/mpeg",
             "audio_format": "mp3",
             "sample_rate": 24000,
-            "duration_ms": None,
+            "duration_ms": 1200,
             "subtitle_timings": [
                 {"text": "本局游戏开始，", "start_ms": 0, "end_ms": 600},
                 {"text": "请确认身份牌。", "start_ms": 600, "end_ms": 1200},

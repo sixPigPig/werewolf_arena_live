@@ -209,6 +209,10 @@ describe("admin live run flow", () => {
     expect(screen.getByText("2 / 1")).toBeInTheDocument();
     expect(screen.getAllByText("样本不足")).toHaveLength(2);
     expect(screen.getByText(/样本 18 · 最大值 13200 ms/)).toBeInTheDocument();
+    expect(screen.getByText("Provider attempt 终态")).toBeInTheDocument();
+    expect(screen.getByText(/有效 24 · 非法 1 · 超时 1/)).toBeInTheDocument();
+    expect(screen.getByText("Logical action 终态")).toBeInTheDocument();
+    expect(screen.getByText(/完成 22 · 降级 1 · 取消 0 · 失败 1/)).toBeInTheDocument();
     expect(screen.getByText(/需要 runs.debug.read 权限/)).toBeInTheDocument();
     expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
     expect(screen.getByText("doubao-seed-1-6-flash")).toBeInTheDocument();

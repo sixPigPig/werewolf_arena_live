@@ -123,6 +123,35 @@ class StaticJudgeVoiceAsset:
     mime_type: str
     sample_rate: int
     subtitle_timings: list[dict[str, Any]]
+    duration_ms: int | None = None
+
+
+def static_judge_voice_duration_ms(asset: StaticJudgeVoiceAsset) -> int:
+    """Return media duration, never shorter than the final subtitle cue."""
+    subtitle_duration_ms = max(
+        (
+            int(cue.get("end_ms", 0))
+            for cue in asset.subtitle_timings
+            if isinstance(cue, dict)
+            and isinstance(cue.get("end_ms"), int)
+            and not isinstance(cue.get("end_ms"), bool)
+        ),
+        default=0,
+    )
+    metadata_duration_ms = (
+        asset.duration_ms
+        if isinstance(asset.duration_ms, int)
+        and not isinstance(asset.duration_ms, bool)
+        and asset.duration_ms > 0
+        else 0
+    )
+    pcm_duration_ms = 0
+    if asset.audio_format.lower() in {"pcm", "s16le"} and asset.sample_rate > 0:
+        pcm_duration_ms = max(
+            1,
+            int(len(asset.audio) / (asset.sample_rate * 2) * 1000),
+        )
+    return max(metadata_duration_ms, subtitle_duration_ms, pcm_duration_ms)
 
 
 @dataclass(frozen=True)
@@ -356,7 +385,7 @@ class LiveVoiceStreamService:
         voice_store: VoiceStore | None,
         playback_acks: PlaybackAckQueue | None,
     ) -> bool:
-        started_at = time.monotonic()
+        duration_ms = static_judge_voice_duration_ms(asset)
         persistence_enabled = _persist_voice_operation(
             voice_store,
             utterance,
@@ -377,11 +406,12 @@ class LiveVoiceStreamService:
             speaker_name=utterance.speaker_name,
             audio=asset.audio,
             mime_type=asset.mime_type,
-            duration_ms=0,
+            duration_ms=duration_ms,
             audio_format=asset.audio_format,
             sample_rate=asset.sample_rate,
             chunk_index=0,
             audience=utterance.audience,
+            presentation_id=utterance.presentation_id,
         )
         try:
             await websocket.send_json(start_message)
@@ -432,7 +462,6 @@ class LiveVoiceStreamService:
                 utterance,
             ):
                 return False
-            duration_ms = int((time.monotonic() - started_at) * 1000)
             await websocket.send_json(
                 {
                     "type": "voice_end",
@@ -504,6 +533,11 @@ class LiveVoiceStreamService:
                     "type": "voice_start",
                     "utterance_id": utterance.utterance_id,
                     "source_event_id": utterance.source_event_id,
+                    **(
+                        {"presentation_id": utterance.presentation_id}
+                        if utterance.presentation_id is not None
+                        else {}
+                    ),
                     **(
                         {"last_source_event_id": utterance.last_source_event_id}
                         if utterance.last_source_event_id is not None
@@ -867,6 +901,7 @@ def _load_static_judge_voice_asset(
         mime_type=mime_type,
         sample_rate=sample_rate,
         subtitle_timings=_subtitle_timings_from_manifest_line(matching_line),
+        duration_ms=_int_manifest_value(matching_line, "duration_ms"),
     )
 
 
@@ -908,6 +943,7 @@ def build_static_judge_playback_voices(
             if asset is None:
                 asset = _load_static_judge_voice_asset(asset_dir, utterance.static_asset_id)
             if asset is not None:
+                duration_ms = static_judge_voice_duration_ms(asset)
                 start_message, chunk_message, _end_message = build_voice_messages(
                     utterance_id=(
                         f"static_judge_{utterance.source_event_id}_{utterance.static_asset_id}"
@@ -918,11 +954,12 @@ def build_static_judge_playback_voices(
                     speaker_name=utterance.speaker_name,
                     audio=asset.audio,
                     mime_type=asset.mime_type,
-                    duration_ms=0,
+                    duration_ms=duration_ms,
                     audio_format=asset.audio_format,
                     sample_rate=asset.sample_rate,
                     chunk_index=0,
                     audience=utterance.audience,
+                    presentation_id=utterance.presentation_id,
                 )
                 voices.append(
                     {
@@ -938,7 +975,12 @@ def build_static_judge_playback_voices(
                         "mime_type": start_message["mime_type"],
                         "audio_format": start_message["audio_format"],
                         "sample_rate": start_message["sample_rate"],
-                        "duration_ms": None,
+                        **(
+                            {"presentation_id": start_message["presentation_id"]}
+                            if "presentation_id" in start_message
+                            else {}
+                        ),
+                        "duration_ms": duration_ms,
                         "subtitle_timings": asset.subtitle_timings,
                         "chunks": [
                             {
@@ -1137,6 +1179,9 @@ async def _replay_recent_utterance(
     mime_type = utterance.get("mime_type")
     audio_format = utterance.get("audio_format")
     audience = utterance.get("audience")
+    presentation_id = utterance.get("presentation_id")
+    if not isinstance(presentation_id, str) or not presentation_id:
+        presentation_id = None
     if audience not in {"player_public", "spectator_god_view"}:
         audience = "player_public"
     if (
@@ -1164,6 +1209,7 @@ async def _replay_recent_utterance(
         sample_rate=sample_rate,
         chunk_index=0,
         audience=audience,
+        presentation_id=presentation_id,
     )
     if not await _send_replay_message(websocket, start_message, disconnect_task):
         return RecentUtteranceReplayResult(should_continue=False)

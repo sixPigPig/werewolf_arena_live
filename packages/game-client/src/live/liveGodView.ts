@@ -1,5 +1,6 @@
 import type { LivePlayer, LiveSpectatorState } from "./liveSpectator";
 import { eventTypeLabel } from "./liveLabels";
+import { projectLivePresentationEvents } from "./livePresentation";
 import type { LiveGameEvent } from "../types";
 
 export type GodViewIdentityGroup = "狼人" | "神职" | "平民" | "未知";
@@ -245,7 +246,7 @@ export function deriveGodViewState(
     nameToSeat: buildNameToSeat(spectator.players),
   };
 
-  for (const event of events) {
+  for (const event of projectLivePresentationEvents(events)) {
     if (event.round !== null) {
       view.currentRound = event.round;
     }
@@ -1183,6 +1184,17 @@ function stateUpdatedReplayText(
   payload: Record<string, unknown>,
   nameToSeat: Map<string, number>,
 ): string | null {
+  if (event.action === "hunter_shot_resolved") {
+    const status = stringField(payload, "hunter_shot_status");
+    const target = stringField(payload, "hunter_shot");
+    if (status === "shot" && target) {
+      return `猎人带走 ${seatLabel(target, nameToSeat)}`;
+    }
+    if (status === "skipped") {
+      return "猎人选择不发动技能";
+    }
+  }
+
   const exiled = stringField(payload, "exiled");
   if (exiled) {
     return `${seatLabel(exiled, nameToSeat)} 被放逐`;
@@ -1241,6 +1253,17 @@ function stateUpdatedReplayDetail(
   payload: Record<string, unknown>,
   nameToSeat: Map<string, number>,
 ): string {
+  if (event.action === "hunter_shot_resolved") {
+    const status = stringField(payload, "hunter_shot_status");
+    const target = stringField(payload, "hunter_shot");
+    if (status === "shot" && target) {
+      return `${seatLabel(event.actor ?? "猎人", nameToSeat)} 带走 ${seatLabel(target, nameToSeat)}`;
+    }
+    if (status === "skipped") {
+      return "猎人选择不发动技能";
+    }
+  }
+
   const exiled = stringField(payload, "exiled");
   if (exiled) {
     return `${seatLabel(exiled, nameToSeat)} 被投票放逐`;

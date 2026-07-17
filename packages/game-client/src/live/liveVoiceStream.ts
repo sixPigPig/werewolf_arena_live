@@ -44,6 +44,7 @@ export type LiveVoiceMessage =
       utterance_id: string;
       source_event_id: number;
       last_source_event_id?: number;
+      presentation_id?: string;
       speaker_kind: "player" | "judge";
       speaker_name: string;
       audience?: VoiceAudience;
@@ -121,6 +122,7 @@ export type LiveVoiceQueueItem = {
   utteranceId: string;
   sourceEventId: number;
   lastSourceEventId: number;
+  presentationId?: string;
   audience?: VoiceAudience;
   speakerKind: "player" | "judge";
   speakerName: string;
@@ -275,6 +277,8 @@ export function enqueueVoiceMessage(
                   item.lastSourceEventId,
                   lastSourceEventId,
                 ),
+                presentationId:
+                  message.presentation_id ?? item.presentationId,
                 speakerKind: message.speaker_kind,
                 speakerName: message.speaker_name,
                 audience: message.audience ?? "player_public",
@@ -297,6 +301,9 @@ export function enqueueVoiceMessage(
           utteranceId: message.utterance_id,
           sourceEventId: message.source_event_id,
           lastSourceEventId,
+          ...(message.presentation_id
+            ? { presentationId: message.presentation_id }
+            : {}),
           speakerKind: message.speaker_kind,
           speakerName: message.speaker_name,
           audience: message.audience ?? "player_public",
@@ -438,6 +445,59 @@ export function pruneStaleVoiceQueue(
       (item) => !isStaleJudgeVoiceItem(item, currentEventId),
     ),
   };
+}
+
+export function pruneTerminalVoiceQueue(
+  queue: LiveVoiceQueue,
+  terminalKeepFromEventId: number | null,
+  terminalEventId: number | null,
+): LiveVoiceQueue {
+  if (
+    !isValidTerminalVoiceWindow(
+      terminalKeepFromEventId,
+      terminalEventId,
+    )
+  ) {
+    return queue;
+  }
+
+  return {
+    ...queue,
+    items: queue.items.filter((item) =>
+      voiceItemIntersectsTerminalWindow(
+        item,
+        terminalKeepFromEventId,
+        terminalEventId,
+      ),
+    ),
+  };
+}
+
+function isValidTerminalVoiceWindow(
+  terminalKeepFromEventId: number | null,
+  terminalEventId: number | null,
+): boolean {
+  return (
+    terminalKeepFromEventId !== null &&
+    terminalEventId !== null &&
+    Number.isInteger(terminalKeepFromEventId) &&
+    Number.isInteger(terminalEventId) &&
+    terminalKeepFromEventId > 0 &&
+    terminalKeepFromEventId <= terminalEventId
+  );
+}
+
+function voiceItemIntersectsTerminalWindow(
+  item: Pick<LiveVoiceQueueItem, "sourceEventId" | "lastSourceEventId">,
+  terminalKeepFromEventId: number | null,
+  terminalEventId: number | null,
+) {
+  return (
+    terminalKeepFromEventId !== null &&
+    terminalEventId !== null &&
+    item.lastSourceEventId >= terminalKeepFromEventId &&
+    item.sourceEventId <= terminalEventId
+  );
 }
 
 function isStaleJudgeVoiceItem(
@@ -586,6 +646,8 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
       typeof value.source_event_id === "number" &&
       (value.last_source_event_id === undefined ||
         typeof value.last_source_event_id === "number") &&
+      (value.presentation_id === undefined ||
+        typeof value.presentation_id === "string") &&
       isSpeakerKind(value.speaker_kind) &&
       typeof value.speaker_name === "string" &&
       (value.audience === undefined || isVoiceAudience(value.audience)) &&
@@ -647,11 +709,15 @@ export function useLiveVoiceStream(
     currentEventId,
     enabled,
     isPaused,
+    terminalEventId = null,
+    terminalKeepFromEventId = null,
   }: {
     audience?: "player_public" | "spectator_god_view";
     currentEventId: number | null;
     enabled: boolean;
     isPaused: boolean;
+    terminalEventId?: number | null;
+    terminalKeepFromEventId?: number | null;
   },
 ) {
   const hasCurrentEventId = currentEventId !== null;
@@ -672,11 +738,37 @@ export function useLiveVoiceStream(
     () => (runId ? resolveVoiceStreamUrl(runId, API_BASE_URL, undefined, audience) : null),
     [audience, runId],
   );
+  const queueStreamUrlRef = useRef(streamUrl);
   const latestCurrentEventIdRef = useRef(currentEventId);
   latestCurrentEventIdRef.current = currentEventId;
+  const terminalVoiceWindow = useMemo(
+    () =>
+      isValidTerminalVoiceWindow(
+        terminalKeepFromEventId,
+        terminalEventId,
+      )
+        ? {
+            keepFromEventId: terminalKeepFromEventId as number,
+            terminalEventId: terminalEventId as number,
+          }
+        : null,
+    [terminalEventId, terminalKeepFromEventId],
+  );
   const visibleQueue = useMemo(
-    () => pruneStaleVoiceQueue(queue, currentEventId),
-    [currentEventId, queue],
+    () => {
+      if (queueStreamUrlRef.current !== streamUrl) {
+        return createVoiceQueue();
+      }
+      return pruneStaleVoiceQueue(
+        pruneTerminalVoiceQueue(
+          queue,
+          terminalVoiceWindow?.keepFromEventId ?? null,
+          terminalVoiceWindow?.terminalEventId ?? null,
+        ),
+        currentEventId,
+      );
+    },
+    [currentEventId, queue, streamUrl, terminalVoiceWindow],
   );
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -686,6 +778,7 @@ export function useLiveVoiceStream(
   >(null);
   const socketRef = useRef<WebSocket | null>(null);
   const acknowledgedUtteranceIdsRef = useRef<Set<string>>(new Set());
+  const pendingPlaybackAckIdsRef = useRef<Set<string>>(new Set());
   const pcmEndTimesRef = useRef<Map<string, number>>(new Map());
   const pcmSubtitleStartTimesRef = useRef<Map<string, number>>(new Map());
   const scheduledPcmChunkIndexesRef = useRef<Map<string, Set<number>>>(
@@ -693,6 +786,7 @@ export function useLiveVoiceStream(
   );
   const isPausedRef = useRef(isPaused);
   const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
+  const playedPresentationIdsRef = useRef<Set<string>>(new Set());
   const playbackCompletionSequenceRef = useRef(0);
   useEffect(() => {
     isPausedRef.current = isPaused;
@@ -721,15 +815,61 @@ export function useLiveVoiceStream(
     if (acknowledgedUtteranceIdsRef.current.has(utteranceId)) {
       return;
     }
-    acknowledgedUtteranceIdsRef.current.add(utteranceId);
+    const socket = socketRef.current;
+    if (!socket) {
+      pendingPlaybackAckIdsRef.current.add(utteranceId);
+      return;
+    }
     try {
-      socketRef.current?.send(
+      socket.send(
         JSON.stringify({ type: "voice_played", utterance_id: utteranceId }),
       );
+      acknowledgedUtteranceIdsRef.current.add(utteranceId);
+      pendingPlaybackAckIdsRef.current.delete(utteranceId);
     } catch {
-      // Playback progression should not depend on ack delivery.
+      pendingPlaybackAckIdsRef.current.add(utteranceId);
     }
   }, []);
+  useEffect(() => {
+    if (!enabled || !terminalVoiceWindow) {
+      return;
+    }
+
+    const preemptedItems = queue.items.filter(
+      (item) =>
+        item.status !== "played" &&
+        !voiceItemIntersectsTerminalWindow(
+          item,
+          terminalVoiceWindow.keepFromEventId,
+          terminalVoiceWindow.terminalEventId,
+        ),
+    );
+    if (preemptedItems.length === 0) {
+      return;
+    }
+    if (
+      preemptedItems.some(
+        (item) =>
+          item.status === "playing" && isPcmAudioFormat(item.audioFormat),
+      )
+    ) {
+      closePcmScheduler();
+    }
+    for (const item of preemptedItems) {
+      consumedUtteranceIdsRef.current.add(item.utteranceId);
+      sendPlaybackAck(item.utteranceId);
+      dispatch({
+        type: "utterance_played",
+        utteranceId: item.utteranceId,
+      });
+    }
+  }, [
+    closePcmScheduler,
+    enabled,
+    queue.items,
+    sendPlaybackAck,
+    terminalVoiceWindow,
+  ]);
   useEffect(() => {
     if (!enabled || currentEventId === null) {
       return;
@@ -754,9 +894,15 @@ export function useLiveVoiceStream(
     (
       item: Pick<
         LiveVoiceQueueItem,
-        "utteranceId" | "sourceEventId" | "lastSourceEventId"
+        | "utteranceId"
+        | "sourceEventId"
+        | "lastSourceEventId"
+        | "presentationId"
       >,
     ) => {
+      if (item.presentationId) {
+        playedPresentationIdsRef.current.add(item.presentationId);
+      }
       playbackCompletionSequenceRef.current += 1;
       setLastCompletedPlayback({
         id: `${item.utteranceId}:${playbackCompletionSequenceRef.current}`,
@@ -771,7 +917,10 @@ export function useLiveVoiceStream(
       utteranceId: string,
       completedItem?: Pick<
         LiveVoiceQueueItem,
-        "utteranceId" | "sourceEventId" | "lastSourceEventId"
+        | "utteranceId"
+        | "sourceEventId"
+        | "lastSourceEventId"
+        | "presentationId"
       >,
     ) => {
       consumedUtteranceIdsRef.current.add(utteranceId);
@@ -802,7 +951,10 @@ export function useLiveVoiceStream(
       endTime: number;
       item: Pick<
         LiveVoiceQueueItem,
-        "utteranceId" | "sourceEventId" | "lastSourceEventId"
+        | "utteranceId"
+        | "sourceEventId"
+        | "lastSourceEventId"
+        | "presentationId"
       >;
     }) => {
       clearPcmCompletionTimeout();
@@ -1347,8 +1499,10 @@ export function useLiveVoiceStream(
   }, [closePcmScheduler, streamUrl]);
 
   useEffect(() => {
+    queueStreamUrlRef.current = streamUrl;
     consumedUtteranceIdsRef.current.clear();
     acknowledgedUtteranceIdsRef.current.clear();
+    pendingPlaybackAckIdsRef.current.clear();
     playbackCompletionSequenceRef.current = 0;
     pcmSubtitleStartTimesRef.current.clear();
     setLastCompletedPlayback(null);
@@ -1439,6 +1593,9 @@ export function useLiveVoiceStream(
       nextSocket.onopen = () => {
         if (isActive) {
           setConnectionState("open");
+          for (const utteranceId of pendingPlaybackAckIdsRef.current) {
+            sendPlaybackAck(utteranceId);
+          }
         }
       };
       nextSocket.onerror = () => {
@@ -1479,6 +1636,16 @@ export function useLiveVoiceStream(
           return;
         }
 
+        if (
+          parsed.type === "voice_start" &&
+          parsed.presentation_id &&
+          playedPresentationIdsRef.current.has(parsed.presentation_id)
+        ) {
+          consumedUtteranceIdsRef.current.add(parsed.utterance_id);
+          sendPlaybackAck(parsed.utterance_id);
+          return;
+        }
+
         dispatch(parsed);
       };
     };
@@ -1492,7 +1659,7 @@ export function useLiveVoiceStream(
       }
       socket?.close();
     };
-  }, [audience, enabled, hasCurrentEventId, runId, streamUrl]);
+  }, [audience, enabled, hasCurrentEventId, runId, sendPlaybackAck, streamUrl]);
 
   return {
     connectionState,

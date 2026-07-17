@@ -35,6 +35,7 @@ from app.werewolf.voice_store import DatabaseVoiceStore
 from app.werewolf.voice_stream import (
     StaticJudgeVoiceAsset,
     load_static_judge_voice_asset,
+    static_judge_voice_duration_ms,
 )
 from app.werewolf.volcengine_tts import (
     TtsSubtitleTiming,
@@ -235,7 +236,7 @@ class VoiceMaterializer:
         store.append_chunk(utterance.utterance_id, chunk_index=0, audio=asset.audio)
         store.complete_utterance(
             utterance.utterance_id,
-            duration_ms=_asset_duration_ms(asset),
+            duration_ms=static_judge_voice_duration_ms(asset),
         )
 
     async def _persist_dynamic(
@@ -541,25 +542,6 @@ def _voice_context(
                 previous_night_deaths = tuple(names)
                 peaceful_night = not names
     return player_seats, previous_night_deaths, peaceful_night
-
-
-def _asset_duration_ms(asset: StaticJudgeVoiceAsset) -> int:
-    timed_duration = max(
-        (
-            int(cue.get("end_ms", 0))
-            for cue in asset.subtitle_timings
-            if isinstance(cue, dict)
-        ),
-        default=0,
-    )
-    return max(
-        timed_duration,
-        _audio_duration_ms(
-            audio_format=asset.audio_format,
-            sample_rate=asset.sample_rate,
-            audio_bytes=len(asset.audio),
-        ),
-    )
 
 
 def _audio_duration_ms(*, audio_format: str, sample_rate: int, audio_bytes: int) -> int:

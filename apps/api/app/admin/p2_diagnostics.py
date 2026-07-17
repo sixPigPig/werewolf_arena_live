@@ -50,6 +50,18 @@ _PUBLIC_OUTCOME_VALUES = {
 }
 _PUBLIC_OUTCOME_PHASES = {"night", "day", "vote", "unknown"}
 _OUTCOME_EVENT_ID = re.compile(r"^(?:outcome_[0-9a-f]{16}|legacy:r\d+:\d+)$")
+_PROVIDER_ATTEMPT_RESULTS = (
+    "valid_response",
+    "invalid_response",
+    "timed_out",
+    "canceled",
+    "transport_failed",
+)
+_LOGICAL_ACTION_RESULTS = ("completed", "fallback", "canceled", "failed")
+_ATTEMPT_TERMINAL_EVENT_TYPES = {
+    "model_attempt_completed",
+    "model_request_failed",
+}
 
 
 def build_run_p2_diagnostics(
@@ -62,13 +74,17 @@ def build_run_p2_diagnostics(
     safe_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if safe_diagnostics:
-        return _stored_run_diagnostics(
+        stored = _stored_run_diagnostics(
             safe_diagnostics,
             status=status,
             diagnostic_events=diagnostic_events,
             started_at=started_at,
             completed_at=completed_at,
         )
+        actions = list(_action_logs(logs))
+        if stored["logical_action_outcomes"]["action_count"] == 0 and actions:
+            stored["logical_action_outcomes"] = _logical_action_outcomes(actions)
+        return stored
     actions = list(_action_logs(logs))
     performance = _performance(
         actions,
@@ -76,6 +92,11 @@ def build_run_p2_diagnostics(
         started_at=started_at,
         completed_at=completed_at,
     )
+    provider_attempt_outcomes = _provider_attempt_outcomes(
+        actions,
+        diagnostic_events=diagnostic_events,
+    )
+    logical_action_outcomes = _logical_action_outcomes(actions)
     has_p2_data = _has_p2_action_data(actions)
     return {
         "schema_version": 1,
@@ -87,6 +108,8 @@ def build_run_p2_diagnostics(
         "performance": performance,
         "speech_quality": _speech_quality(actions),
         "choice_normalization": _choice_normalization(actions),
+        "provider_attempt_outcomes": provider_attempt_outcomes,
+        "logical_action_outcomes": logical_action_outcomes,
     }
 
 
@@ -138,10 +161,20 @@ def build_game_p2_quality(
         )
     )
     speech = stored_run["speech_quality"] if stored_run else _speech_quality(actions)
-    choice = (
-        stored_run["choice_normalization"]
+    choice = stored_run["choice_normalization"] if stored_run else _choice_normalization(actions)
+    provider_attempt_outcomes = (
+        stored_run["provider_attempt_outcomes"]
         if stored_run
-        else _choice_normalization(actions)
+        else _provider_attempt_outcomes(
+            actions,
+            diagnostic_events=diagnostic_events,
+        )
+    )
+    logical_action_outcomes = (
+        stored_run["logical_action_outcomes"]
+        if stored_run
+        and stored_run["logical_action_outcomes"]["action_count"] > 0
+        else _logical_action_outcomes(actions)
     )
     return {
         "schema_version": 1,
@@ -150,10 +183,10 @@ def build_game_p2_quality(
         "speech_quality": speech,
         "performance": performance,
         "choice_normalization": choice,
+        "provider_attempt_outcomes": provider_attempt_outcomes,
+        "logical_action_outcomes": logical_action_outcomes,
         "public_outcomes": outcomes if terminal else [],
-        "public_outcome_summary_mismatch_count": (
-            summary_mismatches if terminal else 0
-        ),
+        "public_outcome_summary_mismatch_count": (summary_mismatches if terminal else 0),
         "quality_gates": _quality_gates(
             data_status=data_status,
             lineup=lineup,
@@ -190,15 +223,9 @@ def _stored_run_diagnostics(
         "discrete_action_sample_count": _non_negative_int(
             performance_data.get("discrete_action_sample_count"), default=0
         ),
-        "discrete_action_p50_ms": _non_negative_int(
-            performance_data.get("discrete_action_p50_ms")
-        ),
-        "discrete_action_p95_ms": _non_negative_int(
-            performance_data.get("discrete_action_p95_ms")
-        ),
-        "discrete_action_max_ms": _non_negative_int(
-            performance_data.get("discrete_action_max_ms")
-        ),
+        "discrete_action_p50_ms": _non_negative_int(performance_data.get("discrete_action_p50_ms")),
+        "discrete_action_p95_ms": _non_negative_int(performance_data.get("discrete_action_p95_ms")),
+        "discrete_action_max_ms": _non_negative_int(performance_data.get("discrete_action_max_ms")),
         "speech_first_token_sample_count": _non_negative_int(
             performance_data.get("speech_first_token_sample_count"), default=0
         ),
@@ -208,12 +235,8 @@ def _stored_run_diagnostics(
         "speech_first_token_max_ms": _non_negative_int(
             performance_data.get("speech_first_token_max_ms")
         ),
-        "timeout_count": _non_negative_int(
-            performance_data.get("timeout_count"), default=0
-        ),
-        "fallback_count": _non_negative_int(
-            performance_data.get("fallback_count"), default=0
-        ),
+        "timeout_count": _non_negative_int(performance_data.get("timeout_count"), default=0),
+        "fallback_count": _non_negative_int(performance_data.get("fallback_count"), default=0),
         "active_request_count": active_request_count,
         "game_duration_ms": duration_ms,
     }
@@ -236,6 +259,15 @@ def _stored_run_diagnostics(
             "other_count",
         }
     }
+    provider_attempt_outcomes = _safe_provider_attempt_outcomes(
+        value.get("provider_attempt_outcomes")
+    )
+    if provider_attempt_outcomes["attempt_count"] == 0:
+        provider_attempt_outcomes = _provider_attempt_outcomes(
+            [],
+            diagnostic_events=diagnostic_events,
+        )
+    logical_action_outcomes = _safe_logical_action_outcomes(value.get("logical_action_outcomes"))
     return {
         "schema_version": 1,
         "data_status": _data_status(
@@ -246,11 +278,14 @@ def _stored_run_diagnostics(
         "performance": performance,
         "speech_quality": speech,
         "choice_normalization": choice,
+        "provider_attempt_outcomes": provider_attempt_outcomes,
+        "logical_action_outcomes": logical_action_outcomes,
     }
 
 
 def _action_logs(logs: list[Any]) -> Iterable[dict[str, Any]]:
     stack = list(reversed(logs))
+    seen_action_ids: set[str] = set()
     while stack:
         value = stack.pop()
         if isinstance(value, list):
@@ -258,12 +293,171 @@ def _action_logs(logs: list[Any]) -> Iterable[dict[str, Any]]:
             continue
         if not isinstance(value, dict):
             continue
-        if isinstance(value.get("action"), str) and isinstance(
-            value.get("lm_log"), dict
-        ):
+        if isinstance(value.get("action"), str) and isinstance(value.get("lm_log"), dict):
+            action_id = value["lm_log"].get("action_id")
+            if isinstance(action_id, str) and action_id:
+                if action_id in seen_action_ids:
+                    continue
+                seen_action_ids.add(action_id)
             yield value
             continue
         stack.extend(reversed(list(value.values())))
+
+
+def _provider_attempt_outcomes(
+    actions: list[dict[str, Any]],
+    *,
+    diagnostic_events: list[dict[str, Any]],
+) -> dict[str, int]:
+    keyed_results: dict[str, str] = {}
+    anonymous_results: list[str] = []
+
+    for action in actions:
+        lm_log = action.get("lm_log")
+        if not isinstance(lm_log, dict):
+            continue
+        ledger_rows = _safe_attempt_outcome_ledger(lm_log.get("attempt_outcomes"))
+        if ledger_rows:
+            for request_id, result in ledger_rows:
+                keyed_results.setdefault(request_id, result)
+            continue
+        invalid_attempts = lm_log.get("invalid_attempts")
+        invalid_rows = invalid_attempts if isinstance(invalid_attempts, list) else []
+        invalid_ids: set[str] = set()
+        for attempt in invalid_rows:
+            if not isinstance(attempt, dict):
+                continue
+            attempt_id = _attempt_identifier(attempt)
+            if attempt_id is None:
+                anonymous_results.append("invalid_response")
+                continue
+            invalid_ids.add(attempt_id)
+            keyed_results.setdefault(attempt_id, "invalid_response")
+
+        final_attempt_id = _attempt_identifier(lm_log)
+        has_result = isinstance(lm_log.get("result"), dict)
+        if final_attempt_id is not None:
+            if final_attempt_id not in invalid_ids and has_result:
+                keyed_results.setdefault(final_attempt_id, "valid_response")
+        elif _has_anonymous_valid_response(
+            action,
+            lm_log=lm_log,
+            invalid_attempts=invalid_rows,
+        ):
+            anonymous_results.append("valid_response")
+
+    for event in diagnostic_events:
+        if str(event.get("type") or "") not in _ATTEMPT_TERMINAL_EVENT_TYPES:
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        result = payload.get("attempt_result")
+        if result not in _PROVIDER_ATTEMPT_RESULTS:
+            continue
+        attempt_id = _attempt_identifier(payload)
+        if attempt_id is None:
+            anonymous_results.append(str(result))
+        else:
+            keyed_results[attempt_id] = str(result)
+
+    results = [*keyed_results.values(), *anonymous_results]
+    counts = {f"{result}_count": results.count(result) for result in _PROVIDER_ATTEMPT_RESULTS}
+    return {"attempt_count": sum(counts.values()), **counts}
+
+
+def _safe_attempt_outcome_ledger(value: object) -> list[tuple[str, str]]:
+    if not isinstance(value, list):
+        return []
+
+    outcomes: list[tuple[str, str]] = []
+    seen_request_ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        action_id = item.get("action_id")
+        request_id = item.get("request_id")
+        result = item.get("attempt_result")
+        if (
+            not isinstance(action_id, str)
+            or not action_id
+            or not isinstance(request_id, str)
+            or not request_id
+            or not isinstance(result, str)
+            or result not in _PROVIDER_ATTEMPT_RESULTS
+            or request_id in seen_request_ids
+        ):
+            continue
+        seen_request_ids.add(request_id)
+        outcomes.append((request_id, str(result)))
+    return outcomes
+
+
+def _logical_action_outcomes(
+    actions: list[dict[str, Any]],
+) -> dict[str, int]:
+    results = [_logical_action_result(action) for action in actions]
+    counts = {f"{result}_count": results.count(result) for result in _LOGICAL_ACTION_RESULTS}
+    return {"action_count": sum(counts.values()), **counts}
+
+
+def _logical_action_result(action: dict[str, Any]) -> str:
+    raw_status = action.get("execution_status")
+    if raw_status is None:
+        return "fallback" if action.get("fallback_reason") else "completed"
+    status = str(raw_status)
+    if status in _LOGICAL_ACTION_RESULTS:
+        return status
+    if status == "timed_out" and (
+        action.get("fallback_reason") or action.get("fallback_choice") is not None
+    ):
+        return "fallback"
+    return "failed"
+
+
+def _has_anonymous_valid_response(
+    action: dict[str, Any],
+    *,
+    lm_log: dict[str, Any],
+    invalid_attempts: list[Any],
+) -> bool:
+    if not isinstance(lm_log.get("result"), dict):
+        return False
+    status = str(action.get("execution_status") or "completed")
+    if status == "completed":
+        return True
+    if status != "fallback" or invalid_attempts:
+        return False
+    fallback_reason = str(action.get("fallback_reason") or "")
+    return bool(lm_log.get("raw_response")) and not fallback_reason.startswith(
+        ("timeout_", "batch_deadline_")
+    )
+
+
+def _attempt_identifier(value: dict[str, Any]) -> str | None:
+    for key in ("attempt_id", "request_id"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
+
+
+def _safe_provider_attempt_outcomes(value: object) -> dict[str, int]:
+    data = value if isinstance(value, dict) else {}
+    counts = {
+        f"{result}_count": int(_non_negative_int(data.get(f"{result}_count"), default=0) or 0)
+        for result in _PROVIDER_ATTEMPT_RESULTS
+    }
+    return {"attempt_count": sum(counts.values()), **counts}
+
+
+def _safe_logical_action_outcomes(value: object) -> dict[str, int]:
+    data = value if isinstance(value, dict) else {}
+    counts = {
+        f"{result}_count": int(_non_negative_int(data.get(f"{result}_count"), default=0) or 0)
+        for result in _LOGICAL_ACTION_RESULTS
+    }
+    return {"action_count": sum(counts.values()), **counts}
 
 
 def _performance(
@@ -276,8 +470,7 @@ def _performance(
     discrete_durations = sorted(
         _non_negative_int(action.get("duration_ms"))
         for action in actions
-        if str(action.get("action"))
-        not in _PUBLIC_SPEECH_ACTIONS | _PRIVATE_TEXT_ACTIONS
+        if str(action.get("action")) not in _PUBLIC_SPEECH_ACTIONS | _PRIVATE_TEXT_ACTIONS
         and _non_negative_int(action.get("duration_ms")) is not None
     )
     discrete_durations = [value for value in discrete_durations if value is not None]
@@ -291,9 +484,7 @@ def _performance(
     timeout_count = sum(
         1
         for action in actions
-        if str(action.get("fallback_reason") or "").startswith(
-            ("timeout_", "batch_deadline_")
-        )
+        if str(action.get("fallback_reason") or "").startswith(("timeout_", "batch_deadline_"))
     )
     fallback_count = sum(1 for action in actions if action.get("fallback_reason"))
     duration_ms = None
@@ -304,9 +495,7 @@ def _performance(
         "discrete_action_sample_count": len(discrete_durations),
         "discrete_action_p50_ms": _percentile(discrete_durations, 0.5),
         "discrete_action_p95_ms": (
-            _percentile(discrete_durations, 0.95)
-            if len(discrete_durations) >= 20
-            else None
+            _percentile(discrete_durations, 0.95) if len(discrete_durations) >= 20 else None
         ),
         "discrete_action_max_ms": max(discrete_durations, default=None),
         "speech_first_token_sample_count": len(first_tokens),
@@ -324,6 +513,7 @@ def _performance(
 def _request_counts(events: list[dict[str, Any]]) -> tuple[int, int]:
     active: set[str] = set()
     request_count = 0
+    anonymous_started = 0
     anonymous_completed = 0
     for event in events:
         event_type = str(event.get("type") or "")
@@ -337,7 +527,10 @@ def _request_counts(events: list[dict[str, Any]]) -> tuple[int, int]:
             request_count += 1
             if request_id:
                 active.add(request_id)
+            else:
+                anonymous_started += 1
         elif event_type in {
+            "model_attempt_completed",
             "model_request_failed",
             "model_response_received",
         }:
@@ -345,28 +538,23 @@ def _request_counts(events: list[dict[str, Any]]) -> tuple[int, int]:
                 active.discard(request_id)
             else:
                 anonymous_completed += 1
-    anonymous_active = max(0, request_count - anonymous_completed - len(active))
+    anonymous_active = max(0, anonymous_started - anonymous_completed)
     return request_count, len(active) + anonymous_active
 
 
 def _speech_quality(actions: list[dict[str, Any]]) -> dict[str, int]:
     speech_actions = [
-        action
-        for action in actions
-        if isinstance(action.get("speech_quality_report"), dict)
+        action for action in actions if isinstance(action.get("speech_quality_report"), dict)
     ]
     return {
         "checked_count": len(speech_actions),
         "retry_count": sum(
             1
             for action in speech_actions
-            if _non_negative_int(action.get("speech_quality_attempt_count"), default=0)
-            > 1
+            if _non_negative_int(action.get("speech_quality_attempt_count"), default=0) > 1
         ),
         "exhausted_count": sum(
-            1
-            for action in speech_actions
-            if action.get("speech_quality_retry_exhausted") is True
+            1 for action in speech_actions if action.get("speech_quality_retry_exhausted") is True
         ),
         "low_novelty_window_count": sum(
             1
@@ -440,9 +628,7 @@ def _safe_lineup_quality(report: dict[str, Any]) -> dict[str, Any]:
         "was_repaired": bool(report.get("was_repaired")),
         "is_blocked": bool(report.get("is_blocked")),
         "style_bucket_count": _non_negative_int(report.get("style_bucket_count")),
-        "required_style_bucket_count": _non_negative_int(
-            report.get("required_style_bucket_count")
-        ),
+        "required_style_bucket_count": _non_negative_int(report.get("required_style_bucket_count")),
         "violations": violations,
     }
 
@@ -494,14 +680,10 @@ def _public_outcomes(state: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
                         else None
                     ),
                     "outcome": (
-                        event.outcome
-                        if event.outcome in _PUBLIC_OUTCOME_VALUES
-                        else "unknown"
+                        event.outcome if event.outcome in _PUBLIC_OUTCOME_VALUES else "unknown"
                     ),
                     "caused_by_event_id": (
-                        event.caused_by_event_id
-                        if event.caused_by_event_id in event_ids
-                        else None
+                        event.caused_by_event_id if event.caused_by_event_id in event_ids else None
                     ),
                     "occurred_phase": (
                         event.occurred_phase
@@ -572,8 +754,14 @@ def _quality_gates(
         ),
         _gate(
             "choice_normalization",
-            "unavailable" if unavailable and not sum(choice.values()) else "warn" if choice["invalid_count"] else "pass",
-            "choice_data_unavailable" if unavailable and not sum(choice.values()) else "choice_checked",
+            "unavailable"
+            if unavailable and not sum(choice.values())
+            else "warn"
+            if choice["invalid_count"]
+            else "pass",
+            "choice_data_unavailable"
+            if unavailable and not sum(choice.values())
+            else "choice_checked",
             "invalid=0",
             str(choice["invalid_count"]),
         ),
@@ -640,10 +828,7 @@ def _percentile(values: list[int], fraction: float) -> int | None:
 def _report_has_issue(report: object, code: str) -> bool:
     if not isinstance(report, dict) or not isinstance(report.get("issues"), list):
         return False
-    return any(
-        isinstance(issue, dict) and issue.get("code") == code
-        for issue in report["issues"]
-    )
+    return any(isinstance(issue, dict) and issue.get("code") == code for issue in report["issues"])
 
 
 def _bounded_code(value: object) -> str:
@@ -651,9 +836,7 @@ def _bounded_code(value: object) -> str:
     return text if text in _LINEUP_VIOLATION_CODES else "unknown"
 
 
-def _public_player_ids(
-    state: dict[str, Any], rounds: list[object]
-) -> set[str]:
+def _public_player_ids(state: dict[str, Any], rounds: list[object]) -> set[str]:
     result: set[str] = set()
     players = state.get("players")
     if isinstance(players, list):
@@ -662,13 +845,9 @@ def _public_player_ids(
                 result.add(player["name"])
                 result.add(f"{seat}号玩家")
     for round_data in rounds:
-        if not isinstance(round_data, dict) or not isinstance(
-            round_data.get("players"), list
-        ):
+        if not isinstance(round_data, dict) or not isinstance(round_data.get("players"), list):
             continue
-        result.update(
-            player for player in round_data["players"] if isinstance(player, str)
-        )
+        result.update(player for player in round_data["players"] if isinstance(player, str))
     return result
 
 

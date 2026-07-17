@@ -5,6 +5,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from app.werewolf.public_facts import public_fact_dicts_from_value
+
 
 PublicChannel = Literal["live_event", "voice", "subtitle", "replay", "public_state"]
 
@@ -318,11 +320,9 @@ def _public_artifacts(
                     )
                 )
 
-    public_facts = state.get("public_facts")
-    if isinstance(public_facts, list):
+    public_facts = public_fact_dicts_from_value(state.get("public_facts"))
+    if public_facts:
         for fact in public_facts:
-            if not isinstance(fact, dict):
-                continue
             artifacts.append(
                 PublicArtifactV1(
                     channel="public_state",

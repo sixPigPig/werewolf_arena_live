@@ -71,6 +71,7 @@ export function usePlaybackVoice(
               voice.utterance_id,
               voice.source_event_id,
               voice.last_source_event_id,
+              voice.presentation_id ?? "",
               voice.chunks?.length ?? 0,
               subtitleTimingsKey(voice),
             ].join(":"),
@@ -103,6 +104,7 @@ export function usePlaybackVoice(
   const pcmSubtitleStartTimesRef = useRef<Map<string, number>>(new Map());
   const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
   const activeUtteranceIdsRef = useRef<Set<string>>(new Set());
+  const playedPresentationIdsRef = useRef<Set<string>>(new Set());
   const latestCurrentEventIdRef = useRef(currentEventId);
   latestCurrentEventIdRef.current = currentEventId;
   const sourceVoicesRef = useRef(sourceVoices);
@@ -171,6 +173,10 @@ export function usePlaybackVoice(
   }, []);
 
   const recordPlaybackCompletion = useCallback((item: LiveVoiceQueueItem) => {
+    const presentationId = item.presentationId?.trim();
+    if (presentationId) {
+      playedPresentationIdsRef.current.add(presentationId);
+    }
     playbackCompletionSequenceRef.current += 1;
     setLastCompletedPlayback({
       id: `${item.utteranceId}:${playbackCompletionSequenceRef.current}`,
@@ -217,6 +223,7 @@ export function usePlaybackVoice(
     releaseBlobAudio();
     closeScheduler();
     activeUtteranceIdsRef.current.clear();
+    playedPresentationIdsRef.current.clear();
     consumedUtteranceIdsRef.current = new Set(
       targetEventId === null
         ? []
@@ -341,6 +348,20 @@ export function usePlaybackVoice(
       if (pendingItem.status !== "receiving") {
         return;
       }
+      const pendingPresentationId = pendingItem.presentationId?.trim();
+      if (
+        pendingPresentationId &&
+        playedPresentationIdsRef.current.has(pendingPresentationId)
+      ) {
+        markVoiceFailed(
+          pendingItem.utteranceId,
+          activeUtteranceIdsRef,
+          consumedUtteranceIdsRef,
+        );
+        releaseLoadedVoice(pendingItem.utteranceId);
+        setPendingItem(null);
+        return;
+      }
       nextVoice = sortedVoices.find(
         (voice) => voice.utterance_id === pendingItem.utteranceId,
       );
@@ -348,13 +369,29 @@ export function usePlaybackVoice(
         return;
       }
     } else {
-      nextVoice = sortedVoices.find(
-        (voice) =>
-          voice.source_event_id <= currentEventId &&
-          voice.last_source_event_id >= currentEventId &&
-          !consumedUtteranceIdsRef.current.has(voice.utterance_id) &&
-          !activeUtteranceIdsRef.current.has(voice.utterance_id),
-      );
+      for (const voice of sortedVoices) {
+        if (
+          voice.source_event_id > currentEventId ||
+          voice.last_source_event_id < currentEventId ||
+          consumedUtteranceIdsRef.current.has(voice.utterance_id) ||
+          activeUtteranceIdsRef.current.has(voice.utterance_id)
+        ) {
+          continue;
+        }
+
+        const presentationId = voice.presentation_id?.trim();
+        if (
+          presentationId &&
+          playedPresentationIdsRef.current.has(presentationId)
+        ) {
+          consumedUtteranceIdsRef.current.add(voice.utterance_id);
+          releaseLoadedVoice(voice.utterance_id);
+          continue;
+        }
+
+        nextVoice = voice;
+        break;
+      }
     }
     if (!nextVoice) {
       return;
@@ -948,6 +985,9 @@ function toQueueItem(voice: PlaybackVoiceUtterance): LiveVoiceQueueItem {
     utteranceId: voice.utterance_id,
     sourceEventId: voice.source_event_id,
     lastSourceEventId: voice.last_source_event_id,
+    ...(voice.presentation_id
+      ? { presentationId: voice.presentation_id }
+      : {}),
     audience: voice.audience ?? "player_public",
     speakerKind: voice.speaker_kind,
     speakerName: voice.speaker_name,

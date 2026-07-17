@@ -267,6 +267,7 @@ _COMMON_RUN_PAYLOAD_KEYS = frozenset(
 
 _ACTION_PAYLOAD_KEYS = frozenset(
     {
+        "action_id",
         "allowed_values",
         "attempt",
         "attempt_count",
@@ -283,6 +284,7 @@ _ACTION_PAYLOAD_KEYS = frozenset(
         "message",
         "model",
         "options",
+        "presentation_id",
         "request_id",
         "result",
         "result_key",
@@ -300,6 +302,7 @@ _STATE_PAYLOAD_KEYS = frozenset(
         "bids",
         "day_deaths",
         "day_ended_by_self_explosion",
+        "deaths",
         "debate",
         "eliminated",
         "exiled",
@@ -309,6 +312,7 @@ _STATE_PAYLOAD_KEYS = frozenset(
         "exile_resolution_reason",
         "exile_runoff_votes",
         "hunter_shot",
+        "hunter_shot_status",
         "idiot_revealed",
         "interruption",
         "narration_mode",
@@ -317,6 +321,7 @@ _STATE_PAYLOAD_KEYS = frozenset(
         "public_outcome_events",
         "public_outcome_next_sequence",
         "public_summary",
+        "presentation_id",
         "sheriff",
         "sheriff_badge_lost",
         "sheriff_badge_lost_reason",
@@ -377,7 +382,14 @@ _PAYLOAD_KEYS_BY_EVENT_TYPE: dict[str, frozenset[str]] = {
     "run_stop_requested": frozenset({"requested_at"}),
     "game_started": frozenset({"active_players", "playback", "players", "rule_set"}),
     "game_resumed": frozenset(
-        {"active_players", "attempt_no", "parent_run_id", "players", "resume_from_round"}
+        {
+            "active_players",
+            "attempt_no",
+            "parent_run_id",
+            "players",
+            "resume_from_round",
+            "terminal_recovery",
+        }
     ),
     "round_started": frozenset({"active_players", "playback", "round"}),
     "phase_started": frozenset({"active_players", "narration_mode", "playback"}),
@@ -396,7 +408,7 @@ _PAYLOAD_KEYS_BY_EVENT_TYPE: dict[str, frozenset[str]] = {
     "role_revealed": frozenset({"player", "role"}),
     "idiot_revealed": frozenset({"player", "role"}),
     "werewolf_self_exploded": frozenset({"player", "role"}),
-    "game_completed": frozenset({"playback", "roles", "winner"}),
+    "game_completed": frozenset({"playback", "roles", "terminal_keep_from_event_id", "winner"}),
     "game_failed": frozenset({"error", "message", "playback_partial"}),
     "game_canceled": frozenset({"message", "reason"}),
 }

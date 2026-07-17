@@ -5,19 +5,52 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
-PINNED_CATEGORIES = {"claim", "sheriff", "death", "vote", "reveal", "interruption"}
+PINNED_CATEGORIES = {
+    "claim",
+    "sheriff",
+    "sheriff_result",
+    "death",
+    "vote",
+    "reveal",
+    "interruption",
+}
+ENGINE_FACT_CATEGORIES = frozenset(
+    {"death", "vote", "sheriff", "sheriff_result", "reveal", "interruption"}
+)
+PLAYER_CLAIM_CATEGORIES = frozenset({"claim", "speech"})
+PRIVATE_FACT_CATEGORIES = frozenset({"private_observation", "strategy_note"})
+PUBLIC_FACT_CATEGORIES = frozenset(
+    {
+        "event",
+        "death",
+        "vote",
+        "claim",
+        "speech",
+        "sheriff",
+        "sheriff_result",
+        "reveal",
+        "interruption",
+    }
+)
 PUBLIC_FACT_SCHEMA_VERSION = 3
 FactRetention = Literal["critical", "important", "recent"]
+FactTrustClass = Literal["engine_fact", "player_claim", "legacy_unclassified"]
 FACT_RETENTION_LEVELS = frozenset({"critical", "important", "recent"})
+FACT_TRUST_CLASSES = frozenset(
+    {"engine_fact", "player_claim", "legacy_unclassified"}
+)
 PRIVATE_DETAIL_KEYS = frozenset(
     {
         "known_roles",
+        "model_memory",
         "observations",
         "private_observation",
         "private_summaries",
         "prompt",
         "raw_response",
         "reasoning",
+        "strategy_note",
+        "strategy_notes",
     }
 )
 
@@ -41,12 +74,20 @@ class PublicFact:
     stage: str | None = None
     actor: str | None = None
     retention: FactRetention | None = None
+    trust_class: FactTrustClass | None = None
     source_opportunity_id: str | None = None
+    source_event_id: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.category in PRIVATE_FACT_CATEGORIES:
+            raise ValueError(f"Public fact uses private category: {self.category}")
+        if self.category not in PUBLIC_FACT_CATEGORIES:
+            raise ValueError(f"Unsupported public fact category: {self.category}")
         if self.retention is not None and self.retention not in FACT_RETENTION_LEVELS:
             raise ValueError(f"Unsupported public fact retention: {self.retention}")
+        if self.trust_class is not None and self.trust_class not in FACT_TRUST_CLASSES:
+            raise ValueError(f"Unsupported public fact trust class: {self.trust_class}")
         private_key = _first_private_detail_key(self.details)
         if private_key is not None:
             raise ValueError(f"Public fact details contain private key: {private_key}")
@@ -59,6 +100,20 @@ class PublicFact:
             return "important"
         return "recent"
 
+    @property
+    def effective_trust_class(self) -> FactTrustClass:
+        if self.trust_class == "engine_fact" and self.category not in ENGINE_FACT_CATEGORIES:
+            if self.category in PLAYER_CLAIM_CATEGORIES:
+                return "player_claim"
+            return "legacy_unclassified"
+        if self.trust_class is not None:
+            return self.trust_class
+        if self.category in PLAYER_CLAIM_CATEGORIES:
+            return "player_claim"
+        if self.category in ENGINE_FACT_CATEGORIES:
+            return "engine_fact"
+        return "legacy_unclassified"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "round_number": self.round_number,
@@ -69,34 +124,109 @@ class PublicFact:
             "stage": self.stage,
             "actor": self.actor,
             "retention": self.effective_retention,
+            "trust_class": self.effective_trust_class,
             "source_opportunity_id": self.source_opportunity_id,
+            "source_event_id": self.source_event_id,
             "details": copy.deepcopy(self.details),
         }
 
 
 def public_fact_from_dict(data: dict[str, Any]) -> PublicFact:
-    category = str(data.get("category") or "event")
+    raw_category = data.get("category")
+    if raw_category is None or raw_category == "":
+        category = "event"
+    elif not isinstance(raw_category, str):
+        return _redacted_public_fact()
+    else:
+        category = raw_category
+    if category not in PUBLIC_FACT_CATEGORIES:
+        return _redacted_public_fact()
     raw_retention = data.get("retention")
     retention: FactRetention | None = None
     if isinstance(raw_retention, str) and raw_retention in FACT_RETENTION_LEVELS:
         retention = raw_retention  # type: ignore[assignment]
-    details = data.get("details")
-    return PublicFact(
-        round_number=int(data.get("round_number") or 0),
-        category=category,
-        text=str(data.get("text") or ""),
-        schema_version=int(data.get("schema_version") or 1),
-        fact_id=str(data.get("fact_id") or ""),
-        stage=str(data["stage"]) if data.get("stage") is not None else None,
-        actor=str(data["actor"]) if data.get("actor") is not None else None,
-        retention=retention,
-        source_opportunity_id=(
-            str(data["source_opportunity_id"])
-            if data.get("source_opportunity_id") is not None
-            else None
-        ),
-        details=copy.deepcopy(details) if isinstance(details, dict) else {},
+    raw_trust_class = data.get("trust_class")
+    if raw_trust_class is not None and (
+        not isinstance(raw_trust_class, str)
+        or raw_trust_class not in FACT_TRUST_CLASSES
+    ):
+        return _redacted_public_fact()
+    trust_class: FactTrustClass = (  # type: ignore[assignment]
+        raw_trust_class or "legacy_unclassified"
     )
+    details = data.get("details")
+    safe_details = copy.deepcopy(details) if isinstance(details, dict) else {}
+    if _first_private_detail_key(safe_details) is not None:
+        return _redacted_public_fact()
+    raw_text = data.get("text")
+    return PublicFact(
+        round_number=_safe_int(data.get("round_number"), default=0),
+        category=category,
+        text=raw_text if isinstance(raw_text, str) else "",
+        schema_version=_safe_int(data.get("schema_version"), default=1),
+        fact_id=_safe_optional_string(data.get("fact_id")) or "",
+        stage=_safe_optional_string(data.get("stage")),
+        actor=_safe_optional_string(data.get("actor")),
+        retention=retention,
+        trust_class=trust_class,
+        source_opportunity_id=_safe_optional_string(
+            data.get("source_opportunity_id")
+        ),
+        source_event_id=_safe_optional_string(data.get("source_event_id")),
+        details=safe_details,
+    )
+
+
+def public_fact_dicts_from_value(
+    value: object,
+    *,
+    include_details: bool = False,
+) -> list[dict[str, Any]]:
+    """Project stored facts through the public whitelist, dropping unsafe rows."""
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, str):
+            fact = PublicFact(
+                round_number=0,
+                category="event",
+                text=item,
+                schema_version=1,
+                trust_class="legacy_unclassified",
+            )
+        elif isinstance(item, dict):
+            fact = public_fact_from_dict(item)
+        else:
+            continue
+        if not fact.text.strip():
+            continue
+        payload = fact.to_dict()
+        if not include_details:
+            payload["details"] = {}
+        result.append(payload)
+    return result
+
+
+def _redacted_public_fact() -> PublicFact:
+    return PublicFact(
+        round_number=0,
+        category="event",
+        text="",
+        schema_version=PUBLIC_FACT_SCHEMA_VERSION,
+        trust_class="legacy_unclassified",
+    )
+
+
+def _safe_int(value: object, *, default: int) -> int:
+    try:
+        return int(value) if value is not None and not isinstance(value, bool) else default
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _safe_optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 @dataclass(frozen=True)
@@ -127,10 +257,14 @@ class PublicFactOpportunityV1:
 
 def fact_prompt_coverage(
     facts: list[PublicFact],
-    rendered_lines: list[str],
+    rendered_lines: list[object],
 ) -> dict[str, Any]:
     critical = [fact for fact in facts if fact.effective_retention == "critical"]
-    rendered = set(rendered_lines)
+    rendered = {
+        text
+        for item in rendered_lines
+        if (text := _rendered_fact_text(item)) is not None
+    }
     included = [
         fact
         for fact in critical
@@ -153,6 +287,49 @@ def compressed_public_facts(
     max_lines: int = 18,
     budget: PublicFactBudget | None = None,
 ) -> list[str]:
+    return [
+        _project_fact_text(fact, (budget or PublicFactBudget()).max_fact_chars)
+        for fact in _select_compressed_public_facts(
+            facts,
+            max_lines=max_lines,
+            budget=budget,
+        )
+    ]
+
+
+def compressed_public_fact_records(
+    facts: list[PublicFact],
+    *,
+    max_lines: int = 18,
+    budget: PublicFactBudget | None = None,
+) -> list[dict[str, Any]]:
+    fact_budget = budget or PublicFactBudget()
+    return [
+        {
+            "round_number": fact.round_number,
+            "category": fact.category,
+            "trust_class": fact.effective_trust_class,
+            "text": _project_fact_text(fact, fact_budget.max_fact_chars),
+            "fact_id": fact.fact_id,
+            "stage": fact.stage,
+            "actor": fact.actor,
+            "source_opportunity_id": fact.source_opportunity_id,
+            "source_event_id": fact.source_event_id,
+        }
+        for fact in _select_compressed_public_facts(
+            facts,
+            max_lines=max_lines,
+            budget=fact_budget,
+        )
+    ]
+
+
+def _select_compressed_public_facts(
+    facts: list[PublicFact],
+    *,
+    max_lines: int,
+    budget: PublicFactBudget | None,
+) -> list[PublicFact]:
     if max_lines <= 0:
         return []
 
@@ -164,7 +341,13 @@ def compressed_public_facts(
         if fact.fact_id:
             key = ("fact_id", fact.fact_id)
         else:
-            key = ("legacy", fact.round_number, fact.category, fact.text)
+            key = (
+                "legacy",
+                fact.round_number,
+                fact.category,
+                fact.effective_trust_class,
+                fact.text,
+            )
         if key in seen or not fact.text.strip():
             continue
         seen.add(key)
@@ -206,7 +389,7 @@ def compressed_public_facts(
         )
     )
     selected.sort(key=lambda item: item[0])
-    return [_project_fact_text(fact, fact_budget.max_fact_chars) for _, fact in selected]
+    return [fact for _, fact in selected]
 
 
 def _select_latest_with_budget(
@@ -241,6 +424,15 @@ def _project_fact_text(fact: PublicFact, max_chars: int) -> str:
     if max_chars == 1:
         return "…"
     return text[: max_chars - 1].rstrip() + "…"
+
+
+def _rendered_fact_text(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        text = value.get("text")
+        return str(text) if isinstance(text, str) else None
+    return None
 
 
 def _first_private_detail_key(value: object) -> str | None:

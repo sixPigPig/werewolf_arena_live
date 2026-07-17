@@ -161,6 +161,14 @@ export type PublicFact = {
   round_number: number;
   category: string;
   text: string;
+  schema_version?: number;
+  fact_id?: string;
+  stage?: string | null;
+  actor?: string | null;
+  retention?: string;
+  trust_class?: string;
+  source_opportunity_id?: string | null;
+  source_event_id?: string | null;
 };
 
 export type WerewolfDiscussionEntry = {
@@ -736,6 +744,7 @@ export type PlaybackVoiceUtterance = {
   audience?: "player_public" | "spectator_god_view";
   source_event_id: number;
   last_source_event_id: number;
+  presentation_id?: string;
   speaker_kind: "player" | "judge";
   speaker_name: string;
   mime_type: string;

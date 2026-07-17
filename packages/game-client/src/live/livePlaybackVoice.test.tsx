@@ -23,7 +23,8 @@ import {
   currentSubtitleForPlaybackVoices,
   usePlaybackVoice,
 } from "./livePlaybackVoice";
-import type { PlaybackVoiceUtterance } from "../types";
+import { useLiveDirector } from "./liveDirector";
+import type { LiveGameEvent, PlaybackVoiceUtterance } from "../types";
 
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -98,6 +99,21 @@ function mp3Voice(overrides: Partial<PlaybackVoiceUtterance> = {}): PlaybackVoic
     speaker_name: "法官",
     ...overrides,
   });
+}
+
+function liveEvent(partial: Partial<LiveGameEvent>): LiveGameEvent {
+  return {
+    id: partial.id ?? 1,
+    type: partial.type ?? "game_started",
+    run_id: partial.run_id ?? "run-child",
+    session_id: partial.session_id ?? "game_same",
+    created_at: "2026-07-17T12:00:00Z",
+    round: partial.round ?? null,
+    phase: partial.phase ?? null,
+    actor: partial.actor ?? null,
+    action: partial.action ?? null,
+    payload: partial.payload ?? {},
+  };
 }
 
 function stubObjectUrls(objectUrls = ["blob:voice"]) {
@@ -247,6 +263,273 @@ describe("playback voice", () => {
     });
   });
 
+  it("plays the first actual hunter-shot voice once and skips its later occurrence", async () => {
+    vi.useFakeTimers();
+    const { context } = stubAudioContext({ currentTime: 0, state: "running" });
+    pcmMocks.schedule.mockResolvedValue({
+      duration: 0.05,
+      endTime: 0.05,
+      startTime: 0,
+    });
+    const presentationId = "game_same:hunter:shot:playback";
+    const parentVoice = voice({
+      utterance_id: "voice-parent-shot",
+      presentation_id: presentationId,
+      source_event_id: 4,
+      last_source_event_id: 4,
+      chunks: [{ chunk_index: 0, data: "cGFyZW50" }],
+    });
+    const childVoice = voice({
+      utterance_id: "voice-child-shot",
+      presentation_id: presentationId,
+      source_event_id: 8,
+      last_source_event_id: 8,
+      chunks: [{ chunk_index: 0, data: "Y2hpbGQ=" }],
+    });
+    const { rerender, result } = renderHook(
+      ({ currentEventId }) =>
+        usePlaybackVoice([parentVoice, childVoice], {
+          currentEventId,
+          enabled: true,
+          isPaused: false,
+        }),
+      { initialProps: { currentEventId: 4 } },
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.currentItem).toMatchObject({
+      utteranceId: "voice-parent-shot",
+      presentationId,
+    });
+    expect(pcmMocks.schedule).toHaveBeenCalledWith("cGFyZW50", 24000);
+
+    context.currentTime = 0.05;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    await vi.waitFor(() => expect(result.current.currentItem).toBeNull());
+
+    rerender({ currentEventId: 8 });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(pcmMocks.schedule).toHaveBeenCalledTimes(1);
+    expect(result.current.currentItem).toBeNull();
+  });
+
+  it("keeps the replay Director and voice on the same actual hunter-shot occurrence", async () => {
+    vi.useFakeTimers();
+    const { context } = stubAudioContext({ currentTime: 0, state: "running" });
+    pcmMocks.schedule.mockResolvedValue({
+      duration: 0.05,
+      endTime: 0.05,
+      startTime: 0,
+    });
+    const presentationId = "game_same:hunter:shot:director-voice";
+    const hunterEvent = (id: number, runId: string) =>
+      liveEvent({
+        id,
+        run_id: runId,
+        action: "hunter_shot_resolved",
+        type: "state_updated",
+        payload: {
+          presentation_id: presentationId,
+          hunter_shot_status: "shot",
+          hunter_shot: "4号玩家",
+        },
+      });
+    const parentVoice = voice({
+      utterance_id: "voice-parent-director",
+      presentation_id: presentationId,
+      source_event_id: 4,
+      last_source_event_id: 4,
+      chunks: [{ chunk_index: 0, data: "cGFyZW50" }],
+    });
+    const childVoice = voice({
+      utterance_id: "voice-child-director",
+      presentation_id: presentationId,
+      source_event_id: 8,
+      last_source_event_id: 8,
+      chunks: [{ chunk_index: 0, data: "Y2hpbGQ=" }],
+    });
+    const { result } = renderHook(() => {
+      const director = useLiveDirector(
+        [
+          hunterEvent(4, "run-parent"),
+          hunterEvent(8, "run-child"),
+          liveEvent({
+            id: 9,
+            run_id: "run-child",
+            type: "game_completed",
+            payload: { winner: "好人阵营" },
+          }),
+        ],
+        { resetKey: "run-child", sessionKey: "game_same" },
+      );
+      const playbackVoice = usePlaybackVoice([parentVoice, childVoice], {
+        currentEventId: director.currentEventId,
+        cursorVersion: director.cursorVersion,
+        enabled: true,
+        isPaused: director.isPaused,
+      });
+      return { director, playbackVoice };
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.director.currentEventId).toBe(4);
+    expect(result.current.playbackVoice.currentItem).toMatchObject({
+      utteranceId: "voice-parent-director",
+      presentationId,
+    });
+
+    context.currentTime = 0.05;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    await vi.waitFor(() =>
+      expect(result.current.playbackVoice.currentItem).toBeNull(),
+    );
+
+    act(() => result.current.director.advance());
+
+    expect(result.current.director.currentEventId).toBe(9);
+    expect(result.current.director.cues.map((cue) => cue.eventId)).toEqual([
+      4,
+      9,
+    ]);
+    expect(pcmMocks.schedule).toHaveBeenCalledTimes(1);
+    expect(pcmMocks.schedule).toHaveBeenCalledWith("cGFyZW50", 24000);
+  });
+
+  it("plays and subtitles the child no-shot occurrence when the parent was never presented", async () => {
+    vi.stubGlobal("AudioContext", undefined);
+    stubObjectUrls(["blob:child-no-shot"]);
+    const { audioElements, play } = stubAudioElement();
+    const presentationId = "game_same:hunter:skipped:playback";
+    const parentVoice = mp3Voice({
+      utterance_id: "voice-parent-skipped",
+      presentation_id: presentationId,
+      source_event_id: 4,
+      last_source_event_id: 4,
+      subtitle_timings: [
+        { text: "父运行不应重播", start_ms: 0, end_ms: 100 },
+      ],
+    });
+    const childVoice = mp3Voice({
+      utterance_id: "voice-child-skipped",
+      presentation_id: presentationId,
+      source_event_id: 8,
+      last_source_event_id: 8,
+      subtitle_timings: [
+        { text: "猎人选择不发动技能", start_ms: 0, end_ms: 100 },
+      ],
+    });
+    const { rerender, result } = renderHook(
+      ({ currentEventId }) =>
+        usePlaybackVoice([parentVoice, childVoice], {
+          currentEventId,
+          enabled: true,
+          isPaused: false,
+        }),
+      { initialProps: { currentEventId: 3 } },
+    );
+
+    expect(result.current.currentItem).toBeNull();
+    expect(play).not.toHaveBeenCalled();
+    expect(
+      currentSubtitleForPlaybackVoices({
+        currentEventId: 4,
+        elapsedMs: 10,
+        isPaused: false,
+        voices: [parentVoice, childVoice],
+      }),
+    ).toMatchObject({
+      text: "父运行不应重播",
+      utteranceId: "voice-parent-skipped",
+    });
+
+    rerender({ currentEventId: 8 });
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    expect(audioElements).toHaveLength(1);
+    expect(result.current.currentItem).toMatchObject({
+      utteranceId: "voice-child-skipped",
+      presentationId,
+    });
+    expect(
+      currentSubtitleForPlaybackVoices({
+        currentEventId: 8,
+        elapsedMs: 10,
+        isPaused: false,
+        voices: [parentVoice, childVoice],
+      }),
+    ).toMatchObject({
+      text: "猎人选择不发动技能",
+      utteranceId: "voice-child-skipped",
+    });
+  });
+
+  it("preserves both legacy saved voices without presentation IDs", async () => {
+    vi.useFakeTimers();
+    const { context } = stubAudioContext({ currentTime: 0, state: "running" });
+    pcmMocks.schedule.mockResolvedValue({
+      duration: 0.05,
+      endTime: 0.05,
+      startTime: 0,
+    });
+    const parentVoice = voice({
+      utterance_id: "legacy-parent",
+      source_event_id: 4,
+      last_source_event_id: 4,
+      chunks: [{ chunk_index: 0, data: "cGFyZW50" }],
+    });
+    const childVoice = voice({
+      utterance_id: "legacy-child",
+      source_event_id: 8,
+      last_source_event_id: 8,
+      chunks: [{ chunk_index: 0, data: "Y2hpbGQ=" }],
+    });
+    const { rerender, result } = renderHook(
+      ({ currentEventId }) =>
+        usePlaybackVoice([childVoice, parentVoice], {
+          currentEventId,
+          enabled: true,
+          isPaused: false,
+        }),
+      { initialProps: { currentEventId: 4 } },
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.currentItem?.utteranceId).toBe("legacy-parent");
+
+    context.currentTime = 0.05;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    await vi.waitFor(() => expect(result.current.currentItem).toBeNull());
+
+    rerender({ currentEventId: 8 });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.currentItem?.utteranceId).toBe("legacy-child");
+    expect(pcmMocks.schedule).toHaveBeenNthCalledWith(1, "cGFyZW50", 24000);
+    expect(pcmMocks.schedule).toHaveBeenNthCalledWith(2, "Y2hpbGQ=", 24000);
+  });
+
   it("loads saved PCM chunks only when the utterance becomes current", async () => {
     const loadVoice = vi.fn().mockResolvedValue(voice());
     const metadata = voice({ chunks: undefined });
@@ -280,7 +563,10 @@ describe("playback voice", () => {
           resolveVoice = resolve;
         }),
     );
-    const metadata = voice({ chunks: undefined });
+    const metadata = voice({
+      chunks: undefined,
+      presentation_id: "game_same:hunter:settlement-1",
+    });
     const { result, rerender } = renderHook(() =>
       usePlaybackVoice([metadata], {
         currentEventId: 4,
@@ -293,6 +579,7 @@ describe("playback voice", () => {
     await waitFor(() =>
       expect(result.current.currentItem).toMatchObject({
         sourceEventId: 4,
+        presentationId: "game_same:hunter:settlement-1",
         status: "receiving",
         utteranceId: "voice-1",
       }),
@@ -301,7 +588,11 @@ describe("playback voice", () => {
     expect(loadVoice).toHaveBeenCalledTimes(1);
     expect(pcmMocks.schedule).not.toHaveBeenCalled();
 
-    act(() => resolveVoice?.(voice()));
+    act(() =>
+      resolveVoice?.(
+        voice({ presentation_id: "game_same:hunter:settlement-1" }),
+      ),
+    );
 
     await waitFor(() =>
       expect(pcmMocks.schedule).toHaveBeenCalledWith("YWJj", 24000),

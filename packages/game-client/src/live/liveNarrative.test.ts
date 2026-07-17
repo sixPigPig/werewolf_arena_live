@@ -699,6 +699,57 @@ describe("deriveLiveNarrativeState", () => {
       judgeLine: "该玩家 被猎人带走，出局。",
       performerLine: "技能效果已经公开。",
     });
+
+    expect(
+      narrativeFor([
+        event({
+          id: 3,
+          type: "state_updated",
+          round: 1,
+          phase: "day",
+          actor: "2号玩家",
+          action: "hunter_shot_resolved",
+          payload: {
+            presentation_id: "game_1200abcd:hunter:settlement-1",
+            hunter_shot_status: "shot",
+            hunter_shot: "4号玩家",
+            exiled: "2号玩家",
+            active_players: ["1号玩家", "3号玩家"],
+          },
+        }),
+      ]).cue,
+    ).toMatchObject({
+      kind: "player-action",
+      tone: "danger",
+      judgeLine: "4号玩家 被猎人带走，出局。",
+      performerLine: "猎人技能已经结算。",
+      actorName: "2号玩家",
+    });
+
+    expect(
+      narrativeFor([
+        event({
+          id: 4,
+          type: "state_updated",
+          round: 1,
+          phase: "day",
+          actor: "2号玩家",
+          action: "hunter_shot_resolved",
+          payload: {
+            presentation_id: "game_1200abcd:hunter:settlement-2",
+            hunter_shot_status: "skipped",
+            hunter_shot: null,
+            exiled: "2号玩家",
+          },
+        }),
+      ]).cue,
+    ).toMatchObject({
+      kind: "player-action",
+      tone: "danger",
+      judgeLine: "猎人选择不发动技能。",
+      performerLine: "猎人技能已经结算。",
+      actorName: "2号玩家",
+    });
   });
 
   it("explains sheriff election continuation after first pre-election self explosion", () => {

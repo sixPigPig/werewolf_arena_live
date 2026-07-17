@@ -10,8 +10,8 @@ function event(partial: Partial<LiveGameEvent>): LiveGameEvent {
   return {
     id: partial.id ?? 1,
     type: partial.type ?? "game_started",
-    run_id: "run_1234abcd",
-    session_id: "game_1200abcd",
+    run_id: partial.run_id ?? "run_1234abcd",
+    session_id: partial.session_id ?? "game_1200abcd",
     created_at: "2026-04-24T12:00:00Z",
     round: partial.round ?? null,
     phase: partial.phase ?? null,
@@ -137,6 +137,548 @@ describe("useLiveDirector seekToEventId", () => {
 
     expect(result.current.currentEventId).toBe(1);
     expect(result.current.backlogCount).toBe(2);
+  });
+
+  it("preempts unplayed backlog when a new completion event declares its keep boundary", () => {
+    const initialEvents = [
+      event({ id: 1, type: "game_started" }),
+      event({ id: 3, type: "phase_started", round: 1, phase: "day" }),
+      event({
+        id: 5,
+        type: "model_request_started",
+        actor: "1号玩家",
+        action: "debate",
+        payload: { request_id: "req-backlog" },
+      }),
+      event({
+        id: 6,
+        type: "model_response_delta",
+        actor: "1号玩家",
+        action: "debate",
+        payload: { request_id: "req-backlog", visible_text: "这段已经失去意义。" },
+      }),
+      event({
+        id: 7,
+        type: "state_updated",
+        round: 1,
+        phase: "vote",
+        action: "exile_resolved",
+        payload: { eliminated: "1号玩家" },
+      }),
+    ];
+    const { rerender, result } = renderHook(
+      ({ liveEvents }: { liveEvents: LiveGameEvent[] }) =>
+        useLiveDirector(liveEvents),
+      { initialProps: { liveEvents: initialEvents } },
+    );
+
+    expect(result.current.currentEventId).toBe(1);
+
+    rerender({
+      liveEvents: [
+        ...initialEvents,
+        event({
+          id: 9,
+          type: "game_completed",
+          payload: {
+            winner: "狼人阵营",
+            terminal_keep_from_event_id: 7,
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 7,
+      latestEventId: 7,
+      action: "exile_resolved",
+    });
+    expect(result.current.currentEventId).toBe(7);
+    expect(result.current.backlogCount).toBe(1);
+    expect(result.current.terminalKeepFromEventId).toBe(7);
+    expect(result.current.terminalEventId).toBe(9);
+  });
+
+  it("preempts run_2d12b755578b at the final-civilian exile boundary", () => {
+    // Client layer for apps/api/tests/fixtures/run_2d12b755578b_terminal_regression.json.
+    const scenarioEvent = (partial: Partial<LiveGameEvent>) =>
+      event({
+        ...partial,
+        run_id: "run_2d12b755578b",
+        session_id: "game_d8a3c680",
+      });
+    const initialEvents = [
+      scenarioEvent({ id: 1, type: "game_started" }),
+      scenarioEvent({ id: 1200, type: "phase_started", round: 4, phase: "day" }),
+      scenarioEvent({ id: 1304, type: "phase_started", round: 4, phase: "vote" }),
+      scenarioEvent({
+        id: 1305,
+        type: "state_updated",
+        round: 4,
+        phase: "vote",
+        action: "exile_resolved",
+        payload: { exiled: "2号玩家", active_players: ["1号玩家", "3号玩家"] },
+      }),
+      scenarioEvent({
+        id: 1306,
+        type: "judge_cue",
+        round: 4,
+        phase: "vote",
+        action: "exile_result",
+        payload: {
+          visible_text: "2号玩家得票最高，被放逐出局。",
+          static_asset_id: "exile_result_2",
+        },
+      }),
+    ];
+    const { rerender, result } = renderHook(
+      ({ liveEvents }: { liveEvents: LiveGameEvent[] }) =>
+        useLiveDirector(liveEvents),
+      { initialProps: { liveEvents: initialEvents } },
+    );
+
+    expect(result.current.currentEventId).toBe(1);
+
+    rerender({
+      liveEvents: [
+        ...initialEvents,
+        scenarioEvent({
+          id: 1307,
+          type: "game_completed",
+          payload: {
+            winner: "狼人阵营",
+            terminal_keep_from_event_id: 1305,
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 1305,
+      latestEventId: 1305,
+      action: "exile_resolved",
+    });
+    expect(result.current.currentEventId).toBe(1305);
+    expect(result.current.backlogCount).toBe(2);
+    expect(result.current.terminalKeepFromEventId).toBe(1305);
+    expect(result.current.terminalEventId).toBe(1307);
+
+    act(() => result.current.advance());
+    expect(result.current.currentEventId).toBe(1306);
+    act(() => result.current.advance());
+    expect(result.current.currentEventId).toBe(1307);
+  });
+
+  it("keeps a coalesced cue whose source range intersects the terminal window", () => {
+    const initialEvents = [
+      event({ id: 1, type: "game_started" }),
+      event({
+        id: 4,
+        type: "model_request_started",
+        actor: "1号玩家",
+        action: "debate",
+        payload: { request_id: "req-overlap" },
+      }),
+      event({
+        id: 5,
+        type: "phase_started",
+        round: 1,
+        phase: "vote",
+      }),
+      event({
+        id: 6,
+        type: "model_response_delta",
+        actor: "1号玩家",
+        action: "debate",
+        payload: { request_id: "req-overlap", visible_text: "合并发言跨过边界。" },
+      }),
+    ];
+    const { rerender, result } = renderHook(
+      ({ liveEvents }: { liveEvents: LiveGameEvent[] }) =>
+        useLiveDirector(liveEvents),
+      { initialProps: { liveEvents: initialEvents } },
+    );
+
+    act(() => result.current.seekToEventId(4));
+    expect(result.current.currentCue).toMatchObject({ eventId: 4, latestEventId: 6 });
+
+    rerender({
+      liveEvents: [
+        ...initialEvents,
+        event({
+          id: 9,
+          type: "game_completed",
+          payload: {
+            winner: "好人阵营",
+            terminal_keep_from_event_id: 6,
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.currentCue).toMatchObject({ eventId: 4, latestEventId: 6 });
+    expect(result.current.currentEventId).toBe(6);
+    expect(result.current.backlogCount).toBe(1);
+
+    act(() => result.current.advance());
+    expect(result.current.currentEventId).toBe(9);
+  });
+
+  it("maps a resumed run source boundary onto folded timeline event ids", () => {
+    const decisiveEvent: LiveGameEvent = {
+      ...event({
+        id: 12,
+        type: "state_updated",
+        action: "exile_resolved",
+        payload: { eliminated: "1号玩家" },
+      }),
+      source_run_id: "run-resumed",
+      source_event_id: 45,
+    };
+    const completedEvent: LiveGameEvent = {
+      ...event({
+        id: 14,
+        type: "game_completed",
+        payload: {
+          winner: "狼人阵营",
+          terminal_keep_from_event_id: 45,
+        },
+      }),
+      source_run_id: "run-resumed",
+      source_event_id: 47,
+    };
+    const { result } = renderHook(() =>
+      useLiveDirector([
+        event({ id: 1, type: "game_started" }),
+        decisiveEvent,
+        completedEvent,
+      ]),
+    );
+
+    expect(result.current.currentEventId).toBe(12);
+    expect(result.current.terminalKeepFromEventId).toBe(12);
+    expect(result.current.terminalEventId).toBe(14);
+  });
+
+  it("does not replay a child-run presentation that was already current in the parent run", () => {
+    const presentationId = "game_same:hunter:settlement-1";
+    const parentPresentation = event({
+      id: 10,
+      run_id: "run-parent",
+      session_id: "game_same",
+      type: "state_updated",
+      action: "hunter_shot_resolved",
+      payload: {
+        presentation_id: presentationId,
+        hunter_shot_status: "shot",
+        hunter_shot: "4号玩家",
+      },
+    });
+    const childPresentation = event({
+      id: 20,
+      run_id: "run-child",
+      session_id: "game_same",
+      type: "state_updated",
+      action: "hunter_shot_resolved",
+      payload: {
+        presentation_id: presentationId,
+        hunter_shot_status: "shot",
+        hunter_shot: "4号玩家",
+      },
+    });
+    const childCompletion = event({
+      id: 21,
+      run_id: "run-child",
+      session_id: "game_same",
+      type: "game_completed",
+      payload: { winner: "好人阵营" },
+    });
+    const { rerender, result } = renderHook(
+      ({ liveEvents, resetKey, sessionKey }) =>
+        useLiveDirector(liveEvents, { resetKey, sessionKey }),
+      {
+        initialProps: {
+          liveEvents: [parentPresentation],
+          resetKey: "run-parent",
+          sessionKey: "game_same",
+        },
+      },
+    );
+
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 10,
+      presentationId,
+    });
+
+    rerender({
+      liveEvents: [childPresentation, childCompletion],
+      resetKey: "run-child",
+      sessionKey: "game_same",
+    });
+
+    expect(result.current.cues.map((cue) => cue.eventId)).toEqual([21]);
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 21,
+      type: "game_completed",
+    });
+  });
+
+  it("applies semantic presentation dedupe to recovered primary results", () => {
+    const presentationId =
+      "settlement:game_same:3:vote:2号玩家:primary:presentation";
+    const primaryResult = (id: number, runId: string) =>
+      event({
+        id,
+        run_id: runId,
+        session_id: "game_same",
+        type: "state_updated",
+        action: "exile_resolved",
+        payload: {
+          presentation_id: presentationId,
+          exiled: "2号玩家",
+          active_players: ["1号玩家", "3号玩家"],
+        },
+      });
+    const { rerender, result } = renderHook(
+      ({ liveEvents, resetKey }) =>
+        useLiveDirector(liveEvents, {
+          resetKey,
+          sessionKey: "game_same",
+        }),
+      {
+        initialProps: {
+          liveEvents: [primaryResult(30, "run-parent")],
+          resetKey: "run-parent",
+        },
+      },
+    );
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 30,
+      presentationId,
+      action: "exile_resolved",
+    });
+
+    rerender({
+      liveEvents: [
+        primaryResult(40, "run-child"),
+        event({
+          id: 41,
+          run_id: "run-child",
+          session_id: "game_same",
+          type: "game_completed",
+          payload: { winner: "狼人阵营" },
+        }),
+      ],
+      resetKey: "run-child",
+    });
+
+    expect(result.current.cues.map((cue) => cue.eventId)).toEqual([41]);
+    expect(result.current.currentCue?.type).toBe("game_completed");
+  });
+
+  it("removes a queued child occurrence after the parent presentation becomes current", () => {
+    const presentationId = "game_same:hunter:shot:initial-backlog";
+    const hunterResult = (id: number, runId: string) =>
+      event({
+        id,
+        run_id: runId,
+        session_id: "game_same",
+        type: "state_updated",
+        action: "hunter_shot_resolved",
+        payload: {
+          presentation_id: presentationId,
+          hunter_shot_status: "shot",
+          hunter_shot: "4号玩家",
+        },
+      });
+    const { result } = renderHook(() =>
+      useLiveDirector(
+        [
+          hunterResult(50, "run-parent"),
+          hunterResult(60, "run-child"),
+          event({
+            id: 61,
+            run_id: "run-child",
+            session_id: "game_same",
+            type: "game_completed",
+            payload: { winner: "好人阵营" },
+          }),
+        ],
+        { resetKey: "run-child", sessionKey: "game_same" },
+      ),
+    );
+
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 50,
+      presentationId,
+    });
+    expect(result.current.cues.map((cue) => cue.eventId)).toEqual([50, 61]);
+
+    act(() => result.current.advance());
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 61,
+      type: "game_completed",
+    });
+  });
+
+  it("can jump to the child occurrence when the queued parent was never presented", () => {
+    const presentationId = "game_same:hunter:skipped:initial-backlog";
+    const hunterResult = (id: number, runId: string) =>
+      event({
+        id,
+        run_id: runId,
+        session_id: "game_same",
+        type: "state_updated",
+        action: "hunter_shot_resolved",
+        payload: {
+          presentation_id: presentationId,
+          hunter_shot_status: "skipped",
+          hunter_shot: null,
+        },
+      });
+    const { result } = renderHook(() =>
+      useLiveDirector(
+        [
+          event({
+            id: 1,
+            run_id: "run-parent",
+            session_id: "game_same",
+            type: "game_started",
+          }),
+          hunterResult(70, "run-parent"),
+          hunterResult(80, "run-child"),
+        ],
+        { resetKey: "run-child", sessionKey: "game_same" },
+      ),
+    );
+    expect(result.current.currentEventId).toBe(1);
+
+    act(() => result.current.catchUpToLatest());
+
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 80,
+      presentationId,
+      body: "猎人选择不发动技能。",
+    });
+    expect(result.current.cues.map((cue) => cue.eventId)).toEqual([1, 80]);
+  });
+
+  it("shows a child-run presentation when the parent occurrence never became current", () => {
+    const presentationId = "game_same:hunter:settlement-2";
+    const parentStart = event({
+      id: 1,
+      run_id: "run-parent",
+      session_id: "game_same",
+      type: "game_started",
+    });
+    const parentPresentation = event({
+      id: 10,
+      run_id: "run-parent",
+      session_id: "game_same",
+      type: "state_updated",
+      action: "hunter_shot_resolved",
+      payload: {
+        presentation_id: presentationId,
+        hunter_shot_status: "skipped",
+        hunter_shot: null,
+      },
+    });
+    const childStart = event({
+      id: 11,
+      run_id: "run-child",
+      session_id: "game_same",
+      type: "game_resumed",
+    });
+    const childPresentation = event({
+      id: 20,
+      run_id: "run-child",
+      session_id: "game_same",
+      type: "state_updated",
+      action: "hunter_shot_resolved",
+      payload: {
+        presentation_id: presentationId,
+        hunter_shot_status: "skipped",
+        hunter_shot: null,
+      },
+    });
+    const { rerender, result } = renderHook(
+      ({ liveEvents, resetKey, sessionKey }) =>
+        useLiveDirector(liveEvents, { resetKey, sessionKey }),
+      {
+        initialProps: {
+          liveEvents: [parentStart, parentPresentation],
+          resetKey: "run-parent",
+          sessionKey: "game_same",
+        },
+      },
+    );
+
+    expect(result.current.currentEventId).toBe(1);
+
+    rerender({
+      liveEvents: [childStart, childPresentation],
+      resetKey: "run-child",
+      sessionKey: "game_same",
+    });
+    expect(result.current.cues.map((cue) => cue.eventId)).toEqual([11, 20]);
+
+    act(() => result.current.advance());
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 20,
+      presentationId,
+      body: "猎人选择不发动技能。",
+    });
+  });
+
+  it("clears presentation history when the session continuity key changes", () => {
+    const presentationId = "opaque-hunter-presentation";
+    const { rerender, result } = renderHook(
+      ({ liveEvents, resetKey, sessionKey }) =>
+        useLiveDirector(liveEvents, { resetKey, sessionKey }),
+      {
+        initialProps: {
+          liveEvents: [
+            event({
+              id: 10,
+              run_id: "run-one",
+              session_id: "game-one",
+              type: "state_updated",
+              action: "hunter_shot_resolved",
+              payload: {
+                presentation_id: presentationId,
+                hunter_shot_status: "skipped",
+              },
+            }),
+          ],
+          resetKey: "run-one",
+          sessionKey: "game-one",
+        },
+      },
+    );
+    expect(result.current.currentCue?.presentationId).toBe(presentationId);
+
+    rerender({
+      liveEvents: [
+        event({
+          id: 20,
+          run_id: "run-two",
+          session_id: "game-two",
+          type: "state_updated",
+          action: "hunter_shot_resolved",
+          payload: {
+            presentation_id: presentationId,
+            hunter_shot_status: "skipped",
+          },
+        }),
+      ],
+      resetKey: "run-two",
+      sessionKey: "game-two",
+    });
+
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 20,
+      presentationId,
+    });
   });
 
   it("can start live playback at the first requested event type", () => {

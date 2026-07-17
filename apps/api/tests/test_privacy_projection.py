@@ -94,6 +94,7 @@ def test_public_game_resumed_keeps_only_resume_boundary_metadata() -> None:
                 "parent_run_id": "run_parent",
                 "resume_from_round": 4,
                 "attempt_no": 3,
+                "terminal_recovery": True,
                 "private_error": "secret",
             },
         ),
@@ -106,6 +107,81 @@ def test_public_game_resumed_keeps_only_resume_boundary_metadata() -> None:
         "parent_run_id": "run_parent",
         "resume_from_round": 4,
         "attempt_no": 3,
+        "terminal_recovery": True,
+    }
+
+
+def test_public_model_progress_keeps_opaque_action_correlation_id() -> None:
+    projected = project_live_event(
+        _event(
+            "model_request_started",
+            action="debate",
+            payload={
+                "action_id": "act_public_safe",
+                "request_id": "req_public_safe",
+                "model": "test-model",
+                "prompt": "private prompt",
+            },
+        ),
+        "player_public",
+    )
+
+    assert projected is not None
+    assert projected.payload == {
+        "action_id": "act_public_safe",
+        "request_id": "req_public_safe",
+        "model": "test-model",
+    }
+
+
+@pytest.mark.parametrize("audience", ["player_public", "spectator_god_view"])
+def test_hunter_result_projection_preserves_public_presentation_semantics(
+    audience: str,
+) -> None:
+    projected = project_live_event(
+        _event(
+            "state_updated",
+            action="hunter_shot_resolved",
+            payload={
+                "presentation_id": "hp_0123456789abcdef01234567",
+                "hunter_shot_status": "skipped",
+                "hunter_shot": None,
+                "deaths": [{"player": "2号玩家", "cause": "vote_exile"}],
+                "active_players": ["1号玩家", "3号玩家"],
+                "private_note": "drop-me",
+            },
+        ),
+        audience,  # type: ignore[arg-type]
+    )
+
+    assert projected is not None
+    assert projected.payload == {
+        "presentation_id": "hp_0123456789abcdef01234567",
+        "hunter_shot_status": "skipped",
+        "hunter_shot": None,
+        "deaths": [{"player": "2号玩家"}],
+        "active_players": ["1号玩家", "3号玩家"],
+    }
+
+
+@pytest.mark.parametrize("audience", ["player_public", "spectator_god_view"])
+def test_game_completed_keeps_terminal_playback_boundary(audience: str) -> None:
+    projected = project_live_event(
+        _event(
+            "game_completed",
+            payload={
+                "winner": "好人阵营",
+                "terminal_keep_from_event_id": 5,
+                "private_note": "must be removed",
+            },
+        ),
+        audience,  # type: ignore[arg-type]
+    )
+
+    assert projected is not None
+    assert projected.payload == {
+        "winner": "好人阵营",
+        "terminal_keep_from_event_id": 5,
     }
 
 
@@ -209,6 +285,7 @@ def test_night_resolution_preserves_public_death_without_cause_or_source() -> No
             "state_updated",
             action="night_resolved",
             payload={
+                "presentation_id": "pp_0123456789abcdef01234567",
                 "attacked": "3号玩家",
                 "protected": "4号玩家",
                 "night_deaths": [
@@ -222,6 +299,7 @@ def test_night_resolution_preserves_public_death_without_cause_or_source() -> No
 
     assert projected is not None
     assert projected.payload == {
+        "presentation_id": "pp_0123456789abcdef01234567",
         "night_deaths": [{"player": "3号玩家"}],
         "active_players": ["1号玩家", "2号玩家"],
         "peaceful_night": False,

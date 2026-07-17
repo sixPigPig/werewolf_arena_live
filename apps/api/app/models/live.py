@@ -289,6 +289,7 @@ class VoiceUtteranceRecord(Base):
     )
     source_event_id: Mapped[int] = mapped_column(nullable=False)
     last_source_event_id: Mapped[int] = mapped_column(nullable=False)
+    presentation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     speaker_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     speaker_name: Mapped[str] = mapped_column(String(120), nullable=False)

@@ -210,6 +210,53 @@ describe("toDirectorCue", () => {
     });
   });
 
+  it("renders normalized hunter shot and no-shot results before generic exile fields", () => {
+    const shotCue = toDirectorCue(
+      event({
+        id: 8,
+        type: "state_updated",
+        action: "hunter_shot_resolved",
+        payload: {
+          presentation_id: "game_1200abcd:hunter:settlement-1",
+          hunter_shot_status: "shot",
+          hunter_shot: "4号玩家",
+          exiled: "2号玩家",
+          active_players: ["1号玩家", "3号玩家"],
+        },
+      }),
+    );
+
+    expect(shotCue).toMatchObject({
+      presentationId: "game_1200abcd:hunter:settlement-1",
+      title: "猎人开枪结算",
+      body: "4号玩家 被猎人带走出局。\n存活玩家：1号玩家、3号玩家",
+      importance: "key",
+      compressible: false,
+    });
+
+    const skippedCue = toDirectorCue(
+      event({
+        id: 9,
+        type: "state_updated",
+        action: "hunter_shot_resolved",
+        payload: {
+          presentation_id: "game_1200abcd:hunter:settlement-2",
+          hunter_shot_status: "skipped",
+          hunter_shot: null,
+          exiled: "2号玩家",
+        },
+      }),
+    );
+
+    expect(skippedCue).toMatchObject({
+      presentationId: "game_1200abcd:hunter:settlement-2",
+      title: "猎人技能结算",
+      body: "猎人选择不发动技能。",
+      importance: "key",
+      compressible: false,
+    });
+  });
+
   it("renders state updates for debate, votes, exile and completed games", () => {
     expect(
       toDirectorCue(

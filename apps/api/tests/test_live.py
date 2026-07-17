@@ -3229,7 +3229,7 @@ def test_two_registries_converge_on_one_active_run_during_create_race() -> None:
     assert [event.type for event in store.active_run.events] == ["run_created"]
 
 
-def test_live_registry_marks_completed_when_persistence_fails() -> None:
+def test_live_registry_fails_closed_when_completion_event_persistence_fails() -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(
         session_id="game_1200abcd",
@@ -3240,8 +3240,50 @@ def test_live_registry_marks_completed_when_persistence_fails() -> None:
     )
     registry.set_live_store(FailingLiveStore())
 
-    event = registry.mark_completed(run.run_id, winner="好人阵营")
+    with pytest.raises(RuntimeError, match="cannot append"):
+        registry.mark_completed(run.run_id, winner="好人阵营")
 
-    assert run.status == "completed"
-    assert event.type == "game_completed"
-    assert run.events[-1] is event
+    assert run.status == "queued"
+    assert run.winner is None
+    assert [event.type for event in run.events] == ["run_created"]
+
+
+def test_live_registry_publishes_declared_terminal_keep_boundary() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_terminal_window",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    decisive_event = registry.publish(
+        run.run_id,
+        "state_updated",
+        round_number=1,
+        phase="vote",
+        action="exile_resolved",
+        payload={"eliminated": "1号玩家"},
+    )
+
+    event = registry.mark_completed(
+        run.run_id,
+        winner="狼人阵营",
+        p2_diagnostics={"schema_version": 1, "sample_count": 2},
+        terminal_keep_from_event_id=decisive_event.id,
+    )
+
+    assert event.payload == {
+        "winner": "狼人阵营",
+        "terminal_keep_from_event_id": decisive_event.id,
+    }
+
+    repeated = registry.mark_completed(
+        run.run_id,
+        winner="狼人阵营",
+        terminal_keep_from_event_id=decisive_event.id,
+    )
+
+    assert repeated is event
+    assert [item.type for item in run.events].count("game_completed") == 1
+    assert run.p2_diagnostics == {"schema_version": 1, "sample_count": 2}

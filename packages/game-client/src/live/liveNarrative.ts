@@ -551,6 +551,37 @@ function stateUpdatedCue(
   nextSpeakerName: string | null,
   godViewState: GodViewState,
 ): NarrativeCue {
+  if (cue.action === "hunter_shot_resolved") {
+    const status = stringField(payload, "hunter_shot_status");
+    const target = stringField(payload, "hunter_shot");
+    if (status === "shot" && target) {
+      return makeCue({
+        eventId: cue.eventId,
+        kind: "player-action",
+        tone: "danger",
+        judgeLine: `${playerReference(target, godViewState, "该玩家")} 被猎人带走，出局。`,
+        performerLine: "猎人技能已经结算。",
+        detailLine: activePlayersLine(payload, godViewState),
+        actorName,
+        action: cue.action,
+        speechText: "",
+      });
+    }
+    if (status === "skipped") {
+      return makeCue({
+        eventId: cue.eventId,
+        kind: "player-action",
+        tone: "danger",
+        judgeLine: "猎人选择不发动技能。",
+        performerLine: "猎人技能已经结算。",
+        detailLine: activePlayersLine(payload, godViewState),
+        actorName,
+        action: cue.action,
+        speechText: "",
+      });
+    }
+  }
+
   const debateEntry = payload.debate_entry;
   if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
     const message =

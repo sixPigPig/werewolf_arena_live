@@ -24,7 +24,11 @@ from app.models.live import VoiceMaterializationJobRecord
 from app.werewolf import voice_stream as voice_stream_module
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.voice import VoiceUtterance
-from app.werewolf.voice_stream import LiveVoiceStreamService
+from app.werewolf.voice_stream import (
+    LiveVoiceStreamService,
+    StaticJudgeVoiceAsset,
+    build_static_judge_playback_voices,
+)
 from app.werewolf.voice_store import DatabaseVoiceStore
 from app.werewolf.volcengine_tts import TtsSubtitleCue, TtsSubtitleTiming, VolcengineTtsConfig
 
@@ -39,6 +43,36 @@ BASE_TTS_CONFIG = VolcengineTtsConfig(
     audio_format="pcm",
     sample_rate=24000,
 )
+
+
+def test_static_judge_playback_voice_uses_media_duration_not_send_time() -> None:
+    voices = build_static_judge_playback_voices(
+        [
+            {
+                "id": 7,
+                "type": "game_completed",
+                "run_id": "run-static-duration",
+                "session_id": "game-static-duration",
+                "created_at": "2026-07-17T00:00:00Z",
+                "payload": {"winner": "好人阵营"},
+            }
+        ],
+        asset_loader=lambda _asset_id: StaticJudgeVoiceAsset(
+            audio=b"encoded-audio",
+            audio_format="mp3",
+            mime_type="audio/mpeg",
+            sample_rate=24000,
+            subtitle_timings=[
+                {"text": "游戏结束，", "start_ms": 0, "end_ms": 400},
+                {"text": "好人阵营获胜。", "start_ms": 400, "end_ms": 900},
+            ],
+            duration_ms=1100,
+        ),
+    )
+
+    assert len(voices) == 1
+    assert voices[0]["duration_ms"] == 1100
+    assert max(cue["end_ms"] for cue in voices[0]["subtitle_timings"]) == 900
 
 
 class FakeVoiceStreamer:
@@ -461,6 +495,7 @@ def stored_voice_utterance(
     source_event_id: int,
     text: str,
     speaker_kind: str = "player",
+    presentation_id: str | None = None,
 ) -> VoiceUtterance:
     return VoiceUtterance(
         utterance_id=utterance_id,
@@ -472,6 +507,7 @@ def stored_voice_utterance(
         speaker="player",
         text=text,
         action="debate",
+        presentation_id=presentation_id,
     )
 
 
@@ -1035,6 +1071,7 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
               "id": "night_start",
               "filename": "night_start.mp3",
               "exists": true,
+              "duration_ms": 1250,
               "subtitle_timings": [
                 {"text": "夜晚降临，", "start_ms": 0, "end_ms": 500},
                 {"text": "所有玩家请闭眼。", "start_ms": 500, "end_ms": 1100}
@@ -1073,10 +1110,12 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
     registry = LiveRunRegistry()
     run = create_run(registry)
     websocket = FakeWebSocket()
+    voice_store = RecordingVoiceStore()
     service = LiveVoiceStreamService(
         registry=registry,
         config=replace(BASE_TTS_CONFIG, audio_format="mp3"),
         client_factory=RecordingTtsClient,
+        voice_store_factory=lambda _session_id: voice_store,
         judge_voice_asset_dir=asset_dir,
     )
 
@@ -1121,7 +1160,7 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
         "audio_chunk",
         "voice_end",
     ]
-    start, subtitle, chunk, _end = websocket.messages[:4]
+    start, subtitle, chunk, end = websocket.messages[:4]
     assert start["speaker_kind"] == "judge"
     assert start["speaker_name"] == "法官"
     assert start["audio_format"] == "mp3"
@@ -1135,7 +1174,8 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
         ],
     }
     assert chunk["data"] == "c3RhdGljLW5pZ2h0"
-    end_start, end_subtitle, end_chunk, _end = websocket.messages[4:8]
+    assert end["duration_ms"] == 1250
+    end_start, end_subtitle, end_chunk, end_end = websocket.messages[4:8]
     assert end_start["speaker_kind"] == "judge"
     assert end_subtitle == {
         "type": "subtitle_timing",
@@ -1146,6 +1186,8 @@ def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) 
         ],
     }
     assert end_chunk["data"] == "c3RhdGljLWVuZA=="
+    assert end_end["duration_ms"] == 1000
+    assert [item["duration_ms"] for item in voice_store.completed] == [1250, 1000]
 
 
 def test_voice_stream_service_announces_explicit_dawn_deaths_once(tmp_path) -> None:
@@ -1900,6 +1942,7 @@ def test_voice_stream_service_replays_database_utterance_when_newer_rows_are_inv
         run_id=run.run_id,
         source_event_id=4,
         text="这是可回放的历史发言。",
+        presentation_id="hp_0123456789abcdef01234567",
     )
     failed = stored_voice_utterance(
         utterance_id="stored-failed",
@@ -1976,6 +2019,7 @@ def test_voice_stream_service_replays_database_utterance_when_newer_rows_are_inv
             "utterance_id": "stored-complete",
             "source_event_id": 4,
             "last_source_event_id": 4,
+            "presentation_id": "hp_0123456789abcdef01234567",
             "speaker_kind": "player",
             "speaker_name": "阿青",
             "audience": "player_public",

@@ -24,6 +24,8 @@ _QUALITY_COUNTER: Counter[tuple[str, str, str]] = Counter()
 _RETRY_COUNTER: Counter[tuple[str, str]] = Counter()
 _NOVELTY_SUM: Counter[tuple[str]] = Counter()
 _NOVELTY_COUNT: Counter[tuple[str]] = Counter()
+_RETRY_DURATION_SUM: Counter[tuple[str, str]] = Counter()
+_RETRY_DURATION_COUNT: Counter[tuple[str, str]] = Counter()
 
 
 def record_speech_quality(
@@ -32,6 +34,7 @@ def record_speech_quality(
     report: dict[str, object],
     attempt_count: int,
     retry_exhausted: bool,
+    retry_duration_ms: int = 0,
 ) -> None:
     phase_label = phase if phase in _PHASES else "other"
     novelty = report.get("novelty_score")
@@ -70,6 +73,11 @@ def record_speech_quality(
         _RETRY_COUNTER[(retry_result, phase_label)] += 1
         _NOVELTY_SUM[(phase_label,)] += novelty_score
         _NOVELTY_COUNT[(phase_label,)] += 1
+        if attempt_count > 1:
+            _RETRY_DURATION_SUM[(retry_result, phase_label)] += (
+                max(0, retry_duration_ms) / 1000
+            )
+            _RETRY_DURATION_COUNT[(retry_result, phase_label)] += 1
 
 
 def render_speech_quality_metrics() -> str:
@@ -78,6 +86,8 @@ def render_speech_quality_metrics() -> str:
         retry = _RETRY_COUNTER.copy()
         novelty_sum = _NOVELTY_SUM.copy()
         novelty_count = _NOVELTY_COUNT.copy()
+        retry_duration_sum = _RETRY_DURATION_SUM.copy()
+        retry_duration_count = _RETRY_DURATION_COUNT.copy()
     lines = [
         "# HELP werewolf_speech_quality_total Final speech quality outcomes.",
         "# TYPE werewolf_speech_quality_total counter",
@@ -114,6 +124,23 @@ def render_speech_quality_metrics() -> str:
             f'werewolf_speech_novelty_score_count{{phase="{phase}"}} '
             f"{novelty_count[(phase,)]}"
         )
+    lines.extend(
+        [
+            "# HELP werewolf_speech_quality_retry_extra_duration_seconds "
+            "Additional model time spent on one quality rewrite.",
+            "# TYPE werewolf_speech_quality_retry_extra_duration_seconds summary",
+        ]
+    )
+    for result, phase in sorted(retry_duration_count):
+        labels = f'result="{result}",phase="{phase}"'
+        lines.append(
+            "werewolf_speech_quality_retry_extra_duration_seconds_sum"
+            f"{{{labels}}} {retry_duration_sum[(result, phase)]}"
+        )
+        lines.append(
+            "werewolf_speech_quality_retry_extra_duration_seconds_count"
+            f"{{{labels}}} {retry_duration_count[(result, phase)]}"
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -124,3 +151,5 @@ def reset_speech_quality_metrics_for_tests() -> None:
         _RETRY_COUNTER.clear()
         _NOVELTY_SUM.clear()
         _NOVELTY_COUNT.clear()
+        _RETRY_DURATION_SUM.clear()
+        _RETRY_DURATION_COUNT.clear()

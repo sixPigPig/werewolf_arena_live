@@ -131,6 +131,33 @@ function normalizeRound(
           round_number: Number(fact.round_number ?? 0),
           category: String(fact.category ?? "event"),
           text: String(fact.text ?? ""),
+          schema_version:
+            typeof fact.schema_version === "number"
+              ? fact.schema_version
+              : undefined,
+          fact_id: typeof fact.fact_id === "string" ? fact.fact_id : undefined,
+          stage:
+            typeof fact.stage === "string" || fact.stage === null
+              ? fact.stage
+              : undefined,
+          actor:
+            typeof fact.actor === "string" || fact.actor === null
+              ? fact.actor
+              : undefined,
+          retention:
+            typeof fact.retention === "string" ? fact.retention : undefined,
+          trust_class:
+            typeof fact.trust_class === "string" ? fact.trust_class : undefined,
+          source_opportunity_id:
+            typeof fact.source_opportunity_id === "string" ||
+            fact.source_opportunity_id === null
+              ? fact.source_opportunity_id
+              : undefined,
+          source_event_id:
+            typeof fact.source_event_id === "string" ||
+            fact.source_event_id === null
+              ? fact.source_event_id
+              : undefined,
         }))
       : [],
     night_deaths: nightDeaths,

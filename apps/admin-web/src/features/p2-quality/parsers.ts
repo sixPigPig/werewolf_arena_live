@@ -3,7 +3,9 @@ import type {
   AdminGameP2Quality,
   AdminP2ChoiceNormalization,
   AdminP2DataStatus,
+  AdminP2LogicalActionOutcomes,
   AdminP2Performance,
+  AdminP2ProviderAttemptOutcomes,
   AdminP2SpeechQuality,
   AdminPublicOutcome,
   AdminRunP2Diagnostics,
@@ -35,6 +37,12 @@ export function parseAdminRunP2Diagnostics(
     performance: parsePerformance(record.performance),
     speech_quality: parseSpeech(record.speech_quality),
     choice_normalization: parseChoice(record.choice_normalization),
+    provider_attempt_outcomes: parseProviderAttemptOutcomes(
+      record.provider_attempt_outcomes,
+    ),
+    logical_action_outcomes: parseLogicalActionOutcomes(
+      record.logical_action_outcomes,
+    ),
   };
 }
 
@@ -200,6 +208,108 @@ function parseChoice(value: unknown): AdminP2ChoiceNormalization {
     invalid_count: nonNegativeInteger(record.invalid_count, "invalid_count"),
     other_count: nonNegativeInteger(record.other_count, "other_count"),
   };
+}
+
+function parseProviderAttemptOutcomes(
+  value: unknown,
+): AdminP2ProviderAttemptOutcomes {
+  if (value === undefined) {
+    return {
+      attempt_count: 0,
+      valid_response_count: 0,
+      invalid_response_count: 0,
+      timed_out_count: 0,
+      canceled_count: 0,
+      transport_failed_count: 0,
+    };
+  }
+  const record = recordValue(value, "provider_attempt_outcomes");
+  const parsed = {
+    attempt_count: nonNegativeInteger(
+      record.attempt_count,
+      "provider_attempt_outcomes.attempt_count",
+    ),
+    valid_response_count: nonNegativeInteger(
+      record.valid_response_count,
+      "provider_attempt_outcomes.valid_response_count",
+    ),
+    invalid_response_count: nonNegativeInteger(
+      record.invalid_response_count,
+      "provider_attempt_outcomes.invalid_response_count",
+    ),
+    timed_out_count: nonNegativeInteger(
+      record.timed_out_count,
+      "provider_attempt_outcomes.timed_out_count",
+    ),
+    canceled_count: nonNegativeInteger(
+      record.canceled_count,
+      "provider_attempt_outcomes.canceled_count",
+    ),
+    transport_failed_count: nonNegativeInteger(
+      record.transport_failed_count,
+      "provider_attempt_outcomes.transport_failed_count",
+    ),
+  };
+  const terminalCount =
+    parsed.valid_response_count +
+    parsed.invalid_response_count +
+    parsed.timed_out_count +
+    parsed.canceled_count +
+    parsed.transport_failed_count;
+  if (parsed.attempt_count !== terminalCount) {
+    throw invalidContract(
+      "provider_attempt_outcomes.attempt_count 必须等于各 attempt 终态之和",
+    );
+  }
+  return parsed;
+}
+
+function parseLogicalActionOutcomes(
+  value: unknown,
+): AdminP2LogicalActionOutcomes {
+  if (value === undefined) {
+    return {
+      action_count: 0,
+      completed_count: 0,
+      fallback_count: 0,
+      canceled_count: 0,
+      failed_count: 0,
+    };
+  }
+  const record = recordValue(value, "logical_action_outcomes");
+  const parsed = {
+    action_count: nonNegativeInteger(
+      record.action_count,
+      "logical_action_outcomes.action_count",
+    ),
+    completed_count: nonNegativeInteger(
+      record.completed_count,
+      "logical_action_outcomes.completed_count",
+    ),
+    fallback_count: nonNegativeInteger(
+      record.fallback_count,
+      "logical_action_outcomes.fallback_count",
+    ),
+    canceled_count: nonNegativeInteger(
+      record.canceled_count,
+      "logical_action_outcomes.canceled_count",
+    ),
+    failed_count: nonNegativeInteger(
+      record.failed_count,
+      "logical_action_outcomes.failed_count",
+    ),
+  };
+  const terminalCount =
+    parsed.completed_count +
+    parsed.fallback_count +
+    parsed.canceled_count +
+    parsed.failed_count;
+  if (parsed.action_count !== terminalCount) {
+    throw invalidContract(
+      "logical_action_outcomes.action_count 必须等于各 logical action 终态之和",
+    );
+  }
+  return parsed;
 }
 
 function parseOutcome(value: unknown): AdminPublicOutcome {

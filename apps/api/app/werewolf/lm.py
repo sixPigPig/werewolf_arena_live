@@ -25,10 +25,23 @@ DEFAULT_RETRIES = 3
 STREAM_DELTA_FLUSH_CHARS = 12
 STREAM_DELTA_FLUSH_SECONDS = 0.12
 PUBLIC_MODEL_FAILURE_MESSAGE = "模型请求失败，正在中止本次行动"
+PROVIDER_ATTEMPT_RESULTS = frozenset(
+    {
+        "valid_response",
+        "invalid_response",
+        "timed_out",
+        "canceled",
+        "transport_failed",
+    }
+)
 
 
 class EmptyModelResponseError(ValueError):
     """The provider completed successfully but returned no usable content."""
+
+
+class ModelActionCanceled(RuntimeError):
+    """An engine-domain transition canceled an in-flight model action."""
 
 
 class ModelProvider(Protocol):
@@ -48,7 +61,9 @@ class LmLog:
     prompt: str
     raw_response: str
     result: dict[str, Any] | None
+    action_id: str | None = None
     request_id: str | None = None
+    attempt_outcomes: list[dict[str, str]] = field(default_factory=list)
     invalid_attempts: list[dict[str, Any]] = field(default_factory=list)
     raw_choice: object | None = None
     choice_normalization_kind: str | None = None
@@ -57,6 +72,7 @@ class LmLog:
     speech_quality_attempt_count: int = field(default=0, repr=False)
     speech_quality_retry_exhausted: bool = field(default=False, repr=False)
     speech_quality_initial_codes: list[str] = field(default_factory=list, repr=False)
+    speech_quality_retry_duration_ms: int = field(default=0, repr=False)
     first_token_ms: int | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -65,14 +81,65 @@ class LmLog:
             "raw_response": self.raw_response,
             "result": self.result,
         }
+        if self.action_id is not None:
+            value["action_id"] = self.action_id
         if self.request_id is not None:
             value["request_id"] = self.request_id
+        attempt_outcomes = safe_attempt_outcomes(self.attempt_outcomes)
+        if attempt_outcomes:
+            value["attempt_outcomes"] = attempt_outcomes
         if self.invalid_attempts:
             value["invalid_attempts"] = self.invalid_attempts
         if self.choice_normalization_kind is not None:
             value["raw_choice"] = self.raw_choice
             value["choice_normalization_kind"] = self.choice_normalization_kind
         return value
+
+
+def safe_attempt_outcomes(value: object) -> list[dict[str, str]]:
+    """Return only the bounded provider-attempt ledger contract."""
+    if not isinstance(value, list):
+        return []
+
+    outcomes: list[dict[str, str]] = []
+    seen_request_ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        action_id = item.get("action_id")
+        request_id = item.get("request_id")
+        attempt_result = item.get("attempt_result")
+        if (
+            not isinstance(action_id, str)
+            or not action_id
+            or not isinstance(request_id, str)
+            or not request_id
+            or not isinstance(attempt_result, str)
+            or attempt_result not in PROVIDER_ATTEMPT_RESULTS
+            or request_id in seen_request_ids
+        ):
+            continue
+        seen_request_ids.add(request_id)
+        outcomes.append(
+            {
+                "action_id": action_id,
+                "request_id": request_id,
+                "attempt_result": str(attempt_result),
+            }
+        )
+    return outcomes
+
+
+def _provider_attempt_outcome(
+    *, action_id: str, request_id: str, attempt_result: str
+) -> dict[str, str]:
+    if attempt_result not in PROVIDER_ATTEMPT_RESULTS:
+        raise ValueError("unsupported provider attempt result")
+    return {
+        "action_id": action_id,
+        "request_id": request_id,
+        "attempt_result": attempt_result,
+    }
 
 
 class FakeProvider:
@@ -185,6 +252,7 @@ def generate_action_with_events(
     retries: int = DEFAULT_RETRIES,
     event_sink: Any,
     event_context: dict[str, Any],
+    action_id_factory: Callable[[], str] | None = None,
     request_id_factory: Callable[[], str] | None = None,
     enable_progress_ticks: bool = True,
     call_options: ModelCallOptions | None = None,
@@ -197,12 +265,19 @@ def generate_action_with_events(
     last_normalization_kind: str | None = None
     last_request_id: str | None = None
     last_first_token_ms: int | None = None
+    attempt_outcomes: list[dict[str, str]] = []
     current_prompt = base_prompt
+    action_id = (
+        action_id_factory()
+        if action_id_factory is not None
+        else f"act_{uuid.uuid4().hex[:12]}"
+    )
     context = ModelEventContext(
         round_number=event_context.get("round_number"),
         phase=event_context.get("phase"),
         actor=event_context.get("actor"),
         action=event_context.get("action"),
+        action_id=action_id,
     )
 
     for attempt in range(retries):
@@ -222,6 +297,7 @@ def generate_action_with_events(
             "model_request_started",
             context=context,
             payload={
+                "action_id": action_id,
                 "request_id": request_id,
                 "model": model,
                 "message": waiting_message,
@@ -256,17 +332,34 @@ def generate_action_with_events(
                 progress=progress,
                 call_options=attempt_options,
             )
-        except Exception:
+        except Exception as exc:
             progress.stop()
             progress_stopped = True
+            attempt_result = (
+                "canceled"
+                if isinstance(exc, ModelActionCanceled)
+                else "timed_out"
+                if isinstance(exc, ModelDeadlineExceeded)
+                else "transport_failed"
+            )
+            attempt_outcomes.append(
+                _provider_attempt_outcome(
+                    action_id=action_id,
+                    request_id=request_id,
+                    attempt_result=attempt_result,
+                )
+            )
+            setattr(exc, "attempt_outcomes", safe_attempt_outcomes(attempt_outcomes))
             _publish_model_event(
                 event_sink,
                 "model_request_failed",
                 context=context,
                 payload={
+                    "action_id": action_id,
                     "request_id": request_id,
                     "model": model,
                     "message": PUBLIC_MODEL_FAILURE_MESSAGE,
+                    "attempt_result": attempt_result,
                 },
             )
             raise
@@ -283,8 +376,35 @@ def generate_action_with_events(
                 if isinstance(exc, EmptyModelResponseError)
                 else "invalid_json"
             )
-            invalid_attempts.append(
-                _invalid_response_attempt(reason_code, result_key=result_key)
+            invalid_attempt = _invalid_response_attempt(
+                reason_code,
+                result_key=result_key,
+            )
+            invalid_attempt.update(
+                {
+                    "action_id": action_id,
+                    "request_id": request_id,
+                }
+            )
+            invalid_attempts.append(invalid_attempt)
+            attempt_outcomes.append(
+                _provider_attempt_outcome(
+                    action_id=action_id,
+                    request_id=request_id,
+                    attempt_result="invalid_response",
+                )
+            )
+            _publish_model_event(
+                event_sink,
+                "model_attempt_completed",
+                context=context,
+                payload={
+                    "action_id": action_id,
+                    "request_id": request_id,
+                    "model": model,
+                    "attempt_result": "invalid_response",
+                    "reason_code": reason_code,
+                },
             )
             if attempt + 1 < retries:
                 _publish_model_event(
@@ -316,11 +436,31 @@ def generate_action_with_events(
         last_normalization_kind = normalization.kind if normalization is not None else None
         normalized_value = normalization.canonical_value if normalization else value
         if allowed_values is None or normalized_value in allowed_values:
+            attempt_outcomes.append(
+                _provider_attempt_outcome(
+                    action_id=action_id,
+                    request_id=request_id,
+                    attempt_result="valid_response",
+                )
+            )
+            _publish_model_event(
+                event_sink,
+                "model_attempt_completed",
+                context=context,
+                payload={
+                    "action_id": action_id,
+                    "request_id": request_id,
+                    "model": model,
+                    "attempt_result": "valid_response",
+                },
+            )
             return normalized_value, LmLog(
                 prompt=current_prompt,
                 raw_response=raw_response,
                 result=result,
+                action_id=action_id,
                 request_id=request_id,
+                attempt_outcomes=attempt_outcomes.copy(),
                 invalid_attempts=invalid_attempts.copy(),
                 raw_choice=value if normalization is not None else None,
                 choice_normalization_kind=(
@@ -328,12 +468,36 @@ def generate_action_with_events(
                 ),
                 first_token_ms=last_first_token_ms,
             )
-        invalid_attempts.append(
-            _invalid_attempt(
-                value=value,
-                allowed_values=allowed_values,
-                result_key=result_key,
+        invalid_attempt = _invalid_attempt(
+            value=value,
+            allowed_values=allowed_values,
+            result_key=result_key,
+        )
+        invalid_attempt.update(
+            {
+                "action_id": action_id,
+                "request_id": request_id,
+            }
+        )
+        invalid_attempts.append(invalid_attempt)
+        attempt_outcomes.append(
+            _provider_attempt_outcome(
+                action_id=action_id,
+                request_id=request_id,
+                attempt_result="invalid_response",
             )
+        )
+        _publish_model_event(
+            event_sink,
+            "model_attempt_completed",
+            context=context,
+            payload={
+                "action_id": action_id,
+                "request_id": request_id,
+                "model": model,
+                "attempt_result": "invalid_response",
+                "reason_code": "invalid_choice",
+            },
         )
         if attempt + 1 < retries:
             _publish_model_event(
@@ -355,7 +519,9 @@ def generate_action_with_events(
         prompt=current_prompt,
         raw_response="\n--- retry ---\n".join(raw_responses),
         result=last_result,
+        action_id=action_id,
         request_id=last_request_id,
+        attempt_outcomes=attempt_outcomes.copy(),
         invalid_attempts=invalid_attempts.copy(),
         raw_choice=last_raw_choice,
         choice_normalization_kind=last_normalization_kind,
@@ -548,14 +714,19 @@ def _publish_model_event(
     context: ModelEventContext,
     payload: dict[str, Any],
 ) -> None:
-    record_model_progress_event(event_type)
+    public_payload = payload.copy()
+    attempt_result = public_payload.get("attempt_result")
+    record_model_progress_event(
+        event_type,
+        attempt_result=(attempt_result if isinstance(attempt_result, str) else None),
+    )
     event_sink.publish(
         event_type,
         round_number=context.round_number,
         phase=context.phase,
         actor=context.actor,
         action=context.action,
-        payload=payload,
+        payload=public_payload,
     )
 
 

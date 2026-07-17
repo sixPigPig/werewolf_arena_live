@@ -108,6 +108,21 @@ export const contractLiveRunDetail: AdminLiveRunDetail = {
       invalid_count: 0,
       other_count: 0,
     },
+    provider_attempt_outcomes: {
+      attempt_count: 27,
+      valid_response_count: 24,
+      invalid_response_count: 1,
+      timed_out_count: 1,
+      canceled_count: 0,
+      transport_failed_count: 1,
+    },
+    logical_action_outcomes: {
+      action_count: 24,
+      completed_count: 22,
+      fallback_count: 1,
+      canceled_count: 0,
+      failed_count: 1,
+    },
   },
 };
 

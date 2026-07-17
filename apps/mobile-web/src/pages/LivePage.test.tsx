@@ -452,6 +452,60 @@ describe("LivePage", () => {
     expect(screen.queryByText("运行已开始")).not.toBeInTheDocument();
   });
 
+  it("shows a recovered hunter presentation only once in the live event rail", async () => {
+    const user = userEvent.setup();
+    const presentationId =
+      "settlement:session-1:2:day:阿青:hunter:阿青:presentation";
+    const payload = {
+      presentation_id: presentationId,
+      hunter_shot_status: "shot",
+      hunter_shot: "白石",
+      day_deaths: [
+        { player: "阿青", cause: "vote_exile", source: null },
+        { player: "白石", cause: "hunter_shot", source: "阿青" },
+      ],
+      active_players: ["南风", "木子"],
+    };
+    const parentResult: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 10,
+      run_id: "run-parent",
+      round: 2,
+      phase: "day",
+      actor: "阿青",
+      action: "hunter_shot_resolved",
+      type: "state_updated",
+      payload,
+    };
+    const childResult: LiveGameEvent = {
+      ...parentResult,
+      id: 12,
+      run_id: "run-child",
+    };
+    const resumedEvent: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 11,
+      run_id: "run-child",
+      round: 2,
+      phase: "day",
+      type: "game_resumed",
+      payload: {},
+    };
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, parentResult, resumedEvent, childResult],
+      latestEvent: childResult,
+    });
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const eventRail = screen.getByRole("log");
+    expect(within(eventRail).getAllByText("猎人带走 2号")).toHaveLength(1);
+    expect(eventRail.querySelectorAll('[data-event-id="12"]')).toHaveLength(1);
+    expect(eventRail.querySelector('[data-event-id="10"]')).toBeNull();
+  });
+
   it("renders live seat avatars through API asset URLs", async () => {
     renderLiveRoute();
 
@@ -1043,6 +1097,46 @@ describe("LivePage", () => {
         enabled: true,
         isPaused: false,
       }),
+    );
+  });
+
+  it("passes the declared terminal source window to live voice playback", async () => {
+    const decisiveEvent: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 7,
+      type: "state_updated",
+      phase: "vote",
+      action: "exile_resolved",
+      payload: { eliminated: "阿青" },
+    };
+    const completedEvent: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 9,
+      type: "game_completed",
+      phase: "vote",
+      action: null,
+      payload: {
+        winner: "狼人阵营",
+        terminal_keep_from_event_id: 7,
+      },
+    };
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "closed",
+      events: [gameStartedEvent, decisiveEvent, completedEvent],
+      latestEvent: completedEvent,
+    });
+
+    renderLiveRoute();
+
+    await waitFor(() =>
+      expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
+        "run-1",
+        expect.objectContaining({
+          currentEventId: 7,
+          terminalEventId: 9,
+          terminalKeepFromEventId: 7,
+        }),
+      ),
     );
   });
 

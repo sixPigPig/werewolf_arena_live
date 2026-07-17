@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, OrderedDict
 from threading import Lock
 
 from app.werewolf.execution_budget import ActionBudgetKind
@@ -9,7 +9,16 @@ from app.werewolf.execution_budget import ActionBudgetKind
 _ACTION_KINDS = frozenset(
     {"required_discrete", "optional_discrete", "public_speech", "private_text"}
 )
-_RESULTS = frozenset({"completed", "timed_out", "fallback", "failed"})
+_RESULTS = frozenset({"completed", "fallback", "canceled", "failed"})
+_ATTEMPT_RESULTS = frozenset(
+    {
+        "valid_response",
+        "invalid_response",
+        "timed_out",
+        "canceled",
+        "transport_failed",
+    }
+)
 _BATCH_RESULTS = frozenset({"completed", "deadline", "failed"})
 _FALLBACK_REASONS = frozenset(
     {
@@ -25,7 +34,15 @@ _FALLBACK_REASONS = frozenset(
     }
 )
 _PROGRESS_STAGES = frozenset(
-    {"started", "thinking", "delta", "received", "retry", "failed"}
+    {
+        "started",
+        "thinking",
+        "delta",
+        "attempt_completed",
+        "received",
+        "retry",
+        "failed",
+    }
 )
 ACTION_DURATION_BUCKETS = (0.5, 1, 2, 3, 5, 8, 10, 12, 15, 20, 30, 45, 60)
 FIRST_TOKEN_BUCKETS = (0.25, 0.5, 1, 2, 3, 5, 8, 10, 15, 20)
@@ -34,6 +51,7 @@ _LOCK = Lock()
 _ACTION_DURATION_SUM: Counter[tuple[str, str, str]] = Counter()
 _ACTION_DURATION_COUNT: Counter[tuple[str, str, str]] = Counter()
 _ACTION_DURATION_BUCKET: Counter[tuple[str, str, str, float]] = Counter()
+_ACTION_RESULT_COUNTER: Counter[tuple[str, str, str]] = Counter()
 _FIRST_TOKEN_SUM: Counter[tuple[str, str, str]] = Counter()
 _FIRST_TOKEN_COUNT: Counter[tuple[str, str, str]] = Counter()
 _FIRST_TOKEN_BUCKET: Counter[tuple[str, str, str, float]] = Counter()
@@ -43,6 +61,9 @@ _BATCH_DURATION_SUM: Counter[tuple[str, str]] = Counter()
 _BATCH_DURATION_COUNT: Counter[tuple[str, str]] = Counter()
 _BATCH_DURATION_BUCKET: Counter[tuple[str, str, float]] = Counter()
 _PROGRESS_COUNTER: Counter[tuple[str]] = Counter()
+_ATTEMPT_RESULT_COUNTER: Counter[tuple[str]] = Counter()
+MAX_FINALIZED_ACTION_IDS = 65_536
+_FINALIZED_ACTION_IDS: OrderedDict[str, None] = OrderedDict()
 
 
 def record_action_execution(
@@ -53,15 +74,23 @@ def record_action_execution(
     duration_ms: int,
     first_token_ms: int | None,
     fallback_reason: str | None,
+    action_id: str | None = None,
 ) -> None:
     kind = action_kind if action_kind in _ACTION_KINDS else "required_discrete"
     provider = _provider_label(model)
     result_label = result if result in _RESULTS else "failed"
     duration_seconds = max(0, duration_ms) / 1000
     with _LOCK:
+        if action_id is not None:
+            if action_id in _FINALIZED_ACTION_IDS:
+                return
+            _FINALIZED_ACTION_IDS[action_id] = None
+            while len(_FINALIZED_ACTION_IDS) > MAX_FINALIZED_ACTION_IDS:
+                _FINALIZED_ACTION_IDS.popitem(last=False)
         key = (kind, provider, result_label)
         _ACTION_DURATION_SUM[key] += duration_seconds
         _ACTION_DURATION_COUNT[key] += 1
+        _ACTION_RESULT_COUNTER[key] += 1
         for boundary in ACTION_DURATION_BUCKETS:
             if duration_seconds <= boundary:
                 _ACTION_DURATION_BUCKET[(*key, boundary)] += 1
@@ -104,20 +133,29 @@ def record_action_batch(
                 _BATCH_DURATION_BUCKET[(*key, boundary)] += 1
 
 
-def record_model_progress_event(event_type: str) -> None:
+def record_model_progress_event(
+    event_type: str,
+    *,
+    attempt_result: str | None = None,
+) -> None:
     stage_by_event = {
         "model_request_started": "started",
         "model_thinking_tick": "thinking",
         "model_response_delta": "delta",
+        "model_attempt_completed": "attempt_completed",
         "model_response_received": "received",
         "model_retry_scheduled": "retry",
         "model_request_failed": "failed",
     }
     stage = stage_by_event.get(event_type)
-    if stage not in _PROGRESS_STAGES:
+    result = attempt_result if attempt_result in _ATTEMPT_RESULTS else None
+    if stage not in _PROGRESS_STAGES and result is None:
         return
     with _LOCK:
-        _PROGRESS_COUNTER[(stage,)] += 1
+        if stage in _PROGRESS_STAGES:
+            _PROGRESS_COUNTER[(stage,)] += 1
+        if result is not None:
+            _ATTEMPT_RESULT_COUNTER[(result,)] += 1
 
 
 def render_action_execution_metrics() -> str:
@@ -125,6 +163,7 @@ def render_action_execution_metrics() -> str:
         action_sum = _ACTION_DURATION_SUM.copy()
         action_count = _ACTION_DURATION_COUNT.copy()
         action_bucket = _ACTION_DURATION_BUCKET.copy()
+        action_results = _ACTION_RESULT_COUNTER.copy()
         first_sum = _FIRST_TOKEN_SUM.copy()
         first_count = _FIRST_TOKEN_COUNT.copy()
         first_bucket = _FIRST_TOKEN_BUCKET.copy()
@@ -134,6 +173,7 @@ def render_action_execution_metrics() -> str:
         batch_count = _BATCH_DURATION_COUNT.copy()
         batch_bucket = _BATCH_DURATION_BUCKET.copy()
         progress = _PROGRESS_COUNTER.copy()
+        attempt_results = _ATTEMPT_RESULT_COUNTER.copy()
     lines = [
         "# HELP werewolf_model_action_duration_seconds Model action duration.",
         "# TYPE werewolf_model_action_duration_seconds histogram",
@@ -146,6 +186,17 @@ def render_action_execution_metrics() -> str:
         action_bucket,
         ACTION_DURATION_BUCKETS,
     )
+    lines.extend(
+        [
+            "# HELP werewolf_logical_action_total Terminal logical action results.",
+            "# TYPE werewolf_logical_action_total counter",
+        ]
+    )
+    for (kind, provider, result), count in sorted(action_results.items()):
+        lines.append(
+            "werewolf_logical_action_total"
+            f'{{action_kind="{kind}",provider="{provider}",result="{result}"}} {count}'
+        )
     lines.extend(
         [
             "# HELP werewolf_model_first_token_seconds Model first token latency.",
@@ -218,6 +269,14 @@ def render_action_execution_metrics() -> str:
         lines.append(
             f'werewolf_model_progress_event_total{{stage="{stage}"}} {count}'
         )
+    lines.extend(
+        [
+            "# HELP werewolf_model_attempt_total Terminal provider attempt results.",
+            "# TYPE werewolf_model_attempt_total counter",
+        ]
+    )
+    for (result,), count in sorted(attempt_results.items()):
+        lines.append(f'werewolf_model_attempt_total{{result="{result}"}} {count}')
     lines.append("")
     return "\n".join(lines)
 
@@ -227,6 +286,7 @@ def reset_action_execution_metrics_for_tests() -> None:
         _ACTION_DURATION_SUM.clear()
         _ACTION_DURATION_COUNT.clear()
         _ACTION_DURATION_BUCKET.clear()
+        _ACTION_RESULT_COUNTER.clear()
         _FIRST_TOKEN_SUM.clear()
         _FIRST_TOKEN_COUNT.clear()
         _FIRST_TOKEN_BUCKET.clear()
@@ -236,6 +296,8 @@ def reset_action_execution_metrics_for_tests() -> None:
         _BATCH_DURATION_COUNT.clear()
         _BATCH_DURATION_BUCKET.clear()
         _PROGRESS_COUNTER.clear()
+        _ATTEMPT_RESULT_COUNTER.clear()
+        _FINALIZED_ACTION_IDS.clear()
 
 
 def _provider_label(model: str) -> str:

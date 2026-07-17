@@ -24,6 +24,7 @@ def test_speech_quality_metrics_use_only_bounded_labels() -> None:
         },
         attempt_count=2,
         retry_exhausted=True,
+        retry_duration_ms=1250,
     )
 
     metrics = render_speech_quality_metrics()
@@ -35,4 +36,12 @@ def test_speech_quality_metrics_use_only_bounded_labels() -> None:
     assert 'code="unknown",result="warning",phase="day"' in metrics
     assert 'result="exhausted",phase="day"} 1' in metrics
     assert 'werewolf_speech_novelty_score_sum{phase="day"} 0.25' in metrics
+    assert (
+        'werewolf_speech_quality_retry_extra_duration_seconds_sum'
+        '{result="exhausted",phase="day"} 1.25'
+    ) in metrics
+    assert (
+        'werewolf_speech_quality_retry_extra_duration_seconds_count'
+        '{result="exhausted",phase="day"} 1'
+    ) in metrics
     assert "SENTINEL_PRIVATE_DRAFT" not in metrics

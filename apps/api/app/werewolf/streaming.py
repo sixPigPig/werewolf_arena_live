@@ -37,6 +37,7 @@ class ModelEventContext:
     phase: str | None
     actor: str | None
     action: str | None
+    action_id: str | None = None
 
 
 class ModelRequestProgress:
@@ -97,18 +98,21 @@ class ModelRequestProgress:
         if self._should_suppress_tick(now):
             return
         record_model_progress_event("model_thinking_tick")
+        payload = {
+            "request_id": self.request_id,
+            "model": self.model,
+            "elapsed_ms": int((now - self._started_at) * 1000),
+            "message": self.message,
+        }
+        if self.context.action_id is not None:
+            payload["action_id"] = self.context.action_id
         self.event_sink.publish(
             "model_thinking_tick",
             round_number=self.context.round_number,
             phase=self.context.phase,
             actor=self.context.actor,
             action=self.context.action,
-            payload={
-                "request_id": self.request_id,
-                "model": self.model,
-                "elapsed_ms": int((now - self._started_at) * 1000),
-                "message": self.message,
-            },
+            payload=payload,
         )
 
     def _should_suppress_tick(self, now: float) -> bool:

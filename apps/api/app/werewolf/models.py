@@ -56,7 +56,7 @@ class ActionLog:
     fallback_reason: str | None = None
     attempt_count: int = 1
     decision_schema: str | None = None
-    decision_audit: dict[str, str] | None = None
+    decision_audit: dict[str, object] | None = None
     raw_choice: object | None = None
     choice_normalization_kind: str | None = None
     speech_mission: dict[str, object] | None = None
@@ -64,7 +64,10 @@ class ActionLog:
     speech_quality_attempt_count: int = 0
     speech_quality_retry_exhausted: bool = False
     speech_quality_initial_codes: list[str] = field(default_factory=list)
-    execution_status: Literal["completed", "timed_out", "fallback", "failed"] = (
+    speech_quality_retry_duration_ms: int = 0
+    execution_status: Literal[
+        "completed", "timed_out", "fallback", "canceled", "failed"
+    ] = (
         "completed"
     )
     duration_ms: int = 0
@@ -110,6 +113,9 @@ class ActionLog:
             )
             payload["speech_quality_initial_codes"] = (
                 self.speech_quality_initial_codes.copy()
+            )
+            payload["speech_quality_retry_duration_ms"] = (
+                self.speech_quality_retry_duration_ms
             )
         if self.fact_prompt_coverage is not None:
             payload["fact_prompt_coverage"] = copy.deepcopy(self.fact_prompt_coverage)
@@ -468,6 +474,8 @@ class RoundLog:
     speech_order: ActionLog | None = None
     sheriff_badge: ActionLog | None = None
     werewolf_self_explosion: ActionLog | None = None
+    werewolf_self_explosion_decisions: list[ActionLog] = field(default_factory=list)
+    canceled_actions: list[ActionLog] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -502,6 +510,10 @@ class RoundLog:
             "werewolf_self_explosion": self.werewolf_self_explosion.to_dict()
             if self.werewolf_self_explosion
             else None,
+            "werewolf_self_explosion_decisions": [
+                log.to_dict() for log in self.werewolf_self_explosion_decisions
+            ],
+            "canceled_actions": [log.to_dict() for log in self.canceled_actions],
         }
 
 

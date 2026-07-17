@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from dataclasses import replace
 
 import pytest
 from sqlalchemy import create_engine
@@ -83,6 +84,25 @@ def test_voice_store_creates_updates_chunks_and_completes(db_session: Session) -
     assert store.load_chunks("voice_1") == [b"abc", b"def"]
 
 
+def test_voice_store_persists_semantic_presentation_id(db_session: Session) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    semantic_utterance = replace(
+        utterance(),
+        presentation_id="hp_0123456789abcdef01234567",
+    )
+
+    store.upsert_utterance(
+        semantic_utterance,
+        audio_format="pcm",
+        sample_rate=24000,
+        mime_type="audio/L16",
+    )
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["presentation_id"] == "hp_0123456789abcdef01234567"
+
+
 def test_voice_store_merges_subtitle_timing_updates(db_session: Session) -> None:
     store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
     store.upsert_utterance(
@@ -116,6 +136,31 @@ def test_voice_store_merges_subtitle_timing_updates(db_session: Session) -> None
         {"text": "我先", "start_ms": 700, "end_ms": 1040},
         {"text": "过。", "start_ms": 1040, "end_ms": 1320},
     ]
+
+
+def test_voice_store_never_completes_before_the_last_subtitle_cue(
+    db_session: Session,
+) -> None:
+    store = DatabaseVoiceStore(db_session, session_id="game_1200abcd")
+    store.upsert_utterance(
+        utterance("游戏结束，好人阵营获胜。"),
+        audio_format="mp3",
+        sample_rate=24000,
+        mime_type="audio/mpeg",
+    )
+    store.update_subtitle_timings(
+        "voice_1",
+        subtitle_timings=[
+            {"text": "游戏结束，", "start_ms": 0, "end_ms": 400},
+            {"text": "好人阵营获胜。", "start_ms": 400, "end_ms": 1250},
+        ],
+    )
+
+    store.complete_utterance("voice_1", duration_ms=3)
+
+    loaded = store.load_utterance("voice_1")
+    assert loaded is not None
+    assert loaded["duration_ms"] == 1250
 
 
 def test_voice_store_finds_recent_utterance_for_request(db_session: Session) -> None:

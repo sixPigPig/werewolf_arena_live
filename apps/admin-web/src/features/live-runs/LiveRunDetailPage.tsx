@@ -327,6 +327,8 @@ function RunP2QualityPanel({
   diagnostics: AdminRunP2Diagnostics;
 }) {
   const performance = diagnostics.performance;
+  const attempts = diagnostics.provider_attempt_outcomes;
+  const actions = diagnostics.logical_action_outcomes;
   return (
     <section aria-labelledby="live-run-p2-title" className="game-detail-panel">
       <PanelHeading
@@ -382,6 +384,24 @@ function RunP2QualityPanel({
             <strong>{diagnostics.choice_normalization.seat_alias_count}</strong>
             <small>
               seat alias · 无效 {diagnostics.choice_normalization.invalid_count}
+            </small>
+          </article>
+          <article>
+            <span>Provider attempt 终态</span>
+            <strong>{attempts.attempt_count}</strong>
+            <small>
+              有效 {attempts.valid_response_count} · 非法{" "}
+              {attempts.invalid_response_count} · 超时 {attempts.timed_out_count} ·
+              取消 {attempts.canceled_count} · 传输失败{" "}
+              {attempts.transport_failed_count}
+            </small>
+          </article>
+          <article>
+            <span>Logical action 终态</span>
+            <strong>{actions.action_count}</strong>
+            <small>
+              完成 {actions.completed_count} · 降级 {actions.fallback_count} · 取消{" "}
+              {actions.canceled_count} · 失败 {actions.failed_count}
             </small>
           </article>
         </div>

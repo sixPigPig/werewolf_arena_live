@@ -4,6 +4,7 @@ import copy
 import random
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from app.core.config import settings
 from app.rule_sets.types import CompiledRuleSet
@@ -17,12 +18,14 @@ from app.werewolf.checkpoint import (
     resolved_rule_set_from_checkpoint,
     rng_from_json_state,
     round_logs_from_dict,
+    terminal_settlement_from_checkpoint,
 )
 from app.werewolf.config import DEFAULT_MAX_ROUNDS
 from app.werewolf.engine import GameEngine, initialize_game_state
 from app.werewolf.execution_budget import ActionExecutionBudgetV1
 from app.werewolf.live import GameRunCanceled, NullEventSink, strict_json_equal
 from app.werewolf.lm import ModelProvider
+from app.werewolf.models import GameState, RoundLog
 from app.werewolf.player_configs import PlayerConfig
 from app.werewolf.providers import create_model_provider, default_model_name
 from app.werewolf.replay import GameRecordStore, ReplayWriteFencedError
@@ -33,6 +36,7 @@ class RunGameResult:
     winner: str
     session_id: str
     p2_diagnostics: dict[str, object] = field(default_factory=dict)
+    terminal_keep_from_event_id: int | None = None
 
 
 class GameRunError(RuntimeError):
@@ -54,6 +58,7 @@ def run_game(
     event_sink: object | None = None,
     player_configs: list[PlayerConfig] | None = None,
 ) -> RunGameResult:
+    started_at = _utc_now()
     session_id = session_id or new_session_id()
     rule_set = compiled_rule_set.rule_set
     default_model = default_model_name()
@@ -120,8 +125,17 @@ def run_game(
         record_store.save_game(state, logs)
         raise GameRunError(str(exc), session_id) from exc
 
-    record_store.save_game(state, logs)
+    terminal_keep_from_event_id = (
+        engine.terminal_keep_from_event_id if engine is not None else None
+    )
+    _save_completed_game(
+        record_store,
+        state=state,
+        logs=logs,
+        terminal_keep_from_event_id=terminal_keep_from_event_id,
+    )
     record_store.clear_resume_checkpoint(session_id)
+    completed_at = _utc_now()
     return RunGameResult(
         winner=state.winner,
         session_id=session_id,
@@ -129,9 +143,10 @@ def run_game(
             logs=[log.to_dict() for log in logs],
             status="completed",
             diagnostic_events=[],
-            started_at=None,
-            completed_at=None,
+            started_at=started_at,
+            completed_at=completed_at,
         ),
+        terminal_keep_from_event_id=terminal_keep_from_event_id,
     )
 
 
@@ -143,6 +158,7 @@ def resume_game(
     event_sink: object | None = None,
     expected_compiled_rule_set: CompiledRuleSet | None = None,
 ) -> RunGameResult:
+    started_at = _utc_now()
     try:
         checkpoint = record_store.load_resume_checkpoint(session_id)
     except ResumeCheckpointError as exc:
@@ -175,13 +191,34 @@ def resume_game(
     raw_seed = run_params.get("seed")
     fallback_seed = raw_seed if type(raw_seed) is int else None
     try:
-        state = game_state_from_dict(checkpoint["state_at_round_start"])
+        terminal_settlement = terminal_settlement_from_checkpoint(checkpoint)
+        state_payload = (
+            terminal_settlement["state"]
+            if terminal_settlement is not None
+            else checkpoint["state_at_round_start"]
+        )
+        if not isinstance(state_payload, dict):
+            state_payload = dict(state_payload)
+        state = game_state_from_dict(state_payload)
+    except ResumeCheckpointError as exc:
+        report_resume_checkpoint_error(exc)
+        raise GameRunError("Resume checkpoint is invalid", session_id) from exc
     except (KeyError, TypeError, ValueError) as exc:
         raise GameRunError("Resume checkpoint is invalid", session_id) from exc
     state.rule_set = copy.deepcopy(compiled.snapshot)
     state.error_message = ""
-    logs_before_round = round_logs_from_dict(checkpoint.get("logs_before_round", []))
-    active_players = [str(player) for player in checkpoint.get("active_players", [])]
+    logs_payload = (
+        terminal_settlement.get("logs", [])
+        if terminal_settlement is not None
+        else checkpoint.get("logs_before_round", [])
+    )
+    logs_before_round = round_logs_from_dict(logs_payload)
+    active_payload = (
+        terminal_settlement.get("active_players", [])
+        if terminal_settlement is not None
+        else checkpoint.get("active_players", [])
+    )
+    active_players = [str(player) for player in active_payload]
     if not active_players:
         active_players = [player.name for player in state.players]
     replay_provider = ReplayThenLiveProvider(
@@ -194,6 +231,7 @@ def resume_game(
         compiled_rule_set=compiled,
         run_params=run_params,
         logs_prefix=logs_before_round,
+        initial_checkpoint=checkpoint,
     )
     rng = rng_from_json_state(checkpoint.get("rng_state"))
     logs_after_resume = []
@@ -216,6 +254,11 @@ def resume_game(
             execution_mode="resume",
             resume_from_round=int(checkpoint.get("round_number") or len(state.rounds) + 1),
         )
+        if terminal_settlement is not None:
+            engine.prepare_terminal_settlement_recovery(
+                terminal_settlement,
+                logs=logs_before_round,
+            )
         logs_after_resume = engine.run()
     except ReplayWriteFencedError:
         raise
@@ -233,8 +276,17 @@ def resume_game(
         raise GameRunError(str(exc), session_id) from exc
 
     logs = logs_before_round + logs_after_resume
-    record_store.save_game(state, logs)
+    terminal_keep_from_event_id = (
+        engine.terminal_keep_from_event_id if engine is not None else None
+    )
+    _save_completed_game(
+        record_store,
+        state=state,
+        logs=logs,
+        terminal_keep_from_event_id=terminal_keep_from_event_id,
+    )
     record_store.clear_resume_checkpoint(session_id)
+    completed_at = _utc_now()
     return RunGameResult(
         winner=state.winner,
         session_id=session_id,
@@ -242,9 +294,10 @@ def resume_game(
             logs=[log.to_dict() for log in logs],
             status="completed",
             diagnostic_events=[],
-            started_at=None,
-            completed_at=None,
+            started_at=started_at,
+            completed_at=completed_at,
         ),
+        terminal_keep_from_event_id=terminal_keep_from_event_id,
     )
 
 
@@ -259,6 +312,37 @@ def _compiled_rule_sets_match(
         and first.content_hash == second.content_hash
         and strict_json_equal(first.snapshot, second.snapshot)
     )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(tz=UTC)
+
+
+def _save_completed_game(
+    record_store: GameRecordStore,
+    *,
+    state: GameState,
+    logs: list[RoundLog],
+    terminal_keep_from_event_id: int | None,
+) -> None:
+    run_id = getattr(record_store, "run_id", None)
+    save_with_receipt = getattr(
+        record_store,
+        "save_game_with_live_completion",
+        None,
+    )
+    if isinstance(run_id, str) and run_id:
+        if terminal_keep_from_event_id is None:
+            raise RuntimeError("Live game completed without a terminal event boundary")
+        if callable(save_with_receipt):
+            save_with_receipt(
+                state,
+                logs,
+                run_id=run_id,
+                terminal_keep_from_event_id=terminal_keep_from_event_id,
+            )
+            return
+    record_store.save_game(state, logs)
 
 
 def _action_execution_budget() -> ActionExecutionBudgetV1:

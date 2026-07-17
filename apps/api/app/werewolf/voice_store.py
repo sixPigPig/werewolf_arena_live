@@ -65,6 +65,7 @@ class DatabaseVoiceStore:
                 audience=utterance.audience,
                 source_event_id=utterance.source_event_id,
                 last_source_event_id=last_source_event_id,
+                presentation_id=utterance.presentation_id,
                 request_id=utterance.request_id,
                 speaker_kind=utterance.speaker_kind,
                 speaker_name=utterance.speaker_name,
@@ -91,6 +92,8 @@ class DatabaseVoiceStore:
             )
             if record.status in TERMINAL_STATUSES:
                 return
+            if utterance.presentation_id is not None:
+                record.presentation_id = utterance.presentation_id
             record.last_source_event_id = max(
                 record.last_source_event_id,
                 last_source_event_id,
@@ -217,7 +220,10 @@ class DatabaseVoiceStore:
             return
         completed_at = datetime.now(tz=UTC)
         record.status = "complete"
-        record.duration_ms = duration_ms
+        record.duration_ms = max(
+            duration_ms,
+            _last_subtitle_end_ms(record.subtitle_timings),
+        )
         record.error_message = None
         record.completed_at = completed_at
         has_audio = (
@@ -292,7 +298,10 @@ class DatabaseVoiceStore:
         record = self.db.get(VoiceUtteranceRecord, utterance_id)
         if record is None:
             return None
-        return _utterance_record_to_dict(record)
+        return _utterance_record_to_dict(
+            record,
+            presentation_id=self._presentation_id_for_record(record),
+        )
 
     def load_chunks(self, utterance_id: str) -> list[bytes]:
         rows = (
@@ -332,7 +341,11 @@ class DatabaseVoiceStore:
         )
         if not chunks:
             return None
-        return _playback_voice_from_record(record, chunks=chunks)
+        return _playback_voice_from_record(
+            record,
+            chunks=chunks,
+            presentation_id=self._presentation_id_for_record(record),
+        )
 
     def list_playback_voices(
         self,
@@ -377,6 +390,7 @@ class DatabaseVoiceStore:
                     utterance,
                     audio_byte_length=int(audio_byte_length or 0),
                     include_chunks=False,
+                    presentation_id=self._presentation_id_for_record(utterance),
                 )
                 for utterance, audio_byte_length in rows
                 if utterance.action not in excluded_actions
@@ -415,6 +429,14 @@ class DatabaseVoiceStore:
                     "audience": utterance.audience,
                     "source_event_id": utterance.source_event_id,
                     "last_source_event_id": utterance.last_source_event_id,
+                    **(
+                        {"presentation_id": presentation_id}
+                        if (
+                            presentation_id
+                            := self._presentation_id_for_record(utterance)
+                        )
+                        else {}
+                    ),
                     "speaker_kind": utterance.speaker_kind,
                     "speaker_name": utterance.speaker_name,
                     "mime_type": utterance.mime_type,
@@ -503,7 +525,25 @@ class DatabaseVoiceStore:
         )
         if record is None:
             return None
-        return _utterance_record_to_dict(record)
+        return _utterance_record_to_dict(
+            record,
+            presentation_id=self._presentation_id_for_record(record),
+        )
+
+    def _presentation_id_for_record(
+        self,
+        record: VoiceUtteranceRecord,
+    ) -> str | None:
+        if record.presentation_id:
+            return record.presentation_id
+        source_event = self.db.get(
+            LiveEventRecord,
+            (record.run_id, record.source_event_id),
+        )
+        if source_event is None or not isinstance(source_event.payload, dict):
+            return record.presentation_id
+        value = source_event.payload.get("presentation_id")
+        return value if isinstance(value, str) and value else None
 
     def _commit(self) -> None:
         try:
@@ -535,7 +575,11 @@ class DatabaseVoiceStore:
             )
 
 
-def _utterance_record_to_dict(record: VoiceUtteranceRecord) -> dict[str, Any]:
+def _utterance_record_to_dict(
+    record: VoiceUtteranceRecord,
+    *,
+    presentation_id: str | None = None,
+) -> dict[str, Any]:
     return {
         "utterance_id": record.utterance_id,
         "run_id": record.run_id,
@@ -543,6 +587,11 @@ def _utterance_record_to_dict(record: VoiceUtteranceRecord) -> dict[str, Any]:
         "audience": record.audience,
         "source_event_id": record.source_event_id,
         "last_source_event_id": record.last_source_event_id,
+        **(
+            {"presentation_id": presentation_id or record.presentation_id}
+            if presentation_id or record.presentation_id
+            else {}
+        ),
         "request_id": record.request_id,
         "speaker_kind": record.speaker_kind,
         "speaker_name": record.speaker_name,
@@ -569,6 +618,7 @@ def _playback_voice_from_record(
     chunks: list[VoiceAudioChunkRecord] | None = None,
     audio_byte_length: int | None = None,
     include_chunks: bool = True,
+    presentation_id: str | None = None,
 ) -> dict[str, Any]:
     resolved_chunks = chunks or []
     resolved_audio_byte_length = (
@@ -582,6 +632,11 @@ def _playback_voice_from_record(
         "audience": record.audience,
         "source_event_id": record.source_event_id,
         "last_source_event_id": record.last_source_event_id,
+        **(
+            {"presentation_id": presentation_id or record.presentation_id}
+            if presentation_id or record.presentation_id
+            else {}
+        ),
         "speaker_kind": record.speaker_kind,
         "speaker_name": record.speaker_name,
         "mime_type": record.mime_type,
@@ -611,6 +666,21 @@ def _last_source_event_id(utterance: VoiceUtterance) -> int:
     if utterance.last_source_event_id is None:
         return utterance.source_event_id
     return max(utterance.source_event_id, utterance.last_source_event_id)
+
+
+def _last_subtitle_end_ms(value: object) -> int:
+    if not isinstance(value, list):
+        return 0
+    return max(
+        (
+            end_ms
+            for cue in value
+            if isinstance(cue, dict)
+            and isinstance((end_ms := cue.get("end_ms")), int)
+            and not isinstance(end_ms, bool)
+        ),
+        default=0,
+    )
 
 
 def _stream_claim_owner(utterance_id: str) -> str:
@@ -745,6 +815,11 @@ def _raise_for_incompatible_upsert(
         ("sample_rate", record.sample_rate, sample_rate),
         ("mime_type", record.mime_type, mime_type),
     )
+    if record.presentation_id is not None:
+        comparisons = (
+            *comparisons,
+            ("presentation_id", record.presentation_id, utterance.presentation_id),
+        )
     mismatches = [name for name, existing, incoming in comparisons if existing != incoming]
     if mismatches:
         fields = ", ".join(mismatches)

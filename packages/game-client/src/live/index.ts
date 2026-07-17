@@ -7,6 +7,7 @@ export * from "./liveNavStatus";
 export * from "./livePlaybackVoice";
 export * from "./livePcmPlayer";
 export * from "./livePhaseBar";
+export * from "./livePresentation";
 export * from "./liveSpectator";
 export * from "./liveVoiceStream";
 export * from "./liveVoiceSubtitleClock";

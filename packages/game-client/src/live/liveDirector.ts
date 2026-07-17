@@ -10,6 +10,8 @@ export type DirectorCueImportance = "normal" | "action" | "key" | "terminal";
 export type DirectorCue = {
   eventId: number;
   latestEventId: number;
+  presentationId?: string;
+  presentationOccurrenceKey?: string;
   type: string;
   round: number | null;
   phase: string | null;
@@ -34,6 +36,8 @@ export type UseLiveDirectorResult = {
   isPaused: boolean;
   speed: LiveDirectorSpeed;
   effectiveDurationMs: number;
+  terminalKeepFromEventId: number | null;
+  terminalEventId: number | null;
   pause: () => void;
   resume: () => void;
   togglePaused: () => void;
@@ -47,6 +51,7 @@ export type UseLiveDirectorResult = {
 type UseLiveDirectorOptions = {
   holdAdvance?: boolean;
   resetKey?: string;
+  sessionKey?: string;
   startAtEventType?: string;
   startAtLatestEventType?: string;
   startAtLatestTerminal?: boolean;
@@ -56,6 +61,11 @@ type StreamedSpeechSignature = {
   actor: string | null;
   action: string | null;
   text: string;
+};
+
+export type TerminalPlaybackWindow = {
+  keepFromEventId: number;
+  terminalEventId: number;
 };
 
 type SheriffRunBatch = {
@@ -289,7 +299,67 @@ export function useLiveDirector(
   events: LiveGameEvent[],
   options: UseLiveDirectorOptions = {},
 ): UseLiveDirectorResult {
-  const cues = useMemo(() => buildDirectorCues(events), [events]);
+  const usesExplicitSessionKey = Object.prototype.hasOwnProperty.call(
+    options,
+    "sessionKey",
+  );
+  const presentationScopeKey = usesExplicitSessionKey
+    ? options.sessionKey
+    : options.resetKey;
+  const presentedPresentationOccurrencesRef = useRef<Map<string, string>>(
+    new Map(),
+  );
+  const [presentationRevision, setPresentationRevision] = useState(0);
+  const presentationScopeKeyRef = useRef(presentationScopeKey);
+  const builtCues = useMemo(() => buildDirectorCues(events), [events]);
+  const allCues = useMemo(() => {
+    if (
+      presentationScopeKey !== undefined &&
+      presentationScopeKeyRef.current !== undefined &&
+      presentationScopeKeyRef.current !== presentationScopeKey
+    ) {
+      return builtCues;
+    }
+
+    return builtCues.filter((cue) => {
+      if (!cue.presentationId) {
+        return true;
+      }
+      const presentedOccurrence =
+        presentedPresentationOccurrencesRef.current.get(cue.presentationId);
+      return (
+        !presentedOccurrence ||
+        presentedOccurrence === cue.presentationOccurrenceKey
+      );
+    });
+  }, [builtCues, presentationRevision, presentationScopeKey]);
+  useEffect(() => {
+    if (presentationScopeKey === undefined) {
+      return;
+    }
+    if (
+      presentationScopeKeyRef.current !== undefined &&
+      presentationScopeKeyRef.current !== presentationScopeKey
+    ) {
+      presentedPresentationOccurrencesRef.current.clear();
+    }
+    presentationScopeKeyRef.current = presentationScopeKey;
+  }, [presentationScopeKey]);
+  const terminalPlaybackWindow = useMemo(
+    () => terminalPlaybackWindowForEvents(events),
+    [events],
+  );
+  const cues = useMemo(
+    () =>
+      terminalPlaybackWindow
+        ? allCues.filter(
+            (cue) =>
+              cue.latestEventId >= terminalPlaybackWindow.keepFromEventId &&
+              cue.eventId <= terminalPlaybackWindow.terminalEventId,
+          )
+        : allCues,
+    [allCues, terminalPlaybackWindow],
+  );
   const latestTerminalCue = useMemo(
     () =>
       [...cues]
@@ -347,6 +417,7 @@ export function useLiveDirector(
     latestRequestedStartCue?.eventId ?? firstRequestedStartCue?.eventId ?? null,
   );
   const lastVoiceCompletionIdRef = useRef<string | null>(null);
+  const appliedTerminalPreemptionEventIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (
@@ -397,6 +468,52 @@ export function useLiveDirector(
     );
   }, [latestRequestedStartCue, options.startAtLatestEventType]);
 
+  useEffect(() => {
+    if (
+      !terminalPlaybackWindow ||
+      appliedTerminalPreemptionEventIdRef.current ===
+        terminalPlaybackWindow.terminalEventId
+    ) {
+      return;
+    }
+    appliedTerminalPreemptionEventIdRef.current =
+      terminalPlaybackWindow.terminalEventId;
+
+    const currentCue =
+      currentCueId === null
+        ? null
+        : cues.find((cue) => cue.eventId === currentCueId) ?? null;
+    const currentCueIntersectsWindow =
+      currentCue !== null &&
+      currentCue.latestEventId >= terminalPlaybackWindow.keepFromEventId &&
+      currentCue.eventId <= terminalPlaybackWindow.terminalEventId;
+    if (
+      currentCueIntersectsWindow ||
+      (currentCue !== null &&
+        currentCue.eventId > terminalPlaybackWindow.terminalEventId)
+    ) {
+      return;
+    }
+
+    const firstKeptCue =
+      cues.find(
+        (cue) =>
+          cue.latestEventId >= terminalPlaybackWindow.keepFromEventId &&
+          cue.eventId <= terminalPlaybackWindow.terminalEventId,
+      ) ??
+      cues.find(
+        (cue) => cue.eventId === terminalPlaybackWindow.terminalEventId,
+      );
+    if (!firstKeptCue) {
+      return;
+    }
+
+    startedAtRef.current = Date.now();
+    pausedAtRef.current = isPaused ? startedAtRef.current : null;
+    setVoiceCompletedCueId(null);
+    setCurrentCueId(firstKeptCue.eventId);
+  }, [cues, currentCueId, isPaused, terminalPlaybackWindow]);
+
   const currentIndex = useMemo(() => {
     if (cues.length === 0) {
       return -1;
@@ -444,6 +561,7 @@ export function useLiveDirector(
     terminalStartRequestedAtResetRef.current =
       options.startAtLatestTerminal === true;
     autoStartedTerminalEventIdRef.current = null;
+    appliedTerminalPreemptionEventIdRef.current = null;
     autoStartedEventTypeIdRef.current = null;
     setCurrentCueId(null);
     setIsPaused(false);
@@ -452,6 +570,23 @@ export function useLiveDirector(
     setVoiceCompletedCueId(null);
     lastVoiceCompletionIdRef.current = null;
   }, [options.resetKey, options.startAtLatestTerminal]);
+
+  useEffect(() => {
+    if (
+      !currentCue?.presentationId ||
+      !currentCue.presentationOccurrenceKey ||
+      presentedPresentationOccurrencesRef.current.has(
+        currentCue.presentationId,
+      )
+    ) {
+      return;
+    }
+    presentedPresentationOccurrencesRef.current.set(
+      currentCue.presentationId,
+      currentCue.presentationOccurrenceKey,
+    );
+    setPresentationRevision((current) => current + 1);
+  }, [currentCue]);
 
   const moveToIndex = useCallback(
     (nextIndex: number) => {
@@ -609,7 +744,7 @@ export function useLiveDirector(
   }, [cues, currentIndex, moveToIndex]);
 
   return {
-    cues,
+    cues: allCues,
     currentCue,
     currentEventId: resolvedCurrentEventId,
     cursorVersion,
@@ -618,6 +753,9 @@ export function useLiveDirector(
     isPaused,
     speed,
     effectiveDurationMs,
+    terminalKeepFromEventId:
+      terminalPlaybackWindow?.keepFromEventId ?? null,
+    terminalEventId: terminalPlaybackWindow?.terminalEventId ?? null,
     pause,
     resume,
     togglePaused,
@@ -626,6 +764,48 @@ export function useLiveDirector(
     seekToEventId,
     catchUpToLatest,
     completeVoicePlayback,
+  };
+}
+
+export function terminalPlaybackWindowForEvents(
+  events: LiveGameEvent[],
+): TerminalPlaybackWindow | null {
+  const terminalEvent = [...events]
+    .reverse()
+    .find((event) => event.type === "game_completed");
+  if (!terminalEvent) {
+    return null;
+  }
+
+  const sourceKeepFromEventId = numberField(
+    payloadForEvent(terminalEvent),
+    "terminal_keep_from_event_id",
+  );
+  const terminalSourceEventId =
+    terminalEvent.source_event_id ?? terminalEvent.id;
+  if (
+    sourceKeepFromEventId === null ||
+    !Number.isInteger(sourceKeepFromEventId) ||
+    sourceKeepFromEventId < 1 ||
+    sourceKeepFromEventId > terminalSourceEventId
+  ) {
+    return null;
+  }
+
+  const terminalSourceRunId =
+    terminalEvent.source_run_id ?? terminalEvent.run_id;
+  const keepFromEvent = events.find(
+    (event) =>
+      (event.source_run_id ?? event.run_id) === terminalSourceRunId &&
+      (event.source_event_id ?? event.id) === sourceKeepFromEventId,
+  );
+  if (!keepFromEvent || keepFromEvent.id > terminalEvent.id) {
+    return null;
+  }
+
+  return {
+    keepFromEventId: keepFromEvent.id,
+    terminalEventId: terminalEvent.id,
   };
 }
 
@@ -977,9 +1157,19 @@ function normalizeSpeechText(text: string): string {
 }
 
 function cueBase(event: LiveGameEvent): DirectorCue {
+  const presentationId = stringField(
+    payloadForEvent(event),
+    "presentation_id",
+  );
   return {
     eventId: event.id,
     latestEventId: event.id,
+    ...(presentationId
+      ? {
+          presentationId,
+          presentationOccurrenceKey: `${event.source_run_id ?? event.run_id}:${event.source_event_id ?? event.id}`,
+        }
+      : {}),
     type: event.type,
     round: event.round,
     phase: event.phase,
@@ -999,6 +1189,31 @@ function stateUpdatedCue(
   payload: Record<string, unknown>,
   base: DirectorCue,
 ): DirectorCue {
+  if (event.action === "hunter_shot_resolved") {
+    const status = stringField(payload, "hunter_shot_status");
+    const target = stringField(payload, "hunter_shot");
+    if (status === "shot" && target) {
+      return {
+        ...base,
+        title: "猎人开枪结算",
+        body: `${target} 被猎人带走出局。\n${activePlayersBody(payload)}`,
+        importance: "key",
+        durationMs: 6000,
+        compressible: false,
+      };
+    }
+    if (status === "skipped") {
+      return {
+        ...base,
+        title: "猎人技能结算",
+        body: "猎人选择不发动技能。",
+        importance: "key",
+        durationMs: 4500,
+        compressible: false,
+      };
+    }
+  }
+
   const debateEntry = payload.debate_entry;
   if (isRecord(debateEntry) && typeof debateEntry.speaker === "string") {
     const message =

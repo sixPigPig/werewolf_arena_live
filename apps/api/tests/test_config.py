@@ -199,6 +199,8 @@ def test_settings_disable_admin_development_auth_by_default() -> None:
     assert settings.legacy_player_profile_content_writes_enabled is False
     assert settings.legacy_player_profile_favorite_writes_enabled is False
     assert settings.legacy_judge_voice_generation_enabled is False
+    assert settings.werewolf_speech_quality_retry_enabled is True
+    assert settings.werewolf_action_budgets_enabled is True
 
 
 def test_settings_reject_legacy_player_profile_content_writes_in_production(

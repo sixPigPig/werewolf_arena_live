@@ -7,6 +7,7 @@ from typing import Any
 
 from app.werewolf.live import LiveEvent
 from app.werewolf.privacy_projection import ProjectionAudience, project_live_event
+from app.werewolf.public_facts import public_fact_dicts_from_value
 from app.werewolf.checkpoint import (
     sheriff_badge_resolution_from_dict,
     sheriff_election_resolution_from_dict,
@@ -369,7 +370,7 @@ def build_public_game_session(session: dict[str, Any]) -> dict[str, Any]:
         "error_message": (
             "对局异常中断。" if raw_state.get("error_message") and not terminal_reveal else ""
         ),
-        "public_facts": copy.deepcopy(raw_state.get("public_facts") or []),
+        "public_facts": public_fact_dicts_from_value(raw_state.get("public_facts")),
         "rule_set": copy.deepcopy(raw_state.get("rule_set")),
         "sheriff": raw_state.get("sheriff"),
         "sheriff_badge_lost": bool(raw_state.get("sheriff_badge_lost")),
@@ -463,6 +464,10 @@ def _public_game_round(round_state: dict[str, Any]) -> dict[str, Any]:
         for key, value in round_state.items()
         if key in allowed
     }
+    if "public_facts" in projected:
+        projected["public_facts"] = public_fact_dicts_from_value(
+            round_state.get("public_facts")
+        )
     for field_name in ("night_deaths", "day_deaths"):
         deaths = projected.get(field_name)
         if isinstance(deaths, list):

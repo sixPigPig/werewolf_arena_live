@@ -197,6 +197,61 @@ describe("LiveReplayPage", () => {
     );
   });
 
+  it("shows a recovered hunter no-shot presentation only once in replay", async () => {
+    const user = userEvent.setup();
+    const presentationId =
+      "settlement:session-1:2:day:阿青:hunter:阿青:presentation";
+    const payload = {
+      presentation_id: presentationId,
+      hunter_shot_status: "skipped",
+      hunter_shot: null,
+      day_deaths: [
+        { player: "阿青", cause: "vote_exile", source: null },
+      ],
+      active_players: ["白石", "南风", "木子"],
+    };
+    const parentResult: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 10,
+      run_id: "run-parent",
+      round: 2,
+      phase: "day",
+      actor: "阿青",
+      action: "hunter_shot_resolved",
+      type: "state_updated",
+      payload,
+    };
+    const childResult: LiveGameEvent = {
+      ...parentResult,
+      id: 12,
+      run_id: "run-child",
+    };
+    const resumedEvent: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 11,
+      run_id: "run-child",
+      round: 2,
+      phase: "day",
+      type: "game_resumed",
+      payload: {},
+    };
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({
+        events: [gameStartedEvent, parentResult, resumedEvent, childResult],
+      }),
+    );
+
+    renderLiveReplayRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const eventRail = screen.getByRole("log");
+    expect(
+      within(eventRail).getAllByText("猎人选择不发动技能"),
+    ).toHaveLength(1);
+    expect(eventRail.querySelectorAll('[data-event-id="12"]')).toHaveLength(1);
+    expect(eventRail.querySelector('[data-event-id="10"]')).toBeNull();
+  });
+
   it("hides future speaker delta while playback is paused", async () => {
     const user = userEvent.setup();
 

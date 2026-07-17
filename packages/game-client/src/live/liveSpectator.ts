@@ -1,4 +1,5 @@
 import type { LiveGameEvent } from "../types";
+import { projectLivePresentationEvents } from "./livePresentation";
 
 export type LivePlayerStatus =
   | "waiting"
@@ -58,7 +59,7 @@ export function deriveLiveSpectatorState(
     latestStateEvent: null,
   };
 
-  for (const event of events) {
+  for (const event of projectLivePresentationEvents(events)) {
     if (event.round !== null) {
       state.currentRound = event.round;
     }

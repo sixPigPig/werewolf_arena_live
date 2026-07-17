@@ -1260,23 +1260,83 @@ class LiveRunRegistry:
         *,
         winner: str,
         p2_diagnostics: dict[str, Any] | None = None,
+        terminal_keep_from_event_id: int | None = None,
     ) -> LiveEvent:
         with self._lock:
             run = self._runs[run_id]
+            existing_completion = next(
+                (event for event in reversed(run.events) if event.type == "game_completed"),
+                None,
+            )
+            if existing_completion is not None:
+                existing_payload = existing_completion.payload
+                if existing_payload.get("winner") != winner:
+                    raise ValueError("game_completed winner cannot change")
+                existing_keep = existing_payload.get("terminal_keep_from_event_id")
+                if (
+                    terminal_keep_from_event_id is not None
+                    and existing_keep != terminal_keep_from_event_id
+                ):
+                    raise ValueError("game_completed terminal boundary cannot change")
+                run.status = "completed"
+                run.winner = winner
+                if p2_diagnostics is not None:
+                    run.p2_diagnostics = _copy_json_payload(p2_diagnostics)
+                run.completed_at = run.completed_at or existing_completion.created_at
+                run.lease_expires_at = None
+                run.recovery_last_error = None
+                self._persist_run_locked(run, raise_on_error=True)
+                return existing_completion
+            if terminal_keep_from_event_id is not None:
+                _require_exact_int(terminal_keep_from_event_id)
+                if not 1 <= terminal_keep_from_event_id <= run.next_event_id:
+                    raise ValueError(
+                        "terminal_keep_from_event_id must identify an event no later "
+                        "than game_completed"
+                    )
+            previous_terminal_state = (
+                run.status,
+                run.winner,
+                _copy_json_payload(run.p2_diagnostics),
+                run.completed_at,
+                run.lease_expires_at,
+                run.recovery_last_error,
+            )
             run.status = "completed"
             run.winner = winner
-            run.p2_diagnostics = _copy_json_payload(p2_diagnostics or {})
+            if p2_diagnostics is not None:
+                run.p2_diagnostics = _copy_json_payload(p2_diagnostics)
             run.completed_at = utc_now()
             run.lease_expires_at = None
             run.recovery_last_error = None
-            self._persist_run_locked(run)
-            if run.status != "completed":
-                return self._publish_terminal_state_locked(run)
-            return self._publish_locked(
-                run,
-                "game_completed",
-                payload={"winner": winner},
-            )
+            try:
+                completion = self._publish_locked(
+                    run,
+                    "game_completed",
+                    payload={
+                        "winner": winner,
+                        **(
+                            {
+                                "terminal_keep_from_event_id": terminal_keep_from_event_id,
+                            }
+                            if terminal_keep_from_event_id is not None
+                            else {}
+                        ),
+                    },
+                    raise_on_persist_error=True,
+                )
+            except Exception:
+                (
+                    run.status,
+                    run.winner,
+                    run.p2_diagnostics,
+                    run.completed_at,
+                    run.lease_expires_at,
+                    run.recovery_last_error,
+                ) = previous_terminal_state
+                raise
+            self._persist_run_locked(run, raise_on_error=True)
+            return completion
 
     def mark_failed(self, run_id: str, *, error: str) -> LiveEvent:
         with self._lock:
@@ -1669,6 +1729,7 @@ class LiveRunRegistry:
         actor: str | None = None,
         action: str | None = None,
         payload: dict[str, Any] | None = None,
+        raise_on_persist_error: bool = False,
     ) -> LiveEvent:
         event = LiveEvent(
             id=run.next_event_id,
@@ -1684,7 +1745,17 @@ class LiveRunRegistry:
         )
         run.next_event_id += 1
         run.events.append(event)
-        self._persist_event_locked(run, event)
+        try:
+            self._persist_event_locked(
+                run,
+                event,
+                raise_on_error=raise_on_persist_error,
+            )
+        except Exception:
+            if run.events and run.events[-1] is event:
+                run.events.pop()
+                run.next_event_id -= 1
+            raise
         for subscriber in run.subscribers:
             subscriber.put(event)
         return event

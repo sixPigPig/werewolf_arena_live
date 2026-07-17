@@ -97,6 +97,37 @@ COMMON_GAME_ANCHORS = {
     "警下发言",
     "出局玩家",
 }
+PUBLIC_SPEECH_CHARACTER_LIMITS: dict[str, int] = {
+    "sheriff_speech": 180,
+    "debate": 220,
+    "sheriff_pk_speech": 180,
+    "exile_pk_speech": 180,
+    "exile_last_words": 150,
+    "werewolf_discuss": 60,
+    "werewolf_kill_vote": 60,
+}
+_ROLE_TERM_RE = re.compile(r"查杀|金水|好人|狼人|狼")
+_ROLE_TERM_AFTER_SEAT_RE = re.compile(
+    rf"{_SEAT_REFERENCE}"
+    r"(?:这张牌)?(?:也|又|仍然|还是|同时|更)?"
+    r"(?:是|为|像|偏像|更像|我认|我认为)?"
+    r"(查杀|金水|好人|狼人|狼)"
+)
+_ROLE_TERM_BEFORE_SEAT_RE = re.compile(
+    rf"(查杀|金水)(?:牌|结果)?(?:是|给|发给|了)?{_SEAT_REFERENCE}"
+)
+_REPORTED_ROLE_CLAIM_RE = re.compile(
+    rf"(?:据|听)?{_SEAT_REFERENCE}[^，。！？；;,.!?\n]{{0,8}}?"
+    r"(?:说|表示|认为|觉得|声称|宣称|判断|认定|提到|强调|坚持|发言称|的结论|的观点)"
+)
+_REPORTED_ROLE_PRONOUN_RE = re.compile(
+    r"(?:他|她|对方|有人|前置位|后置位)(?:说|表示|认为|觉得|声称|宣称|判断|认定|提到)"
+)
+_ROLE_ASSERTION_SEGMENT_SPLIT_RE = re.compile(
+    r"[，。！？；;,.!?\n]+|(?=但(?:是)?|不过|然而|而我|可我)"
+)
+_SENTENCE_ENDINGS = frozenset("。！？!?；;")
+_SAFE_SPEECH_FALLBACK = "本轮暂不追加判断。"
 
 
 @dataclass(frozen=True)
@@ -388,8 +419,103 @@ def evaluate_speech_quality(
     )
 
 
+def contradictory_role_targets(text: str) -> set[str]:
+    """Return public seat numbers assigned both good and wolf-aligned labels."""
+
+    labels_by_target: dict[str, set[str]] = {}
+
+    def add_label(target: str, term: str) -> None:
+        label = "good" if term in {"金水", "好人"} else "wolf"
+        labels_by_target.setdefault(str(int(target)), set()).add(label)
+
+    for segment in _ROLE_ASSERTION_SEGMENT_SPLIT_RE.split(text):
+        clause = segment.strip()
+        if not clause or _is_reported_role_claim(clause):
+            continue
+        for match in _ROLE_TERM_AFTER_SEAT_RE.finditer(clause):
+            add_label(match.group(1), match.group(2))
+        for match in _ROLE_TERM_BEFORE_SEAT_RE.finditer(clause):
+            add_label(match.group(2), match.group(1))
+
+        targets = {
+            str(int(match.group(1)))
+            for match in re.finditer(_SEAT_REFERENCE, clause)
+        }
+        if len(targets) != 1:
+            continue
+        target = next(iter(targets))
+        for term in _ROLE_TERM_RE.findall(clause):
+            add_label(target, term)
+
+    return {
+        target
+        for target, labels in labels_by_target.items()
+        if labels == {"good", "wolf"}
+    }
+
+
+def _is_reported_role_claim(clause: str) -> bool:
+    return bool(
+        _REPORTED_ROLE_CLAIM_RE.search(clause)
+        or _REPORTED_ROLE_PRONOUN_RE.search(clause)
+    )
+
+
+def speech_character_limit(action: str) -> int | None:
+    return PUBLIC_SPEECH_CHARACTER_LIMITS.get(action)
+
+
+def speech_length_violation(action: str, text: str) -> str | None:
+    limit = speech_character_limit(action)
+    if limit is None or _speech_character_count(text) <= limit:
+        return None
+    return "speech_too_long"
+
+
+def truncate_speech_to_complete_sentence(
+    text: str,
+    *,
+    max_chars: int,
+    fallback: str = _SAFE_SPEECH_FALLBACK,
+) -> str:
+    normalized = text.strip()
+    if max_chars <= 0:
+        return ""
+    if _speech_character_count(normalized) <= max_chars:
+        return normalized
+
+    prefix = _prefix_with_character_budget(normalized, max_chars)
+    boundary = max(
+        (index for index, character in enumerate(prefix) if character in _SENTENCE_ENDINGS),
+        default=-1,
+    )
+    if boundary >= 0:
+        return prefix[: boundary + 1].strip()
+
+    safe_fallback = fallback.strip() or _SAFE_SPEECH_FALLBACK
+    if _speech_character_count(safe_fallback) <= max_chars:
+        return safe_fallback
+    return _prefix_with_character_budget(_SAFE_SPEECH_FALLBACK, max_chars).strip()
+
+
 def normalize_dialogue_text(text: str) -> str:
     return PUNCTUATION_RE.sub("", text.strip())
+
+
+def _speech_character_count(text: str) -> int:
+    return len(re.sub(r"\s+", "", text))
+
+
+def _prefix_with_character_budget(text: str, max_chars: int) -> str:
+    accepted: list[str] = []
+    used = 0
+    for character in text:
+        if not character.isspace():
+            if used >= max_chars:
+                break
+            used += 1
+        accepted.append(character)
+    return "".join(accepted)
 
 
 def catchphrases_from_personality(personality: str) -> list[str]:

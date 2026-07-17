@@ -63,8 +63,8 @@ class Settings(BaseSettings):
     legacy_player_profile_favorite_writes_enabled: bool = False
     legacy_judge_voice_generation_enabled: bool = False
     werewolf_lineup_quality_mode: Literal["observe", "repair", "enforce"] = "repair"
-    werewolf_speech_quality_retry_enabled: bool = False
-    werewolf_action_budgets_enabled: bool = False
+    werewolf_speech_quality_retry_enabled: bool = True
+    werewolf_action_budgets_enabled: bool = True
     werewolf_required_action_request_seconds: float = Field(default=12.0, ge=0.1, le=300)
     werewolf_required_action_total_seconds: float = Field(default=15.0, ge=0.1, le=300)
     werewolf_required_action_batch_seconds: float = Field(default=15.0, ge=0.1, le=300)

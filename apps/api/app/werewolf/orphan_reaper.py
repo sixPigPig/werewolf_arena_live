@@ -157,21 +157,51 @@ def _claim_and_recover(
             outcome="canceled",
         )
 
+    completion_receipt: dict[str, object] | None = None
     with session_factory() as db:
-        try:
-            checkpoint = DatabaseReplayStore(db).load_resume_checkpoint(run.session_id)
-            compiled = resolved_rule_set_from_checkpoint(checkpoint)
-        except (ReplayNotFoundError, ResumeCheckpointError):
-            registry.mark_failed_durably(
-                run.run_id,
-                error="Orphaned live run has no valid resume checkpoint",
-            )
-            return OrphanRecoveryResult(
-                run_id=run.run_id,
-                session_id=run.session_id,
-                attempt=attempt,
-                outcome="failed",
-            )
+        replay_store = DatabaseReplayStore(db)
+        completion_receipt = replay_store.load_live_completion_receipt(
+            run.session_id,
+            run_id=run.run_id,
+        )
+        if completion_receipt is not None:
+            checkpoint = None
+            compiled = None
+        else:
+            try:
+                checkpoint = replay_store.load_resume_checkpoint(run.session_id)
+                compiled = resolved_rule_set_from_checkpoint(checkpoint)
+            except (ReplayNotFoundError, ResumeCheckpointError):
+                registry.mark_failed_durably(
+                    run.run_id,
+                    error="Orphaned live run has no valid resume checkpoint",
+                )
+                return OrphanRecoveryResult(
+                    run_id=run.run_id,
+                    session_id=run.session_id,
+                    attempt=attempt,
+                    outcome="failed",
+                )
+
+    if completion_receipt is not None:
+        winner = completion_receipt["winner"]
+        terminal_keep = completion_receipt["terminal_keep_from_event_id"]
+        if not isinstance(winner, str) or type(terminal_keep) is not int:
+            raise RuntimeError("Live completion receipt validation drifted")
+        registry.mark_completed(
+            run.run_id,
+            winner=winner,
+            terminal_keep_from_event_id=terminal_keep,
+        )
+        return OrphanRecoveryResult(
+            run_id=run.run_id,
+            session_id=run.session_id,
+            attempt=attempt,
+            outcome="resumed",
+        )
+
+    if compiled is None:
+        raise RuntimeError("Resume checkpoint validation drifted")
 
     if not live_run_matches_compiled_rule_set(run, compiled):
         registry.mark_failed_durably(

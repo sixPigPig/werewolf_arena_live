@@ -1,6 +1,97 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+from app.werewolf.public_facts import public_fact_from_dict
+
+
+logger = logging.getLogger(__name__)
+
+DEATH_CAUSE_PROMPT_LABELS = {
+    "vote_exile": "被白天投票放逐",
+    "werewolf_attack": "被狼人夜间袭击",
+    "witch_poison": "被女巫使用毒药",
+    "hunter_shot": "被猎人开枪带走",
+    "werewolf_self_explosion": "因狼人自爆出局",
+}
+ACTION_PROMPT_LABELS = {
+    "debate": "白天公开发言",
+    "vote": "白天放逐投票",
+    "sheriff_run": "警长竞选报名",
+    "sheriff_speech": "警上竞选发言",
+    "sheriff_withdraw": "警长竞选退水",
+    "sheriff_vote": "警长投票",
+    "sheriff_pk_speech": "警长竞选 PK 发言",
+    "sheriff_runoff_vote": "二轮警长投票",
+    "exile_pk_speech": "白天放逐 PK 发言",
+    "exile_runoff_vote": "白天放逐二轮投票",
+    "exile_last_words": "驱逐遗言",
+    "speech_order": "警长决定发言方向",
+    "sheriff_badge": "警徽处理",
+    "werewolf_self_explosion": "狼人自爆判断",
+    "hunter_shoot": "猎人死亡技能结算",
+}
+PHASE_PROMPT_LABELS = {
+    "night": "夜晚",
+    "day": "白天",
+    "sheriff_election": "警长竞选",
+    "last_words": "驱逐遗言",
+    "game_over": "对局已经结束",
+}
+STATUS_PROMPT_LABELS = {
+    "pending": "待处理",
+    "completed": "已完成",
+    "canceled": "已取消",
+    "failed": "失败",
+}
+REASON_PROMPT_LABELS = {
+    **DEATH_CAUSE_PROMPT_LABELS,
+    "terminal_committed": "对局胜方已经确定",
+    "terminal_candidate_non_settlement_action": "当前动作不是允许继续的强制结算",
+    "stale_action_after_terminal": "这是终局后失效的旧动作",
+}
+SELF_EXPLOSION_BENEFIT_TYPE_PROMPT_LABELS = {
+    "immediate_win": "立即取得对局胜利",
+    "secure_badge_denial": "确保对方无法获得或保留警徽收益",
+    "protect_last_hidden_wolf": "保护最后一名仍隐藏身份的狼人",
+    "deny_confirmed_public_information": "阻止好人获得即将公开的确定信息",
+    "force_valuable_night": "强制进入对狼人有明确价值的夜晚",
+    "none": "没有足以支持自爆的明确收益",
+}
+SPEECH_MISSION_PROMPT_CONTENT = {
+    "fact_checker": (
+        "公开事实核验",
+        "纠正或确认一条已经公开发生的事实，并说明它如何影响当前判断。",
+    ),
+    "vote_analyst": (
+        "票型分析",
+        "解释一处已有票型、警徽或站边变化，并给出你的票口。",
+    ),
+    "contradiction_hunter": (
+        "矛盾追问",
+        "指出一名玩家前后表述中的具体矛盾或需要回答的问题。",
+    ),
+    "devil_advocate": (
+        "反方审视",
+        "对当前多数结论提出最强反例或尚未排除的风险。",
+    ),
+    "risk_controller": (
+        "风险控制",
+        "说明判断失败的成本、轮次资源或终局风险，并给出稳妥方案。",
+    ),
+    "consolidator": (
+        "信息归纳",
+        "合并已有公开信息，形成一个明确且下一步可验证的结论。",
+    ),
+}
+SELF_EXPLOSION_BADGE_IMPACT_PROMPT_LABELS = {
+    "none": "不影响警徽",
+    "owner_must_transfer_or_destroy": "自爆者持有警徽，出局后必须移交或撕毁",
+    "badge_will_be_lost": "本次自爆将导致警徽流失",
+    "election_postponed": "本次警长竞选被中断并顺延，警徽暂不产生",
+    "election_interrupted": "本次警长竞选被中断",
+}
 
 DEFAULT_GAME_RULES = """你正在进行一局数字版狼人杀。
 
@@ -286,9 +377,51 @@ def _render_hard_state(world_state: dict[str, Any]) -> str:
     if hard_state.get("actor_alive") is False:
         lines.append("你已经出局，不在当前存活玩家名单中。")
     if hard_state.get("death_cause"):
-        lines.append(f"你的出局原因：{hard_state['death_cause']}。")
+        death_cause = _prompt_state_label(
+            hard_state["death_cause"],
+            field="death_cause",
+            labels=DEATH_CAUSE_PROMPT_LABELS,
+            fallback="因未识别的规则原因出局",
+        )
+        lines.append(f"你的出局原因：{death_cause}。")
     if hard_state.get("current_action"):
-        lines.append(f"当前唯一合法阶段：{hard_state['current_action']}。")
+        current_action = _prompt_state_label(
+            hard_state["current_action"],
+            field="current_action",
+            labels=ACTION_PROMPT_LABELS,
+            fallback="未识别的规则阶段",
+        )
+        lines.append(f"当前唯一合法阶段：{current_action}。")
+    if hard_state.get("phase"):
+        phase = _prompt_state_label(
+            hard_state["phase"],
+            field="phase",
+            labels=PHASE_PROMPT_LABELS,
+            fallback="未识别的规则阶段",
+        )
+        lines.append(f"当前流程阶段：{phase}。")
+    if hard_state.get("status"):
+        status = _prompt_state_label(
+            hard_state["status"],
+            field="status",
+            labels=STATUS_PROMPT_LABELS,
+            fallback="未识别的流程状态",
+        )
+        lines.append(f"当前流程状态：{status}。")
+    if hard_state.get("reason"):
+        reason = _prompt_state_label(
+            hard_state["reason"],
+            field="reason",
+            labels=REASON_PROMPT_LABELS,
+            fallback="未识别的规则原因",
+        )
+        lines.append(f"当前规则原因：{reason}。")
+    if hard_state.get("hunter_death_trigger_active") is True:
+        lines.append("引擎已经合法触发本次猎人死亡技能，你只能在本次结算中决定是否开枪。")
+    elif hard_state.get("hunter_death_trigger_active") is False:
+        lines.append("当前没有猎人死亡技能触发；猎人存活状态下不能主动开枪。")
+    if hard_state.get("terminal_after_current_action") is True:
+        lines.append("当前动作结算后对局会立即结束，不存在下一轮或下一夜。")
     if not lines:
         return ""
     return "引擎硬状态（不可否认或改写）：\n" + "\n".join(f"- {line}" for line in lines)
@@ -297,8 +430,73 @@ def _render_hard_state(world_state: dict[str, Any]) -> str:
 def _render_public_facts(world_state: dict[str, Any]) -> str:
     facts = world_state.get("public_facts") or []
     if not facts:
-        return "公开事实记录：暂无。"
-    return "公开事实记录：\n" + "\n".join(f"- {fact}" for fact in facts)
+        return "公开信息：暂无。"
+
+    grouped: dict[str, list[str]] = {
+        "engine_fact": [],
+        "player_claim": [],
+        "legacy_unclassified": [],
+    }
+    for fact in facts:
+        if isinstance(fact, str):
+            text = fact.strip()
+            trust_class = "legacy_unclassified"
+        elif isinstance(fact, dict):
+            public_fact = public_fact_from_dict(fact)
+            text = public_fact.text.strip()
+            trust_class = public_fact.effective_trust_class
+            if not text and fact.get("text"):
+                logger.warning("unsafe_public_fact_rejected_from_prompt")
+        else:
+            continue
+        if not text:
+            continue
+        grouped[trust_class].append(text)
+
+    sections: list[str] = []
+    headings = {
+        "engine_fact": "引擎确认事实",
+        "player_claim": "玩家声明（可能撒谎）",
+        "legacy_unclassified": "未分类公开记录（非引擎确认）",
+    }
+    for trust_class in ("engine_fact", "player_claim", "legacy_unclassified"):
+        entries = grouped[trust_class]
+        if entries:
+            sections.append(
+                f"{headings[trust_class]}：\n"
+                + "\n".join(f"- {entry}" for entry in entries)
+            )
+    return "\n\n".join(sections) if sections else "公开信息：暂无。"
+
+
+def _prompt_state_label(
+    value: object,
+    *,
+    field: str,
+    labels: dict[str, str],
+    fallback: str,
+) -> str:
+    normalized = str(value or "").strip()
+    if normalized in labels:
+        return labels[normalized]
+    if not _is_explicit_chinese_plaintext(normalized):
+        logger.warning("unknown_prompt_state_code field=%s", field)
+        return fallback
+    return normalized or fallback
+
+
+def _is_explicit_chinese_plaintext(value: str) -> bool:
+    """Allow custom human labels, while failing closed on machine-like values."""
+
+    has_chinese = any(
+        "\u3400" <= character <= "\u4dbf"
+        or "\u4e00" <= character <= "\u9fff"
+        for character in value
+    )
+    has_ascii_letters = any(
+        character.isascii() and character.isalpha() for character in value
+    )
+    return has_chinese and not has_ascii_letters
 
 
 def _render_public_self_history(world_state: dict[str, Any]) -> str:
@@ -392,10 +590,18 @@ def _render_speech_mission(world_state: dict[str, Any]) -> str:
     if not isinstance(mission, dict):
         return ""
     kind = str(mission.get("kind") or "").strip()
-    instruction = str(mission.get("instruction") or "").strip()
-    if not kind or not instruction:
+    content = SPEECH_MISSION_PROMPT_CONTENT.get(kind)
+    if content is None:
+        if kind:
+            logger.warning("unknown_prompt_state_code field=speech_mission_kind")
+        return (
+            "本次发言质量任务（未识别的发言任务）：\n"
+            "- 请仅依据已经公开的信息给出清晰、可核验的判断。"
+        )
+    label, instruction = content
+    if not instruction:
         return ""
-    return f"本次发言质量任务（{kind}）：\n- {instruction}"
+    return f"本次发言质量任务（{label}）：\n- {instruction}"
 
 
 def _render_quality_feedback(world_state: dict[str, Any]) -> str:
@@ -440,7 +646,8 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "行动：白天公开发言。\n"
             "如果你是狼人，要误导局势、转移怀疑、保护队友；如果你是好人，要寻找矛盾、提出怀疑并推动团队协作。\n"
             "发言必须引用至少一条公开事实、票型或前置位发言，不要只复述别人结论。\n"
-            "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
+            "发言必须是中文，简洁、有策略、像真实玩家，不超过 220 个汉字。"
+            "输出字段 reasoning 和 say。"
         )
     if action == "vote":
         return (
@@ -473,7 +680,8 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "你已经上警，需要公开说明竞选警长的理由、当前判断，以及如果当选将如何使用警长权限，"
             "包括发言方向、归票和警徽移交原则。\n"
             f"{role_guidance}\n"
-            "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
+            "发言必须是中文，简洁、有策略、像真实玩家，不超过 180 个汉字。"
+            "输出字段 reasoning 和 say。"
         )
     if action == "sheriff_withdraw":
         return (
@@ -495,7 +703,8 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
         return (
             "行动：警长竞选 PK 发言。\n"
             "首轮警下投票出现最高票平票，你作为 PK 候选需要再次发言争取警下二轮票。\n"
-            "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
+            "发言必须是中文，简洁、有策略、像真实玩家，不超过 180 个汉字。"
+            "输出字段 reasoning 和 say。"
         )
     if action == "sheriff_runoff_vote":
         return (
@@ -508,7 +717,8 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
         return (
             "行动：白天放逐 PK 发言。\n"
             "首轮放逐投票出现最高票平票，你是 PK 候选，需要根据公开发言和首轮票型再次发言。\n"
-            "发言必须是中文，简洁、有策略、像真实玩家。输出字段 reasoning 和 say。"
+            "发言必须是中文，简洁、有策略、像真实玩家，不超过 180 个汉字。"
+            "输出字段 reasoning 和 say。"
         )
     if action == "exile_runoff_vote":
         return (
@@ -554,7 +764,13 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
         active_players = int(decision_context.get("active_players_before") or 0)
         completed_speakers = int(decision_context.get("completed_public_speakers") or 0)
         pending_speakers = int(decision_context.get("pending_public_speakers") or 0)
-        badge_impact = str(decision_context.get("badge_impact") or "none")
+        raw_badge_impact = str(decision_context.get("badge_impact") or "none").strip()
+        badge_impact = SELF_EXPLOSION_BADGE_IMPACT_PROMPT_LABELS.get(raw_badge_impact)
+        if badge_impact is None:
+            logger.warning(
+                "unknown_prompt_state_code field=self_explosion_badge_impact"
+            )
+            badge_impact = "未识别警徽影响，按没有额外警徽收益处理"
         explosion_would_end_game = (
             decision_context.get("explosion_would_end_game") is True
         )
@@ -605,7 +821,7 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
         chain_guidance = "正常比较公开身份代价与阵营收益。"
         if consecutive_explosions == 1:
             chain_guidance = (
-                "上一轮已经发生自爆；本次必须给出具体 benefit_type 和 primary_risk，"
+                "上一轮已经发生自爆；本次必须明确说明收益类型和主要风险，"
                 "不能只写泛化的阻止好人获取信息。"
             )
         elif consecutive_explosions >= 2:
@@ -623,6 +839,10 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "按当前人数和屠边条件，自爆会立即结算对局；必须明确胜负方向。"
             if explosion_would_end_game
             else ""
+        )
+        benefit_type_legend = "；".join(
+            f"{value}={label}"
+            for value, label in SELF_EXPLOSION_BENEFIT_TYPE_PROMPT_LABELS.items()
         )
         return (
             "行动：狼人自爆判断。\n"
@@ -645,6 +865,7 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "收益不明确时选择不自爆，保留白天发言空间。"
             "请以狼人阵营收益判断，输出字段 reasoning、self_explode、benefit_type、"
             "expected_gain 和 primary_risk。"
+            f"benefit_type 取值说明：{benefit_type_legend}。"
         )
     if action == "investigate":
         return (
@@ -676,7 +897,7 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
                 f"最高票平票候选人：{options}。\n"
                 "法官已临时要求你行使本夜归票权。你只能从这些平票候选人中"
                 "确认一个最终刀口，不能改刀其他玩家。"
-                "message 用一句简短中文说明最终归票理由。"
+                "message 用一句不超过 60 个汉字的简短中文说明最终归票理由。"
                 "输出字段 reasoning、target 和 message。"
             )
         return (
@@ -686,7 +907,7 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             "所有存活狼人会同时提交这一次最终票，不会继续进行第三轮投票。"
             "你可以坚持或修改第一轮建议；唯一最高票目标会成为刀口，最高票平票时"
             "法官才会临时触发隐藏归票机制。你不知道谁会获得归票权。"
-            "message 用一句简短中文向队友说明坚持或改刀。"
+            "message 用一句不超过 60 个汉字的简短中文向队友说明坚持或改刀。"
             "输出字段 reasoning、target 和 message。"
         )
     if action == "remove":

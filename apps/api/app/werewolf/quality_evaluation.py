@@ -642,17 +642,25 @@ def _content_metrics(
     }
 
 
-def _iter_action_logs(value: object) -> list[dict[str, Any]]:
+def _iter_action_logs(
+    value: object,
+    _seen_action_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    seen_action_ids = _seen_action_ids if _seen_action_ids is not None else set()
     found: list[dict[str, Any]] = []
     if isinstance(value, dict):
         if isinstance(value.get("action"), str) and isinstance(value.get("lm_log"), dict):
-            found.append(value)
+            action_id = value["lm_log"].get("action_id")
+            if not isinstance(action_id, str) or not action_id or action_id not in seen_action_ids:
+                if isinstance(action_id, str) and action_id:
+                    seen_action_ids.add(action_id)
+                found.append(value)
         else:
             for nested in value.values():
-                found.extend(_iter_action_logs(nested))
+                found.extend(_iter_action_logs(nested, seen_action_ids))
     elif isinstance(value, list):
         for nested in value:
-            found.extend(_iter_action_logs(nested))
+            found.extend(_iter_action_logs(nested, seen_action_ids))
     return found
 
 
