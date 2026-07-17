@@ -24,7 +24,6 @@ from app.werewolf.voice import (
     build_voice_messages,
     chunk_text_for_tts,
     event_to_voice_utterance,
-    is_god_view_private_speech_event,
     is_public_complete_speech_event,
     is_public_speech_event,
     voice_job_candidate,
@@ -42,7 +41,7 @@ logger = logging.getLogger(__name__)
 TERMINAL_EVENT_TYPES = {"game_completed", "game_failed", "game_canceled"}
 TERMINAL_RUN_STATUSES = {"completed", "failed", "canceled"}
 IDLE_POLL_SECONDS = 0.1
-REQUEST_DELTA_COALESCE_SECONDS = 0.16
+REQUEST_DELTA_COALESCE_SECONDS = 0.5
 PLAYBACK_ACK_TIMEOUT_SECONDS = 60.0
 TERMINAL_UNAVAILABLE_MESSAGE = "语音只支持进行中的实时对局；该对局已结束或异常中断。"
 
@@ -58,6 +57,17 @@ class TtsClient(Protocol):
 
 
 class VoiceStore(Protocol):
+    def claim_streamed_utterance(self, utterance: VoiceUtterance) -> bool:
+        pass
+
+    def release_streamed_utterance(
+        self,
+        utterance: VoiceUtterance,
+        *,
+        error_type: str,
+    ) -> None:
+        pass
+
     def upsert_utterance(
         self,
         utterance: VoiceUtterance,
@@ -91,6 +101,7 @@ class VoiceStore(Protocol):
         *,
         run_id: str,
         current_event_id: int,
+        audience: ProjectionAudience = "player_public",
     ) -> dict[str, Any] | None:
         pass
 
@@ -182,11 +193,6 @@ class LiveVoiceStreamService:
             return
 
         voice_store = self.voice_store_factory(run.session_id) if self.voice_store_factory else None
-        persistence_store = (
-            voice_store
-            if self.persist_streamed_voices and audience == "player_public"
-            else None
-        )
         playback_acks: PlaybackAckQueue | None = asyncio.Queue() if playback_ack_required else None
         disconnect_task = asyncio.create_task(_watch_websocket_control(websocket, playback_acks))
         subscriber: queue.Queue[LiveEvent] | None = None
@@ -197,9 +203,10 @@ class LiveVoiceStreamService:
         try:
             recent_replay = await _replay_recent_utterance(
                 websocket,
-                voice_store if audience == "player_public" else None,
+                voice_store,
                 run_id=run_id,
                 current_event_id=current_event_id,
+                audience=audience,
                 disconnect_task=disconnect_task,
                 playback_acks=playback_acks,
             )
@@ -247,11 +254,18 @@ class LiveVoiceStreamService:
                     previous_night_deaths=voice_context.previous_night_deaths,
                     peaceful_night=voice_context.peaceful_night,
                 )
-                if utterance is not None and is_god_view_private_speech_event(event):
-                    utterance = replace(
-                        utterance,
-                        audience="spectator_god_view",
+                if utterance is not None and audience == "spectator_god_view":
+                    public_event = project_live_event(canonical_event, "player_public")
+                    public_speaker_kind = (
+                        voice_job_candidate(public_event)
+                        if public_event is not None
+                        else None
                     )
+                    if public_speaker_kind != utterance.speaker_kind:
+                        utterance = replace(
+                            utterance,
+                            audience="spectator_god_view",
+                        )
                 if (
                     utterance is not None
                     and utterance.request_id in streamed_delta_request_ids
@@ -274,6 +288,10 @@ class LiveVoiceStreamService:
                         streamed_delta_request_ids.add(utterance.request_id)
                     if disconnect_task.done():
                         return
+                    persistence_store = _claim_voice_persistence_store(
+                        voice_store if self.persist_streamed_voices else None,
+                        utterance,
+                    )
                     chunks = chunk_text_for_tts(utterance.text)
                     static_asset = self._static_asset_for_utterance(utterance)
                     if static_asset is not None:
@@ -1070,6 +1088,7 @@ async def _replay_recent_utterance(
     *,
     run_id: str,
     current_event_id: int | None,
+    audience: ProjectionAudience = "player_public",
     disconnect_task: asyncio.Task[None],
     playback_acks: PlaybackAckQueue | None,
 ) -> RecentUtteranceReplayResult:
@@ -1080,6 +1099,7 @@ async def _replay_recent_utterance(
         utterance = voice_store.find_recent_utterance(
             run_id=run_id,
             current_event_id=current_event_id,
+            audience=audience,
         )
     except Exception:
         logger.warning(
@@ -1293,7 +1313,60 @@ def _persist_voice_operation(
                 "persistence_operation": persistence_operation,
             },
         )
+        _release_voice_persistence_claim(
+            voice_store,
+            utterance,
+            error_type=f"{persistence_operation}_failed",
+        )
         return False
+
+
+def _claim_voice_persistence_store(
+    voice_store: VoiceStore | None,
+    utterance: VoiceUtterance,
+) -> VoiceStore | None:
+    if voice_store is None:
+        return None
+    try:
+        return voice_store if voice_store.claim_streamed_utterance(utterance) else None
+    except Exception:
+        logger.warning(
+            "Voice persistence claim failed",
+            exc_info=True,
+            extra={
+                "run_id": utterance.run_id,
+                "source_event_id": utterance.source_event_id,
+                "utterance_id": utterance.utterance_id,
+                "speaker_kind": utterance.speaker_kind,
+                "audience": utterance.audience,
+            },
+        )
+        return None
+
+
+def _release_voice_persistence_claim(
+    voice_store: VoiceStore,
+    utterance: VoiceUtterance,
+    *,
+    error_type: str,
+) -> None:
+    try:
+        voice_store.release_streamed_utterance(
+            utterance,
+            error_type=error_type,
+        )
+    except Exception:
+        logger.warning(
+            "Voice persistence claim release failed",
+            exc_info=True,
+            extra={
+                "run_id": utterance.run_id,
+                "source_event_id": utterance.source_event_id,
+                "utterance_id": utterance.utterance_id,
+                "speaker_kind": utterance.speaker_kind,
+                "audience": utterance.audience,
+            },
+        )
 
 
 def _mark_voice_stream_interrupted(
@@ -1310,6 +1383,12 @@ def _mark_voice_stream_interrupted(
             message=message,
         ),
     )
+    if voice_store is not None:
+        _release_voice_persistence_claim(
+            voice_store,
+            utterance,
+            error_type="live_stream_interrupted",
+        )
 
 
 def _mark_voice_stream_disconnected_if_needed(
@@ -1422,6 +1501,10 @@ async def _coalesce_request_deltas(
             continue
         event = projected_event
 
+        if _is_same_request_progress_event(utterance, event):
+            last_source_event_id = max(last_source_event_id, event.id)
+            continue
+
         next_utterance = event_to_voice_utterance(
             event,
             speaker_config,
@@ -1463,6 +1546,17 @@ def _is_same_request_utterance(
         and next_utterance.speaker_kind == utterance.speaker_kind
         and next_utterance.speaker_name == utterance.speaker_name
         and next_utterance.action == utterance.action
+    )
+
+
+def _is_same_request_progress_event(
+    utterance: VoiceUtterance,
+    event: LiveEvent,
+) -> bool:
+    return (
+        event.type == "model_response_received"
+        and event.payload.get("request_id") == utterance.request_id
+        and event.action == utterance.action
     )
 
 

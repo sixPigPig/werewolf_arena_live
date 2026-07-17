@@ -3,10 +3,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -101,6 +101,82 @@ class DatabaseVoiceStore:
                 record.status = status
         self._commit()
 
+    def claim_streamed_utterance(
+        self,
+        utterance: VoiceUtterance,
+        *,
+        lease_seconds: float,
+    ) -> bool:
+        now = datetime.now(tz=UTC)
+        last_source_event_id = _last_source_event_id(utterance)
+        job = self.db.scalar(
+            select(VoiceMaterializationJobRecord)
+            .where(
+                VoiceMaterializationJobRecord.run_id == utterance.run_id,
+                VoiceMaterializationJobRecord.session_id == self.session_id,
+                VoiceMaterializationJobRecord.audience == utterance.audience,
+                VoiceMaterializationJobRecord.speaker_kind == utterance.speaker_kind,
+                VoiceMaterializationJobRecord.source_event_id >= utterance.source_event_id,
+                VoiceMaterializationJobRecord.source_event_id <= last_source_event_id,
+                or_(
+                    and_(
+                        VoiceMaterializationJobRecord.status == "pending",
+                        VoiceMaterializationJobRecord.not_before <= now,
+                    ),
+                    and_(
+                        VoiceMaterializationJobRecord.status == "processing",
+                        VoiceMaterializationJobRecord.lease_expires_at.is_not(None),
+                        VoiceMaterializationJobRecord.lease_expires_at <= now,
+                    ),
+                ),
+            )
+            .order_by(VoiceMaterializationJobRecord.source_event_id.desc())
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if job is None:
+            self.db.rollback()
+            return False
+        job.status = "processing"
+        job.worker_id = _stream_claim_owner(utterance.utterance_id)
+        job.lease_expires_at = now + timedelta(seconds=lease_seconds)
+        job.last_error = None
+        job.completed_at = None
+        self._commit()
+        return True
+
+    def release_streamed_utterance(
+        self,
+        utterance: VoiceUtterance,
+        *,
+        error_type: str,
+    ) -> None:
+        now = datetime.now(tz=UTC)
+        self.db.query(VoiceMaterializationJobRecord).filter(
+            VoiceMaterializationJobRecord.run_id == utterance.run_id,
+            VoiceMaterializationJobRecord.session_id == self.session_id,
+            VoiceMaterializationJobRecord.audience == utterance.audience,
+            VoiceMaterializationJobRecord.speaker_kind == utterance.speaker_kind,
+            VoiceMaterializationJobRecord.source_event_id >= utterance.source_event_id,
+            VoiceMaterializationJobRecord.source_event_id
+            <= _last_source_event_id(utterance),
+            VoiceMaterializationJobRecord.status == "processing",
+            VoiceMaterializationJobRecord.worker_id
+            == _stream_claim_owner(utterance.utterance_id),
+        ).update(
+            {
+                VoiceMaterializationJobRecord.status: "pending",
+                VoiceMaterializationJobRecord.worker_id: None,
+                VoiceMaterializationJobRecord.lease_expires_at: None,
+                VoiceMaterializationJobRecord.last_error: error_type[:120],
+                VoiceMaterializationJobRecord.not_before: now,
+                VoiceMaterializationJobRecord.completed_at: None,
+                VoiceMaterializationJobRecord.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+        self._commit()
+
     def append_chunk(self, utterance_id: str, *, chunk_index: int, audio: bytes) -> None:
         existing = self.db.get(VoiceAudioChunkRecord, (utterance_id, chunk_index))
         if existing is not None:
@@ -158,10 +234,19 @@ class DatabaseVoiceStore:
                 VoiceMaterializationJobRecord.speaker_kind == record.speaker_kind,
                 VoiceMaterializationJobRecord.source_event_id >= record.source_event_id,
                 VoiceMaterializationJobRecord.source_event_id <= record.last_source_event_id,
-                VoiceMaterializationJobRecord.status == "pending",
+                or_(
+                    VoiceMaterializationJobRecord.status == "pending",
+                    and_(
+                        VoiceMaterializationJobRecord.status == "processing",
+                        VoiceMaterializationJobRecord.worker_id
+                        == _stream_claim_owner(utterance_id),
+                    ),
+                ),
             ).update(
                 {
                     VoiceMaterializationJobRecord.status: "complete",
+                    VoiceMaterializationJobRecord.worker_id: None,
+                    VoiceMaterializationJobRecord.lease_expires_at: None,
                     VoiceMaterializationJobRecord.last_error: None,
                     VoiceMaterializationJobRecord.completed_at: completed_at,
                     VoiceMaterializationJobRecord.updated_at: completed_at,
@@ -526,6 +611,10 @@ def _last_source_event_id(utterance: VoiceUtterance) -> int:
     if utterance.last_source_event_id is None:
         return utterance.source_event_id
     return max(utterance.source_event_id, utterance.last_source_event_id)
+
+
+def _stream_claim_owner(utterance_id: str) -> str:
+    return f"live-stream:{utterance_id}"[:64]
 
 
 def _as_utc(value: datetime) -> datetime:

@@ -238,6 +238,53 @@ def test_god_view_wolf_chat_job_materializes_scoped_voice(
         assert utterance.text == "今晚建议刀3号。"
 
 
+def test_god_view_only_judge_job_materializes_scoped_voice(
+    session_factory: sessionmaker[Session],
+) -> None:
+    key = seed_event(
+        session_factory,
+        event_type="judge_cue",
+        phase="night",
+        action="werewolf_tiebreak_result",
+        payload={
+            "cue_id": "werewolf_tiebreak_result",
+            "visible_text": "2号玩家最终归票3号玩家，狼人请确认刀口。",
+            "static_asset_id": None,
+        },
+    )
+    materializer = VoiceMaterializer(
+        session_factory,
+        config=tts_config(),
+        client_factory=lambda _config: SuccessfulTtsClient(),
+    )
+
+    claimed = materializer.claim_next_job(worker_id="worker-god-view-judge")
+
+    assert claimed == key
+    assert asyncio.run(
+        materializer.process_claimed_job(
+            claimed,
+            worker_id="worker-god-view-judge",
+        )
+    ) is True
+
+    utterance_id = deterministic_voice_utterance_id(
+        key[0],
+        key[1],
+        "judge",
+        audience="spectator_god_view",
+    )
+    with session_factory() as db:
+        job = db.get(VoiceMaterializationJobRecord, key)
+        utterance = db.get(VoiceUtteranceRecord, utterance_id)
+        assert job is not None and job.status == "complete"
+        assert job.audience == "spectator_god_view"
+        assert utterance is not None and utterance.status == "complete"
+        assert utterance.audience == "spectator_god_view"
+        assert utterance.speaker_kind == "judge"
+        assert utterance.action == "werewolf_tiebreak_result"
+
+
 def test_dynamic_player_job_reuses_equivalent_live_audio(
     session_factory: sessionmaker[Session],
 ) -> None:

@@ -3211,6 +3211,38 @@ def test_live_store_creates_god_view_only_private_voice_job(db_session: Session)
     assert db_session.get(GodViewLiveEventRecord, (run.run_id, event.id)) is not None
 
 
+def test_live_store_creates_god_view_only_judge_voice_job(db_session: Session) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_private_judge_voice_job",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    event = registry.publish(
+        run.run_id,
+        "judge_cue",
+        phase="night",
+        action="werewolf_tiebreak_start",
+        payload={
+            "cue_id": "werewolf_tiebreak_start",
+            "visible_text": "狼队刀口出现平票，请确认最终刀口。",
+            "static_asset_id": None,
+        },
+    )
+    store = DatabaseLiveStore(db_session)
+
+    store.save_run(run)
+    store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
+
+    job = db_session.query(VoiceMaterializationJobRecord).one()
+    assert job.audience == "spectator_god_view"
+    assert job.speaker_kind == "judge"
+    assert db_session.get(PublicLiveEventRecord, (run.run_id, event.id)) is None
+    assert db_session.get(GodViewLiveEventRecord, (run.run_id, event.id)) is not None
+
+
 def test_live_store_events_after_filters_by_event_id(db_session: Session) -> None:
     registry = LiveRunRegistry()
     run = registry.create_run(

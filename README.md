@@ -82,8 +82,11 @@ cd apps/api
 make api
 ```
 
-`make api` 会先执行 `alembic upgrade head`，同时启动历史语音物化 worker，并注入仅用于本地 HTTP
-联调的开发认证与 Cookie 配置。如果手动启动，需先自行完成迁移、另启语音物化 worker，并提供等价环境变量：
+`make api` 会先执行 `alembic upgrade head`，同时启动并持续监督历史语音物化 worker；worker
+异常退出后会自动重启。语音物化 worker 未就绪时，API 会拒绝新开或续接对局，避免产生没有复播语音的对局。
+开发态进程的启动、信号转发和退出清理由 `scripts/run-api-dev.sh` 统一管理。该命令还会注入仅用于
+本地 HTTP 联调的开发认证与 Cookie 配置。如果手动启动，需先自行完成迁移、另启语音物化 worker，
+并提供等价环境变量：
 
 ```bash
 cd apps/api

@@ -60,6 +60,11 @@ def context(monkeypatch: pytest.MonkeyPatch) -> Generator[AdminLiveRunsContext, 
     monkeypatch.setattr(settings, "admin_session_cookie_name", "runs_admin_session")
     monkeypatch.setattr(settings, "admin_session_cookie_secure", False)
     monkeypatch.setattr(settings, "admin_session_ttl_seconds", 3600)
+    monkeypatch.setattr(
+        live_run_routes,
+        "live_voice_materializer_is_available",
+        lambda _db: True,
+    )
 
     engine = create_engine(
         "sqlite+pysqlite://",
@@ -510,6 +515,40 @@ def test_resume_live_run_requires_persistent_resumable_state_and_returns_new_run
         audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.live_run.resume"))
         assert audit is not None
         assert audit.after["run_id"] == payload["run_id"]
+
+
+def test_resume_live_run_rejects_when_voice_persistence_is_unavailable(
+    context: AdminLiveRunsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login = _login(context, monkeypatch, role="operator")
+    _seed_run(
+        context,
+        run_id="run_000000000092",
+        session_id="game_00000092",
+        created_at=datetime(2026, 7, 11, 15, tzinfo=UTC),
+        status="failed",
+        game_status="partial",
+        resumable=True,
+        winner=None,
+    )
+    monkeypatch.setattr(
+        live_run_routes,
+        "live_voice_materializer_is_available",
+        lambda _db: False,
+    )
+
+    response = context.client.post(
+        "/api/v1/admin/live-runs/run_000000000092/resume",
+        json={"reason": "语音保存服务恢复后再续局"},
+        headers={
+            "X-CSRF-Token": login["csrf_token"],
+            "Idempotency-Key": "resume-voice-unavailable-001",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "admin_live_voice_materializer_unavailable"
 
 
 def test_resume_live_run_allows_a_stale_active_checkpoint_takeover(

@@ -261,6 +261,8 @@ class FailingThenRecordingTtsClient:
 
 class RecordingVoiceStore:
     def __init__(self) -> None:
+        self.claimed: list[VoiceUtterance] = []
+        self.released: list[dict] = []
         self.utterances: list[dict] = []
         self.chunks: list[dict] = []
         self.completed: list[dict] = []
@@ -269,6 +271,18 @@ class RecordingVoiceStore:
         self.recent_utterance: dict | None = None
         self.replay_chunks: list[bytes] = []
         self.find_recent_calls: list[dict] = []
+
+    def claim_streamed_utterance(self, utterance: VoiceUtterance) -> bool:
+        self.claimed.append(utterance)
+        return True
+
+    def release_streamed_utterance(
+        self,
+        utterance: VoiceUtterance,
+        *,
+        error_type: str,
+    ) -> None:
+        self.released.append({"utterance": utterance, "error_type": error_type})
 
     def upsert_utterance(
         self,
@@ -319,8 +333,15 @@ class RecordingVoiceStore:
         *,
         run_id: str,
         current_event_id: int,
+        audience: str = "player_public",
     ) -> dict | None:
-        self.find_recent_calls.append({"run_id": run_id, "current_event_id": current_event_id})
+        self.find_recent_calls.append(
+            {
+                "run_id": run_id,
+                "current_event_id": current_event_id,
+                "audience": audience,
+            }
+        )
         return self.recent_utterance
 
     def load_chunks(self, utterance_id: str) -> list[bytes]:
@@ -493,6 +514,7 @@ def test_get_voice_streamer_persists_audio_generated_for_live_playback(
         session_id=session_id,
         session_factory=session_factory,
     )
+    final_event_ids: list[int] = []
 
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
@@ -508,6 +530,16 @@ def test_get_voice_streamer_persists_audio_generated_for_live_playback(
                 "is_public": True,
             },
         )
+        registry.publish(
+            run.run_id,
+            "model_response_received",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-live-persist",
+                "message": "模型返回已接收，正在解析行动",
+            },
+        )
         final_event = registry.publish(
             run.run_id,
             "action_parsed",
@@ -518,6 +550,7 @@ def test_get_voice_streamer_persists_audio_generated_for_live_playback(
                 "visible_result": {"say": "这段现场语音需要保存。"},
             },
         )
+        final_event_ids.append(final_event.id)
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
         with session_factory() as db:
@@ -531,11 +564,153 @@ def test_get_voice_streamer_persists_audio_generated_for_live_playback(
 
     with session_factory() as db:
         voices = DatabaseVoiceStore(db, session_id=run.session_id).list_playback_voices()
-    player_voice = next(voice for voice in voices if voice["speaker_kind"] == "player")
+    player_voices = [voice for voice in voices if voice["speaker_kind"] == "player"]
+    assert len(player_voices) == 1
+    player_voice = player_voices[0]
+    assert player_voice["last_source_event_id"] == final_event_ids[0]
     assert [chunk["data"] for chunk in player_voice["chunks"]] == [
         "Zmlyc3Q=",
         "c2Vjb25k",
     ]
+
+
+def test_get_voice_streamer_persists_private_audio_and_subtitles_from_god_view(
+    db_session: Session,
+) -> None:
+    SubtitleTtsClient.instances.clear()
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(live_store=SessionLiveStore(session_factory))
+    run = create_run(registry)
+    registry.publish(
+        run.run_id,
+        "game_started",
+        payload={
+            "players": [
+                {"name": "阿青", "role": "werewolf", "model": "test-model"},
+                {"name": "白石", "role": "villager", "model": "test-model"},
+            ]
+        },
+    )
+    websocket = FakeWebSocket()
+    service = get_voice_streamer(registry, BASE_TTS_CONFIG)
+    service.client_factory = SubtitleTtsClient
+    service.voice_store_factory = lambda session_id: SessionVoiceStore(
+        session_id=session_id,
+        session_factory=session_factory,
+    )
+
+    async def stream_private_event() -> None:
+        task = asyncio.create_task(
+            service.stream_run(
+                run.run_id,
+                websocket,
+                audience="spectator_god_view",
+            )
+        )
+        await wait_for_subscription(registry, run.run_id)
+        private_event = registry.publish(
+            run.run_id,
+            "action_parsed",
+            actor="阿青",
+            action="werewolf_discuss",
+            phase="night",
+            payload={
+                "visible_result": {
+                    "message": "我先发言。",
+                    "decision_stage": "proposal",
+                }
+            },
+        )
+        await wait_for_messages(websocket, 4)
+        private_judge_event = registry.publish(
+            run.run_id,
+            "judge_cue",
+            phase="night",
+            action="werewolf_tiebreak_result",
+            payload={
+                "cue_id": "werewolf_tiebreak_result",
+                "visible_text": "我先发言。",
+                "static_asset_id": None,
+            },
+        )
+        await wait_for_messages(websocket, 8)
+        websocket.disconnect()
+        await asyncio.wait_for(task, timeout=1)
+        with session_factory() as db:
+            for event_id, speaker_kind in (
+                (private_event.id, "player"),
+                (private_judge_event.id, "judge"),
+            ):
+                job = db.get(
+                    VoiceMaterializationJobRecord,
+                    (run.run_id, event_id, speaker_kind),
+                )
+                assert job is not None and job.status == "complete"
+
+    asyncio.run(stream_private_event())
+
+    with session_factory() as db:
+        voices = DatabaseVoiceStore(db, session_id=run.session_id).list_playback_voices(
+            allowed_audiences=frozenset({"spectator_god_view"})
+        )
+    assert len(voices) == 2
+    assert {voice["speaker_kind"] for voice in voices} == {"player", "judge"}
+    assert all(voice["audience"] == "spectator_god_view" for voice in voices)
+    assert all(
+        voice["subtitle_timings"]
+        == [
+            {"text": "我", "start_ms": 0, "end_ms": 180},
+            {"text": "先发言。", "start_ms": 180, "end_ms": 820},
+        ]
+        for voice in voices
+    )
+    assert all([chunk["data"] for chunk in voice["chunks"]] == ["YWJj"] for voice in voices)
+
+
+def test_live_stream_claim_is_single_writer_and_released_after_failure(
+    db_session: Session,
+) -> None:
+    session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+    )
+    registry = LiveRunRegistry(live_store=SessionLiveStore(session_factory))
+    run = create_run(registry)
+    private_event = registry.publish(
+        run.run_id,
+        "action_parsed",
+        actor="阿青",
+        action="werewolf_discuss",
+        phase="night",
+        payload={"visible_result": {"message": "今晚先刀白石。"}},
+    )
+    utterance = VoiceUtterance(
+        utterance_id="voice-live-private",
+        run_id=run.run_id,
+        source_event_id=private_event.id,
+        request_id=None,
+        speaker_kind="player",
+        speaker_name="1号玩家",
+        speaker="player",
+        text="今晚先刀白石。",
+        action="werewolf_discuss",
+        audience="spectator_god_view",
+    )
+    first = SessionVoiceStore(session_id=run.session_id, session_factory=session_factory)
+    second = SessionVoiceStore(session_id=run.session_id, session_factory=session_factory)
+
+    assert first.claim_streamed_utterance(utterance) is True
+    assert second.claim_streamed_utterance(replace(utterance, utterance_id="voice-second")) is False
+
+    first.release_streamed_utterance(utterance, error_type="test_failure")
+
+    replacement = replace(utterance, utterance_id="voice-replacement")
+    assert second.claim_streamed_utterance(replacement) is True
 
 
 def override_streamer(streamer: FakeVoiceStreamer) -> None:
@@ -748,8 +923,10 @@ def test_voice_stream_service_streams_public_voice_events_and_unsubscribes(tmp_p
     assert websocket.messages[4]["chunk_index"] == 0
 
 
-def test_voice_stream_service_streams_private_wolf_chat_to_god_view(tmp_path) -> None:
-    RecordingTtsClient.instances.clear()
+def test_voice_stream_service_streams_and_persists_private_wolf_chat_to_god_view(
+    tmp_path,
+) -> None:
+    SubtitleTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
     registry.publish(
@@ -763,10 +940,12 @@ def test_voice_stream_service_streams_private_wolf_chat_to_god_view(tmp_path) ->
         },
     )
     websocket = FakeWebSocket()
+    voice_store = RecordingVoiceStore()
     service = LiveVoiceStreamService(
         registry=registry,
         config=BASE_TTS_CONFIG,
-        client_factory=RecordingTtsClient,
+        client_factory=SubtitleTtsClient,
+        voice_store_factory=lambda session_id: voice_store,
         judge_voice_asset_dir=tmp_path / "judge-voice",
     )
 
@@ -795,23 +974,46 @@ def test_voice_stream_service_streams_private_wolf_chat_to_god_view(tmp_path) ->
                 "decision_stage": "proposal",
             },
         )
-        await wait_for_messages(websocket, 3)
+        await wait_for_messages(websocket, 4)
         websocket.disconnect()
         await asyncio.wait_for(task, timeout=1)
         assert websocket.messages[0]["source_event_id"] == private_event.id
 
     asyncio.run(stream_private_event())
 
-    assert RecordingTtsClient.instances[0].calls == [
+    assert SubtitleTtsClient.instances[0].calls == [
         {"speaker": "player", "text_chunks": ["李四带队能力强，", "建议先处理。"]}
     ]
     assert [message["type"] for message in websocket.messages] == [
         "voice_start",
+        "subtitle_timing",
         "audio_chunk",
         "voice_end",
     ]
-    assert websocket.messages[0]["speaker_name"] == "1号玩家"
-    assert websocket.messages[0]["audience"] == "spectator_god_view"
+    start, subtitle, chunk, end = websocket.messages
+    assert start["speaker_name"] == "1号玩家"
+    assert start["audience"] == "spectator_god_view"
+    assert voice_store.utterances[0]["utterance"].audience == "spectator_god_view"
+    assert voice_store.utterances[0]["utterance"].text == "李四带队能力强，建议先处理。"
+    assert voice_store.subtitle_timings == [
+        {
+            "utterance_id": start["utterance_id"],
+            "subtitle_timings": subtitle["cues"],
+        }
+    ]
+    assert voice_store.chunks == [
+        {
+            "utterance_id": start["utterance_id"],
+            "chunk_index": chunk["chunk_index"],
+            "audio": b"abc",
+        }
+    ]
+    assert voice_store.completed == [
+        {
+            "utterance_id": start["utterance_id"],
+            "duration_ms": end["duration_ms"],
+        }
+    ]
 
 
 def test_voice_stream_service_uses_static_judge_assets_when_available(tmp_path) -> None:
@@ -1621,7 +1823,13 @@ def test_voice_stream_service_replays_recent_complete_utterance_then_streams_fut
 
     asyncio.run(stream_events())
 
-    assert voice_store.find_recent_calls == [{"run_id": run.run_id, "current_event_id": 7}]
+    assert voice_store.find_recent_calls == [
+        {
+            "run_id": run.run_id,
+            "current_event_id": 7,
+            "audience": "player_public",
+        }
+    ]
     assert websocket.messages[:5] == [
         {
             "type": "voice_start",

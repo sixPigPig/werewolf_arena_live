@@ -134,7 +134,8 @@ jobs:
       - uses: azure/setup-kubectl@v5
         with:
           version: v1.34.1
-      - run: bash -n scripts/deploy-kubernetes.sh scripts/smoke-admin-deployment.sh scripts/smoke-mobile-deployment.sh
+      - run: bash -n scripts/deploy-kubernetes.sh scripts/run-api-dev.sh scripts/test-run-api-dev.sh scripts/smoke-admin-deployment.sh scripts/smoke-mobile-deployment.sh
+      - run: scripts/test-run-api-dev.sh
       - run: docker compose --profile app --profile voice --profile monitoring config --quiet
       - run: scripts/deploy-kubernetes.sh staging sha-0000000000000000000000000000000000000000 --render-dir /tmp/werewolf-staging
       - run: scripts/deploy-kubernetes.sh production sha-0000000000000000000000000000000000000000 --render-dir /tmp/werewolf-production

@@ -57,7 +57,11 @@ from app.core.config import settings
 from app.models.admin import AdminRunControlRequest
 from app.models.game_session import GameSessionRecord
 from app.models.live import LiveRunRecord, VoiceUtteranceRecord
-from app.api.routes.games import get_live_registry, start_resume_game_run
+from app.api.routes.games import (
+    get_live_registry,
+    live_voice_materializer_is_available,
+    start_resume_game_run,
+)
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.replay import DatabaseReplayStore
 
@@ -352,6 +356,18 @@ def resume_live_run(
                     "checkpoint can be resumed."
                 ),
                 status_code=409,
+            )
+        if not live_voice_materializer_is_available(db):
+            _control_rejection(
+                db,
+                request=request,
+                principal=principal,
+                action="resume",
+                run_id=run_id,
+                reason=request_body.reason,
+                code="admin_live_voice_materializer_unavailable",
+                detail="Voice persistence is unavailable; retry after the backend is ready.",
+                status_code=503,
             )
         resumed, created = start_resume_game_run(
             session_id=record.session_id,

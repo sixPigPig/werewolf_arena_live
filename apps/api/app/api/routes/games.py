@@ -126,9 +126,10 @@ from app.werewolf.rules import (
     role_summary,
     rule_set_snapshot,
 )
+from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.runner import GameRunError, new_session_id, resume_game, run_game
 from app.werewolf.voice import VoiceUtterance
-from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
+from app.werewolf.voice_materializer import LIVE_VOICE_MATERIALIZER_WORKER_TYPE
 from app.werewolf.voice_stream import (
     LiveVoiceStreamService,
     StaticJudgeVoiceAsset,
@@ -137,6 +138,7 @@ from app.werewolf.voice_stream import (
 )
 from app.werewolf.voice_store import DatabaseVoiceStore
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
+from app.werewolf.worker_telemetry import runtime_worker_is_alive
 
 
 router = APIRouter()
@@ -206,6 +208,25 @@ class LineupPreviewRequest(BaseModel):
 
 def get_replay_store(db: Annotated[Session, Depends(get_db)]) -> DatabaseReplayStore:
     return DatabaseReplayStore(db)
+
+
+def live_voice_materializer_is_available(db: Session) -> bool:
+    return not settings.ark_tts_enabled or runtime_worker_is_alive(
+        db,
+        worker_type=LIVE_VOICE_MATERIALIZER_WORKER_TYPE,
+        max_age_seconds=settings.live_voice_materializer_probe_max_age_seconds,
+    )
+
+
+def _require_live_voice_materializer(db: Session, request: Request) -> None:
+    if live_voice_materializer_is_available(db):
+        return
+    raise public_problem(
+        request,
+        status_code=503,
+        code="live_voice_materializer_unavailable",
+        detail="Voice persistence is unavailable; retry after the backend is ready.",
+    )
 
 
 class SessionLiveStore:
@@ -492,6 +513,37 @@ class SessionVoiceStore:
         finally:
             db.close()
 
+    def claim_streamed_utterance(self, utterance: VoiceUtterance) -> bool:
+        db = self.session_factory()
+        try:
+            return DatabaseVoiceStore(
+                db,
+                session_id=self.session_id,
+            ).claim_streamed_utterance(
+                utterance,
+                lease_seconds=settings.live_voice_materializer_lease_seconds,
+            )
+        finally:
+            db.close()
+
+    def release_streamed_utterance(
+        self,
+        utterance: VoiceUtterance,
+        *,
+        error_type: str,
+    ) -> None:
+        db = self.session_factory()
+        try:
+            DatabaseVoiceStore(
+                db,
+                session_id=self.session_id,
+            ).release_streamed_utterance(
+                utterance,
+                error_type=error_type,
+            )
+        finally:
+            db.close()
+
     def append_chunk(self, utterance_id: str, *, chunk_index: int, audio: bytes) -> None:
         db = self.session_factory()
         try:
@@ -544,12 +596,14 @@ class SessionVoiceStore:
         *,
         run_id: str,
         current_event_id: int,
+        audience: str = "player_public",
     ) -> dict[str, Any] | None:
         db = self.session_factory()
         try:
             return DatabaseVoiceStore(db, session_id=self.session_id).find_recent_utterance(
                 run_id=run_id,
                 current_event_id=current_event_id,
+                audience=audience,
             )
         finally:
             db.close()
@@ -1002,6 +1056,7 @@ def create_game_run(
     run: LiveGameRun | None = None
     staged = False
     try:
+        _require_live_voice_materializer(db, request)
         compiled = _resolve_selected_rule_set(
             db,
             rule_set_id=request_body.rule_set_id,
@@ -1405,8 +1460,11 @@ def resume_game_run(
     ],
     store: Annotated[GameRecordStore, Depends(get_replay_store)],
     registry: Annotated[LiveRunRegistry, Depends(get_live_registry)],
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
     response: Response,
 ) -> dict:
+    _require_live_voice_materializer(db, request)
     run, created = start_resume_game_run(
         session_id=session_id,
         store=store,

@@ -117,6 +117,7 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     _reset_rule_set_metrics_for_tests()
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr(settings, "legacy_player_profile_content_writes_enabled", True)
+    monkeypatch.setattr(games_routes, "runtime_worker_is_alive", lambda *_args, **_kwargs: True)
     monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
     with TestingSessionLocal() as session:
         session.query(VoiceAudioChunkRecord).delete()
@@ -914,6 +915,42 @@ def test_create_game_run_accepts_rule_set_id(
     compiled = captured[0]["compiled"]
     assert isinstance(compiled, CompiledRuleSet)
     assert compiled.rule_set.id == "starter_6"
+
+
+def test_create_game_run_refuses_to_start_when_voice_persistence_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_virtual_profiles(8)
+    registry = LiveRunRegistry()
+    override_live_registry(registry)
+    monkeypatch.setattr(settings, "ark_tts_enabled", True)
+    monkeypatch.setattr(games_routes, "runtime_worker_is_alive", lambda *_args, **_kwargs: False)
+
+    try:
+        response = client.post(
+            "/api/v1/games/runs",
+            json={"seed": 21, "max_rounds": 1},
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "live_voice_materializer_unavailable"
+    assert registry._runs == {}
+    with TestingSessionLocal() as session:
+        assert session.query(LiveRunRecord).count() == 0
+
+
+def test_resume_game_run_refuses_to_continue_when_voice_persistence_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "ark_tts_enabled", True)
+    monkeypatch.setattr(games_routes, "runtime_worker_is_alive", lambda *_args, **_kwargs: False)
+
+    response = client.post("/api/v1/games/game_1200abcd/resume")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "live_voice_materializer_unavailable"
 
 
 def test_create_game_run_pins_expected_revision_and_snapshot(

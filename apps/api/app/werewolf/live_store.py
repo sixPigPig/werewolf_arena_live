@@ -45,7 +45,7 @@ from app.werewolf.session_timeline import (
     TimelineRun,
     build_session_timeline,
 )
-from app.werewolf.voice import is_god_view_private_speech_event, voice_job_candidate
+from app.werewolf.voice import voice_job_candidate
 
 
 def parse_live_datetime(value: str | None) -> datetime | None:
@@ -1093,16 +1093,20 @@ class DatabaseLiveStore:
             self.db.add(_god_view_projection_record(god_view_event))
 
         voice_jobs: list[tuple[str, str]] = []
+        public_speaker_kind: str | None = None
         if public_event is not None:
             public_speaker_kind = voice_job_candidate(public_event)
             if public_speaker_kind is not None:
                 voice_jobs.append((public_speaker_kind, "player_public"))
-        if god_view_event is not None and is_god_view_private_speech_event(god_view_event):
+        if god_view_event is not None:
             god_view_speaker_kind = voice_job_candidate(
                 god_view_event,
                 audience="spectator_god_view",
             )
-            if god_view_speaker_kind is not None:
+            if (
+                god_view_speaker_kind is not None
+                and god_view_speaker_kind != public_speaker_kind
+            ):
                 voice_jobs.append((god_view_speaker_kind, "spectator_god_view"))
 
         dialect_name = self.db.get_bind().dialect.name
