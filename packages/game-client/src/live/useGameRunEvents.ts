@@ -29,6 +29,7 @@ const EVENT_TYPES = [
   "model_request_failed",
   "model_response_received",
   "action_parsed",
+  "public_action_cancelled",
   "state_updated",
   "game_completed",
   "game_failed",

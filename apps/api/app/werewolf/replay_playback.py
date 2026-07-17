@@ -16,10 +16,13 @@ from app.werewolf.judge_narration import (
     cue_spec,
     dawn_result_cue,
     exile_no_result_cue,
+    exile_last_words_cue,
+    exile_last_words_skipped_cue,
     exile_result_cue,
     exile_runoff_tied_cue,
     exile_tie_cues,
     hunter_result_cue,
+    hunter_start_cues,
     idiot_reveal_cues,
     legacy_exile_no_result_cue,
     seat_asset_id,
@@ -41,11 +44,9 @@ DAY_ACTION_KEYS = (
     "exile_runoff_votes",
     "sheriff_votes",
     "speech_order",
-    "sheriff_badge",
     "bid",
     "debate",
     "votes",
-    "hunter_shoot",
     "werewolf_self_explosion",
 )
 DAY_STAGE_STATE_KEYS = (
@@ -65,6 +66,7 @@ DAY_STAGE_STATE_KEYS = (
     "exile_pk_speeches",
     "exile_runoff_votes",
     "exile_resolution_reason",
+    "exile_last_words",
     "sheriff_elected",
     "speech_order",
     "speech_order_choice",
@@ -315,6 +317,7 @@ def build_replay_playback(session: dict[str, Any]) -> dict[str, Any]:
         _publish_replay_day_cues(
             publish,
             round_state,
+            round_log,
             round_number=round_number,
         )
 
@@ -416,6 +419,7 @@ def _public_game_round(round_state: dict[str, Any]) -> dict[str, Any]:
         "exile_pk_candidates",
         "exile_pk_speeches",
         "exile_resolution_reason",
+        "exile_last_words",
         "exile_runoff_votes",
         "hunter_shot",
         "idiot_revealed",
@@ -807,6 +811,7 @@ def _publish_replay_cue(
 def _publish_replay_day_cues(
     publish: Any,
     round_state: dict[str, Any],
+    round_log: dict[str, Any],
     *,
     round_number: int,
 ) -> None:
@@ -925,8 +930,45 @@ def _publish_replay_day_cues(
             phase="vote",
         )
 
+    last_words = _dict_or_empty(round_state.get("exile_last_words"))
+    if exiled and last_words:
+        _publish_replay_cue(
+            publish,
+            exile_last_words_cue(exiled),
+            round_number=round_number,
+            phase="last_words",
+        )
+        last_words_logs = _action_logs(round_log, ("exile_last_words",))
+        for action_log in last_words_logs:
+            _publish_action_events(
+                publish,
+                action_log,
+                round_number=round_number,
+                phase="last_words",
+            )
+        if last_words.get("status") == "skipped":
+            _publish_replay_cue(
+                publish,
+                exile_last_words_skipped_cue(
+                    exiled,
+                    str(last_words.get("reason_code") or "legacy_skipped"),
+                ),
+                round_number=round_number,
+                phase="last_words",
+            )
+
     hunter_shot = _optional_str(round_state.get("hunter_shot"))
-    if hunter_shot:
+    hunter_logs = _action_logs(round_log, ("hunter_shoot",))
+    if hunter_logs:
+        for cue in hunter_start_cues(exiled or "猎人"):
+            _publish_replay_cue(publish, cue, round_number=round_number, phase="vote")
+        for action_log in hunter_logs:
+            _publish_action_events(
+                publish,
+                action_log,
+                round_number=round_number,
+                phase="vote",
+            )
         _publish_replay_cue(
             publish,
             hunter_result_cue(hunter_shot),
@@ -936,7 +978,21 @@ def _publish_replay_day_cues(
 
     badge = sheriff_badge_resolution_from_dict(round_state.get("sheriff_badge_resolution"))
     if badge is not None:
-        for cue in sheriff_badge_cues(badge):
+        badge_cues = sheriff_badge_cues(badge)
+        _publish_replay_cue(
+            publish,
+            badge_cues[0],
+            round_number=round_number,
+            phase="vote",
+        )
+        for action_log in _action_logs(round_log, ("sheriff_badge",)):
+            _publish_action_events(
+                publish,
+                action_log,
+                round_number=round_number,
+                phase="vote",
+            )
+        for cue in badge_cues[1:]:
             _publish_replay_cue(publish, cue, round_number=round_number, phase="vote")
     else:
         badge_target = _optional_str(round_state.get("sheriff_badge_target"))

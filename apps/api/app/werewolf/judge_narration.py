@@ -44,6 +44,7 @@ STATIC_CUE_TEXT: dict[str, str] = {
     "exile_no_votes": "本轮没有形成有效投票，无人被放逐。",
     "exile_no_runoff_voters": "本轮没有可参与二轮投票的玩家，无人被放逐。",
     "exile_no_result": "放逐投票未产生出局玩家，本轮无人被放逐。",
+    "exile_last_words_skipped": "该玩家未留下有效遗言，继续结算。",
     "self_explosion_skip": "本轮剩余发言和放逐投票终止，直接进入夜晚。",
     "hunter_shot_start": "猎人死亡，可以发动技能。",
     "hunter_shot_choose": "请猎人选择要带走的玩家。",
@@ -282,6 +283,22 @@ def exile_result_cue(player: str) -> JudgeCueSpec:
         f"{player}得票最高，被放逐出局。",
         static_asset_id=seat_asset_id("exile_result", player),
         params={"player": player},
+    )
+
+
+def exile_last_words_cue(player: str) -> JudgeCueSpec:
+    return cue_spec(
+        "exile_last_words",
+        f"请 {player} 发表遗言。",
+        static_asset_id=seat_asset_id("exile_last_words", player),
+        params={"player": player},
+    )
+
+
+def exile_last_words_skipped_cue(player: str, reason_code: str) -> JudgeCueSpec:
+    return cue_spec(
+        "exile_last_words_skipped",
+        params={"player": player, "reason_code": reason_code},
     )
 
 

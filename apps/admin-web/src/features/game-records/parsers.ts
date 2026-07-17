@@ -542,6 +542,10 @@ function parseRound(value: unknown): AdminGameRound {
       record.exile_pk_speeches,
       "round.exile_pk_speeches",
     ),
+    exile_last_words:
+      record.exile_last_words === null
+        ? null
+        : speechValue(record.exile_last_words, "round.exile_last_words"),
     debate: speechArray(record.debate, "round.debate"),
     sheriff_badge_target: nullableString(
       record.sheriff_badge_target,
@@ -563,13 +567,17 @@ function parseRound(value: unknown): AdminGameRound {
 }
 
 function speechArray(value: unknown, field: string) {
-  return arrayValue(value, field).map((item, index) => {
-    const record = recordValue(item);
-    return {
-      speaker: requiredString(record.speaker, `${field}[${index}].speaker`),
-      message: requiredString(record.message, `${field}[${index}].message`),
-    };
-  });
+  return arrayValue(value, field).map((item, index) =>
+    speechValue(item, `${field}[${index}]`),
+  );
+}
+
+function speechValue(value: unknown, field: string) {
+  const record = recordValue(value);
+  return {
+    speaker: requiredString(record.speaker, `${field}.speaker`),
+    message: requiredString(record.message, `${field}.message`),
+  };
 }
 
 function parseEvent(value: unknown): AdminGameEvent {

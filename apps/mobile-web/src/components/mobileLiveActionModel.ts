@@ -49,6 +49,7 @@ const SPEECH_ACTIONS = new Set([
   "sheriff_speech",
   "sheriff_pk_speech",
   "exile_pk_speech",
+  "exile_last_words",
   "summarize",
 ]);
 
@@ -1122,6 +1123,9 @@ function speechLabel(action: string | null): string {
   }
   if (action === "exile_pk_speech") {
     return "放逐 PK 发言";
+  }
+  if (action === "exile_last_words") {
+    return "驱逐遗言";
   }
   return "白天发言";
 }

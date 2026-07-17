@@ -446,6 +446,10 @@ def test_all_official_configs_match_literal_runtime_and_hash_goldens(
     )
     expected = copy.deepcopy(OFFICIAL_RUNTIME_GOLDENS[rule_set_id])
     expected["version"] = "1"
+    day_actions = expected["day_actions"]
+    assert isinstance(day_actions, list)
+    day_actions.insert(day_actions.index("vote") + 1, "exile_last_words")
+    expected["exile_last_words_enabled"] = True
     expected.update(
         {
             "revision_id": "revision-1",

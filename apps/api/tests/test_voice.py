@@ -77,6 +77,31 @@ def test_complete_public_speech_is_materialized_from_action_parsed() -> None:
     assert utterance.text == "这是最终完整发言。"
 
 
+def test_exile_last_words_use_the_exiled_players_public_voice() -> None:
+    event = live_event(
+        10,
+        "action_parsed",
+        actor="阿青",
+        action="exile_last_words",
+        payload={
+            "request_id": "req-last-words",
+            "visible_result": {"say": "这是我的最后判断。"},
+        },
+        phase="last_words",
+    )
+
+    utterance = event_to_voice_materialization(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+        player_seats={"阿青": 8},
+    )
+
+    assert utterance is not None
+    assert utterance.speaker_kind == "player"
+    assert utterance.speaker_name == "8号玩家"
+    assert utterance.text == "这是我的最后判断。"
+
+
 def test_game_resumed_uses_resume_judge_voice() -> None:
     event = live_event(10, "game_resumed", payload={"resume_from_round": 4})
 

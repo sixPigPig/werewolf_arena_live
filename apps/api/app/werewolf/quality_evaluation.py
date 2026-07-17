@@ -471,6 +471,7 @@ def _structure_metrics(state: dict[str, Any], logs: list[dict[str, Any]]) -> dic
             "sheriff_speech",
             "sheriff_pk_speech",
             "exile_pk_speech",
+            "exile_last_words",
             "exile_runoff_vote",
         }
         or action.startswith("sheriff_vote")

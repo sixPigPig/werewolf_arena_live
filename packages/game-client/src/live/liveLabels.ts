@@ -5,6 +5,7 @@ const ACTION_LABELS: Record<string, string> = {
   sheriff_speech: "警上发言",
   sheriff_pk_speech: "警长 PK 发言",
   exile_pk_speech: "放逐 PK 发言",
+  exile_last_words: "驱逐遗言",
   sheriff_run: "选择是否上警",
   sheriff_withdraw: "选择是否退水",
   sheriff_vote: "警长投票",
@@ -42,6 +43,7 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   model_response_delta: "模型返回片段",
   model_response_received: "模型返回已接收",
   action_parsed: "行动解析完成",
+  public_action_cancelled: "公开行动已取消",
   state_updated: "状态更新",
   game_completed: "对局完成",
   game_failed: "对局失败",
@@ -110,6 +112,9 @@ export function liveEventTitle(event: LiveGameEvent) {
   }
   if (event.type === "action_parsed" && event.actor) {
     return `${event.actor} 完成${actionLabel(event.action)}`;
+  }
+  if (event.type === "public_action_cancelled" && event.actor) {
+    return `${event.actor} 的公开行动已取消`;
   }
   if (event.type === "game_completed") {
     return "对局完成";

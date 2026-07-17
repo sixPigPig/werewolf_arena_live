@@ -22,7 +22,7 @@ PRIVATE_ACTIONS = frozenset(
     }
 )
 PUBLIC_SPEECH_ACTIONS = frozenset(
-    {"debate", "sheriff_speech", "sheriff_pk_speech", "exile_pk_speech"}
+    {"debate", "sheriff_speech", "sheriff_pk_speech", "exile_pk_speech", "exile_last_words"}
 )
 PUBLIC_EVENT_TEXT_KEYS = frozenset(
     {

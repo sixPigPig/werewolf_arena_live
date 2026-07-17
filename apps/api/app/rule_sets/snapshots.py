@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+from dataclasses import replace
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, cast
 
@@ -18,6 +19,7 @@ from app.rule_sets.validation import (
 )
 from app.werewolf.rules import (
     ACTION_DEBATE,
+    ACTION_EXILE_LAST_WORDS,
     ACTION_HUNTER_SHOOT,
     ACTION_INVESTIGATE,
     ACTION_PROTECT,
@@ -82,12 +84,14 @@ _RUNTIME_FIELDS = (
     "sheriff_enabled",
     "sheriff_vote_weight",
     "werewolf_self_explosion_enabled",
+    "exile_last_words_enabled",
     "sheriff_badge_bomb_policy",
     "speech_policy",
     "speech_rounds",
     "rule_tags",
 )
 _RUNTIME_FIELD_SET = frozenset(_RUNTIME_FIELDS)
+_LEGACY_OPTIONAL_RUNTIME_FIELDS = frozenset({"exile_last_words_enabled"})
 _REVISION_FIELDS = frozenset({"revision_id", "revision_no", "schema_version", "content_hash"})
 _ROLE_FIELDS = frozenset({"role", "count", "team", "model_group", "category"})
 _CONTENT_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -313,6 +317,7 @@ def _compile_rule_set(
         speech_rounds=1,
         rule_tags=config.rule_tags,
         werewolf_self_explosion_enabled=config.werewolf_self_explosion_enabled,
+        exile_last_words_enabled=True,
         sheriff_badge_bomb_policy=config.sheriff_badge_bomb_policy,
     )
     content_hash = rule_set_content_hash(config)
@@ -393,6 +398,29 @@ def _resolve_snapshot(
             revision_no=None,
         )
 
+    if snapshot.get("exile_last_words_enabled") is not True:
+        legacy_rule_set = replace(
+            compiled.rule_set,
+            day_actions=tuple(
+                action
+                for action in compiled.rule_set.day_actions
+                if action != ACTION_EXILE_LAST_WORDS
+            ),
+            exile_last_words_enabled=False,
+        )
+        legacy_snapshot = {
+            **compiled.snapshot,
+            "day_actions": list(legacy_rule_set.day_actions),
+            "exile_last_words_enabled": False,
+        }
+        if "exile_last_words_enabled" not in snapshot:
+            legacy_snapshot.pop("exile_last_words_enabled", None)
+        compiled = replace(
+            compiled,
+            rule_set=legacy_rule_set,
+            snapshot=legacy_snapshot,
+        )
+
     _compare_runtime_snapshot(snapshot, compiled.snapshot)
     return compiled, config
 
@@ -407,7 +435,7 @@ def _validate_snapshot_shape(snapshot: Mapping[str, object]) -> bool:
         names = ", ".join(sorted(str(field) for field in unknown))
         raise ValueError(f"Unsupported snapshot fields: {names}")
 
-    missing = _RUNTIME_FIELD_SET - fields
+    missing = _RUNTIME_FIELD_SET - _LEGACY_OPTIONAL_RUNTIME_FIELDS - fields
     if missing:
         names = ", ".join(sorted(missing))
         raise ValueError(f"Snapshot is missing required fields: {names}")
@@ -443,6 +471,10 @@ def _validate_runtime_types(snapshot: Mapping[str, object]) -> None:
     for field in ("sheriff_enabled", "werewolf_self_explosion_enabled"):
         if not isinstance(snapshot[field], bool):
             raise ValueError(f"snapshot field {field} must be a boolean")
+    if "exile_last_words_enabled" in snapshot and not isinstance(
+        snapshot["exile_last_words_enabled"], bool
+    ):
+        raise ValueError("snapshot field exile_last_words_enabled must be a boolean")
 
     vote_weight = snapshot["sheriff_vote_weight"]
     if isinstance(vote_weight, bool) or not isinstance(vote_weight, (int, float)):
@@ -508,6 +540,8 @@ def _compare_runtime_snapshot(
     snapshot: Mapping[str, object], expected: Mapping[str, object]
 ) -> None:
     for field in _RUNTIME_FIELDS:
+        if field in _LEGACY_OPTIONAL_RUNTIME_FIELDS and field not in snapshot:
+            continue
         if snapshot[field] != expected[field]:
             raise ValueError(f"snapshot field {field} does not match compiled configuration")
 
@@ -606,6 +640,7 @@ def _day_actions(config: RuleSetConfig) -> tuple[str, ...]:
     if config.sheriff_enabled and config.speech_policy == SPEECH_POLICY_SHERIFF_DIRECTED:
         actions.append(ACTION_SPEECH_ORDER)
     actions.extend((ACTION_DEBATE, ACTION_VOTE))
+    actions.append(ACTION_EXILE_LAST_WORDS)
     if config.role_counts["hunter"]:
         actions.append(ACTION_HUNTER_SHOOT)
     actions.append(ACTION_SUMMARIZE)

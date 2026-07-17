@@ -227,6 +227,20 @@ function cueForEvent({
     return parsedActionCue(cue, payload, actorName, nextSpeakerName, godViewState);
   }
 
+  if (event.type === "public_action_cancelled") {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: "danger",
+      judgeLine: "狼人自爆，当前公开行动立即取消。",
+      performerLine: `${actorName || "当前玩家"}的发言不再公开。`,
+      detailLine: "流程已切换到自爆结算。",
+      actorName,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
   if (event.type === "state_updated") {
     return stateUpdatedCue(cue, payload, actorName, nextSpeakerName, godViewState);
   }
@@ -903,6 +917,7 @@ function isPublicSpeechAction(action: string | null): boolean {
     action === "sheriff_speech" ||
     action === "sheriff_pk_speech" ||
     action === "exile_pk_speech" ||
+    action === "exile_last_words" ||
     action === "summarize"
   );
 }

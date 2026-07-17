@@ -911,6 +911,7 @@ function RoundItem({ round }: { round: AdminGameRound }) {
     { label: "警长竞选发言", items: round.sheriff_speeches },
     { label: "警长平票发言", items: round.sheriff_pk_speeches },
     { label: "放逐平票发言", items: round.exile_pk_speeches },
+    { label: "驱逐遗言", items: round.exile_last_words ? [round.exile_last_words] : [] },
     { label: "白天发言", items: round.debate },
   ].filter((group) => group.items.length > 0);
   return (

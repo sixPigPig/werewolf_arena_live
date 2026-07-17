@@ -463,6 +463,15 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
             if data.get("exile_resolution_reason") is not None
             else None
         ),
+        exile_last_words=(
+            {
+                str(key): str(value)
+                for key, value in data["exile_last_words"].items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+            if isinstance(data.get("exile_last_words"), dict)
+            else None
+        ),
         summaries=copy.deepcopy(data.get("summaries", {})),
         private_summaries=copy.deepcopy(data.get("private_summaries", {})),
         public_summary=str(data.get("public_summary") or ""),
@@ -596,6 +605,7 @@ def round_log_from_dict(data: dict[str, Any]) -> RoundLog:
         votes=action_log_groups_from_dict(data.get("votes", [])),
         exile_pk_speech=action_logs_from_dict(data.get("exile_pk_speech", [])),
         exile_runoff_votes=action_logs_from_dict(data.get("exile_runoff_votes", [])),
+        exile_last_words=optional_action_log_from_dict(data.get("exile_last_words")),
         summaries=action_logs_from_dict(data.get("summaries", [])),
         sheriff_run=action_logs_from_dict(data.get("sheriff_run", [])),
         sheriff_speech=action_logs_from_dict(data.get("sheriff_speech", [])),

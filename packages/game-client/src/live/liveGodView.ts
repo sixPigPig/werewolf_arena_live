@@ -1035,6 +1035,7 @@ function actionParsedLine(
     action === "sheriff_speech" ||
     action === "sheriff_pk_speech" ||
     action === "exile_pk_speech" ||
+    action === "exile_last_words" ||
     action === "summarize"
   ) {
     return null;
@@ -1991,7 +1992,8 @@ function isPublicSpeechAction(action: string | null) {
     action === "debate" ||
     action === "sheriff_speech" ||
     action === "sheriff_pk_speech" ||
-    action === "exile_pk_speech"
+    action === "exile_pk_speech" ||
+    action === "exile_last_words"
   );
 }
 

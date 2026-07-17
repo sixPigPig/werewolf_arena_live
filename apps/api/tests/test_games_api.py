@@ -660,6 +660,7 @@ def test_list_rule_sets_returns_published_database_revisions_default_first() -> 
         "speech_rounds",
         "rule_tags",
         "werewolf_self_explosion_enabled",
+        "exile_last_words_enabled",
         "sheriff_badge_bomb_policy",
         "revision_id",
         "revision_no",

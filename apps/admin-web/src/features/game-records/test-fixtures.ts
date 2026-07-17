@@ -84,6 +84,7 @@ export const contractGameDetail: AdminGameDetail = {
       debate: [
         { speaker: "暮鸦归票", message: "结合票型，我认为灰塔更可疑。" },
       ],
+      exile_last_words: null,
       sheriff_badge_target: null,
       sheriff_badge_lost: false,
       sheriff_badge_lost_reason: null,

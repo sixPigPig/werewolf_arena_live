@@ -260,7 +260,8 @@ function isLiveSpeakerDelta(event: LiveGameEvent) {
     (event.action === "debate" ||
       event.action === "sheriff_speech" ||
       event.action === "sheriff_pk_speech" ||
-      event.action === "exile_pk_speech")
+      event.action === "exile_pk_speech" ||
+      event.action === "exile_last_words")
   );
 }
 

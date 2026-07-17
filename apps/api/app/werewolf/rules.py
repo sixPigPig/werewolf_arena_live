@@ -33,6 +33,7 @@ ACTION_DEBATE = "debate"
 ACTION_VOTE = "vote"
 ACTION_EXILE_PK_SPEECH = "exile_pk_speech"
 ACTION_EXILE_RUNOFF_VOTE = "exile_runoff_vote"
+ACTION_EXILE_LAST_WORDS = "exile_last_words"
 ACTION_SUMMARIZE = "summarize"
 
 SPEECH_POLICY_SEQUENTIAL = "sequential"
@@ -83,6 +84,7 @@ class RuleSet:
     speech_rounds: int = 1
     rule_tags: tuple[str, ...] = ()
     werewolf_self_explosion_enabled: bool = False
+    exile_last_words_enabled: bool = False
     sheriff_badge_bomb_policy: str = "none"
 
 
@@ -102,6 +104,7 @@ CLASSIC_8 = RuleSet(
     day_actions=(
         ACTION_DEBATE,
         ACTION_VOTE,
+        ACTION_EXILE_LAST_WORDS,
         ACTION_SUMMARIZE,
     ),
     win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
@@ -109,6 +112,7 @@ CLASSIC_8 = RuleSet(
     complexity="标准",
     estimated_duration="中",
     rule_tags=("无警长", "顺序发言", "标准"),
+    exile_last_words_enabled=True,
 )
 
 STARTER_6 = RuleSet(
@@ -127,6 +131,7 @@ STARTER_6 = RuleSet(
     day_actions=(
         ACTION_DEBATE,
         ACTION_VOTE,
+        ACTION_EXILE_LAST_WORDS,
         ACTION_SUMMARIZE,
     ),
     win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
@@ -134,6 +139,7 @@ STARTER_6 = RuleSet(
     complexity="入门",
     estimated_duration="短",
     rule_tags=("无警长", "顺序发言", "新手"),
+    exile_last_words_enabled=True,
 )
 
 SOCIAL_8 = RuleSet(
@@ -150,6 +156,7 @@ SOCIAL_8 = RuleSet(
     day_actions=(
         ACTION_DEBATE,
         ACTION_VOTE,
+        ACTION_EXILE_LAST_WORDS,
         ACTION_SUMMARIZE,
     ),
     win_condition=WIN_CONDITION_WOLVES_GTE_OTHERS,
@@ -157,6 +164,7 @@ SOCIAL_8 = RuleSet(
     complexity="心理",
     estimated_duration="中",
     rule_tags=("无警长", "顺序发言", "心理"),
+    exile_last_words_enabled=True,
 )
 
 CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
@@ -185,6 +193,7 @@ CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
         ACTION_SPEECH_ORDER,
         ACTION_DEBATE,
         ACTION_VOTE,
+        ACTION_EXILE_LAST_WORDS,
         ACTION_HUNTER_SHOOT,
         ACTION_SUMMARIZE,
     ),
@@ -195,6 +204,7 @@ CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
     sheriff_enabled=True,
     sheriff_vote_weight=1.5,
     werewolf_self_explosion_enabled=True,
+    exile_last_words_enabled=True,
     sheriff_badge_bomb_policy="double",
     speech_policy=SPEECH_POLICY_SHERIFF_DIRECTED,
     rule_tags=("有警长", "警徽 1.5 票", "屠边", "预女猎白"),
@@ -229,6 +239,7 @@ def rule_set_summary(rule_set: RuleSet) -> dict[str, Any]:
         "sheriff_enabled": rule_set.sheriff_enabled,
         "sheriff_vote_weight": rule_set.sheriff_vote_weight,
         "werewolf_self_explosion_enabled": rule_set.werewolf_self_explosion_enabled,
+        "exile_last_words_enabled": rule_set.exile_last_words_enabled,
         "sheriff_badge_bomb_policy": rule_set.sheriff_badge_bomb_policy,
         "speech_policy": rule_set.speech_policy,
         "speech_rounds": rule_set.speech_rounds,
@@ -262,6 +273,7 @@ def rule_set_snapshot(rule_set: RuleSet) -> dict[str, Any]:
         "sheriff_enabled": rule_set.sheriff_enabled,
         "sheriff_vote_weight": rule_set.sheriff_vote_weight,
         "werewolf_self_explosion_enabled": rule_set.werewolf_self_explosion_enabled,
+        "exile_last_words_enabled": rule_set.exile_last_words_enabled,
         "sheriff_badge_bomb_policy": rule_set.sheriff_badge_bomb_policy,
         "speech_policy": rule_set.speech_policy,
         "speech_rounds": rule_set.speech_rounds,
@@ -324,6 +336,11 @@ def render_rule_text(rule_set: RuleSet) -> str:
         else:
             self_explosion_text += "警长产生前自爆会中断当次竞选，但多次自爆不会累计导致警徽流失。"
         lines.append(self_explosion_text)
+    if rule_set.exile_last_words_enabled:
+        lines.append(
+            "被白天投票放逐且实际出局的玩家发表一次遗言；白痴翻牌免死、狼人自爆、"
+            "夜间死亡和猎人带走均不触发该遗言。遗言结束后再依次结算死亡技能与警徽。"
+        )
     lines.append("身份揭示：游戏过程中隐藏玩家真实身份。")
     return "\n".join(lines)
 

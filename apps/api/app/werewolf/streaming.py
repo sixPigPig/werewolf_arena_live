@@ -13,6 +13,7 @@ PUBLIC_STREAM_FIELD_BY_ACTION = {
     "sheriff_speech": "say",
     "sheriff_pk_speech": "say",
     "exile_pk_speech": "say",
+    "exile_last_words": "say",
 }
 
 
@@ -124,7 +125,13 @@ def action_visible_stream_field(action: str) -> str | None:
 
 
 def waiting_message_for_action(action: str) -> str:
-    if action in {"debate", "sheriff_speech", "sheriff_pk_speech", "exile_pk_speech"}:
+    if action in {
+        "debate",
+        "sheriff_speech",
+        "sheriff_pk_speech",
+        "exile_pk_speech",
+        "exile_last_words",
+    }:
         return "玩家正在组织公开发言..."
     if action == "summarize":
         return "正在整理本轮总结..."

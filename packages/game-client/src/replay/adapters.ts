@@ -28,6 +28,7 @@ const ACTION_TITLES: Record<string, string> = {
   sheriff_runoff_vote: "警下二轮投票",
   exile_pk_speech: "放逐 PK 发言",
   exile_runoff_vote: "放逐二轮投票",
+  exile_last_words: "驱逐遗言",
   werewolf_self_explosion: "狼人自爆",
   speech_order: "发言方向",
   sheriff_badge: "警徽处理",
@@ -156,6 +157,7 @@ function normalizeRound(
     exile_pk_speeches: round.exile_pk_speeches ?? [],
     exile_runoff_votes: round.exile_runoff_votes ?? {},
     exile_resolution_reason: round.exile_resolution_reason ?? null,
+    exile_last_words: round.exile_last_words ?? null,
     sheriff_elected: round.sheriff_elected ?? null,
     speech_order: round.speech_order ?? [],
     speech_order_choice: round.speech_order_choice ?? null,
@@ -389,6 +391,13 @@ function debugItemsFromRound(
   round.votes.flat().forEach((action, index) => {
     pushAction(items, round.number, "day", `day-vote-${index}`, action);
   });
+  pushAction(
+    items,
+    round.number,
+    "day",
+    "day-exile-last-words",
+    round.exile_last_words ?? null,
+  );
   if (sheriffBadgePlacement === "after_day_vote") {
     pushAction(items, round.number, "day", "day-sheriff-badge", sheriffBadge);
   }

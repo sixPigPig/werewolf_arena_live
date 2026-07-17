@@ -880,6 +880,40 @@ def test_round_state_from_dict_defaults_new_summary_fields() -> None:
     assert round_state.interruption is None
 
 
+def test_exile_last_words_round_trip_without_being_requested_again() -> None:
+    last_words = ActionLog(
+        actor="Alice",
+        action="exile_last_words",
+        options=[],
+        choice="请继续复盘票型。",
+        lm_log=LmLog(
+            prompt="prompt",
+            raw_response='{"say":"请继续复盘票型。"}',
+            result={"say": "请继续复盘票型。"},
+        ),
+    )
+    source = RoundState(
+        number=2,
+        players=["Alice", "Bob"],
+        exiled="Alice",
+        exile_last_words={
+            "player": "Alice",
+            "message": "请继续复盘票型。",
+            "status": "completed",
+            "reason_code": "completed",
+        },
+    )
+
+    restored_state = round_state_from_dict(source.to_dict())
+    restored_log = round_log_from_dict(
+        RoundLog(number=2, exile_last_words=last_words).to_dict()
+    )
+
+    assert restored_state.exile_last_words == source.exile_last_words
+    assert restored_log.exile_last_words is not None
+    assert restored_log.exile_last_words.choice == "请继续复盘票型。"
+
+
 def test_round_state_sheriff_resolutions_round_trip_through_checkpoint_payload() -> None:
     source = RoundState(
         number=4,

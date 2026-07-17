@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import random
+import re
 import threading
 import time
 from collections import Counter
@@ -46,6 +47,8 @@ from app.werewolf.judge_narration import (
     cue_spec,
     dawn_result_cue,
     exile_no_result_cue,
+    exile_last_words_cue,
+    exile_last_words_skipped_cue,
     exile_result_cue,
     exile_runoff_tied_cue,
     exile_tie_cues,
@@ -100,6 +103,7 @@ from app.werewolf.public_outcomes import (
 from app.werewolf.quality_telemetry import record_speech_quality
 from app.werewolf.rules import (
     ACTION_DEBATE,
+    ACTION_EXILE_LAST_WORDS,
     ACTION_EXILE_PK_SPEECH,
     ACTION_EXILE_RUNOFF_VOTE,
     ACTION_SHERIFF_BADGE,
@@ -143,6 +147,7 @@ HARD_ACTION_QUALITY_CODES = frozenset(
         "sheriff_speech_investigation_plan_without_seer_claim",
         "assumes_future_round_in_endgame",
         "ignores_terminal_risk",
+        "contradicts_public_vote_tally",
     }
 )
 BUFFERED_QUALITY_ACTIONS = frozenset(
@@ -150,10 +155,12 @@ BUFFERED_QUALITY_ACTIONS = frozenset(
         ACTION_SHERIFF_SPEECH,
         ACTION_SHERIFF_PK_SPEECH,
         ACTION_EXILE_PK_SPEECH,
+        ACTION_EXILE_LAST_WORDS,
         ACTION_DEBATE,
     }
 )
 REQUIRED_PUBLIC_SPEECH_FALLBACK = "本轮暂不追加判断，投票时我会给出明确选择。"
+OBJECTIVE_FACT_QUALITY_CODES = frozenset({"contradicts_public_vote_tally"})
 SHERIFF_SPEECH_CONTEXT_MAX_CHARS = 180
 SELF_EXPLOSION_BENEFIT_TYPES = frozenset(
     {
@@ -247,6 +254,7 @@ class PendingSelfExplosionBatch:
     requests: tuple[PlayerActionRequest, ...]
     futures: tuple[Future[PlayerActionResult], ...]
     started_at: float
+    cursor: PublicStageCursor
 
 
 @dataclass(frozen=True)
@@ -263,11 +271,28 @@ class PublicStageCursor:
         return [actor for actor in self.ordered_actors if actor not in completed]
 
 
+@dataclass(frozen=True)
+class ActivePublicActionContext:
+    round_state: RoundState
+    round_log: RoundLog
+    active_players: list[str]
+    cursor: PublicStageCursor
+    actor: str
+    action: str
+
+
+class _PublicActionInterruptedBySelfExplosion(RuntimeError):
+    pass
+
+
 class _BufferedEventSink:
-    def __init__(self) -> None:
+    def __init__(self, before_publish: Callable[[str], None] | None = None) -> None:
         self.events: list[tuple[str, dict[str, object]]] = []
+        self._before_publish = before_publish
 
     def publish(self, event_type: str, **kwargs: object) -> None:
+        if self._before_publish is not None:
+            self._before_publish(event_type)
         self.events.append((event_type, kwargs))
 
     def flush_to(self, event_sink: object) -> None:
@@ -534,6 +559,8 @@ class GameEngine:
         self.logs: list[RoundLog] = []
         self._self_explosion_executor: ThreadPoolExecutor | None = None
         self._pending_self_explosion: PendingSelfExplosionBatch | None = None
+        self._active_public_action: ActivePublicActionContext | None = None
+        self._self_explosion_locked = False
 
     def run(self) -> list[RoundLog]:
         logs: list[RoundLog] = []
@@ -864,13 +891,31 @@ class GameEngine:
                 if wolf_name in completed_final_voters:
                     continue
                 fallback_target = proposals.get(wolf_name)
+                fallback_reason = "final_vote_missing_reused_proposal"
                 if fallback_target not in candidates:
                     fallback_target = self._deterministic_werewolf_vote_choice(
                         round_state=round_state,
                         wolf_name=wolf_name,
                         candidates=candidates,
                     )
+                    fallback_reason = "final_vote_missing_seeded_choice"
                 votes[wolf_name] = fallback_target
+                fallback_log = ActionLog(
+                    actor=wolf_name,
+                    action=ACTION_WEREWOLF_KILL_VOTE,
+                    options=candidates.copy(),
+                    choice=fallback_target,
+                    lm_log=LmLog(
+                        prompt="",
+                        raw_response="",
+                        result={"target": fallback_target, "message": ""},
+                    ),
+                    fallback_choice=fallback_target,
+                    fallback_reason=fallback_reason,
+                    execution_status="fallback",
+                )
+                vote_logs.append(fallback_log)
+                latest_logs[wolf_name] = fallback_log
                 self._publish_werewolf_private_action(
                     round_state=round_state,
                     actor=wolf_name,
@@ -878,6 +923,7 @@ class GameEngine:
                     target=fallback_target,
                     message="",
                     decision_stage="final",
+                    fallback_reason=fallback_reason,
                 )
             round_log.werewolf_votes.append(vote_logs)
             decision_stage = "final_vote"
@@ -1099,11 +1145,11 @@ class GameEngine:
                 decision_stage="tiebreak",
             )
         else:
-            action_log = None
             existing_vote = votes.get(tiebreaker)
             if existing_vote in candidates:
                 target = existing_vote
                 source = "existing_vote"
+                fallback_reason = "tiebreak_missing_reused_existing_vote"
             else:
                 target = self._deterministic_werewolf_tiebreak_choice(
                     round_state=round_state,
@@ -1111,6 +1157,30 @@ class GameEngine:
                     candidates=candidates,
                 )
                 source = "seeded_fallback"
+                fallback_reason = "tiebreak_missing_seeded_choice"
+            action_log = ActionLog(
+                actor=tiebreaker,
+                action=ACTION_WEREWOLF_KILL_VOTE,
+                options=candidates.copy(),
+                choice=target,
+                lm_log=LmLog(
+                    prompt="",
+                    raw_response="",
+                    result={"target": target, "message": ""},
+                ),
+                fallback_choice=target,
+                fallback_reason=fallback_reason,
+                execution_status="fallback",
+            )
+            self._publish_werewolf_private_action(
+                round_state=round_state,
+                actor=tiebreaker,
+                action=ACTION_WEREWOLF_KILL_VOTE,
+                target=target,
+                message="",
+                decision_stage="tiebreak",
+                fallback_reason=fallback_reason,
+            )
 
         target_label = self._public_player_reference(target)
         self._publish_werewolf_tiebreak_cue(
@@ -1169,6 +1239,7 @@ class GameEngine:
         target: str,
         message: str,
         decision_stage: str,
+        fallback_reason: str | None = None,
     ) -> None:
         public_target = self._public_player_reference(target)
         public_result: dict[str, object] = {"target": public_target}
@@ -1187,6 +1258,7 @@ class GameEngine:
                 "message": message,
                 "decision_stage": decision_stage,
                 "vote_round": 1,
+                **({"fallback_reason": fallback_reason} if fallback_reason else {}),
             },
         )
 
@@ -1513,7 +1585,34 @@ class GameEngine:
             result_key="shoot",
             round_state=round_state,
             phase=phase,
+            extra_world_state={
+                "hard_state": {
+                    "actor_alive": False,
+                    "death_cause": death_cause,
+                    "current_action": "猎人死亡技能结算",
+                }
+            },
         )
+        if self._hunter_reasoning_claims_alive(action_log):
+            shot, action_log = self._player_action(
+                player=hunter,
+                action=ACTION_HUNTER_SHOOT,
+                options=options,
+                result_key="shoot",
+                round_state=round_state,
+                phase=phase,
+                extra_world_state={
+                    "hard_state": {
+                        "actor_alive": False,
+                        "death_cause": death_cause,
+                        "current_action": "猎人死亡技能结算",
+                    },
+                    "quality_feedback": (
+                        "你的上一份推理错误地声称自己仍存活。引擎已确认你死亡，"
+                        "请基于死亡技能状态重新选择。"
+                    ),
+                },
+            )
         round_log.hunter_shoot = action_log
         hunter.hunter_can_shoot = False
         if shot and shot != NO_HUNTER_SHOT:
@@ -1576,6 +1675,13 @@ class GameEngine:
             return
         self._publish_judge_cue(round_state, phase, hunter_result_cue(None))
 
+    def _hunter_reasoning_claims_alive(self, action_log: ActionLog) -> bool:
+        result = action_log.lm_log.result or {}
+        reasoning = result.get("reasoning")
+        if not isinstance(reasoning, str):
+            return False
+        return re.search(r"我.{0,8}(?:仍|还|尚).{0,5}(?:存活|活着|在场)", reasoning) is not None
+
     def _run_day_phase(
         self,
         round_state: RoundState,
@@ -1599,7 +1705,7 @@ class GameEngine:
                 round_log,
                 active_players,
             )
-            self._publish_self_explosion_update(round_state, active_players)
+            self._finish_self_explosion_day(round_state, round_log, active_players)
             return
 
         self._finish_deferred_night_deaths_if_needed(
@@ -1612,42 +1718,48 @@ class GameEngine:
             return
 
         if self._run_debate_phase(round_state, round_log, active_players):
-            self._publish_self_explosion_update(round_state, active_players)
+            self._finish_self_explosion_day(round_state, round_log, active_players)
             return
 
+        self._cancel_pending_self_explosion()
+        self._self_explosion_locked = True
         self._publish(
             "phase_started",
             round_number=round_state.number,
             phase="vote",
             payload={"active_players": active_players.copy()},
         )
-        votes, vote_logs = self._run_voting(round_state, active_players)
-        round_state.votes.append(votes)
-        round_log.votes.append(vote_logs)
-        if votes:
-            self._add_public_fact(
-                round_state.number,
-                "vote",
-                f"第{round_state.number}轮票型："
-                + "；".join(f"{voter}->{target}" for voter, target in votes.items()),
-                stage="vote",
-                retention="important",
-                details={"votes": votes.copy()},
+        try:
+            votes, vote_logs = self._run_voting(round_state, active_players)
+            round_state.votes.append(votes)
+            round_log.votes.append(vote_logs)
+            if votes:
+                self._add_public_fact(
+                    round_state.number,
+                    "vote",
+                    f"第{round_state.number}轮票型："
+                    + "；".join(f"{voter}->{target}" for voter, target in votes.items()),
+                    stage="vote",
+                    retention="important",
+                    details={"votes": votes.copy()},
+                )
+            self._publish_state_updated(
+                round_state=round_state,
+                phase="vote",
+                action="vote",
+                payload={"votes": votes},
             )
-        self._publish_state_updated(
-            round_state=round_state,
-            phase="vote",
-            action="vote",
-            payload={"votes": votes},
-        )
 
-        if self._run_exile_vote_resolution(
-            votes,
-            round_state,
-            round_log,
-            active_players,
-        ):
-            self._publish_self_explosion_update(round_state, active_players)
+            interrupted_by_self_explosion = self._run_exile_vote_resolution(
+                votes,
+                round_state,
+                round_log,
+                active_players,
+            )
+        finally:
+            self._self_explosion_locked = False
+        if interrupted_by_self_explosion:
+            self._finish_self_explosion_day(round_state, round_log, active_players)
             return
         self._publish_state_updated(
             round_state=round_state,
@@ -1671,6 +1783,18 @@ class GameEngine:
         if is_terminal:
             return
         self._run_private_round_memories(round_state, round_log, active_players)
+
+    def _finish_self_explosion_day(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
+        self._publish_self_explosion_update(round_state, active_players)
+        self._refresh_winner(active_players)
+        self._publish_public_round_brief(round_state, active_players)
+        if not self.state.winner:
+            self._run_private_round_memories(round_state, round_log, active_players)
 
     def _finish_deferred_night_deaths_if_needed(
         self,
@@ -1848,14 +1972,24 @@ class GameEngine:
             ):
                 return True
             player = players_by_name[speaker]
-            message, action_log = self._player_action(
+            action_result = self._interruptible_public_speech_action(
                 player=player,
                 action=ACTION_DEBATE,
-                options=[],
-                result_key="say",
                 round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
                 phase="day",
+                cursor=PublicStageCursor(
+                    stage="debate",
+                    ordered_actors=tuple(speech_order),
+                    completed_actors=tuple(completed_speakers),
+                    current_actor=speaker,
+                    timing="before_actor",
+                ),
             )
+            if action_result is None:
+                return True
+            message, action_log = action_result
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{speaker} did not return a valid debate message.")
             self._publish_action_quality_warnings(
@@ -1873,6 +2007,16 @@ class GameEngine:
             round_log.debate.append(action_log)
             completed_speakers.append(speaker)
             self._record_public_debate(active_players, entry)
+            self._add_public_fact(
+                round_state.number,
+                "claim",
+                f"第{round_state.number}轮白天发言第{len(completed_speakers)}位："
+                f"{speaker}：{message}",
+                stage="debate",
+                actor=speaker,
+                retention="important",
+                details={"turn_index": len(completed_speakers)},
+            )
             self._publish_state_updated(
                 round_state=round_state,
                 phase="day",
@@ -1899,6 +2043,39 @@ class GameEngine:
                 return True
         return False
 
+    def _interruptible_public_speech_action(
+        self,
+        *,
+        player: Player,
+        action: str,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+        phase: str,
+        cursor: PublicStageCursor,
+    ) -> tuple[object | None, ActionLog] | None:
+        self._active_public_action = ActivePublicActionContext(
+            round_state=round_state,
+            round_log=round_log,
+            active_players=active_players,
+            cursor=cursor,
+            actor=player.name,
+            action=action,
+        )
+        try:
+            return self._player_action(
+                player=player,
+                action=action,
+                options=[],
+                result_key="say",
+                round_state=round_state,
+                phase=phase,
+            )
+        except _PublicActionInterruptedBySelfExplosion:
+            return None
+        finally:
+            self._active_public_action = None
+
     def _speech_order(
         self,
         round_state: RoundState,
@@ -1922,7 +2099,8 @@ class GameEngine:
     ) -> bool:
         if not self.rule_set.werewolf_self_explosion_enabled:
             return False
-        if self.state.winner:
+        if self.state.winner or self._self_explosion_locked:
+            self._cancel_pending_self_explosion()
             return False
 
         pending = self._pending_self_explosion
@@ -1930,52 +2108,42 @@ class GameEngine:
             self._cancel_pending_self_explosion()
             pending = None
 
+        if pending is not None and not self._self_explosion_window_accepts(
+            pending.cursor,
+            cursor,
+        ):
+            self._cancel_pending_self_explosion()
+            pending = None
+
         if pending is not None:
             if not all(future.done() for future in pending.futures):
                 wait(pending.futures, timeout=SELF_EXPLOSION_HANDOFF_TIMEOUT_SECONDS)
-                if not all(future.done() for future in pending.futures):
-                    return False
-            self._pending_self_explosion = None
-            decisions = self._finish_pending_self_explosion(pending)
-            players_by_name = self.state.player_by_name()
-            for name, (choice, action_log) in zip(
-                pending.active_wolves,
-                decisions,
-                strict=True,
+            if pending is not None and self._accept_ready_self_explosion(
+                pending,
+                round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
+                cursor=cursor,
             ):
-                if (
-                    choice != WEREWOLF_SELF_EXPLODE
-                    or name not in active_players
-                    or not self._is_werewolf(players_by_name[name])
-                ):
-                    continue
-
-                round_log.werewolf_self_explosion = action_log
-                round_state.interruption = self._stage_interruption_from_cursor(
-                    cursor,
-                    actor=name,
-                )
-                self._resolve_werewolf_self_explosion(
-                    wolf=name,
+                self._pending_self_explosion = None
+                return True
+            if pending is not None and not all(
+                future.done() for future in pending.futures
+            ):
+                if pending.cursor == cursor:
+                    return False
+                self._cancel_pending_self_explosion()
+                pending = None
+            if pending is not None:
+                self._pending_self_explosion = None
+                if self._accept_completed_self_explosion(
+                    pending,
                     round_state=round_state,
                     round_log=round_log,
                     active_players=active_players,
-                )
-                interruption_text = self._stage_interruption_text(
-                    round_state.number,
-                    round_state.interruption,
-                )
-                self._add_public_fact(
-                    round_state.number,
-                    "interruption",
-                    interruption_text,
-                    stage=cursor.stage,
-                    actor=name,
-                    retention="critical",
-                    details=round_state.interruption.to_dict(),
-                )
-                self._refresh_winner(active_players)
-                return True
+                    cursor=cursor,
+                ):
+                    return True
 
         players_by_name = self.state.player_by_name()
         active_wolves = [
@@ -2015,8 +2183,203 @@ class GameEngine:
             round_number=round_state.number,
             active_wolves=tuple(active_wolves),
             requests=requests,
+            cursor=cursor,
         )
         return False
+
+    def _accept_ready_self_explosion(
+        self,
+        pending: PendingSelfExplosionBatch,
+        *,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+        cursor: PublicStageCursor,
+    ) -> bool:
+        """Accept a completed self-explosion intent without waiting for the batch."""
+        completed_results: list[PlayerActionResult | None] = [None] * len(
+            pending.futures
+        )
+        accepted: tuple[str, PlayerActionResult] | None = None
+        for index, future in enumerate(pending.futures):
+            if not future.done():
+                continue
+            try:
+                result = future.result()
+            except Exception as exc:
+                self._checkpoint_player_action_failure(pending.requests[index], exc)
+                raise
+            completed_results[index] = result
+            if result.value == WEREWOLF_SELF_EXPLODE and accepted is None:
+                accepted = (pending.active_wolves[index], result)
+
+        if accepted is None:
+            return False
+
+        self._checkpoint_player_action_results(completed_results)
+        name, result = accepted
+        try:
+            choice, action_log = self._finalize_player_action_result(
+                result,
+                checkpoint=False,
+            )
+        except Exception as exc:
+            self._checkpoint_player_action_failure(result.request, exc)
+            raise
+        for future in pending.futures:
+            if not future.done():
+                future.cancel()
+        return self._accept_self_explosion_choice(
+            name=name,
+            choice=choice,
+            action_log=action_log,
+            round_state=round_state,
+            round_log=round_log,
+            active_players=active_players,
+            cursor=cursor,
+        )
+
+    def _accept_completed_self_explosion(
+        self,
+        pending: PendingSelfExplosionBatch,
+        *,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+        cursor: PublicStageCursor,
+    ) -> bool:
+        decisions = self._finish_pending_self_explosion(pending)
+        for name, (choice, action_log) in zip(
+            pending.active_wolves,
+            decisions,
+            strict=True,
+        ):
+            if self._accept_self_explosion_choice(
+                name=name,
+                choice=choice,
+                action_log=action_log,
+                round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
+                cursor=cursor,
+            ):
+                return True
+        return False
+
+    def _accept_self_explosion_choice(
+        self,
+        *,
+        name: str,
+        choice: object | None,
+        action_log: ActionLog,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+        cursor: PublicStageCursor,
+    ) -> bool:
+        players_by_name = self.state.player_by_name()
+        if (
+            choice != WEREWOLF_SELF_EXPLODE
+            or name not in active_players
+            or not self._is_werewolf(players_by_name[name])
+        ):
+            return False
+        round_log.werewolf_self_explosion = action_log
+        round_state.interruption = self._stage_interruption_from_cursor(cursor, actor=name)
+        self._resolve_werewolf_self_explosion(
+            wolf=name,
+            round_state=round_state,
+            round_log=round_log,
+            active_players=active_players,
+        )
+        interruption_text = self._stage_interruption_text(
+            round_state.number,
+            round_state.interruption,
+        )
+        self._add_public_fact(
+            round_state.number,
+            "interruption",
+            interruption_text,
+            stage=cursor.stage,
+            actor=name,
+            retention="critical",
+            details=round_state.interruption.to_dict(),
+        )
+        return True
+
+    def _self_explosion_window_accepts(
+        self,
+        origin: PublicStageCursor,
+        current: PublicStageCursor,
+    ) -> bool:
+        if origin.stage != current.stage or origin.ordered_actors != current.ordered_actors:
+            return False
+        if origin == current:
+            return True
+        if (
+            origin.timing == "before_stage"
+            and current.timing == "before_actor"
+            and bool(current.ordered_actors)
+            and not current.completed_actors
+            and current.current_actor == current.ordered_actors[0]
+        ):
+            return True
+        if (
+            origin.timing == "after_actor"
+            and current.timing == "before_actor"
+            and origin.completed_actors == current.completed_actors
+            and origin.current_actor in origin.ordered_actors
+            and current.current_actor in current.ordered_actors
+        ):
+            origin_index = origin.ordered_actors.index(origin.current_actor)
+            current_index = current.ordered_actors.index(current.current_actor)
+            return current_index == origin_index + 1
+        return False
+
+    def _interrupt_public_action_if_self_explosion_ready(self, event_type: str) -> None:
+        if event_type == "model_thinking_tick":
+            return
+        context = self._active_public_action
+        pending = self._pending_self_explosion
+        if context is None or pending is None or self._self_explosion_locked:
+            return
+        if not all(future.done() for future in pending.futures):
+            wait(pending.futures, timeout=SELF_EXPLOSION_HANDOFF_TIMEOUT_SECONDS)
+        if not self._self_explosion_window_accepts(pending.cursor, context.cursor):
+            self._cancel_pending_self_explosion()
+            return
+        accepted = self._accept_ready_self_explosion(
+            pending,
+            round_state=context.round_state,
+            round_log=context.round_log,
+            active_players=context.active_players,
+            cursor=context.cursor,
+        )
+        if not accepted:
+            if not all(future.done() for future in pending.futures):
+                return
+            accepted = self._accept_completed_self_explosion(
+                pending,
+                round_state=context.round_state,
+                round_log=context.round_log,
+                active_players=context.active_players,
+                cursor=context.cursor,
+            )
+        if not accepted:
+            self._pending_self_explosion = None
+            return
+        self._pending_self_explosion = None
+        self._publish(
+            "public_action_cancelled",
+            round_number=context.round_state.number,
+            phase="day",
+            actor=context.actor,
+            payload={
+                "canceled_action": context.action,
+                "reason_code": "werewolf_self_explosion",
+            },
+        )
+        raise _PublicActionInterruptedBySelfExplosion()
 
     def _start_pending_self_explosion(
         self,
@@ -2024,6 +2387,7 @@ class GameEngine:
         round_number: int,
         active_wolves: tuple[str, ...],
         requests: tuple[PlayerActionRequest, ...],
+        cursor: PublicStageCursor,
     ) -> None:
         if not requests:
             return
@@ -2055,6 +2419,7 @@ class GameEngine:
             requests=requests,
             futures=futures,
             started_at=self.monotonic(),
+            cursor=cursor,
         )
 
     def _finish_pending_self_explosion(
@@ -2413,14 +2778,24 @@ class GameEngine:
                 ),
             ):
                 return True
-            message, action_log = self._player_action(
+            action_result = self._interruptible_public_speech_action(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_SPEECH,
-                options=[],
-                result_key="say",
                 round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
                 phase="day",
+                cursor=PublicStageCursor(
+                    stage="sheriff_speech",
+                    ordered_actors=tuple(sheriff_speech_order),
+                    completed_actors=tuple(completed_sheriff_speakers),
+                    current_actor=name,
+                    timing="before_actor",
+                ),
             )
+            if action_result is None:
+                return True
+            message, action_log = action_result
             round_log.sheriff_speech.append(action_log)
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{name} did not return a valid sheriff speech.")
@@ -2607,14 +2982,24 @@ class GameEngine:
                 ),
             ):
                 return True
-            message, action_log = self._player_action(
+            action_result = self._interruptible_public_speech_action(
                 player=players_by_name[name],
                 action=ACTION_SHERIFF_PK_SPEECH,
-                options=[],
-                result_key="say",
                 round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
                 phase="day",
+                cursor=PublicStageCursor(
+                    stage="sheriff_pk_speech",
+                    ordered_actors=tuple(pk_candidates),
+                    completed_actors=tuple(completed_pk_speakers),
+                    current_actor=name,
+                    timing="before_actor",
+                ),
             )
+            if action_result is None:
+                return True
+            message, action_log = action_result
             round_log.sheriff_pk_speech.append(action_log)
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{name} did not return a valid sheriff PK speech.")
@@ -3029,6 +3414,7 @@ class GameEngine:
         ]
         tie_cues = exile_tie_cues(public_pk_candidates)
         self._publish_judge_cues(round_state, "vote", tie_cues[:2])
+        self._self_explosion_locked = False
 
         if self._maybe_run_werewolf_self_explosion(
             round_state,
@@ -3058,14 +3444,24 @@ class GameEngine:
                 ),
             ):
                 return True
-            message, action_log = self._player_action(
+            action_result = self._interruptible_public_speech_action(
                 player=players_by_name[name],
                 action=ACTION_EXILE_PK_SPEECH,
-                options=[],
-                result_key="say",
                 round_state=round_state,
+                round_log=round_log,
+                active_players=active_players,
                 phase="vote",
+                cursor=PublicStageCursor(
+                    stage="exile_pk_speech",
+                    ordered_actors=tuple(pk_candidates),
+                    completed_actors=tuple(completed_pk_speakers),
+                    current_actor=name,
+                    timing="before_actor",
+                ),
             )
+            if action_result is None:
+                return True
+            message, action_log = action_result
             round_log.exile_pk_speech.append(action_log)
             if not isinstance(message, str) or not message:
                 raise ValueError(f"{name} did not return a valid exile PK speech.")
@@ -3105,6 +3501,8 @@ class GameEngine:
             for name in self._eligible_voters(active_players)
             if name not in set(pk_candidates)
         ]
+        self._cancel_pending_self_explosion()
+        self._self_explosion_locked = True
         if not runoff_voters:
             self._record_no_exile(
                 round_state,
@@ -3112,18 +3510,6 @@ class GameEngine:
                 reason_code="no_runoff_voters",
             )
             return False
-
-        if self._maybe_run_werewolf_self_explosion(
-            round_state,
-            round_log,
-            active_players,
-            PublicStageCursor(
-                stage="exile_runoff_vote",
-                ordered_actors=tuple(runoff_voters),
-                timing="before_stage",
-            ),
-        ):
-            return True
 
         self._publish_judge_cue(round_state, "vote", tie_cues[2])
         runoff_requests = [
@@ -3351,6 +3737,12 @@ class GameEngine:
             "vote",
             exile_result_cue(exile_outcome.target_player_id or ""),
         )
+        self._run_exile_last_words(
+            exiled=exiled,
+            round_state=round_state,
+            round_log=round_log,
+            active_players=active_players,
+        )
         self._maybe_run_hunter_shot(
             dead_player=exiled,
             death_cause="vote_exile",
@@ -3367,6 +3759,89 @@ class GameEngine:
             phase="vote",
         )
 
+    def _run_exile_last_words(
+        self,
+        *,
+        exiled: str,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
+    ) -> None:
+        if not self.rule_set.exile_last_words_enabled:
+            return
+        if round_state.exile_last_words is not None:
+            return
+        self._cancel_pending_self_explosion()
+        public_player = self._public_player_reference(exiled)
+        self._publish(
+            "phase_started",
+            round_number=round_state.number,
+            phase="last_words",
+            actor=exiled,
+            payload={"active_players": active_players.copy()},
+        )
+        self._publish_judge_cue(
+            round_state,
+            "last_words",
+            exile_last_words_cue(public_player),
+        )
+        message: object | None = None
+        action_log: ActionLog | None = None
+        reason_code = "completed"
+        try:
+            message, action_log = self._player_action(
+                player=self.state.player_by_name()[exiled],
+                action=ACTION_EXILE_LAST_WORDS,
+                options=[],
+                result_key="say",
+                round_state=round_state,
+                phase="last_words",
+                extra_world_state={
+                    "hard_state": {
+                        "actor_alive": False,
+                        "death_cause": "vote_exile",
+                        "current_action": "驱逐遗言",
+                    }
+                },
+            )
+        except Exception:
+            reason_code = "model_failure"
+        if action_log is not None:
+            round_log.exile_last_words = action_log
+            if action_log.fallback_reason:
+                reason_code = action_log.fallback_reason
+        accepted_message = message.strip() if isinstance(message, str) else ""
+        status = "completed" if accepted_message else "skipped"
+        round_state.exile_last_words = {
+            "player": exiled,
+            "message": accepted_message,
+            "status": status,
+            "reason_code": reason_code,
+        }
+        if accepted_message:
+            text = f"第{round_state.number}轮驱逐遗言：{exiled}：{accepted_message}"
+            self._announce(active_players, text)
+            self._add_public_fact(
+                round_state.number,
+                "claim",
+                text,
+                stage="exile_last_words",
+                actor=exiled,
+                retention="critical",
+            )
+        else:
+            self._publish_judge_cue(
+                round_state,
+                "last_words",
+                exile_last_words_skipped_cue(public_player, reason_code),
+            )
+        self._publish_state_updated(
+            round_state=round_state,
+            phase="last_words",
+            actor=exiled,
+            action=ACTION_EXILE_LAST_WORDS,
+            payload={"exile_last_words": copy.deepcopy(round_state.exile_last_words)},
+        )
     def _maybe_transfer_sheriff_badge(
         self,
         *,
@@ -3621,10 +4096,8 @@ class GameEngine:
                     for pending_future in futures[index + 1 :]:
                         pending_future.cancel()
                     raise
-                player = players_by_name[name]
                 if isinstance(summary, str) and summary:
                     round_state.private_summaries[name] = summary
-                    player.add_observation(f"第{round_state.number}轮总结：{summary}")
                 round_log.summaries.append(action_log)
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
@@ -3830,6 +4303,8 @@ class GameEngine:
                     else None
                 ),
             )
+        except _PublicActionInterruptedBySelfExplosion:
+            raise
         except Exception:
             release_turn = getattr(action_provider, "release_turn_if_not_started", None)
             if callable(release_turn):
@@ -3880,18 +4355,10 @@ class GameEngine:
         )
 
     def _should_buffer_quality_action(self, request: PlayerActionRequest) -> bool:
-        if request.event_visibility != "public" or request.action not in BUFFERED_QUALITY_ACTIONS:
-            return False
-        if self.speech_quality_retry_enabled:
-            return True
-        if request.action != ACTION_DEBATE:
-            return True
-        active_players = (
-            request.player.gamestate.current_players
-            if request.player.gamestate
-            else request.round_state.players
+        return (
+            request.event_visibility == "public"
+            and request.action in BUFFERED_QUALITY_ACTIONS
         )
-        return len(active_players) <= 4
 
     def _generate_buffered_quality_action(
         self,
@@ -3904,7 +4371,7 @@ class GameEngine:
         world_state = copy.deepcopy(request.world_state)
         initial_codes: list[str] = []
         for quality_attempt in range(2):
-            buffer = _BufferedEventSink()
+            buffer = _BufferedEventSink(self._interrupt_public_action_if_self_explosion_ready)
             value, lm_log = self._generate_action_for_request(
                 request,
                 provider,
@@ -3914,11 +4381,17 @@ class GameEngine:
             )
             quality_report = self._speech_quality_report(request, lm_log)
             hard_warnings = self._hard_quality_warnings(request, lm_log)
+            if not isinstance(value, str) or not value.strip():
+                hard_warnings.append("invalid_public_speech")
+            if request.action == ACTION_EXILE_LAST_WORDS and isinstance(value, str):
+                if len(value.strip()) > 150:
+                    hard_warnings.append("last_words_too_long")
+            hard_warnings = list(dict.fromkeys(hard_warnings))
             if self.speech_quality_retry_enabled and quality_report is not None:
                 hard_warnings = list(
                     dict.fromkeys([*hard_warnings, *quality_report.hard_failure_codes])
                 )
-            if not hard_warnings or quality_attempt == 1:
+            if not hard_warnings:
                 self._attach_speech_quality_metadata(
                     request=request,
                     lm_log=lm_log,
@@ -3928,6 +4401,27 @@ class GameEngine:
                     initial_codes=initial_codes,
                 )
                 buffer.flush_to(event_sink)
+                return value, lm_log
+            if quality_attempt == 1:
+                self._attach_speech_quality_metadata(
+                    request=request,
+                    lm_log=lm_log,
+                    report=quality_report,
+                    attempt_count=2,
+                    retry_exhausted=True,
+                    initial_codes=initial_codes,
+                )
+                if "last_words_too_long" in hard_warnings and isinstance(value, str):
+                    value = value.strip()[:150]
+                    result = dict(lm_log.result or {})
+                    result[request.result_key] = value
+                    lm_log.result = result
+                    return value, lm_log
+                if any(code in OBJECTIVE_FACT_QUALITY_CODES for code in hard_warnings):
+                    value = ""
+                    result = dict(lm_log.result or {})
+                    result[request.result_key] = value
+                    lm_log.result = result
                 return value, lm_log
             initial_codes = hard_warnings.copy()
             publish = getattr(event_sink, "publish")
@@ -3974,6 +4468,8 @@ class GameEngine:
             eligibility=eligibility if isinstance(eligibility, dict) else None,
             role=request.player.role,
         )
+        if self._speech_contradicts_latest_vote_tally(request, text):
+            warnings.append("contradicts_public_vote_tally")
         return [warning for warning in warnings if warning in HARD_ACTION_QUALITY_CODES]
 
     def _quality_feedback(self, warnings: list[str]) -> str:
@@ -3990,8 +4486,46 @@ class GameEngine:
             "low_proposition_novelty": "给出一个此前没有出现过的明确判断，并说明可验证依据。",
             "group_agreement_without_evidence": "不要继续无依据附和；提出当前多数结论的反例或风险。",
             "catchphrase_dominates_speech": "减少个人口头禅，用具体事实和结论替代。",
+            "contradicts_public_vote_tally": "你写出的确定票数与引擎票型不一致，请按公开票型改写。",
+            "invalid_public_speech": "必须返回非空的公开发言。",
+            "last_words_too_long": "遗言不得超过 150 个汉字，请只保留最后判断和依据。",
         }
         return "；".join(guidance[warning] for warning in warnings if warning in guidance)
+
+    def _speech_contradicts_latest_vote_tally(
+        self,
+        request: PlayerActionRequest,
+        text: str,
+    ) -> bool:
+        patterns = (
+            r"(?:票型|投票结果|票数)[^0-9]{0,8}(\d+)\s*(?:[:：比-])\s*(\d+)",
+            r"(\d+)\s*(?:[:：比-])\s*(\d+)\s*(?:票型|票)",
+        )
+        asserted: tuple[int, int] | None = None
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match is not None:
+                asserted = tuple(sorted((int(match.group(1)), int(match.group(2))), reverse=True))
+                break
+        if asserted is None:
+            return False
+
+        candidate_rounds = list(self.state.rounds)
+        if all(existing is not request.round_state for existing in candidate_rounds):
+            candidate_rounds.append(request.round_state)
+        latest_votes: dict[str, str] | None = None
+        for existing in reversed(candidate_rounds):
+            if existing.exile_runoff_votes:
+                latest_votes = existing.exile_runoff_votes
+                break
+            if existing.votes:
+                latest_votes = existing.votes[-1]
+                break
+        if not latest_votes:
+            return False
+        counts = sorted(Counter(latest_votes.values()).values(), reverse=True)
+        expected = (counts[0], counts[1] if len(counts) > 1 else 0)
+        return asserted != expected
 
     def _speech_stage_context(
         self,
@@ -4083,7 +4617,11 @@ class GameEngine:
         timeout_source: Literal["action", "batch"] = "action",
     ) -> PlayerActionResult:
         result: dict[str, object]
-        if request.action in BUFFERED_QUALITY_ACTIONS:
+        if request.action == ACTION_EXILE_LAST_WORDS:
+            value = ""
+            result = {request.result_key: value}
+            reason = "timeout_last_words_skipped"
+        elif request.action in BUFFERED_QUALITY_ACTIONS:
             value: object | None = REQUIRED_PUBLIC_SPEECH_FALLBACK
             result = {request.result_key: value}
             reason = "timeout_neutral_public_speech"
@@ -4197,7 +4735,10 @@ class GameEngine:
         if invalid_error is not None:
             fallback_choice = self._optional_fallback_choice(request)
             fallback_reason = "optional_action_invalid"
-            if request.action in BUFFERED_QUALITY_ACTIONS:
+            if request.action == ACTION_EXILE_LAST_WORDS:
+                fallback_choice = ""
+                fallback_reason = "last_words_invalid_skipped"
+            elif request.action in BUFFERED_QUALITY_ACTIONS:
                 fallback_choice = REQUIRED_PUBLIC_SPEECH_FALLBACK
                 fallback_reason = "required_public_speech_invalid"
             if fallback_choice is None:
@@ -4389,6 +4930,8 @@ class GameEngine:
         self._publish_player_action_requested(request)
         try:
             result = self._execute_player_action_request(request)
+        except _PublicActionInterruptedBySelfExplosion:
+            raise
         except Exception as exc:
             self._checkpoint_player_action_failure(request, exc)
             raise
@@ -4725,7 +5268,12 @@ class GameEngine:
             "name": player.name,
             "role": player.role,
             "round": round_state.number,
-            "observations": player.observations,
+            "observations": [
+                observation
+                for observation in player.observations
+                if re.match(r"第\d+轮总结：", observation) is None
+            ],
+            "model_memory": self._model_memory(player.name, player.observations),
             "public_facts": self._public_fact_lines(),
             "public_self_history": self._public_self_history(player.name),
             "stage_interruptions": self._stage_interruption_lines(round_state),
@@ -4967,6 +5515,7 @@ class GameEngine:
             "sheriff_speech",
             "sheriff_pk_speech",
             "exile_pk_speech",
+            "exile_last_words",
             "debate",
         }
         facts = [
@@ -4981,6 +5530,19 @@ class GameEngine:
             and (fact.stage in public_speech_stages or fact.category in {"claim", "speech"})
         ]
         return compressed_public_facts(own_public_speech, max_lines=12)
+
+    def _model_memory(self, player_name: str, observations: list[str]) -> list[str]:
+        memories = [
+            observation
+            for observation in observations
+            if re.match(r"第\d+轮总结：", observation) is not None
+        ]
+        memories.extend(
+            f"第{round_state.number}轮：{summary}"
+            for round_state in self.state.rounds
+            if (summary := round_state.private_summaries.get(player_name))
+        )
+        return list(dict.fromkeys(memories))[-8:]
 
     def _stage_interruption_lines(self, round_state: RoundState) -> list[str]:
         rounds = list(self.state.rounds)

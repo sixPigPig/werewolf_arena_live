@@ -126,6 +126,7 @@ class AdminGameRoundSummary(BaseModel):
     exile_pk_candidates: list[str]
     exile_runoff_votes: dict[str, str]
     exile_resolution_reason: str | None
+    exile_last_words: AdminGameSpeechSummary | None
     sheriff_speech_order: list[str]
     sheriff_speech_direction: str | None
     speech_order: list[str]

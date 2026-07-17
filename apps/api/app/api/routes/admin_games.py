@@ -868,6 +868,9 @@ def _round_summaries(
                 "exile_resolution_reason": _optional_text(
                     item.get("exile_resolution_reason"), max_length=80
                 ),
+                "exile_last_words": _exile_last_words_summary(
+                    item.get("exile_last_words")
+                ),
                 "sheriff_speech_order": _string_list(
                     item.get("sheriff_speech_order"), max_items=24, max_length=120
                 ),
@@ -895,6 +898,16 @@ def _round_summaries(
             }
         )
     return rounds
+
+
+def _exile_last_words_summary(value: object) -> dict[str, str] | None:
+    if not isinstance(value, dict) or value.get("status") != "completed":
+        return None
+    speaker = _optional_text(value.get("player"), max_length=120)
+    message = _optional_text(value.get("message"), max_length=4000)
+    if speaker is None or message is None:
+        return None
+    return {"speaker": speaker, "message": message}
 
 
 def _public_round_summary(item: dict[str, Any]) -> str:

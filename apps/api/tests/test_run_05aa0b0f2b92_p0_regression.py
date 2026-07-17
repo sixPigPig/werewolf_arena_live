@@ -17,7 +17,7 @@ from app.werewolf.replay_playback import (
     filter_public_playback_voices,
     private_round_memory_event_ids,
 )
-from app.werewolf.rules import ACTION_DEBATE, get_rule_set
+from app.werewolf.rules import ACTION_DEBATE, ACTION_EXILE_LAST_WORDS, get_rule_set
 from app.werewolf.voice import VoiceSpeakerConfig, event_to_voice_utterance
 
 
@@ -75,7 +75,7 @@ def test_run_05aa0b0f2b92_p0_fixture_full_path(
 
     sink = TimedEventSink()
     sentinel = fixture["privacy"]["sentinel"]
-    provider = FakeProvider([{"reasoning": "不应调用", "summary": sentinel}])
+    provider = FakeProvider([{"reasoning": "留下公开判断。", "say": "请继续复盘票型。"}])
     engine = GameEngine(
         state=state,
         provider=provider,
@@ -150,7 +150,11 @@ def test_run_05aa0b0f2b92_p0_fixture_full_path(
     assert round_state.exiled == terminal["exiled"]
     assert active_players == terminal["active_after"]
     assert state.winner == terminal["winner"]
-    assert provider.calls == 0
+    assert provider.calls == 1
+    assert round_state.exile_last_words is not None
+    assert round_state.exile_last_words["player"] == terminal["exiled"]
+    assert round_state.exile_last_words["message"] == "请继续复盘票型。"
+    assert round_state.exile_last_words["status"] == "completed"
     assert round_log.summaries == []
     assert round_state.private_summaries == {}
 
@@ -172,7 +176,13 @@ def test_run_05aa0b0f2b92_p0_fixture_full_path(
         int(sink.events[completed_index]["_at_ns"])
         - int(sink.events[decisive_index]["_at_ns"])
     ) / 1_000_000
-    assert intervening_model_events == acceptance["post_terminal_model_events"]
+    intervening_actions = {
+        event.get("action")
+        for event in sink.events[decisive_index + 1 : completed_index]
+        if event["type"] in MODEL_EVENT_TYPES
+    }
+    assert intervening_model_events > acceptance["post_terminal_model_events"]
+    assert intervening_actions == {ACTION_EXILE_LAST_WORDS}
     assert terminal_latency_ms < acceptance["terminal_publish_latency_ms_max"]
 
     raw_state = state.to_dict()

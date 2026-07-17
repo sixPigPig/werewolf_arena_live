@@ -16,6 +16,7 @@ export const PUBLIC_SPEECH_ACTIONS = [
   "sheriff_speech",
   "sheriff_pk_speech",
   "exile_pk_speech",
+  "exile_last_words",
 ] as const;
 
 export type MobileLiveSubtitle = {

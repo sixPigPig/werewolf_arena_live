@@ -802,6 +802,17 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
     };
   }
 
+  if (event.type === "public_action_cancelled") {
+    return {
+      ...base,
+      title: liveEventTitle(event),
+      body: "狼人自爆已生效，原公开行动不再播出。",
+      importance: "action",
+      durationMs: MIN_DURATION_MS,
+      compressible: true,
+    };
+  }
+
   if (event.type === "state_updated") {
     return stateUpdatedCue(event, rawPayload, payload, base);
   }
@@ -1187,6 +1198,7 @@ function isPublicSpeechAction(action: string | null): boolean {
     action === "sheriff_speech" ||
     action === "sheriff_pk_speech" ||
     action === "exile_pk_speech" ||
+    action === "exile_last_words" ||
     action === "summarize"
   );
 }

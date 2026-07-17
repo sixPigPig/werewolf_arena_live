@@ -65,6 +65,30 @@ describe("toDirectorCue", () => {
     });
   });
 
+  it("renders self-explosion cancellation as a short non-speech cue", () => {
+    const cue = toDirectorCue(
+      event({
+        id: 3,
+        type: "public_action_cancelled",
+        round: 2,
+        phase: "day",
+        actor: "张三",
+        payload: {
+          canceled_action: "debate",
+          reason_code: "werewolf_self_explosion",
+        },
+      }),
+    );
+
+    expect(cue).toMatchObject({
+      eventId: 3,
+      title: "张三 的公开行动已取消",
+      body: "狼人自爆已生效，原公开行动不再播出。",
+      durationMs: 500,
+      compressible: true,
+    });
+  });
+
   it("renders sanitized model response receipts", () => {
     const cue = toDirectorCue(
       event({

@@ -100,6 +100,7 @@ export type AdminGameRound = {
   exile_pk_candidates: string[];
   exile_runoff_votes: Record<string, string>;
   exile_resolution_reason: string | null;
+  exile_last_words: AdminGameSpeech | null;
   sheriff_speech_order: string[];
   sheriff_speech_direction: string | null;
   speech_order: string[];

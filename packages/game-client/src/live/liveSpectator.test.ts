@@ -19,6 +19,33 @@ function event(partial: Partial<LiveGameEvent>): LiveGameEvent {
 }
 
 describe("deriveLiveSpectatorState", () => {
+  it("clears a player's pending speech when self-explosion cancels it", () => {
+    const state = deriveLiveSpectatorState([
+      event({
+        id: 1,
+        type: "action_requested",
+        actor: "张三",
+        action: "debate",
+      }),
+      event({
+        id: 2,
+        type: "public_action_cancelled",
+        actor: "张三",
+        payload: {
+          canceled_action: "debate",
+          reason_code: "werewolf_self_explosion",
+        },
+      }),
+    ]);
+
+    expect(state.players[0]).toMatchObject({
+      name: "张三",
+      status: "waiting",
+      activeRequestId: null,
+      lastDetail: "发言因狼人自爆取消",
+    });
+  });
+
   it("initializes players from game_started", () => {
     const state = deriveLiveSpectatorState([
       event({

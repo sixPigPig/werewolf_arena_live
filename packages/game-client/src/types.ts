@@ -27,6 +27,7 @@ export type RuleSetSummary = {
   speech_policy?: "sequential" | "sheriff_directed" | string;
   speech_rounds?: number;
   rule_tags?: string[];
+  exile_last_words_enabled?: boolean;
 };
 
 export type RuleSetsResponse = {
@@ -133,6 +134,7 @@ export type RawRoundLog = {
   sheriff_runoff_votes?: RawActionLog[];
   exile_pk_speech?: RawActionLog[];
   exile_runoff_votes?: RawActionLog[];
+  exile_last_words?: RawActionLog | null;
   werewolf_self_explosion?: RawActionLog | null;
   speech_order?: RawActionLog | null;
   sheriff_badge?: RawActionLog | null;
@@ -146,6 +148,13 @@ export type DeathEvent = {
   player: string;
   cause: string;
   source?: string | null;
+};
+
+export type ExileLastWords = {
+  player: string;
+  message: string;
+  status: "completed" | "skipped" | string;
+  reason_code: string;
 };
 
 export type PublicFact = {
@@ -230,6 +239,7 @@ export type RawRoundState = {
   exile_pk_speeches?: SpeechEntry[];
   exile_runoff_votes?: Record<string, string>;
   exile_resolution_reason?: string | null;
+  exile_last_words?: ExileLastWords | null;
   sheriff_elected?: string | null;
   speech_order?: string[];
   speech_order_choice?: string | null;
@@ -340,6 +350,7 @@ export type GameRound = Omit<
   | "exile_pk_speeches"
   | "exile_runoff_votes"
   | "exile_resolution_reason"
+  | "exile_last_words"
   | "sheriff_elected"
   | "speech_order"
   | "speech_order_choice"
@@ -380,6 +391,7 @@ export type GameRound = Omit<
   exile_pk_speeches: SpeechEntry[];
   exile_runoff_votes: Record<string, string>;
   exile_resolution_reason: string | null;
+  exile_last_words: ExileLastWords | null;
   sheriff_elected: string | null;
   speech_order: string[];
   speech_order_choice: string | null;

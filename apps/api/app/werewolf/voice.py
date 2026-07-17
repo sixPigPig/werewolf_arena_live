@@ -17,6 +17,7 @@ PUBLIC_SPEECH_ACTIONS = {
     "sheriff_speech",
     "sheriff_pk_speech",
     "exile_pk_speech",
+    "exile_last_words",
 }
 GOD_VIEW_PRIVATE_SPEECH_ACTIONS = {"werewolf_discuss", "werewolf_kill_vote"}
 PUBLIC_WINNER_ASSETS = {
@@ -71,6 +72,7 @@ USED_STATIC_JUDGE_VOICE_ASSET_IDS = frozenset(
 USED_STATIC_JUDGE_VOICE_ASSET_TEMPLATE_IDS = frozenset(
     {
         "badge_transfer",
+        "exile_last_words",
         "exile_result",
         "hunter_shot_result",
         "idiot_reveal",
@@ -456,6 +458,8 @@ def _judge_cue_for_event(
             "请警长选择从警左或警右开始发言。",
             "sheriff_choose_badge_side",
         )
+    if event.type == "action_requested" and event.action == "exile_last_words":
+        return None
     if event.type == "action_requested" and event.action in PUBLIC_SPEECH_ACTIONS:
         actor_label = _player_label(event.actor, player_seats, fallback="当前玩家")
         return JudgeVoiceCue(

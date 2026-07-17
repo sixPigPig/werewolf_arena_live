@@ -86,7 +86,7 @@ def test_rule_set_snapshot_is_json_safe() -> None:
             },
         ],
         "night_actions": ["remove", "protect", "investigate"],
-        "day_actions": ["debate", "vote", "summarize"],
+        "day_actions": ["debate", "vote", "exile_last_words", "summarize"],
         "win_condition": "wolves_gte_others",
         "reveal_policy": "hidden",
         "complexity": "入门",
@@ -94,6 +94,7 @@ def test_rule_set_snapshot_is_json_safe() -> None:
         "sheriff_enabled": False,
         "sheriff_vote_weight": 1.0,
         "werewolf_self_explosion_enabled": False,
+        "exile_last_words_enabled": True,
         "sheriff_badge_bomb_policy": "none",
         "speech_policy": "sequential",
         "speech_rounds": 1,
@@ -121,15 +122,18 @@ def test_12_player_rule_set_has_sheriff_flow_metadata() -> None:
         "speech_order",
         "debate",
         "vote",
+        "exile_last_words",
         "hunter_shoot",
         "summarize",
     )
     assert rule.werewolf_self_explosion_enabled is True
+    assert rule.exile_last_words_enabled is True
     assert rule.sheriff_badge_bomb_policy == "double"
     assert "werewolf_self_explosion" in rule.day_actions
     assert snapshot["sheriff_enabled"] is True
     assert snapshot["sheriff_vote_weight"] == 1.5
     assert snapshot["werewolf_self_explosion_enabled"] is True
+    assert snapshot["exile_last_words_enabled"] is True
     assert snapshot["sheriff_badge_bomb_policy"] == "double"
     assert snapshot["speech_policy"] == "sheriff_directed"
     assert snapshot["speech_rounds"] == 1
@@ -237,7 +241,7 @@ def test_rule_text_omits_self_explosion_policy_when_feature_is_disabled() -> Non
 
     text = render_rule_text(rule)
 
-    assert "自爆" not in text
+    assert "狼人白天公开阶段可以自爆" not in text
 
 
 def test_rule_text_omits_absent_special_roles_and_description() -> None:

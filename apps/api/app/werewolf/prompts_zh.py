@@ -63,6 +63,11 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {"reasoning": {"type": "string"}, "vote": {"type": "string"}},
         "required": ["reasoning", "vote"],
     },
+    "exile_last_words": {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
+        "required": ["reasoning", "say"],
+    },
     "speech_order": {
         "type": "object",
         "properties": {"reasoning": {"type": "string"}, "speech_order": {"type": "string"}},
@@ -166,6 +171,7 @@ RESULT_FIELD_BY_ACTION = {
     "sheriff_runoff_vote": "sheriff_vote",
     "exile_pk_speech": "say",
     "exile_runoff_vote": "vote",
+    "exile_last_words": "say",
     "speech_order": "speech_order",
     "sheriff_badge": "badge",
     "werewolf_self_explosion": "self_explode",
@@ -207,7 +213,13 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
         raise ValueError(f"Unsupported action: {action}")
 
     speech_guidance_sections = []
-    if action in {"debate", "sheriff_speech", "sheriff_pk_speech", "exile_pk_speech"}:
+    if action in {
+        "debate",
+        "sheriff_speech",
+        "sheriff_pk_speech",
+        "exile_pk_speech",
+        "exile_last_words",
+    }:
         speech_guidance_sections.append(_render_speech_mission(world_state))
     if action == "debate":
         speech_guidance_sections.append(_render_debate_guidance(world_state))
@@ -215,6 +227,8 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
     sections = [
         _render_base(world_state),
         _render_observations(world_state),
+        _render_model_memory(world_state),
+        _render_hard_state(world_state),
         _render_public_facts(world_state),
         _render_public_self_history(world_state),
         _render_stage_interruptions(world_state),
@@ -252,6 +266,32 @@ def _render_observations(world_state: dict[str, Any]) -> str:
     if not observations:
         return "你的私人观察：暂无。"
     return "你的私人观察：\n" + "\n".join(f"- {observation}" for observation in observations)
+
+
+def _render_model_memory(world_state: dict[str, Any]) -> str:
+    memories = world_state.get("model_memory") or []
+    if not memories:
+        return ""
+    return (
+        "你的模型策略笔记（可能包含误判，不属于客观事实）：\n"
+        + "\n".join(f"- {memory}" for memory in memories)
+    )
+
+
+def _render_hard_state(world_state: dict[str, Any]) -> str:
+    hard_state = world_state.get("hard_state")
+    if not isinstance(hard_state, dict):
+        return ""
+    lines: list[str] = []
+    if hard_state.get("actor_alive") is False:
+        lines.append("你已经出局，不在当前存活玩家名单中。")
+    if hard_state.get("death_cause"):
+        lines.append(f"你的出局原因：{hard_state['death_cause']}。")
+    if hard_state.get("current_action"):
+        lines.append(f"当前唯一合法阶段：{hard_state['current_action']}。")
+    if not lines:
+        return ""
+    return "引擎硬状态（不可否认或改写）：\n" + "\n".join(f"- {line}" for line in lines)
 
 
 def _render_public_facts(world_state: dict[str, Any]) -> str:
@@ -477,6 +517,15 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             f"候选人：{options}。\n"
             "输出字段 reasoning 和 vote。"
         )
+    if action == "exile_last_words":
+        return (
+            "行动：被放逐后的公开遗言。\n"
+            "你已经被白天投票放逐并实际出局，不在存活玩家名单中。"
+            "这是遗言阶段，不是普通白天发言，也不能在遗言中直接发动角色技能。\n"
+            "请结合已经发生的公开事实、发言和票型留下最后判断；可以欺骗或表达主观判断，"
+            "但不要把玩家声明写成法官确认事实。发言不超过 150 个汉字。\n"
+            "输出字段 reasoning 和 say。"
+        )
     if action == "speech_order":
         return (
             "行动：警长决定发言方向。\n"
@@ -683,6 +732,8 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
     if action == "hunter_shoot":
         return (
             "行动：猎人死亡开枪。\n"
+            "引擎已经确认你死亡并出局；你不在存活玩家名单中。当前是在结算死亡技能，"
+            "不得以‘自己仍存活’或‘尚未死亡’为理由放弃判断。\n"
             f"候选人：{options}。\n"
             "你可以选择一名存活玩家带走，或选择不发动技能。"
             "必须给出候选嫌疑对比；不能只因为信息不足就随机开枪。"

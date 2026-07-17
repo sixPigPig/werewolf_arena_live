@@ -106,6 +106,11 @@ export function deriveLiveSpectatorState(
           player.lastDetail = detailForEvent(event);
           player.status = "requesting";
         }
+      } else if (event.type === "public_action_cancelled") {
+        player.activeRequestId = null;
+        player.lastDetail = "发言因狼人自爆取消";
+        player.hasVisibleStreamText = false;
+        player.status = "waiting";
       } else {
         player.lastDetail = detailForEvent(event);
         player.hasVisibleStreamText = false;

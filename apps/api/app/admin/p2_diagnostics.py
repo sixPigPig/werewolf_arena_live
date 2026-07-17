@@ -11,6 +11,7 @@ _PUBLIC_SPEECH_ACTIONS = {
     "sheriff_speech",
     "sheriff_pk_speech",
     "exile_pk_speech",
+    "exile_last_words",
 }
 _PRIVATE_TEXT_ACTIONS = {"werewolf_discuss", "summarize"}
 _OUTCOME_KINDS = {

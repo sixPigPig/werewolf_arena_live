@@ -339,6 +339,7 @@ class RoundState:
     exile_pk_speeches: list[dict[str, str]] = field(default_factory=list)
     exile_runoff_votes: dict[str, str] = field(default_factory=dict)
     exile_resolution_reason: str | None = None
+    exile_last_words: dict[str, str] | None = None
     summaries: dict[str, str] = field(default_factory=dict)
     private_summaries: dict[str, str] = field(default_factory=dict)
     public_summary: str = ""
@@ -396,6 +397,7 @@ class RoundState:
             "exile_pk_speeches": self.exile_pk_speeches,
             "exile_runoff_votes": self.exile_runoff_votes,
             "exile_resolution_reason": self.exile_resolution_reason,
+            "exile_last_words": copy.deepcopy(self.exile_last_words),
             "summaries": self.summaries,
             "private_summaries": self.private_summaries,
             "public_summary": self.public_summary,
@@ -455,6 +457,7 @@ class RoundLog:
     votes: list[list[ActionLog]] = field(default_factory=list)
     exile_pk_speech: list[ActionLog] = field(default_factory=list)
     exile_runoff_votes: list[ActionLog] = field(default_factory=list)
+    exile_last_words: ActionLog | None = None
     summaries: list[ActionLog] = field(default_factory=list)
     sheriff_run: list[ActionLog] = field(default_factory=list)
     sheriff_speech: list[ActionLog] = field(default_factory=list)
@@ -484,6 +487,9 @@ class RoundLog:
             "votes": [[log.to_dict() for log in vote_logs] for vote_logs in self.votes],
             "exile_pk_speech": [log.to_dict() for log in self.exile_pk_speech],
             "exile_runoff_votes": [log.to_dict() for log in self.exile_runoff_votes],
+            "exile_last_words": (
+                self.exile_last_words.to_dict() if self.exile_last_words else None
+            ),
             "summaries": [log.to_dict() for log in self.summaries],
             "sheriff_run": [log.to_dict() for log in self.sheriff_run],
             "sheriff_speech": [log.to_dict() for log in self.sheriff_speech],
