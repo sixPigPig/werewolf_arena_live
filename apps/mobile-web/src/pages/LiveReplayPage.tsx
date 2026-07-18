@@ -44,6 +44,7 @@ export function LiveReplayPage() {
   const [voiceAdvanceHold, setVoiceAdvanceHold] = useState(false);
   const director = useLiveDirector(allEvents, {
     holdAdvance: voiceAdvanceHold,
+    preemptTerminalBacklog: false,
     resetKey: gameId,
     startAtLatestTerminal: false,
   });

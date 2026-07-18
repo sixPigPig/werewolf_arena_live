@@ -199,6 +199,44 @@ describe("useLiveDirector seekToEventId", () => {
     expect(result.current.terminalEventId).toBe(9);
   });
 
+  it("keeps completed replay playback at the first event when terminal preemption is disabled", () => {
+    const completedReplayEvents = [
+      event({ id: 3, type: "game_started" }),
+      event({
+        id: 955,
+        type: "state_updated",
+        round: 3,
+        phase: "vote",
+        action: "exile_resolved",
+        payload: { exiled: "1号玩家" },
+      }),
+      event({
+        id: 957,
+        type: "game_completed",
+        payload: {
+          winner: "狼人阵营",
+          terminal_keep_from_event_id: 955,
+        },
+      }),
+    ];
+    const { result } = renderHook(() =>
+      useLiveDirector(completedReplayEvents, {
+        preemptTerminalBacklog: false,
+      }),
+    );
+
+    expect(result.current.currentEventId).toBe(3);
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 3,
+      type: "game_started",
+    });
+    expect(result.current.cues.map((cue) => cue.eventId)).toEqual([
+      3, 955, 957,
+    ]);
+    expect(result.current.terminalKeepFromEventId).toBe(955);
+    expect(result.current.terminalEventId).toBe(957);
+  });
+
   it("preempts run_2d12b755578b at the final-civilian exile boundary", () => {
     // Client layer for apps/api/tests/fixtures/run_2d12b755578b_terminal_regression.json.
     const scenarioEvent = (partial: Partial<LiveGameEvent>) =>

@@ -92,7 +92,10 @@ const completedEvent: LiveGameEvent = {
   type: "game_completed",
   round: 1,
   phase: "day",
-  payload: { winner: "villagers" },
+  payload: {
+    winner: "villagers",
+    terminal_keep_from_event_id: 4,
+  },
 };
 
 const failedEvent: LiveGameEvent = {
@@ -534,6 +537,7 @@ describe("LiveReplayPage", () => {
         expect.any(Array),
         expect.objectContaining({
           holdAdvance: true,
+          preemptTerminalBacklog: false,
           resetKey: "session-1",
           startAtLatestTerminal: false,
         }),

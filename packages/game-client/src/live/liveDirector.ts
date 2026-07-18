@@ -50,6 +50,7 @@ export type UseLiveDirectorResult = {
 
 type UseLiveDirectorOptions = {
   holdAdvance?: boolean;
+  preemptTerminalBacklog?: boolean;
   resetKey?: string;
   sessionKey?: string;
   startAtEventType?: string;
@@ -349,16 +350,18 @@ export function useLiveDirector(
     () => terminalPlaybackWindowForEvents(events),
     [events],
   );
+  const terminalPreemptionWindow =
+    options.preemptTerminalBacklog === false ? null : terminalPlaybackWindow;
   const cues = useMemo(
     () =>
-      terminalPlaybackWindow
+      terminalPreemptionWindow
         ? allCues.filter(
             (cue) =>
-              cue.latestEventId >= terminalPlaybackWindow.keepFromEventId &&
-              cue.eventId <= terminalPlaybackWindow.terminalEventId,
+              cue.latestEventId >= terminalPreemptionWindow.keepFromEventId &&
+              cue.eventId <= terminalPreemptionWindow.terminalEventId,
           )
         : allCues,
-    [allCues, terminalPlaybackWindow],
+    [allCues, terminalPreemptionWindow],
   );
   const latestTerminalCue = useMemo(
     () =>
@@ -470,14 +473,14 @@ export function useLiveDirector(
 
   useEffect(() => {
     if (
-      !terminalPlaybackWindow ||
+      !terminalPreemptionWindow ||
       appliedTerminalPreemptionEventIdRef.current ===
-        terminalPlaybackWindow.terminalEventId
+        terminalPreemptionWindow.terminalEventId
     ) {
       return;
     }
     appliedTerminalPreemptionEventIdRef.current =
-      terminalPlaybackWindow.terminalEventId;
+      terminalPreemptionWindow.terminalEventId;
 
     const currentCue =
       currentCueId === null
@@ -485,12 +488,12 @@ export function useLiveDirector(
         : cues.find((cue) => cue.eventId === currentCueId) ?? null;
     const currentCueIntersectsWindow =
       currentCue !== null &&
-      currentCue.latestEventId >= terminalPlaybackWindow.keepFromEventId &&
-      currentCue.eventId <= terminalPlaybackWindow.terminalEventId;
+      currentCue.latestEventId >= terminalPreemptionWindow.keepFromEventId &&
+      currentCue.eventId <= terminalPreemptionWindow.terminalEventId;
     if (
       currentCueIntersectsWindow ||
       (currentCue !== null &&
-        currentCue.eventId > terminalPlaybackWindow.terminalEventId)
+        currentCue.eventId > terminalPreemptionWindow.terminalEventId)
     ) {
       return;
     }
@@ -498,11 +501,11 @@ export function useLiveDirector(
     const firstKeptCue =
       cues.find(
         (cue) =>
-          cue.latestEventId >= terminalPlaybackWindow.keepFromEventId &&
-          cue.eventId <= terminalPlaybackWindow.terminalEventId,
+          cue.latestEventId >= terminalPreemptionWindow.keepFromEventId &&
+          cue.eventId <= terminalPreemptionWindow.terminalEventId,
       ) ??
       cues.find(
-        (cue) => cue.eventId === terminalPlaybackWindow.terminalEventId,
+        (cue) => cue.eventId === terminalPreemptionWindow.terminalEventId,
       );
     if (!firstKeptCue) {
       return;
@@ -512,7 +515,7 @@ export function useLiveDirector(
     pausedAtRef.current = isPaused ? startedAtRef.current : null;
     setVoiceCompletedCueId(null);
     setCurrentCueId(firstKeptCue.eventId);
-  }, [cues, currentCueId, isPaused, terminalPlaybackWindow]);
+  }, [cues, currentCueId, isPaused, terminalPreemptionWindow]);
 
   const currentIndex = useMemo(() => {
     if (cues.length === 0) {
