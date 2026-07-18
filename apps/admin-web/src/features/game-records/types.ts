@@ -269,7 +269,7 @@ export type AdminGameQualityEvaluation = {
   schema_version: 1;
   evaluator_version: string;
   evaluation_status: AdminQualityEvaluationStatus;
-  source_revision?: string;
+  source_revision?: string | null;
   created_at?: string | null;
   started_at?: string | null;
   completed_at?: string | null;

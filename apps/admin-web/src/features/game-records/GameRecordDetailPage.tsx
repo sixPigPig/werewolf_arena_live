@@ -586,8 +586,10 @@ function GameP3QualityPanel({
         {quality.source_revision !== undefined ? (
           <div>
             <dt>来源修订</dt>
-            <dd title={quality.source_revision}>
-              {quality.source_revision.slice(0, 12)} · {quality.evaluator_version}
+            <dd title={quality.source_revision ?? undefined}>
+              {quality.source_revision
+                ? `${quality.source_revision.slice(0, 12)} · ${quality.evaluator_version}`
+                : "暂无"}
             </dd>
           </div>
         ) : null}

@@ -411,10 +411,13 @@ function optionalQualityTaskFields(
 ): Partial<AdminGameQualityEvaluation> {
   const parsed: Partial<AdminGameQualityEvaluation> = {};
   if ("source_revision" in record) {
-    parsed.source_revision = requiredString(
-      record.source_revision,
-      "quality_evaluation.source_revision",
-    );
+    parsed.source_revision =
+      record.source_revision === null
+        ? null
+        : requiredString(
+            record.source_revision,
+            "quality_evaluation.source_revision",
+          );
   }
   if ("created_at" in record) {
     parsed.created_at = nullableDateString(

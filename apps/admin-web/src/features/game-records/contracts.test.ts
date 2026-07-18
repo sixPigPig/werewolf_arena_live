@@ -73,6 +73,7 @@ describe("admin game records contract", () => {
         quality_evaluation: {
           ...contractGameDetail.quality_evaluation,
           evaluation_status: "queued",
+          source_revision: null,
           started_at: null,
           completed_at: null,
           latest_successful_result: null,
@@ -80,6 +81,7 @@ describe("admin game records contract", () => {
       }).quality_evaluation,
     ).toMatchObject({
       evaluation_status: "queued",
+      source_revision: null,
       started_at: null,
       completed_at: null,
       latest_successful_result: null,
@@ -93,6 +95,15 @@ describe("admin game records contract", () => {
         },
       }),
     ).toThrow(/attempt_count/);
+    expect(() =>
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        quality_evaluation: {
+          ...contractGameDetail.quality_evaluation,
+          source_revision: 42,
+        },
+      }),
+    ).toThrow(/source_revision/);
     expect(() =>
       parseAdminGameDetail({
         ...contractGameDetail,

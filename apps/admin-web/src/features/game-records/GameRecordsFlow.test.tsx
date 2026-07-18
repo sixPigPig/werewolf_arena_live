@@ -422,6 +422,48 @@ describe("admin game record flow", () => {
     ).toBe(false);
   });
 
+  it("renders game detail when the quality evaluation has no source revision", async () => {
+    const detailWithoutEvaluation = {
+      ...contractGameDetail,
+      quality_evaluation: {
+        ...contractGameDetail.quality_evaluation,
+        evaluation_status: "not_scheduled",
+        data_status: "legacy",
+        verdict: "unavailable",
+        source_revision: null,
+        created_at: null,
+        started_at: null,
+        completed_at: null,
+        attempt_count: 0,
+        latest_successful_result: null,
+        critical_actions: [],
+      },
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["games.read"]));
+      }
+      if (url.endsWith("/api/v1/admin/games/game_1234abcd")) {
+        return jsonResponse(detailWithoutEvaluation);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/operations/games/game_1234abcd");
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "game_1234abcd" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("旧对局尚未生成 P3 质量评估。")).toBeInTheDocument();
+    expect(screen.getByLabelText("赛后复盘任务状态")).toHaveTextContent(
+      "来源修订暂无",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "无法读取对局详情" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("opens model request input and output in an audited right drawer", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
