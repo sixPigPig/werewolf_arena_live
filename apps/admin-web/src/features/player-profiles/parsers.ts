@@ -9,6 +9,7 @@ import type {
   PlayerProfileOption,
   PlayerProfileOptions,
   PlayerProfileStatus,
+  PlayerTtsSpeakerOptions,
 } from "@/features/player-profiles/types";
 
 const PROFILE_STATUSES: PlayerProfileStatus[] = [
@@ -270,6 +271,25 @@ export function parsePlayerProfileOptions(value: unknown): PlayerProfileOptions 
     appearances: appearanceArray(record.appearances),
     strategies: optionArray(record.strategies),
     constraints: parseConstraints(constraints),
+  };
+}
+
+export function parsePlayerTtsSpeakerOptions(
+  value: unknown,
+): PlayerTtsSpeakerOptions {
+  const record = recordValue(value);
+  if (!Array.isArray(record.items)) {
+    throw invalidContract("玩家音色列表格式无效");
+  }
+  return {
+    resource_id: requiredString(record.resource_id, "resource_id"),
+    items: record.items.map((item) => {
+      const option = recordValue(item);
+      return {
+        voice_type: requiredString(option.voice_type, "voice_type"),
+        name: requiredString(option.name, "name"),
+      };
+    }),
   };
 }
 

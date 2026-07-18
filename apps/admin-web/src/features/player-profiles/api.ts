@@ -5,6 +5,7 @@ import {
   parseAdminPlayerProfileList,
   parseAdminPlayerVoicePreview,
   parsePlayerProfileOptions,
+  parsePlayerTtsSpeakerOptions,
 } from "@/features/player-profiles/parsers";
 import type {
   AdminPlayerProfile,
@@ -12,6 +13,7 @@ import type {
   CreatePlayerProfileRequest,
   PlayerProfileListParams,
   PlayerProfileOptions,
+  PlayerTtsSpeakerOptions,
   PlayerProfileTransitionRequest,
   PlayerVoicePreviewRequest,
   UpdatePlayerProfileRequest,
@@ -19,6 +21,8 @@ import type {
 
 const PLAYER_PROFILES_PATH = "/api/v1/admin/player-profiles";
 const PLAYER_PROFILE_OPTIONS_PATH = "/api/v1/admin/player-profile-options";
+const PLAYER_PROFILE_TTS_SPEAKERS_PATH =
+  "/api/v1/admin/player-profile-tts-speakers";
 const PLAYER_PROFILE_AI_DRAFT_PATH =
   "/api/v1/admin/player-profile-ai-drafts";
 const PLAYER_PROFILE_VOICE_PREVIEW_PATH =
@@ -92,6 +96,15 @@ export async function getPlayerProfileOptions(
     signal,
   });
   return parsePlayerProfileOptions(value);
+}
+
+export async function getPlayerTtsSpeakerOptions(
+  signal?: AbortSignal,
+): Promise<PlayerTtsSpeakerOptions> {
+  const value = await adminApiFetch<unknown>(PLAYER_PROFILE_TTS_SPEAKERS_PATH, {
+    signal,
+  });
+  return parsePlayerTtsSpeakerOptions(value);
 }
 
 export async function createAdminPlayerProfile(

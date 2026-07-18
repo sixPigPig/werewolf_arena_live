@@ -8,7 +8,6 @@ from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.player_avatar_assets import resolve_profile_avatar_reference
 from app.werewolf.player_profile_store import PlayerProfileFileStore, StoredPlayerProfile
@@ -75,7 +74,6 @@ def _database_profile(
         appearance_id=profile.appearance_id,
         avatar_image_url=profile.avatar_image_url,
         avatar_image_mime=profile.avatar_image_mime,
-        logs_dir=settings.werewolf_logs_dir,
     )
     return VirtualPlayerProfile(
         id=profile.id,

@@ -29,6 +29,7 @@ from app.api.schemas.admin_player_profiles import (
     AdminPlayerProfileResponse,
     AdminPlayerProfileTransition,
     AdminPlayerProfileUpdate,
+    AdminPlayerTtsSpeakersResponse,
     AdminPlayerVoicePreviewRequest,
     AdminPlayerVoicePreviewResponse,
     PlayerProfileSort,
@@ -77,6 +78,11 @@ from app.werewolf.speech_delivery import (
     compile_context_texts,
     normalize_delivery,
 )
+from app.werewolf.tts_speaker_catalog import (
+    TtsSpeakerCatalogUnavailable,
+    VolcengineTtsSpeakerCatalog,
+    tts_speaker_catalog,
+)
 from app.werewolf.voice import chunk_text_for_tts
 from app.werewolf.volcengine_tts import (
     TtsSynthesisItem,
@@ -124,6 +130,10 @@ def get_player_voice_preview_client_factory() -> Callable[
     [VolcengineTtsConfig], PlayerVoicePreviewTtsClient
 ]:
     return VolcengineTtsClient
+
+
+def get_tts_speaker_catalog() -> VolcengineTtsSpeakerCatalog:
+    return tts_speaker_catalog
 
 
 @router.post(
@@ -405,6 +415,41 @@ def get_profile_options(
             "example_messages_max_items": 5,
             "example_message_max_length": 240,
         },
+    )
+
+
+@router.get(
+    "/player-profile-tts-speakers",
+    response_model=AdminPlayerTtsSpeakersResponse,
+)
+def get_profile_tts_speakers(
+    request: Request,
+    response: Response,
+    _principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.PLAYERS_READ)),
+    ],
+    catalog: Annotated[
+        VolcengineTtsSpeakerCatalog,
+        Depends(get_tts_speaker_catalog),
+    ],
+) -> AdminPlayerTtsSpeakersResponse:
+    try:
+        items = catalog.list_supported(resource_id=settings.ark_tts_resource_id)
+    except TtsSpeakerCatalogUnavailable as exc:
+        raise AdminAPIProblem(
+            status_code=503,
+            code="admin_player_tts_speakers_unavailable",
+            title="TTS speaker catalog unavailable",
+            detail="无法从火山引擎读取可用音色列表，请稍后重试。",
+        ) from exc
+    _set_private_headers(request, response)
+    return AdminPlayerTtsSpeakersResponse(
+        resource_id=settings.ark_tts_resource_id,
+        items=[
+            {"voice_type": item.voice_type, "name": item.name}
+            for item in items
+        ],
     )
 
 

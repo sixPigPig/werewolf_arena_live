@@ -3,8 +3,10 @@ import {
   cloneElement,
   type FormEvent,
   isValidElement,
+  type KeyboardEvent,
   type ReactNode,
   useCallback,
+  useEffect,
   useId,
   useRef,
   useState,
@@ -40,6 +42,7 @@ import type {
   PlayerProfileEditableFields,
   PlayerProfileOptions,
   PlayerProfileStatus,
+  PlayerTtsSpeakerOption,
 } from "@/features/player-profiles/types";
 
 const STATUS_LABELS: Record<PlayerProfileStatus, string> = {
@@ -86,6 +89,12 @@ export default function PlayerProfileEditorPage() {
     queryKey: playerProfileKeys.detail(profileId ?? "new"),
     queryFn: ({ signal }) => repository.get(profileId!, signal),
   });
+  const ttsSpeakersQuery = useQuery({
+    enabled: isNew || profileQuery.data?.tts_speaker !== undefined,
+    queryKey: playerProfileKeys.ttsSpeakers(),
+    queryFn: ({ signal }) => repository.getTtsSpeakers(signal),
+    staleTime: 60 * 60_000,
+  });
 
   async function reloadProfile() {
     const result = await profileQuery.refetch();
@@ -128,6 +137,10 @@ export default function PlayerProfileEditorPage() {
       onReload={() => void reloadProfile()}
       options={optionsQuery.data}
       repository={repository}
+      ttsSpeakerOptions={ttsSpeakersQuery.data?.items ?? []}
+      ttsSpeakersError={ttsSpeakersQuery.isError}
+      ttsSpeakersPending={ttsSpeakersQuery.isPending}
+      onRetryTtsSpeakers={() => void ttsSpeakersQuery.refetch()}
     />
   );
 }
@@ -136,14 +149,22 @@ function PlayerProfileEditor({
   initialProfile,
   isNew,
   onReload,
+  onRetryTtsSpeakers,
   options,
   repository,
+  ttsSpeakerOptions,
+  ttsSpeakersError,
+  ttsSpeakersPending,
 }: {
   initialProfile: AdminPlayerProfile | null;
   isNew: boolean;
   onReload: () => void;
+  onRetryTtsSpeakers: () => void;
   options: PlayerProfileOptions;
   repository: ReturnType<typeof usePlayerProfileRepository>;
+  ttsSpeakerOptions: PlayerTtsSpeakerOption[];
+  ttsSpeakersError: boolean;
+  ttsSpeakersPending: boolean;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -741,22 +762,15 @@ function PlayerProfileEditor({
                 ) : null}
                 <div className="player-form-grid player-voice-config-grid">
                   {draft.tts_speaker !== undefined ? (
-                    <Field
-                      className="is-wide"
+                    <TtsSpeakerField
                       error={formErrors.tts_speaker}
-                      label="玩家音色"
-                      help="留空表示继承全局 player_speaker；具体音色能力由服务端校验。"
-                    >
-                      <input
-                        maxLength={160}
-                        name="tts_speaker"
-                        onChange={(event) =>
-                          updateDraft("tts_speaker", event.target.value)
-                        }
-                        placeholder="继承全局玩家音色"
-                        value={draft.tts_speaker ?? ""}
-                      />
-                    </Field>
+                      isError={ttsSpeakersError}
+                      isPending={ttsSpeakersPending}
+                      onChange={(speaker) => updateDraft("tts_speaker", speaker)}
+                      onRetry={onRetryTtsSpeakers}
+                      options={ttsSpeakerOptions}
+                      value={draft.tts_speaker ?? null}
+                    />
                   ) : null}
                   {draft.base_delivery_mood !== undefined ? (
                     <Field
@@ -1234,6 +1248,208 @@ function PlayerProfileEditor({
       </Field>
     );
   }
+}
+
+function TtsSpeakerField({
+  error,
+  isError,
+  isPending,
+  onChange,
+  onRetry,
+  options,
+  value,
+}: {
+  error?: string;
+  isError: boolean;
+  isPending: boolean;
+  onChange: (value: string | null) => void;
+  onRetry: () => void;
+  options: PlayerTtsSpeakerOption[];
+  value: string | null;
+}) {
+  const generatedId = useId();
+  const labelId = `${generatedId}-label`;
+  const valueId = `${generatedId}-value`;
+  const helpId = `${generatedId}-help`;
+  const errorId = `${generatedId}-error`;
+  const listboxId = `${generatedId}-listbox`;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const [isOpen, setIsOpen] = useState(false);
+  const selected = options.find((option) => option.voice_type === value);
+  const legacyOption = value && !selected
+    ? { voice_type: value, name: "当前已保存（不在可用列表）" }
+    : null;
+  const displayedOptions = [
+    { voice_type: "", name: "继承全局玩家音色" },
+    ...(legacyOption ? [legacyOption] : []),
+    ...options,
+  ];
+  const selectedIndex = Math.max(
+    0,
+    displayedOptions.findIndex((option) => option.voice_type === (value ?? "")),
+  );
+  const [activeIndex, setActiveIndex] = useState(selectedIndex);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (isOpen) {
+      optionRefs.current[activeIndex]?.focus();
+    }
+  }, [activeIndex, isOpen]);
+
+  function openList(direction: "first" | "last" | "selected" = "selected") {
+    setActiveIndex(
+      direction === "first"
+        ? 0
+        : direction === "last"
+          ? displayedOptions.length - 1
+          : selectedIndex,
+    );
+    setIsOpen(true);
+  }
+
+  function selectOption(option: PlayerTtsSpeakerOption) {
+    onChange(option.voice_type || null);
+    setIsOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function handleOptionKeyDown(
+    event: KeyboardEvent<HTMLDivElement>,
+    index: number,
+  ) {
+    let nextIndex = index;
+    if (event.key === "ArrowDown") {
+      nextIndex = Math.min(displayedOptions.length - 1, index + 1);
+    } else if (event.key === "ArrowUp") {
+      nextIndex = Math.max(0, index - 1);
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = displayedOptions.length - 1;
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setIsOpen(false);
+      triggerRef.current?.focus();
+      return;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    setActiveIndex(nextIndex);
+  }
+
+  const selectedName = selected?.name ?? legacyOption?.name ?? "继承全局玩家音色";
+  return (
+    <div
+      className="player-form-field player-speaker-field is-wide"
+      ref={containerRef}
+    >
+      <span id={labelId}>玩家音色</span>
+      <div className="player-speaker-select">
+        <button
+          aria-controls={listboxId}
+          aria-describedby={[helpId, error ? errorId : null]
+            .filter(Boolean)
+            .join(" ")}
+          aria-expanded={isOpen}
+          aria-haspopup="listbox"
+          aria-invalid={Boolean(error)}
+          aria-labelledby={`${labelId} ${valueId}`}
+          className="player-speaker-trigger"
+          onClick={() => (isOpen ? setIsOpen(false) : openList())}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              openList(event.key === "ArrowDown" ? "first" : "last");
+            }
+          }}
+          ref={triggerRef}
+          role="combobox"
+          type="button"
+        >
+          <span className="player-speaker-value" id={valueId}>
+            <code>{value || "继承全局"}</code>
+            <span>{selectedName}</span>
+          </span>
+          <span aria-hidden="true" className="player-speaker-chevron">
+            ⌄
+          </span>
+        </button>
+        {isOpen ? (
+          <div className="player-speaker-menu" id={listboxId} role="listbox">
+            <div aria-hidden="true" className="player-speaker-menu-header">
+              <span>voice_type</span>
+              <span>音色名称</span>
+            </div>
+            {displayedOptions.map((option, index) => (
+              <div
+                aria-label={`${option.voice_type || "继承全局"} ${option.name}`}
+                aria-selected={option.voice_type === (value ?? "")}
+                className="player-speaker-option"
+                key={option.voice_type || "inherit-global"}
+                onClick={() => selectOption(option)}
+                onFocus={() => setActiveIndex(index)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    selectOption(option);
+                    return;
+                  }
+                  handleOptionKeyDown(event, index);
+                }}
+                ref={(node) => {
+                  optionRefs.current[index] = node;
+                }}
+                role="option"
+                tabIndex={activeIndex === index ? 0 : -1}
+              >
+                <code>{option.voice_type || "继承全局"}</code>
+                <span>{option.name}</span>
+              </div>
+            ))}
+            {isPending ? (
+              <div className="player-speaker-menu-status" role="status">
+                正在读取火山引擎音色列表…
+              </div>
+            ) : null}
+            {isError ? (
+              <div className="player-speaker-menu-status is-error" role="alert">
+                <span>音色列表暂时读取失败。</span>
+                <button onClick={onRetry} type="button">
+                  重试
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      <small id={helpId}>
+        仅列出当前 seed-tts-2.0
+        双向流兼容音色；留空表示继承全局 player_speaker。
+      </small>
+      {error ? (
+        <small className="player-field-error" id={errorId} role="alert">
+          {error}
+        </small>
+      ) : null}
+    </div>
+  );
 }
 
 function Field({

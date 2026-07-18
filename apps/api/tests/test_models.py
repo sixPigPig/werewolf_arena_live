@@ -414,7 +414,7 @@ def test_player_avatar_asset_table_matches_expected_schema() -> None:
         "id",
         "source",
         "content_type",
-        "data",
+        "data_base64",
         "sha256",
         "size_bytes",
         "created_at",
@@ -422,7 +422,7 @@ def test_player_avatar_asset_table_matches_expected_schema() -> None:
     assert table.c.id.primary_key is True
     assert table.c.source.nullable is False
     assert table.c.content_type.nullable is False
-    assert table.c.data.nullable is False
+    assert table.c.data_base64.nullable is False
     assert table.c.sha256.nullable is False
     assert table.c.sha256.index is True
     assert table.c.size_bytes.nullable is False

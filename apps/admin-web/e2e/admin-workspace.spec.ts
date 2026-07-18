@@ -56,6 +56,16 @@ test.describe("Admin 运营工作台", () => {
       page.getByText("AI 草稿已填入，请审核后保存"),
     ).toBeVisible();
     await expect(page.getByLabel("玩家名称")).toHaveValue("月影听风");
+    const speakerSelect = page.getByRole("combobox", { name: /^玩家音色 / });
+    await speakerSelect.click();
+    await expect(page.getByText("voice_type", { exact: true })).toBeVisible();
+    await expect(page.getByText("音色名称", { exact: true })).toBeVisible();
+    const viviOption = page.getByRole("option", {
+      name: "zh_female_vv_uranus_bigtts Vivi 2.0",
+    });
+    await expect(viviOption).toBeVisible();
+    await viviOption.click();
+    await expect(speakerSelect).toContainText("zh_female_vv_uranus_bigtts");
     await expect(page.getByRole("button", { name: "保存草稿" })).toBeEnabled();
     await expect(page).toHaveURL(/\/content\/players\/new$/);
   });

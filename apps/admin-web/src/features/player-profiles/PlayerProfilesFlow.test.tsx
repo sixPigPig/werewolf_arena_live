@@ -166,11 +166,11 @@ describe("admin player profile flow", () => {
         name: "玩家音色与基础演绎",
       }),
     ).toBeInTheDocument();
-    const speakerInput = screen.getByRole("textbox", { name: /^玩家音色 / });
+    const speakerSelect = screen.getByRole("combobox", { name: /^玩家音色 / });
     const instructionInput = screen.getByRole("textbox", {
       name: /^基础演绎提示/,
     });
-    expect(speakerInput).toHaveValue("");
+    expect(speakerSelect).toHaveTextContent("继承全局玩家音色");
     expect(screen.getByRole("combobox", { name: /^基础情绪/ })).toHaveValue(
       "restrained",
     );
@@ -194,22 +194,36 @@ describe("admin player profile flow", () => {
       screen.getByText(/进行中、恢复、已排队语音和历史 Replay/),
     ).toBeInTheDocument();
 
-    await user.type(speakerInput, "custom-speaker");
+    await user.click(speakerSelect);
+    expect(screen.getByText("voice_type")).toBeInTheDocument();
+    expect(screen.getByText("音色名称")).toBeInTheDocument();
+    await user.click(
+      await screen.findByRole("option", {
+        name: /zh_female_vv_uranus_bigtts Vivi 2.0/,
+      }),
+    );
     await user.clear(instructionInput);
     await user.type(instructionInput, "  自然接话  ");
     await user.click(screen.getByRole("button", { name: "保存修改" }));
 
     expect(await screen.findByText("玩家资料已保存")).toBeInTheDocument();
     expect(instructionInput).toHaveValue("自然接话");
-    expect(screen.getByText(/当前生效：custom-speaker/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/当前生效：zh_female_vv_uranus_bigtts/),
+    ).toBeInTheDocument();
   });
 
   it("previews the current unsaved voice draft and shows bounded safe output", async () => {
     const user = userEvent.setup();
     renderRoute("/content/players/preview-draft-1");
     await screen.findByRole("heading", { name: "草稿语音试听" });
-    const speakerInput = screen.getByRole("textbox", { name: /^玩家音色 / });
-    await user.type(speakerInput, "zh_female_vv_uranus_bigtts");
+    const speakerSelect = screen.getByRole("combobox", { name: /^玩家音色 / });
+    await user.click(speakerSelect);
+    await user.click(
+      await screen.findByRole("option", {
+        name: /zh_female_vv_uranus_bigtts Vivi 2.0/,
+      }),
+    );
     const sayInput = screen.getByRole("textbox", { name: /^试听文本/ });
     await user.clear(sayInput);
     await user.type(sayInput, "这是尚未保存的试听文本。");
@@ -244,11 +258,18 @@ describe("admin player profile flow", () => {
 
   it("shows the backend-safe preview error code for unsupported speakers", async () => {
     const user = userEvent.setup();
+    await act(async () => {
+      await updatePreviewPlayerProfile("preview-draft-1", {
+        expected_version: 2,
+        tts_speaker: "clone-speaker",
+      });
+    });
     renderRoute("/content/players/preview-draft-1");
-    const speakerInput = await screen.findByRole("textbox", {
+    const speakerSelect = await screen.findByRole("combobox", {
       name: /^玩家音色 /,
     });
-    await user.type(speakerInput, "clone-speaker");
+    expect(speakerSelect).toHaveTextContent("clone-speaker");
+    expect(speakerSelect).toHaveTextContent("当前已保存（不在可用列表）");
     await user.click(screen.getByRole("button", { name: "试听当前草稿" }));
 
     const alert = await screen.findByRole("alert");

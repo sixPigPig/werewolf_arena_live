@@ -5,6 +5,7 @@ import {
   generateAdminPlayerProfileAiDraft,
   getAdminPlayerProfile,
   getPlayerProfileOptions,
+  getPlayerTtsSpeakerOptions,
   listAdminPlayerProfiles,
   previewAdminPlayerProfileVoice,
   transitionAdminPlayerProfile,
@@ -15,6 +16,7 @@ import {
   generatePreviewPlayerProfileAiDraft,
   getPreviewPlayerProfile,
   getPreviewPlayerProfileOptions,
+  getPreviewPlayerTtsSpeakerOptions,
   listPreviewPlayerProfiles,
   previewPlayerProfileVoice,
   transitionPreviewPlayerProfile,
@@ -48,6 +50,10 @@ export function usePlayerProfileRepository() {
         runtimeMode === "preview"
           ? getPreviewPlayerProfileOptions()
           : getPlayerProfileOptions(signal),
+      getTtsSpeakers: (signal?: AbortSignal) =>
+        runtimeMode === "preview"
+          ? getPreviewPlayerTtsSpeakerOptions()
+          : getPlayerTtsSpeakerOptions(signal),
       generateAiDraft: () =>
         runtimeMode === "preview"
           ? generatePreviewPlayerProfileAiDraft()

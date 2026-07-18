@@ -6,6 +6,7 @@ import type {
   CreatePlayerProfileRequest,
   PlayerProfileListParams,
   PlayerProfileOptions,
+  PlayerTtsSpeakerOptions,
   PlayerProfileTransitionRequest,
   PlayerVoicePreviewRequest,
   UpdatePlayerProfileRequest,
@@ -78,6 +79,18 @@ const PREVIEW_OPTIONS: PlayerProfileOptions = {
     example_messages_max_items: 5,
     example_message_max_length: 240,
   },
+};
+
+const PREVIEW_TTS_SPEAKERS: PlayerTtsSpeakerOptions = {
+  resource_id: "seed-tts-2.0",
+  items: [
+    { voice_type: "zh_female_vv_uranus_bigtts", name: "Vivi 2.0" },
+    {
+      voice_type: "zh_female_gaolengyujie_uranus_bigtts",
+      name: "高冷御姐 2.0",
+    },
+    { voice_type: "en_male_tim_uranus_bigtts", name: "Tim" },
+  ],
 };
 
 const FIXTURE_PROFILES: AdminPlayerProfile[] = [
@@ -195,6 +208,10 @@ export async function getPreviewPlayerProfile(profileId: string) {
 
 export async function getPreviewPlayerProfileOptions() {
   return Promise.resolve(structuredClone(PREVIEW_OPTIONS));
+}
+
+export async function getPreviewPlayerTtsSpeakerOptions() {
+  return Promise.resolve(structuredClone(PREVIEW_TTS_SPEAKERS));
 }
 
 export async function previewPlayerProfileVoice(

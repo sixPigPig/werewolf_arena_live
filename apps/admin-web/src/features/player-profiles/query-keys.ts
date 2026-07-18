@@ -9,4 +9,5 @@ export const playerProfileKeys = {
   detail: (profileId: string) =>
     [...playerProfileKeys.details(), profileId] as const,
   options: () => [...playerProfileKeys.all, "options"] as const,
+  ttsSpeakers: () => [...playerProfileKeys.all, "tts-speakers"] as const,
 };

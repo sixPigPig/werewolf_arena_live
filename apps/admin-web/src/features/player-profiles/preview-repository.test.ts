@@ -1,6 +1,7 @@
 import {
   getPreviewPlayerProfile,
   getPreviewPlayerProfileOptions,
+  getPreviewPlayerTtsSpeakerOptions,
   listPreviewPlayerProfiles,
   resetPreviewPlayerProfiles,
   transitionPreviewPlayerProfile,
@@ -20,7 +21,13 @@ describe("preview player repository", () => {
   it("uses only local or data resources and never API image URLs", async () => {
     const list = await listPreviewPlayerProfiles(listParams);
     const options = await getPreviewPlayerProfileOptions();
+    const speakers = await getPreviewPlayerTtsSpeakerOptions();
     expect(list.items).toHaveLength(3);
+    expect(speakers.resource_id).toBe("seed-tts-2.0");
+    expect(speakers.items).toContainEqual({
+      voice_type: "zh_female_vv_uranus_bigtts",
+      name: "Vivi 2.0",
+    });
     expect(
       [...list.items.map((item) => item.avatar_image_url), ...options.appearances.map((item) => item.avatar_image_url)]
         .filter(Boolean)

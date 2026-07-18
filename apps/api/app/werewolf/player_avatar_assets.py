@@ -34,13 +34,6 @@ LEGACY_SYSTEM_AVATAR_URLS = {
 
 
 @dataclass(frozen=True)
-class FilePlayerAvatarAsset:
-    filename: str
-    path: Path
-    content_type: str
-
-
-@dataclass(frozen=True)
 class ResolvedAvatarReference:
     id: str | None
     url: str
@@ -123,12 +116,22 @@ def create_avatar_asset(
         id=asset_id or f"{source}-{uuid.uuid4().hex}",
         source=source,
         content_type=normalized_type,
-        data=data,
+        data_base64=base64.b64encode(data).decode("ascii"),
         sha256=sha256,
         size_bytes=len(data),
     )
     db.add(asset)
     return asset
+
+
+def decode_avatar_asset_data(asset: PlayerAvatarAsset) -> bytes:
+    try:
+        data = base64.b64decode(asset.data_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Invalid stored avatar image data") from exc
+    if len(data) != asset.size_bytes or hashlib.sha256(data).hexdigest() != asset.sha256:
+        raise ValueError("Stored avatar image data failed integrity validation")
+    return data
 
 
 def save_uploaded_avatar_asset(
@@ -161,7 +164,7 @@ def system_avatar_asset_id_for_legacy_url(avatar_image_url: str | None) -> str |
     return LEGACY_SYSTEM_AVATAR_URLS.get(avatar_image_url.strip())
 
 
-def legacy_avatar_file_path(logs_dir: str | Path, avatar_image_url: str | None) -> Path | None:
+def legacy_avatar_filename(avatar_image_url: str | None) -> str | None:
     if not avatar_image_url:
         return None
     avatar_image_url = avatar_image_url.strip()
@@ -170,6 +173,13 @@ def legacy_avatar_file_path(logs_dir: str | Path, avatar_image_url: str | None) 
         return None
     filename = avatar_image_url.removeprefix(legacy_prefix)
     if Path(filename).name != filename:
+        return None
+    return filename
+
+
+def legacy_avatar_file_path(logs_dir: str | Path, avatar_image_url: str | None) -> Path | None:
+    filename = legacy_avatar_filename(avatar_image_url)
+    if filename is None:
         return None
     return Path(logs_dir) / "player_profile_assets" / filename
 
@@ -181,7 +191,6 @@ def resolve_profile_avatar_reference(
     appearance_id: str | None,
     avatar_image_url: str | None,
     avatar_image_mime: str | None,
-    logs_dir: str | Path,
 ) -> ResolvedAvatarReference:
     trimmed_asset_id = avatar_asset_id.strip() if isinstance(avatar_asset_id, str) else ""
     if trimmed_asset_id:
@@ -215,21 +224,8 @@ def resolve_profile_avatar_reference(
                 mime=asset.content_type,
             )
 
-        legacy_path = legacy_avatar_file_path(logs_dir, trimmed_url)
-        if legacy_path is not None:
-            if not legacy_path.is_file():
-                raise ValueError("Legacy avatar image file not found")
-            asset = create_avatar_asset(
-                db,
-                source="migrated",
-                content_type=avatar_image_mime or avatar_content_type_for_filename(legacy_path),
-                data=legacy_path.read_bytes(),
-            )
-            return ResolvedAvatarReference(
-                id=asset.id,
-                url=avatar_asset_url(asset.id),
-                mime=asset.content_type,
-            )
+        if legacy_avatar_filename(trimmed_url) is not None:
+            raise ValueError("Legacy file-backed avatar URLs are no longer supported")
 
         return ResolvedAvatarReference(
             id=None,
@@ -250,40 +246,3 @@ def resolve_profile_avatar_reference(
         url="",
         mime=avatar_image_mime or "",
     )
-
-
-class PlayerAvatarAssetStore:
-    def __init__(self, root: Path) -> None:
-        self.root = root
-
-    def save(self, *, content_type: str, data_base64: str) -> FilePlayerAvatarAsset:
-        normalized_type, image_bytes = decode_uploaded_avatar(
-            content_type=content_type,
-            data_base64=data_base64,
-        )
-        extension = AVATAR_IMAGE_TYPES[normalized_type]
-
-        self.root.mkdir(parents=True, exist_ok=True)
-        filename = f"{uuid.uuid4().hex}{extension}"
-        path = self.root / filename
-        path.write_bytes(image_bytes)
-        return FilePlayerAvatarAsset(
-            filename=filename,
-            path=path,
-            content_type=normalized_type,
-        )
-
-    def path_for(self, filename: str) -> Path | None:
-        if Path(filename).name != filename:
-            return None
-        path = self.root / filename
-        if not path.is_file():
-            return None
-        return path
-
-    def content_type_for(self, filename: str) -> str:
-        return avatar_content_type_for_filename(filename)
-
-
-def player_avatar_asset_store_for_logs_dir(logs_dir: str | Path) -> PlayerAvatarAssetStore:
-    return PlayerAvatarAssetStore(Path(logs_dir) / "player_profile_assets")

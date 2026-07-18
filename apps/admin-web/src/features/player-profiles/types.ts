@@ -175,6 +175,16 @@ export type PlayerProfileOptions = {
   constraints: PlayerProfileConstraints;
 };
 
+export type PlayerTtsSpeakerOption = {
+  voice_type: string;
+  name: string;
+};
+
+export type PlayerTtsSpeakerOptions = {
+  resource_id: string;
+  items: PlayerTtsSpeakerOption[];
+};
+
 export const DEFAULT_PLAYER_PROFILE_INPUT: PlayerProfileEditableFields = {
   display_name: "",
   model: "",

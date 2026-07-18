@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes import player_profiles as player_profiles_routes
-from app.api.routes.player_profiles import get_player_avatar_asset_store
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
@@ -18,7 +17,7 @@ from app.main import app
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.player_avatar_assets import PlayerAvatarAssetStore, create_avatar_asset
+from app.werewolf.player_avatar_assets import create_avatar_asset, decode_avatar_asset_data
 from app.werewolf.player_profile_store import PlayerProfileFileStore
 from app.werewolf.player_presets import default_personality_text
 
@@ -324,7 +323,8 @@ def test_upload_avatar_image_returns_database_asset_url() -> None:
     assert asset is not None
     assert asset.source == "uploaded"
     assert asset.content_type == "image/png"
-    assert asset.data == PNG_BYTES
+    assert asset.data_base64 == base64.b64encode(PNG_BYTES).decode("ascii")
+    assert decode_avatar_asset_data(asset) == PNG_BYTES
     assert asset.size_bytes == len(PNG_BYTES)
 
 
@@ -392,6 +392,24 @@ def test_get_avatar_asset_returns_404_for_missing_asset() -> None:
     assert response.json()["detail"] == "Avatar asset not found"
 
 
+def test_get_avatar_asset_rejects_corrupted_base64_data() -> None:
+    with TestingSessionLocal() as session:
+        asset = create_avatar_asset(
+            session,
+            asset_id="corrupted-avatar",
+            content_type="image/png",
+            data=PNG_BYTES,
+            source="uploaded",
+        )
+        asset.data_base64 = "not-valid-base64"
+        session.commit()
+
+    response = client.get("/api/v1/player-profiles/avatar-assets/corrupted-avatar")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Avatar asset data is invalid"
+
+
 def test_upload_avatar_image_returns_503_when_database_is_unavailable() -> None:
     app.dependency_overrides[get_db] = override_broken_db
     try:
@@ -421,21 +439,10 @@ def test_get_avatar_asset_returns_503_when_database_is_unavailable() -> None:
     assert response.json()["detail"] == "Player profile database unavailable"
 
 
-def test_legacy_avatar_file_route_serves_existing_file(tmp_path) -> None:
-    asset_root = tmp_path / "player_profile_assets"
-    asset_root.mkdir()
-    (asset_root / "legacy.png").write_bytes(PNG_BYTES)
-    app.dependency_overrides[get_player_avatar_asset_store] = lambda: PlayerAvatarAssetStore(
-        asset_root
-    )
-    try:
-        response = client.get("/api/v1/player-profiles/avatar/legacy.png")
-    finally:
-        app.dependency_overrides.clear()
+def test_legacy_avatar_file_route_is_removed() -> None:
+    response = client.get("/api/v1/player-profiles/avatar/legacy.png")
 
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "image/png"
-    assert response.content == PNG_BYTES
+    assert response.status_code == 404
 
 
 def test_upload_avatar_image_rejects_unsupported_type() -> None:
@@ -506,15 +513,7 @@ def test_create_profile_normalizes_legacy_system_avatar_url() -> None:
     assert payload["avatar_image_mime"] == "image/png"
 
 
-def test_create_profile_migrates_explicit_legacy_uploaded_url_before_appearance(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    legacy_root = tmp_path / "player_profile_assets"
-    legacy_root.mkdir()
-    (legacy_root / "legacy.png").write_bytes(PNG_BYTES)
-    monkeypatch.setattr(player_profiles_routes.settings, "werewolf_logs_dir", str(tmp_path))
-
+def test_create_profile_rejects_legacy_file_url_even_when_appearance_is_set() -> None:
     response = client.post(
         "/api/v1/player-profiles",
         json={
@@ -526,53 +525,11 @@ def test_create_profile_migrates_explicit_legacy_uploaded_url_before_appearance(
         },
     )
 
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload["avatar_asset_id"].startswith("migrated-")
-    assert payload["avatar_asset_id"] != "system-gothic-male-1"
+    assert response.status_code == 422
     assert (
-        payload["avatar_image_url"]
-        == f"/api/v1/player-profiles/avatar-assets/{payload['avatar_asset_id']}"
+        response.json()["detail"]
+        == "Legacy file-backed avatar URLs are no longer supported"
     )
-
-    with TestingSessionLocal() as session:
-        asset = session.get(PlayerAvatarAsset, payload["avatar_asset_id"])
-
-    assert asset is not None
-    assert asset.source == "migrated"
-    assert asset.content_type == "image/png"
-    assert asset.data == PNG_BYTES
-
-
-def test_create_profile_migrates_legacy_uploaded_url_with_empty_mime(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    legacy_root = tmp_path / "player_profile_assets"
-    legacy_root.mkdir()
-    (legacy_root / "legacy.png").write_bytes(PNG_BYTES)
-    monkeypatch.setattr(player_profiles_routes.settings, "werewolf_logs_dir", str(tmp_path))
-
-    response = client.post(
-        "/api/v1/player-profiles",
-        json={
-            "display_name": "空 MIME 旧头像玩家",
-            "model": "gpt-4.1-mini",
-            "avatar_image_url": "/api/v1/player-profiles/avatar/legacy.png",
-        },
-    )
-
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload["avatar_asset_id"].startswith("migrated-")
-    assert payload["avatar_image_mime"] == "image/png"
-
-    with TestingSessionLocal() as session:
-        asset = session.get(PlayerAvatarAsset, payload["avatar_asset_id"])
-
-    assert asset is not None
-    assert asset.source == "migrated"
-    assert asset.content_type == "image/png"
 
 
 def test_create_profile_rejects_missing_legacy_uploaded_avatar_file() -> None:
@@ -587,7 +544,10 @@ def test_create_profile_rejects_missing_legacy_uploaded_avatar_file() -> None:
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "Legacy avatar image file not found"
+    assert (
+        response.json()["detail"]
+        == "Legacy file-backed avatar URLs are no longer supported"
+    )
 
 
 def test_create_profile_rejects_missing_explicit_legacy_url_before_appearance() -> None:
@@ -603,7 +563,10 @@ def test_create_profile_rejects_missing_explicit_legacy_url_before_appearance() 
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "Legacy avatar image file not found"
+    assert (
+        response.json()["detail"]
+        == "Legacy file-backed avatar URLs are no longer supported"
+    )
 
 
 def test_create_profile_preserves_explicit_external_avatar_url_before_appearance() -> None:
@@ -807,14 +770,13 @@ def test_patch_profile_rejects_missing_legacy_uploaded_avatar_file() -> None:
     )
 
     assert patch_response.status_code == 422
-    assert patch_response.json()["detail"] == "Legacy avatar image file not found"
+    assert (
+        patch_response.json()["detail"]
+        == "Legacy file-backed avatar URLs are no longer supported"
+    )
 
 
-def test_patch_profile_migrates_existing_legacy_uploaded_avatar_file(tmp_path, monkeypatch) -> None:
-    legacy_root = tmp_path / "player_profile_assets"
-    legacy_root.mkdir()
-    (legacy_root / "legacy.png").write_bytes(PNG_BYTES)
-    monkeypatch.setattr(player_profiles_routes.settings, "werewolf_logs_dir", str(tmp_path))
+def test_patch_profile_rejects_legacy_file_url() -> None:
     created = client.post(
         "/api/v1/player-profiles",
         json={"display_name": "待迁移旧头像玩家", "model": "gpt-4.1-mini"},
@@ -828,53 +790,11 @@ def test_patch_profile_migrates_existing_legacy_uploaded_avatar_file(tmp_path, m
         },
     )
 
-    assert patch_response.status_code == 200
-    patched = patch_response.json()
-    assert patched["avatar_asset_id"].startswith("migrated-")
+    assert patch_response.status_code == 422
     assert (
-        patched["avatar_image_url"]
-        == f"/api/v1/player-profiles/avatar-assets/{patched['avatar_asset_id']}"
+        patch_response.json()["detail"]
+        == "Legacy file-backed avatar URLs are no longer supported"
     )
-    assert patched["avatar_image_mime"] == "image/png"
-
-    with TestingSessionLocal() as session:
-        asset = session.get(PlayerAvatarAsset, patched["avatar_asset_id"])
-
-    assert asset is not None
-    assert asset.source == "migrated"
-    assert asset.content_type == "image/png"
-    assert asset.data == PNG_BYTES
-
-
-def test_patch_profile_migrates_legacy_uploaded_url_with_empty_mime(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    legacy_root = tmp_path / "player_profile_assets"
-    legacy_root.mkdir()
-    (legacy_root / "legacy.png").write_bytes(PNG_BYTES)
-    monkeypatch.setattr(player_profiles_routes.settings, "werewolf_logs_dir", str(tmp_path))
-    created = client.post(
-        "/api/v1/player-profiles",
-        json={"display_name": "待迁移空 MIME 玩家", "model": "gpt-4.1-mini"},
-    ).json()
-
-    patch_response = client.patch(
-        f"/api/v1/player-profiles/{created['id']}",
-        json={"avatar_image_url": "/api/v1/player-profiles/avatar/legacy.png"},
-    )
-
-    assert patch_response.status_code == 200
-    patched = patch_response.json()
-    assert patched["avatar_asset_id"].startswith("migrated-")
-    assert patched["avatar_image_mime"] == "image/png"
-
-    with TestingSessionLocal() as session:
-        asset = session.get(PlayerAvatarAsset, patched["avatar_asset_id"])
-
-    assert asset is not None
-    assert asset.source == "migrated"
-    assert asset.content_type == "image/png"
 
 
 def test_patch_display_name_only_preserves_missing_legacy_avatar_fields() -> None:

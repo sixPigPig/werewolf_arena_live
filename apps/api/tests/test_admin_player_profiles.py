@@ -35,6 +35,12 @@ from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.player_profiles.errors import PlayerProfileVersionConflict
 from app.player_profiles.service import update_player_profile
 from app.werewolf.providers import configured_model_options
+from app.werewolf.player_avatar_assets import create_avatar_asset
+from app.werewolf.tts_speaker_catalog import (
+    TtsSpeakerCatalogUnavailable,
+    TtsSpeakerOption,
+    tts_speaker_catalog,
+)
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
 
@@ -276,6 +282,53 @@ def test_admin_create_is_draft_and_uses_exact_safe_response_contract(
     assert profile.published_at is None
     assert audit is not None
     assert audit.result == "success"
+
+
+def test_admin_update_accepts_an_existing_database_avatar(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, csrf_token = _login(context, monkeypatch)
+    with context.session_factory() as db:
+        create_avatar_asset(
+            db,
+            asset_id="system-gothic-male-2",
+            source="system",
+            content_type="image/png",
+            data=b"database-avatar",
+        )
+        db.commit()
+
+    created = context.client.post(
+        "/api/v1/admin/player-profiles",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "display_name": "纪衡",
+            "model": _model_name(),
+            "appearance_id": "gothic-male-2",
+            "avatar_asset_id": "system-gothic-male-2",
+        },
+    )
+    assert created.status_code == 201, created.text
+    published = _transition(context, csrf_token, created.json(), "publish")
+
+    response = context.client.patch(
+        f"/api/v1/admin/player-profiles/{published['id']}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "expected_version": published["version"],
+            "appearance_id": "gothic-male-2",
+            "avatar_asset_id": "system-gothic-male-2",
+            "short_description": "更新已发布表单中的其他配置",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "published"
+    assert response.json()["avatar_asset_id"] == "system-gothic-male-2"
+    assert response.json()["avatar_image_url"] == (
+        "/api/v1/player-profiles/avatar-assets/system-gothic-male-2"
+    )
 
 
 @pytest.mark.parametrize(
@@ -983,6 +1036,58 @@ def test_options_and_role_permission_matrix(
     )
     assert operator_write.status_code == 403
 
+
+def test_tts_speaker_options_returns_supported_voice_types(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _login(context, monkeypatch, role="viewer")
+    monkeypatch.setattr(settings, "ark_tts_resource_id", "seed-tts-2.0")
+    monkeypatch.setattr(
+        tts_speaker_catalog,
+        "list_supported",
+        lambda *, resource_id: (
+            TtsSpeakerOption(
+                voice_type="zh_female_vv_uranus_bigtts",
+                name="Vivi 2.0",
+            ),
+            TtsSpeakerOption(
+                voice_type="en_male_tim_uranus_bigtts",
+                name="Tim",
+            ),
+        ),
+    )
+
+    response = context.client.get("/api/v1/admin/player-profile-tts-speakers")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resource_id": "seed-tts-2.0",
+        "items": [
+            {
+                "voice_type": "zh_female_vv_uranus_bigtts",
+                "name": "Vivi 2.0",
+            },
+            {"voice_type": "en_male_tim_uranus_bigtts", "name": "Tim"},
+        ],
+    }
+
+
+def test_tts_speaker_options_returns_structured_unavailable_error(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _login(context, monkeypatch, role="viewer")
+
+    def unavailable(*, resource_id: str) -> tuple[TtsSpeakerOption, ...]:
+        raise TtsSpeakerCatalogUnavailable(resource_id)
+
+    monkeypatch.setattr(tts_speaker_catalog, "list_supported", unavailable)
+
+    response = context.client.get("/api/v1/admin/player-profile-tts-speakers")
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "admin_player_tts_speakers_unavailable"
 
 def test_published_update_needs_publish_permission_in_addition_to_write(
     context: AdminProfilesContext,

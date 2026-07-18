@@ -1,3 +1,4 @@
+import base64
 import json
 from contextlib import nullcontext
 
@@ -647,7 +648,7 @@ def test_migrate_player_avatar_assets_command_imports_legacy_files(
     assert profile is not None
     assert profile.avatar_asset_id == assets[0].id
     assert assets[0].source == "migrated"
-    assert assets[0].data == PNG_BYTES
+    assert assets[0].data_base64 == base64.b64encode(PNG_BYTES).decode("ascii")
 
 
 def test_migrate_player_avatar_assets_command_reuses_and_counts_missing_files(

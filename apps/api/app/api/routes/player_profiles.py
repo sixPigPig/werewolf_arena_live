@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Response
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
@@ -28,9 +27,8 @@ from app.player_profiles.service import (
     update_player_profile as update_profile_service,
 )
 from app.werewolf.player_avatar_assets import (
-    PlayerAvatarAssetStore,
     avatar_asset_url,
-    player_avatar_asset_store_for_logs_dir,
+    decode_avatar_asset_data,
     save_uploaded_avatar_asset,
 )
 from app.werewolf.player_presets import (
@@ -421,10 +419,6 @@ class PlayerProfileAiDraftResponse(BaseModel):
         return []
 
 
-def get_player_avatar_asset_store() -> PlayerAvatarAssetStore:
-    return player_avatar_asset_store_for_logs_dir(settings.werewolf_logs_dir)
-
-
 def get_player_profile_ai_provider():
     return create_model_provider()
 
@@ -476,22 +470,15 @@ def get_player_avatar_asset(
         raise _profile_database_unavailable() from exc
     if asset is None:
         raise HTTPException(status_code=404, detail="Avatar asset not found")
+    try:
+        content = decode_avatar_asset_data(asset)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="Avatar asset data is invalid") from exc
     return Response(
-        content=asset.data,
+        content=content,
         media_type=asset.content_type,
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
-
-
-@router.get("/avatar/{filename}")
-def get_player_avatar(
-    filename: str,
-    store: Annotated[PlayerAvatarAssetStore, Depends(get_player_avatar_asset_store)],
-) -> FileResponse:
-    path = store.path_for(filename)
-    if path is None:
-        raise HTTPException(status_code=404, detail="Avatar image not found")
-    return FileResponse(path, media_type=store.content_type_for(filename))
 
 
 @router.get("", response_model=PlayerProfileListResponse)

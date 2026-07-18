@@ -10,7 +10,6 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 from sqlalchemy.orm.exc import StaleDataError
 
-from app.core.config import settings
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.player_profiles.errors import (
     PlayerProfileNotFound,
@@ -200,17 +199,21 @@ def create_player_profile(
     appearance_id = str(data.get("appearance_id") or "default")
     _validate_presets(personality_id, appearance_id, str(data.get("strategy_profile") or "balanced"))
 
+    avatar_asset_id = _optional_string(data.get("avatar_asset_id"))
     avatar_image_url = str(data.get("avatar_image_url") or "")
-    if avatar_image_url and not allow_external_avatar_url:
+    if (
+        avatar_image_url
+        and not allow_external_avatar_url
+        and not _optional_string(avatar_asset_id)
+    ):
         raise PlayerProfileValidationError("External avatar URLs are not allowed")
     try:
         resolved_avatar = resolve_profile_avatar_reference(
             db,
-            avatar_asset_id=_optional_string(data.get("avatar_asset_id")),
+            avatar_asset_id=avatar_asset_id,
             appearance_id=appearance_id,
             avatar_image_url=avatar_image_url,
             avatar_image_mime=str(data.get("avatar_image_mime") or ""),
-            logs_dir=settings.werewolf_logs_dir,
         )
     except ValueError as exc:
         raise PlayerProfileValidationError(str(exc)) from exc
@@ -472,7 +475,11 @@ def _apply_avatar_update(
         None if "avatar_image_url" in updates else profile.avatar_asset_id,
     )
     avatar_image_url = str(updates.get("avatar_image_url", profile.avatar_image_url) or "")
-    if avatar_image_url and not allow_external_avatar_url:
+    if (
+        avatar_image_url
+        and not allow_external_avatar_url
+        and not _optional_string(avatar_asset_id)
+    ):
         raise PlayerProfileValidationError("External avatar URLs are not allowed")
     try:
         resolved_avatar = resolve_profile_avatar_reference(
@@ -483,7 +490,6 @@ def _apply_avatar_update(
             avatar_image_mime=str(
                 updates.get("avatar_image_mime", profile.avatar_image_mime) or ""
             ),
-            logs_dir=settings.werewolf_logs_dir,
         )
     except ValueError as exc:
         raise PlayerProfileValidationError(str(exc)) from exc

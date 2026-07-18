@@ -1,3 +1,4 @@
+import base64
 import copy
 import json
 import logging
@@ -2300,7 +2301,7 @@ def test_create_game_run_resolves_profile_configs(
                 id="system-gothic-female-2",
                 source="system",
                 content_type="image/png",
-                data=b"png-bytes",
+                data_base64=base64.b64encode(b"png-bytes").decode("ascii"),
                 sha256="0" * 64,
                 size_bytes=9,
             )

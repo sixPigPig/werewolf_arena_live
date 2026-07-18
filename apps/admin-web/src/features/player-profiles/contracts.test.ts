@@ -1,5 +1,6 @@
 import {
   createAdminPlayerProfile,
+  getPlayerTtsSpeakerOptions,
   listAdminPlayerProfiles,
   previewAdminPlayerProfileVoice,
   transitionAdminPlayerProfile,
@@ -9,6 +10,7 @@ import {
   parseAdminPlayerProfile,
   parseAdminPlayerProfileList,
   parseAdminPlayerVoicePreview,
+  parsePlayerTtsSpeakerOptions,
 } from "@/features/player-profiles/parsers";
 import type {
   AdminPlayerProfile,
@@ -150,6 +152,29 @@ describe("admin player profile contract", () => {
         audio_byte_length: 2 * 1024 * 1024 + 1,
       }),
     ).toThrow(/大小限制/);
+  });
+
+  it("parses and fetches the server-driven TTS speaker catalog", async () => {
+    const response = {
+      resource_id: "seed-tts-2.0",
+      items: [
+        {
+          voice_type: "zh_female_vv_uranus_bigtts",
+          name: "Vivi 2.0",
+        },
+      ],
+    };
+    expect(parsePlayerTtsSpeakerOptions(response)).toEqual(response);
+    expect(() =>
+      parsePlayerTtsSpeakerOptions({ ...response, items: [{ name: "Vivi 2.0" }] }),
+    ).toThrow(/字符串字段无效/);
+
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getPlayerTtsSpeakerOptions()).resolves.toEqual(response);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/api/v1/admin/player-profile-tts-speakers",
+    );
   });
 
   it("rejects legacy favorite and malformed lifecycle data", () => {

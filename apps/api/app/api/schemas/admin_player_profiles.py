@@ -482,6 +482,16 @@ class AdminPlayerProfileOptionsResponse(BaseModel):
     constraints: PlayerProfileConstraints
 
 
+class AdminPlayerTtsSpeakerOption(BaseModel):
+    voice_type: str
+    name: str
+
+
+class AdminPlayerTtsSpeakersResponse(BaseModel):
+    resource_id: str
+    items: list[AdminPlayerTtsSpeakerOption]
+
+
 class AdminPlayerProfileAiDraftRequest(AdminRequestModel):
     mode: Literal["name", "template"] = "template"
 

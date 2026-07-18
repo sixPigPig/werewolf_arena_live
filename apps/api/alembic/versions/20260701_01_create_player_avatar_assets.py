@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import hashlib
-from pathlib import Path
 
 from alembic import op
 import sqlalchemy as sa
+
+from app.werewolf.system_player_avatar_data import SYSTEM_AVATAR_DATA_BASE64
 
 revision = "20260701_01"
 down_revision = "20260517_02"
@@ -60,10 +62,9 @@ def downgrade() -> None:
 
 def _seed_system_avatar_assets() -> None:
     connection = op.get_bind()
-    assets_dir = Path(__file__).resolve().parents[2] / "app" / "assets" / "player_avatars"
     rows = []
     for appearance_id, asset_id in SYSTEM_AVATARS.items():
-        data = (assets_dir / f"{appearance_id}.png").read_bytes()
+        data = base64.b64decode(SYSTEM_AVATAR_DATA_BASE64[asset_id], validate=True)
         rows.append(
             {
                 "id": asset_id,
