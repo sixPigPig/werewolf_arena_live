@@ -1,6 +1,6 @@
 import { AdminApiError } from "@/api/problem-details";
 import { cleanRuleSetInput, playerCount, roleSummary, validateRuleSetInput } from "./form";
-import { fixtureDetail, fixtureRevision, fixtureRuleSet, ruleSetOptions, standardConfig } from "./test-fixtures";
+import { fixtureDetail, fixtureRevision, fixtureRuleSet, ruleContract, ruleSetOptions, standardConfig } from "./test-fixtures";
 import type { AdminRuleSet, AdminRuleSetDetail, ArchiveRuleSetRequest, CreateRuleSetRequest, DuplicateRuleSetRequest, PublishRuleSetRequest, RuleSetListParams, RuleSetRevision, RuleSetTransitionRequest, RuleSetValidation, SetDefaultRuleSetRequest, UpdateRuleSetDraftRequest, ValidateRuleSetRequest } from "./types";
 
 const INITIAL = [fixtureRuleSet("classic_9", "published", true, 1), fixtureRuleSet("classic_12", "published", false, 2), fixtureRuleSet("preview_draft", "draft", false, 3), fixtureRuleSet("archived_rule", "archived", false, 4)].map(fixtureDetail);
@@ -20,7 +20,7 @@ export async function createPreviewRuleSet(request: CreateRuleSetRequest) {
   if (rules.some((rule) => rule.id === request.id)) throw problem(409, "admin_rule_set_id_conflict", "规则 ID 已存在");
   const errors = validateRuleSetInput(request, ruleSetOptions); if (Object.keys(errors).length) throw validationProblem(errors);
   const now = nowIso(); const config = cleanRuleSetInput(request, ruleSetOptions).config; const revision = makeRevision(request.id, 1, "draft", config, now);
-  const rule: AdminRuleSetDetail = { id: request.id, status: "draft", is_default: false, display_order: request.display_order, lock_version: 1, draft_revision: revision, published_revision: null, revisions: [history(revision)], usage: { game_count: 0, live_count: 0 }, warnings: [], created_at: now, updated_at: now };
+  const rule: AdminRuleSetDetail = { id: request.id, status: "draft", is_default: false, display_order: request.display_order, lock_version: 1, draft_revision: revision, published_revision: null, revisions: [history(revision)], usage: { game_count: 0, live_count: 0 }, warnings: [], rule_contract: structuredClone(ruleContract), created_at: now, updated_at: now };
   rules.unshift(rule); return structuredClone(rule) as AdminRuleSet;
 }
 
@@ -41,7 +41,7 @@ export async function updatePreviewRuleSetDraft(id: string, request: UpdateRuleS
 export async function validatePreviewRuleSet(id: string, request: ValidateRuleSetRequest): Promise<RuleSetValidation> {
   const rule = find(id); const draft = rule.draft_revision; if (!draft?.config) throw problem(409, "admin_rule_set_invalid_state", "没有可校验草稿"); if (draft.lock_version !== request.expected_revision_lock_version) throw lockProblem("规则草稿已更新");
   const errors = validateRuleSetInput({ id, display_order: rule.display_order, config: draft.config }, ruleSetOptions); const warnings = Object.entries(errors).map(([path, message]) => ({ code: "invalid_rule_config", path: path === "role_counts" ? "config.role_counts.werewolf" : `config.${path}`, message }));
-  return { valid: warnings.length === 0, errors: warnings, warnings: [], content_hash: warnings.length ? null : hashFor(draft), rule_text_preview: warnings.length ? null : `${draft.config.name}（${draft.player_count} 人）` };
+  return { valid: warnings.length === 0, errors: warnings, warnings: [], content_hash: warnings.length ? null : hashFor(draft), rule_text_preview: warnings.length ? null : `${draft.config.name}（${draft.player_count} 人）`, rule_contract: structuredClone(rule.rule_contract) };
 }
 
 export async function publishPreviewRuleSet(id: string, request: PublishRuleSetRequest) {

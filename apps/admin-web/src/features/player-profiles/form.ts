@@ -34,6 +34,7 @@ export function inputFromProfile(
     leadership_tendency: profile.leadership_tendency,
     talkativeness: profile.talkativeness,
     example_messages: profile.example_messages,
+    ...voiceInputFromProfile(profile),
     featured: profile.featured,
     tags: profile.tags,
   });
@@ -61,6 +62,7 @@ export function cleanPlayerProfileInput(
     leadership_tendency: normalizeNumber(value.leadership_tendency),
     talkativeness: normalizeNumber(value.talkativeness),
     example_messages: cleanList(value.example_messages),
+    ...cleanOptionalVoiceInput(value),
     tags: cleanList(value.tags),
   };
 }
@@ -131,7 +133,7 @@ export function formErrorsFromApi(
   const result: PlayerProfileFormErrors = {};
   errors.forEach(({ field, message }) => {
     const normalized = field.split(".").at(-1) as keyof PlayerProfileEditableFields;
-    if (normalized in DEFAULT_PLAYER_PROFILE_INPUT) {
+    if (PLAYER_PROFILE_FORM_FIELDS.has(normalized)) {
       result[normalized] = message;
     } else {
       result.form = message;
@@ -139,6 +141,18 @@ export function formErrorsFromApi(
   });
   return result;
 }
+
+const PLAYER_PROFILE_FORM_FIELDS = new Set<keyof PlayerProfileEditableFields>([
+  ...Object.keys(DEFAULT_PLAYER_PROFILE_INPUT) as Array<
+    keyof PlayerProfileEditableFields
+  >,
+  "tts_speaker",
+  "base_delivery_mood",
+  "base_delivery_intensity",
+  "base_delivery_pace",
+  "base_delivery_instruction",
+  "voice_enabled",
+]);
 
 export function parseCommaList(value: string) {
   return value
@@ -177,6 +191,51 @@ function cleanList(value: string[]) {
 
 function normalizeNumber(value: number) {
   return Number.isFinite(value) ? Math.round(value) : value;
+}
+
+function voiceInputFromProfile(
+  profile: AdminPlayerProfile,
+): Partial<PlayerProfileEditableFields> {
+  const value: Partial<PlayerProfileEditableFields> = {};
+  (
+    [
+      "tts_speaker",
+      "base_delivery_mood",
+      "base_delivery_intensity",
+      "base_delivery_pace",
+      "base_delivery_instruction",
+      "voice_enabled",
+    ] as const
+  ).forEach((field) => {
+    if (profile[field] !== undefined) {
+      Object.assign(value, { [field]: profile[field] });
+    }
+  });
+  return value;
+}
+
+function cleanOptionalVoiceInput(
+  value: PlayerProfileEditableFields,
+): Partial<PlayerProfileEditableFields> {
+  const cleaned: Partial<PlayerProfileEditableFields> = {};
+  (
+    [
+      "tts_speaker",
+      "base_delivery_mood",
+      "base_delivery_intensity",
+      "base_delivery_pace",
+      "base_delivery_instruction",
+    ] as const
+  ).forEach((field) => {
+    const raw = value[field];
+    if (raw !== undefined) {
+      Object.assign(cleaned, { [field]: raw?.trim() || null });
+    }
+  });
+  if (value.voice_enabled !== undefined) {
+    cleaned.voice_enabled = value.voice_enabled;
+  }
+  return cleaned;
 }
 
 function checkLength(

@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { LiveGameEvent } from "../types";
-import { eventTypeLabel, liveEventTitle } from "./liveLabels";
+import {
+  livePhaseLifecycleForEvent,
+  livePublicStatusForEvent,
+  publicReasonLabel,
+  type LivePhaseLifecycle,
+  type LivePublicStatus,
+} from "./liveEventMeta";
+import { eventTypeLabel, liveEventTitle, phaseLabel } from "./liveLabels";
 import type { LiveDirectorSpeed } from "./liveNavStatus";
 import type { VoicePlaybackCompletion } from "./liveVoiceStream";
 
@@ -24,6 +31,8 @@ export type DirectorCue = {
   durationMs: number;
   compressible: boolean;
   suppressSpeechSubtitle?: boolean;
+  publicStatus?: LivePublicStatus;
+  phaseLifecycle?: LivePhaseLifecycle;
 };
 
 export type UseLiveDirectorResult = {
@@ -102,11 +111,30 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
     string,
     StreamedSpeechSignature
   >();
+  const pendingNotSpoken = new Map<string, DirectorCue | null>();
   let sheriffRunBatch: SheriffRunBatch | null = null;
 
   for (const event of events) {
     const payload = payloadForEvent(event);
     const requestId = stringField(payload, "request_id");
+    const actionOccurrenceKey = publicActionOccurrenceKey(event);
+
+    if (event.type === "player_did_not_speak") {
+      pendingNotSpoken.set(actionOccurrenceKey, null);
+    } else if (
+      pendingNotSpoken.has(actionOccurrenceKey) &&
+      (event.type === "model_response_received" ||
+        event.type === "action_parsed")
+    ) {
+      const notSpokenCue = pendingNotSpoken.get(actionOccurrenceKey);
+      if (notSpokenCue) {
+        notSpokenCue.latestEventId = event.id;
+      }
+      if (event.type === "action_parsed") {
+        pendingNotSpoken.delete(actionOccurrenceKey);
+      }
+      continue;
+    }
 
     if (
       event.action === "sheriff_run" &&
@@ -228,6 +256,9 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
       cue.compressible = true;
     }
     cues.push(cue);
+    if (event.type === "player_did_not_speak") {
+      pendingNotSpoken.set(actionOccurrenceKey, cue);
+    }
 
     if (event.type === "model_request_started" && requestId) {
       if (isPublicSpeechAction(event.action)) {
@@ -875,6 +906,36 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
     };
   }
 
+  if (event.type === "phase_completed") {
+    const lifecycle = livePhaseLifecycleForEvent(event);
+    const reason = publicReasonLabel(lifecycle?.completionReason ?? null);
+    const nextPhase = lifecycle?.nextPhase;
+    let body = reason;
+    if (!body) {
+      if (lifecycle?.completionStatus === "canceled") {
+        body = "当前阶段已取消。";
+      } else if (lifecycle?.completionStatus === "skipped") {
+        body = "当前阶段已跳过。";
+      } else if (
+        lifecycle?.terminal ||
+        lifecycle?.completionStatus === "terminal"
+      ) {
+        body = "当前阶段已闭合，进入终局结算。";
+      } else {
+        body = nextPhase
+          ? `当前阶段已完成，准备进入 ${phaseLabel(nextPhase)}。`
+          : "当前阶段已完成。";
+      }
+    }
+    return {
+      ...base,
+      title: liveEventTitle(event),
+      body,
+      durationMs: 1800,
+      compressible: true,
+    };
+  }
+
   if (event.type === "judge_cue") {
     const cueId = stringField(payload, "cue_id") || event.action || "";
     const uncompressible = new Set([
@@ -905,6 +966,20 @@ export function toDirectorCue(event: LiveGameEvent): DirectorCue {
       importance: uncompressible ? "key" : "action",
       durationMs: uncompressible ? 4500 : 2200,
       compressible: !uncompressible,
+    };
+  }
+
+  if (event.type === "player_did_not_speak") {
+    const status = livePublicStatusForEvent(event);
+    return {
+      ...base,
+      title: liveEventTitle(event),
+      body:
+        publicReasonLabel(status?.reasonCode ?? null) ||
+        "本轮没有形成有效公开发言。",
+      importance: "action",
+      durationMs: 2500,
+      compressible: true,
     };
   }
 
@@ -1155,6 +1230,16 @@ function streamedSpeechKey(actor: string | null, action: string | null): string 
   return `${actor ?? ""}:${action ?? ""}`;
 }
 
+function publicActionOccurrenceKey(event: LiveGameEvent): string {
+  return [
+    event.source_run_id ?? event.run_id,
+    event.round ?? "",
+    event.phase ?? "",
+    event.actor ?? "",
+    event.action ?? "",
+  ].join(":");
+}
+
 function normalizeSpeechText(text: string): string {
   return text.replace(/\s+/g, "");
 }
@@ -1164,6 +1249,8 @@ function cueBase(event: LiveGameEvent): DirectorCue {
     payloadForEvent(event),
     "presentation_id",
   );
+  const publicStatus = livePublicStatusForEvent(event);
+  const phaseLifecycle = livePhaseLifecycleForEvent(event);
   return {
     eventId: event.id,
     latestEventId: event.id,
@@ -1183,6 +1270,8 @@ function cueBase(event: LiveGameEvent): DirectorCue {
     importance: "normal",
     durationMs: 2000,
     compressible: true,
+    ...(publicStatus ? { publicStatus } : {}),
+    ...(phaseLifecycle ? { phaseLifecycle } : {}),
   };
 }
 

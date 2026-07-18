@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.werewolf import live as live_module
 from app.werewolf.live import (
+    EventSink,
     GameRunCanceled,
     LiveEvent,
     LiveGameRun,
@@ -115,6 +116,70 @@ def test_strict_json_snapshot_rejects_shallow_first_deep_alias_reuse() -> None:
 
     with pytest.raises(ValueError, match="invalid exact JSON value"):
         live_module._strict_json_snapshot(source)
+
+
+def test_event_sink_lifecycle_publish_is_idempotent_and_conflict_detecting() -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_lifecycle_unique",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+        **classic_rule_kwargs(),
+    )
+    registry.mark_running(run.run_id)
+    sink = EventSink(registry, run.run_id)
+    phase_instance_id = "phase:r1:night:1"
+    start_payload = {"phase_instance_id": phase_instance_id}
+
+    started = sink.publish_lifecycle(
+        "phase_started",
+        round_number=1,
+        phase="night",
+        payload=start_payload,
+    )
+    repeated_start = sink.publish_lifecycle(
+        "phase_started",
+        round_number=1,
+        phase="night",
+        payload=start_payload,
+    )
+    completion_payload = {
+        "phase_instance_id": phase_instance_id,
+        "completion_status": "completed",
+        "completion_reason": "night_actions_resolved",
+        "next_phase": "dawn_reveal",
+        "terminal": False,
+        "source_event_id": started.id,
+        "audience_policy": "public_lifecycle_v1",
+    }
+    completed = sink.publish_lifecycle(
+        "phase_completed",
+        round_number=1,
+        phase="night",
+        payload=completion_payload,
+    )
+    repeated_completion = sink.publish_lifecycle(
+        "phase_completed",
+        round_number=1,
+        phase="night",
+        payload=completion_payload,
+    )
+
+    assert repeated_start is started
+    assert repeated_completion is completed
+    assert [(event.type, event.id) for event in sink.lifecycle_events()] == [
+        ("phase_started", started.id),
+        ("phase_completed", completed.id),
+    ]
+    with pytest.raises(ValueError, match="conflicts with persisted data"):
+        sink.publish_lifecycle(
+            "phase_completed",
+            round_number=1,
+            phase="night",
+            payload={**completion_payload, "next_phase": "day"},
+        )
 
 
 @pytest.mark.parametrize(

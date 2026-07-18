@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Annotated
+import base64
+from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
+import logging
+import time
+from typing import Annotated, Protocol
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import select
@@ -25,6 +29,8 @@ from app.api.schemas.admin_player_profiles import (
     AdminPlayerProfileResponse,
     AdminPlayerProfileTransition,
     AdminPlayerProfileUpdate,
+    AdminPlayerVoicePreviewRequest,
+    AdminPlayerVoicePreviewResponse,
     PlayerProfileSort,
     PlayerProfileStatus,
 )
@@ -35,6 +41,7 @@ from app.api.routes.player_profiles import (
     generate_ai_player_draft,
     get_player_profile_ai_provider,
 )
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.player_profiles.errors import (
@@ -65,9 +72,165 @@ from app.werewolf.player_presets import (
     STRATEGY_PRESETS,
 )
 from app.werewolf.providers import configured_model_options
+from app.werewolf.speech_delivery import (
+    DELIVERY_MAPPING_VERSION,
+    compile_context_texts,
+    normalize_delivery,
+)
+from app.werewolf.voice import chunk_text_for_tts
+from app.werewolf.volcengine_tts import (
+    TtsSynthesisItem,
+    VolcengineTtsClient,
+    VolcengineTtsConfig,
+    mime_type_for_format,
+    supports_tts_context_texts,
+)
 
 router = APIRouter()
 RecoverableDatabaseError = (OperationalError, ProgrammingError)
+logger = logging.getLogger(__name__)
+PLAYER_VOICE_PREVIEW_AUDIO_FORMAT = "mp3"
+PLAYER_VOICE_PREVIEW_MAX_AUDIO_BYTES = 2 * 1024 * 1024
+PROFILE_TTS_CONTEXT_UNSUPPORTED_DETAIL = (
+    "tts_speaker is incompatible with the configured TTS resource; "
+    "delivery context requires a seed-tts-2.0 preset *_uranus_bigtts speaker"
+)
+
+
+class PlayerVoicePreviewTtsClient(Protocol):
+    async def synthesize(
+        self,
+        *,
+        speaker: str,
+        text_chunks: list[str],
+        context_texts: list[str] | tuple[str, ...] | None = None,
+    ) -> AsyncIterator[TtsSynthesisItem]: ...
+
+
+def get_player_voice_preview_tts_config() -> VolcengineTtsConfig:
+    return VolcengineTtsConfig(
+        enabled=settings.ark_tts_enabled,
+        api_key=settings.ark_tts_api_key,
+        resource_id=settings.ark_tts_resource_id,
+        ws_url=settings.ark_tts_ws_url,
+        player_speaker=settings.ark_tts_player_speaker,
+        judge_speaker=settings.ark_tts_judge_speaker,
+        audio_format=PLAYER_VOICE_PREVIEW_AUDIO_FORMAT,
+        sample_rate=settings.ark_tts_sample_rate,
+    )
+
+
+def get_player_voice_preview_client_factory() -> Callable[
+    [VolcengineTtsConfig], PlayerVoicePreviewTtsClient
+]:
+    return VolcengineTtsClient
+
+
+@router.post(
+    "/player-profile-voice-previews",
+    response_model=AdminPlayerVoicePreviewResponse,
+)
+async def preview_player_profile_voice(
+    request_body: AdminPlayerVoicePreviewRequest,
+    request: Request,
+    response: Response,
+    _principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.PLAYERS_WRITE)),
+    ],
+    _csrf: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
+    config: Annotated[
+        VolcengineTtsConfig,
+        Depends(get_player_voice_preview_tts_config),
+    ],
+    client_factory: Annotated[
+        Callable[[VolcengineTtsConfig], PlayerVoicePreviewTtsClient],
+        Depends(get_player_voice_preview_client_factory),
+    ],
+) -> AdminPlayerVoicePreviewResponse:
+    if not config.available:
+        raise _voice_preview_problem(
+            status_code=503,
+            code="admin_player_voice_preview_unavailable",
+            title="Voice preview unavailable",
+            detail="语音试听服务未启用或配置不完整，请联系管理员。",
+        )
+
+    speaker = request_body.speaker or config.player_speaker.strip()
+    if not supports_tts_context_texts(
+        resource_id=config.resource_id,
+        speaker=speaker,
+    ):
+        raise _voice_preview_problem(
+            status_code=422,
+            code="admin_player_voice_preview_context_unsupported",
+            title="Voice preview speaker unsupported",
+            detail="当前仅支持 seed-tts-2.0 预置大模型音色的安全演绎试听。",
+        )
+
+    base_delivery = normalize_delivery(
+        request_body.base_delivery.model_dump(exclude_none=True)
+    )
+    effective_delivery = normalize_delivery(
+        request_body.turn_delivery.model_dump(exclude_none=True),
+        base_mood=str(base_delivery["mood"]),
+        base_intensity=str(base_delivery["intensity"]),
+        base_pace=str(base_delivery["pace"]),
+        base_instruction=str(base_delivery["instruction"]),
+    )
+    context_texts = compile_context_texts(effective_delivery)
+    audio = bytearray()
+    started_at = time.monotonic()
+    try:
+        client = client_factory(replace(config, audio_format=PLAYER_VOICE_PREVIEW_AUDIO_FORMAT))
+        async for item in client.synthesize(
+            speaker=speaker,
+            text_chunks=chunk_text_for_tts(request_body.say),
+            context_texts=context_texts,
+        ):
+            if not isinstance(item, bytes):
+                continue
+            if len(item) > PLAYER_VOICE_PREVIEW_MAX_AUDIO_BYTES - len(audio):
+                raise _voice_preview_problem(
+                    status_code=502,
+                    code="admin_player_voice_preview_audio_too_large",
+                    title="Voice preview audio too large",
+                    detail="试听音频超过安全大小限制，请缩短测试文本后重试。",
+                )
+            audio.extend(item)
+    except AdminAPIProblem:
+        raise
+    except Exception as exc:
+        logger.warning("Player voice preview provider failed")
+        raise _voice_preview_problem(
+            status_code=502,
+            code="admin_player_voice_preview_failed",
+            title="Voice preview failed",
+            detail="语音供应商未能完成试听，请稍后重试。",
+        ) from exc
+
+    if not audio:
+        raise _voice_preview_problem(
+            status_code=502,
+            code="admin_player_voice_preview_empty_audio",
+            title="Voice preview returned no audio",
+            detail="语音供应商未返回可播放音频，请稍后重试。",
+        )
+
+    elapsed_ms = max(0, round((time.monotonic() - started_at) * 1000))
+    _set_private_headers(request, response)
+    return AdminPlayerVoicePreviewResponse(
+        speaker=speaker,
+        effective_delivery=effective_delivery,
+        context_texts=context_texts,
+        delivery_mapping_version=DELIVERY_MAPPING_VERSION,
+        audio_format=PLAYER_VOICE_PREVIEW_AUDIO_FORMAT,
+        mime_type=mime_type_for_format(PLAYER_VOICE_PREVIEW_AUDIO_FORMAT),
+        sample_rate=config.sample_rate,
+        elapsed_ms=elapsed_ms,
+        audio_byte_length=len(audio),
+        audio_base64=base64.b64encode(audio).decode("ascii"),
+    )
 
 
 @router.post(
@@ -262,6 +425,9 @@ def create_profile(
     _csrf: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
 ) -> AdminPlayerProfileResponse:
     try:
+        _ensure_profile_tts_context_capability(
+            requested_speaker=request_body.tts_speaker,
+        )
         _ensure_configured_model(request_body.model)
         profile = create_player_profile(
             db,
@@ -339,6 +505,11 @@ def update_profile(
         existing = get_player_profile(db, profile_id)
         updates = request_body.model_dump(exclude_unset=True)
         updates.pop("expected_version")
+        if "tts_speaker" in updates:
+            _ensure_profile_tts_context_capability(
+                requested_speaker=updates["tts_speaker"],
+                current_speaker=existing.tts_speaker,
+            )
         if "model" in updates and updates["model"] != existing.model:
             _ensure_configured_model(str(updates["model"]))
         if existing.status == "published" or "featured" in updates:
@@ -679,6 +850,37 @@ def _record_ai_draft_failure(
     except RecoverableDatabaseError as exc:
         db.rollback()
         raise _database_unavailable() from exc
+
+
+def _voice_preview_problem(
+    *,
+    status_code: int,
+    code: str,
+    title: str,
+    detail: str,
+) -> AdminAPIProblem:
+    return AdminAPIProblem(
+        status_code=status_code,
+        code=code,
+        title=title,
+        detail=detail,
+    )
+
+
+def _ensure_profile_tts_context_capability(
+    *,
+    requested_speaker: object,
+    current_speaker: str | None = None,
+) -> None:
+    speaker = str(requested_speaker or "").strip()
+    if not speaker or speaker == str(current_speaker or "").strip():
+        return
+    if supports_tts_context_texts(
+        resource_id=settings.ark_tts_resource_id,
+        speaker=speaker,
+    ):
+        return
+    raise PlayerProfileValidationError(PROFILE_TTS_CONTEXT_UNSUPPORTED_DETAIL)
 
 
 def _set_private_headers(request: Request, response: Response) -> None:

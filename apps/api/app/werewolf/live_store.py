@@ -1111,6 +1111,14 @@ class DatabaseLiveStore:
 
         dialect_name = self.db.get_bind().dialect.name
         for speaker_kind, audience in voice_jobs:
+            voice_snapshot = (
+                event.payload.get("voice_snapshot")
+                if speaker_kind == "player"
+                and isinstance(event.payload.get("voice_snapshot"), dict)
+                else None
+            )
+            if voice_snapshot is not None and voice_snapshot.get("enabled") is False:
+                continue
             values = {
                 "run_id": event.run_id,
                 "source_event_id": event.id,
@@ -1120,6 +1128,43 @@ class DatabaseLiveStore:
                 "status": "pending",
                 "attempt_count": 0,
                 "not_before": datetime.now(tz=UTC),
+                "speaker": (
+                    str(voice_snapshot.get("speaker") or "") or None
+                    if voice_snapshot is not None
+                    else None
+                ),
+                "effective_delivery": (
+                    voice_snapshot.get("effective_delivery")
+                    if voice_snapshot is not None
+                    and isinstance(voice_snapshot.get("effective_delivery"), dict)
+                    else None
+                ),
+                "effective_context_texts": (
+                    [
+                        str(item)
+                        for item in voice_snapshot.get("effective_context_texts", [])
+                        if isinstance(item, str)
+                    ]
+                    if voice_snapshot is not None
+                    and isinstance(voice_snapshot.get("effective_context_texts"), list)
+                    else None
+                ),
+                "voice_config_version": (
+                    voice_snapshot.get("voice_config_version")
+                    if voice_snapshot is not None
+                    and type(voice_snapshot.get("voice_config_version")) is int
+                    else None
+                ),
+                "delivery_mapping_version": (
+                    str(voice_snapshot.get("delivery_mapping_version") or "") or None
+                    if voice_snapshot is not None
+                    else None
+                ),
+                "tts_request_source": (
+                    "accepted_player_action"
+                    if speaker_kind == "player"
+                    else "judge_event"
+                ),
             }
             if dialect_name == "postgresql":
                 statement = postgresql_insert(VoiceMaterializationJobRecord).values(**values)

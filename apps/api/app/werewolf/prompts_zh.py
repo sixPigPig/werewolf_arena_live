@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from app.werewolf.public_facts import public_fact_from_dict
+from app.werewolf.rules import prompt_rule_clauses_from_snapshot
 
 
 logger = logging.getLogger(__name__)
@@ -103,10 +104,44 @@ DEFAULT_GAME_RULES = """你正在进行一局数字版狼人杀。
 - 胜利条件：好人阵营放逐全部狼人即获胜；狼人数量大于或等于其他存活玩家数量时狼人获胜。
 """
 
+DELIVERY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "mood": {
+            "type": "string",
+            "enum": [
+                "neutral",
+                "restrained",
+                "calm",
+                "confident",
+                "skeptical",
+                "tense",
+                "frustrated",
+                "urgent",
+                "sad",
+                "excited",
+                "playful",
+            ],
+        },
+        "intensity": {"type": "string", "enum": ["low", "medium", "high"]},
+        "pace": {"type": "string", "enum": ["slow", "natural", "fast"]},
+        "instruction": {"type": "string"},
+    },
+    "required": ["mood", "intensity", "pace"],
+}
+
+
+def _speech_properties() -> dict[str, Any]:
+    return {
+        "reasoning": {"type": "string"},
+        "say": {"type": "string"},
+        "delivery": DELIVERY_SCHEMA,
+    }
+
 SCHEMAS: dict[str, dict[str, Any]] = {
     "debate": {
         "type": "object",
-        "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
+        "properties": _speech_properties(),
         "required": ["reasoning", "say"],
     },
     "vote": {
@@ -121,7 +156,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "sheriff_speech": {
         "type": "object",
-        "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
+        "properties": _speech_properties(),
         "required": ["reasoning", "say"],
     },
     "sheriff_withdraw": {
@@ -136,7 +171,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "sheriff_pk_speech": {
         "type": "object",
-        "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
+        "properties": _speech_properties(),
         "required": ["reasoning", "say"],
     },
     "sheriff_runoff_vote": {
@@ -146,7 +181,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "exile_pk_speech": {
         "type": "object",
-        "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
+        "properties": _speech_properties(),
         "required": ["reasoning", "say"],
     },
     "exile_runoff_vote": {
@@ -156,7 +191,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "exile_last_words": {
         "type": "object",
-        "properties": {"reasoning": {"type": "string"}, "say": {"type": "string"}},
+        "properties": _speech_properties(),
         "required": ["reasoning", "say"],
     },
     "speech_order": {
@@ -212,6 +247,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             "reasoning": {"type": "string"},
             "target": {"type": "string"},
             "message": {"type": "string"},
+            "delivery": DELIVERY_SCHEMA,
         },
         "required": ["reasoning", "target", "message"],
     },
@@ -221,6 +257,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             "reasoning": {"type": "string"},
             "target": {"type": "string"},
             "message": {"type": "string"},
+            "delivery": DELIVERY_SCHEMA,
         },
         "required": ["reasoning", "target", "message"],
     },
@@ -310,53 +347,103 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
         "sheriff_pk_speech",
         "exile_pk_speech",
         "exile_last_words",
+        "werewolf_discuss",
+        "werewolf_kill_vote",
     }:
         speech_guidance_sections.append(_render_speech_mission(world_state))
     if action == "debate":
         speech_guidance_sections.append(_render_debate_guidance(world_state))
 
     sections = [
-        _render_base(world_state),
-        _render_observations(world_state),
-        _render_model_memory(world_state),
-        _render_hard_state(world_state),
+        _render_public_rules(world_state),
+        _render_role_private_rules(action, world_state),
+        _render_private_identity(world_state),
+        _render_public_state(world_state),
         _render_public_facts(world_state),
         _render_public_self_history(world_state),
         _render_stage_interruptions(world_state),
         _render_endgame_context(world_state),
         _render_sheriff_election(world_state),
         _render_public_action_eligibility(world_state),
+        _render_observations(world_state),
+        _render_model_memory(world_state),
+        _render_hard_state(world_state),
         _render_quality_feedback(world_state),
         _render_debate(world_state),
         *speech_guidance_sections,
-        _render_instruction(action, world_state),
+        _render_action_contract(action, world_state),
         "请只输出合法 JSON，不要输出 Markdown，不要添加解释性前后缀。",
         _render_json_example(action),
     ]
     return "\n\n".join(section for section in sections if section.strip()), SCHEMAS[action]
 
 
-def _render_base(world_state: dict[str, Any]) -> str:
+def _render_public_rules(world_state: dict[str, Any]) -> str:
     rules_text = str(world_state.get("rule_text") or DEFAULT_GAME_RULES)
     if "狼人杀" not in rules_text:
         rules_text = f"你正在进行一局数字版狼人杀。\n\n{rules_text}"
+    return f"公共固定规则：\n{rules_text}"
+
+
+def _render_role_private_rules(action: str, world_state: dict[str, Any]) -> str:
+    snapshot = world_state.get("rule_set_snapshot")
+    clauses = prompt_rule_clauses_from_snapshot(
+        snapshot if isinstance(snapshot, dict) else None,
+        role=str(world_state.get("role") or ""),
+        action=action,
+        phase=str(world_state.get("phase") or "") or None,
+    )
+    if not clauses:
+        return ""
+    return "角色私有规则：\n" + "\n".join(
+        f"- {clause.neutral_text_zh}" for clause in clauses
+    )
+
+
+def _render_public_state(world_state: dict[str, Any]) -> str:
+    return (
+        "当前公开状态：\n"
+        f"- 现在是第 {world_state['round']} 轮。\n"
+        f"- 当前存活玩家：{world_state['remaining_players']}"
+    )
+
+
+def _render_private_identity(world_state: dict[str, Any]) -> str:
     personality = world_state.get("personality") or "无"
     werewolf_context = world_state.get("werewolf_context") or ""
     return (
-        f"{rules_text}\n"
-        "当前状态：\n"
-        f"- 现在是第 {world_state['round']} 轮。\n"
+        "当前私人身份与设定：\n"
         f"- 你是{world_state['name']}，身份是{world_state['role']}。{werewolf_context}\n"
-        f"- 你的性格设定：{personality}\n"
-        f"- 当前存活玩家：{world_state['remaining_players']}"
+        f"- 你的性格设定：{personality}"
     )
 
 
 def _render_observations(world_state: dict[str, Any]) -> str:
     observations = world_state.get("observations") or []
     if not observations:
-        return "你的私人观察：暂无。"
-    return "你的私人观察：\n" + "\n".join(f"- {observation}" for observation in observations)
+        return "你的私人观察（当前）：暂无。"
+    return "你的私人观察（当前）：\n" + "\n".join(
+        f"- {observation}" for observation in observations
+    )
+
+
+def _render_action_contract(action: str, world_state: dict[str, Any]) -> str:
+    instruction = _render_instruction(action, world_state)
+    if action in {
+        "debate",
+        "sheriff_speech",
+        "sheriff_pk_speech",
+        "exile_pk_speech",
+        "exile_last_words",
+        "werewolf_discuss",
+        "werewolf_kill_vote",
+    }:
+        instruction += (
+            "\n同时可输出 delivery，使用受控的 mood、intensity、pace 描述本轮演绎；"
+            "instruction 只能写情绪、停顿、反问等演绎方式，不得写身份、座位、票型或行动事实。"
+            "delivery 缺失不会影响有效 say 或 message。"
+        )
+    return "本次合法动作与候选：\n" + instruction
 
 
 def _render_model_memory(world_state: dict[str, Any]) -> str:
@@ -420,8 +507,6 @@ def _render_hard_state(world_state: dict[str, Any]) -> str:
         lines.append("引擎已经合法触发本次猎人死亡技能，你只能在本次结算中决定是否开枪。")
     elif hard_state.get("hunter_death_trigger_active") is False:
         lines.append("当前没有猎人死亡技能触发；猎人存活状态下不能主动开枪。")
-    if hard_state.get("terminal_after_current_action") is True:
-        lines.append("当前动作结算后对局会立即结束，不存在下一轮或下一夜。")
     if not lines:
         return ""
     return "引擎硬状态（不可否认或改写）：\n" + "\n".join(f"- {line}" for line in lines)
@@ -771,9 +856,6 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
                 "unknown_prompt_state_code field=self_explosion_badge_impact"
             )
             badge_impact = "未识别警徽影响，按没有额外警徽收益处理"
-        explosion_would_end_game = (
-            decision_context.get("explosion_would_end_game") is True
-        )
         sheriff = world_state.get("sheriff")
         election_open = world_state.get("sheriff_election_open") is True
         bomb_count = int(world_state.get("sheriff_pre_election_bomb_count") or 0)
@@ -809,40 +891,14 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             if self_explosion_enabled
             else "锁定规则未确认启用狼人自爆；仅在引擎明确开放该动作时选择。"
         )
-        benefit_examples = "阻止关键查验、保护最后隐狼或直接创造胜势"
-        if (
-            self_explosion_enabled
-            and sheriff_enabled
-            and election_open
-            and not sheriff
-            and badge_policy == "double"
-        ):
-            benefit_examples = f"吞警徽、{benefit_examples}"
-        chain_guidance = "正常比较公开身份代价与阵营收益。"
-        if consecutive_explosions == 1:
-            chain_guidance = (
-                "上一轮已经发生自爆；本次必须明确说明收益类型和主要风险，"
-                "不能只写泛化的阻止好人获取信息。"
-            )
-        elif consecutive_explosions >= 2:
-            chain_guidance = (
-                f"已经连续 {consecutive_explosions} 轮发生狼人自爆，默认选择不自爆。"
-                "只有直接胜势、关键警徽收益或保护最后隐狼等高价值理由才支持继续；"
-                "阻止好人形成信息不能单独作为充分理由。"
-            )
-        last_wolf_guidance = (
-            "你是场上最后一名狼人；自爆会让狼队失去最后存活者，必须优先评估立即败北风险。"
-            if actor_is_last_wolf
-            else ""
-        )
-        terminal_guidance = (
-            "按当前人数和屠边条件，自爆会立即结算对局；必须明确胜负方向。"
-            if explosion_would_end_game
-            else ""
-        )
         benefit_type_legend = "；".join(
             f"{value}={label}"
             for value, label in SELF_EXPLOSION_BENEFIT_TYPE_PROMPT_LABELS.items()
+        )
+        last_wolf_fact = (
+            "你是场上最后一名狼人。"
+            if actor_is_last_wolf
+            else "你不是场上最后一名狼人。"
         )
         return (
             "行动：狼人自爆判断。\n"
@@ -852,18 +908,15 @@ def _render_instruction(action: str, world_state: dict[str, Any]) -> str:
             f"- 历史总自爆次数：{total_explosions}。\n"
             f"- 连续自爆轮数：{consecutive_explosions}。\n"
             f"- 当前存活狼人/玩家：{active_wolves}/{active_players}。\n"
+            f"- {last_wolf_fact}\n"
             f"- 已完成/待发言玩家数：{completed_speakers}/{pending_speakers}。\n"
             f"- 警徽影响：{badge_impact}。\n"
             f"{feature_context}\n"
             f"{badge_context}\n"
-            f"{chain_guidance}\n"
-            f"{last_wolf_guidance}\n"
-            f"{terminal_guidance}\n"
-            "选择自爆会公开你是狼人、你立刻出局，并让当天直接结束进入夜晚。\n"
+            "选择自爆会公开你是狼人、你立刻出局并结束当天；若对局尚未结束则进入下一夜。\n"
             f"候选选项：{options}。\n"
-            f"已有狼人自爆时，继续自爆必须能带来明确收益，例如{benefit_examples}。"
-            "收益不明确时选择不自爆，保留白天发言空间。"
-            "请以狼人阵营收益判断，输出字段 reasoning、self_explode、benefit_type、"
+            "请依据已提供的规则、公开事实、私人信息和阵营目标自行判断，"
+            "输出字段 reasoning、self_explode、benefit_type、"
             "expected_gain 和 primary_risk。"
             f"benefit_type 取值说明：{benefit_type_legend}。"
         )
@@ -973,10 +1026,10 @@ def _render_json_example(action: str) -> str:
     if action == "werewolf_self_explosion":
         return (
             "JSON 示例（自爆收益审计）："
-            '{"reasoning":"当前连续自爆代价过高",'
+            '{"reasoning":"依据当前可见规则和事实自行判断",'
             '"self_explode":"不自爆","benefit_type":"none",'
-            '"expected_gain":"保留白天发言和抗推空间",'
-            '"primary_risk":"继续自爆会损失存活狼人"}'
+            '"expected_gain":"说明预期收益",'
+            '"primary_risk":"说明主要风险"}'
         )
     if action in {"werewolf_discuss", "werewolf_kill_vote"}:
         field_mapping = (
@@ -987,10 +1040,18 @@ def _render_json_example(action: str) -> str:
         return (
             f"JSON 示例（字段含义：{field_mapping}）："
             '{"reasoning":"用中文说明你的推理","target":"你的选择或发言",'
-            '"message":"给狼人队友的简短说明"}'
+            '"message":"给狼人队友的简短说明",'
+            '"delivery":{"mood":"tense","intensity":"low","pace":"natural"}}'
         )
     key = RESULT_FIELD_BY_ACTION[action]
     field_mapping = f"reasoning={FIELD_LABELS['reasoning']}，{key}={FIELD_LABELS[key]}"
+    if key == "say":
+        return (
+            f"JSON 示例（字段含义：{field_mapping}）："
+            f'{{"reasoning":"用中文说明你的推理","{key}":"你的发言",'
+            '"delivery":{"mood":"skeptical","intensity":"medium",'
+            '"pace":"natural","instruction":"克制、反问"}}'
+        )
     return (
         f"JSON 示例（字段含义：{field_mapping}）："
         f'{{"reasoning":"用中文说明你的推理","{key}":"你的选择或发言"}}'

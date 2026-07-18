@@ -1084,6 +1084,110 @@ describe("deriveGodViewState", () => {
   });
 });
 
+describe("public provenance in God View presentation", () => {
+  it("settles a not-spoken actor without keeping a fake active speaker", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "action_requested",
+        round: 1,
+        phase: "day",
+        actor: "2号 女巫",
+        action: "debate",
+      }),
+      event({
+        id: 3,
+        type: "player_did_not_speak",
+        round: 1,
+        phase: "day",
+        actor: "2号 女巫",
+        action: "debate",
+        payload: {
+          speech_status: "not_spoken",
+          action_origin: "none",
+          public_reason_code: "provider_timeout",
+        },
+      }),
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "day",
+        actor: "2号 女巫",
+        action: "debate",
+        payload: {
+          speech_status: "not_spoken",
+          action_origin: "none",
+          public_reason_code: "provider_timeout",
+        },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+
+    expect(state.speakerFlow.current).toBeNull();
+    expect(state.currentSeatLabel).toBe("等待");
+    expect(state.players.find((player) => player.name === "2号 女巫")).toMatchObject({
+      stageStatus: { kind: "resolved", label: "未发言" },
+      isSpeaking: false,
+    });
+    expect(state.eventLines.find((line) => line.id === 3)).toMatchObject({
+      text: "2号 本轮未发言",
+      detail: "发言超时",
+      tone: "warning",
+    });
+    expect(
+      state.eventLines.filter((line) => line.text === "2号 本轮未发言"),
+    ).toHaveLength(1);
+  });
+
+  it("labels system voting in the event rail and keeps cancellation separate", () => {
+    const events = [
+      ...eightPlayerEvents(),
+      event({
+        id: 2,
+        type: "action_parsed",
+        round: 1,
+        phase: "vote",
+        actor: "2号 女巫",
+        action: "vote",
+        payload: {
+          choice: "1号 狼人A",
+          action_origin: "system_fallback",
+          public_reason_code: "system_vote_timeout",
+        },
+      }),
+      event({
+        id: 3,
+        type: "public_action_cancelled",
+        round: 1,
+        phase: "day",
+        actor: "4号 预言家",
+        action: "debate",
+        payload: { public_reason_code: "self_explosion" },
+      }),
+    ];
+    const spectator = deriveLiveSpectatorState(events);
+    const state = deriveGodViewState(events, spectator, "暗夜古堡");
+
+    expect(state.eventLines.find((line) => line.id === 2)).toMatchObject({
+      text: "系统代投：2号 -> 1号",
+      detail: "系统代替 2号 投给 1号",
+      tone: "warning",
+    });
+    expect(state.eventLines.find((line) => line.id === 3)).toMatchObject({
+      text: "4号 公开行动取消",
+      detail: "狼人自爆",
+      tone: "danger",
+    });
+    expect(state.players.find((player) => player.name === "4号 预言家")).toMatchObject({
+      stageStatus: { kind: "resolved", label: "行动取消" },
+    });
+    expect(state.speakerFlow.current).toBeNull();
+  });
+});
+
 function eightPlayerEvents(): LiveGameEvent[] {
   return [
     event({

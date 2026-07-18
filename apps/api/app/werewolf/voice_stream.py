@@ -34,6 +34,7 @@ from app.werewolf.volcengine_tts import (
     VolcengineTtsClient,
     VolcengineTtsConfig,
     mime_type_for_format,
+    supports_tts_context_texts,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ class TtsClient(Protocol):
         *,
         speaker: str,
         text_chunks: list[str],
+        context_texts: list[str] | tuple[str, ...] | None = None,
     ) -> AsyncIterator[TtsSynthesisItem]:
         pass
 
@@ -283,6 +285,14 @@ class LiveVoiceStreamService:
                     previous_night_deaths=voice_context.previous_night_deaths,
                     peaceful_night=voice_context.peaceful_night,
                 )
+                if utterance is not None and utterance.speaker_kind == "player":
+                    if is_public_speech_event(event):
+                        utterance = None
+                    else:
+                        utterance = _apply_voice_snapshot(
+                            utterance,
+                            canonical_event,
+                        )
                 if utterance is not None and audience == "spectator_god_view":
                     public_event = project_live_event(canonical_event, "player_public")
                     public_speaker_kind = (
@@ -565,10 +575,18 @@ class LiveVoiceStreamService:
                 "Voice stream disconnected",
             )
             raise
-        audio_iterator = client.synthesize(
+        synthesize_kwargs: dict[str, Any] = {
+            "speaker": utterance.speaker,
+            "text_chunks": chunks,
+        }
+        if utterance.effective_context_texts and supports_tts_context_texts(
+            resource_id=self.config.resource_id,
             speaker=utterance.speaker,
-            text_chunks=chunks,
-        )
+        ):
+            synthesize_kwargs["context_texts"] = list(
+                utterance.effective_context_texts
+            )
+        audio_iterator = client.synthesize(**synthesize_kwargs)
         audio_task: asyncio.Task[TtsSynthesisItem] | None = None
         chunk_index = 0
         try:
@@ -1388,6 +1406,47 @@ def _claim_voice_persistence_store(
             },
         )
         return None
+
+
+def _apply_voice_snapshot(
+    utterance: VoiceUtterance,
+    canonical_event: LiveEvent,
+) -> VoiceUtterance | None:
+    snapshot = canonical_event.payload.get("voice_snapshot")
+    if not isinstance(snapshot, dict):
+        return utterance
+    if snapshot.get("enabled") is False:
+        return None
+    speaker = snapshot.get("speaker")
+    delivery = snapshot.get("effective_delivery")
+    context_texts = snapshot.get("effective_context_texts")
+    voice_config_version = snapshot.get("voice_config_version")
+    mapping_version = snapshot.get("delivery_mapping_version")
+    return replace(
+        utterance,
+        speaker=(
+            speaker.strip()
+            if isinstance(speaker, str) and speaker.strip()
+            else utterance.speaker
+        ),
+        effective_delivery=dict(delivery) if isinstance(delivery, dict) else None,
+        effective_context_texts=tuple(
+            item for item in context_texts if isinstance(item, str) and item.strip()
+        )
+        if isinstance(context_texts, list)
+        else (),
+        voice_config_version=(
+            voice_config_version
+            if type(voice_config_version) is int and voice_config_version >= 1
+            else None
+        ),
+        delivery_mapping_version=(
+            mapping_version
+            if isinstance(mapping_version, str) and mapping_version
+            else None
+        ),
+        tts_request_source="accepted_player_action",
+    )
 
 
 def _release_voice_persistence_claim(

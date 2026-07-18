@@ -64,9 +64,12 @@ from app.models.live import (
 from app.models.quality_evaluation import GameQualityEvaluationRecord
 from app.werewolf.quality_evaluation import DEFAULT_EVALUATOR_VERSION
 from app.werewolf.quality_store import (
+    QualityEvaluationSuccessReference,
     QualityEvaluationSourceUnavailable,
     enqueue_quality_evaluation,
     latest_quality_evaluation,
+    latest_successful_quality_evaluation,
+    reset_quality_evaluation_for_retry,
 )
 from app.werewolf.public_outcomes import (
     conservative_legacy_outcomes,
@@ -163,12 +166,20 @@ def get_game(
     try:
         detail = get_admin_game_detail(db, session_id)
         quality_record = latest_quality_evaluation(db, session_id=session_id)
+        latest_successful_record = latest_successful_quality_evaluation(
+            db,
+            session_id=session_id,
+        )
     except RecoverableDatabaseError as exc:
         raise _database_unavailable() from exc
     if detail is None:
         raise _not_found()
     _set_private_headers(request, response)
-    return _detail_response(detail, quality_record=quality_record)
+    return _detail_response(
+        detail,
+        quality_record=quality_record,
+        latest_successful_record=latest_successful_record,
+    )
 
 
 @router.get(
@@ -390,6 +401,10 @@ def get_game_quality_evaluation(
             quality_evaluation=build_admin_quality_summary(
                 quality_record,
                 terminal=_is_terminal_game(game),
+                latest_successful_record=latest_successful_quality_evaluation(
+                    db,
+                    session_id=session_id,
+                ),
             ),
         )
     except AdminAPIProblem:
@@ -492,7 +507,7 @@ def retry_game_quality_evaluation(
                 "The replay sources required for evaluation are unavailable."
             ) from exc
         if queued.status != "pending":
-            _reset_quality_evaluation_for_retry(queued)
+            reset_quality_evaluation_for_retry(queued)
         record_audit_event(
             db,
             request=request,
@@ -593,6 +608,7 @@ def _detail_response(
     detail: AdminGameDetailData,
     *,
     quality_record: GameQualityEvaluationRecord | None,
+    latest_successful_record: QualityEvaluationSuccessReference | None,
 ) -> AdminGameDetailResponse:
     state = detail.state
     reveal_terminal_metadata = _is_terminal_game(detail.record)
@@ -642,22 +658,9 @@ def _detail_response(
         quality_evaluation=build_admin_quality_summary(
             quality_record,
             terminal=reveal_terminal_metadata,
+            latest_successful_record=latest_successful_record,
         ),
     )
-
-
-def _reset_quality_evaluation_for_retry(record: GameQualityEvaluationRecord) -> None:
-    record.status = "pending"
-    record.data_status = "collecting"
-    record.verdict = "unavailable"
-    record.safe_summary = {}
-    record.duration_ms = None
-    record.attempt_count = 0
-    record.not_before = datetime.now(tz=UTC)
-    record.worker_id = None
-    record.lease_expires_at = None
-    record.last_error_code = None
-    record.completed_at = None
 
 
 def _require_quality_debug_permission(principal: AdminPrincipal) -> None:

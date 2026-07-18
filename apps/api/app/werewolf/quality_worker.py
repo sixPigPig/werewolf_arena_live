@@ -46,32 +46,40 @@ class QualityEvaluationWorker:
     ) -> str | None:
         claimed_at = now or datetime.now(tz=UTC)
         with self.session_factory() as db:
-            record = db.scalar(
-                select(GameQualityEvaluationRecord)
-                .where(
-                    or_(
-                        and_(
-                            GameQualityEvaluationRecord.status == "pending",
-                            GameQualityEvaluationRecord.not_before <= claimed_at,
-                        ),
-                        and_(
-                            GameQualityEvaluationRecord.status == "processing",
-                            GameQualityEvaluationRecord.lease_expires_at.is_not(None),
-                            GameQualityEvaluationRecord.lease_expires_at <= claimed_at,
-                        ),
+            while True:
+                record = db.scalar(
+                    select(GameQualityEvaluationRecord)
+                    .where(
+                        or_(
+                            and_(
+                                GameQualityEvaluationRecord.status == "pending",
+                                GameQualityEvaluationRecord.not_before <= claimed_at,
+                            ),
+                            and_(
+                                GameQualityEvaluationRecord.status == "processing",
+                                GameQualityEvaluationRecord.lease_expires_at.is_not(None),
+                                GameQualityEvaluationRecord.lease_expires_at <= claimed_at,
+                            ),
+                        )
                     )
+                    .order_by(
+                        GameQualityEvaluationRecord.not_before.asc(),
+                        GameQualityEvaluationRecord.created_at.asc(),
+                        GameQualityEvaluationRecord.id.asc(),
+                    )
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
                 )
-                .order_by(
-                    GameQualityEvaluationRecord.not_before.asc(),
-                    GameQualityEvaluationRecord.created_at.asc(),
-                    GameQualityEvaluationRecord.id.asc(),
-                )
-                .with_for_update(skip_locked=True)
-                .limit(1)
-            )
-            if record is None:
-                return None
+                if record is None:
+                    return None
+                if record.attempt_count >= self.max_attempts:
+                    _fail_exhausted_job(record, completed_at=claimed_at)
+                    db.commit()
+                    continue
+                break
             record.status = "processing"
+            if record.started_at is None:
+                record.started_at = claimed_at
             record.worker_id = worker_id
             record.lease_expires_at = claimed_at + timedelta(seconds=self.lease_seconds)
             record.attempt_count += 1
@@ -88,8 +96,15 @@ class QualityEvaluationWorker:
     ) -> bool:
         renewed_at = now or datetime.now(tz=UTC)
         with self.session_factory() as db:
-            record = db.get(GameQualityEvaluationRecord, evaluation_id)
-            if record is None or record.status != "processing" or record.worker_id != worker_id:
+            record = _owned_processing_job(
+                db,
+                evaluation_id=evaluation_id,
+                worker_id=worker_id,
+                at=renewed_at,
+                lock=True,
+                require_live_lease=True,
+            )
+            if record is None:
                 return False
             record.lease_expires_at = renewed_at + timedelta(seconds=self.lease_seconds)
             db.commit()
@@ -119,23 +134,41 @@ class QualityEvaluationWorker:
         worker_id: str,
         started_at: float,
     ) -> None:
-        now = datetime.now(tz=UTC)
+        observed_at = datetime.now(tz=UTC)
         with self.session_factory() as db:
-            record = db.get(GameQualityEvaluationRecord, evaluation_id)
-            if record is None or record.status != "processing" or record.worker_id != worker_id:
+            record = _owned_processing_job(
+                db,
+                evaluation_id=evaluation_id,
+                worker_id=worker_id,
+                at=observed_at,
+                lock=False,
+                require_live_lease=True,
+            )
+            if record is None:
                 raise RuntimeError("quality evaluation ownership was lost")
             bundle = build_database_quality_bundle(
                 db,
                 session_id=record.session_id,
                 run_id=record.run_id,
             )
+            guarded_at = datetime.now(tz=UTC)
+            record = _owned_processing_job(
+                db,
+                evaluation_id=evaluation_id,
+                worker_id=worker_id,
+                at=guarded_at,
+                lock=True,
+                require_live_lease=True,
+            )
+            if record is None:
+                raise RuntimeError("quality evaluation ownership was lost")
             if bundle.source_revision != record.source_revision:
                 record.status = "superseded"
                 record.data_status = "unavailable"
                 record.verdict = "unavailable"
                 record.worker_id = None
                 record.lease_expires_at = None
-                record.completed_at = now
+                record.completed_at = guarded_at
                 enqueue_quality_evaluation(
                     db,
                     session_id=record.session_id,
@@ -144,15 +177,28 @@ class QualityEvaluationWorker:
                 )
                 db.commit()
                 return
-            if not self.renew_lease(evaluation_id, worker_id=worker_id, now=now):
-                raise RuntimeError("quality evaluation lease renewal failed")
-            db.expire(record)
-            report = evaluate_quality_bundle(
-                bundle,
-                hmac_key=self.hmac_key,
-                evaluator_version=record.evaluator_version,
-                evaluated_at=now,
+            evaluator_version = record.evaluator_version
+            record.lease_expires_at = guarded_at + timedelta(seconds=self.lease_seconds)
+            db.commit()
+
+        report = evaluate_quality_bundle(
+            bundle,
+            hmac_key=self.hmac_key,
+            evaluator_version=evaluator_version,
+            evaluated_at=guarded_at,
+        )
+        completed_at = datetime.now(tz=UTC)
+        with self.session_factory() as db:
+            record = _owned_processing_job(
+                db,
+                evaluation_id=evaluation_id,
+                worker_id=worker_id,
+                at=completed_at,
+                lock=True,
+                require_live_lease=True,
             )
+            if record is None:
+                raise RuntimeError("quality evaluation ownership was lost")
             record.status = "completed"
             record.data_status = report.data_status
             record.verdict = report.verdict
@@ -165,7 +211,7 @@ class QualityEvaluationWorker:
             record.lease_expires_at = None
             record.last_error_code = None
             record.duration_ms = max(0, round((time.monotonic() - started_at) * 1000))
-            record.completed_at = now
+            record.completed_at = completed_at
             db.commit()
 
     def _release_failed_job(
@@ -177,8 +223,15 @@ class QualityEvaluationWorker:
     ) -> None:
         now = datetime.now(tz=UTC)
         with self.session_factory() as db:
-            record = db.get(GameQualityEvaluationRecord, evaluation_id)
-            if record is None or record.status != "processing" or record.worker_id != worker_id:
+            record = _owned_processing_job(
+                db,
+                evaluation_id=evaluation_id,
+                worker_id=worker_id,
+                at=now,
+                lock=True,
+                require_live_lease=False,
+            )
+            if record is None:
                 return
             terminal = record.attempt_count >= self.max_attempts
             record.status = "failed" if terminal else "pending"
@@ -238,3 +291,45 @@ def _error_code(exc: Exception) -> str:
         "RuntimeError": "worker_state_error",
     }
     return known.get(type(exc).__name__, "evaluation_failed")
+
+
+def _fail_exhausted_job(
+    record: GameQualityEvaluationRecord,
+    *,
+    completed_at: datetime,
+) -> None:
+    """Terminalize a crashed/retryable job without erasing success lineage."""
+
+    record.status = "failed"
+    record.data_status = "unavailable"
+    record.verdict = "unavailable"
+    record.worker_id = None
+    record.lease_expires_at = None
+    record.last_error_code = "lease_expired_max_attempts"
+    record.completed_at = completed_at
+
+
+def _owned_processing_job(
+    db: Session,
+    *,
+    evaluation_id: str,
+    worker_id: str,
+    at: datetime,
+    lock: bool,
+    require_live_lease: bool,
+) -> GameQualityEvaluationRecord | None:
+    conditions = [
+        GameQualityEvaluationRecord.id == evaluation_id,
+        GameQualityEvaluationRecord.status == "processing",
+        GameQualityEvaluationRecord.worker_id == worker_id,
+    ]
+    if require_live_lease:
+        conditions.append(GameQualityEvaluationRecord.lease_expires_at > at)
+    statement = (
+        select(GameQualityEvaluationRecord)
+        .where(*conditions)
+        .execution_options(populate_existing=True)
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return db.scalar(statement)

@@ -52,6 +52,12 @@ _EDITABLE_PROFILE_FIELDS = frozenset(
         "short_description",
         "background_story",
         "speaking_style",
+        "tts_speaker",
+        "base_delivery_mood",
+        "base_delivery_intensity",
+        "base_delivery_pace",
+        "base_delivery_instruction",
+        "voice_enabled",
         "catchphrases",
         "strategy_profile",
         "risk_tolerance",
@@ -232,6 +238,13 @@ def create_player_profile(
         short_description=str(data.get("short_description") or ""),
         background_story=str(data.get("background_story") or ""),
         speaking_style=str(data.get("speaking_style") or ""),
+        tts_speaker=str(data.get("tts_speaker") or ""),
+        base_delivery_mood=str(data.get("base_delivery_mood") or "neutral"),
+        base_delivery_intensity=str(data.get("base_delivery_intensity") or "medium"),
+        base_delivery_pace=str(data.get("base_delivery_pace") or "natural"),
+        base_delivery_instruction=str(data.get("base_delivery_instruction") or ""),
+        voice_enabled=bool(data.get("voice_enabled", True)),
+        voice_config_version=1,
         catchphrases=list(data.get("catchphrases") or []),
         strategy_profile=str(data.get("strategy_profile") or "balanced"),
         risk_tolerance=int(data.get("risk_tolerance") or 3),
@@ -288,6 +301,28 @@ def update_player_profile(
     appearance_id = str(data.get("appearance_id", profile.appearance_id))
     strategy_profile = str(data.get("strategy_profile", profile.strategy_profile))
     _validate_presets(personality_id, appearance_id, strategy_profile)
+    voice_fields = {
+        "tts_speaker",
+        "base_delivery_mood",
+        "base_delivery_intensity",
+        "base_delivery_pace",
+        "base_delivery_instruction",
+        "voice_enabled",
+    }
+    if "tts_speaker" in data:
+        data["tts_speaker"] = str(data["tts_speaker"] or "")
+    if "base_delivery_mood" in data:
+        data["base_delivery_mood"] = str(data["base_delivery_mood"] or "neutral")
+    if "base_delivery_intensity" in data:
+        data["base_delivery_intensity"] = str(data["base_delivery_intensity"] or "medium")
+    if "base_delivery_pace" in data:
+        data["base_delivery_pace"] = str(data["base_delivery_pace"] or "natural")
+    if "base_delivery_instruction" in data:
+        data["base_delivery_instruction"] = str(data["base_delivery_instruction"] or "")
+    voice_changed = any(
+        field_name in data and data[field_name] != getattr(profile, field_name)
+        for field_name in voice_fields
+    )
 
     if "avatar_image_url" in data and data["avatar_image_url"] and not allow_external_avatar_url:
         raise PlayerProfileValidationError("External avatar URLs are not allowed")
@@ -305,6 +340,9 @@ def update_player_profile(
 
     for field_name, value in data.items():
         setattr(profile, field_name, value)
+
+    if voice_changed:
+        profile.voice_config_version += 1
 
     if personality_changed and "personality_text" not in data:
         profile.personality_text = default_personality_text(personality_id)

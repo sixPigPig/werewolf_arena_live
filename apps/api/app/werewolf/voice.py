@@ -112,6 +112,11 @@ class VoiceUtterance:
     last_source_event_id: int | None = None
     static_asset_id: str | None = None
     audience: VoiceAudience = "player_public"
+    effective_delivery: dict[str, Any] | None = None
+    effective_context_texts: tuple[str, ...] = ()
+    voice_config_version: int | None = None
+    delivery_mapping_version: str | None = None
+    tts_request_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +221,7 @@ def voice_job_candidate(
         "game_completed",
         "game_failed",
         "game_canceled",
+        "player_did_not_speak",
     }:
         return "judge"
     if event.type == "phase_started" and event.phase in {"night", "day", "vote"}:
@@ -461,6 +467,9 @@ def _judge_cue_for_event(
         if event.payload.get("terminal_recovery") is True:
             return None
         return JudgeVoiceCue("本局游戏继续。", "game_resume")
+    if event.type == "player_did_not_speak":
+        actor_label = _player_label(event.actor, player_seats, fallback="该玩家")
+        return JudgeVoiceCue(f"{actor_label}本轮未发言。")
     if event.type == "phase_started" and event.phase == "night":
         return JudgeVoiceCue("夜晚降临，所有玩家请闭眼。", "night_start")
     if event.type == "phase_started" and event.phase == "day":

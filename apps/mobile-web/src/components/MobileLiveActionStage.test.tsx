@@ -305,4 +305,63 @@ describe("MobileLiveActionStage", () => {
     const presenter = stage.querySelector(".mobile-live-presenter");
     expect(presenter).toHaveAttribute("aria-hidden", "true");
   });
+
+  it("renders provenance badges and exposes the badge in the atomic status text", () => {
+    render(
+      <MobileLiveActionStage
+        presentation={presentation({
+          kind: "vote-action",
+          tone: "warning",
+          actorName: "8号 猎人",
+          actorSeat: 8,
+          title: "8号 -> 1号",
+          detail: "已投票",
+          accessibleText: "8号投给1号，系统代投",
+          statusBadge: {
+            kind: "system_fallback",
+            label: "系统代投",
+            origin: "system_fallback",
+            reasonCode: "system_vote_timeout",
+          },
+        })}
+        currentPlayer={null}
+        godViewState={stateWith([])}
+      />,
+    );
+
+    const stage = screen.getByRole("status");
+    expect(within(stage).getByText("系统代投")).toHaveClass(
+      "mobile-live-status-badge-system-fallback",
+    );
+    expect(stage.querySelector(".mobile-sr-only")).toHaveTextContent(
+      "8号投给1号，系统代投",
+    );
+  });
+
+  it("uses a distinct cancellation badge style", () => {
+    render(
+      <MobileLiveActionStage
+        presentation={presentation({
+          kind: "waiting",
+          tone: "danger",
+          actorName: "法官",
+          title: "2号玩家公开行动已取消",
+          detail: "狼人自爆",
+          accessibleText: "2号玩家公开行动已取消，狼人自爆，动作取消",
+          statusBadge: {
+            kind: "canceled",
+            label: "动作取消",
+            origin: "canceled",
+            reasonCode: "self_explosion",
+          },
+        })}
+        currentPlayer={null}
+        godViewState={stateWith([])}
+      />,
+    );
+
+    expect(within(screen.getByRole("status")).getByText("动作取消")).toHaveClass(
+      "mobile-live-status-badge-canceled",
+    );
+  });
 });

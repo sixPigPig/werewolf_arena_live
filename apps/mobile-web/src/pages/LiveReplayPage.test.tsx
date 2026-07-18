@@ -715,9 +715,40 @@ describe("LiveReplayPage", () => {
     const stage = await screen.findByRole("status", { name: "当前舞台" });
     expect(within(stage).getByText("狼人最终目标")).toBeVisible();
     expect(within(stage).getByText("袭击 1号")).toBeVisible();
+    expect(within(stage).getByText("来源未知 · 旧数据")).toBeVisible();
 
     const rail = screen.getByRole("log");
     expect(within(rail).getByText("最终狼刀 -> 1号")).toBeVisible();
+  });
+
+  it("replays a persisted system vote with its provenance intact", async () => {
+    const user = userEvent.setup();
+    const systemVote: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 7,
+      type: "action_parsed",
+      round: 1,
+      phase: "vote",
+      actor: "白石",
+      action: "vote",
+      payload: {
+        choice: "南风",
+        action_origin: "system_fallback",
+        public_reason_code: "system_vote_timeout",
+      },
+    };
+    gameClientMocks.getGamePlayback.mockResolvedValue(
+      buildPlayback({ events: [gameStartedEvent, systemVote] }),
+    );
+
+    renderLiveReplayRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("系统代投")).toBeVisible();
+    expect(screen.getByRole("log")).toHaveTextContent(
+      "系统代投：2号 -> 3号",
+    );
   });
 
   it("seeks the replay director when selecting an event from the sheet", async () => {

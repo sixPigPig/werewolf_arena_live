@@ -1623,6 +1623,71 @@ class LiveRunRegistry:
                 payload=payload,
             )
 
+    def publish_lifecycle(
+        self,
+        run_id: str,
+        event_type: str,
+        *,
+        round_number: int,
+        phase: str,
+        actor: str | None = None,
+        action: str | None = None,
+        payload: dict[str, Any],
+        expected_fence_token: int | None = None,
+    ) -> LiveEvent:
+        if event_type not in {"phase_started", "phase_completed"}:
+            raise ValueError("Lifecycle publication requires a lifecycle event type")
+        phase_instance_id = payload.get("phase_instance_id")
+        if not isinstance(phase_instance_id, str) or not phase_instance_id:
+            raise ValueError("Lifecycle publication requires a phase instance id")
+        with self._lock:
+            run = self._runs[run_id]
+            if run.status in {"completed", "failed", "canceled"}:
+                raise RunLeaseUnavailable(
+                    f"Run {run_id} is terminal and cannot publish events"
+                )
+            self._raise_if_fence_changed_locked(run, expected_fence_token)
+            matches = [
+                event
+                for event in run.events
+                if event.type == event_type
+                and event.payload.get("phase_instance_id") == phase_instance_id
+            ]
+            if len(matches) > 1:
+                raise ValueError("Lifecycle event identity is not unique")
+            if matches:
+                existing = matches[0]
+                if (
+                    existing.round != round_number
+                    or existing.phase != phase
+                    or existing.actor != actor
+                    or existing.action != action
+                    or not strict_json_equal(existing.payload, payload)
+                ):
+                    raise ValueError("Lifecycle event identity conflicts with persisted data")
+                return existing
+            if event_type == "phase_completed":
+                matching_start = [
+                    event
+                    for event in run.events
+                    if event.type == "phase_started"
+                    and event.payload.get("phase_instance_id") == phase_instance_id
+                ]
+                if len(matching_start) != 1:
+                    raise ValueError("Lifecycle completion has no unique start event")
+                if payload.get("source_event_id") != matching_start[0].id:
+                    raise ValueError("Lifecycle completion source event does not match")
+            return self._publish_locked(
+                run,
+                event_type,
+                round_number=round_number,
+                phase=phase,
+                actor=actor,
+                action=action,
+                payload=payload,
+                raise_on_persist_error=True,
+            )
+
     @staticmethod
     def _raise_if_fence_changed_locked(
         run: LiveGameRun,
@@ -3168,6 +3233,39 @@ class EventSink:
             payload=payload,
             expected_fence_token=self.fence_token,
         )
+
+    def publish_lifecycle(
+        self,
+        event_type: str,
+        *,
+        round_number: int,
+        phase: str,
+        actor: str | None = None,
+        action: str | None = None,
+        payload: dict[str, Any],
+    ) -> LiveEvent:
+        self.registry.raise_if_stop_requested(
+            self.run_id,
+            expected_fence_token=self.fence_token,
+        )
+        return self.registry.publish_lifecycle(
+            self.run_id,
+            event_type,
+            round_number=round_number,
+            phase=phase,
+            actor=actor,
+            action=action,
+            payload=payload,
+            expected_fence_token=self.fence_token,
+        )
+
+    def lifecycle_events(self) -> list[LiveEvent]:
+        return [
+            event
+            for event in self.registry.events_after(self.run_id)
+            if event.type in {"phase_started", "phase_completed"}
+            and isinstance(event.payload.get("phase_instance_id"), str)
+        ]
 
 
 class NullEventSink:

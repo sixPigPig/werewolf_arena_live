@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Generator
-from dataclasses import dataclass
+import base64
+from collections.abc import AsyncIterator, Generator
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 import pytest
@@ -14,16 +15,27 @@ from sqlalchemy.pool import StaticPool
 
 from app.admin.rbac import AdminPermission
 from app.api.admin.errors import admin_request_validation_handler
+from app.api.routes.admin_player_profiles import (
+    get_player_voice_preview_client_factory,
+    get_player_voice_preview_tts_config,
+)
 from app.api.routes.player_profiles import get_player_profile_ai_provider
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_application
 from app.models.admin import AuditEvent
+from app.models.live import (
+    LiveEventRecord,
+    VoiceAudioChunkRecord,
+    VoiceMaterializationJobRecord,
+    VoiceUtteranceRecord,
+)
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.player_profiles.errors import PlayerProfileVersionConflict
 from app.player_profiles.service import update_player_profile
 from app.werewolf.providers import configured_model_options
+from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
 
 @dataclass(frozen=True)
@@ -93,6 +105,51 @@ class StubAiDraftProvider:
         return self.response
 
 
+PREVIEW_TTS_CONFIG = VolcengineTtsConfig(
+    enabled=True,
+    api_key="preview-secret-api-key",
+    resource_id="seed-tts-2.0",
+    ws_url="wss://preview.example.test",
+    player_speaker="zh_female_gaolengyujie_uranus_bigtts",
+    judge_speaker="zh_female_vv_uranus_bigtts",
+    audio_format="mp3",
+    sample_rate=24_000,
+)
+
+
+class RecordingVoicePreviewTtsClient:
+    def __init__(
+        self,
+        config: VolcengineTtsConfig,
+        *,
+        error: Exception | None = None,
+        audio_chunks: tuple[bytes, ...] = (b"preview-", b"audio"),
+    ) -> None:
+        self.config = config
+        self.error = error
+        self.audio_chunks = audio_chunks
+        self.calls: list[dict[str, object]] = []
+
+    async def synthesize(
+        self,
+        *,
+        speaker: str,
+        text_chunks: list[str],
+        context_texts: list[str] | tuple[str, ...] | None = None,
+    ) -> AsyncIterator[bytes]:
+        self.calls.append(
+            {
+                "speaker": speaker,
+                "text_chunks": text_chunks,
+                "context_texts": list(context_texts or ()),
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        for chunk in self.audio_chunks:
+            yield chunk
+
+
 def _create_draft(
     context: AdminProfilesContext,
     csrf_token: str,
@@ -106,6 +163,33 @@ def _create_draft(
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def _override_voice_preview(
+    context: AdminProfilesContext,
+    *,
+    config: VolcengineTtsConfig = PREVIEW_TTS_CONFIG,
+    error: Exception | None = None,
+    audio_chunks: tuple[bytes, ...] = (b"preview-", b"audio"),
+) -> list[RecordingVoicePreviewTtsClient]:
+    clients: list[RecordingVoicePreviewTtsClient] = []
+
+    def factory(client_config: VolcengineTtsConfig) -> RecordingVoicePreviewTtsClient:
+        client = RecordingVoicePreviewTtsClient(
+            client_config,
+            error=error,
+            audio_chunks=audio_chunks,
+        )
+        clients.append(client)
+        return client
+
+    context.client.app.dependency_overrides[get_player_voice_preview_tts_config] = (
+        lambda: config
+    )
+    context.client.app.dependency_overrides[get_player_voice_preview_client_factory] = (
+        lambda: factory
+    )
+    return clients
 
 
 def _transition(
@@ -393,6 +477,354 @@ def test_stale_update_returns_409_current_version_and_audits_both_versions(
         )
     assert conflict is not None
     assert conflict.after == {"expected_version": 1, "current_version": 2}
+
+
+def test_voice_config_version_tracks_effective_normalized_changes_only(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, csrf_token = _login(context, monkeypatch)
+    draft = _create_draft(context, csrf_token)
+    assert draft["tts_speaker"] is None
+    assert draft["base_delivery_mood"] == "neutral"
+    assert draft["base_delivery_intensity"] == "medium"
+    assert draft["base_delivery_pace"] == "natural"
+    assert draft["voice_config_version"] == 1
+
+    normalized_no_op = context.client.patch(
+        f"/api/v1/admin/player-profiles/{draft['id']}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "expected_version": draft["version"],
+            "tts_speaker": None,
+            "base_delivery_mood": None,
+            "base_delivery_intensity": None,
+            "base_delivery_pace": None,
+        },
+    )
+    assert normalized_no_op.status_code == 200, normalized_no_op.text
+    no_op_payload = normalized_no_op.json()
+    assert no_op_payload["voice_config_version"] == 1
+
+    customized = context.client.patch(
+        f"/api/v1/admin/player-profiles/{draft['id']}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "expected_version": no_op_payload["version"],
+            "tts_speaker": "zh_female_gaolengyujie_uranus_bigtts",
+            "base_delivery_mood": "tense",
+            "base_delivery_intensity": "high",
+            "base_delivery_pace": "fast",
+        },
+    )
+    assert customized.status_code == 200, customized.text
+    customized_payload = customized.json()
+    assert customized_payload["voice_config_version"] == 2
+
+    reset = context.client.patch(
+        f"/api/v1/admin/player-profiles/{draft['id']}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "expected_version": customized_payload["version"],
+            "tts_speaker": None,
+            "base_delivery_mood": None,
+            "base_delivery_intensity": None,
+            "base_delivery_pace": None,
+        },
+    )
+    assert reset.status_code == 200, reset.text
+    reset_payload = reset.json()
+    assert reset_payload["tts_speaker"] is None
+    assert reset_payload["base_delivery_mood"] == "neutral"
+    assert reset_payload["base_delivery_intensity"] == "medium"
+    assert reset_payload["base_delivery_pace"] == "natural"
+    assert reset_payload["voice_config_version"] == 3
+
+    repeated_reset = context.client.patch(
+        f"/api/v1/admin/player-profiles/{draft['id']}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "expected_version": reset_payload["version"],
+            "tts_speaker": None,
+            "base_delivery_mood": None,
+            "base_delivery_intensity": None,
+            "base_delivery_pace": None,
+        },
+    )
+    assert repeated_reset.status_code == 200, repeated_reset.text
+    assert repeated_reset.json()["voice_config_version"] == 3
+
+    with context.session_factory() as db:
+        persisted = db.get(VirtualPlayerProfile, draft["id"])
+    assert persisted is not None
+    assert persisted.tts_speaker == ""
+    assert persisted.base_delivery_mood == "neutral"
+    assert persisted.base_delivery_intensity == "medium"
+    assert persisted.base_delivery_pace == "natural"
+
+
+@pytest.mark.parametrize(
+    ("resource_id", "speaker"),
+    [
+        ("seed-tts-1.0", "zh_female_gaolengyujie_uranus_bigtts"),
+        ("seed-tts-2.0", "S_clone_voice_001"),
+    ],
+)
+def test_admin_rejects_new_profile_speaker_without_delivery_context_capability(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+    resource_id: str,
+    speaker: str,
+) -> None:
+    monkeypatch.setattr(settings, "ark_tts_resource_id", resource_id)
+    _, csrf_token = _login(context, monkeypatch)
+
+    response = context.client.post(
+        "/api/v1/admin/player-profiles",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "display_name": "不兼容音色",
+            "model": _model_name(),
+            "tts_speaker": speaker,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "admin_player_profile_invalid"
+    assert "delivery context requires" in response.json()["detail"]
+    with context.session_factory() as db:
+        assert db.scalar(select(VirtualPlayerProfile.id)) is None
+
+
+def test_admin_allows_unrelated_edit_of_legacy_unsupported_speaker_but_not_replacement(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "ark_tts_resource_id", "seed-tts-2.0")
+    _, csrf_token = _login(context, monkeypatch)
+    draft = _create_draft(context, csrf_token)
+    with context.session_factory() as db:
+        profile = db.get(VirtualPlayerProfile, draft["id"])
+        assert profile is not None
+        profile.tts_speaker = "S_legacy_clone_voice_001"
+        db.commit()
+        db.refresh(profile)
+        legacy_version = profile.version
+
+    unrelated_edit = context.client.patch(
+        f"/api/v1/admin/player-profiles/{draft['id']}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "expected_version": legacy_version,
+            "short_description": "只修改简介",
+            # Admin forms may submit the unchanged legacy speaker with other fields.
+            "tts_speaker": "S_legacy_clone_voice_001",
+        },
+    )
+
+    assert unrelated_edit.status_code == 200, unrelated_edit.text
+    payload = unrelated_edit.json()
+    assert payload["short_description"] == "只修改简介"
+    assert payload["tts_speaker"] == "S_legacy_clone_voice_001"
+
+    unsupported_replacement = context.client.patch(
+        f"/api/v1/admin/player-profiles/{draft['id']}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "expected_version": payload["version"],
+            "tts_speaker": "S_new_clone_voice_002",
+        },
+    )
+
+    assert unsupported_replacement.status_code == 422
+    assert unsupported_replacement.json()["code"] == "admin_player_profile_invalid"
+    assert "delivery context requires" in unsupported_replacement.json()["detail"]
+    with context.session_factory() as db:
+        persisted = db.get(VirtualPlayerProfile, draft["id"])
+    assert persisted is not None
+    assert persisted.tts_speaker == "S_legacy_clone_voice_001"
+
+
+def test_admin_voice_preview_compiles_safe_delivery_without_live_artifacts(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, csrf_token = _login(context, monkeypatch, role="content_editor")
+    clients = _override_voice_preview(context)
+
+    response = context.client.post(
+        "/api/v1/admin/player-profile-voice-previews",
+        headers={
+            "X-CSRF-Token": csrf_token,
+            "X-Request-ID": "player-voice-preview-1",
+        },
+        json={
+            "say": "  我先听完这一轮，再给出判断。  ",
+            "speaker": "zh_female_vv_uranus_bigtts",
+            "base_delivery": {
+                "mood": "calm",
+                "intensity": "low",
+                "pace": "natural",
+                "instruction": "低沉、清晰",
+            },
+            "turn_delivery": {
+                "mood": "tense",
+                "pace": "fast",
+                "instruction": "3号狼人要急切反驳",
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["speaker"] == "zh_female_vv_uranus_bigtts"
+    assert payload["effective_delivery"] == {
+        "schema_version": 1,
+        "mood": "tense",
+        "intensity": "low",
+        "pace": "fast",
+        "instruction": "低沉、清晰",
+    }
+    assert payload["delivery_mapping_version"] == "delivery-v1"
+    assert payload["audio_format"] == "mp3"
+    assert payload["mime_type"] == "audio/mpeg"
+    assert payload["sample_rate"] == 24_000
+    assert payload["elapsed_ms"] >= 0
+    assert payload["audio_byte_length"] == len(b"preview-audio")
+    assert base64.b64decode(payload["audio_base64"]) == b"preview-audio"
+    assert "3号" not in "".join(payload["context_texts"])
+    assert "急切反驳" not in "".join(payload["context_texts"])
+    assert "低沉、清晰" in "".join(payload["context_texts"])
+    assert "preview-secret-api-key" not in response.text
+    assert "source_event_id" not in response.text
+    assert "utterance_id" not in response.text
+    assert "voice_job" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-request-id"] == "player-voice-preview-1"
+    assert len(clients) == 1
+    assert clients[0].config.audio_format == "mp3"
+    assert clients[0].calls == [
+        {
+            "speaker": "zh_female_vv_uranus_bigtts",
+            "text_chunks": ["我先听完这一轮，", "再给出判断。"],
+            "context_texts": payload["context_texts"],
+        }
+    ]
+
+    with context.session_factory() as db:
+        assert list(db.scalars(select(LiveEventRecord))) == []
+        assert list(db.scalars(select(VoiceMaterializationJobRecord))) == []
+        assert list(db.scalars(select(VoiceUtteranceRecord))) == []
+        assert list(db.scalars(select(VoiceAudioChunkRecord))) == []
+
+
+def test_admin_voice_preview_requires_session_write_permission_and_csrf(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_body = {"say": "这是权限测试。"}
+    unauthenticated = context.client.post(
+        "/api/v1/admin/player-profile-voice-previews",
+        json=request_body,
+    )
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["code"] == "admin_auth_required"
+
+    _, viewer_csrf = _login(context, monkeypatch, role="viewer")
+    forbidden = context.client.post(
+        "/api/v1/admin/player-profile-voice-previews",
+        headers={"X-CSRF-Token": viewer_csrf},
+        json=request_body,
+    )
+    assert forbidden.status_code == 403
+    assert forbidden.json()["code"] == "admin_permission_denied"
+
+    _login(context, monkeypatch, role="content_editor")
+    missing_csrf = context.client.post(
+        "/api/v1/admin/player-profile-voice-previews",
+        json=request_body,
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["code"] == "admin_csrf_invalid"
+
+
+def test_admin_voice_preview_rejects_unsupported_context_capabilities(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, csrf_token = _login(context, monkeypatch, role="content_editor")
+    clients = _override_voice_preview(
+        context,
+        config=replace(PREVIEW_TTS_CONFIG, resource_id="seed-tts-1.0"),
+    )
+    unsupported_resource = context.client.post(
+        "/api/v1/admin/player-profile-voice-previews",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"say": "测试资源能力。"},
+    )
+    assert unsupported_resource.status_code == 422
+    assert (
+        unsupported_resource.json()["code"]
+        == "admin_player_voice_preview_context_unsupported"
+    )
+    assert clients == []
+
+    context.client.app.dependency_overrides[get_player_voice_preview_tts_config] = (
+        lambda: PREVIEW_TTS_CONFIG
+    )
+    unsupported_speaker = context.client.post(
+        "/api/v1/admin/player-profile-voice-previews",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"say": "测试复刻音色。", "speaker": "S_clone_voice_001"},
+    )
+    assert unsupported_speaker.status_code == 422
+    assert (
+        unsupported_speaker.json()["code"]
+        == "admin_player_voice_preview_context_unsupported"
+    )
+    assert clients == []
+
+
+def test_admin_voice_preview_hides_provider_errors_and_credentials(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, csrf_token = _login(context, monkeypatch, role="content_editor")
+    raw_error = "provider exploded with preview-secret-api-key and raw payload"
+    _override_voice_preview(context, error=RuntimeError(raw_error))
+
+    response = context.client.post(
+        "/api/v1/admin/player-profile-voice-previews",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"say": "触发供应商失败。"},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "admin_player_voice_preview_failed"
+    assert raw_error not in response.text
+    assert "preview-secret-api-key" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_admin_voice_preview_rejects_audio_over_the_response_limit(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, csrf_token = _login(context, monkeypatch, role="content_editor")
+    _override_voice_preview(
+        context,
+        audio_chunks=(b"x" * (2 * 1024 * 1024 + 1),),
+    )
+
+    response = context.client.post(
+        "/api/v1/admin/player-profile-voice-previews",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"say": "测试试听音频大小限制。"},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "admin_player_voice_preview_audio_too_large"
+    assert "audio_base64" not in response.text
 
 
 def test_mapper_version_rejects_a_real_two_session_lost_update(tmp_path) -> None:

@@ -14,6 +14,7 @@ from app.models.live import LiveRunRecord
 from app.core.config import settings
 from app.werewolf.checkpoint import (
     ResumeCheckpointError,
+    lifecycle_ledger_from_checkpoint,
     report_resume_checkpoint_error,
     resolved_rule_set_from_checkpoint,
 )
@@ -451,6 +452,7 @@ def _validated_checkpoint_payload_unreported(
     if not isinstance(logs, list):
         raise ResumeCheckpointError("invalid_structure")
 
+    lifecycle_ledger_from_checkpoint(checkpoint)
     compiled = resolved_rule_set_from_checkpoint(checkpoint)
     return state, logs, checkpoint, rounds, compiled
 

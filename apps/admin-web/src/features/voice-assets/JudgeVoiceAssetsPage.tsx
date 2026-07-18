@@ -123,6 +123,9 @@ export default function JudgeVoiceAssetsPage() {
           ? "当前读取 PostgreSQL 独立语音资产存储；旧静态文件仅作为回滚输入保留。本页不会自动生成、覆盖或删除语音。"
           : "当前仍从旧静态目录双读；完成幂等导入后会自动切换 PostgreSQL。本页不会自动生成、覆盖或删除语音。"}
       </p>
+      <p className="voice-assets-storage-note">
+        本页只管理法官固定台词资产。玩家音色与基础演绎在玩家档案中配置，两者不会自动联动；修改任一配置都不会改写运行中对局或历史 Replay。
+      </p>
 
       {createJob.isError ? (
         <p className="game-inline-warning" role="alert">无法创建语音生成任务，请稍后重试。</p>

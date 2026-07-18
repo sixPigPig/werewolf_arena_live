@@ -14,6 +14,7 @@ from app.werewolf.checkpoint import (
     ResumeCheckpointError,
     ResumeCheckpointManager,
     game_state_from_dict,
+    lifecycle_ledger_from_checkpoint,
     report_resume_checkpoint_error,
     resolved_rule_set_from_checkpoint,
     rng_from_json_state,
@@ -172,6 +173,7 @@ def resume_game(
 
     try:
         compiled = resolved_rule_set_from_checkpoint(checkpoint)
+        lifecycle_ledger_from_checkpoint(checkpoint)
     except ResumeCheckpointError as exc:
         report_resume_checkpoint_error(exc)
         raise GameRunError("Resume checkpoint is invalid", session_id) from exc

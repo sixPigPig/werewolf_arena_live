@@ -3,6 +3,7 @@ import {
   parseAdminPlayerProfile,
   parseAdminPlayerProfileAiDraft,
   parseAdminPlayerProfileList,
+  parseAdminPlayerVoicePreview,
   parsePlayerProfileOptions,
 } from "@/features/player-profiles/parsers";
 import type {
@@ -12,6 +13,7 @@ import type {
   PlayerProfileListParams,
   PlayerProfileOptions,
   PlayerProfileTransitionRequest,
+  PlayerVoicePreviewRequest,
   UpdatePlayerProfileRequest,
 } from "@/features/player-profiles/types";
 
@@ -19,6 +21,8 @@ const PLAYER_PROFILES_PATH = "/api/v1/admin/player-profiles";
 const PLAYER_PROFILE_OPTIONS_PATH = "/api/v1/admin/player-profile-options";
 const PLAYER_PROFILE_AI_DRAFT_PATH =
   "/api/v1/admin/player-profile-ai-drafts";
+const PLAYER_PROFILE_VOICE_PREVIEW_PATH =
+  "/api/v1/admin/player-profile-voice-previews";
 
 export async function generateAdminPlayerProfileAiDraft(
   mode: "name" | "template",
@@ -33,6 +37,21 @@ export async function generateAdminPlayerProfileAiDraft(
     body: JSON.stringify({ mode }),
   });
   return parseAdminPlayerProfileAiDraft(value);
+}
+
+export async function previewAdminPlayerProfileVoice(
+  request: PlayerVoicePreviewRequest,
+  csrfToken: string,
+) {
+  const value = await adminApiFetch<unknown>(PLAYER_PROFILE_VOICE_PREVIEW_PATH, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify(request),
+  });
+  return parseAdminPlayerVoicePreview(value);
 }
 
 export async function listAdminPlayerProfiles(

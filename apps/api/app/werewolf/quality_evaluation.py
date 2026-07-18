@@ -25,6 +25,68 @@ EVALUATION_SCHEMA_VERSION = 1
 DEFAULT_EVALUATOR_VERSION = "p3-v1"
 Severity = Literal["P0", "P1", "P2"]
 
+MAX_CRITICAL_ACTIONS = 64
+MAX_CRITICAL_CLAUSE_IDS = 16
+CRITICAL_DECISION_ACTIONS = frozenset(
+    {
+        "remove",
+        "protect",
+        "investigate",
+        "witch_save",
+        "witch_poison",
+        "hunter_shoot",
+        "sheriff_run",
+        "sheriff_withdraw",
+        "sheriff_vote",
+        "sheriff_runoff_vote",
+        "werewolf_self_explosion",
+        "speech_order",
+        "sheriff_badge",
+        "vote",
+        "exile_runoff_vote",
+        "werewolf_kill_vote",
+    }
+)
+_KNOWN_ACTION_CLAUSE_IDS: dict[str, tuple[str, ...]] = {
+    "remove": ("night.werewolf_attack.non_wolf_targets.v1",),
+    "werewolf_kill_vote": ("night.werewolf_attack.non_wolf_targets.v1",),
+    "werewolf_self_explosion": (
+        "day.self_explosion.interruption.v1",
+        "private.werewolf.team_knowledge.v1",
+    ),
+    "witch_save": (
+        "night.witch.resources_and_targets.v1",
+        "private.witch.attack_observation.v1",
+    ),
+    "witch_poison": (
+        "night.witch.resources_and_targets.v1",
+        "private.witch.attack_observation.v1",
+    ),
+    "vote": ("day.exile.weighted_plurality_and_runoff.v1",),
+    "exile_runoff_vote": ("day.exile.weighted_plurality_and_runoff.v1",),
+    "hunter_shoot": ("settlement.hunter.trigger_and_order.v1",),
+    "sheriff_run": ("day.sheriff.eligibility_and_runoff.v1",),
+    "sheriff_withdraw": ("day.sheriff.eligibility_and_runoff.v1",),
+    "sheriff_vote": ("day.sheriff.eligibility_and_runoff.v1",),
+    "sheriff_runoff_vote": ("day.sheriff.eligibility_and_runoff.v1",),
+}
+_NO_EFFECT_CHOICES = frozenset(
+    {
+        "",
+        "不使用解药",
+        "不使用毒药",
+        "不开枪",
+        "不发动",
+        "不自爆",
+        "不竞选",
+        "不退水",
+        "弃权",
+        "跳过",
+        "skip",
+        "none",
+    }
+)
+
 P0_ISSUE_CODES = frozenset(
     {
         "private_action_public_artifact",
@@ -86,6 +148,39 @@ class SafeQualityIssueV1:
 
 
 @dataclass(frozen=True)
+class SafeCriticalActionV1:
+    """Bounded post-game decision attribution without private evidence text."""
+
+    action_id: str
+    round_number: int | None
+    action: str
+    action_origin: str
+    input_completeness: str
+    action_legality: str
+    reasoning_observation: str
+    direct_impact: str
+    attribution: str
+    clause_ids: tuple[str, ...]
+    coverage: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "action_id": self.action_id,
+            "round_number": self.round_number,
+            "action": self.action,
+            "action_origin": self.action_origin,
+            "input_completeness": self.input_completeness,
+            "action_legality": self.action_legality,
+            "reasoning_observation": self.reasoning_observation,
+            "direct_impact": self.direct_impact,
+            "attribution": self.attribution,
+            "clause_ids": list(self.clause_ids),
+            "coverage": self.coverage.copy(),
+        }
+
+
+@dataclass(frozen=True)
 class GameQualityEvaluationV1:
     schema_version: int
     evaluator_version: str
@@ -100,6 +195,7 @@ class GameQualityEvaluationV1:
     voice: dict[str, Any]
     performance: dict[str, Any]
     content: dict[str, Any]
+    critical_actions: tuple[SafeCriticalActionV1, ...]
     safe_issues: tuple[SafeQualityIssueV1, ...]
     evaluated_at: str
 
@@ -122,6 +218,7 @@ class GameQualityEvaluationV1:
             "voice": self.voice.copy(),
             "performance": self.performance.copy(),
             "content": self.content.copy(),
+            "critical_actions": [action.to_dict() for action in self.critical_actions],
             "evaluated_at": self.evaluated_at,
         }
         if include_issues:
@@ -247,6 +344,7 @@ def evaluate_quality_bundle(
         voice=voice,
         performance=_performance_metrics(bundle),
         content=content,
+        critical_actions=_critical_action_cards(bundle),
         safe_issues=tuple(issues),
         evaluated_at=timestamp,
     )
@@ -260,8 +358,7 @@ def _artifact_invariant_issues(
     payload = artifact.payload
     action = artifact.action or ""
     has_public_content = payload.get("is_public") is True or any(
-        key in payload and payload.get(key) not in (None, "", {}, [])
-        for key in PUBLIC_CONTENT_KEYS
+        key in payload and payload.get(key) not in (None, "", {}, []) for key in PUBLIC_CONTENT_KEYS
     )
     if action in PRIVATE_ACTIONS and has_public_content:
         code = {
@@ -276,7 +373,11 @@ def _artifact_invariant_issues(
     if _payload_marks_rejected(payload):
         issues.append(("rejected_draft_public", "P0"))
     for player, role in _role_pairs(payload):
-        if role and not ledger.role_is_revealed(player) and artifact.event_type not in REVEAL_EVENT_TYPES:
+        if (
+            role
+            and not ledger.role_is_revealed(player)
+            and artifact.event_type not in REVEAL_EVENT_TYPES
+        ):
             issues.append(("hidden_role_public_before_reveal", "P0"))
     if _payload_exposes_wolf_team(payload) and not ledger.terminal_reached:
         issues.append(("wolf_team_public_before_reveal", "P0"))
@@ -513,9 +614,7 @@ def _voice_metrics(bundle: QualityEvaluationBundleV1) -> dict[str, Any]:
         for voice in bundle.voice_utterances
         if voice.get("status", "complete") == "complete"
         and type(source_event_id := voice.get("source_event_id")) is int
-        and type(
-            last_source_event_id := voice.get("last_source_event_id", source_event_id)
-        ) is int
+        and type(last_source_event_id := voice.get("last_source_event_id", source_event_id)) is int
         and isinstance((speaker_kind := voice.get("speaker_kind")), str)
     ]
     covered = {
@@ -540,48 +639,678 @@ def _voice_metrics(bundle: QualityEvaluationBundleV1) -> dict[str, Any]:
             if isinstance(max_event, int) and isinstance(max_voice, int)
             else None
         ),
-        "terminal_judge_voice_coverage": bool(terminal_keys)
-        and terminal_keys.issubset(covered),
+        "terminal_judge_voice_coverage": bool(terminal_keys) and terminal_keys.issubset(covered),
         "pending_voice_count": coverage.pending_voice_count,
         "failed_voice_count": coverage.failed_voice_count,
         "interruption_count": sum(
             event.get("type") == "voice_interrupted" for event in bundle.live_events
         ),
-        "replay_count": sum(
-            event.get("type") == "voice_replayed" for event in bundle.live_events
-        ),
+        "replay_count": sum(event.get("type") == "voice_replayed" for event in bundle.live_events),
     }
+
+
+def _critical_action_cards(
+    bundle: QualityEvaluationBundleV1,
+) -> tuple[SafeCriticalActionV1, ...]:
+    candidates: list[tuple[int, int, SafeCriticalActionV1]] = []
+    seen_action_ids: set[str] = set()
+    player_roles, seat_players = _terminal_player_roles(bundle.state)
+    terminal = bool(bundle.state.get("winner")) or any(
+        event.get("type") == "game_completed" for event in bundle.live_events
+    )
+    for sequence, (round_number, action_log) in enumerate(
+        _iter_action_logs_with_round(bundle.logs)
+    ):
+        action = str(action_log.get("action") or "")
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", action) is None:
+            continue
+        lm_log = action_log.get("lm_log")
+        action_id = lm_log.get("action_id") if isinstance(lm_log, dict) else None
+        if not isinstance(action_id, str) or re.fullmatch(
+            r"[A-Za-z0-9_-]{1,80}", action_id
+        ) is None:
+            action_id = _derived_safe_action_id(
+                bundle,
+                action_log=action_log,
+                action=action,
+                round_number=round_number,
+                sequence=sequence,
+            )
+        if action_id in seen_action_ids:
+            continue
+        seen_action_ids.add(action_id)
+        reasoning = _private_model_reasoning(action_log) if terminal else ""
+        actor = str(action_log.get("actor") or "")
+        clause_ids, coverage = _rule_clause_coverage(
+            bundle.state,
+            action_log,
+            action=action,
+            actor_role=player_roles.get(actor),
+            reasoning=reasoning,
+        )
+        input_completeness = _input_completeness(action_log, coverage)
+        action_origin = _safe_action_origin(action_log)
+        legality = _safe_action_legality(action_log, action_origin=action_origin)
+        observation = _reasoning_observation(
+            action_log,
+            action=action,
+            actor=actor,
+            actor_role=player_roles.get(actor),
+            reasoning=reasoning,
+            seat_players=seat_players,
+            coverage=coverage,
+        )
+        card = SafeCriticalActionV1(
+            action_id=action_id,
+            round_number=round_number,
+            action=action,
+            action_origin=action_origin,
+            input_completeness=input_completeness,
+            action_legality=legality,
+            reasoning_observation=observation,
+            direct_impact=_direct_action_impact(
+                action_log,
+                action=action,
+                action_origin=action_origin,
+            ),
+            attribution=_decision_attribution(
+                action_origin=action_origin,
+                input_completeness=input_completeness,
+                reasoning_observation=observation,
+            ),
+            clause_ids=tuple(clause_ids),
+            coverage=coverage,
+        )
+        priority = _critical_action_priority(card)
+        if priority > 0:
+            candidates.append((priority, sequence, card))
+
+    selected = sorted(candidates, key=lambda item: (-item[0], item[1]))[:MAX_CRITICAL_ACTIONS]
+    return tuple(card for _priority, _sequence, card in sorted(selected, key=lambda item: item[1]))
+
+
+def _derived_safe_action_id(
+    bundle: QualityEvaluationBundleV1,
+    *,
+    action_log: dict[str, Any],
+    action: str,
+    round_number: int | None,
+    sequence: int,
+) -> str:
+    material = "|".join(
+        (
+            str(bundle.state.get("session_id") or "legacy"),
+            str(round_number if round_number is not None else "unknown"),
+            str(sequence),
+            str(action_log.get("actor") or "unknown"),
+            action,
+        )
+    )
+    return f"act_safe_{hashlib.sha256(material.encode()).hexdigest()[:16]}"
+
+
+def _iter_action_logs_with_round(
+    value: object,
+    *,
+    round_number: int | None = None,
+) -> list[tuple[int | None, dict[str, Any]]]:
+    found: list[tuple[int | None, dict[str, Any]]] = []
+    if isinstance(value, dict):
+        current_round = round_number
+        raw_number = value.get("number")
+        if type(raw_number) is int and raw_number >= 0:
+            current_round = raw_number
+        if isinstance(value.get("action"), str) and isinstance(value.get("lm_log"), dict):
+            found.append((current_round, value))
+        else:
+            for nested in value.values():
+                found.extend(_iter_action_logs_with_round(nested, round_number=current_round))
+    elif isinstance(value, list):
+        for nested in value:
+            found.extend(_iter_action_logs_with_round(nested, round_number=round_number))
+    return found
+
+
+def _terminal_player_roles(
+    state: dict[str, Any],
+) -> tuple[dict[str, str], dict[int, tuple[str, str]]]:
+    by_name: dict[str, str] = {}
+    by_seat: dict[int, tuple[str, str]] = {}
+    players = state.get("players")
+    if not isinstance(players, list):
+        return by_name, by_seat
+    for index, player in enumerate(players, start=1):
+        if not isinstance(player, dict):
+            continue
+        name = player.get("name")
+        role = player.get("role")
+        if not isinstance(name, str) or not name or not isinstance(role, str) or not role:
+            continue
+        by_name[name] = role
+        seat = player.get("seat")
+        effective_seat = seat if type(seat) is int and seat > 0 else index
+        by_seat[effective_seat] = (name, role)
+    return by_name, by_seat
+
+
+def _private_model_reasoning(action_log: dict[str, Any]) -> str:
+    model_result = action_log.get("model_result")
+    if isinstance(model_result, dict) and isinstance(model_result.get("reasoning"), str):
+        return str(model_result["reasoning"])
+    lm_log = action_log.get("lm_log")
+    result = lm_log.get("result") if isinstance(lm_log, dict) else None
+    if isinstance(result, dict) and isinstance(result.get("reasoning"), str):
+        return str(result["reasoning"])
+    return ""
+
+
+def _rule_clause_coverage(
+    state: dict[str, Any],
+    action_log: dict[str, Any],
+    *,
+    action: str,
+    actor_role: str | None,
+    reasoning: str,
+) -> tuple[list[str], dict[str, Any]]:
+    clause_texts, frozen_ids = _frozen_action_clauses(
+        state,
+        action=action,
+        actor_role=actor_role,
+    )
+    required_ids = [*frozen_ids, *_KNOWN_ACTION_CLAUSE_IDS.get(action, ())]
+    if action in {"vote", "exile_runoff_vote"} and _mentions_wolf_self_attack(reasoning):
+        required_ids.append("night.werewolf_attack.non_wolf_targets.v1")
+    clause_ids = _bounded_unique_strings(required_ids, limit=MAX_CRITICAL_CLAUSE_IDS)
+    if not clause_ids:
+        return [], {
+            "schema_version": 1,
+            "status": "unknown",
+            "required_count": 0,
+            "included_count": 0,
+            "missing_count": 0,
+            "missing_clause_ids": [],
+        }
+
+    explicit_ids = _explicit_prompt_clause_ids(action_log)
+    lm_log = action_log.get("lm_log")
+    prompt = str(lm_log.get("prompt") or "") if isinstance(lm_log, dict) else ""
+    if explicit_ids is None and not prompt:
+        return clause_ids, {
+            "schema_version": 1,
+            "status": "unknown",
+            "required_count": len(clause_ids),
+            "included_count": 0,
+            "missing_count": 0,
+            "missing_clause_ids": [],
+        }
+
+    included: list[str] = []
+    missing: list[str] = []
+    for clause_id in clause_ids:
+        present = (
+            clause_id in explicit_ids
+            if explicit_ids is not None
+            else _prompt_supports_clause(
+                prompt,
+                clause_id=clause_id,
+                frozen_text=clause_texts.get(clause_id, ""),
+                action_log=action_log,
+            )
+        )
+        (included if present else missing).append(clause_id)
+    status = "complete" if not missing else "missing" if not included else "partial"
+    return clause_ids, {
+        "schema_version": 1,
+        "status": status,
+        "required_count": len(clause_ids),
+        "included_count": len(included),
+        "missing_count": len(missing),
+        "missing_clause_ids": missing,
+    }
+
+
+def _frozen_action_clauses(
+    state: dict[str, Any],
+    *,
+    action: str,
+    actor_role: str | None,
+) -> tuple[dict[str, str], list[str]]:
+    snapshot = state.get("rule_set_snapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = state.get("rule_set")
+    contract = snapshot.get("rule_contract") if isinstance(snapshot, dict) else None
+    raw_clauses = contract.get("clauses") if isinstance(contract, dict) else None
+    if not isinstance(raw_clauses, list):
+        return {}, []
+    texts: dict[str, str] = {}
+    clause_ids: list[str] = []
+    for raw in raw_clauses:
+        if not isinstance(raw, dict) or raw.get("audience") == "internal_only":
+            continue
+        clause_id = raw.get("clause_id")
+        actions = raw.get("actions")
+        roles = raw.get("roles")
+        if not isinstance(clause_id, str) or not clause_id:
+            continue
+        if isinstance(actions, list) and actions and action not in actions:
+            continue
+        if isinstance(roles, list) and roles and actor_role not in roles:
+            continue
+        clause_ids.append(clause_id)
+        text = raw.get("neutral_text_zh")
+        if isinstance(text, str):
+            texts[clause_id] = text
+    return texts, clause_ids
+
+
+def _explicit_prompt_clause_ids(action_log: dict[str, Any]) -> set[str] | None:
+    lm_log = action_log.get("lm_log")
+    for container in (action_log, lm_log if isinstance(lm_log, dict) else {}):
+        for key in ("prompt_clause_ids", "rule_clause_ids", "injected_clause_ids"):
+            value = container.get(key)
+            if isinstance(value, list):
+                return {
+                    item
+                    for item in value
+                    if isinstance(item, str)
+                    and re.fullmatch(r"[a-z0-9_.-]{1,120}", item) is not None
+                }
+    return None
+
+
+def _prompt_supports_clause(
+    prompt: str,
+    *,
+    clause_id: str,
+    frozen_text: str,
+    action_log: dict[str, Any],
+) -> bool:
+    if frozen_text and frozen_text in prompt:
+        return True
+    compact = re.sub(r"\s+", "", prompt)
+    if clause_id == "night.werewolf_attack.non_wolf_targets.v1":
+        return (
+            re.search(
+                r"狼人.{0,18}(?:只能袭击非狼人|不能.{0,8}(?:自己|狼人队友|狼队友))",
+                compact,
+            )
+            is not None
+        )
+    if clause_id == "day.self_explosion.interruption.v1":
+        return "自爆" in compact and any(
+            term in compact for term in ("结束当日", "当日不再投票", "剩余公开动作")
+        )
+    if clause_id == "private.werewolf.team_knowledge.v1":
+        return any(term in compact for term in ("狼人队友", "狼队友", "队友名单"))
+    if clause_id == "night.witch.resources_and_targets.v1":
+        action = str(action_log.get("action") or "")
+        resource = "解药" if action == "witch_save" else "毒药"
+        return resource in compact and f"不使用{resource}" in compact
+    if clause_id == "private.witch.attack_observation.v1":
+        return any(term in compact for term in ("被狼人袭击", "狼人袭击目标", "狼人袭击的是"))
+    if clause_id == "day.exile.weighted_plurality_and_runoff.v1":
+        return "最高票" in compact and any(term in compact for term in ("平票", "PK", "二轮"))
+    if clause_id == "settlement.hunter.trigger_and_order.v1":
+        return "猎人" in compact and any(
+            term in compact for term in ("开枪", "不能发动", "死亡结算")
+        )
+    if clause_id == "day.sheriff.eligibility_and_runoff.v1":
+        return "警长" in compact and any(term in compact for term in ("警下", "退水", "平票", "PK"))
+    return False
+
+
+def _input_completeness(action_log: dict[str, Any], coverage: dict[str, Any]) -> str:
+    missing_ids = coverage.get("missing_clause_ids")
+    safe_missing = missing_ids if isinstance(missing_ids, list) else []
+    if any(str(item).startswith("private.") for item in safe_missing):
+        return "private_observation_missing"
+    if safe_missing:
+        return "rule_missing"
+    fact_coverage = action_log.get("fact_prompt_coverage")
+    if isinstance(fact_coverage, dict) and _non_negative_int(
+        fact_coverage.get("missing_critical_count")
+    ):
+        return "critical_public_fact_missing"
+    if coverage.get("status") == "complete":
+        return "complete"
+    return "unknown"
+
+
+def _safe_action_origin(action_log: dict[str, Any]) -> str:
+    lifecycle = str(
+        action_log.get("lifecycle_status") or action_log.get("execution_status") or "completed"
+    )
+    if lifecycle == "canceled":
+        return "canceled"
+    effective_result = action_log.get("effective_result")
+    origin = (
+        effective_result.get("origin")
+        if isinstance(effective_result, dict)
+        else action_log.get("effective_origin")
+    )
+    reason = str(
+        (effective_result.get("reason_code") if isinstance(effective_result, dict) else None)
+        or action_log.get("reason_code")
+        or action_log.get("fallback_reason")
+        or ""
+    )
+    if origin == "state_machine":
+        return "state_machine"
+    if origin == "system_fallback" or lifecycle == "fallback":
+        if _action_ended_with_provider_timeout(action_log) or reason.startswith(
+            ("timeout", "batch_deadline")
+        ):
+            return "system_timeout"
+        if reason == "rule_default" or "default" in reason:
+            return "rule_default"
+        return "system_fallback"
+    if origin == "none" or lifecycle in {"failed", "timed_out"}:
+        return "failed"
+    if _non_negative_int(action_log.get("attempt_count")) > 1:
+        return "model_after_retry"
+    return "model_first_attempt"
+
+
+def _safe_action_legality(action_log: dict[str, Any], *, action_origin: str) -> str:
+    lifecycle = str(
+        action_log.get("lifecycle_status") or action_log.get("execution_status") or "completed"
+    )
+    model_result = action_log.get("model_result")
+    model_status = str(model_result.get("status") or "") if isinstance(model_result, dict) else ""
+    invalid = action_log.get("invalid_value") is not None or model_status == "invalid"
+    normalized = action_log.get("choice_normalization_kind") not in (None, "exact")
+    if lifecycle == "canceled":
+        return "legal_but_canceled"
+    if invalid and action_origin in {"system_timeout", "system_fallback", "rule_default"}:
+        return "invalid_system_fallback"
+    if invalid or normalized:
+        return "invalid_normalized" if lifecycle == "completed" else "invalid_not_executed"
+    if action_origin in {"system_timeout", "system_fallback", "rule_default", "state_machine"}:
+        return "legal_system_result"
+    if lifecycle in {"failed", "timed_out"}:
+        return "not_executed"
+    options = action_log.get("options")
+    choice = _effective_choice(action_log)
+    if isinstance(options, list) and options:
+        return "legal_executed" if choice in options else "unknown"
+    return "legal_executed" if action_origin.startswith("model_") else "unknown"
+
+
+def _reasoning_observation(
+    action_log: dict[str, Any],
+    *,
+    action: str,
+    actor: str,
+    actor_role: str | None,
+    reasoning: str,
+    seat_players: dict[int, tuple[str, str]],
+    coverage: dict[str, Any],
+) -> str:
+    del actor
+    if not reasoning.strip():
+        return "not_available"
+    compact = re.sub(r"\s+", "", reasoning)
+    if actor_role == "狼人" and _claims_non_wolf_teammate(compact, seat_players):
+        return "identity_information_conflict"
+    if action == "witch_save" and _witch_reasoning_is_internally_contradictory(
+        compact,
+        action_log=action_log,
+        seat_players=seat_players,
+    ):
+        return "internal_logic_contradiction"
+    if _mentions_wolf_self_attack(compact):
+        missing = coverage.get("missing_clause_ids")
+        if isinstance(missing, list) and "night.werewolf_attack.non_wolf_targets.v1" in missing:
+            return "used_unspecified_rule"
+        return "hard_rule_conflict"
+    return "not_assessed"
+
+
+def _claims_non_wolf_teammate(reasoning: str, seat_players: dict[int, tuple[str, str]]) -> bool:
+    for seat, (name, role) in seat_players.items():
+        if role == "狼人":
+            continue
+        references = (rf"{seat}号", re.escape(name))
+        if any(
+            re.search(rf"{reference}.{{0,12}}(?:狼人队友|狼队友|我的队友)", reasoning)
+            or re.search(rf"(?:狼人队友|狼队友|我的队友).{{0,12}}{reference}", reasoning)
+            for reference in references
+        ):
+            return True
+    return False
+
+
+def _witch_reasoning_is_internally_contradictory(
+    reasoning: str,
+    *,
+    action_log: dict[str, Any],
+    seat_players: dict[int, tuple[str, str]],
+) -> bool:
+    claims_non_wolf_attack_rule = (
+        re.search(
+            r"(?:狼人|狼).{0,10}(?:不能|不可能|不会).{0,10}(?:自刀|刀自己|刀队友|袭击自己|袭击队友)",
+            reasoning,
+        )
+        is not None
+    )
+    if not claims_non_wolf_attack_rule:
+        return False
+    raw_options = action_log.get("options")
+    target_names = (
+        {item for item in raw_options if isinstance(item, str) and item not in _NO_EFFECT_CHOICES}
+        if isinstance(raw_options, list)
+        else set()
+    )
+    for seat, (name, _role) in seat_players.items():
+        if name not in target_names:
+            continue
+        for reference in (rf"{seat}号", re.escape(name)):
+            if re.search(rf"{reference}.{{0,8}}(?:是|为).{{0,3}}(?:狼人|狼)", reasoning):
+                return True
+    return False
+
+
+def _mentions_wolf_self_attack(reasoning: str) -> bool:
+    compact = re.sub(r"\s+", "", reasoning)
+    return (
+        re.search(
+            r"(?:狼人|狼).{0,10}(?:可以|可能|能够|会).{0,8}(?:自刀|刀自己|刀队友|袭击自己|袭击队友)",
+            compact,
+        )
+        is not None
+    )
+
+
+def _direct_action_impact(action_log: dict[str, Any], *, action: str, action_origin: str) -> str:
+    lifecycle = str(
+        action_log.get("lifecycle_status") or action_log.get("execution_status") or "completed"
+    )
+    if lifecycle == "canceled":
+        return "canceled_no_effect"
+    if lifecycle in {"failed", "timed_out"} or action_origin == "failed":
+        return "failed_no_effect"
+    choice = _effective_choice(action_log)
+    if str(choice or "").strip().lower() in _NO_EFFECT_CHOICES:
+        return "no_state_change"
+    if action == "werewolf_self_explosion":
+        return "phase_ended"
+    if action in {"vote", "exile_runoff_vote", "sheriff_vote", "sheriff_runoff_vote"}:
+        return "vote_recorded"
+    if action in {"witch_save", "witch_poison", "hunter_shoot", "remove", "protect", "investigate"}:
+        return "game_state_effect_applied"
+    if action_origin in {"system_timeout", "system_fallback", "rule_default", "state_machine"}:
+        return "system_result_applied"
+    return "model_result_applied"
+
+
+def _decision_attribution(
+    *,
+    action_origin: str,
+    input_completeness: str,
+    reasoning_observation: str,
+) -> str:
+    if reasoning_observation == "identity_information_conflict":
+        return "model_reasoning_error"
+    if reasoning_observation == "internal_logic_contradiction":
+        return "model_internal_logic_contradiction"
+    if reasoning_observation == "used_unspecified_rule" or (
+        reasoning_observation == "hard_rule_conflict" and input_completeness != "complete"
+    ):
+        return "model_judgment_and_rule_input_gap"
+    if reasoning_observation == "hard_rule_conflict":
+        return "model_reasoning_error"
+    if action_origin == "canceled":
+        return "canceled"
+    if action_origin in {"system_timeout", "system_fallback", "rule_default", "failed"}:
+        return "runtime_fallback"
+    return "not_determined"
+
+
+def _critical_action_priority(card: SafeCriticalActionV1) -> int:
+    if card.reasoning_observation not in {"not_available", "not_assessed"}:
+        return 100
+    if card.input_completeness not in {"complete", "unknown"}:
+        return 90
+    if card.action_origin in {
+        "system_timeout",
+        "system_fallback",
+        "rule_default",
+        "failed",
+        "canceled",
+    }:
+        return 80
+    if card.action_legality not in {"legal_executed", "unknown"}:
+        return 70
+    return 40 if card.action in CRITICAL_DECISION_ACTIONS else 0
+
+
+def _effective_choice(action_log: dict[str, Any]) -> object:
+    effective = action_log.get("effective_result")
+    if isinstance(effective, dict) and "choice" in effective:
+        return effective.get("choice")
+    return action_log.get("choice")
+
+
+def _action_ended_with_provider_timeout(action_log: dict[str, Any]) -> bool:
+    results = _provider_attempt_results(action_log)
+    return bool(results) and results[-1] == "timed_out"
+
+
+def _provider_attempt_results(action_log: dict[str, Any]) -> list[str]:
+    lm_log = action_log.get("lm_log")
+    attempts = lm_log.get("attempt_outcomes") if isinstance(lm_log, dict) else None
+    if not isinstance(attempts, list):
+        return []
+    return [
+        str(item.get("attempt_result"))
+        for item in attempts
+        if isinstance(item, dict) and isinstance(item.get("attempt_result"), str)
+    ]
+
+
+def _bounded_unique_strings(value: list[str], *, limit: int) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if item in seen or re.fullmatch(r"[a-z0-9_.-]{1,120}", item) is None:
+            continue
+        seen.add(item)
+        result.append(item)
+        if len(result) == limit:
+            break
+    return result
 
 
 def _performance_metrics(bundle: QualityEvaluationBundleV1) -> dict[str, Any]:
     durations: list[int] = []
     first_tokens: list[int] = []
-    timeout_count = 0
     retry_count = 0
     fallback_count = 0
-    for action_log in _iter_action_logs(bundle.logs):
+    logical_timeout_fallback_count = 0
+    action_logs = list(_iter_action_logs(bundle.logs))
+    logical_status_counts = {
+        "completed_by_model": 0,
+        "completed_by_system_fallback": 0,
+        "canceled": 0,
+        "failed": 0,
+    }
+    provider_attempt_counts = {
+        "valid": 0,
+        "invalid": 0,
+        "timeout": 0,
+        "transport_failure": 0,
+        "canceled": 0,
+    }
+    retry_counts = {"provider_retry": 0, "format_retry": 0, "quality_rewrite": 0}
+    attempt_result_names = {
+        "valid_response": "valid",
+        "invalid_response": "invalid",
+        "timed_out": "timeout",
+        "transport_failed": "transport_failure",
+        "canceled": "canceled",
+    }
+    for action_log in action_logs:
         duration = action_log.get("duration_ms")
         if type(duration) is int and duration >= 0:
             durations.append(duration)
         first_token = action_log.get("first_token_ms")
         if type(first_token) is int and first_token >= 0:
             first_tokens.append(first_token)
-        if action_log.get("execution_status") == "timed_out":
-            timeout_count += 1
+        execution_status = str(
+            action_log.get("lifecycle_status") or action_log.get("execution_status") or "completed"
+        )
         retry_count += max(0, _non_negative_int(action_log.get("attempt_count")) - 1)
-        if action_log.get("fallback_reason"):
+        if execution_status == "fallback":
             fallback_count += 1
+            logical_status_counts["completed_by_system_fallback"] += 1
+            if _action_ended_with_provider_timeout(action_log) or str(
+                action_log.get("reason_code") or action_log.get("fallback_reason") or ""
+            ).startswith(("timeout", "batch_deadline")):
+                logical_timeout_fallback_count += 1
+        elif execution_status == "canceled":
+            logical_status_counts["canceled"] += 1
+        elif execution_status in {"failed", "timed_out"}:
+            logical_status_counts["failed"] += 1
+        else:
+            logical_status_counts["completed_by_model"] += 1
+
+        lm_log = action_log.get("lm_log")
+        attempts = lm_log.get("attempt_outcomes") if isinstance(lm_log, dict) else None
+        safe_attempts = attempts if isinstance(attempts, list) else []
+        retry_counts["provider_retry"] += max(0, len(safe_attempts) - 1)
+        for attempt in safe_attempts:
+            if not isinstance(attempt, dict):
+                continue
+            mapped = attempt_result_names.get(str(attempt.get("attempt_result") or ""))
+            if mapped is not None:
+                provider_attempt_counts[mapped] += 1
+        invalid_attempts = lm_log.get("invalid_attempts") if isinstance(lm_log, dict) else None
+        retry_counts["format_retry"] += max(
+            0,
+            len(invalid_attempts) if isinstance(invalid_attempts, list) else 0,
+        )
+        retry_counts["quality_rewrite"] += max(
+            0,
+            _non_negative_int(action_log.get("speech_quality_attempt_count")) - 1,
+        )
     game_duration_ms = _duration_between(bundle.started_at, bundle.completed_at)
     return {
-        "action_count": len(durations),
+        "action_count": len(action_logs),
         "action_duration_ms_sum": sum(durations),
         "action_duration_ms_max": max(durations, default=None),
         "first_token_count": len(first_tokens),
         "first_token_ms_sum": sum(first_tokens),
         "first_token_ms_max": max(first_tokens, default=None),
-        "timeout_count": timeout_count,
+        # Compatibility alias: timeout_count is explicitly a provider-attempt
+        # count. One logical fallback may contain multiple timed-out attempts.
+        "timeout_count": provider_attempt_counts["timeout"],
+        "provider_timeout_count": provider_attempt_counts["timeout"],
+        "logical_timeout_fallback_count": logical_timeout_fallback_count,
         "retry_count": retry_count,
         "fallback_count": fallback_count,
+        "logical_action_counts": logical_status_counts,
+        "provider_attempt_counts": provider_attempt_counts,
+        "retry_counts": retry_counts,
         "action_duration_histogram": _histogram(
             durations,
             boundaries=ACTION_DURATION_BUCKETS,
@@ -627,9 +1356,7 @@ def _content_metrics(
         if action_log.get("speech_quality_retry_exhausted"):
             exhausted += 1
     lineup_report = bundle.state.get("lineup_quality_report")
-    warnings = (
-        lineup_report.get("warnings", []) if isinstance(lineup_report, dict) else []
-    )
+    warnings = lineup_report.get("warnings", []) if isinstance(lineup_report, dict) else []
     return {
         "speech_check_count": checked,
         "repeated_speech_count": repeated,

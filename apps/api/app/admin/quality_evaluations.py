@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.models.game_session import GameSessionRecord
 from app.models.quality_evaluation import GameQualityEvaluationRecord
 from app.werewolf.quality_evaluation import DEFAULT_EVALUATOR_VERSION, P0_ISSUE_CODES
+from app.werewolf.quality_store import QualityEvaluationSuccessReference
 from app.werewolf.worker_telemetry import (
     QUALITY_EVALUATION_WORKER_TYPE,
     runtime_worker_is_alive,
@@ -27,15 +28,81 @@ QUALITY_ISSUE_CODES = set(P0_ISSUE_CODES) | {"suspicious_private_term"}
 QUALITY_ISSUE_ID_RE = re.compile(r"^quality_[0-9a-f]{24}$")
 QUALITY_COORDINATE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 QUALITY_VERSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
+QUALITY_SOURCE_REVISION_RE = re.compile(r"^[0-9a-f]{64}$")
+QUALITY_ACTION_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+QUALITY_CLAUSE_ID_RE = re.compile(r"^[a-z0-9_.-]{1,120}$")
+QUALITY_CRITICAL_ACTION_LIMIT = 64
+QUALITY_CRITICAL_CLAUSE_LIMIT = 16
+QUALITY_CRITICAL_ORIGINS = {
+    "canceled",
+    "failed",
+    "model_after_retry",
+    "model_first_attempt",
+    "rule_default",
+    "state_machine",
+    "system_fallback",
+    "system_timeout",
+}
+QUALITY_CRITICAL_INPUT_COMPLETENESS = {
+    "complete",
+    "critical_public_fact_missing",
+    "private_observation_missing",
+    "rule_missing",
+    "unknown",
+}
+QUALITY_CRITICAL_ACTION_LEGALITY = {
+    "invalid_normalized",
+    "invalid_not_executed",
+    "invalid_system_fallback",
+    "legal_but_canceled",
+    "legal_executed",
+    "legal_system_result",
+    "not_executed",
+    "unknown",
+}
+QUALITY_CRITICAL_REASONING_OBSERVATIONS = {
+    "hard_rule_conflict",
+    "identity_information_conflict",
+    "internal_logic_contradiction",
+    "not_assessed",
+    "not_available",
+    "used_unspecified_rule",
+}
+QUALITY_CRITICAL_DIRECT_IMPACTS = {
+    "canceled_no_effect",
+    "failed_no_effect",
+    "game_state_effect_applied",
+    "model_result_applied",
+    "no_state_change",
+    "phase_ended",
+    "system_result_applied",
+    "vote_recorded",
+}
+QUALITY_CRITICAL_ATTRIBUTIONS = {
+    "canceled",
+    "model_internal_logic_contradiction",
+    "model_judgment_and_rule_input_gap",
+    "model_reasoning_error",
+    "not_determined",
+    "runtime_fallback",
+}
+QUALITY_CRITICAL_COVERAGE_STATUSES = {"complete", "partial", "missing", "unknown"}
 
 
 def build_admin_quality_summary(
     record: GameQualityEvaluationRecord | None,
     *,
     terminal: bool,
+    latest_successful_record: (
+        GameQualityEvaluationRecord | QualityEvaluationSuccessReference | None
+    ) = None,
 ) -> dict[str, Any]:
     if record is None:
-        return _empty_summary(data_status="legacy" if terminal else "unavailable")
+        return _empty_summary(
+            data_status="legacy" if terminal else "unavailable",
+            can_retry=terminal,
+            latest_successful_result=_latest_successful_result(latest_successful_record),
+        )
 
     raw = record.safe_summary if isinstance(record.safe_summary, dict) else {}
     completed = record.status == "completed"
@@ -58,11 +125,7 @@ def build_admin_quality_summary(
             if QUALITY_VERSION_RE.fullmatch(record.evaluator_version)
             else DEFAULT_EVALUATOR_VERSION
         ),
-        evaluation_status=_enum_text(
-            record.status,
-            {"pending", "processing", "completed", "failed", "superseded"},
-            "failed",
-        ),
+        evaluation_status=_admin_evaluation_status(record.status),
         data_status=data_status,
         verdict=verdict,
         evaluated_at=(
@@ -70,6 +133,30 @@ def build_admin_quality_summary(
             if completed and record.completed_at is not None
             else None
         ),
+        source_revision=(
+            record.source_revision
+            if QUALITY_SOURCE_REVISION_RE.fullmatch(record.source_revision)
+            else None
+        ),
+        created_at=_iso_datetime(record.created_at),
+        started_at=_iso_datetime(record.started_at),
+        completed_at=_iso_datetime(record.completed_at),
+        attempt_count=max(0, record.attempt_count),
+        failure_reason=(
+            _safe_text(record.last_error_code, 64)
+            if record.last_error_code
+            else None
+        ),
+        can_retry=(
+            terminal
+            and record.status not in {"pending", "processing"}
+            and (
+                record.status == "failed"
+                or record.data_status == "partial"
+                or record.evaluator_version != DEFAULT_EVALUATOR_VERSION
+            )
+        ),
+        latest_successful_result=_latest_successful_result(latest_successful_record),
     )
     if not completed:
         return summary
@@ -81,6 +168,11 @@ def build_admin_quality_summary(
     summary["voice"] = _voice(raw.get("voice"))
     summary["performance"] = _performance(raw.get("performance"))
     summary["content"] = _content(raw.get("content"))
+    summary["critical_actions"] = (
+        _critical_actions(raw.get("critical_actions"))
+        if terminal and data_status != "legacy"
+        else []
+    )
     return summary
 
 
@@ -247,6 +339,14 @@ def _empty_summary(
     data_status: str = "unavailable",
     verdict: str = "unavailable",
     evaluated_at: str | None = None,
+    source_revision: str | None = None,
+    created_at: str | None = None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    attempt_count: int = 0,
+    failure_reason: str | None = None,
+    can_retry: bool = False,
+    latest_successful_result: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -305,6 +405,9 @@ def _empty_summary(
             "timeout_count": 0,
             "retry_count": 0,
             "fallback_count": 0,
+            "logical_action_counts": {},
+            "provider_attempt_counts": {},
+            "retry_counts": {},
         },
         "content": {
             "speech_check_count": 0,
@@ -316,7 +419,16 @@ def _empty_summary(
             "privacy_p0_issue_count": 0,
             "lineup_warning_count": 0,
         },
+        "critical_actions": [],
         "evaluated_at": evaluated_at,
+        "source_revision": source_revision,
+        "created_at": created_at,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "attempt_count": attempt_count,
+        "failure_reason": failure_reason,
+        "can_retry": can_retry,
+        "latest_successful_result": latest_successful_result,
     }
 
 
@@ -429,7 +541,44 @@ def _performance(value: object) -> dict[str, Any]:
             else None
         ),
         "game_duration_ms": _optional_count(raw.get("game_duration_ms")),
+        "logical_action_counts": _count_map(raw.get("logical_action_counts")),
+        "provider_attempt_counts": _count_map(raw.get("provider_attempt_counts")),
+        "retry_counts": _count_map(raw.get("retry_counts")),
     }
+
+
+def _latest_successful_result(
+    record: GameQualityEvaluationRecord | QualityEvaluationSuccessReference | None,
+) -> dict[str, str] | None:
+    if record is None or record.status != "completed" or record.completed_at is None:
+        return None
+    if not QUALITY_VERSION_RE.fullmatch(record.evaluator_version):
+        return None
+    if not QUALITY_SOURCE_REVISION_RE.fullmatch(record.source_revision):
+        return None
+    return {
+        "evaluator_version": record.evaluator_version,
+        "source_revision": record.source_revision,
+        "completed_at": _iso_datetime(record.completed_at) or "",
+    }
+
+
+def _admin_evaluation_status(value: object) -> str:
+    if value == "pending":
+        return "queued"
+    if value == "processing":
+        return "running"
+    return _enum_text(value, {"completed", "failed", "superseded"}, "failed")
+
+
+def _count_map(value: object) -> dict[str, int]:
+    raw = value if isinstance(value, dict) else {}
+    result: dict[str, int] = {}
+    for key, count in list(raw.items())[:80]:
+        safe_key = _safe_text(key, 64)
+        if safe_key and re.fullmatch(r"[A-Za-z0-9_.:-]+", safe_key):
+            result[safe_key] = _count(count)
+    return result
 
 
 def _content(value: object) -> dict[str, Any]:
@@ -449,6 +598,127 @@ def _content(value: object) -> dict[str, Any]:
         ),
         "repeated_speech_rate": _rate(raw.get("repeated_speech_rate")),
     }
+
+
+def _critical_actions(value: object) -> list[dict[str, Any]]:
+    """Project only the bounded, versioned decision-card contract."""
+    if not isinstance(value, list):
+        return []
+    actions: list[dict[str, Any]] = []
+    seen_action_ids: set[str] = set()
+    for raw in value[:QUALITY_CRITICAL_ACTION_LIMIT]:
+        if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+            continue
+        action_id = _strict_identifier(raw.get("action_id"), QUALITY_COORDINATE_ID_RE)
+        action = _strict_identifier(raw.get("action"), QUALITY_ACTION_RE)
+        round_number = raw.get("round_number")
+        if round_number is not None and (
+            type(round_number) is not int or not 0 <= round_number <= 1_000_000
+        ):
+            continue
+        if not action_id or action_id in seen_action_ids or not action:
+            continue
+        origin = _enum_text(raw.get("action_origin"), QUALITY_CRITICAL_ORIGINS, "")
+        input_completeness = _enum_text(
+            raw.get("input_completeness"),
+            QUALITY_CRITICAL_INPUT_COMPLETENESS,
+            "",
+        )
+        legality = _enum_text(
+            raw.get("action_legality"), QUALITY_CRITICAL_ACTION_LEGALITY, ""
+        )
+        reasoning = _enum_text(
+            raw.get("reasoning_observation"),
+            QUALITY_CRITICAL_REASONING_OBSERVATIONS,
+            "",
+        )
+        direct_impact = _enum_text(
+            raw.get("direct_impact"), QUALITY_CRITICAL_DIRECT_IMPACTS, ""
+        )
+        attribution = _enum_text(
+            raw.get("attribution"), QUALITY_CRITICAL_ATTRIBUTIONS, ""
+        )
+        clause_ids = _critical_clause_ids(raw.get("clause_ids"))
+        coverage = _critical_clause_coverage(raw.get("coverage"), clause_ids=clause_ids)
+        if not all(
+            (origin, input_completeness, legality, reasoning, direct_impact, attribution)
+        ) or clause_ids is None or coverage is None:
+            continue
+        seen_action_ids.add(action_id)
+        actions.append(
+            {
+                "schema_version": 1,
+                "action_id": action_id,
+                "round_number": round_number,
+                "action": action,
+                "action_origin": origin,
+                "input_completeness": input_completeness,
+                "action_legality": legality,
+                "reasoning_observation": reasoning,
+                "direct_impact": direct_impact,
+                "attribution": attribution,
+                "clause_ids": clause_ids,
+                "coverage": coverage,
+            }
+        )
+    return actions
+
+
+def _critical_clause_ids(value: object) -> list[str] | None:
+    if not isinstance(value, list) or len(value) > QUALITY_CRITICAL_CLAUSE_LIMIT:
+        return None
+    result: list[str] = []
+    for raw in value:
+        clause_id = _strict_identifier(raw, QUALITY_CLAUSE_ID_RE)
+        if not clause_id or clause_id in result:
+            return None
+        result.append(clause_id)
+    return result
+
+
+def _critical_clause_coverage(
+    value: object,
+    *,
+    clause_ids: list[str] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or clause_ids is None or value.get("schema_version") != 1:
+        return None
+    status = _enum_text(
+        value.get("status"), QUALITY_CRITICAL_COVERAGE_STATUSES, ""
+    )
+    required = value.get("required_count")
+    included = value.get("included_count")
+    missing = value.get("missing_count")
+    missing_ids = _critical_clause_ids(value.get("missing_clause_ids"))
+    if (
+        not status
+        or missing_ids is None
+        or any(type(count) is not int or not 0 <= count <= QUALITY_CRITICAL_CLAUSE_LIMIT for count in (required, included, missing))
+        or required != len(clause_ids)
+        or any(clause_id not in clause_ids for clause_id in missing_ids)
+        or missing != len(missing_ids)
+    ):
+        return None
+    valid_shape = {
+        "complete": included == required and missing == 0,
+        "partial": included > 0 and missing > 0 and included + missing == required,
+        "missing": required > 0 and included == 0 and missing == required,
+        "unknown": included == 0 and missing == 0,
+    }[status]
+    if not valid_shape:
+        return None
+    return {
+        "schema_version": 1,
+        "status": status,
+        "required_count": required,
+        "included_count": included,
+        "missing_count": missing,
+        "missing_clause_ids": missing_ids,
+    }
+
+
+def _strict_identifier(value: object, pattern: re.Pattern[str]) -> str | None:
+    return value if isinstance(value, str) and pattern.fullmatch(value) else None
 
 
 def _empty_aggregates() -> dict[str, int]:

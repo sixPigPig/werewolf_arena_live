@@ -1536,6 +1536,60 @@ describe("LivePage", () => {
     const stage = await screen.findByRole("status", { name: "当前舞台" });
     expect(within(stage).getByText("狼人最终目标")).toBeVisible();
     expect(within(stage).getByText("袭击 1号")).toBeVisible();
+    expect(within(stage).getByText("来源未知 · 旧数据")).toBeVisible();
+  });
+
+  it("shows not-spoken as a judge fact and clears the active speaker", async () => {
+    const didNotSpeak: LiveGameEvent = {
+      ...gameStartedEvent,
+      id: 4,
+      type: "player_did_not_speak",
+      round: 1,
+      phase: "day",
+      actor: "阿青",
+      action: "debate",
+      payload: {
+        speech_status: "not_spoken",
+        action_origin: "none",
+        public_reason_code: "provider_timeout",
+      },
+    };
+    const failedReceipt: LiveGameEvent = {
+      ...didNotSpeak,
+      id: 5,
+      type: "model_response_received",
+      payload: { message: "模型返回已接收，正在解析行动" },
+    };
+    const failedParsed: LiveGameEvent = {
+      ...didNotSpeak,
+      id: 6,
+      type: "action_parsed",
+    };
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [
+        gameStartedEvent,
+        backlogRequestEvent,
+        didNotSpeak,
+        failedReceipt,
+        failedParsed,
+      ],
+      latestEvent: failedParsed,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("1号玩家本轮未发言")).toBeVisible();
+    expect(within(stage).getByText("未发言")).toHaveClass(
+      "mobile-live-status-badge-not-spoken",
+    );
+    expect(screen.getByRole("log")).toHaveTextContent("1号 本轮未发言");
+    expect(document.querySelector(".mobile-live-focus-strip")).toHaveTextContent(
+      "等待行动",
+    );
   });
 
   it("emphasizes every living wolf while the werewolf team is choosing", async () => {
@@ -1679,6 +1733,32 @@ describe("LivePage", () => {
     expect(within(rail).getByText("2号 -> 3号")).toBeVisible();
     expect(within(rail).getByText("3号 -> 2号")).toBeVisible();
     expect(within(rail).queryByText("model_response_delta")).not.toBeInTheDocument();
+  });
+
+  it("marks a system fallback vote without presenting it as player reasoning", async () => {
+    const systemVote: LiveGameEvent = {
+      ...secondVoteParsedEvent,
+      payload: {
+        ...secondVoteParsedEvent.payload,
+        action_origin: "system_fallback",
+        public_reason_code: "system_vote_timeout",
+      },
+    };
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: [gameStartedEvent, votePhaseStartEvent, systemVote],
+      latestEvent: systemVote,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+
+    const stage = await screen.findByRole("status", { name: "当前舞台" });
+    expect(within(stage).getByText("系统代投")).toBeVisible();
+    expect(screen.getByRole("log")).toHaveTextContent(
+      "系统代投：3号 -> 2号",
+    );
   });
 
   it("seeks the director when selecting an older event from the event sheet", async () => {

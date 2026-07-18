@@ -14,6 +14,21 @@ from app.werewolf.player_presets import (
 )
 
 PlayerProfileStatus = Literal["draft", "published", "archived"]
+PlayerDeliveryMood = Literal[
+    "neutral",
+    "restrained",
+    "calm",
+    "confident",
+    "skeptical",
+    "tense",
+    "frustrated",
+    "urgent",
+    "sad",
+    "excited",
+    "playful",
+]
+PlayerDeliveryIntensity = Literal["low", "medium", "high"]
+PlayerDeliveryPace = Literal["slow", "natural", "fast"]
 PlayerProfileSort = Literal[
     "display_order",
     "-display_order",
@@ -68,6 +83,25 @@ class AdminPlayerProfileContent(AdminRequestModel):
     short_description: str = Field(default="", max_length=160)
     background_story: str = Field(default="", max_length=1200)
     speaking_style: str = Field(default="", max_length=800)
+    tts_speaker: str | None = Field(
+        default=None,
+        max_length=160,
+        description="Null inherits the globally configured TTS speaker.",
+    )
+    base_delivery_mood: PlayerDeliveryMood | None = Field(
+        default=None,
+        description="Null resets the profile to the built-in neutral mood.",
+    )
+    base_delivery_intensity: PlayerDeliveryIntensity | None = Field(
+        default=None,
+        description="Null resets the profile to the built-in medium intensity.",
+    )
+    base_delivery_pace: PlayerDeliveryPace | None = Field(
+        default=None,
+        description="Null resets the profile to the built-in natural pace.",
+    )
+    base_delivery_instruction: str | None = Field(default=None, max_length=240)
+    voice_enabled: bool = True
     catchphrases: list[str] = Field(default_factory=list)
     strategy_profile: str = Field(default="balanced", min_length=1, max_length=40)
     risk_tolerance: int = Field(default=3, ge=1, le=5)
@@ -89,6 +123,8 @@ class AdminPlayerProfileContent(AdminRequestModel):
         "short_description",
         "background_story",
         "speaking_style",
+        "tts_speaker",
+        "base_delivery_instruction",
         "strategy_profile",
         mode="before",
     )
@@ -166,6 +202,25 @@ class AdminPlayerProfileUpdate(AdminRequestModel):
     short_description: str | None = Field(default=None, max_length=160)
     background_story: str | None = Field(default=None, max_length=1200)
     speaking_style: str | None = Field(default=None, max_length=800)
+    tts_speaker: str | None = Field(
+        default=None,
+        max_length=160,
+        description="Null clears the override and inherits the global TTS speaker.",
+    )
+    base_delivery_mood: PlayerDeliveryMood | None = Field(
+        default=None,
+        description="Null resets the profile to the built-in neutral mood.",
+    )
+    base_delivery_intensity: PlayerDeliveryIntensity | None = Field(
+        default=None,
+        description="Null resets the profile to the built-in medium intensity.",
+    )
+    base_delivery_pace: PlayerDeliveryPace | None = Field(
+        default=None,
+        description="Null resets the profile to the built-in natural pace.",
+    )
+    base_delivery_instruction: str | None = Field(default=None, max_length=240)
+    voice_enabled: bool | None = None
     catchphrases: list[str] | None = None
     strategy_profile: str | None = Field(default=None, min_length=1, max_length=40)
     risk_tolerance: int | None = Field(default=None, ge=1, le=5)
@@ -182,7 +237,14 @@ class AdminPlayerProfileUpdate(AdminRequestModel):
     def reject_null_non_nullable_fields(cls, data: object) -> object:
         if not isinstance(data, dict):
             return data
-        nullable_fields = {"avatar_asset_id"}
+        nullable_fields = {
+            "avatar_asset_id",
+            "tts_speaker",
+            "base_delivery_mood",
+            "base_delivery_intensity",
+            "base_delivery_pace",
+            "base_delivery_instruction",
+        }
         null_fields = [
             field_name
             for field_name, value in data.items()
@@ -210,6 +272,8 @@ class AdminPlayerProfileUpdate(AdminRequestModel):
         "short_description",
         "background_story",
         "speaking_style",
+        "tts_speaker",
+        "base_delivery_instruction",
         "strategy_profile",
         mode="before",
     )
@@ -278,6 +342,64 @@ class AdminPlayerProfileTransition(AdminRequestModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class AdminPlayerVoicePreviewDelivery(AdminRequestModel):
+    mood: PlayerDeliveryMood | None = None
+    intensity: PlayerDeliveryIntensity | None = None
+    pace: PlayerDeliveryPace | None = None
+    instruction: str | None = Field(default=None, max_length=240)
+
+    @field_validator("instruction", mode="before")
+    @classmethod
+    def trim_instruction(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        return value.strip() or None
+
+
+class AdminPlayerVoicePreviewRequest(AdminRequestModel):
+    say: str = Field(min_length=1, max_length=240)
+    speaker: str | None = Field(default=None, max_length=160)
+    base_delivery: AdminPlayerVoicePreviewDelivery = Field(
+        default_factory=AdminPlayerVoicePreviewDelivery
+    )
+    turn_delivery: AdminPlayerVoicePreviewDelivery = Field(
+        default_factory=AdminPlayerVoicePreviewDelivery
+    )
+
+    @field_validator("say", mode="before")
+    @classmethod
+    def trim_say(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("speaker", mode="before")
+    @classmethod
+    def trim_speaker(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        return value.strip() or None
+
+
+class AdminPlayerVoiceEffectiveDelivery(BaseModel):
+    schema_version: Literal[1]
+    mood: PlayerDeliveryMood
+    intensity: PlayerDeliveryIntensity
+    pace: PlayerDeliveryPace
+    instruction: str = Field(max_length=120)
+
+
+class AdminPlayerVoicePreviewResponse(BaseModel):
+    speaker: str = Field(min_length=1, max_length=160)
+    effective_delivery: AdminPlayerVoiceEffectiveDelivery
+    context_texts: list[str] = Field(max_length=4)
+    delivery_mapping_version: str = Field(min_length=1, max_length=40)
+    audio_format: Literal["mp3"]
+    mime_type: Literal["audio/mpeg"]
+    sample_rate: int = Field(gt=0, le=192_000)
+    elapsed_ms: int = Field(ge=0)
+    audio_byte_length: int = Field(gt=0, le=2 * 1024 * 1024)
+    audio_base64: str = Field(min_length=1, max_length=2_800_000)
+
+
 class AdminPlayerProfileResponse(BaseModel):
     id: str
     display_name: str
@@ -291,6 +413,21 @@ class AdminPlayerProfileResponse(BaseModel):
     short_description: str
     background_story: str
     speaking_style: str
+    tts_speaker: str | None = Field(
+        description="Null means this profile inherits the global TTS speaker."
+    )
+    base_delivery_mood: PlayerDeliveryMood = Field(
+        description="Resolved profile mood; null input resets this to neutral."
+    )
+    base_delivery_intensity: PlayerDeliveryIntensity = Field(
+        description="Resolved profile intensity; null input resets this to medium."
+    )
+    base_delivery_pace: PlayerDeliveryPace = Field(
+        description="Resolved profile pace; null input resets this to natural."
+    )
+    base_delivery_instruction: str | None
+    voice_enabled: bool
+    voice_config_version: int = Field(ge=1)
     catchphrases: list[str]
     strategy_profile: str
     risk_tolerance: int

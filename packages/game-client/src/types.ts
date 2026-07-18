@@ -710,6 +710,30 @@ export type CreateGameRunRequest = {
   allow_lineup_quality_warnings?: boolean;
 };
 
+export type PublicActionOrigin =
+  | "model"
+  | "model_retry"
+  | "system_fallback"
+  | "rule_default"
+  | "state_machine"
+  | "none"
+  | "canceled"
+  | "legacy_unknown"
+  | (string & {});
+
+export type PublicPhaseCompletionStatus =
+  | "completed"
+  | "skipped"
+  | "canceled"
+  | "terminal"
+  | (string & {});
+
+export type PublicSpeechStatus =
+  | "spoken"
+  | "not_spoken"
+  | "canceled"
+  | (string & {});
+
 export type LiveGameEvent = {
   id: number;
   source_run_id?: string;
@@ -725,6 +749,13 @@ export type LiveGameEvent = {
   phase: string | null;
   actor: string | null;
   action: string | null;
+  /** Public-safe lifecycle/provenance fields. Older events may only carry these in payload. */
+  phase_instance_id?: string | null;
+  completion_status?: PublicPhaseCompletionStatus | null;
+  completion_reason?: string | null;
+  action_origin?: PublicActionOrigin | null;
+  public_reason_code?: string | null;
+  speech_status?: PublicSpeechStatus | null;
   payload: Record<string, unknown>;
 };
 

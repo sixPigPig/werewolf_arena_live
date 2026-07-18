@@ -86,6 +86,7 @@ function renderSpeech(
           </span>
         ) : null}
       </div>
+      {renderStatusBadge(presentation.statusBadge)}
       <span aria-hidden="true">{seat}</span>
       <strong aria-hidden="true">{name}</strong>
       <em aria-hidden="true">{status}</em>
@@ -110,6 +111,7 @@ function renderAction(
     actorSeat,
     actorName,
     accessibleText,
+    statusBadge,
   } = presentation;
 
   const className = [
@@ -139,6 +141,7 @@ function renderAction(
       <div aria-hidden="true" className="mobile-live-presenter">
         {presenter}
       </div>
+      {renderStatusBadge(statusBadge)}
       <span aria-hidden="true">{actorDisplay(actorName, actorSeat, eyebrow)}</span>
       <strong aria-hidden="true">{title}</strong>
       <em aria-hidden="true" className="mobile-live-action-detail">
@@ -147,6 +150,22 @@ function renderAction(
       {progress ? <p aria-hidden="true">{progress}</p> : null}
       <small aria-hidden="true">{`${eyebrow} · ${phaseLabel(kind)}`}</small>
     </section>
+  );
+}
+
+function renderStatusBadge(
+  status: MobileLiveFocusPresentation["statusBadge"],
+) {
+  if (!status) {
+    return null;
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className={`mobile-live-status-badge mobile-live-status-badge-${status.kind.replaceAll("_", "-")}`}
+    >
+      {status.label}
+    </span>
   );
 }
 

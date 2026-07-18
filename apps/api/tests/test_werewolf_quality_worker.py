@@ -17,6 +17,7 @@ from app.werewolf.quality_store import (
     enqueue_quality_evaluation,
     enqueue_recent_missing_evaluations,
     latest_quality_evaluation,
+    latest_successful_quality_evaluation,
 )
 from app.werewolf.quality_worker import QualityEvaluationWorker
 from app.werewolf.replay import DatabaseReplayStore
@@ -151,6 +152,125 @@ def test_expired_quality_lease_is_reclaimed(
         assert record is not None
         assert record.worker_id == "replacement-worker"
         assert record.attempt_count == 1
+
+
+def test_repeated_crashes_stop_reclaiming_at_max_attempts(
+    session_factory: sessionmaker[Session],
+) -> None:
+    session_id, run_id = _seed_terminal_game(session_factory)
+    with session_factory() as db:
+        record = enqueue_quality_evaluation(db, session_id=session_id, run_id=run_id)
+        db.commit()
+        evaluation_id = record.id
+
+    worker = QualityEvaluationWorker(
+        session_factory,
+        hmac_key="test-key",
+        max_attempts=2,
+    )
+    assert worker.claim_next_job(worker_id="worker-one") == evaluation_id
+    with session_factory() as db:
+        record = db.get(GameQualityEvaluationRecord, evaluation_id)
+        assert record is not None
+        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        db.commit()
+
+    assert worker.claim_next_job(worker_id="worker-two") == evaluation_id
+    with session_factory() as db:
+        record = db.get(GameQualityEvaluationRecord, evaluation_id)
+        assert record is not None
+        record.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        record.safe_summary = {
+            "_previous_successful_result": {
+                "evaluator_version": record.evaluator_version,
+                "source_revision": record.source_revision,
+                "completed_at": "2026-07-18T01:02:03+00:00",
+            }
+        }
+        db.commit()
+
+    assert worker.claim_next_job(worker_id="worker-three") is None
+    with session_factory() as db:
+        record = db.get(GameQualityEvaluationRecord, evaluation_id)
+        assert record is not None
+        assert record.status == "failed"
+        assert record.attempt_count == 2
+        assert record.worker_id is None
+        assert record.lease_expires_at is None
+        assert record.last_error_code == "lease_expired_max_attempts"
+        assert record.completed_at is not None
+        successful = latest_successful_quality_evaluation(db, session_id=session_id)
+        assert successful is not None
+        assert successful.source_revision == record.source_revision
+
+
+def test_lost_lease_fences_old_worker_completion(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id, run_id = _seed_terminal_game(session_factory)
+    with session_factory() as db:
+        record = enqueue_quality_evaluation(db, session_id=session_id, run_id=run_id)
+        db.commit()
+        evaluation_id = record.id
+
+    worker = QualityEvaluationWorker(
+        session_factory,
+        hmac_key="test-key",
+        lease_seconds=60,
+    )
+    assert worker.claim_next_job(worker_id="worker-old") == evaluation_id
+
+    from app.werewolf.quality_evaluation import (
+        evaluate_quality_bundle as real_evaluate_quality_bundle,
+    )
+
+    def reclaim_before_old_worker_commit(*args: object, **kwargs: object) -> object:
+        with session_factory() as db:
+            record = db.get(GameQualityEvaluationRecord, evaluation_id)
+            assert record is not None
+            record.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+            db.commit()
+        assert worker.claim_next_job(worker_id="worker-new") == evaluation_id
+        return real_evaluate_quality_bundle(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.werewolf.quality_worker.evaluate_quality_bundle",
+        reclaim_before_old_worker_commit,
+    )
+
+    assert worker.process_claimed_job(evaluation_id, worker_id="worker-old") is False
+    with session_factory() as db:
+        record = db.get(GameQualityEvaluationRecord, evaluation_id)
+        assert record is not None
+        assert record.status == "processing"
+        assert record.worker_id == "worker-new"
+        assert record.attempt_count == 2
+        assert record.safe_summary == {}
+
+
+def test_expired_lease_cannot_be_renewed_by_old_owner(
+    session_factory: sessionmaker[Session],
+) -> None:
+    session_id, run_id = _seed_terminal_game(session_factory)
+    expired_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+    with session_factory() as db:
+        record = enqueue_quality_evaluation(db, session_id=session_id, run_id=run_id)
+        record.status = "processing"
+        record.worker_id = "worker-old"
+        record.lease_expires_at = expired_at
+        db.commit()
+        evaluation_id = record.id
+
+    worker = QualityEvaluationWorker(session_factory, hmac_key="test-key")
+
+    assert worker.renew_lease(evaluation_id, worker_id="worker-old") is False
+    with session_factory() as db:
+        record = db.get(GameQualityEvaluationRecord, evaluation_id)
+        assert record is not None
+        assert record.worker_id == "worker-old"
+        assert record.lease_expires_at is not None
+        assert record.lease_expires_at.replace(tzinfo=UTC) == expired_at
 
 
 def test_source_revision_drift_supersedes_old_job_and_enqueues_new(

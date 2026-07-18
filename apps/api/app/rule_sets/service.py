@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
+from app.rule_sets.contracts import build_admin_rule_contract
 from app.rule_sets.errors import (
     DefaultRuleRequired,
     RuleRevisionChanged,
@@ -71,6 +72,15 @@ class RuleSetDraftValidation:
 class RuleSetDefaultChange:
     previous_default: RuleSetAggregate | None
     current_default: RuleSetAggregate
+
+
+def compile_rule_set_revision(revision: RuleSetRevisionRecord) -> CompiledRuleSet:
+    return compile_rule_set_config(
+        revision.rule_set_id,
+        _normalized_revision_config(revision),
+        revision_id=revision.id,
+        revision_no=revision.revision_no,
+    )
 
 
 def create_rule_set(
@@ -228,12 +238,7 @@ def validate_rule_set_draft(
     validation = validate_rule_set_config(config)
     compiled: CompiledRuleSet | None = None
     if validation.valid:
-        candidate = compile_rule_set_config(
-            rule_set_id,
-            config,
-            revision_id=draft.id,
-            revision_no=draft.revision_no,
-        )
+        candidate = compile_rule_set_revision(draft)
         compiled = resolve_rule_set_snapshot(candidate.snapshot)
     return RuleSetDraftValidation(
         aggregate=aggregate,
@@ -553,12 +558,14 @@ def publish_rule_set(
             revision_id=draft.id,
             issues=validation.errors,
         )
-    compiled = compile_rule_set_config(
-        rule_set_id,
-        config,
-        revision_id=draft.id,
-        revision_no=draft.revision_no,
-    )
+    compiled = compile_rule_set_revision(draft)
+    contract = build_admin_rule_contract(compiled.rule_set)
+    if contract.issues:
+        raise RuleSetValidationFailed(
+            rule_set_id,
+            revision_id=draft.id,
+            issues=contract.issues,
+        )
     round_tripped = resolve_rule_set_snapshot(compiled.snapshot)
     if round_tripped.snapshot != compiled.snapshot:
         raise ValueError("compiled rule set round-trip failed")

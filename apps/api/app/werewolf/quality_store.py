@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import case, select
@@ -27,6 +29,19 @@ from app.werewolf.privacy_projection import project_live_event
 
 class QualityEvaluationSourceUnavailable(RuntimeError):
     pass
+
+
+_PREVIOUS_SUCCESS_KEY = "_previous_successful_result"
+_EVALUATOR_VERSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
+_SOURCE_REVISION_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True)
+class QualityEvaluationSuccessReference:
+    evaluator_version: str
+    source_revision: str
+    completed_at: datetime
+    status: str = "completed"
 
 
 def build_database_quality_bundle(
@@ -235,6 +250,112 @@ def latest_quality_evaluation(
             GameQualityEvaluationRecord.id.desc(),
         )
         .limit(1)
+    )
+
+
+def latest_successful_quality_evaluation(
+    db: Session,
+    *,
+    session_id: str,
+) -> QualityEvaluationSuccessReference | None:
+    records = list(
+        db.scalars(
+            select(GameQualityEvaluationRecord)
+            .where(GameQualityEvaluationRecord.session_id == session_id)
+            .order_by(
+                GameQualityEvaluationRecord.created_at.desc(),
+                GameQualityEvaluationRecord.id.desc(),
+            )
+        )
+    )
+    references = [
+        reference
+        for record in records
+        if (reference := _quality_success_reference(record)) is not None
+    ]
+    if not references:
+        return None
+    return max(references, key=lambda reference: reference.completed_at)
+
+
+def reset_quality_evaluation_for_retry(
+    record: GameQualityEvaluationRecord,
+    *,
+    now: datetime | None = None,
+) -> None:
+    previous_success = _quality_success_reference(record)
+    record.status = "pending"
+    record.data_status = "collecting"
+    record.verdict = "unavailable"
+    record.safe_summary = (
+        {
+            _PREVIOUS_SUCCESS_KEY: {
+                "evaluator_version": previous_success.evaluator_version,
+                "source_revision": previous_success.source_revision,
+                "completed_at": previous_success.completed_at.isoformat(),
+            }
+        }
+        if previous_success is not None
+        else {}
+    )
+    record.duration_ms = None
+    record.attempt_count = 0
+    record.not_before = now or datetime.now(tz=UTC)
+    record.worker_id = None
+    record.lease_expires_at = None
+    record.last_error_code = None
+    record.started_at = None
+    record.completed_at = None
+
+
+def _quality_success_reference(
+    record: GameQualityEvaluationRecord,
+) -> QualityEvaluationSuccessReference | None:
+    if record.status == "completed" and record.completed_at is not None:
+        return _validated_success_reference(
+            evaluator_version=record.evaluator_version,
+            source_revision=record.source_revision,
+            completed_at=record.completed_at,
+        )
+    summary = record.safe_summary if isinstance(record.safe_summary, dict) else {}
+    raw = summary.get(_PREVIOUS_SUCCESS_KEY)
+    if not isinstance(raw, dict):
+        return None
+    completed_at = raw.get("completed_at")
+    if not isinstance(completed_at, str) or len(completed_at) > 64:
+        return None
+    try:
+        parsed_completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _validated_success_reference(
+        evaluator_version=raw.get("evaluator_version"),
+        source_revision=raw.get("source_revision"),
+        completed_at=parsed_completed_at,
+    )
+
+
+def _validated_success_reference(
+    *,
+    evaluator_version: object,
+    source_revision: object,
+    completed_at: datetime,
+) -> QualityEvaluationSuccessReference | None:
+    if not isinstance(evaluator_version, str) or not _EVALUATOR_VERSION_RE.fullmatch(
+        evaluator_version
+    ):
+        return None
+    if not isinstance(source_revision, str) or not _SOURCE_REVISION_RE.fullmatch(source_revision):
+        return None
+    normalized_completed_at = (
+        completed_at.replace(tzinfo=UTC)
+        if completed_at.tzinfo is None
+        else completed_at.astimezone(UTC)
+    )
+    return QualityEvaluationSuccessReference(
+        evaluator_version=evaluator_version,
+        source_revision=source_revision,
+        completed_at=normalized_completed_at,
     )
 
 

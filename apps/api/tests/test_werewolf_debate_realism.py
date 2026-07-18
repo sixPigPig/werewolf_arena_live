@@ -347,7 +347,10 @@ def test_speech_quality_flags_group_agreement_for_counterpoint_mission() -> None
         mission=mission,
     )
 
-    assert "group_agreement_without_evidence" in report.hard_failure_codes
+    assert report.hard_failure_codes == []
+    assert "group_agreement_without_evidence" in {
+        issue.code for issue in report.issues
+    }
     assert all(
         0 <= start <= end <= len("我同意前面，今天继续跟票5号玩家。")
         for issue in report.issues

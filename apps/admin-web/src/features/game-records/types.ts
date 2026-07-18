@@ -188,7 +188,9 @@ export type AdminGameModelRequestDetail = AdminGameModelRequestSummary & {
 export type AdminQualityEvaluationStatus =
   | "not_scheduled"
   | "pending"
+  | "queued"
   | "processing"
+  | "running"
   | "completed"
   | "failed"
   | "superseded";
@@ -200,10 +202,85 @@ export type AdminQualityDataStatus =
   | "legacy"
   | "unavailable";
 
+export type AdminGameQualityCriticalAction = {
+  schema_version: 1;
+  action_id: string;
+  round_number: number | null;
+  action: string;
+  action_origin:
+    | "canceled"
+    | "failed"
+    | "model_after_retry"
+    | "model_first_attempt"
+    | "rule_default"
+    | "state_machine"
+    | "system_fallback"
+    | "system_timeout";
+  input_completeness:
+    | "complete"
+    | "critical_public_fact_missing"
+    | "private_observation_missing"
+    | "rule_missing"
+    | "unknown";
+  action_legality:
+    | "invalid_normalized"
+    | "invalid_not_executed"
+    | "invalid_system_fallback"
+    | "legal_but_canceled"
+    | "legal_executed"
+    | "legal_system_result"
+    | "not_executed"
+    | "unknown";
+  reasoning_observation:
+    | "hard_rule_conflict"
+    | "identity_information_conflict"
+    | "internal_logic_contradiction"
+    | "not_assessed"
+    | "not_available"
+    | "used_unspecified_rule";
+  direct_impact:
+    | "canceled_no_effect"
+    | "failed_no_effect"
+    | "game_state_effect_applied"
+    | "model_result_applied"
+    | "no_state_change"
+    | "phase_ended"
+    | "system_result_applied"
+    | "vote_recorded";
+  attribution:
+    | "canceled"
+    | "model_internal_logic_contradiction"
+    | "model_judgment_and_rule_input_gap"
+    | "model_reasoning_error"
+    | "not_determined"
+    | "runtime_fallback";
+  clause_ids: string[];
+  coverage: {
+    schema_version: 1;
+    status: "complete" | "partial" | "missing" | "unknown";
+    required_count: number;
+    included_count: number;
+    missing_count: number;
+    missing_clause_ids: string[];
+  };
+};
+
 export type AdminGameQualityEvaluation = {
   schema_version: 1;
   evaluator_version: string;
   evaluation_status: AdminQualityEvaluationStatus;
+  source_revision?: string;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  attempt_count?: number;
+  failure_reason?: string | null;
+  can_retry?: boolean;
+  latest_successful_result?: {
+    evaluator_version: string;
+    source_revision: string;
+    completed_at: string;
+  } | null;
   data_status: AdminQualityDataStatus;
   verdict: "pass" | "warn" | "fail" | "unavailable";
   source_coverage: {
@@ -268,6 +345,7 @@ export type AdminGameQualityEvaluation = {
     privacy_p0_issue_count: number;
     lineup_warning_count: number;
   };
+  critical_actions: AdminGameQualityCriticalAction[];
   evaluated_at: string | null;
 };
 

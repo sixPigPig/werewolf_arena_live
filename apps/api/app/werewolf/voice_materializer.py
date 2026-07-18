@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import logging
 from threading import Event
@@ -42,6 +43,7 @@ from app.werewolf.volcengine_tts import (
     VolcengineTtsClient,
     VolcengineTtsConfig,
     mime_type_for_format,
+    supports_tts_context_texts,
 )
 
 
@@ -201,6 +203,27 @@ class VoiceMaterializer:
             )
             if utterance is None or utterance.speaker_kind != speaker_kind:
                 raise PermanentVoiceMaterializationError("source event is no longer narratable")
+            utterance = replace(
+                utterance,
+                tts_request_source=job.tts_request_source,
+            )
+            if speaker_kind == "player":
+                utterance = replace(
+                    utterance,
+                    speaker=job.speaker or utterance.speaker,
+                    effective_delivery=(
+                        dict(job.effective_delivery)
+                        if isinstance(job.effective_delivery, dict)
+                        else None
+                    ),
+                    effective_context_texts=tuple(
+                        item
+                        for item in (job.effective_context_texts or [])
+                        if isinstance(item, str)
+                    ),
+                    voice_config_version=job.voice_config_version,
+                    delivery_mapping_version=job.delivery_mapping_version,
+                )
             if _equivalent_complete_voice_exists(db, utterance):
                 return
 
@@ -262,10 +285,18 @@ class VoiceMaterializer:
         audio_bytes = 0
         chunk_index = 0
         max_subtitle_end_ms = 0
-        async for item in client.synthesize(
+        synthesize_kwargs: dict[str, Any] = {
+            "speaker": utterance.speaker,
+            "text_chunks": text_chunks,
+        }
+        if utterance.effective_context_texts and supports_tts_context_texts(
+            resource_id=self.config.resource_id,
             speaker=utterance.speaker,
-            text_chunks=text_chunks,
         ):
+            synthesize_kwargs["context_texts"] = list(
+                utterance.effective_context_texts
+            )
+        async for item in client.synthesize(**synthesize_kwargs):
             if isinstance(item, TtsSubtitleTiming):
                 subtitle_timings = [
                     {

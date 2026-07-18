@@ -57,8 +57,8 @@ export type AdminRunP2Diagnostics = {
   performance: AdminP2Performance;
   speech_quality: AdminP2SpeechQuality;
   choice_normalization: AdminP2ChoiceNormalization;
-  provider_attempt_outcomes: AdminP2ProviderAttemptOutcomes;
-  logical_action_outcomes: AdminP2LogicalActionOutcomes;
+  provider_attempt_outcomes: AdminP2ProviderAttemptOutcomes | null;
+  logical_action_outcomes: AdminP2LogicalActionOutcomes | null;
 };
 
 export type AdminP2LineupViolation = {

@@ -1,4 +1,40 @@
-import type { AdminRuleSet, AdminRuleSetDetail, RuleSetConfig, RuleSetOptions, RuleSetRevision } from "./types";
+import type { AdminRuleSet, AdminRuleSetDetail, RuleContract, RuleSetConfig, RuleSetOptions, RuleSetRevision } from "./types";
+
+export const ruleContract: RuleContract = {
+  schema_version: 1,
+  revision_id: "2026-07-18.1",
+  canonical_hash: "c".repeat(64),
+  coverage_status: "covered",
+  publish_ready: true,
+  missing_p0_clause_ids: [],
+  broken_engine_constraint_ids: [],
+  clauses: [
+    {
+      clause_id: "night.werewolf_attack.non_wolf_targets.v1",
+      priority: "P0",
+      roles: [],
+      phases: [],
+      actions: ["remove"],
+      audience: "player_public",
+      engine_constraint_ids: ["engine.night.werewolf_attack.candidates_non_wolves"],
+      model_rule_text: "狼人夜间只能袭击非狼人玩家。",
+      coverage_status: "covered",
+      uncovered_engine_constraint_ids: [],
+    },
+    {
+      clause_id: "internal.werewolf.collective_fallback.v1",
+      priority: "P2",
+      roles: ["狼人"],
+      phases: [],
+      actions: ["remove"],
+      audience: "internal_only",
+      engine_constraint_ids: ["engine.night.werewolf.collective_fallback"],
+      model_rule_text: null,
+      coverage_status: "covered",
+      uncovered_engine_constraint_ids: [],
+    },
+  ],
+};
 
 export const ruleSetOptions: RuleSetOptions = {
   roles: [
@@ -33,5 +69,5 @@ export function fixtureRuleSet(id: string, status: AdminRuleSet["status"], isDef
 }
 
 export function fixtureDetail(rule: AdminRuleSet): AdminRuleSetDetail {
-  return { ...structuredClone(rule), revisions: rule.revisions.map((revision) => ({ ...revision, usage: { game_count: revision.revision_no, live_count: 0 } })), usage: { game_count: 2, live_count: 1 }, warnings: [] };
+  return { ...structuredClone(rule), revisions: rule.revisions.map((revision) => ({ ...revision, usage: { game_count: revision.revision_no, live_count: 0 } })), usage: { game_count: 2, live_count: 1 }, warnings: [], rule_contract: structuredClone(ruleContract) };
 }

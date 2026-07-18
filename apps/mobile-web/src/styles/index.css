@@ -2557,6 +2557,52 @@ textarea {
   -webkit-line-clamp: 2;
 }
 
+.mobile-live-center-stage > .mobile-live-status-badge {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  border: 1px solid rgb(235 190 103 / 58%);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgb(74 52 16 / 84%);
+  color: #f5d68e;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-live-center-stage > .mobile-live-status-badge-canceled {
+  border-color: rgb(255 112 105 / 68%);
+  background: rgb(88 21 22 / 88%);
+  color: #ffaaa3;
+}
+
+.mobile-live-center-stage > .mobile-live-status-badge-rule-default {
+  border-color: rgb(120 180 232 / 68%);
+  background: rgb(20 51 90 / 88%);
+  color: #a9daf5;
+}
+
+.mobile-live-center-stage > .mobile-live-status-badge-retry-completed {
+  border-color: rgb(86 196 160 / 68%);
+  background: rgb(17 74 54 / 88%);
+  color: #9cedcf;
+}
+
+.mobile-live-center-stage > .mobile-live-status-badge-not-spoken {
+  border-color: rgb(226 158 91 / 68%);
+  background: rgb(77 42 20 / 88%);
+  color: #f2c28e;
+}
+
+.mobile-live-center-stage > .mobile-live-status-badge-legacy-unknown {
+  border-color: rgb(181 181 181 / 48%);
+  background: rgb(45 45 48 / 88%);
+  color: #d2d2d4;
+}
+
 .mobile-live-action-tone-danger .mobile-live-presenter {
   border-color: rgb(214 58 58 / 88%);
   box-shadow:

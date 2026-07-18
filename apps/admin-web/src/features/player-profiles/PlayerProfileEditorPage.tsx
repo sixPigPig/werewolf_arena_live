@@ -36,6 +36,7 @@ import { playerProfileKeys } from "@/features/player-profiles/query-keys";
 import { usePlayerProfileRepository } from "@/features/player-profiles/repository";
 import type {
   AdminPlayerProfile,
+  AdminPlayerVoicePreview,
   PlayerProfileEditableFields,
   PlayerProfileOptions,
   PlayerProfileStatus,
@@ -161,6 +162,12 @@ function PlayerProfileEditor({
     strategy_profile: options.strategies[0]?.id ?? "balanced",
     appearance_id: options.appearances[0]?.id ?? "default",
     avatar_asset_id: options.appearances[0]?.avatar_asset_id ?? null,
+    tts_speaker: null,
+    base_delivery_mood: "neutral",
+    base_delivery_intensity: "medium",
+    base_delivery_pace: "natural",
+    base_delivery_instruction: null,
+    voice_enabled: true,
   };
   const initialInput = inputFromProfile(initialProfile, defaults);
   const [profile, setProfile] = useState(initialProfile);
@@ -184,6 +191,20 @@ function PlayerProfileEditor({
   const [transitionAction, setTransitionAction] =
     useState<TransitionAction | null>(null);
   const [transitionError, setTransitionError] = useState<string | null>(null);
+  const [voicePreviewSay, setVoicePreviewSay] = useState(
+    "我先听完这一轮，再给出我的判断。",
+  );
+  const [turnDelivery, setTurnDelivery] = useState({
+    mood: "",
+    intensity: "",
+    pace: "",
+    instruction: "",
+  });
+  const [voicePreview, setVoicePreview] =
+    useState<AdminPlayerVoicePreview | null>(null);
+  const [voicePreviewError, setVoicePreviewError] =
+    useState<AdminApiError | null>(null);
+  const [voicePreviewPending, setVoicePreviewPending] = useState(false);
   const allowNavigation = useRef(false);
   const baseline = useRef(JSON.stringify(initialInput));
   const status = profile?.status ?? "new";
@@ -225,6 +246,14 @@ function PlayerProfileEditor({
     selectedAppearance?.avatar_asset_id === draft.avatar_asset_id
       ? selectedAppearance.avatar_image_url
       : profile?.avatar_image_url ?? selectedAppearance?.avatar_image_url ?? "";
+  const hasVoiceConfig =
+    draft.tts_speaker !== undefined ||
+    draft.base_delivery_mood !== undefined ||
+    draft.base_delivery_intensity !== undefined ||
+    draft.base_delivery_pace !== undefined ||
+    draft.base_delivery_instruction !== undefined ||
+    draft.voice_enabled !== undefined ||
+    profile?.voice_config_version !== undefined;
 
   function updateDraft<Key extends keyof PlayerProfileEditableFields>(
     field: Key,
@@ -233,6 +262,63 @@ function PlayerProfileEditor({
     setDraft((current) => ({ ...current, [field]: value }));
     setFormErrors((current) => ({ ...current, [field]: undefined, form: undefined }));
     setSuccessMessage(null);
+    setVoicePreview(null);
+    setVoicePreviewError(null);
+  }
+
+  function updateTurnDelivery(
+    field: keyof typeof turnDelivery,
+    value: string,
+  ) {
+    setTurnDelivery((current) => ({ ...current, [field]: value }));
+    setVoicePreview(null);
+    setVoicePreviewError(null);
+  }
+
+  async function previewDraftVoice() {
+    if (!canEdit || voicePreviewPending || !voicePreviewSay.trim()) {
+      return;
+    }
+    setVoicePreviewPending(true);
+    setVoicePreview(null);
+    setVoicePreviewError(null);
+    try {
+      const result = await repository.previewVoice({
+        say: voicePreviewSay.trim(),
+        speaker: draft.tts_speaker?.trim() || null,
+        base_delivery: {
+          mood: draft.base_delivery_mood ?? null,
+          intensity: draft.base_delivery_intensity ?? null,
+          pace: draft.base_delivery_pace ?? null,
+          instruction: draft.base_delivery_instruction?.trim() || null,
+        },
+        turn_delivery: {
+          mood: turnDelivery.mood || null,
+          intensity: turnDelivery.intensity || null,
+          pace: turnDelivery.pace || null,
+          instruction: turnDelivery.instruction.trim() || null,
+        },
+      });
+      setVoicePreview(result);
+    } catch (error) {
+      setVoicePreviewError(
+        error instanceof AdminApiError
+          ? error
+          : new AdminApiError({
+              cause: error,
+              problem: {
+                type: "about:blank",
+                title: "语音试听失败",
+                status: 0,
+                detail: "语音试听未能完成，请稍后重试。",
+                code: "admin_player_voice_preview_request_failed",
+                request_id: null,
+              },
+            }),
+      );
+    } finally {
+      setVoicePreviewPending(false);
+    }
   }
 
   async function generateAiDraft() {
@@ -400,7 +486,7 @@ function PlayerProfileEditor({
           {isNew && canEdit && canGenerateAi ? (
             <button
               className="player-ai-draft-button"
-              disabled={pendingAction !== null}
+              disabled={pendingAction !== null || voicePreviewPending}
               onClick={() => void generateAiDraft()}
               type="button"
             >
@@ -462,7 +548,9 @@ function PlayerProfileEditor({
 
       <form className="player-editor-layout" noValidate onSubmit={saveProfile}>
         <div className="player-editor-form-column">
-          <fieldset disabled={!canEdit || pendingAction !== null}>
+          <fieldset
+            disabled={!canEdit || pendingAction !== null || voicePreviewPending}
+          >
             <legend>玩家内容</legend>
             <section aria-labelledby="player-basic-title" className="player-form-section">
               <SectionHeading
@@ -628,6 +716,290 @@ function PlayerProfileEditor({
               </div>
             </section>
 
+            {hasVoiceConfig ? (
+              <section aria-labelledby="player-tts-title" className="player-form-section">
+                <SectionHeading
+                  description="玩家音色可继承全局配置；基础演绎留空时分别重置为内置 neutral、medium 与 natural。"
+                  id="player-tts-title"
+                  title="玩家音色与基础演绎"
+                />
+                {draft.voice_enabled !== undefined ? (
+                  <label className="player-featured-control">
+                    <input
+                      checked={draft.voice_enabled}
+                      name="voice_enabled"
+                      onChange={(event) =>
+                        updateDraft("voice_enabled", event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span>
+                      <strong>为新对局启用玩家语音</strong>
+                      <small>关闭只影响之后创建的新对局，不改写运行中或历史语音。</small>
+                    </span>
+                  </label>
+                ) : null}
+                <div className="player-form-grid player-voice-config-grid">
+                  {draft.tts_speaker !== undefined ? (
+                    <Field
+                      className="is-wide"
+                      error={formErrors.tts_speaker}
+                      label="玩家音色"
+                      help="留空表示继承全局 player_speaker；具体音色能力由服务端校验。"
+                    >
+                      <input
+                        maxLength={160}
+                        name="tts_speaker"
+                        onChange={(event) =>
+                          updateDraft("tts_speaker", event.target.value)
+                        }
+                        placeholder="继承全局玩家音色"
+                        value={draft.tts_speaker ?? ""}
+                      />
+                    </Field>
+                  ) : null}
+                  {draft.base_delivery_mood !== undefined ? (
+                    <Field
+                      error={formErrors.base_delivery_mood}
+                      label="基础情绪"
+                      help="留空重置为内置中性情绪 neutral。"
+                    >
+                      <select
+                        name="base_delivery_mood"
+                        onChange={(event) =>
+                          updateDraft(
+                            "base_delivery_mood",
+                            event.target.value || null,
+                          )
+                        }
+                        value={draft.base_delivery_mood ?? ""}
+                      >
+                        {voiceDeliveryOptions(
+                          PLAYER_DELIVERY_MOOD_OPTIONS,
+                          draft.base_delivery_mood,
+                          "内置默认 · neutral",
+                        )}
+                      </select>
+                    </Field>
+                  ) : null}
+                  {draft.base_delivery_intensity !== undefined ? (
+                    <Field
+                      error={formErrors.base_delivery_intensity}
+                      label="基础强度"
+                      help="留空重置为内置中等强度 medium。"
+                    >
+                      <select
+                        name="base_delivery_intensity"
+                        onChange={(event) =>
+                          updateDraft(
+                            "base_delivery_intensity",
+                            event.target.value || null,
+                          )
+                        }
+                        value={draft.base_delivery_intensity ?? ""}
+                      >
+                        {voiceDeliveryOptions(
+                          PLAYER_DELIVERY_INTENSITY_OPTIONS,
+                          draft.base_delivery_intensity,
+                          "内置默认 · medium",
+                        )}
+                      </select>
+                    </Field>
+                  ) : null}
+                  {draft.base_delivery_pace !== undefined ? (
+                    <Field
+                      error={formErrors.base_delivery_pace}
+                      label="基础语速"
+                      help="留空重置为内置自然语速 natural。"
+                    >
+                      <select
+                        name="base_delivery_pace"
+                        onChange={(event) =>
+                          updateDraft(
+                            "base_delivery_pace",
+                            event.target.value || null,
+                          )
+                        }
+                        value={draft.base_delivery_pace ?? ""}
+                      >
+                        {voiceDeliveryOptions(
+                          PLAYER_DELIVERY_PACE_OPTIONS,
+                          draft.base_delivery_pace,
+                          "内置默认 · natural",
+                        )}
+                      </select>
+                    </Field>
+                  ) : null}
+                  {draft.base_delivery_instruction !== undefined ? (
+                    <Field
+                      className="is-wide"
+                      error={formErrors.base_delivery_instruction}
+                      label="基础演绎提示"
+                      help="只描述演绎方式，不应包含身份、座位、行动结果或其他游戏事实。"
+                    >
+                      <textarea
+                        maxLength={240}
+                        name="base_delivery_instruction"
+                        onChange={(event) =>
+                          updateDraft(
+                            "base_delivery_instruction",
+                            event.target.value,
+                          )
+                        }
+                        rows={3}
+                        value={draft.base_delivery_instruction ?? ""}
+                      />
+                    </Field>
+                  ) : null}
+                </div>
+                <p className="player-voice-config-boundary">
+                  当前生效：
+                  {draft.voice_enabled === false
+                    ? "语音关闭"
+                    : draft.tts_speaker || "继承全局音色"}
+                  {profile?.voice_config_version !== undefined
+                    ? ` · 配置版本 ${profile.voice_config_version}`
+                    : ""}
+                  。保存后只影响新对局；进行中、恢复、已排队语音和历史 Replay 继续使用冻结快照。
+                </p>
+                <div className="player-voice-preview" aria-labelledby="player-voice-preview-title">
+                  <header>
+                    <div>
+                      <h3 id="player-voice-preview-title">草稿语音试听</h3>
+                      <p>直接使用当前未保存表单；只生成一次性受限音频，不创建正式语音任务或 Replay 数据。</p>
+                    </div>
+                    <span>seed-tts-2.0</span>
+                  </header>
+                  <div className="player-form-grid player-voice-preview-grid">
+                    <Field className="is-wide" label="试听文本" help="最多 240 个字符">
+                      <textarea
+                        maxLength={240}
+                        name="voice_preview_say"
+                        onChange={(event) => {
+                          setVoicePreviewSay(event.target.value);
+                          setVoicePreview(null);
+                          setVoicePreviewError(null);
+                        }}
+                        rows={3}
+                        value={voicePreviewSay}
+                      />
+                    </Field>
+                    <Field label="本轮情绪">
+                      <select
+                        name="voice_preview_mood"
+                        onChange={(event) =>
+                          updateTurnDelivery("mood", event.target.value)
+                        }
+                        value={turnDelivery.mood}
+                      >
+                        {voiceDeliveryOptions(
+                          PLAYER_DELIVERY_MOOD_OPTIONS,
+                          turnDelivery.mood,
+                          "沿用基础情绪",
+                        )}
+                      </select>
+                    </Field>
+                    <Field label="本轮强度">
+                      <select
+                        name="voice_preview_intensity"
+                        onChange={(event) =>
+                          updateTurnDelivery("intensity", event.target.value)
+                        }
+                        value={turnDelivery.intensity}
+                      >
+                        {voiceDeliveryOptions(
+                          PLAYER_DELIVERY_INTENSITY_OPTIONS,
+                          turnDelivery.intensity,
+                          "沿用基础强度",
+                        )}
+                      </select>
+                    </Field>
+                    <Field label="本轮语速">
+                      <select
+                        name="voice_preview_pace"
+                        onChange={(event) =>
+                          updateTurnDelivery("pace", event.target.value)
+                        }
+                        value={turnDelivery.pace}
+                      >
+                        {voiceDeliveryOptions(
+                          PLAYER_DELIVERY_PACE_OPTIONS,
+                          turnDelivery.pace,
+                          "沿用基础语速",
+                        )}
+                      </select>
+                    </Field>
+                    <Field
+                      className="is-wide"
+                      label="本轮演绎提示"
+                      help="含座位、身份、阵营或行动事实时，后端会丢弃整段并安全回退。"
+                    >
+                      <textarea
+                        maxLength={240}
+                        name="voice_preview_instruction"
+                        onChange={(event) =>
+                          updateTurnDelivery("instruction", event.target.value)
+                        }
+                        rows={2}
+                        value={turnDelivery.instruction}
+                      />
+                    </Field>
+                  </div>
+                  <button
+                    className="player-voice-preview-button"
+                    disabled={
+                      !canEdit ||
+                      voicePreviewPending ||
+                      pendingAction !== null ||
+                      !voicePreviewSay.trim()
+                    }
+                    onClick={() => void previewDraftVoice()}
+                    type="button"
+                  >
+                    {voicePreviewPending ? "正在合成..." : "试听当前草稿"}
+                  </button>
+                  {voicePreviewError ? (
+                    <div className="player-voice-preview-error" role="alert">
+                      <strong>{voicePreviewError.problem.title}</strong>
+                      <span>{voicePreviewError.message}</span>
+                      <code>错误码：{voicePreviewError.problem.code}</code>
+                    </div>
+                  ) : null}
+                  {voicePreview ? (
+                    <div className="player-voice-preview-result" role="status">
+                      <audio
+                        aria-label="玩家语音试听"
+                        controls
+                        src={`data:${voicePreview.mime_type};base64,${voicePreview.audio_base64}`}
+                      />
+                      <dl>
+                        <div><dt>音色</dt><dd>{voicePreview.speaker}</dd></div>
+                        <div><dt>格式</dt><dd>{voicePreview.audio_format}</dd></div>
+                        <div><dt>采样率</dt><dd>{voicePreview.sample_rate} Hz</dd></div>
+                        <div><dt>耗时</dt><dd>{voicePreview.elapsed_ms} ms</dd></div>
+                        <div><dt>大小</dt><dd>{voicePreview.audio_byte_length} bytes</dd></div>
+                      </dl>
+                      <div className="player-voice-effective-delivery">
+                        <strong>最终演绎</strong>
+                        <code>
+                          {voicePreview.effective_delivery.mood} / {voicePreview.effective_delivery.intensity} / {voicePreview.effective_delivery.pace}
+                          {voicePreview.effective_delivery.instruction
+                            ? ` · ${voicePreview.effective_delivery.instruction}`
+                            : ""}
+                        </code>
+                      </div>
+                      <div className="player-voice-context-texts">
+                        <strong>安全 context_texts</strong>
+                        {voicePreview.context_texts.map((text, index) => (
+                          <code key={`${index}:${text}`}>{text}</code>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
+
             <section aria-labelledby="player-appearance-title" className="player-form-section">
               <SectionHeading
                 description="本轮仅允许选择服务端提供的不可变形象资产。"
@@ -687,7 +1059,7 @@ function PlayerProfileEditor({
             {canEdit ? (
               <button
                 className="admin-primary-button"
-                disabled={pendingAction !== null}
+                disabled={pendingAction !== null || voicePreviewPending}
                 type="submit"
               >
                 {pendingAction === "save"
@@ -714,6 +1086,16 @@ function PlayerProfileEditor({
               <div><dt>模型</dt><dd>{draft.model || "未选择"}</dd></div>
               <div><dt>性格</dt><dd>{optionLabel(options.personalities, draft.personality_id)}</dd></div>
               <div><dt>策略</dt><dd>{optionLabel(options.strategies, draft.strategy_profile)}</dd></div>
+              {hasVoiceConfig ? (
+                <div>
+                  <dt>语音</dt>
+                  <dd>
+                    {draft.voice_enabled === false
+                      ? "关闭"
+                      : draft.tts_speaker || "继承全局音色"}
+                  </dd>
+                </div>
+              ) : null}
             </dl>
             <div className="player-preview-tags">
               {draft.tags.length > 0
@@ -942,6 +1324,55 @@ function EditorLoadError({
 
 function optionLabel(options: Array<{ id: string; label: string }>, id: string) {
   return options.find((option) => option.id === id)?.label ?? id;
+}
+
+const PLAYER_DELIVERY_MOOD_OPTIONS = [
+  { id: "neutral", label: "中性" },
+  { id: "restrained", label: "克制" },
+  { id: "calm", label: "平静" },
+  { id: "confident", label: "笃定" },
+  { id: "skeptical", label: "质疑" },
+  { id: "tense", label: "紧张" },
+  { id: "frustrated", label: "挫败" },
+  { id: "urgent", label: "急迫" },
+  { id: "sad", label: "低落" },
+  { id: "excited", label: "兴奋" },
+  { id: "playful", label: "轻松" },
+] as const;
+
+const PLAYER_DELIVERY_INTENSITY_OPTIONS = [
+  { id: "low", label: "低" },
+  { id: "medium", label: "中" },
+  { id: "high", label: "高" },
+] as const;
+
+const PLAYER_DELIVERY_PACE_OPTIONS = [
+  { id: "slow", label: "慢" },
+  { id: "natural", label: "自然" },
+  { id: "fast", label: "快" },
+] as const;
+
+function voiceDeliveryOptions(
+  options: ReadonlyArray<{ id: string; label: string }>,
+  current: string | null | undefined,
+  emptyLabel: string,
+) {
+  const hasCurrent = current
+    ? options.some((option) => option.id === current)
+    : true;
+  return (
+    <>
+      <option value="">{emptyLabel}</option>
+      {!hasCurrent && current ? (
+        <option value={current}>当前值 · {current}</option>
+      ) : null}
+      {options.map((option) => (
+        <option key={option.id} value={option.id}>
+          {option.label} · {option.id}
+        </option>
+      ))}
+    </>
+  );
 }
 
 function formatDateTime(value: string) {

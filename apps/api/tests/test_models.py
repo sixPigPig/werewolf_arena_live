@@ -247,6 +247,13 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "short_description",
         "background_story",
         "speaking_style",
+        "tts_speaker",
+        "base_delivery_mood",
+        "base_delivery_intensity",
+        "base_delivery_pace",
+        "base_delivery_instruction",
+        "voice_enabled",
+        "voice_config_version",
         "catchphrases",
         "strategy_profile",
         "risk_tolerance",
@@ -275,6 +282,17 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
     assert table.c.model.nullable is False
     assert table.c.personality_id.nullable is False
     assert table.c.appearance_id.nullable is False
+    _assert_string_column(table.c.tts_speaker, length=160, nullable=False)
+    _assert_string_column(table.c.base_delivery_mood, length=24, nullable=False)
+    _assert_string_column(table.c.base_delivery_intensity, length=16, nullable=False)
+    _assert_string_column(table.c.base_delivery_pace, length=16, nullable=False)
+    _assert_string_column(
+        table.c.base_delivery_instruction,
+        length=240,
+        nullable=False,
+    )
+    assert table.c.voice_enabled.nullable is False
+    assert table.c.voice_config_version.nullable is False
     assert table.c.tags.nullable is False
     assert table.c.created_at.server_default is not None
     assert table.c.updated_at.server_default is not None
@@ -987,6 +1005,11 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
         "duration_ms",
         "subtitle_timings",
         "error_message",
+        "effective_delivery",
+        "effective_context_texts",
+        "voice_config_version",
+        "delivery_mapping_version",
+        "tts_request_source",
         "created_at",
         "updated_at",
         "completed_at",
@@ -1015,6 +1038,11 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
     assert table.c.duration_ms.nullable is True
     _assert_json_column(table.c.subtitle_timings, nullable=True)
     _assert_text_column(table.c.error_message, nullable=True)
+    _assert_json_column(table.c.effective_delivery, nullable=True)
+    _assert_json_column(table.c.effective_context_texts, nullable=True)
+    assert table.c.voice_config_version.nullable is True
+    _assert_string_column(table.c.delivery_mapping_version, length=40, nullable=True)
+    _assert_string_column(table.c.tts_request_source, length=40, nullable=True)
     assert table.c.created_at.nullable is False
     assert table.c.updated_at.nullable is False
     assert table.c.completed_at.nullable is True

@@ -1,4 +1,5 @@
 import type { DirectorCue } from "./liveDirector";
+import { publicReasonLabel } from "./liveEventMeta";
 import type { GodViewPlayer, GodViewState } from "./liveGodView";
 import type { LiveSpectatorState } from "./liveSpectator";
 import type { LiveGameEvent } from "../types";
@@ -183,6 +184,23 @@ function cueForEvent({
     return phaseCue(cue, event.phase, godViewState, actorName);
   }
 
+  if (event.type === "phase_completed") {
+    const reason = publicReasonLabel(
+      cue.phaseLifecycle?.completionReason ?? null,
+    );
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: event.phase === "night" ? "night" : "neutral",
+      judgeLine: `${cue.title}。`,
+      performerLine: "当前阶段已经闭合。",
+      detailLine: reason || cue.body || "准备进入下一阶段。",
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
   if (event.type === "judge_cue") {
     const line = stringField(payload, "visible_text") || "请听法官提示。";
     return makeCue({
@@ -192,6 +210,22 @@ function cueForEvent({
       judgeLine: line,
       performerLine: "法官正在主持流程。",
       detailLine: line,
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
+  if (event.type === "player_did_not_speak") {
+    const actor = playerReference(actorName, godViewState);
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: "day",
+      judgeLine: `${actor}本轮未发言。`,
+      performerLine: "本轮没有记录玩家发言。",
+      detailLine:
+        publicReasonLabel(cue.publicStatus?.reasonCode ?? null) || cue.body,
       actorName: null,
       action: cue.action,
       speechText: "",
@@ -228,14 +262,18 @@ function cueForEvent({
   }
 
   if (event.type === "public_action_cancelled") {
+    const reason = publicReasonLabel(cue.publicStatus?.reasonCode ?? null);
     return makeCue({
       eventId: cue.eventId,
       kind: "judge",
       tone: "danger",
-      judgeLine: "狼人自爆，当前公开行动立即取消。",
-      performerLine: `${actorName || "当前玩家"}的发言不再公开。`,
-      detailLine: "流程已切换到自爆结算。",
-      actorName,
+      judgeLine:
+        reason === "狼人自爆"
+          ? "狼人自爆，当前公开行动立即取消。"
+          : "当前公开行动已取消。",
+      performerLine: `${playerReference(actorName, godViewState)}的公开行动已取消。`,
+      detailLine: reason || "流程状态已发生变化。",
+      actorName: null,
       action: cue.action,
       speechText: "",
     });
@@ -513,16 +551,80 @@ function parsedActionCue(
   nextSpeakerName: string | null,
   godViewState: GodViewState,
 ): NarrativeCue {
+  const publicStatus = cue.publicStatus;
+  const actor = playerReference(actorName, godViewState);
+
+  if (publicStatus?.kind === "not_spoken") {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: "day",
+      judgeLine: `${actor}本轮未发言。`,
+      performerLine: "本轮没有记录玩家发言。",
+      detailLine:
+        publicReasonLabel(publicStatus.reasonCode) ||
+        "本轮没有取得有效公开发言。",
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
+  if (publicStatus?.kind === "system_fallback") {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: "vote",
+      judgeLine: `系统已代替 ${actor} 完成投票。`,
+      performerLine: `${actor} 的本轮投票标记为系统代投。`,
+      detailLine: parsedActionDetailLine(cue),
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
+  if (publicStatus?.kind === "rule_default") {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: parsedActionTone(cue),
+      judgeLine: "当前行动已按规则默认值执行。",
+      performerLine: actorName ? `${actor} 的行动由规则完成。` : "规则默认已生效。",
+      detailLine: parsedActionDetailLine(cue),
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
+  if (publicStatus?.kind === "canceled") {
+    return makeCue({
+      eventId: cue.eventId,
+      kind: "judge",
+      tone: "danger",
+      judgeLine: "当前公开行动已取消。",
+      performerLine: actorName ? `${actor} 的行动未执行。` : "行动未执行。",
+      detailLine:
+        publicReasonLabel(publicStatus.reasonCode) || "流程状态已发生变化。",
+      actorName: null,
+      action: cue.action,
+      speechText: "",
+    });
+  }
+
   const visibleText = visibleSpeechText(payload);
   if (visibleText && isPublicSpeechAction(cue.action)) {
-    const actor = playerReference(actorName, godViewState);
     return makeCue({
       eventId: cue.eventId,
       kind: "player-speaking",
       tone: "day",
       judgeLine: `请听 ${actor} 的发言。`,
       performerLine: `${actor} 完成发言。`,
-      detailLine: nextLine(nextSpeakerName, godViewState),
+      detailLine:
+        publicStatus?.kind === "retry_completed"
+          ? `重试后完成。${nextLine(nextSpeakerName, godViewState)}`
+          : nextLine(nextSpeakerName, godViewState),
       actorName,
       action: cue.action,
       speechText: visibleText,

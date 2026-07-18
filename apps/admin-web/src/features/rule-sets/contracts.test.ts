@@ -6,6 +6,7 @@ import {
   parseRuleSetOptions,
   parseRuleSetValidation,
 } from "./parsers";
+import { ruleContract } from "./test-fixtures";
 
 const config = {
   name: "标准局", description: "", complexity: "中等", estimated_duration: "45 分钟",
@@ -52,10 +53,10 @@ const options = {
 describe("rule-set response contracts", () => {
   it("accepts exact rule set, detail, list, options, and validation payloads", () => {
     expect(parseAdminRuleSet(ruleSet)).toEqual(ruleSet);
-    expect(parseAdminRuleSetDetail({ ...ruleSet, revisions: [{ ...revision, usage: { game_count: 1, live_count: 2 } }], usage: { game_count: 3, live_count: 4 }, warnings: [] })).toMatchObject({ usage: { game_count: 3, live_count: 4 } });
+    expect(parseAdminRuleSetDetail({ ...ruleSet, revisions: [{ ...revision, usage: { game_count: 1, live_count: 2 } }], usage: { game_count: 3, live_count: 4 }, warnings: [], rule_contract: ruleContract })).toMatchObject({ usage: { game_count: 3, live_count: 4 }, rule_contract: ruleContract });
     expect(parseAdminRuleSetList({ items: [ruleSet], pagination: { page: 1, page_size: 20, total: 1, pages: 1 } })).toMatchObject({ items: [ruleSet] });
     expect(parseRuleSetOptions(options)).toEqual(options);
-    expect(parseRuleSetValidation({ valid: true, errors: [], warnings: [], compiled_snapshot: { internal: true }, content_hash: "a".repeat(64), rule_text_preview: "preview" })).toEqual({ valid: true, errors: [], warnings: [], content_hash: "a".repeat(64), rule_text_preview: "preview" });
+    expect(parseRuleSetValidation({ valid: true, errors: [], warnings: [], compiled_snapshot: { internal: true }, content_hash: "a".repeat(64), rule_text_preview: "preview", rule_contract: ruleContract })).toEqual({ valid: true, errors: [], warnings: [], content_hash: "a".repeat(64), rule_text_preview: "preview", rule_contract: ruleContract });
   });
 
   it.each<{ payload: unknown; label: string }>([
@@ -77,8 +78,8 @@ describe("rule-set response contracts", () => {
   });
 
   it("allows compiled_snapshot only at validation root", () => {
-    expect(() => parseRuleSetValidation({ valid: false, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).not.toThrow();
-    expect(() => parseRuleSetValidation({ valid: true, errors: [{ code: "x", path: "x", message: "x", compiled_snapshot: {} }], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).toThrow();
+    expect(() => parseRuleSetValidation({ valid: false, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null, rule_contract: ruleContract })).not.toThrow();
+    expect(() => parseRuleSetValidation({ valid: true, errors: [{ code: "x", path: "x", message: "x", compiled_snapshot: {} }], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null, rule_contract: ruleContract })).toThrow();
   });
 
   it("treats the validation-root compiled snapshot as opaque and omits it", () => {
@@ -89,9 +90,10 @@ describe("rule-set response contracts", () => {
       compiled_snapshot: { sql: "opaque", nested: { players: [], raw_error: "opaque", compiled_snapshot: {} } },
       content_hash: null,
       rule_text_preview: null,
+      rule_contract: ruleContract,
     });
 
-    expect(result).toEqual({ valid: false, errors: [], warnings: [], content_hash: null, rule_text_preview: null });
+    expect(result).toEqual({ valid: false, errors: [], warnings: [], content_hash: null, rule_text_preview: null, rule_contract: ruleContract });
     expect(result).not.toHaveProperty("compiled_snapshot");
   });
 
@@ -147,12 +149,21 @@ describe("rule-set response contracts", () => {
 
   it("requires bounded successful validation output", () => {
     for (const payload of [
-      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: "preview" },
-      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "A".repeat(64), rule_text_preview: "preview" },
-      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "a".repeat(63), rule_text_preview: "preview" },
-      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "a".repeat(64), rule_text_preview: "" },
+      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: "preview", rule_contract: ruleContract },
+      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "A".repeat(64), rule_text_preview: "preview", rule_contract: ruleContract },
+      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "a".repeat(63), rule_text_preview: "preview", rule_contract: ruleContract },
+      { valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "a".repeat(64), rule_text_preview: "", rule_contract: ruleContract },
     ]) expect(() => parseRuleSetValidation(payload)).toThrow();
 
-    expect(() => parseRuleSetValidation({ valid: false, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null })).not.toThrow();
+    expect(() => parseRuleSetValidation({ valid: false, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null, rule_contract: ruleContract })).not.toThrow();
+  });
+
+  it("rejects unsafe or inconsistent rule-contract projections", () => {
+    const validation = { valid: false, errors: [], warnings: [], compiled_snapshot: null, content_hash: null, rule_text_preview: null };
+    const internal = ruleContract.clauses.find((clause) => clause.audience === "internal_only")!;
+    expect(() => parseRuleSetValidation({ ...validation, rule_contract: { ...ruleContract, canonical_hash: "raw" } })).toThrow();
+    expect(() => parseRuleSetValidation({ ...validation, rule_contract: { ...ruleContract, clauses: ruleContract.clauses.map((clause) => clause === internal ? { ...clause, model_rule_text: "internal prompt" } : clause) } })).toThrow();
+    expect(() => parseRuleSetValidation({ ...validation, rule_contract: { ...ruleContract, publish_ready: false } })).toThrow();
+    expect(() => parseRuleSetValidation({ ...validation, rule_contract: { ...ruleContract, clauses: [...ruleContract.clauses, ruleContract.clauses[0]] } })).toThrow();
   });
 });

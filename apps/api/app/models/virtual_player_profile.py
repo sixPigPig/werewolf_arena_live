@@ -37,6 +37,23 @@ class VirtualPlayerProfile(Base):
             "featured = false OR status = 'published'",
             name="ck_virtual_player_profiles_featured_published",
         ),
+        CheckConstraint(
+            "base_delivery_mood IN ('neutral', 'restrained', 'calm', 'confident', 'skeptical', "
+            "'tense', 'frustrated', 'urgent', 'sad', 'excited', 'playful')",
+            name="ck_virtual_player_profiles_delivery_mood",
+        ),
+        CheckConstraint(
+            "base_delivery_intensity IN ('low', 'medium', 'high')",
+            name="ck_virtual_player_profiles_delivery_intensity",
+        ),
+        CheckConstraint(
+            "base_delivery_pace IN ('slow', 'natural', 'fast')",
+            name="ck_virtual_player_profiles_delivery_pace",
+        ),
+        CheckConstraint(
+            "voice_config_version >= 1",
+            name="ck_virtual_player_profiles_voice_version_positive",
+        ),
         Index(
             "ix_virtual_player_profiles_status_display_order",
             "status",
@@ -80,6 +97,27 @@ class VirtualPlayerProfile(Base):
     short_description: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     background_story: Mapped[str] = mapped_column(Text, nullable=False, default="")
     speaking_style: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tts_speaker: Mapped[str] = mapped_column(
+        String(160), nullable=False, default="", server_default=""
+    )
+    base_delivery_mood: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="neutral", server_default="neutral"
+    )
+    base_delivery_intensity: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="medium", server_default="medium"
+    )
+    base_delivery_pace: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="natural", server_default="natural"
+    )
+    base_delivery_instruction: Mapped[str] = mapped_column(
+        String(240), nullable=False, default="", server_default=""
+    )
+    voice_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    voice_config_version: Mapped[int] = mapped_column(
+        nullable=False, default=1, server_default="1"
+    )
     catchphrases: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(JSON),
         nullable=False,

@@ -50,6 +50,109 @@ describe("admin game records contract", () => {
     ).toEqual(contractGameModelRequestDetail);
   });
 
+  it("keeps review-task metadata optional while validating present fields", () => {
+    const legacyEvaluation = { ...contractGameDetail.quality_evaluation };
+    delete legacyEvaluation.source_revision;
+    delete legacyEvaluation.created_at;
+    delete legacyEvaluation.started_at;
+    delete legacyEvaluation.completed_at;
+    delete legacyEvaluation.attempt_count;
+    delete legacyEvaluation.failure_reason;
+    delete legacyEvaluation.can_retry;
+    delete legacyEvaluation.latest_successful_result;
+    const parsedLegacy = parseAdminGameDetail({
+      ...contractGameDetail,
+      quality_evaluation: legacyEvaluation,
+    }).quality_evaluation;
+
+    expect("source_revision" in parsedLegacy).toBe(false);
+    expect("latest_successful_result" in parsedLegacy).toBe(false);
+    expect(
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        quality_evaluation: {
+          ...contractGameDetail.quality_evaluation,
+          evaluation_status: "queued",
+          started_at: null,
+          completed_at: null,
+          latest_successful_result: null,
+        },
+      }).quality_evaluation,
+    ).toMatchObject({
+      evaluation_status: "queued",
+      started_at: null,
+      completed_at: null,
+      latest_successful_result: null,
+    });
+    expect(() =>
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        quality_evaluation: {
+          ...contractGameDetail.quality_evaluation,
+          attempt_count: -1,
+        },
+      }),
+    ).toThrow(/attempt_count/);
+    expect(() =>
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        quality_evaluation: {
+          ...contractGameDetail.quality_evaluation,
+          latest_successful_result: {
+            ...contractGameDetail.quality_evaluation.latest_successful_result!,
+            completed_at: "not-a-date",
+          },
+        },
+      }),
+    ).toThrow(/completed_at/);
+  });
+
+  it("strictly bounds and allowlists safe critical-decision cards", () => {
+    expect(
+      parseAdminGameDetail(contractGameDetail).quality_evaluation.critical_actions,
+    ).toEqual(contractGameDetail.quality_evaluation.critical_actions);
+    expect(() =>
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        quality_evaluation: {
+          ...contractGameDetail.quality_evaluation,
+          critical_actions: [
+            {
+              ...contractGameDetail.quality_evaluation.critical_actions[0],
+              reasoning: "private reasoning must never cross the contract",
+            },
+          ],
+        },
+      }),
+    ).toThrow(/reasoning/);
+    expect(() =>
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        quality_evaluation: {
+          ...contractGameDetail.quality_evaluation,
+          critical_actions: Array.from({ length: 65 }, (_, index) => ({
+            ...contractGameDetail.quality_evaluation.critical_actions[0],
+            action_id: `action_contract_${index}`,
+          })),
+        },
+      }),
+    ).toThrow(/超过 64 条/);
+    expect(() =>
+      parseAdminGameDetail({
+        ...contractGameDetail,
+        quality_evaluation: {
+          ...contractGameDetail.quality_evaluation,
+          critical_actions: [
+            {
+              ...contractGameDetail.quality_evaluation.critical_actions[0],
+              action_origin: "private_model_choice",
+            },
+          ],
+        },
+      }),
+    ).toThrow(/action_origin/);
+  });
+
   it("keeps model request summaries metadata-only and strictly parses details", () => {
     expect(() =>
       parseAdminGameModelRequestList({

@@ -66,6 +66,9 @@ describe("admin voice asset flow", () => {
     expect(
       await screen.findByRole("heading", { name: "法官语音资产" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/玩家音色与基础演绎在玩家档案中配置/),
+    ).toBeInTheDocument();
     const navigation = screen.getByRole("navigation", { name: "后台主导航" });
     expect(within(navigation).getByText("法官语音")).toBeInTheDocument();
     expect(within(navigation).queryByText("虚拟玩家")).toBeNull();

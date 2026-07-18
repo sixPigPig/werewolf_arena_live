@@ -6,6 +6,7 @@ import {
   getAdminPlayerProfile,
   getPlayerProfileOptions,
   listAdminPlayerProfiles,
+  previewAdminPlayerProfileVoice,
   transitionAdminPlayerProfile,
   updateAdminPlayerProfile,
 } from "@/features/player-profiles/api";
@@ -15,6 +16,7 @@ import {
   getPreviewPlayerProfile,
   getPreviewPlayerProfileOptions,
   listPreviewPlayerProfiles,
+  previewPlayerProfileVoice,
   transitionPreviewPlayerProfile,
   updatePreviewPlayerProfile,
 } from "@/features/player-profiles/preview-repository";
@@ -23,6 +25,7 @@ import type {
   CreatePlayerProfileRequest,
   PlayerProfileListParams,
   PlayerProfileTransitionRequest,
+  PlayerVoicePreviewRequest,
   UpdatePlayerProfileRequest,
 } from "@/features/player-profiles/types";
 
@@ -49,6 +52,10 @@ export function usePlayerProfileRepository() {
         runtimeMode === "preview"
           ? generatePreviewPlayerProfileAiDraft()
           : generateAdminPlayerProfileAiDraft("template", csrfToken),
+      previewVoice: (request: PlayerVoicePreviewRequest) =>
+        runtimeMode === "preview"
+          ? previewPlayerProfileVoice(request)
+          : previewAdminPlayerProfileVoice(request, csrfToken),
       create: (request: CreatePlayerProfileRequest) =>
         runtimeMode === "preview"
           ? createPreviewPlayerProfile(request)

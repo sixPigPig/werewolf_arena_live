@@ -21,6 +21,13 @@ export type AdminPlayerProfile = {
   leadership_tendency: number;
   talkativeness: number;
   example_messages: string[];
+  tts_speaker?: string | null;
+  base_delivery_mood?: string | null;
+  base_delivery_intensity?: string | null;
+  base_delivery_pace?: string | null;
+  base_delivery_instruction?: string | null;
+  voice_enabled?: boolean;
+  voice_config_version?: number;
   display_order: number;
   featured: boolean;
   tags: string[];
@@ -81,6 +88,12 @@ export type PlayerProfileEditableFields = {
   leadership_tendency: number;
   talkativeness: number;
   example_messages: string[];
+  tts_speaker?: string | null;
+  base_delivery_mood?: string | null;
+  base_delivery_intensity?: string | null;
+  base_delivery_pace?: string | null;
+  base_delivery_instruction?: string | null;
+  voice_enabled?: boolean;
   featured: boolean;
   tags: string[];
 };
@@ -99,6 +112,39 @@ export type UpdatePlayerProfileRequest = Partial<PlayerProfileEditableFields> & 
 export type PlayerProfileTransitionRequest = {
   expected_version: number;
   reason: string;
+};
+
+export type PlayerVoicePreviewDeliveryInput = {
+  mood?: string | null;
+  intensity?: string | null;
+  pace?: string | null;
+  instruction?: string | null;
+};
+
+export type PlayerVoicePreviewRequest = {
+  say: string;
+  speaker: string | null;
+  base_delivery: PlayerVoicePreviewDeliveryInput;
+  turn_delivery: PlayerVoicePreviewDeliveryInput;
+};
+
+export type AdminPlayerVoicePreview = {
+  speaker: string;
+  effective_delivery: {
+    schema_version: 1;
+    mood: string;
+    intensity: string;
+    pace: string;
+    instruction: string;
+  };
+  context_texts: string[];
+  delivery_mapping_version: string;
+  audio_format: string;
+  mime_type: string;
+  sample_rate: number;
+  elapsed_ms: number;
+  audio_byte_length: number;
+  audio_base64: string;
 };
 
 export type PlayerProfileOption = {

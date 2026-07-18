@@ -109,4 +109,39 @@ describe("buildLivePhaseSegments", () => {
     expect(segments.some((segment) => segment.isCurrent)).toBe(false);
     expect(segments.some((segment) => segment.isVisited)).toBe(false);
   });
+
+  it("uses phase instance identity and closes the segment on phase_completed", () => {
+    const events = [
+      event({
+        id: 3,
+        round: 1,
+        phase: "day",
+        payload: { phase_instance_id: "day-1" },
+      }),
+      event({
+        id: 8,
+        type: "phase_completed",
+        round: 1,
+        phase: "day",
+        payload: {
+          phase_instance_id: "day-1",
+          completion_status: "completed",
+          completion_reason: "self_explosion",
+        },
+      }),
+    ];
+
+    expect(buildLivePhaseSegments(events, 7)[0]).toMatchObject({
+      id: "phase-day-1",
+      phaseInstanceId: "day-1",
+      isCurrent: true,
+    });
+    expect(buildLivePhaseSegments(events, 8)[0]).toMatchObject({
+      completionEventId: 8,
+      completionStatus: "completed",
+      completionReason: "self_explosion",
+      isCurrent: false,
+      isVisited: true,
+    });
+  });
 });

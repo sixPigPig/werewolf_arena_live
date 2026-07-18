@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { routes } from "@/routes";
 import { resetPreviewRuleSets } from "./preview-repository";
-import { fixtureRuleSet, ruleSetOptions, standardConfig } from "./test-fixtures";
+import { fixtureRuleSet, ruleContract, ruleSetOptions, standardConfig } from "./test-fixtures";
 
 function renderRoute(path: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -227,6 +227,11 @@ describe("rule editor", () => {
     expect(screen.getAllByText(/哈希前缀：111111111111/).length).toBeGreaterThan(0);
     expect(screen.getByRole("list", { name: "版本历史" }).children.length).toBeLessThanOrEqual(50);
     expect(screen.queryByText(/classic_9-r1/)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "规则契约与引擎覆盖" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "规则条款与引擎约束覆盖" })).toBeInTheDocument();
+    expect(screen.getByText("night.werewolf_attack.non_wolf_targets.v1")).toBeInTheDocument();
+    expect(screen.getByText("不进入模型规则")).toBeInTheDocument();
+    expect(screen.queryByText("internal prompt")).not.toBeInTheDocument();
   });
 
   it("lets read-only users inspect but not edit", async () => {
@@ -411,6 +416,14 @@ describe("rule editor", () => {
     await user.click(validate); await waitFor(() => expect(screen.getByRole("status")).not.toBe(invalidAnnouncement)); expect(screen.getByRole("status")).toHaveTextContent("规则校验未通过");
   });
 
+  it("shows contract blockers and keeps publish disabled when P0 coverage is broken", async () => {
+    useServerSession(["rules.read", "rules.write", "rules.publish"]); const base = { ...fixtureRuleSet("classic_9", "draft"), revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] };
+    const blockedContract = { ...ruleContract, coverage_status: "broken" as const, publish_ready: false, missing_p0_clause_ids: ["night.dawn.hidden_causes.v1"] };
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) return json(base); if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) return json({ valid: false, errors: [{ code: "rule_contract_p0_clause_missing", path: "rule_contract.clauses.night.dawn.hidden_causes.v1", message: "缺失 P0 条款" }], warnings: [], compiled_snapshot: { opaque: true }, content_hash: "a".repeat(64), rule_text_preview: "规则正文", rule_contract: blockedContract }); throw new Error(`Unexpected request: ${url}`); }));
+    const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); await user.click(await screen.findByRole("button", { name: "校验规则" }));
+    expect(await screen.findByRole("heading", { name: "校验失败" })).toBeInTheDocument(); expect(screen.getByText("阻止发布")).toBeInTheDocument(); expect(screen.getByText("night.dawn.hidden_causes.v1")).toBeInTheDocument(); expect(screen.getByRole("button", { name: "发布规则" })).toBeDisabled(); expect(screen.queryByText("opaque")).not.toBeInTheDocument();
+  });
+
   it("publish rule requires its exact permission, trims a constrained reason, deduplicates, and refreshes from the server", async () => {
     useServerSession(["rules.read", "rules.write", "rules.publish"]); const draft = fixtureRuleSet("classic_9", "draft"); const detail = { ...draft, lock_version: 8, draft_revision: { ...draft.draft_revision!, lock_version: 7 }, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; const published = { ...fixtureRuleSet("classic_9", "published"), lock_version: 9 }; let publishBody: unknown; let publishCalls = 0; let gets = 0; let resolvePublish: ((value: Response) => void) | undefined;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) { gets += 1; return json(gets === 1 ? detail : { ...published, revisions: [], usage: { game_count: 2, live_count: 0 }, warnings: [] }); } if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) return json({ valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "a".repeat(64), rule_text_preview: "ok" }); if (url.endsWith("/api/v1/admin/rule-sets/classic_9/publish")) { publishCalls += 1; publishBody = JSON.parse(String(init?.body)); return new Promise<Response>((resolve) => { resolvePublish = resolve; }); } throw new Error(`Unexpected request: ${url}`); }));
@@ -556,4 +569,13 @@ function serverCommon(url: string) {
   if (url.endsWith("/api/v1/admin/rule-set-options")) return json(ruleSetOptions);
 }
 function serverSession() { return json({ user: { id: "1", email: "r@test", display_name: "只读", role: "viewer" }, permissions: sessionPermissions, csrf_token: "csrf", session_expires_at: "2999-01-01T00:00:00Z" }); }
-function json(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }); }
+function json(body: unknown, status = 200) {
+  let payload = body;
+  if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+    const record = body as Record<string, unknown>;
+    const isDetail = "usage" in record && "warnings" in record && "draft_revision" in record && "published_revision" in record;
+    const isValidValidation = record.valid === true && "errors" in record && "warnings" in record;
+    if ((isDetail || isValidValidation) && !("rule_contract" in record)) payload = { ...record, rule_contract: ruleContract };
+  }
+  return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
+}

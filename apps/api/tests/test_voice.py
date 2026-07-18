@@ -136,6 +136,33 @@ def test_terminal_recovery_does_not_create_resume_judge_voice() -> None:
     )
 
 
+def test_player_did_not_speak_uses_judge_voice_without_player_speech() -> None:
+    event = live_event(
+        11,
+        "player_did_not_speak",
+        actor="阿青",
+        action="debate",
+        payload={
+            "visible_text": "1号玩家本轮未发言。",
+            "speech_status": "not_spoken",
+            "action_origin": "none",
+            "public_reason_code": "timeout",
+        },
+    )
+
+    utterance = event_to_voice_materialization(
+        event,
+        VoiceSpeakerConfig(player_speaker="player", judge_speaker="judge"),
+        player_seats={"阿青": 1},
+    )
+
+    assert voice_job_candidate(event) == "judge"
+    assert utterance is not None
+    assert utterance.speaker_kind == "judge"
+    assert utterance.speaker == "judge"
+    assert utterance.text == "1号玩家本轮未发言。"
+
+
 def test_voice_job_candidate_rejects_private_and_delta_events() -> None:
     public_delta = live_event(
         10,

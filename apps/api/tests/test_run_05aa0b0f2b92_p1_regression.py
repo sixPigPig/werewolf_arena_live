@@ -89,7 +89,8 @@ def test_run_05aa0b0f2b92_p1_self_explosion_context_and_prompt() -> None:
     for field, expected in decision["expected"].items():
         assert getattr(context, field) == expected
     assert "连续自爆轮数：2" in prompt
-    assert "默认选择不自爆" in prompt
+    assert "默认选择不自爆" not in prompt
+    assert "依据当前可见规则和事实自行判断" in prompt
     assert "最后一名狼人" in prompt
     assert {"benefit_type", "expected_gain", "primary_risk"} <= set(
         schema["required"]

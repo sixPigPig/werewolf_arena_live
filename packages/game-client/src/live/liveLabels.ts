@@ -36,7 +36,9 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   game_resumed: "对局继续",
   round_started: "回合开始",
   phase_started: "阶段开始",
+  phase_completed: "阶段完成",
   judge_cue: "法官提示",
+  player_did_not_speak: "玩家未发言",
   action_requested: "行动请求",
   model_request_started: "模型请求开始",
   model_thinking_tick: "模型思考中",
@@ -63,6 +65,18 @@ export function phaseLabel(phase: string | null) {
   }
   if (phase === "summary") {
     return "总结";
+  }
+  if (phase === "night_actions") {
+    return "夜间行动";
+  }
+  if (phase === "dawn_reveal") {
+    return "天亮揭晓";
+  }
+  if (phase === "sheriff_election") {
+    return "警长竞选";
+  }
+  if (phase === "day_resolution") {
+    return "白天结算";
   }
   return phase || "";
 }
@@ -100,6 +114,13 @@ export function liveEventTitle(event: LiveGameEvent) {
   if (event.type === "phase_started") {
     const label = phaseLabel(event.phase);
     return label ? `${label}阶段开始` : "阶段开始";
+  }
+  if (event.type === "phase_completed") {
+    const label = phaseLabel(event.phase);
+    return label ? `${label}阶段完成` : "阶段完成";
+  }
+  if (event.type === "player_did_not_speak") {
+    return event.actor ? `${event.actor} 本轮未发言` : "玩家本轮未发言";
   }
   if (event.type === "action_requested" && event.actor) {
     return `${event.actor} 正在${actionLabel(event.action)}`;

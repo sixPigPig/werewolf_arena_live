@@ -366,7 +366,7 @@ def evaluate_speech_quality(
         issues.append(
             SpeechQualityIssueV1(
                 code="low_proposition_novelty",
-                severity="rewrite" if not mission_completed else "warning",
+                severity="warning",
                 score=1.0 - novelty_score,
                 evidence_spans=whole_text_span,
             )
@@ -379,7 +379,7 @@ def evaluate_speech_quality(
         issues.append(
             SpeechQualityIssueV1(
                 code="group_agreement_without_evidence",
-                severity="rewrite",
+                severity="warning",
                 score=1.0,
                 evidence_spans=whole_text_span,
             )

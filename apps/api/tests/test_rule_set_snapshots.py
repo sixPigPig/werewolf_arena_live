@@ -17,6 +17,7 @@ from app.rule_sets.snapshots import (
     rule_set_config_from_snapshot,
     rule_set_content_hash,
 )
+from app.werewolf.rules import validate_frozen_rule_contract_snapshot
 
 
 def valid_config(**overrides: object) -> dict[str, object]:
@@ -460,7 +461,17 @@ def test_all_official_configs_match_literal_runtime_and_hash_goldens(
     )
 
     assert canonical_rule_set_config(config) == raw_config
-    assert compiled.snapshot == expected
+    frozen_rule_text = compiled.snapshot["rule_text"]
+    frozen_contract = compiled.snapshot["rule_contract"]
+    actual_runtime = {
+        key: value
+        for key, value in compiled.snapshot.items()
+        if key not in {"rule_text", "rule_contract"}
+    }
+    assert actual_runtime == expected
+    assert isinstance(frozen_rule_text, str) and frozen_rule_text
+    assert isinstance(frozen_contract, dict)
+    validate_frozen_rule_contract_snapshot(compiled.snapshot, compiled.rule_set)
     assert compiled.content_hash == OFFICIAL_CONFIG_HASHES[rule_set_id]
 
 
@@ -480,6 +491,40 @@ def test_managed_snapshot_round_trips_without_catalog_access() -> None:
     assert restored.revision_no == 1
     assert restored.schema_version == 1
     assert restored.content_hash == compiled.content_hash
+
+
+def test_v1_frozen_snapshot_round_trips_after_contract_writer_advances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compiled = compile_rule_set_config(
+        "classic_8",
+        normalize_rule_set_config(valid_config()),
+        revision_id="revision-1",
+        revision_no=1,
+    )
+    frozen_v1_snapshot = copy.deepcopy(compiled.snapshot)
+
+    monkeypatch.setattr("app.werewolf.rules.RULE_CONTRACT_SCHEMA_VERSION", 2)
+
+    restored = resolve_rule_set_snapshot(frozen_v1_snapshot)
+    assert restored.snapshot == frozen_v1_snapshot
+    assert restored.snapshot["rule_contract"]["schema_version"] == 1
+
+
+@pytest.mark.parametrize("target", ["contract", "clause"])
+def test_snapshot_parser_fails_closed_for_unknown_frozen_schema(target: str) -> None:
+    snapshot = managed_snapshot()
+    contract = snapshot["rule_contract"]
+    assert isinstance(contract, dict)
+    if target == "contract":
+        contract["schema_version"] = 999
+    else:
+        clauses = contract["clauses"]
+        assert isinstance(clauses, list) and isinstance(clauses[0], dict)
+        clauses[0]["schema_version"] = 999
+
+    with pytest.raises(ValueError, match="frozen rule contract is invalid"):
+        resolve_rule_set_snapshot(snapshot)
 
 
 @pytest.mark.parametrize("rule_set_id", tuple(OFFICIAL_RUNTIME_GOLDENS))

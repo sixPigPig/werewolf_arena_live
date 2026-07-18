@@ -89,6 +89,49 @@ describe("useGameRunEvents", () => {
     expect(source.withCredentials).toBe(true);
   });
 
+  it("subscribes to public provenance and lifecycle event types", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const { result } = renderHook(() => useGameRunEvents("run_1234abcd"));
+    const source = MockEventSource.instances[0];
+    act(() => {
+      source.onopen?.();
+      source.emit("player_did_not_speak", {
+        id: 2,
+        type: "player_did_not_speak",
+        run_id: "run_1234abcd",
+        session_id: "game_1200abcd",
+        created_at: "2026-07-18T12:00:00Z",
+        round: 1,
+        phase: "day",
+        actor: "1号玩家",
+        action: "debate",
+        payload: { speech_status: "not_spoken", action_origin: "none" },
+      });
+      source.emit("phase_completed", {
+        id: 3,
+        type: "phase_completed",
+        run_id: "run_1234abcd",
+        session_id: "game_1200abcd",
+        created_at: "2026-07-18T12:00:01Z",
+        round: 1,
+        phase: "day",
+        actor: null,
+        action: null,
+        payload: {
+          phase_instance_id: "day-1",
+          completion_status: "completed",
+        },
+      });
+    });
+
+    await waitFor(() => expect(result.current.events).toHaveLength(2));
+    expect(result.current.events.map((event) => event.type)).toEqual([
+      "player_did_not_speak",
+      "phase_completed",
+    ]);
+  });
+
   it("bootstraps a guest session before opening the God View channel", async () => {
     vi.stubGlobal("EventSource", MockEventSource);
     let resolveBootstrap!: (response: Response) => void;

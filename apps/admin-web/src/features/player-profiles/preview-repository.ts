@@ -7,11 +7,37 @@ import type {
   PlayerProfileListParams,
   PlayerProfileOptions,
   PlayerProfileTransitionRequest,
+  PlayerVoicePreviewRequest,
   UpdatePlayerProfileRequest,
 } from "@/features/player-profiles/types";
 
 const PREVIEW_AVATAR_DATA_URL =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Crect width='96' height='96' rx='20' fill='%23d1e9ff'/%3E%3Ccircle cx='48' cy='38' r='17' fill='%23175cd3'/%3E%3Cpath d='M18 88c3-19 15-29 30-29s27 10 30 29' fill='%231849a9'/%3E%3C/svg%3E";
+const PREVIEW_PLAYER_SPEAKER = "zh_female_gaolengyujie_uranus_bigtts";
+const PREVIEW_AUDIO_BASE64 = "cHJldmlldy1hdWRpbw==";
+const PREVIEW_ALLOWED_DELIVERY_CUES = [
+  "克制",
+  "平静",
+  "坚定",
+  "自信",
+  "质疑",
+  "犹豫",
+  "紧张",
+  "激动",
+  "悲伤",
+  "低落",
+  "轻松",
+  "自然",
+  "低沉",
+  "果断",
+  "不满",
+  "急切",
+  "急促",
+  "停顿",
+  "反问",
+  "短句",
+  "清晰",
+] as const;
 
 const PREVIEW_OPTIONS: PlayerProfileOptions = {
   models: [
@@ -74,6 +100,13 @@ const FIXTURE_PROFILES: AdminPlayerProfile[] = [
     personality_id: "balanced",
     strategy_profile: "pressure_attacker",
     short_description: "正在打磨的高压问询型玩家。",
+    tts_speaker: null,
+    base_delivery_mood: "restrained",
+    base_delivery_intensity: "medium",
+    base_delivery_pace: "natural",
+    base_delivery_instruction: "像桌边真人一样克制接话，不要播音腔。",
+    voice_enabled: true,
+    voice_config_version: 3,
     status: "draft",
     version: 2,
     published_at: null,
@@ -162,6 +195,61 @@ export async function getPreviewPlayerProfile(profileId: string) {
 
 export async function getPreviewPlayerProfileOptions() {
   return Promise.resolve(structuredClone(PREVIEW_OPTIONS));
+}
+
+export async function previewPlayerProfileVoice(
+  request: PlayerVoicePreviewRequest,
+) {
+  const say = request.say.trim();
+  if (!say) {
+    throw validationError("say", "请输入试听文本");
+  }
+  const speaker = request.speaker?.trim() || PREVIEW_PLAYER_SPEAKER;
+  if (!/^[a-z0-9_]+_uranus_bigtts$/.test(speaker)) {
+    throw new AdminApiError({
+      problem: {
+        type: "about:blank",
+        title: "试听音色不支持",
+        status: 422,
+        detail: "当前仅支持 seed-tts-2.0 预置大模型音色的安全演绎试听。",
+        code: "admin_player_voice_preview_context_unsupported",
+        request_id: "preview-voice-unsupported",
+      },
+    });
+  }
+  const base = {
+    mood: request.base_delivery.mood || "neutral",
+    intensity: request.base_delivery.intensity || "medium",
+    pace: request.base_delivery.pace || "natural",
+    instruction: safePreviewInstruction(request.base_delivery.instruction),
+  };
+  const turnInstruction = safePreviewInstruction(
+    request.turn_delivery.instruction,
+  );
+  const effectiveDelivery = {
+    schema_version: 1 as const,
+    mood: request.turn_delivery.mood || base.mood,
+    intensity: request.turn_delivery.intensity || base.intensity,
+    pace: request.turn_delivery.pace || base.pace,
+    instruction: turnInstruction || base.instruction,
+  };
+  const extra = effectiveDelivery.instruction
+    ? `；演绎提示为${effectiveDelivery.instruction}`
+    : "";
+  return Promise.resolve({
+    speaker,
+    effective_delivery: effectiveDelivery,
+    context_texts: [
+      `像真人在狼人杀现场自然接话，不要使用播音腔。情绪${effectiveDelivery.mood}；表达力度${effectiveDelivery.intensity}；语速${effectiveDelivery.pace}${extra}。`,
+    ],
+    delivery_mapping_version: "delivery-v1",
+    audio_format: "mp3",
+    mime_type: "audio/mpeg",
+    sample_rate: 24_000,
+    elapsed_ms: 12,
+    audio_byte_length: 13,
+    audio_base64: PREVIEW_AUDIO_BASE64,
+  });
 }
 
 export async function createPreviewPlayerProfile(
@@ -328,6 +416,20 @@ function replacePreviewProfile(profile: AdminPlayerProfile) {
   previewProfiles = previewProfiles.map((item) =>
     item.id === profile.id ? profile : item,
   );
+}
+
+function safePreviewInstruction(value: string | null | undefined) {
+  const normalized = value?.trim() ?? "";
+  if (
+    /\d|号|玩家|狼人|身份|阵营|投票|出局|死亡|自爆|reasoning/i.test(
+      normalized,
+    )
+  ) {
+    return "";
+  }
+  return PREVIEW_ALLOWED_DELIVERY_CUES.filter((cue) =>
+    normalized.includes(cue),
+  ).join("、");
 }
 
 function assertVersion(profile: AdminPlayerProfile, expectedVersion: number) {

@@ -1,5 +1,6 @@
 export * from "./liveDebugTrace";
 export * from "./liveDirector";
+export * from "./liveEventMeta";
 export * from "./liveGodView";
 export * from "./liveLabels";
 export * from "./liveNarrative";

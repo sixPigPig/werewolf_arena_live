@@ -30,8 +30,19 @@ def text_hash_for_voice(
     audio_format: str,
     sample_rate: int,
     text: str,
+    context_texts: tuple[str, ...] | list[str] = (),
+    delivery_mapping_version: str | None = None,
 ) -> str:
-    payload = "\0".join((speaker, audio_format, str(sample_rate), text))
+    payload = "\0".join(
+        (
+            speaker,
+            audio_format,
+            str(sample_rate),
+            text,
+            delivery_mapping_version or "",
+            *context_texts,
+        )
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -55,6 +66,8 @@ class DatabaseVoiceStore:
             audio_format=audio_format,
             sample_rate=sample_rate,
             text=utterance.text,
+            context_texts=utterance.effective_context_texts,
+            delivery_mapping_version=utterance.delivery_mapping_version,
         )
         record = self.db.get(VoiceUtteranceRecord, utterance.utterance_id)
         if record is None:
@@ -70,6 +83,11 @@ class DatabaseVoiceStore:
                 speaker_kind=utterance.speaker_kind,
                 speaker_name=utterance.speaker_name,
                 speaker=utterance.speaker,
+                effective_delivery=utterance.effective_delivery,
+                effective_context_texts=list(utterance.effective_context_texts) or None,
+                voice_config_version=utterance.voice_config_version,
+                delivery_mapping_version=utterance.delivery_mapping_version,
+                tts_request_source=utterance.tts_request_source,
                 action=utterance.action,
                 text=utterance.text,
                 text_hash=text_hash,
@@ -810,6 +828,19 @@ def _raise_for_incompatible_upsert(
         ("speaker_kind", record.speaker_kind, utterance.speaker_kind),
         ("speaker_name", record.speaker_name, utterance.speaker_name),
         ("speaker", record.speaker, utterance.speaker),
+        ("effective_delivery", record.effective_delivery, utterance.effective_delivery),
+        (
+            "effective_context_texts",
+            tuple(record.effective_context_texts or ()),
+            utterance.effective_context_texts,
+        ),
+        ("voice_config_version", record.voice_config_version, utterance.voice_config_version),
+        (
+            "delivery_mapping_version",
+            record.delivery_mapping_version,
+            utterance.delivery_mapping_version,
+        ),
+        ("tts_request_source", record.tts_request_source, utterance.tts_request_source),
         ("action", record.action, utterance.action),
         ("audio_format", record.audio_format, audio_format),
         ("sample_rate", record.sample_rate, sample_rate),

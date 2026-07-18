@@ -10,12 +10,18 @@ from types import ModuleType
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import Engine, create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.api.admin.dependencies as admin_dependencies
+from app.admin.quality_evaluations import build_admin_quality_summary
 from app.admin.rbac import AdminPermission
+from app.api.schemas.admin_games import (
+    AdminGameQualityEvaluationSummary,
+    AdminQualityLatestSuccessfulResult,
+)
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
@@ -1526,6 +1532,57 @@ def test_quality_summary_is_safe_and_issues_require_explicit_debug_read(
                         "critical_fact_prompt_coverage_rate": 0.875,
                         "deterministic_contradiction_count": 0,
                     },
+                    "critical_actions": [
+                        {
+                            "schema_version": 1,
+                            "action_id": "action_safe_30",
+                            "round_number": 1,
+                            "action": "vote",
+                            "action_origin": "model_first_attempt",
+                            "input_completeness": "rule_missing",
+                            "action_legality": "legal_executed",
+                            "reasoning_observation": "used_unspecified_rule",
+                            "direct_impact": "vote_recorded",
+                            "attribution": "model_judgment_and_rule_input_gap",
+                            "clause_ids": [
+                                "day.exile.weighted_plurality_and_runoff.v1"
+                            ],
+                            "coverage": {
+                                "schema_version": 1,
+                                "status": "missing",
+                                "required_count": 1,
+                                "included_count": 0,
+                                "missing_count": 1,
+                                "missing_clause_ids": [
+                                    "day.exile.weighted_plurality_and_runoff.v1"
+                                ],
+                            },
+                            "reasoning": marker,
+                            "prompt": marker,
+                            "private_choice": marker,
+                        },
+                        {
+                            "schema_version": 1,
+                            "action_id": "action_invalid_30",
+                            "round_number": 1,
+                            "action": "vote",
+                            "action_origin": "private_model_choice",
+                            "input_completeness": "complete",
+                            "action_legality": "legal_executed",
+                            "reasoning_observation": "not_assessed",
+                            "direct_impact": "vote_recorded",
+                            "attribution": "not_determined",
+                            "clause_ids": [],
+                            "coverage": {
+                                "schema_version": 1,
+                                "status": "unknown",
+                                "required_count": 0,
+                                "included_count": 0,
+                                "missing_count": 0,
+                                "missing_clause_ids": [],
+                            },
+                        },
+                    ],
                     "safe_issues": [
                         {
                             "issue_id": "quality_0123456789abcdef01234567",
@@ -1560,8 +1617,39 @@ def test_quality_summary_is_safe_and_issues_require_explicit_debug_read(
     assert summary.status_code == 200, summary.text
     quality = detail.json()["quality_evaluation"]
     assert quality["verdict"] == "fail"
+    assert quality["source_revision"] == "3" * 64
+    assert quality["latest_successful_result"] == {
+        "evaluator_version": "p3-v1",
+        "source_revision": "3" * 64,
+        "completed_at": (created_at + timedelta(minutes=3)).isoformat().replace("+00:00", "Z"),
+    }
     assert quality["issue_counts"] == {"P0": 1, "P1": 0, "P2": 0}
     assert quality["facts"]["critical_fact_write_rate"] == 0.75
+    assert quality["critical_actions"] == [
+        {
+            "schema_version": 1,
+            "action_id": "action_safe_30",
+            "round_number": 1,
+            "action": "vote",
+            "action_origin": "model_first_attempt",
+            "input_completeness": "rule_missing",
+            "action_legality": "legal_executed",
+            "reasoning_observation": "used_unspecified_rule",
+            "direct_impact": "vote_recorded",
+            "attribution": "model_judgment_and_rule_input_gap",
+            "clause_ids": ["day.exile.weighted_plurality_and_runoff.v1"],
+            "coverage": {
+                "schema_version": 1,
+                "status": "missing",
+                "required_count": 1,
+                "included_count": 0,
+                "missing_count": 1,
+                "missing_clause_ids": [
+                    "day.exile.weighted_plurality_and_runoff.v1"
+                ],
+            },
+        }
+    ]
     assert summary.json()["quality_evaluation"] == quality
     assert forbidden.status_code == 403
     assert "safe_issues" not in detail.text
@@ -1599,6 +1687,213 @@ def test_quality_summary_is_safe_and_issues_require_explicit_debug_read(
     assert audit.after == {
         "evaluation_id": "quality_admin_safe_30",
         "issue_count": 1,
+    }
+
+
+def test_quality_summary_bounds_critical_action_cards() -> None:
+    completed_at = datetime(2026, 7, 14, 9, 3, tzinfo=UTC)
+    cards = [
+        {
+            "schema_version": 1,
+            "action_id": f"action_bounded_{index}",
+            "round_number": 1,
+            "action": "vote",
+            "action_origin": "model_first_attempt",
+            "input_completeness": "complete",
+            "action_legality": "legal_executed",
+            "reasoning_observation": "not_assessed",
+            "direct_impact": "vote_recorded",
+            "attribution": "not_determined",
+            "clause_ids": [],
+            "coverage": {
+                "schema_version": 1,
+                "status": "unknown",
+                "required_count": 0,
+                "included_count": 0,
+                "missing_count": 0,
+                "missing_clause_ids": [],
+            },
+        }
+        for index in range(70)
+    ]
+    record = GameQualityEvaluationRecord(
+        id="quality_bounded_actions",
+        session_id="game_bounded_actions",
+        run_id=None,
+        evaluator_version="p3-v1",
+        source_revision="b" * 64,
+        status="completed",
+        data_status="available",
+        verdict="pass",
+        safe_summary={"critical_actions": cards},
+        attempt_count=1,
+        completed_at=completed_at,
+    )
+
+    summary = build_admin_quality_summary(record, terminal=True)
+
+    assert len(summary["critical_actions"]) == 64
+    assert summary["critical_actions"][0]["action_id"] == "action_bounded_0"
+    assert summary["critical_actions"][-1]["action_id"] == "action_bounded_63"
+    AdminGameQualityEvaluationSummary.model_validate(summary)
+    assert build_admin_quality_summary(record, terminal=False)["critical_actions"] == []
+    record.data_status = "legacy"
+    assert build_admin_quality_summary(record, terminal=True)["critical_actions"] == []
+
+
+@pytest.mark.parametrize(
+    "invalid_revision",
+    ["a" * 63, "A" * 64, "g" * 64],
+)
+def test_quality_summary_rejects_non_sha256_source_revisions(
+    invalid_revision: str,
+) -> None:
+    completed_at = datetime(2026, 7, 14, 9, 3, tzinfo=UTC)
+    record = GameQualityEvaluationRecord(
+        id="quality_invalid_revision",
+        session_id="game_invalid_revision",
+        run_id=None,
+        evaluator_version="p3-v1",
+        source_revision=invalid_revision,
+        status="completed",
+        data_status="available",
+        verdict="pass",
+        safe_summary={},
+        attempt_count=0,
+        completed_at=completed_at,
+    )
+
+    summary = build_admin_quality_summary(
+        record,
+        terminal=True,
+        latest_successful_record=record,
+    )
+
+    assert summary["source_revision"] is None
+    assert summary["latest_successful_result"] is None
+    invalid_summary = {**summary, "source_revision": invalid_revision}
+    with pytest.raises(ValidationError):
+        AdminGameQualityEvaluationSummary.model_validate(invalid_summary)
+    with pytest.raises(ValidationError):
+        AdminQualityLatestSuccessfulResult(
+            evaluator_version="p3-v1",
+            source_revision=invalid_revision,
+            completed_at=completed_at,
+        )
+
+
+@pytest.mark.parametrize(
+    ("stored_status", "admin_status"),
+    [("pending", "queued"), ("processing", "running")],
+)
+def test_quality_summary_maps_internal_active_status_for_admin_api(
+    context: AdminGamesContext,
+    monkeypatch: pytest.MonkeyPatch,
+    stored_status: str,
+    admin_status: str,
+) -> None:
+    created_at = datetime(2026, 7, 14, 9, tzinfo=UTC)
+    session_id = "game_00000032"
+    _seed_game(
+        context,
+        session_id=session_id,
+        run_id="run_000000000032",
+        created_at=created_at,
+    )
+    with context.session_factory() as db:
+        db.add(
+            GameQualityEvaluationRecord(
+                id=f"quality_admin_{stored_status}_32",
+                session_id=session_id,
+                run_id="run_000000000032",
+                evaluator_version="p3-v1",
+                source_revision="4" * 64,
+                status=stored_status,
+                data_status="collecting",
+                verdict="unavailable",
+                safe_summary={},
+                created_at=created_at,
+                started_at=created_at if stored_status == "processing" else None,
+            )
+        )
+        db.commit()
+    _login(context, monkeypatch, role="viewer")
+
+    response = context.client.get(f"/api/v1/admin/games/{session_id}/quality-evaluation")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["quality_evaluation"]["evaluation_status"] == admin_status
+    assert response.json()["quality_evaluation"]["critical_actions"] == []
+    with context.session_factory() as db:
+        record = db.get(
+            GameQualityEvaluationRecord,
+            f"quality_admin_{stored_status}_32",
+        )
+    assert record is not None
+    assert record.status == stored_status
+
+
+def test_quality_summary_keeps_latest_success_when_current_attempt_failed(
+    context: AdminGamesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_at = datetime(2026, 7, 14, 9, tzinfo=UTC)
+    session_id = "game_00000033"
+    run_id = "run_000000000033"
+    successful_revision = "a" * 64
+    failed_revision = "b" * 64
+    successful_at = created_at + timedelta(minutes=2)
+    _seed_game(
+        context,
+        session_id=session_id,
+        run_id=run_id,
+        created_at=created_at,
+    )
+    with context.session_factory() as db:
+        db.add_all(
+            [
+                GameQualityEvaluationRecord(
+                    id="quality_admin_success_33",
+                    session_id=session_id,
+                    run_id=run_id,
+                    evaluator_version="p3-v1",
+                    source_revision=successful_revision,
+                    status="completed",
+                    data_status="available",
+                    verdict="pass",
+                    safe_summary={},
+                    created_at=created_at,
+                    completed_at=successful_at,
+                ),
+                GameQualityEvaluationRecord(
+                    id="quality_admin_failed_33",
+                    session_id=session_id,
+                    run_id=run_id,
+                    evaluator_version="p3-v1",
+                    source_revision=failed_revision,
+                    status="failed",
+                    data_status="unavailable",
+                    verdict="unavailable",
+                    safe_summary={},
+                    created_at=created_at + timedelta(minutes=3),
+                    completed_at=created_at + timedelta(minutes=4),
+                    last_error_code="evaluation_failed",
+                ),
+            ]
+        )
+        db.commit()
+    _login(context, monkeypatch, role="viewer")
+
+    response = context.client.get(f"/api/v1/admin/games/{session_id}/quality-evaluation")
+
+    assert response.status_code == 200, response.text
+    quality = response.json()["quality_evaluation"]
+    assert quality["evaluation_status"] == "failed"
+    assert quality["source_revision"] == failed_revision
+    assert quality["latest_successful_result"] == {
+        "evaluator_version": "p3-v1",
+        "source_revision": successful_revision,
+        "completed_at": successful_at.isoformat().replace("+00:00", "Z"),
     }
 
 
@@ -1678,6 +1973,84 @@ def test_quality_retry_requires_csrf_and_requeues_only_eligible_results(
     }
 
 
+def test_partial_quality_retry_keeps_latest_success_while_job_is_active(
+    context: AdminGamesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_at = datetime(2026, 7, 14, 11, tzinfo=UTC)
+    completed_at = created_at + timedelta(minutes=3)
+    session_id = "game_00000034"
+    run_id = "run_000000000034"
+    evaluation_id = "quality_admin_retry_34"
+    _seed_game(
+        context,
+        session_id=session_id,
+        run_id=run_id,
+        created_at=created_at,
+    )
+    with context.session_factory() as db:
+        source_revision = build_database_quality_bundle(db, session_id=session_id).source_revision
+        db.add(
+            GameQualityEvaluationRecord(
+                id=evaluation_id,
+                session_id=session_id,
+                run_id=run_id,
+                evaluator_version="p3-v1",
+                source_revision=source_revision,
+                status="completed",
+                data_status="partial",
+                verdict="warn",
+                safe_summary={"schema_version": 1},
+                attempt_count=1,
+                completed_at=completed_at,
+            )
+        )
+        db.commit()
+    login = _login(context, monkeypatch, role="operator")
+
+    retried = context.client.post(
+        f"/api/v1/admin/games/{session_id}/quality-evaluation/retry",
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert retried.status_code == 202, retried.text
+    assert retried.json() == {
+        "session_id": session_id,
+        "evaluation_id": evaluation_id,
+        "status": "pending",
+    }
+    expected_success = {
+        "evaluator_version": "p3-v1",
+        "source_revision": source_revision,
+        "completed_at": completed_at.isoformat().replace("+00:00", "Z"),
+    }
+    queued = context.client.get(f"/api/v1/admin/games/{session_id}/quality-evaluation")
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["quality_evaluation"]["evaluation_status"] == "queued"
+    assert queued.json()["quality_evaluation"]["latest_successful_result"] == expected_success
+    assert "_previous_successful_result" not in queued.text
+
+    with context.session_factory() as db:
+        record = db.get(GameQualityEvaluationRecord, evaluation_id)
+        assert record is not None
+        assert record.safe_summary == {
+            "_previous_successful_result": {
+                "evaluator_version": "p3-v1",
+                "source_revision": source_revision,
+                "completed_at": completed_at.isoformat(),
+            }
+        }
+        record.status = "processing"
+        record.worker_id = "quality-worker-34"
+        record.lease_expires_at = created_at + timedelta(hours=1)
+        db.commit()
+
+    running = context.client.get(f"/api/v1/admin/games/{session_id}/quality-evaluation")
+    assert running.status_code == 200, running.text
+    assert running.json()["quality_evaluation"]["evaluation_status"] == "running"
+    assert running.json()["quality_evaluation"]["latest_successful_result"] == expected_success
+
+
 def test_admin_game_query_indexes_are_registered_in_model_metadata() -> None:
     indexes = {index.name: index for index in GameSessionRecord.__table__.indexes}
 
@@ -1697,13 +2070,8 @@ def test_admin_game_query_indexes_are_registered_in_model_metadata() -> None:
         for constraint in LiveRunRecord.__table__.constraints
     )
 
-    quality_indexes = {
-        index.name: index
-        for index in GameQualityEvaluationRecord.__table__.indexes
-    }
-    latest_quality_index = quality_indexes[
-        "ix_game_quality_evaluations_session_created"
-    ]
+    quality_indexes = {index.name: index for index in GameQualityEvaluationRecord.__table__.indexes}
+    latest_quality_index = quality_indexes["ix_game_quality_evaluations_session_created"]
     assert len(latest_quality_index.expressions) == 3
     assert latest_quality_index.expressions[0].name == "session_id"
     assert str(latest_quality_index.expressions[1]).endswith("created_at DESC")
@@ -1718,9 +2086,7 @@ def test_admin_game_query_indexes_are_registered_in_model_metadata() -> None:
     voice_job_indexes = {
         index.name: index for index in VoiceMaterializationJobRecord.__table__.indexes
     }
-    audience_status_index = voice_job_indexes[
-        "ix_voice_materialization_jobs_audience_status"
-    ]
+    audience_status_index = voice_job_indexes["ix_voice_materialization_jobs_audience_status"]
     assert [expression.name for expression in audience_status_index.expressions] == [
         "audience",
         "status",

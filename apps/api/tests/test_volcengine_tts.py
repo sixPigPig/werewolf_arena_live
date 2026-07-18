@@ -18,6 +18,7 @@ from app.werewolf.volcengine_tts import (
     build_tts_session_request,
     mime_type_for_format,
     parse_tts_subtitle_payload,
+    supports_tts_context_texts,
 )
 
 
@@ -172,6 +173,21 @@ def test_build_tts_headers_uses_connect_id_and_resource_id() -> None:
     }
 
 
+def test_context_texts_capability_requires_seed_tts_2_preset_big_model_speaker() -> None:
+    assert supports_tts_context_texts(
+        resource_id="seed-tts-2.0",
+        speaker="zh_female_gaolengyujie_uranus_bigtts",
+    )
+    assert not supports_tts_context_texts(
+        resource_id="seed-tts-1.0",
+        speaker="zh_female_gaolengyujie_uranus_bigtts",
+    )
+    assert not supports_tts_context_texts(
+        resource_id="seed-tts-2.0",
+        speaker="S_clone_voice_001",
+    )
+
+
 def test_build_tts_request_contains_namespace_and_text_only() -> None:
     request = build_tts_request(
         text="我先发言。",
@@ -193,6 +209,31 @@ def test_build_tts_session_request_enables_vendor_subtitle_timestamps() -> None:
     )
 
     assert request["req_params"]["audio_params"]["enable_subtitle"] is True
+
+
+def test_build_tts_session_request_adds_bounded_context_texts() -> None:
+    request = build_tts_session_request(
+        speaker="player",
+        audio_format="pcm",
+        sample_rate=24000,
+        context_texts=["  克制地接话。  ", "", "坚定反问。"],
+    )
+
+    assert request["req_params"]["context_texts"] == [
+        "克制地接话。",
+        "坚定反问。",
+    ]
+
+
+def test_build_tts_session_request_omits_empty_context_texts() -> None:
+    request = build_tts_session_request(
+        speaker="player",
+        audio_format="pcm",
+        sample_rate=24000,
+        context_texts=["", "   "],
+    )
+
+    assert "context_texts" not in request["req_params"]
 
 
 def test_parse_tts_subtitle_payload_uses_vendor_word_timings() -> None:

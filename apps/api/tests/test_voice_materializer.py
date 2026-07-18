@@ -37,11 +37,15 @@ def session_factory() -> Generator[sessionmaker[Session], None, None]:
     engine.dispose()
 
 
-def tts_config(*, enabled: bool = True) -> VolcengineTtsConfig:
+def tts_config(
+    *,
+    enabled: bool = True,
+    resource_id: str = "test-resource",
+) -> VolcengineTtsConfig:
     return VolcengineTtsConfig(
         enabled=enabled,
         api_key="test-key",
-        resource_id="test-resource",
+        resource_id=resource_id,
         ws_url="wss://example.test/tts",
         player_speaker="player",
         judge_speaker="judge",
@@ -127,6 +131,7 @@ def test_static_judge_job_avoids_external_tts(
         assert job is not None and job.status == "complete"
         assert utterance is not None and utterance.status == "complete"
         assert utterance.duration_ms == 950
+        assert utterance.tts_request_source == "judge_event"
         assert utterance.subtitle_timings == [
             {"text": "昨夜平安夜。", "start_ms": 0, "end_ms": 800}
         ]
@@ -247,6 +252,27 @@ class SuccessfulTtsClient:
         yield b"\x00\x01" * 2400
 
 
+class CapturingTtsClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def synthesize(
+        self,
+        *,
+        speaker: str,
+        text_chunks: list[str],
+        context_texts: list[str] | None = None,
+    ):
+        self.calls.append(
+            {
+                "speaker": speaker,
+                "text_chunks": text_chunks,
+                "context_texts": context_texts,
+            }
+        )
+        yield b"\x00\x01" * 2400
+
+
 def test_dynamic_player_job_retries_without_duplicate_audio(
     session_factory: sessionmaker[Session],
 ) -> None:
@@ -288,6 +314,163 @@ def test_dynamic_player_job_retries_without_duplicate_audio(
         assert db.query(VoiceUtteranceRecord).count() == 1
         assert db.query(VoiceAudioChunkRecord).count() == 1
         assert db.get(VoiceUtteranceRecord, utterance_id) is not None
+
+
+def test_dynamic_player_job_uses_enqueue_time_voice_snapshot(
+    session_factory: sessionmaker[Session],
+) -> None:
+    delivery = {
+        "schema_version": 1,
+        "mood": "skeptical",
+        "intensity": "high",
+        "pace": "fast",
+        "instruction": "克制、反问",
+    }
+    contexts = ["像真人在桌上克制反问；语速稍快。"]
+    key = seed_event(
+        session_factory,
+        event_type="action_parsed",
+        actor="阿青",
+        action="debate",
+        payload={
+            "request_id": "req-snapshot",
+            "visible_result": {"say": "我不同意这个票型。"},
+            "voice_snapshot": {
+                "enabled": True,
+                "speaker": "zh_female_gaolengyujie_uranus_bigtts",
+                "effective_delivery": delivery,
+                "effective_context_texts": contexts,
+                "voice_config_version": 7,
+                "delivery_mapping_version": "delivery-v1",
+            },
+        },
+    )
+    client = CapturingTtsClient()
+    materializer = VoiceMaterializer(
+        session_factory,
+        config=tts_config(resource_id="seed-tts-2.0"),
+        client_factory=lambda _config: client,
+    )
+
+    claimed = materializer.claim_next_job(worker_id="worker-snapshot")
+    assert claimed == key
+    assert asyncio.run(
+        materializer.process_claimed_job(claimed, worker_id="worker-snapshot")
+    ) is True
+
+    assert client.calls == [
+        {
+            "speaker": "zh_female_gaolengyujie_uranus_bigtts",
+            "text_chunks": ["我不同意这个票型。"],
+            "context_texts": contexts,
+        }
+    ]
+    utterance_id = deterministic_voice_utterance_id(key[0], key[1], "player")
+    with session_factory() as db:
+        job = db.get(VoiceMaterializationJobRecord, key)
+        utterance = db.get(VoiceUtteranceRecord, utterance_id)
+        assert job is not None
+        assert job.speaker == "zh_female_gaolengyujie_uranus_bigtts"
+        assert job.effective_delivery == delivery
+        assert job.effective_context_texts == contexts
+        assert job.voice_config_version == 7
+        assert job.delivery_mapping_version == "delivery-v1"
+        assert job.tts_request_source == "accepted_player_action"
+        assert utterance is not None
+        assert utterance.speaker == "zh_female_gaolengyujie_uranus_bigtts"
+        assert utterance.effective_delivery == delivery
+        assert utterance.effective_context_texts == contexts
+        assert utterance.voice_config_version == 7
+        assert utterance.delivery_mapping_version == "delivery-v1"
+        assert utterance.tts_request_source == "accepted_player_action"
+
+
+def test_dynamic_clone_voice_keeps_say_but_omits_unsupported_context_texts(
+    session_factory: sessionmaker[Session],
+) -> None:
+    contexts = ["像真人在桌上克制反问；语速稍快。"]
+    key = seed_event(
+        session_factory,
+        event_type="action_parsed",
+        actor="阿青",
+        action="debate",
+        payload={
+            "request_id": "req-clone-context-gate",
+            "visible_result": {"say": "这句话仍然应当正常合成。"},
+            "voice_snapshot": {
+                "enabled": True,
+                "speaker": "S_clone_voice_001",
+                "effective_delivery": {
+                    "schema_version": 1,
+                    "mood": "skeptical",
+                    "intensity": "high",
+                    "pace": "fast",
+                    "instruction": "克制、反问",
+                },
+                "effective_context_texts": contexts,
+                "voice_config_version": 4,
+                "delivery_mapping_version": "delivery-v1",
+            },
+        },
+    )
+    client = CapturingTtsClient()
+    materializer = VoiceMaterializer(
+        session_factory,
+        config=tts_config(),
+        client_factory=lambda _config: client,
+    )
+
+    claimed = materializer.claim_next_job(worker_id="worker-clone-context-gate")
+    assert claimed == key
+    assert asyncio.run(
+        materializer.process_claimed_job(
+            claimed,
+            worker_id="worker-clone-context-gate",
+        )
+    ) is True
+
+    assert client.calls == [
+        {
+            "speaker": "S_clone_voice_001",
+            "text_chunks": ["这句话仍然应当正常合成。"],
+            "context_texts": None,
+        }
+    ]
+    utterance_id = deterministic_voice_utterance_id(key[0], key[1], "player")
+    with session_factory() as db:
+        utterance = db.get(VoiceUtteranceRecord, utterance_id)
+        assert utterance is not None
+        assert utterance.status == "complete"
+        assert utterance.effective_context_texts == contexts
+
+
+def test_disabled_player_voice_snapshot_does_not_enqueue_job(
+    session_factory: sessionmaker[Session],
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_materializer",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    event = registry.publish(
+        run.run_id,
+        "action_parsed",
+        actor="阿青",
+        action="debate",
+        payload={
+            "visible_result": {"say": "这一轮我先听。"},
+            "voice_snapshot": {"enabled": False},
+        },
+    )
+
+    with session_factory() as db:
+        store = DatabaseLiveStore(db)
+        store.save_run(run)
+        store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
+        assert db.query(VoiceMaterializationJobRecord).count() == 0
 
 
 def test_god_view_wolf_chat_job_materializes_scoped_voice(

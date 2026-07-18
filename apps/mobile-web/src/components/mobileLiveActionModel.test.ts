@@ -1041,3 +1041,201 @@ describe("getActiveTheaterPlayer", () => {
     expect(getActiveTheaterPlayer(affected)).toBeNull();
   });
 });
+
+describe("public provenance and phase lifecycle presentation", () => {
+  it("renders a failed speech as a judge-owned not-spoken fact", () => {
+    const { presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "player_did_not_speak",
+        round: 1,
+        phase: "day",
+        actor: "2号 女巫",
+        action: "debate",
+        payload: {
+          speech_status: "not_spoken",
+          action_origin: "none",
+          public_reason_code: "provider_timeout",
+        },
+      }),
+    ]);
+
+    expect(presentation).toMatchObject({
+      kind: "waiting",
+      actorName: "法官",
+      targetName: "2号 女巫",
+      title: "2号玩家本轮未发言",
+      detail: "发言超时",
+      statusBadge: { kind: "not_spoken", label: "未发言" },
+    });
+    expect(presentation.accessibleText).toContain("本轮未发言");
+
+    const parsedCompatibility = focusFor([
+      STARTED,
+      event({
+        id: 3,
+        type: "action_parsed",
+        round: 1,
+        phase: "day",
+        actor: "2号 女巫",
+        action: "debate",
+        payload: {
+          speech_status: "not_spoken",
+          action_origin: "none",
+          public_reason_code: "provider_timeout",
+        },
+      }),
+    ]).presentation;
+    expect(parsedCompatibility).toMatchObject({
+      kind: "waiting",
+      actorName: "法官",
+      statusBadge: { kind: "not_spoken", label: "未发言" },
+    });
+  });
+
+  it("keeps system fallback voting separate from action cancellation", () => {
+    const systemVote = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "action_parsed",
+        round: 1,
+        phase: "vote",
+        actor: "2号 女巫",
+        action: "vote",
+        payload: {
+          choice: "1号 狼人A",
+          action_origin: "system_fallback",
+          public_reason_code: "system_vote_timeout",
+        },
+      }),
+    ]).presentation;
+    const canceled = focusFor([
+      STARTED,
+      event({
+        id: 3,
+        type: "public_action_cancelled",
+        round: 1,
+        phase: "day",
+        actor: "2号 女巫",
+        action: "debate",
+        payload: { public_reason_code: "self_explosion" },
+      }),
+    ]).presentation;
+    const nonVoteFallback = focusFor([
+      STARTED,
+      event({
+        id: 4,
+        type: "action_parsed",
+        round: 1,
+        phase: "day",
+        actor: "2号 女巫",
+        action: "speech_order",
+        payload: {
+          choice: "from_left",
+          action_origin: "system_fallback",
+        },
+      }),
+    ]).presentation;
+
+    expect(systemVote).toMatchObject({
+      kind: "vote-action",
+      statusBadge: { kind: "system_fallback", label: "系统代投" },
+    });
+    expect(canceled).toMatchObject({
+      kind: "waiting",
+      actorName: "法官",
+      detail: "狼人自爆",
+      statusBadge: { kind: "canceled", label: "动作取消" },
+    });
+    expect(nonVoteFallback.statusBadge).toBeUndefined();
+  });
+
+  it("labels rule defaults, successful retries and legacy replay actions", () => {
+    const ruleDefault = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "action_parsed",
+        actor: "4号 预言家",
+        action: "sheriff_badge",
+        payload: {
+          choice: "destroy",
+          action_origin: "system_fallback",
+          public_reason_code: "rule_default_timeout",
+        },
+      }),
+    ]).presentation;
+    const retried = focusFor([
+      STARTED,
+      event({
+        id: 3,
+        type: "action_parsed",
+        phase: "day",
+        actor: "4号 预言家",
+        action: "debate",
+        payload: { action_origin: "model", retry_completed: true },
+      }),
+    ]).presentation;
+    const legacy = focusFor([
+      STARTED,
+      event({
+        id: 4,
+        type: "action_parsed",
+        phase: "vote",
+        actor: "2号 女巫",
+        action: "vote",
+        payload: { choice: "1号 狼人A" },
+      }),
+    ]).presentation;
+
+    expect(ruleDefault.statusBadge).toMatchObject({
+      kind: "rule_default",
+      label: "规则默认",
+      origin: "system_fallback",
+      reasonCode: "rule_default_timeout",
+    });
+    expect(retried.statusBadge).toMatchObject({
+      kind: "retry_completed",
+      label: "重试后完成",
+    });
+    expect(legacy.statusBadge).toMatchObject({
+      kind: "legacy_unknown",
+      label: "来源未知 · 旧数据",
+    });
+  });
+
+  it("presents phase_completed from its public lifecycle contract", () => {
+    const { presentation } = focusFor([
+      STARTED,
+      event({
+        id: 2,
+        type: "phase_completed",
+        round: 1,
+        phase: "day",
+        payload: {
+          phase_instance_id: "day-1",
+          completion_status: "completed",
+          completion_reason: "self_explosion",
+          next_phase: "night",
+          terminal: false,
+        },
+      }),
+    ]);
+
+    expect(presentation).toMatchObject({
+      kind: "waiting",
+      actorName: "法官",
+      title: "白天阶段完成",
+      detail: "狼人自爆",
+      phaseLifecycle: {
+        kind: "completed",
+        phaseInstanceId: "day-1",
+        completionStatus: "completed",
+        completionReason: "self_explosion",
+        nextPhase: "night",
+      },
+    });
+  });
+});

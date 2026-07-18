@@ -1,4 +1,5 @@
 import type { LiveGameEvent } from "../types";
+import { livePhaseLifecycleForEvent } from "./liveEventMeta";
 
 export type LivePhaseKind = "night" | "day";
 
@@ -10,6 +11,10 @@ export type LivePhaseSegment = {
   startEventId: number;
   isCurrent: boolean;
   isVisited: boolean;
+  phaseInstanceId?: string | null;
+  completionEventId?: number | null;
+  completionStatus?: string | null;
+  completionReason?: string | null;
 };
 
 export function buildLivePhaseSegments(
@@ -17,11 +22,12 @@ export function buildLivePhaseSegments(
   currentEventId: number | null,
 ): LivePhaseSegment[] {
   const seen = new Set<string>();
+  const orderedEvents = [...events].sort((left, right) => left.id - right.id);
   const starts = [...events]
     .sort((left, right) => left.id - right.id)
     .filter(isMainPhaseStart)
     .filter((event) => {
-      const key = phaseKey(event.round, event.phase);
+      const key = phaseIdentity(event);
       if (seen.has(key)) {
         return false;
       }
@@ -31,21 +37,44 @@ export function buildLivePhaseSegments(
 
   return starts.map((event, index) => {
     const nextEvent = starts[index + 1];
+    const lifecycle = livePhaseLifecycleForEvent(event);
+    const identity = phaseIdentity(event);
+    const completionEvent = orderedEvents.find(
+      (candidate) =>
+        candidate.type === "phase_completed" &&
+        candidate.id >= event.id &&
+        phaseIdentity(candidate) === identity,
+    );
+    const completion = completionEvent
+      ? livePhaseLifecycleForEvent(completionEvent)
+      : null;
     const isVisited =
       currentEventId !== null && currentEventId >= event.id;
+    const isCompleted =
+      currentEventId !== null &&
+      completionEvent !== undefined &&
+      currentEventId >= completionEvent.id;
     const isCurrent =
-      isVisited && (!nextEvent || currentEventId < nextEvent.id);
+      isVisited &&
+      !isCompleted &&
+      (!nextEvent || currentEventId < nextEvent.id);
     const phase = event.phase as LivePhaseKind;
     const round = event.round as number;
 
     return {
-      id: phaseKey(round, phase),
+      id: lifecycle?.phaseInstanceId
+        ? `phase-${lifecycle.phaseInstanceId}`
+        : phaseKey(round, phase),
       round,
       phase,
       label: phaseSegmentLabel(round, phase),
       startEventId: event.id,
       isCurrent,
       isVisited,
+      phaseInstanceId: lifecycle?.phaseInstanceId ?? null,
+      completionEventId: completionEvent?.id ?? null,
+      completionStatus: completion?.completionStatus ?? null,
+      completionReason: completion?.completionReason ?? null,
     };
   });
 }
@@ -66,6 +95,13 @@ function isValidRound(round: number | null): round is number {
 
 function phaseKey(round: number | null, phase: string | null) {
   return `round-${String(round)}-${String(phase)}`;
+}
+
+function phaseIdentity(event: LiveGameEvent): string {
+  const phaseInstanceId = livePhaseLifecycleForEvent(event)?.phaseInstanceId;
+  return phaseInstanceId
+    ? `instance-${phaseInstanceId}`
+    : phaseKey(event.round, event.phase);
 }
 
 function phaseSegmentLabel(round: number, phase: LivePhaseKind): string {

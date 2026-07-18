@@ -37,6 +37,7 @@ import type {
   AdminGameModelRequestDetail,
   AdminGameModelRequestSummary,
   AdminGameQualityEvaluation,
+  AdminGameQualityCriticalAction,
   AdminGameQualityIssues,
   AdminGameRound,
   AdminGameRun,
@@ -388,6 +389,8 @@ export default function GameRecordDetailPage() {
 }
 
 function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
+  const attempts = quality.provider_attempt_outcomes;
+  const actions = quality.logical_action_outcomes;
   return (
     <section aria-labelledby="game-p2-title" className="game-detail-panel">
       <PanelHeading
@@ -447,6 +450,29 @@ function GameP2QualityPanel({ quality }: { quality: AdminGameP2Quality }) {
               </strong>
               <small>不展示原始选择，只展示安全聚合</small>
             </article>
+            {attempts ? (
+              <article>
+                <span>Provider attempt</span>
+                <strong>{attempts.attempt_count}</strong>
+                <small>
+                  有效 {attempts.valid_response_count} · 非法{" "}
+                  {attempts.invalid_response_count} · 超时{" "}
+                  {attempts.timed_out_count} · 取消 {attempts.canceled_count} ·
+                  传输失败 {attempts.transport_failed_count}
+                </small>
+              </article>
+            ) : null}
+            {actions ? (
+              <article>
+                <span>Logical action 来源</span>
+                <strong>{actions.action_count}</strong>
+                <small>
+                  模型完成 {actions.completed_count} · 系统 fallback{" "}
+                  {actions.fallback_count} · 取消 {actions.canceled_count} · 失败{" "}
+                  {actions.failed_count}
+                </small>
+              </article>
+            ) : null}
           </div>
           {quality.lineup_quality.violations.length > 0 ? (
             <ul aria-label="阵容质量违规" className="game-quality-list">
@@ -505,12 +531,12 @@ function GameP3QualityPanel({
   retryError: boolean;
   retryPending: boolean;
 }) {
-  const canRetry =
-    canReadDebug &&
-    (quality.evaluation_status === "failed" ||
-      quality.evaluation_status === "not_scheduled" ||
-      quality.data_status === "partial" ||
-      quality.data_status === "legacy");
+  const legacyCanRetry =
+    quality.evaluation_status === "failed" ||
+    quality.evaluation_status === "not_scheduled" ||
+    quality.data_status === "partial" ||
+    quality.data_status === "legacy";
+  const canRetry = canReadDebug && (quality.can_retry ?? legacyCanRetry);
   return (
     <section aria-labelledby="game-p3-title" className="game-detail-panel">
       <div className="game-quality-heading">
@@ -527,6 +553,68 @@ function GameP3QualityPanel({
         </span>
       </div>
 
+      <dl className="game-quality-coverage" aria-label="赛后复盘任务状态">
+        <div>
+          <dt>任务状态 / 尝试</dt>
+          <dd>
+            {p3EvaluationStatusLabel(quality.evaluation_status)}
+            {quality.attempt_count === undefined
+              ? ""
+              : ` / ${quality.attempt_count}`}
+          </dd>
+        </div>
+        {quality.created_at !== undefined || quality.started_at !== undefined ? (
+          <div>
+            <dt>创建 / 开始</dt>
+            <dd>
+              {quality.created_at ? formatDateTime(quality.created_at) : "—"}
+              {" / "}
+              {quality.started_at ? formatDateTime(quality.started_at) : "尚未开始"}
+            </dd>
+          </div>
+        ) : null}
+        {quality.completed_at !== undefined ? (
+          <div>
+            <dt>完成时间</dt>
+            <dd>
+              {quality.completed_at
+                ? formatDateTime(quality.completed_at)
+                : "尚未完成"}
+            </dd>
+          </div>
+        ) : null}
+        {quality.source_revision !== undefined ? (
+          <div>
+            <dt>来源修订</dt>
+            <dd title={quality.source_revision}>
+              {quality.source_revision.slice(0, 12)} · {quality.evaluator_version}
+            </dd>
+          </div>
+        ) : null}
+        {quality.failure_reason !== undefined ? (
+          <div>
+            <dt>安全失败原因</dt>
+            <dd>{quality.failure_reason || "无"}</dd>
+          </div>
+        ) : null}
+        {quality.can_retry !== undefined ? (
+          <div>
+            <dt>手动重试</dt>
+            <dd>{quality.can_retry ? "可重试" : "不可重试"}</dd>
+          </div>
+        ) : null}
+        {quality.latest_successful_result !== undefined ? (
+          <div>
+            <dt>最近成功结果</dt>
+            <dd>
+              {quality.latest_successful_result
+                ? `${quality.latest_successful_result.evaluator_version} · ${quality.latest_successful_result.source_revision.slice(0, 12)} · ${formatDateTime(quality.latest_successful_result.completed_at)}`
+                : "暂无"}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+
       <dl className="game-quality-coverage" aria-label="P3 来源覆盖">
         <div><dt>状态 / 日志</dt><dd>{qualitySourceStatusLabel(quality.source_coverage.state)} / {qualitySourceStatusLabel(quality.source_coverage.logs)}</dd></div>
         <div><dt>事件</dt><dd>{qualitySourceStatusLabel(quality.source_coverage.events)}</dd></div>
@@ -535,52 +623,89 @@ function GameP3QualityPanel({
       </dl>
 
       {quality.evaluation_status === "completed" ? (
-        <div className="game-detail-metrics game-quality-metrics">
-          <article>
-            <span>事实</span>
-            <strong>{ratioLabel(quality.facts.critical_recorded_count, quality.facts.critical_opportunity_count)}</strong>
-            <small>
-              提示词 {ratioLabel(quality.facts.prompt_included_critical_count, quality.facts.prompt_expected_critical_count)} · 矛盾 {quality.facts.deterministic_contradiction_count}
-            </small>
-          </article>
-          <article>
-            <span>结构</span>
-            <strong>最长连续自爆 {quality.structure.max_consecutive_self_explosions}</strong>
-            <small>
-              正常辩论 {quality.structure.normal_day_debate_round_count} 轮 · 警长请求 {ratioLabel(quality.structure.sheriff_model_request_count, quality.structure.public_model_request_count)}
-            </small>
-          </article>
-          <article>
-            <span>语音</span>
-            <strong>{ratioLabel(quality.voice.effective_voice_event_count, quality.voice.narratable_event_count)}</strong>
-            <small>
-              尾段差 {quality.voice.voice_source_event_lag ?? "—"} · 中断/补播 {quality.voice.interruption_count}/{quality.voice.replay_count}
-            </small>
-          </article>
-          <article>
-            <span>性能</span>
-            <strong>
-              {quality.performance.action_duration_p95_ms === null
-                ? `样本不足 (${quality.performance.action_count}/20)`
-                : `P95 ${quality.performance.action_duration_p95_ms} ms`}
-            </strong>
-            <small>
-              整局 {durationLabel(quality.performance.game_duration_ms)} · 超时 {quality.performance.timeout_count} · 重试 {quality.performance.retry_count}
-            </small>
-          </article>
-          <article>
-            <span>内容</span>
-            <strong>重复 {quality.content.repeated_speech_count}/{quality.content.speech_check_count}</strong>
-            <small>
-              重写 {quality.content.speech_rewrite_count} · 耗尽 {quality.content.speech_retry_exhausted_count} · 阵容告警 {quality.content.lineup_warning_count}
-            </small>
-          </article>
-          <article>
-            <span>安全问题</span>
-            <strong>P0 {quality.issue_counts.P0} · P1 {quality.issue_counts.P1} · P2 {quality.issue_counts.P2}</strong>
-            <small>问题正文和私密证据不会进入 Admin 响应</small>
-          </article>
-        </div>
+        <>
+          <div className="game-detail-metrics game-quality-metrics">
+            <article>
+              <span>事实</span>
+              <strong>{ratioLabel(quality.facts.critical_recorded_count, quality.facts.critical_opportunity_count)}</strong>
+              <small>
+                提示词 {ratioLabel(quality.facts.prompt_included_critical_count, quality.facts.prompt_expected_critical_count)} · 矛盾 {quality.facts.deterministic_contradiction_count}
+              </small>
+            </article>
+            <article>
+              <span>结构</span>
+              <strong>最长连续自爆 {quality.structure.max_consecutive_self_explosions}</strong>
+              <small>
+                正常辩论 {quality.structure.normal_day_debate_round_count} 轮 · 警长请求 {ratioLabel(quality.structure.sheriff_model_request_count, quality.structure.public_model_request_count)}
+              </small>
+            </article>
+            <article>
+              <span>语音</span>
+              <strong>{ratioLabel(quality.voice.effective_voice_event_count, quality.voice.narratable_event_count)}</strong>
+              <small>
+                尾段差 {quality.voice.voice_source_event_lag ?? "—"} · 中断/补播 {quality.voice.interruption_count}/{quality.voice.replay_count}
+              </small>
+            </article>
+            <article>
+              <span>性能</span>
+              <strong>
+                {quality.performance.action_duration_p95_ms === null
+                  ? `样本不足 (${quality.performance.action_count}/20)`
+                  : `P95 ${quality.performance.action_duration_p95_ms} ms`}
+              </strong>
+              <small>
+                整局 {durationLabel(quality.performance.game_duration_ms)} · 超时 {quality.performance.timeout_count} · 重试 {quality.performance.retry_count}
+              </small>
+            </article>
+            <article>
+              <span>内容</span>
+              <strong>重复 {quality.content.repeated_speech_count}/{quality.content.speech_check_count}</strong>
+              <small>
+                重写 {quality.content.speech_rewrite_count} · 耗尽 {quality.content.speech_retry_exhausted_count} · 阵容告警 {quality.content.lineup_warning_count}
+              </small>
+            </article>
+            <article>
+              <span>安全问题</span>
+              <strong>P0 {quality.issue_counts.P0} · P1 {quality.issue_counts.P1} · P2 {quality.issue_counts.P2}</strong>
+              <small>问题正文和私密证据不会进入 Admin 响应</small>
+            </article>
+          </div>
+          <div className="game-critical-actions">
+            <h3>关键决策</h3>
+            {quality.critical_actions.length > 0 ? (
+              <ol aria-label="P3 关键决策">
+                {quality.critical_actions.map((decision) => (
+                  <li key={decision.action_id}>
+                    <div className="game-critical-action-heading">
+                      <strong>
+                        第 {decision.round_number ?? "—"} 轮 · {actionLabel(decision.action)}
+                      </strong>
+                      <span>{criticalActionOriginLabel(decision.action_origin)}</span>
+                    </div>
+                    <dl>
+                      <div><dt>输入完整性</dt><dd>{criticalInputLabel(decision.input_completeness)}</dd></div>
+                      <div><dt>动作合法性</dt><dd>{criticalLegalityLabel(decision.action_legality)}</dd></div>
+                      <div><dt>推理观察</dt><dd>{criticalReasoningLabel(decision.reasoning_observation)}</dd></div>
+                      <div><dt>直接影响</dt><dd>{criticalImpactLabel(decision.direct_impact)}</dd></div>
+                    </dl>
+                    <p>
+                      归因：{criticalAttributionLabel(decision.attribution)} · 规则覆盖：
+                      {criticalCoverageLabel(decision)}
+                    </p>
+                    <small title={decision.clause_ids.join("、")}>
+                      条款 {decision.clause_ids.join("、") || "无可核验条款"}
+                      {decision.coverage.missing_clause_ids.length > 0
+                        ? ` · 缺失 ${decision.coverage.missing_clause_ids.join("、")}`
+                        : ""}
+                    </small>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <PanelEmpty text="本局没有需要单列的关键决策。" />
+            )}
+          </div>
+        </>
       ) : (
         <PanelEmpty text={p3UnavailableMessage(quality)} />
       )}
@@ -648,7 +773,9 @@ function p3EvaluationStatusLabel(status: AdminGameQualityEvaluation["evaluation_
   return {
     not_scheduled: "未调度",
     pending: "排队中",
+    queued: "排队中",
     processing: "评估中",
+    running: "评估中",
     completed: "已完成",
     failed: "执行失败",
     superseded: "已被新版本替代",
@@ -670,8 +797,18 @@ function p3VerdictLabel(verdict: AdminGameQualityEvaluation["verdict"]) {
 }
 
 function p3UnavailableMessage(quality: AdminGameQualityEvaluation) {
-  if (quality.evaluation_status === "pending") return "质量评估正在等待 Worker 处理。";
-  if (quality.evaluation_status === "processing") return "质量评估正在执行。";
+  if (
+    quality.evaluation_status === "pending" ||
+    quality.evaluation_status === "queued"
+  ) {
+    return "质量评估正在等待 Worker 处理。";
+  }
+  if (
+    quality.evaluation_status === "processing" ||
+    quality.evaluation_status === "running"
+  ) {
+    return "质量评估正在执行。";
+  }
   if (quality.evaluation_status === "failed") return "质量评估执行失败，不会伪装为通过。";
   if (quality.data_status === "legacy") return "旧对局尚未生成 P3 质量评估。";
   return "当前没有可用的 P3 质量评估。";
@@ -684,6 +821,99 @@ function ratioLabel(numerator: number, denominator: number) {
 
 function durationLabel(value: number | null) {
   return value === null ? "—" : `${Math.round(value / 1000)} 秒`;
+}
+
+function criticalActionOriginLabel(
+  value: AdminGameQualityCriticalAction["action_origin"],
+) {
+  return {
+    canceled: "动作已取消",
+    failed: "动作未执行",
+    model_after_retry: "模型重试后结果",
+    model_first_attempt: "模型首次结果",
+    rule_default: "规则默认结果",
+    state_machine: "状态机结算",
+    system_fallback: "系统兜底",
+    system_timeout: "超时系统代打",
+  }[value];
+}
+
+function criticalInputLabel(
+  value: AdminGameQualityCriticalAction["input_completeness"],
+) {
+  return {
+    complete: "输入完整",
+    critical_public_fact_missing: "缺少关键公开事实",
+    private_observation_missing: "缺少角色私有观察",
+    rule_missing: "缺少规则条款",
+    unknown: "无法判定",
+  }[value];
+}
+
+function criticalLegalityLabel(
+  value: AdminGameQualityCriticalAction["action_legality"],
+) {
+  return {
+    invalid_normalized: "非法值已归一化",
+    invalid_not_executed: "非法且未执行",
+    invalid_system_fallback: "非法后系统代打",
+    legal_but_canceled: "合法但已取消",
+    legal_executed: "合法且已执行",
+    legal_system_result: "合法系统结果",
+    not_executed: "未执行",
+    unknown: "无法判定",
+  }[value];
+}
+
+function criticalReasoningLabel(
+  value: AdminGameQualityCriticalAction["reasoning_observation"],
+) {
+  return {
+    hard_rule_conflict: "推理违反已知规则",
+    identity_information_conflict: "身份信息冲突",
+    internal_logic_contradiction: "内部逻辑矛盾",
+    not_assessed: "未发现可归类问题",
+    not_available: "无可用推理证据",
+    used_unspecified_rule: "使用了未提供规则",
+  }[value];
+}
+
+function criticalImpactLabel(
+  value: AdminGameQualityCriticalAction["direct_impact"],
+) {
+  return {
+    canceled_no_effect: "取消且未生效",
+    failed_no_effect: "失败且未生效",
+    game_state_effect_applied: "已改变游戏状态",
+    model_result_applied: "模型结果已生效",
+    no_state_change: "未改变游戏状态",
+    phase_ended: "直接结束当前阶段",
+    system_result_applied: "系统结果已生效",
+    vote_recorded: "票型已记录",
+  }[value];
+}
+
+function criticalAttributionLabel(
+  value: AdminGameQualityCriticalAction["attribution"],
+) {
+  return {
+    canceled: "动作取消",
+    model_internal_logic_contradiction: "模型内部逻辑矛盾",
+    model_judgment_and_rule_input_gap: "模型判断与规则输入共同影响",
+    model_reasoning_error: "模型推理错误",
+    not_determined: "暂不归因",
+    runtime_fallback: "运行时兜底",
+  }[value];
+}
+
+function criticalCoverageLabel(decision: AdminGameQualityCriticalAction) {
+  const status = {
+    complete: "完整",
+    partial: "部分覆盖",
+    missing: "缺失",
+    unknown: "无法判定",
+  }[decision.coverage.status];
+  return `${status} ${decision.coverage.included_count}/${decision.coverage.required_count}`;
 }
 
 function PublicOutcomePanel({ quality }: { quality: AdminGameP2Quality }) {

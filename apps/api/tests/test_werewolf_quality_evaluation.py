@@ -79,9 +79,7 @@ def test_quality_coverage_counts_coalesced_live_voice_range() -> None:
 
 
 def test_bundle_revision_and_issue_ids_are_deterministic() -> None:
-    data = json.loads(
-        (FIXTURE_DIR / "run_05aa0b0f2b92_leaking.json").read_text(encoding="utf-8")
-    )
+    data = json.loads((FIXTURE_DIR / "run_05aa0b0f2b92_leaking.json").read_text(encoding="utf-8"))
     first_bundle = build_quality_evaluation_bundle(
         state=data["state"],
         logs=data["logs"],
@@ -127,9 +125,7 @@ def test_private_action_visible_result_is_p0_even_without_text_overlap() -> None
 
     report = evaluate_quality_bundle(bundle, hmac_key=HMAC_KEY)
 
-    assert "private_action_public_artifact" in {
-        issue.code for issue in report.safe_issues
-    }
+    assert "private_action_public_artifact" in {issue.code for issue in report.safe_issues}
 
 
 def test_rejected_draft_marker_is_p0_and_safe() -> None:
@@ -157,3 +153,91 @@ def test_rejected_draft_marker_is_p0_and_safe() -> None:
 
     assert "rejected_draft_public" in {issue.code for issue in report.safe_issues}
     assert "REJECTED_SECRET" not in json.dumps(report.to_dict(), ensure_ascii=False)
+
+
+def test_critical_action_cards_are_bounded_and_never_copy_private_reasoning() -> None:
+    sentinel = "PRIVATE_REASONING_DECISION_CARD_SENTINEL"
+    logs = [
+        {
+            "number": 1,
+            "votes": [
+                {
+                    "actor": f"{index + 1}号玩家",
+                    "action": "vote",
+                    "options": ["1号玩家"],
+                    "choice": "1号玩家",
+                    "lifecycle_status": "completed",
+                    "effective_origin": "model",
+                    "lm_log": {
+                        "action_id": f"act_bounded_{index:03d}",
+                        "request_id": f"req_bounded_{index:03d}",
+                        "prompt": "白天放逐按唯一最高票结算，平票进入PK二轮投票。",
+                        "raw_response": sentinel,
+                        "result": {
+                            "reasoning": f"普通战术判断。{sentinel}",
+                            "vote": "1号玩家",
+                        },
+                    },
+                }
+                for index in range(80)
+            ],
+        }
+    ]
+    bundle = build_quality_evaluation_bundle(
+        state={"session_id": "game_bounded_cards", "rounds": []},
+        logs=logs,
+    )
+
+    report = evaluate_quality_bundle(bundle, hmac_key=HMAC_KEY)
+    payload = report.to_dict()
+
+    assert len(payload["critical_actions"]) == 64
+    assert payload["critical_actions"][0]["action_id"] == "act_bounded_000"
+    assert payload["critical_actions"][-1]["action_id"] == "act_bounded_063"
+    assert {item["reasoning_observation"] for item in payload["critical_actions"]} == {
+        "not_available"
+    }
+    assert sentinel not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_critical_action_cards_derive_stable_id_for_legacy_system_fallback() -> None:
+    logs = [
+        {
+            "number": 2,
+            "werewolf_votes": [
+                [
+                    {
+                        "actor": "system",
+                        "action": "remove",
+                        "options": ["3号玩家", "4号玩家"],
+                        "choice": "3号玩家",
+                        "lifecycle_status": "fallback",
+                        "effective_origin": "system_fallback",
+                        "reason_code": "collective_no_result",
+                        "lm_log": {
+                            "prompt": "",
+                            "raw_response": "",
+                            "result": {"target": "3号玩家"},
+                        },
+                    }
+                ]
+            ],
+        }
+    ]
+    bundle = build_quality_evaluation_bundle(
+        state={"session_id": "game_legacy_system_card", "rounds": []},
+        logs=logs,
+    )
+
+    first = evaluate_quality_bundle(bundle, hmac_key=HMAC_KEY).to_dict()[
+        "critical_actions"
+    ]
+    second = evaluate_quality_bundle(bundle, hmac_key=HMAC_KEY).to_dict()[
+        "critical_actions"
+    ]
+
+    assert first == second
+    assert len(first) == 1
+    assert first[0]["action_id"].startswith("act_safe_")
+    assert first[0]["action_origin"] == "system_fallback"
+    assert first[0]["direct_impact"] == "game_state_effect_applied"

@@ -157,6 +157,116 @@ describe("admin player profile flow", () => {
     expect(screen.getByRole("button", { name: "归档" })).toBeInTheDocument();
   });
 
+  it("edits optional player voice fields and explains the snapshot boundary", async () => {
+    const user = userEvent.setup();
+    renderRoute("/content/players/preview-draft-1");
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "玩家音色与基础演绎",
+      }),
+    ).toBeInTheDocument();
+    const speakerInput = screen.getByRole("textbox", { name: /^玩家音色 / });
+    const instructionInput = screen.getByRole("textbox", {
+      name: /^基础演绎提示/,
+    });
+    expect(speakerInput).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: /^基础情绪/ })).toHaveValue(
+      "restrained",
+    );
+    expect(screen.getByRole("combobox", { name: /^基础强度/ })).toHaveValue(
+      "medium",
+    );
+    expect(screen.getByRole("combobox", { name: /^基础语速/ })).toHaveValue(
+      "natural",
+    );
+    expect(screen.getByText(/配置版本 3/)).toBeInTheDocument();
+    expect(
+      screen.getByText("留空重置为内置中性情绪 neutral。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("留空重置为内置中等强度 medium。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("留空重置为内置自然语速 natural。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/进行中、恢复、已排队语音和历史 Replay/),
+    ).toBeInTheDocument();
+
+    await user.type(speakerInput, "custom-speaker");
+    await user.clear(instructionInput);
+    await user.type(instructionInput, "  自然接话  ");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(await screen.findByText("玩家资料已保存")).toBeInTheDocument();
+    expect(instructionInput).toHaveValue("自然接话");
+    expect(screen.getByText(/当前生效：custom-speaker/)).toBeInTheDocument();
+  });
+
+  it("previews the current unsaved voice draft and shows bounded safe output", async () => {
+    const user = userEvent.setup();
+    renderRoute("/content/players/preview-draft-1");
+    await screen.findByRole("heading", { name: "草稿语音试听" });
+    const speakerInput = screen.getByRole("textbox", { name: /^玩家音色 / });
+    await user.type(speakerInput, "zh_female_vv_uranus_bigtts");
+    const sayInput = screen.getByRole("textbox", { name: /^试听文本/ });
+    await user.clear(sayInput);
+    await user.type(sayInput, "这是尚未保存的试听文本。");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "本轮情绪" }),
+      "tense",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: /^本轮演绎提示/ }),
+      "3号狼人要急切反驳",
+    );
+
+    await user.click(screen.getByRole("button", { name: "试听当前草稿" }));
+
+    const audio = await screen.findByLabelText("玩家语音试听");
+    expect(audio).toHaveAttribute(
+      "src",
+      expect.stringMatching(/^data:audio\/mpeg;base64,/),
+    );
+    expect(
+      screen.getAllByText("zh_female_vv_uranus_bigtts").length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("24000 Hz")).toBeInTheDocument();
+    const contextPanel = screen
+      .getByText("安全 context_texts")
+      .closest(".player-voice-context-texts");
+    expect(contextPanel).toBeInTheDocument();
+    expect(screen.getByText(/tense \/ medium \/ natural/)).toBeInTheDocument();
+    expect(contextPanel).not.toHaveTextContent("3号狼人");
+    expect(screen.getByRole("button", { name: "保存修改" })).toBeEnabled();
+  });
+
+  it("shows the backend-safe preview error code for unsupported speakers", async () => {
+    const user = userEvent.setup();
+    renderRoute("/content/players/preview-draft-1");
+    const speakerInput = await screen.findByRole("textbox", {
+      name: /^玩家音色 /,
+    });
+    await user.type(speakerInput, "clone-speaker");
+    await user.click(screen.getByRole("button", { name: "试听当前草稿" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("试听音色不支持");
+    expect(alert).toHaveTextContent(
+      "错误码：admin_player_voice_preview_context_unsupported",
+    );
+    expect(alert).not.toHaveTextContent("API Key");
+  });
+
+  it("keeps the voice section absent for legacy profiles", async () => {
+    renderRoute("/content/players/preview-published-1");
+    expect(await screen.findByLabelText("玩家名称")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "玩家音色与基础演绎" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps dirty form content when expected_version conflicts", async () => {
     const user = userEvent.setup();
     renderRoute("/content/players/preview-draft-1");

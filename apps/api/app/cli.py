@@ -37,7 +37,7 @@ from app.werewolf.quality_store import enqueue_recent_missing_evaluations
 from app.werewolf.quality_worker import run_quality_evaluation_worker
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.runner import GameRunError, run_game
-from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
+from app.werewolf.rules import DEFAULT_RULE_SET_ID, freeze_rule_set_snapshot, get_rule_set
 from app.werewolf.voice_materializer import (
     LIVE_VOICE_MATERIALIZER_WORKER_TYPE,
     run_voice_materializer_worker,
@@ -278,7 +278,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run_game_command(args: argparse.Namespace) -> int:
     db = SessionLocal()
     try:
-        compiled = resolve_rule_set_snapshot(rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID)))
+        compiled = resolve_rule_set_snapshot(
+            freeze_rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
+        )
         result = run_game(
             record_store=DatabaseReplayStore(db),
             compiled_rule_set=compiled,

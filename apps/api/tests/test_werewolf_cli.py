@@ -15,7 +15,11 @@ from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.orphan_reaper import OrphanRecoveryResult
 from app.werewolf.private_memory_cleanup import PrivateMemoryCleanupResult
 from app.werewolf.runner import GameRunError, RunGameResult
-from app.werewolf.rules import DEFAULT_RULE_SET_ID, get_rule_set, rule_set_snapshot
+from app.werewolf.rules import (
+    DEFAULT_RULE_SET_ID,
+    freeze_rule_set_snapshot,
+    get_rule_set,
+)
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
@@ -62,7 +66,9 @@ def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
     assert "rule_set_id" not in calls
     compiled = calls["compiled_rule_set"]
     assert compiled.rule_set.id == DEFAULT_RULE_SET_ID
-    assert compiled.snapshot == rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
+    assert compiled.snapshot == freeze_rule_set_snapshot(
+        get_rule_set(DEFAULT_RULE_SET_ID)
+    )
     assert compiled.revision_id is None
     assert compiled.revision_no is None
     assert compiled.content_hash == (

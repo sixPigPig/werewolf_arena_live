@@ -4,6 +4,7 @@ import multiprocessing
 import queue
 import random
 import threading
+import time
 from collections.abc import Generator
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.werewolf.engine import (
     NO_HUNTER_SHOT,
     NO_WITCH_POISON,
     PublicStageCursor,
+    SHERIFF_SKIP,
     WEREWOLF_NO_SELF_EXPLODE,
     WEREWOLF_SELF_EXPLODE,
     initialize_game_state,
@@ -3076,6 +3078,18 @@ def test_round_log_deserializes_werewolf_consensus_logs() -> None:
         "fallback_choice": None,
         "fallback_reason": None,
         "attempt_count": 1,
+        "model_result": {
+            "status": "completed",
+            "choice": "Alice",
+            "reasoning": None,
+            "attempt_ids": [],
+        },
+        "effective_result": {
+            "origin": "model",
+            "choice": "Alice",
+            "reason_code": None,
+        },
+        "lifecycle_status": "completed",
     }
     assert serialized["werewolf_discussion"] == [
         {**payload["werewolf_discussion"][0], **default_action_metadata}
@@ -4330,9 +4344,10 @@ def test_self_explosion_context_counts_chain_and_last_wolf_risk() -> None:
     assert context.completed_public_speakers == 2
     assert context.pending_public_speakers == 2
     assert context.explosion_would_end_game is True
-    assert "已经连续 2 轮发生狼人自爆，默认选择不自爆" in prompt
+    assert "连续自爆轮数：2" in prompt
+    assert "默认选择不自爆" not in prompt
     assert "你是场上最后一名狼人" in prompt
-    assert "自爆会立即结算对局" in prompt
+    assert "选择自爆会公开你是狼人、你立刻出局并结束当天" in prompt
 
 
 def test_werewolf_self_explosion_requests_active_wolves_concurrently() -> None:
@@ -4560,7 +4575,9 @@ def test_self_explosion_interrupts_unpublished_public_speech_immediately() -> No
     canceled_action = round_log.canceled_actions[0]
     assert canceled_action.action == ACTION_DEBATE
     assert canceled_action.execution_status == "canceled"
-    assert canceled_action.fallback_reason == "canceled_self_explosion"
+    assert canceled_action.fallback_reason is None
+    assert canceled_action.reason_code == "self_explosion_cancelled"
+    assert canceled_action.effective_origin == "none"
     # The interrupt happens before the provider call starts, so this logical
     # cancellation correctly has no provider-attempt outcome.
     assert canceled_action.lm_log.attempt_outcomes == []
@@ -4570,6 +4587,7 @@ def test_self_explosion_interrupts_unpublished_public_speech_immediately() -> No
         and event.get("action") == ACTION_DEBATE
         for event in sink.events
     )
+    assert not any(event["type"] == "player_did_not_speak" for event in sink.events)
     engine._shutdown_self_explosion_worker()
 
 
@@ -4695,7 +4713,7 @@ def test_exile_pk_speech_reopens_self_explosion_window(
     assert observed_locks == [False]
 
 
-def test_public_speech_rewrites_objectively_wrong_vote_tally_before_publish() -> None:
+def test_public_speech_preserves_objectively_wrong_vote_tally_as_model_output() -> None:
     class VoteTallyCorrectionProvider(ScriptedChineseProvider):
         def __init__(self) -> None:
             self.calls = 0
@@ -4750,13 +4768,14 @@ def test_public_speech_rewrites_objectively_wrong_vote_tally_before_publish() ->
         phase="day",
     )
 
-    assert provider.calls == 2
-    assert "10:1" in str(message)
-    assert not any(
+    assert provider.calls == 1
+    assert "11:0" in str(message)
+    assert any(
         "11:0" in str(event.get("payload"))
         for event in sink.events
-        if event["type"] in {"model_response_delta", "action_parsed"}
+        if event["type"] == "action_parsed"
     )
+    assert not any(event["type"] == "model_retry_scheduled" for event in sink.events)
 
 
 def test_first_pre_sheriff_self_explosion_ends_day_without_losing_badge() -> None:
@@ -5209,7 +5228,7 @@ def test_empty_sheriff_voters_and_withdrawn_candidate_are_explicit_in_prompt() -
     assert eligibility["sheriff_vote_reason"] == "withdrew_candidate_not_original_voter"
 
 
-def test_invalid_eligibility_draft_is_buffered_and_only_valid_retry_is_public() -> None:
+def test_ineligible_vote_appeal_is_preserved_without_semantic_rewrite() -> None:
     class QualityRetryStreamProvider:
         def __init__(self) -> None:
             self.calls = 0
@@ -5266,17 +5285,15 @@ def test_invalid_eligibility_draft_is_buffered_and_only_valid_retry_is_public() 
         phase="day",
     )
 
-    assert provider.calls == 2
-    assert "没有警下投票者" in provider.prompts[1]
-    assert message == "本轮没有警下投票者，我只陈述自己的判断。"
+    assert provider.calls == 1
+    assert message == "警下玩家请把票投给我。"
     public_blob = str(sink.events)
-    assert "警下玩家请把票投给我" not in public_blob
-    assert "本轮没有警下投票者，我只陈述自己的判断" in public_blob
-    assert [event["type"] for event in sink.events].count("model_retry_scheduled") == 1
+    assert "警下玩家请把票投给我" in public_blob
+    assert [event["type"] for event in sink.events].count("model_retry_scheduled") == 0
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
 
 
-def test_invalid_non_seer_investigation_plan_is_rewritten_before_publication() -> None:
+def test_non_seer_investigation_plan_is_preserved_without_semantic_rewrite() -> None:
     class InvestigationPlanRetryProvider:
         def __init__(self) -> None:
             self.calls = 0
@@ -5331,16 +5348,12 @@ def test_invalid_non_seer_investigation_plan_is_rewritten_before_publication() -
         phase="day",
     )
 
-    assert provider.calls == 2
-    assert "只有预言家或明确公开跳预言家的玩家" in provider.prompts[1]
-    assert message == "我是村民；如果当选，我会整理票型、明确归票并谨慎移交警徽。"
-    assert "sheriff_speech_investigation_plan_without_seer_claim" in (
-        action_log.speech_quality_initial_codes
-    )
+    assert provider.calls == 1
+    assert message == "我是村民。我的警徽流先验3号，再验5号。"
+    assert action_log.speech_quality_initial_codes == []
     public_blob = str(sink.events)
-    assert "我的警徽流先验3号" not in public_blob
-    assert "整理票型、明确归票并谨慎移交警徽" in public_blob
-    assert [event["type"] for event in sink.events].count("model_retry_scheduled") == 1
+    assert "我的警徽流先验3号" in public_blob
+    assert [event["type"] for event in sink.events].count("model_retry_scheduled") == 0
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
 
 
@@ -5447,7 +5460,7 @@ def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
     assert "所以我仍然保持这个判断" not in str(action_log.to_dict())
 
 
-def test_public_speech_quality_retry_exhaustion_publishes_only_second_draft() -> None:
+def test_public_speech_quality_retry_exhaustion_publishes_did_not_speak() -> None:
     class ExhaustedSpeechProvider:
         def __init__(self) -> None:
             self.calls = 0
@@ -5504,10 +5517,16 @@ def test_public_speech_quality_retry_exhaustion_publishes_only_second_draft() ->
     )
 
     assert provider.calls == 2
-    assert message == "第一轮全票挂警徽定狼，我还是不改判断。"
+    assert message == ""
+    assert action_log.choice is None
+    assert action_log.execution_status == "failed"
+    assert action_log.effective_origin == "none"
+    assert action_log.fallback_reason is None
     public_blob = str(sink.events)
     assert "所以我保持原判断" not in public_blob
-    assert "我还是不改判断" in public_blob
+    assert "我还是不改判断" not in public_blob
+    assert "本轮未发言" in public_blob
+    assert [event["type"] for event in sink.events].count("player_did_not_speak") == 1
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
     assert all(event["type"] != "speech_quality_retry_exhausted" for event in sink.events)
     assert action_log.speech_quality_attempt_count == 2
@@ -5516,7 +5535,7 @@ def test_public_speech_quality_retry_exhaustion_publishes_only_second_draft() ->
     assert action_log.speech_quality_report["requires_rewrite"] is True
 
 
-def test_public_speech_length_retry_exhaustion_keeps_only_complete_accepted_text() -> None:
+def test_public_speech_length_retry_exhaustion_publishes_did_not_speak() -> None:
     overlong = "保留结论。" + ("甲" * 260) + "SENTINEL_OVERLONG_TAIL"
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -5552,16 +5571,21 @@ def test_public_speech_length_retry_exhaustion_keeps_only_complete_accepted_text
     )
 
     assert provider.calls == 2
-    assert message == "保留结论。"
-    assert action_log.choice == "保留结论。"
-    assert action_log.lm_log.result == {"say": "保留结论。"}
+    assert message == ""
+    assert action_log.choice is None
+    assert action_log.execution_status == "failed"
+    assert action_log.effective_origin == "none"
+    assert action_log.fallback_reason is None
+    assert action_log.lm_log.result is not None
+    assert action_log.lm_log.result["say"] == ""
     assert action_log.lm_log.raw_response == ""
     assert "第二稿仍过长" not in str(action_log.to_dict())
     assert "SENTINEL_OVERLONG_TAIL" not in str(sink.events)
     assert "SENTINEL_OVERLONG_TAIL" not in str(action_log.to_dict())
+    assert [event["type"] for event in sink.events].count("player_did_not_speak") == 1
 
 
-def test_hunter_future_shot_retry_exhaustion_uses_safe_fallback_without_draft_leak() -> None:
+def test_hunter_future_shot_rule_error_is_preserved_as_model_output() -> None:
     illegal_speech = "下一夜我会开枪带走1号玩家。SENTINEL_ILLEGAL_HUNTER_PLAN"
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -5597,15 +5621,14 @@ def test_hunter_future_shot_retry_exhaustion_uses_safe_fallback_without_draft_le
         phase="day",
     )
 
-    assert provider.calls == 2
-    assert message == "本轮暂不追加判断，投票时我会给出明确选择。"
+    assert provider.calls == 1
+    assert message == illegal_speech
     assert action_log.choice == message
-    assert action_log.lm_log.result == {"say": message}
-    assert action_log.lm_log.raw_response == ""
-    assert "仍未修正" not in str(action_log.to_dict())
-    assert "hunter_claims_voluntary_future_shot" in action_log.speech_quality_initial_codes
-    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" not in str(sink.events)
-    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" not in str(action_log.to_dict())
+    assert action_log.execution_status == "completed"
+    assert action_log.fallback_reason is None
+    assert action_log.speech_quality_initial_codes == []
+    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" in str(sink.events)
+    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" in str(action_log.to_dict())
 
 
 @pytest.mark.parametrize("action", ["werewolf_discuss", "werewolf_kill_vote"])
@@ -5651,9 +5674,14 @@ def test_werewolf_private_message_enforces_sixty_character_budget_without_leak(
     assert provider.calls == 2
     assert choice == target.name
     assert action_log.lm_log.result is not None
-    assert action_log.lm_log.result == {
-        "target": target.name,
-        "message": "狼队结论。",
+    assert action_log.lm_log.result["target"] == target.name
+    assert action_log.lm_log.result["message"] == "狼队结论。"
+    assert action_log.lm_log.result["delivery"] == {
+        "schema_version": 1,
+        "mood": "neutral",
+        "intensity": "medium",
+        "pace": "natural",
+        "instruction": "",
     }
     assert action_log.lm_log.raw_response == ""
     assert sink.events == []
@@ -5756,7 +5784,7 @@ def test_required_timeout_choice_is_deterministic_and_order_independent() -> Non
     assert first_log.execution_status == "fallback"
 
 
-def test_public_speech_timeout_uses_neutral_text_without_hidden_claims() -> None:
+def test_public_speech_timeout_publishes_did_not_speak_without_fake_text() -> None:
     class TimeoutProvider:
         def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
             del model, prompt, temperature
@@ -5795,17 +5823,27 @@ def test_public_speech_timeout_uses_neutral_text_without_hidden_claims() -> None
         phase="day",
     )
 
-    assert speech == "本轮暂不追加判断，投票时我会给出明确选择。"
-    assert action_log.fallback_reason == "timeout_neutral_public_speech"
+    assert speech == ""
+    assert action_log.choice is None
+    assert action_log.execution_status == "failed"
+    assert action_log.effective_origin == "none"
+    assert action_log.fallback_reason is None
+    assert action_log.reason_code == "timeout"
     assert "查验" not in str(action_log.to_dict())
     assert "狼人" not in str(action_log.lm_log.result)
     assert "test timeout" not in str(sink.events)
     assert [
         outcome["attempt_result"] for outcome in action_log.lm_log.attempt_outcomes
     ] == ["timed_out"]
+    did_not_speak = next(
+        event for event in sink.events if event["type"] == "player_did_not_speak"
+    )
+    assert did_not_speak["payload"]["visible_text"].endswith("本轮未发言。")
+    assert did_not_speak["payload"]["action_origin"] == "none"
+    assert did_not_speak["payload"]["public_reason_code"] == "timeout"
 
 
-def test_batch_deadline_falls_back_in_request_order_and_drops_late_events() -> None:
+def test_batch_deadline_falls_back_in_order_and_audits_late_result_without_content() -> None:
     class SlowFirstProvider:
         def __init__(self, slow_actor: str) -> None:
             self.slow_actor = slow_actor
@@ -5894,12 +5932,27 @@ def test_batch_deadline_falls_back_in_request_order_and_drops_late_events() -> N
 
     provider.release.set()
     assert provider.finished.wait(timeout=1.0)
+    late_deadline = time.monotonic() + 1.0
+    while (
+        not any(event["type"] == "late_result_discarded" for event in sink.events)
+        and time.monotonic() < late_deadline
+    ):
+        threading.Event().wait(0.01)
     assert "LATE_SENTINEL" not in str(sink.events)
     assert [
         event["actor"]
         for event in sink.events
         if event["type"] == "action_parsed" and event["action"] == "vote"
     ] == active_players[:2]
+    late_discards = [
+        event for event in sink.events if event["type"] == "late_result_discarded"
+    ]
+    assert len(late_discards) == 1
+    assert late_discards[0]["actor"] == active_players[0]
+    assert late_discards[0]["payload"]["discard_reason"] == (
+        "deadline_result_already_committed"
+    )
+    assert "LATE_SENTINEL" not in str(late_discards[0])
 
 
 def test_12_player_wolf_world_state_lists_all_living_teammates() -> None:
@@ -6859,7 +6912,7 @@ def test_batched_action_failure_checkpoints_successful_responses_before_raising(
     assert checkpoint_manager.failures[0]["error"] == "batched model failure"
 
 
-def test_batched_invalid_action_does_not_checkpoint_invalid_response() -> None:
+def test_batched_invalid_action_uses_safe_default_without_checkpointing_invalid_response() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
         session_id="session_test_batch_invalid_checkpoint_successes",
@@ -6884,8 +6937,10 @@ def test_batched_invalid_action_does_not_checkpoint_invalid_response() -> None:
     round_state = RoundState(number=1, players=active_players.copy())
     round_log = RoundLog(number=1)
 
-    with pytest.raises(ValueError, match=f"{invalid_actor} returned invalid sheriff_run"):
+    assert (
         engine._run_sheriff_election_if_needed(round_state, round_log, active_players)
+        is False
+    )
 
     assert provider.first_actions == active_players
     assert provider.attempts_by_actor == {
@@ -6896,8 +6951,7 @@ def test_batched_invalid_action_does_not_checkpoint_invalid_response() -> None:
     ]
     assert {success["action"] for success in checkpoint_manager.successes} == {"sheriff_run"}
     assert all(success["prompt"] for success in checkpoint_manager.successes)
-    assert [failure["actor"] for failure in checkpoint_manager.failures] == [invalid_actor]
-    assert "returned invalid sheriff_run" in str(checkpoint_manager.failures[0]["error"])
+    assert checkpoint_manager.failures == []
     decision_events = [
         event
         for event in sink.events
@@ -6905,18 +6959,25 @@ def test_batched_invalid_action_does_not_checkpoint_invalid_response() -> None:
         and event["type"] in {"model_response_received", "action_parsed"}
     ]
     assert [(event["actor"], event["type"]) for event in decision_events] == [
-        (active_players[0], "model_response_received"),
-        (active_players[0], "action_parsed"),
-        (active_players[1], "model_response_received"),
-        (active_players[1], "action_parsed"),
+        pair
+        for actor in active_players
+        for pair in ((actor, "model_response_received"), (actor, "action_parsed"))
     ]
+    invalid_event = next(
+        event
+        for event in decision_events
+        if event["actor"] == invalid_actor and event["type"] == "action_parsed"
+    )
+    assert invalid_event["payload"]["action_origin"] == "system_fallback"
+    assert invalid_event["payload"]["public_reason_code"] == "invalid_exhausted"
+    assert invalid_event["payload"]["fallback_choice"] == SHERIFF_SKIP
 
 
 @pytest.mark.parametrize(
     "action",
     [ACTION_DEBATE, ACTION_SHERIFF_SPEECH, ACTION_SHERIFF_PK_SPEECH],
 )
-def test_required_public_speech_empty_response_uses_fallback_without_checkpoint(
+def test_required_public_speech_empty_response_publishes_did_not_speak_without_checkpoint(
     action: str,
 ) -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
@@ -6950,14 +7011,21 @@ def test_required_public_speech_empty_response_uses_fallback_without_checkpoint(
         phase="day",
     )
 
-    assert message == "本轮暂不追加判断，投票时我会给出明确选择。"
-    assert action_log.execution_status == "fallback"
-    assert action_log.fallback_reason == "required_public_speech_invalid"
+    assert message == ""
+    assert action_log.choice is None
+    assert action_log.execution_status == "failed"
+    assert action_log.fallback_reason is None
+    assert action_log.effective_origin == "none"
     assert checkpoint_manager.successes == []
     assert checkpoint_manager.failures == []
     parsed_event = next(event for event in sink.events if event["type"] == "action_parsed")
-    assert parsed_event["payload"]["result"]["say"] == message
-    assert parsed_event["payload"]["fallback_reason"] == "required_public_speech_invalid"
+    assert parsed_event["payload"]["result"]["say"] == ""
+    assert parsed_event["payload"]["action_origin"] == "none"
+    assert parsed_event["payload"]["speech_status"] == "not_spoken"
+    did_not_speak = next(
+        event for event in sink.events if event["type"] == "player_did_not_speak"
+    )
+    assert did_not_speak["payload"]["visible_text"].endswith("本轮未发言。")
 
 
 def test_12_player_first_night_peace_is_announced_after_sheriff_election_before_debate() -> None:
@@ -8028,16 +8096,19 @@ def test_werewolf_consensus_ignores_timed_out_wolf_and_uses_completed_majority(
 
     assert provider.started.is_set()
     assert attacked == target
-    assert round_state.werewolf_vote_rounds[0]["tally"] == {
-        target: 3,
-        non_wolves[1]: 1,
-    }
+    assert round_state.werewolf_vote_rounds[0]["tally"] == {target: 3}
     assert round_state.werewolf_vote_rounds[0]["unanimous"] is False
     assert len(round_log.werewolf_votes[0]) == 4
-    fallback_log = next(
-        log for log in round_log.werewolf_votes[0] if log.execution_status == "fallback"
+    abstention_log = next(
+        log for log in round_log.werewolf_votes[0] if log.execution_status == "failed"
     )
-    assert fallback_log.fallback_reason == "final_vote_missing_reused_proposal"
+    assert abstention_log.actor == wolves[-1]
+    assert abstention_log.choice is None
+    assert abstention_log.fallback_reason is None
+    assert abstention_log.reason_code == "batch_deadline"
+    assert abstention_log.effective_origin == "none"
+    assert abstention_log.lm_log.action_id
+    assert abstention_log.lm_log.attempt_outcomes[-1]["attempt_result"] == "timed_out"
     provider.release.set()
 
 
@@ -8092,9 +8163,13 @@ def test_werewolf_consensus_all_model_timeouts_use_replay_stable_fallback() -> N
     assert first_attacked == second_attacked
     assert first_record == second_record
     assert first_wolves == second_wolves
-    assert set(first_record["votes"]) == set(first_wolves)
+    assert first_record["votes"] == {}
     assert first_record["stage"] == "final_vote"
     assert first_record["result"] == first_attacked
+    assert first_record["fallback"] == {
+        "source": "system_fallback",
+        "reason_code": "collective_no_result",
+    }
 
 
 def test_werewolf_vote_round_context_is_anonymous() -> None:
@@ -8593,21 +8668,45 @@ def test_werewolf_consensus_live_events_publish_only_safe_vote_results() -> None
         and event["action"] in {"werewolves_wake", "werewolves_sleep"}
     ]
     assert wolf_cues == ["werewolves_wake", "werewolves_sleep"]
-    private_decision_event_types = {
+    private_stream_event_types = {
         "action_requested",
-        "model_request_started",
         "model_response_delta",
         "model_thinking_delta",
         "model_thinking_tick",
         "model_response_received",
     }
-    private_events = [
+    private_stream_events = [
         event
         for event in event_sink.events
         if event["action"] in {"werewolf_discuss", "werewolf_kill_vote"}
-        and event["type"] in private_decision_event_types
+        and event["type"] in private_stream_event_types
     ]
-    assert private_events == []
+    assert private_stream_events == []
+    private_lifecycle_events = [
+        event
+        for event in event_sink.events
+        if event["action"] in {"werewolf_discuss", "werewolf_kill_vote"}
+        and event["type"] in {
+            "model_request_started",
+            "model_attempt_completed",
+            "model_request_failed",
+            "model_retry_scheduled",
+        }
+    ]
+    assert private_lifecycle_events
+    assert all(
+        set(event["payload"])
+        <= {
+            "action_id",
+            "request_id",
+            "model",
+            "attempt",
+            "attempt_result",
+            "reason_code",
+            "discard_reason",
+        }
+        for event in private_lifecycle_events
+    )
     discussion_actors = [
         event["actor"]
         for event in event_sink.events
@@ -8627,6 +8726,15 @@ def test_werewolf_consensus_live_events_publish_only_safe_vote_results() -> None
         and event["payload"]["decision_stage"] == "proposal"
         and event["payload"]["vote_round"] == 1
         and isinstance(event["payload"]["message"], str)
+        and event["payload"]["voice_snapshot"]["enabled"] is True
+        and event["payload"]["voice_snapshot"]["effective_delivery"] == {
+            "schema_version": 1,
+            "mood": "neutral",
+            "intensity": "medium",
+            "pace": "natural",
+            "instruction": "",
+        }
+        and event["payload"]["voice_snapshot"]["effective_context_texts"]
         for event in event_sink.events
         if event["action"] == "werewolf_discuss" and event["type"] == "action_parsed"
     )
@@ -8659,6 +8767,8 @@ def test_werewolf_consensus_live_events_publish_only_safe_vote_results() -> None
         "visible_result": {"target": public_target},
         "vote_round": 1,
         "final_target": True,
+        "action_origin": "model",
+        "public_reason_code": None,
     }
     safe_wolf_events = [
         event
@@ -8946,13 +9056,17 @@ def test_secret_self_explosion_invalid_choice_falls_back_without_public_leak() -
 def test_run_game_saves_in_progress_logs_when_required_action_fails(
     record_store: DatabaseReplayStore,
 ) -> None:
-    provider = FakeProvider(
-        [
-            {"reasoning": "非法刀口", "target": "不存在玩家"},
-            {"reasoning": "仍非法", "target": "不存在玩家"},
-            {"reasoning": "继续非法", "target": "不存在玩家"},
-        ]
-    )
+    class RequiredActionFailureProvider(ScriptedChineseProvider):
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            if '"investigate"' in prompt:
+                raise RuntimeError("required action provider failure")
+            return super().complete_json(
+                model=model,
+                prompt=prompt,
+                temperature=temperature,
+            )
+
+    provider = RequiredActionFailureProvider()
 
     with pytest.raises(GameRunError) as error:
         run_game(
@@ -8994,3 +9108,410 @@ def test_run_game_does_not_write_legacy_game_json_files(
     assert list(tmp_path.rglob("game_partial.json")) == []
     assert list(tmp_path.rglob("game_logs.json")) == []
     assert list(tmp_path.rglob("resume_checkpoint.json")) == []
+
+
+_PUBLIC_LIFECYCLE_PHASES = {
+    "night",
+    "sheriff_election",
+    "dawn_reveal",
+    "day",
+    "vote",
+    "summary",
+}
+_MODEL_ACTION_EVENT_TYPES = {
+    "action_requested",
+    "model_request_started",
+    "model_thinking_tick",
+    "model_thinking_delta",
+    "model_response_delta",
+    "model_response_received",
+    "model_retry_scheduled",
+    "action_parsed",
+}
+
+
+def _assert_closed_public_phase_lifecycle(
+    events: list[dict[str, object]],
+    *,
+    round_number: int,
+    expected_phases: list[str],
+) -> None:
+    lifecycle_events = [
+        (index, event)
+        for index, event in enumerate(events)
+        if event["type"] in {"phase_started", "phase_completed"}
+        and event.get("round_number") == round_number
+        and event.get("phase") in _PUBLIC_LIFECYCLE_PHASES
+    ]
+    starts = [item for item in lifecycle_events if item[1]["type"] == "phase_started"]
+    completions = [
+        item for item in lifecycle_events if item[1]["type"] == "phase_completed"
+    ]
+    assert [event["phase"] for _index, event in starts] == expected_phases
+
+    starts_by_id: dict[str, tuple[int, dict[str, object]]] = {}
+    for index, event in starts:
+        payload = event["payload"]
+        assert isinstance(payload, dict)
+        phase_instance_id = payload["phase_instance_id"]
+        assert isinstance(phase_instance_id, str)
+        assert phase_instance_id not in starts_by_id
+        starts_by_id[phase_instance_id] = (index, event)
+
+    completions_by_id: dict[str, tuple[int, dict[str, object]]] = {}
+    for index, event in completions:
+        payload = event["payload"]
+        assert isinstance(payload, dict)
+        phase_instance_id = payload["phase_instance_id"]
+        assert isinstance(phase_instance_id, str)
+        assert phase_instance_id not in completions_by_id
+        completions_by_id[phase_instance_id] = (index, event)
+
+    assert completions_by_id.keys() == starts_by_id.keys()
+    for phase_instance_id, (start_index, start_event) in starts_by_id.items():
+        completion_index, completion_event = completions_by_id[phase_instance_id]
+        completion_payload = completion_event["payload"]
+        assert isinstance(completion_payload, dict)
+        assert start_index < completion_index
+        assert completion_event["phase"] == start_event["phase"]
+        assert completion_payload["source_event_id"] == start_index + 1
+
+        next_same_phase_start = next(
+            (
+                index
+                for index, event in starts
+                if index > completion_index and event["phase"] == start_event["phase"]
+            ),
+            len(events),
+        )
+        late_actions = [
+            event
+            for event in events[completion_index + 1 : next_same_phase_start]
+            if event["type"] in _MODEL_ACTION_EVENT_TYPES
+            and event.get("round_number") == round_number
+            and event.get("phase") == start_event["phase"]
+        ]
+        assert late_actions == []
+
+    for (start_index, start_event), (next_index, next_event) in zip(
+        starts,
+        starts[1:],
+        strict=False,
+    ):
+        phase_instance_id = start_event["payload"]["phase_instance_id"]
+        completion_index, completion_event = completions_by_id[phase_instance_id]
+        completion_payload = completion_event["payload"]
+        assert completion_index < next_index
+        assert completion_payload["next_phase"] == next_event["phase"]
+
+
+def test_public_phase_lifecycle_first_night_uses_flat_actual_order() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="phase_lifecycle_first_night",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260718,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    protected_target = next(player.name for player in state.players if player.role == "村民")
+    first_candidate, second_candidate = active_players[:2]
+    provider = FirstNightPeacefulSheriffProvider(
+        protected_target=protected_target,
+        candidates={first_candidate, second_candidate},
+        sheriff_vote_targets={
+            name: first_candidate
+            for name in active_players
+            if name not in {first_candidate, second_candidate}
+        },
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._run_day_phase(round_state, round_log, active_players, pending_deaths)
+
+    assert not state.winner
+    _assert_closed_public_phase_lifecycle(
+        sink.events,
+        round_number=1,
+        expected_phases=[
+            "night",
+            "sheriff_election",
+            "dawn_reveal",
+            "day",
+            "vote",
+            "summary",
+        ],
+    )
+
+
+def test_public_phase_lifecycle_delayed_sheriff_runs_once_in_actual_order() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="phase_lifecycle_delayed_sheriff",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260718,
+        rule_set=rule_set,
+    )
+    state.sheriff_election_pending = True
+    active_players = [player.name for player in state.players]
+    protected_target = next(player.name for player in state.players if player.role == "村民")
+    first_candidate, second_candidate = active_players[:2]
+    provider = FirstNightPeacefulSheriffProvider(
+        protected_target=protected_target,
+        candidates={first_candidate, second_candidate},
+        sheriff_vote_targets={
+            name: first_candidate
+            for name in active_players
+            if name not in {first_candidate, second_candidate}
+        },
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._run_day_phase(round_state, round_log, active_players, pending_deaths)
+
+    assert state.sheriff_election_pending is False
+    assert not engine._should_run_sheriff_election(
+        RoundState(number=3, players=active_players.copy())
+    )
+    _assert_closed_public_phase_lifecycle(
+        sink.events,
+        round_number=2,
+        expected_phases=[
+            "night",
+            "sheriff_election",
+            "dawn_reveal",
+            "day",
+            "vote",
+            "summary",
+        ],
+    )
+
+
+def test_public_phase_lifecycle_sheriff_self_explosion_closes_each_phase() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="phase_lifecycle_sheriff_self_explosion",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260718,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    exploding_wolf = next(player.name for player in state.players if player.role == WEREWOLF)
+    night_target = next(player.name for player in state.players if player.role == "村民")
+    provider = FirstNightSelfExplosionProvider(
+        remove_target=night_target,
+        self_exploders=[exploding_wolf],
+        candidates=set(active_players[:2]),
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    engine._run_day_phase(round_state, round_log, active_players, pending_deaths)
+
+    assert round_state.werewolf_self_exploded == exploding_wolf
+    _assert_closed_public_phase_lifecycle(
+        sink.events,
+        round_number=1,
+        expected_phases=[
+            "night",
+            "sheriff_election",
+            "dawn_reveal",
+            "day",
+            "summary",
+        ],
+    )
+
+
+def test_public_phase_lifecycle_terminal_night_closes_dawn_before_game_completed() -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="phase_lifecycle_terminal_night",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260718,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == WEREWOLF)
+    hunter = next(player for player in state.players if player.role == HUNTER)
+    civilian = next(player for player in state.players if player.role == "村民")
+    active_players = [wolf.name, hunter.name, civilian.name]
+    provider = DeferredHunterElectionProvider(shoot_choice=wolf.name)
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_log = RoundLog(number=1)
+
+    pending_deaths = engine._run_night_phase(round_state, round_log, active_players)
+    sink.publish("game_completed", payload={"winner": state.winner})
+
+    assert pending_deaths is None
+    assert state.winner == "好人阵营"
+    _assert_closed_public_phase_lifecycle(
+        sink.events,
+        round_number=1,
+        expected_phases=["night", "dawn_reveal"],
+    )
+    terminal_completion_index = max(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "phase_completed"
+    )
+    game_completed_index = next(
+        index for index, event in enumerate(sink.events) if event["type"] == "game_completed"
+    )
+    terminal_completion = sink.events[terminal_completion_index]
+    assert terminal_completion["phase"] == "dawn_reveal"
+    assert terminal_completion["payload"]["completion_status"] == "terminal"
+    assert terminal_completion_index < game_completed_index
+
+
+def test_public_phase_lifecycle_terminal_vote_closes_before_game_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="phase_lifecycle_terminal_vote",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260718,
+        rule_set=rule_set,
+    )
+    wolf = next(player.name for player in state.players if player.role == WEREWOLF)
+    target = next(player.name for player in state.players if player.role == "村民")
+    other_good = next(
+        player.name
+        for player in state.players
+        if player.role != WEREWOLF and player.name != target
+    )
+    active_players = [wolf, target, other_good]
+    votes = {wolf: target, target: other_good, other_good: target}
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=FakeProvider([]),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    monkeypatch.setattr(engine, "_run_debate_phase", lambda *_: False)
+    monkeypatch.setattr(engine, "_run_voting", lambda *_: (votes, []))
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+
+    engine._run_day_phase(round_state, round_log, active_players)
+    sink.publish("game_completed", payload={"winner": state.winner})
+
+    _assert_closed_public_phase_lifecycle(
+        sink.events,
+        round_number=2,
+        expected_phases=["day", "vote"],
+    )
+    vote_completion_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "phase_completed" and event["phase"] == "vote"
+    )
+    game_completed_index = next(
+        index for index, event in enumerate(sink.events) if event["type"] == "game_completed"
+    )
+    assert sink.events[vote_completion_index]["payload"]["completion_status"] == "terminal"
+    assert vote_completion_index < game_completed_index
+
+
+class FailOncePhaseCompletionSink(CapturingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    def publish(self, event_type: str, **kwargs: object) -> object:
+        if event_type == "phase_completed" and not self.failed:
+            self.failed = True
+            raise RuntimeError("phase completion publish failed")
+        return super().publish(event_type, **kwargs)
+
+
+def test_phase_completion_publish_failure_keeps_same_instance_retryable() -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="phase_lifecycle_completion_retry",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260718,
+        rule_set=rule_set,
+    )
+    sink = FailOncePhaseCompletionSink()
+    engine = GameEngine(
+        state=state,
+        provider=FakeProvider([]),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    phase_instance_id = engine._start_phase(
+        round_number=1,
+        phase="night",
+        payload={},
+    )
+
+    with pytest.raises(RuntimeError, match="phase completion publish failed"):
+        engine._complete_phase(
+            round_number=1,
+            phase="night",
+            completion_status="completed",
+            completion_reason="night_actions_resolved",
+            next_phase="dawn_reveal",
+            terminal=False,
+        )
+
+    assert engine._active_phase_instances[(1, "night")][0] == phase_instance_id
+    engine._complete_phase(
+        round_number=1,
+        phase="night",
+        completion_status="completed",
+        completion_reason="night_actions_resolved",
+        next_phase="dawn_reveal",
+        terminal=False,
+    )
+    _assert_closed_public_phase_lifecycle(
+        sink.events,
+        round_number=1,
+        expected_phases=["night"],
+    )

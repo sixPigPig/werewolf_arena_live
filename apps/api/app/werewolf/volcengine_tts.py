@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -29,6 +30,8 @@ AUDIO_IDLE_TIMEOUT_SECONDS = 8
 TIMEOUT_ERROR_MESSAGE = "Volcengine TTS timed out"
 TTS_NAMESPACE = "BidirectionalTTS"
 TTS_USER_ID = "werewolf-arena-live"
+CONTEXT_TEXTS_RESOURCE_ID = "seed-tts-2.0"
+_PRESET_BIG_MODEL_SPEAKER_RE = re.compile(r"^[a-z0-9_]+_uranus_bigtts$")
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,15 @@ class TtsSubtitleTiming:
 TtsSynthesisItem = bytes | TtsSubtitleTiming
 
 
+def supports_tts_context_texts(*, resource_id: str, speaker: str) -> bool:
+    """Return whether the current TTS resource and preset speaker support context_texts."""
+
+    return (
+        resource_id.strip().lower() == CONTEXT_TEXTS_RESOURCE_ID
+        and _PRESET_BIG_MODEL_SPEAKER_RE.fullmatch(speaker.strip()) is not None
+    )
+
+
 def build_tts_headers(
     config: VolcengineTtsConfig,
     *,
@@ -120,8 +132,9 @@ def build_tts_session_request(
     speaker: str,
     audio_format: str,
     sample_rate: int,
+    context_texts: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
-    return {
+    request = {
         "user": {"uid": TTS_USER_ID},
         "namespace": TTS_NAMESPACE,
         "req_params": {
@@ -133,6 +146,14 @@ def build_tts_session_request(
             },
         },
     }
+    safe_contexts = [
+        text.strip()[:500]
+        for text in context_texts or ()
+        if isinstance(text, str) and text.strip()
+    ][:4]
+    if safe_contexts:
+        request["req_params"]["context_texts"] = safe_contexts
+    return request
 
 
 def mime_type_for_format(audio_format: str) -> str:
@@ -153,6 +174,7 @@ class VolcengineTtsClient:
         *,
         speaker: str,
         text_chunks: list[str],
+        context_texts: list[str] | tuple[str, ...] | None = None,
     ) -> AsyncIterator[TtsSynthesisItem]:
         if not self.config.available:
             raise RuntimeError("Volcengine TTS is not configured")
@@ -189,6 +211,7 @@ class VolcengineTtsClient:
                 speaker=speaker,
                 audio_format=self.config.audio_format,
                 sample_rate=self.config.sample_rate,
+                context_texts=context_texts,
             )
             await _await_with_timeout(
                 protocol.start_session(

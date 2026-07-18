@@ -63,9 +63,11 @@ from app.rule_sets.repository import (
     get_rule_set_usage,
     list_rule_sets,
 )
+from app.rule_sets.contracts import build_admin_rule_contract
 from app.rule_sets.telemetry import record_rule_publish
 from app.rule_sets.service import (
     archive_rule_set,
+    compile_rule_set_revision,
     create_rule_set,
     duplicate_rule_set,
     publish_rule_set,
@@ -255,13 +257,33 @@ def get_admin_rule_set(
             live_count=usage_aggregate.live_count,
         )
         warnings = _operational_warnings(db, aggregate)
+        active_revision = aggregate.draft or aggregate.published
+        if active_revision is None:
+            raise RuleSetCatalogCorrupt(rule_set_id)
+        try:
+            rule_contract = build_admin_rule_contract(
+                compile_rule_set_revision(active_revision).rule_set
+            ).payload
+        except ValueError as exc:
+            if active_revision is not aggregate.draft:
+                raise RuleSetCatalogCorrupt(
+                    rule_set_id,
+                    revision_id=active_revision.id,
+                    reason="published_config_invalid",
+                ) from exc
+            rule_contract = None
     except AdminAPIProblem:
         raise
     except (RuleSetCatalogCorrupt, *PersistenceError) as exc:
         raise _store_unavailable() from exc
     _set_private_headers(request, response)
     return AdminRuleSetDetailResponse.model_validate(
-        {**snapshot, "usage": usage, "warnings": warnings}
+        {
+            **snapshot,
+            "usage": usage,
+            "warnings": warnings,
+            "rule_contract": rule_contract,
+        }
     )
 
 
@@ -383,7 +405,6 @@ def update_admin_rule_set_draft(
 @router.post(
     "/rule-sets/{rule_set_id}/validate",
     response_model=AdminRuleSetValidationResponse,
-    response_model_exclude_none=True,
 )
 def validate_admin_rule_set_draft(
     rule_set_id: Annotated[str, Path(pattern=RULE_SET_ID_PATTERN)],
@@ -404,12 +425,23 @@ def validate_admin_rule_set_draft(
             rule_set_id,
             expected_revision_lock_version=request_body.expected_revision_lock_version,
         )
-        errors = [_issue_response(issue) for issue in result.validation.errors]
+        contract = (
+            build_admin_rule_contract(result.compiled.rule_set)
+            if result.compiled is not None
+            else None
+        )
+        errors = [
+            _issue_response(issue)
+            for issue in (
+                *result.validation.errors,
+                *(contract.issues if contract is not None else ()),
+            )
+        ][:50]
         warnings = (
             [_issue_response(issue) for issue in result.validation.warnings]
             + _operational_warnings(db, result.aggregate)
         )[:50]
-        valid = result.validation.valid
+        valid = result.validation.valid and contract is not None and not contract.issues
         if result.compiled is None:
             payload = AdminRuleSetValidationResponse(
                 valid=False,
@@ -417,10 +449,12 @@ def validate_admin_rule_set_draft(
                 warnings=warnings,
             )
         else:
+            assert contract is not None
             payload = AdminRuleSetValidationResponse(
-                valid=True,
+                valid=valid,
                 errors=errors,
                 warnings=warnings,
+                rule_contract=contract.payload,
                 compiled_snapshot=result.compiled.snapshot,
                 content_hash=result.compiled.content_hash,
                 rule_text_preview=render_rule_text(result.compiled.rule_set),

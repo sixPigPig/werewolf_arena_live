@@ -39,6 +39,8 @@ from app.werewolf.public_outcomes import (
 RESUME_CHECKPOINT_FILE = "resume_checkpoint.json"
 CHECKPOINT_SCHEMA_VERSION = 2
 SUPPORTED_CHECKPOINT_SCHEMA_VERSIONS = frozenset({1, 2})
+LIFECYCLE_LEDGER_SCHEMA_VERSION = 1
+LIFECYCLE_EVENT_KINDS = frozenset({"phase_started", "phase_completed"})
 TERMINAL_SETTLEMENT_SCHEMA_VERSION = "settlement_v1"
 TERMINAL_SETTLEMENT_STAGES = frozenset(
     {
@@ -56,6 +58,9 @@ TERMINAL_HUNTER_PRESENTATION_STATUSES = frozenset({"shot", "skipped"})
 NO_HUNTER_SHOT_CHOICE = "不发动技能"
 _TERMINAL_HUNTER_PRESENTATION_ID_PATTERN = re.compile(r"hp_[0-9a-f]{24}")
 _TERMINAL_PRIMARY_PRESENTATION_ID_PATTERN = re.compile(r"pp_[0-9a-f]{24}")
+_PHASE_INSTANCE_ID_PATTERN = re.compile(
+    r"phase:r(?P<round>[1-9][0-9]*):(?P<phase>[a-z][a-z0-9_]*):(?P<occurrence>[1-9][0-9]*)"
+)
 TERMINAL_PRIMARY_PRESENTATION_KINDS = frozenset(
     {"exile_result", "night_result", "self_explosion_result"}
 )
@@ -557,6 +562,188 @@ def _validate_terminal_hunter_presentation(
         raise ResumeCheckpointError("invalid_structure")
 
 
+def lifecycle_ledger_from_checkpoint(
+    checkpoint: Mapping[str, object],
+) -> dict[str, object]:
+    """Return a validated, detached lifecycle ledger.
+
+    The ledger is additive to checkpoint schema v1/v2.  Its absence means an
+    old checkpoint, not an invalid checkpoint; persisted live events can
+    repopulate it during recovery.
+    """
+
+    raw = checkpoint.get("lifecycle_ledger")
+    if raw is None:
+        return {
+            "schema_version": LIFECYCLE_LEDGER_SCHEMA_VERSION,
+            "events": [],
+        }
+    if not isinstance(raw, Mapping):
+        raise ResumeCheckpointError("invalid_structure")
+    if raw.get("schema_version") != LIFECYCLE_LEDGER_SCHEMA_VERSION:
+        raise ResumeCheckpointError("invalid_structure")
+    raw_events = raw.get("events")
+    if not isinstance(raw_events, list):
+        raise ResumeCheckpointError("invalid_structure")
+    events = [_validated_lifecycle_event_entry(item) for item in raw_events]
+    return _validated_lifecycle_ledger(events)
+
+
+def lifecycle_event_entry(
+    *,
+    lifecycle_kind: str,
+    phase_instance_id: str,
+    round_number: int,
+    phase: str,
+    event_id: int,
+    payload: Mapping[str, object],
+    stream_id: str | None = None,
+) -> dict[str, object]:
+    return _validated_lifecycle_event_entry(
+        {
+            "lifecycle_kind": lifecycle_kind,
+            "phase_instance_id": phase_instance_id,
+            "round_number": round_number,
+            "phase": phase,
+            "event_id": event_id,
+            "payload": copy.deepcopy(dict(payload)),
+            "stream_id": stream_id,
+        }
+    )
+
+
+def merge_lifecycle_event_entries(
+    current: list[Mapping[str, object]],
+    additions: list[Mapping[str, object]],
+) -> dict[str, object]:
+    merged: dict[tuple[str, str], dict[str, object]] = {}
+    for raw in [*current, *additions]:
+        entry = _validated_lifecycle_event_entry(raw)
+        key = (
+            str(entry["phase_instance_id"]),
+            str(entry["lifecycle_kind"]),
+        )
+        existing = merged.get(key)
+        if existing is not None and existing != entry:
+            existing_without_stream = {
+                name: value for name, value in existing.items() if name != "stream_id"
+            }
+            entry_without_stream = {
+                name: value for name, value in entry.items() if name != "stream_id"
+            }
+            if existing_without_stream != entry_without_stream or (
+                existing.get("stream_id") is not None
+                and entry.get("stream_id") is not None
+            ):
+                raise ResumeCheckpointError("invalid_structure")
+            if existing.get("stream_id") is not None:
+                entry = existing
+        merged[key] = entry
+    return _validated_lifecycle_ledger(list(merged.values()))
+
+
+def _validated_lifecycle_event_entry(
+    raw: object,
+) -> dict[str, object]:
+    if not isinstance(raw, Mapping):
+        raise ResumeCheckpointError("invalid_structure")
+    lifecycle_kind = raw.get("lifecycle_kind")
+    phase_instance_id = raw.get("phase_instance_id")
+    round_number = raw.get("round_number")
+    phase = raw.get("phase")
+    event_id = raw.get("event_id")
+    payload = raw.get("payload")
+    stream_id = raw.get("stream_id")
+    if (
+        lifecycle_kind not in LIFECYCLE_EVENT_KINDS
+        or type(phase_instance_id) is not str
+        or type(round_number) is not int
+        or round_number <= 0
+        or type(phase) is not str
+        or not phase
+        or phase.strip() != phase
+        or type(event_id) is not int
+        or event_id <= 0
+        or not isinstance(payload, Mapping)
+        or stream_id is not None
+        and (
+            type(stream_id) is not str
+            or not stream_id
+            or stream_id.strip() != stream_id
+        )
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+    match = _PHASE_INSTANCE_ID_PATTERN.fullmatch(phase_instance_id)
+    if (
+        match is None
+        or int(match.group("round")) != round_number
+        or match.group("phase") != phase
+        or payload.get("phase_instance_id") != phase_instance_id
+    ):
+        raise ResumeCheckpointError("invalid_structure")
+    if lifecycle_kind == "phase_completed":
+        if (
+            payload.get("completion_status")
+            not in {"completed", "skipped", "canceled", "terminal"}
+            or type(payload.get("completion_reason")) is not str
+            or not payload.get("completion_reason")
+            or payload.get("next_phase") is not None
+            and type(payload.get("next_phase")) is not str
+            or type(payload.get("terminal")) is not bool
+            or type(payload.get("source_event_id")) is not int
+            or int(payload["source_event_id"]) <= 0
+        ):
+            raise ResumeCheckpointError("invalid_structure")
+    return {
+        "lifecycle_kind": lifecycle_kind,
+        "phase_instance_id": phase_instance_id,
+        "round_number": round_number,
+        "phase": phase,
+        "event_id": event_id,
+        "payload": copy.deepcopy(dict(payload)),
+        "stream_id": stream_id,
+    }
+
+
+def _validated_lifecycle_ledger(
+    events: list[dict[str, object]],
+) -> dict[str, object]:
+    events.sort(key=lambda item: int(item["event_id"]))
+    event_ids: set[tuple[str | None, int]] = set()
+    by_instance: dict[str, dict[str, dict[str, object]]] = {}
+    for event in events:
+        event_id = int(event["event_id"])
+        scoped_event_id = (event.get("stream_id"), event_id)
+        if scoped_event_id in event_ids:
+            raise ResumeCheckpointError("invalid_structure")
+        event_ids.add(scoped_event_id)
+        phase_instance_id = str(event["phase_instance_id"])
+        lifecycle_kind = str(event["lifecycle_kind"])
+        instance = by_instance.setdefault(phase_instance_id, {})
+        if lifecycle_kind in instance:
+            raise ResumeCheckpointError("invalid_structure")
+        instance[lifecycle_kind] = event
+
+    for instance in by_instance.values():
+        started = instance.get("phase_started")
+        completed = instance.get("phase_completed")
+        if completed is None:
+            continue
+        if started is None or int(started["event_id"]) >= int(completed["event_id"]):
+            raise ResumeCheckpointError("invalid_structure")
+        if (
+            started["round_number"] != completed["round_number"]
+            or started["phase"] != completed["phase"]
+            or started.get("stream_id") != completed.get("stream_id")
+            or completed["payload"].get("source_event_id") != started["event_id"]
+        ):
+            raise ResumeCheckpointError("invalid_structure")
+    return {
+        "schema_version": LIFECYCLE_LEDGER_SCHEMA_VERSION,
+        "events": copy.deepcopy(events),
+    }
+
+
 class ResumeCheckpointManager:
     def __init__(
         self,
@@ -570,6 +757,10 @@ class ResumeCheckpointManager:
     ) -> None:
         self.record_store = record_store
         self.session_id = session_id
+        raw_stream_id = getattr(record_store, "run_id", None)
+        self.lifecycle_stream_id = (
+            raw_stream_id if isinstance(raw_stream_id, str) and raw_stream_id else None
+        )
         self.rule_set_snapshot = copy.deepcopy(compiled_rule_set.snapshot)
         self.run_params = {
             name: copy.deepcopy(run_params.get(name)) for name in _EXECUTION_RUN_PARAM_NAMES
@@ -588,6 +779,9 @@ class ResumeCheckpointManager:
             copy.deepcopy(dict(initial_checkpoint))
             if initial_checkpoint is not None
             else None
+        )
+        self._lifecycle_ledger = lifecycle_ledger_from_checkpoint(
+            initial_checkpoint or {}
         )
         self._terminal_recovery_active = bool(
             initial_checkpoint is not None
@@ -632,8 +826,50 @@ class ResumeCheckpointManager:
             "cached_model_responses": [],
             "failed_request": None,
             "last_error": None,
+            "lifecycle_ledger": copy.deepcopy(self._lifecycle_ledger),
         }
         self._save()
+
+    def lifecycle_events(self) -> list[dict[str, object]]:
+        events = self._lifecycle_ledger.get("events", [])
+        if not isinstance(events, list):
+            raise ResumeCheckpointError("invalid_structure")
+        return copy.deepcopy(events)
+
+    def reconcile_lifecycle_events(
+        self,
+        events: list[Mapping[str, object]],
+    ) -> None:
+        current = self.lifecycle_events()
+        merged = merge_lifecycle_event_entries(current, events)
+        if merged == self._lifecycle_ledger:
+            return
+        self._lifecycle_ledger = merged
+        if self._checkpoint is not None:
+            self._checkpoint["lifecycle_ledger"] = copy.deepcopy(merged)
+            self._save()
+
+    def record_lifecycle_event(
+        self,
+        *,
+        lifecycle_kind: str,
+        phase_instance_id: str,
+        round_number: int,
+        phase: str,
+        event_id: int,
+        payload: Mapping[str, object],
+        stream_id: str | None = None,
+    ) -> None:
+        entry = lifecycle_event_entry(
+            lifecycle_kind=lifecycle_kind,
+            phase_instance_id=phase_instance_id,
+            round_number=round_number,
+            phase=phase,
+            event_id=event_id,
+            payload=payload,
+            stream_id=(stream_id if stream_id is not None else self.lifecycle_stream_id),
+        )
+        self.reconcile_lifecycle_events([entry])
 
     def record_success(
         self,
@@ -772,6 +1008,15 @@ def player_from_dict(data: dict[str, Any]) -> Player:
         avatar_prompt=str(data.get("avatar_prompt") or ""),
         avatar_image_url=str(data.get("avatar_image_url") or ""),
         profile_id=str(data["profile_id"]) if data.get("profile_id") is not None else None,
+        tts_speaker=str(data.get("tts_speaker") or ""),
+        base_delivery_mood=str(data.get("base_delivery_mood") or "neutral"),
+        base_delivery_intensity=str(
+            data.get("base_delivery_intensity") or "medium"
+        ),
+        base_delivery_pace=str(data.get("base_delivery_pace") or "natural"),
+        base_delivery_instruction=str(data.get("base_delivery_instruction") or ""),
+        voice_enabled=bool(data.get("voice_enabled", True)),
+        voice_config_version=max(1, int(data.get("voice_config_version") or 1)),
         tags=[str(item) for item in data.get("tags", [])],
         observations=[str(item) for item in data.get("observations", [])],
         bidding_rationale=str(data.get("bidding_rationale") or ""),
@@ -815,12 +1060,16 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
         debate=[debate_entry_from_dict(entry) for entry in data.get("debate", [])],
         bids=copy.deepcopy(data.get("bids", [])),
         votes=copy.deepcopy(data.get("votes", [])),
+        vote_origins=copy.deepcopy(data.get("vote_origins", {})),
         exile_pk_candidates=[str(item) for item in data.get("exile_pk_candidates", [])],
         exile_pk_speeches=copy.deepcopy(data.get("exile_pk_speeches", [])),
         exile_runoff_votes={
             str(key): str(value)
             for key, value in data.get("exile_runoff_votes", {}).items()
         },
+        exile_runoff_vote_origins=copy.deepcopy(
+            data.get("exile_runoff_vote_origins", {})
+        ),
         exile_resolution_reason=(
             str(data["exile_resolution_reason"])
             if data.get("exile_resolution_reason") is not None
@@ -847,9 +1096,13 @@ def round_state_from_dict(data: dict[str, Any]) -> RoundState:
         sheriff_final_candidates=[str(item) for item in data.get("sheriff_final_candidates", [])],
         sheriff_voters=[str(item) for item in data.get("sheriff_voters", [])],
         sheriff_votes=copy.deepcopy(data.get("sheriff_votes", {})),
+        sheriff_vote_origins=copy.deepcopy(data.get("sheriff_vote_origins", {})),
         sheriff_pk_candidates=[str(item) for item in data.get("sheriff_pk_candidates", [])],
         sheriff_pk_speeches=copy.deepcopy(data.get("sheriff_pk_speeches", [])),
         sheriff_runoff_votes=copy.deepcopy(data.get("sheriff_runoff_votes", {})),
+        sheriff_runoff_vote_origins=copy.deepcopy(
+            data.get("sheriff_runoff_vote_origins", {})
+        ),
         sheriff_elected=data.get("sheriff_elected"),
         speech_order=[str(item) for item in data.get("speech_order", [])],
         speech_order_choice=data.get("speech_order_choice"),
@@ -1035,6 +1288,16 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
         invalid_value=data.get("invalid_value"),
         fallback_choice=data.get("fallback_choice"),
         fallback_reason=data.get("fallback_reason"),
+        reason_code=(
+            str(data["reason_code"]) if data.get("reason_code") is not None else None
+        ),
+        effective_origin=(
+            str(data["effective_result"].get("origin"))
+            if isinstance(data.get("effective_result"), dict)
+            and data["effective_result"].get("origin")
+            in {"model", "system_fallback", "state_machine", "none"}
+            else None
+        ),
         attempt_count=int(data.get("attempt_count") or 1),
         decision_schema=decision_schema,
         decision_audit=(
@@ -1072,6 +1335,24 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
         fact_prompt_coverage=(
             copy.deepcopy(data["fact_prompt_coverage"])
             if isinstance(data.get("fact_prompt_coverage"), dict)
+            else None
+        ),
+        effective_delivery=(
+            copy.deepcopy(data["effective_delivery"])
+            if isinstance(data.get("effective_delivery"), dict)
+            else None
+        ),
+        effective_context_texts=[
+            str(item) for item in data.get("effective_context_texts", [])
+        ],
+        voice_config_version=(
+            max(1, int(data["voice_config_version"]))
+            if data.get("voice_config_version") is not None
+            else None
+        ),
+        delivery_mapping_version=(
+            str(data["delivery_mapping_version"])
+            if data.get("delivery_mapping_version") is not None
             else None
         ),
     )

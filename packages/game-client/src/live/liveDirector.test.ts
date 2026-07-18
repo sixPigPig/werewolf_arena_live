@@ -865,3 +865,146 @@ describe("toDirectorCue", () => {
     });
   });
 });
+
+describe("public provenance and lifecycle director cues", () => {
+  it("keeps one judge cue when the failed speech also has receipt and parsed records", () => {
+    const cues = buildDirectorCues([
+      event({
+        id: 101,
+        type: "player_did_not_speak",
+        round: 1,
+        phase: "day",
+        actor: "1号玩家",
+        action: "debate",
+        payload: {
+          speech_status: "not_spoken",
+          action_origin: "none",
+          public_reason_code: "provider_timeout",
+        },
+      }),
+      event({
+        id: 102,
+        type: "model_response_received",
+        round: 1,
+        phase: "day",
+        actor: "1号玩家",
+        action: "debate",
+        payload: { message: "模型返回已接收，正在解析行动" },
+      }),
+      event({
+        id: 103,
+        type: "action_parsed",
+        round: 1,
+        phase: "day",
+        actor: "1号玩家",
+        action: "debate",
+        payload: {
+          speech_status: "not_spoken",
+          action_origin: "none",
+          public_reason_code: "provider_timeout",
+        },
+      }),
+    ]);
+
+    expect(cues).toHaveLength(1);
+    expect(cues[0]).toMatchObject({
+      eventId: 101,
+      latestEventId: 103,
+      type: "player_did_not_speak",
+      publicStatus: { kind: "not_spoken" },
+    });
+  });
+
+  it("keeps not-spoken and canceled events as judge-readable facts", () => {
+    const notSpoken = toDirectorCue(
+      event({
+        id: 101,
+        type: "player_did_not_speak",
+        phase: "day",
+        actor: "1号玩家",
+        action: "debate",
+        payload: {
+          speech_status: "not_spoken",
+          action_origin: "none",
+          public_reason_code: "provider_timeout",
+        },
+      }),
+    );
+    const canceled = toDirectorCue(
+      event({
+        id: 102,
+        type: "public_action_cancelled",
+        phase: "day",
+        actor: "1号玩家",
+        action: "debate",
+        payload: { public_reason_code: "phase_closed" },
+      }),
+    );
+
+    expect(notSpoken).toMatchObject({
+      title: "1号玩家 本轮未发言",
+      body: "发言超时",
+      publicStatus: { kind: "not_spoken", label: "未发言" },
+    });
+    expect(canceled.publicStatus).toMatchObject({
+      kind: "canceled",
+      label: "动作取消",
+    });
+  });
+
+  it("carries final action provenance without changing event identity", () => {
+    const cue = toDirectorCue(
+      event({
+        id: 103,
+        type: "action_parsed",
+        phase: "vote",
+        actor: "1号玩家",
+        action: "vote",
+        payload: {
+          choice: "2号玩家",
+          action_origin: "system_fallback",
+          public_reason_code: "system_vote_timeout",
+        },
+      }),
+    );
+
+    expect(cue).toMatchObject({
+      eventId: 103,
+      latestEventId: 103,
+      publicStatus: {
+        kind: "system_fallback",
+        label: "系统代投",
+        reasonCode: "system_vote_timeout",
+      },
+    });
+  });
+
+  it("renders phase completion from the canonical lifecycle fields", () => {
+    const cue = toDirectorCue(
+      event({
+        id: 104,
+        type: "phase_completed",
+        round: 1,
+        phase: "day",
+        payload: {
+          phase_instance_id: "day-1",
+          completion_status: "completed",
+          completion_reason: "self_explosion",
+          next_phase: "night",
+          terminal: false,
+        },
+      }),
+    );
+
+    expect(cue).toMatchObject({
+      title: "白天阶段完成",
+      body: "狼人自爆",
+      phaseLifecycle: {
+        kind: "completed",
+        phaseInstanceId: "day-1",
+        completionStatus: "completed",
+        completionReason: "self_explosion",
+      },
+    });
+  });
+});

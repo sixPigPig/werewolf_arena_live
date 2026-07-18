@@ -986,3 +986,111 @@ describe("deriveLiveNarrativeState", () => {
     expect(state.cue.detailLine).not.toContain("provider stack trace");
   });
 });
+
+describe("public provenance narrative", () => {
+  it("uses a judge cue for not-spoken instead of fabricating player speech", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Sam", role: "村民", model: "deepseek-chat" },
+            { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "player_did_not_speak",
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: {
+          speech_status: "not_spoken",
+          action_origin: "none",
+          public_reason_code: "provider_timeout",
+        },
+      }),
+    ]);
+
+    expect(state.cue).toMatchObject({
+      kind: "judge",
+      tone: "day",
+      judgeLine: "1号玩家本轮未发言。",
+      detailLine: "发言超时",
+      actorName: null,
+      speechText: "",
+    });
+    expect(state.speaker).toBeNull();
+  });
+
+  it("narrates a system vote as a judge fact rather than player reasoning", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Sam", role: "村民", model: "deepseek-chat" },
+            { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_parsed",
+        phase: "vote",
+        actor: "Sam",
+        action: "vote",
+        payload: {
+          choice: "Isaac",
+          action_origin: "system_fallback",
+          public_reason_code: "system_vote_timeout",
+        },
+      }),
+    ]);
+
+    expect(state.cue).toMatchObject({
+      kind: "judge",
+      tone: "vote",
+      judgeLine: "系统已代替 1号玩家 完成投票。",
+      actorName: null,
+      speechText: "",
+    });
+  });
+
+  it("keeps a retried successful speech as player speech with a completion note", () => {
+    const state = narrativeFor([
+      event({
+        id: 1,
+        type: "game_started",
+        payload: {
+          players: [
+            { name: "Sam", role: "村民", model: "deepseek-chat" },
+            { name: "Isaac", role: "狼人", model: "deepseek-chat" },
+          ],
+        },
+      }),
+      event({
+        id: 2,
+        type: "action_parsed",
+        phase: "day",
+        actor: "Sam",
+        action: "debate",
+        payload: {
+          visible_result: { say: "我会根据公开票型继续判断。" },
+          action_origin: "model",
+          retry_completed: true,
+        },
+      }),
+    ]);
+
+    expect(state.cue).toMatchObject({
+      kind: "player-speaking",
+      actorName: "Sam",
+      speechText: "我会根据公开票型继续判断。",
+    });
+    expect(state.cue.detailLine).toContain("重试后完成");
+  });
+});

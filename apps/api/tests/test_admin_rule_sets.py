@@ -26,6 +26,7 @@ from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.rule_sets.snapshots import rule_set_content_hash
+from app.rule_sets.types import RuleValidationIssue
 from app.rule_sets.validation import normalize_rule_set_config
 
 
@@ -763,6 +764,7 @@ def test_validate_valid_draft_returns_compiled_preview_and_success_audit(
         "compiled_snapshot",
         "content_hash",
         "rule_text_preview",
+        "rule_contract",
     }
     assert payload["valid"] is True
     assert payload["errors"] == []
@@ -770,6 +772,19 @@ def test_validate_valid_draft_returns_compiled_preview_and_success_audit(
     assert payload["compiled_snapshot"]["revision_no"] == 1
     assert len(payload["content_hash"]) == 64
     assert "Valid Draft" in payload["rule_text_preview"]
+    contract = payload["rule_contract"]
+    assert contract["schema_version"] == 1
+    assert contract["revision_id"] == "2026-07-18.1"
+    assert len(contract["canonical_hash"]) == 64
+    assert contract["publish_ready"] is True
+    assert contract["coverage_status"] == "covered"
+    assert contract["missing_p0_clause_ids"] == []
+    assert contract["broken_engine_constraint_ids"] == []
+    assert any(clause["priority"] == "P0" for clause in contract["clauses"])
+    internal_clause = next(
+        clause for clause in contract["clauses"] if clause["audience"] == "internal_only"
+    )
+    assert internal_clause["model_rule_text"] is None
     with context.session_factory() as db:
         event = db.scalar(select(AuditEvent).where(AuditEvent.action == "admin.rule_set.validate"))
     assert event is not None
@@ -820,6 +835,47 @@ def test_validate_valid_draft_keeps_operational_shortages_advisory(
     ]
 
 
+def test_validate_valid_config_rejects_broken_rule_contract_coverage(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rule_sets import contracts as contract_module
+
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="broken_contract",
+            name="Broken Contract",
+            status="draft",
+            display_order=10,
+            player_count=8,
+        )
+        db.commit()
+    broken_id = "projection.dawn.death_causes_hidden"
+    original = contract_module.clause_ids_for_engine_constraint
+    monkeypatch.setattr(
+        contract_module,
+        "clause_ids_for_engine_constraint",
+        lambda constraint_id: () if constraint_id == broken_id else original(constraint_id),
+    )
+    login = _login(context, monkeypatch, role="content_editor")
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets/broken_contract/validate",
+        json={"expected_revision_lock_version": 1},
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["valid"] is False
+    assert payload["errors"][0]["code"] == "rule_contract_engine_constraint_uncovered"
+    assert payload["rule_contract"]["publish_ready"] is False
+    assert payload["rule_contract"]["coverage_status"] == "broken"
+    assert payload["rule_contract"]["broken_engine_constraint_ids"] == [broken_id]
+    assert payload["compiled_snapshot"]["id"] == "broken_contract"
+
+
 def test_validation_caps_core_then_operational_warnings_at_fifty(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
@@ -867,7 +923,7 @@ def test_validation_caps_core_then_operational_warnings_at_fifty(
     ]
 
 
-def test_validate_invalid_draft_returns_200_without_compiled_fields_and_rejected_audit(
+def test_validate_invalid_draft_returns_200_with_null_compiled_fields_and_rejected_audit(
     context: AdminRuleSetsContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -891,8 +947,20 @@ def test_validate_invalid_draft_returns_200_without_compiled_fields_and_rejected
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert set(payload) == {"valid", "errors", "warnings"}
+    assert set(payload) == {
+        "valid",
+        "errors",
+        "warnings",
+        "compiled_snapshot",
+        "content_hash",
+        "rule_text_preview",
+        "rule_contract",
+    }
     assert payload["valid"] is False
+    assert payload["compiled_snapshot"] is None
+    assert payload["content_hash"] is None
+    assert payload["rule_text_preview"] is None
+    assert payload["rule_contract"] is None
     assert payload["errors"] == [
         {
             "code": "player_count_out_of_range",
@@ -1089,6 +1157,65 @@ def test_publish_validation_failure_rolls_back_and_records_rejected_attempt(
     assert event.reason == "try invalid release"
     assert "config" not in str(event.after)
     assert metric_results == ["rejected"]
+
+
+@pytest.mark.parametrize(
+    "issue",
+    [
+        RuleValidationIssue(
+            code="rule_contract_p0_clause_missing",
+            path="rule_contract.clauses.night.dawn.hidden_causes.v1",
+            message="Required P0 clause is missing.",
+        ),
+        RuleValidationIssue(
+            code="rule_contract_engine_constraint_uncovered",
+            path="rule_contract.engine_constraint_ids.projection.dawn.death_causes_hidden",
+            message="Engine constraint coverage is broken.",
+        ),
+    ],
+)
+def test_publish_blocks_rule_contract_failures(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+    issue: RuleValidationIssue,
+) -> None:
+    from app.rule_sets import service as service_module
+    from app.rule_sets.contracts import AdminRuleContractReport
+
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="contract_blocked",
+            name="Contract Blocked",
+            status="draft",
+            display_order=10,
+            player_count=8,
+        )
+        db.commit()
+    monkeypatch.setattr(
+        service_module,
+        "build_admin_rule_contract",
+        lambda _rule_set: AdminRuleContractReport(payload={}, issues=(issue,)),
+    )
+    login = _login(context, monkeypatch, role="super_admin")
+
+    response = context.client.post(
+        "/api/v1/admin/rule-sets/contract_blocked/publish",
+        json={
+            "expected_rule_set_lock_version": 1,
+            "expected_revision_lock_version": 1,
+            "reason": "contract review failed",
+        },
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "rule_set_validation_failed"
+    assert response.json()["errors"][0]["code"] == issue.code
+    with context.session_factory() as db:
+        record = db.get(RuleSetRecord, "contract_blocked")
+    assert record is not None
+    assert record.status == "draft"
 
 
 def test_super_admin_archives_and_restores_without_changing_published_revision(
@@ -2578,6 +2705,22 @@ def test_rule_set_detail_is_bounded_and_uses_scalar_revision_counts_and_warnings
     assert all(len(warning["message"]) <= 500 for warning in payload["warnings"])
     assert "rule_set" not in payload["usage"]
     assert "snapshot" not in str(payload["usage"])
+    contract = payload["rule_contract"]
+    assert contract["publish_ready"] is True
+    assert contract["coverage_status"] == "covered"
+    assert len(contract["canonical_hash"]) == 64
+    assert {
+        "clause_id",
+        "priority",
+        "roles",
+        "phases",
+        "actions",
+        "audience",
+        "engine_constraint_ids",
+        "model_rule_text",
+        "coverage_status",
+        "uncovered_engine_constraint_ids",
+    } == set(contract["clauses"][0])
 
 
 def test_rule_set_detail_operational_capacity_prefers_draft_player_count(
@@ -2631,6 +2774,28 @@ def test_rule_set_detail_operational_capacity_prefers_draft_player_count(
             "message": "Judge voice assets cover 0 of 6 required seats.",
         },
     ]
+
+
+def test_rule_set_detail_keeps_invalid_draft_readable_without_a_contract(
+    context: AdminRuleSetsContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with context.session_factory() as db:
+        _seed_rule(
+            db,
+            rule_set_id="invalid_detail",
+            name="Invalid Detail",
+            status="draft",
+            display_order=10,
+            player_count=5,
+        )
+        db.commit()
+    _login(context, monkeypatch)
+
+    response = context.client.get("/api/v1/admin/rule-sets/invalid_detail")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["rule_contract"] is None
 
 
 def test_rule_set_detail_returns_bounded_not_found_problem(

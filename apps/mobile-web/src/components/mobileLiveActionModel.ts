@@ -1,7 +1,13 @@
-import type {
-  GodViewPlayer,
-  GodViewState,
-  LiveGameEvent,
+import {
+  livePhaseLifecycleForEvent,
+  livePublicStatusForEvent,
+  phaseLabel as gamePhaseLabel,
+  publicReasonLabel,
+  type LivePhaseLifecycle,
+  type LivePublicStatus,
+  type GodViewPlayer,
+  type GodViewState,
+  type LiveGameEvent,
 } from "@werewolf-arena/game-client";
 
 export type MobileLiveFocusKind =
@@ -34,6 +40,8 @@ export type MobileLiveFocusPresentation = {
   detail: string;
   progress: string | null;
   accessibleText: string;
+  statusBadge?: LivePublicStatus;
+  phaseLifecycle?: LivePhaseLifecycle;
 };
 
 const ACTIVE_ACTOR_KINDS = new Set<GodViewPlayer["stageStatus"]["kind"]>([
@@ -87,6 +95,17 @@ export function deriveMobileLiveFocusPresentation(
     return terminalPresentation(event, payload);
   }
 
+  if (
+    event.type === "player_did_not_speak" ||
+    livePublicStatusForEvent(event)?.kind === "not_spoken"
+  ) {
+    return didNotSpeakPresentation(event, state);
+  }
+
+  if (event.type === "public_action_cancelled") {
+    return canceledActionPresentation(event, state);
+  }
+
   if (isSpeechAction(event.action) && isSpeechEventType(event.type)) {
     return speechPresentation(event, state);
   }
@@ -98,6 +117,10 @@ export function deriveMobileLiveFocusPresentation(
 
   if (event.type === "phase_started") {
     return phaseStartPresentation(event, state);
+  }
+
+  if (event.type === "phase_completed") {
+    return phaseCompletedPresentation(event);
   }
 
   if (event.type === "judge_cue") {
@@ -144,7 +167,10 @@ export function deriveMobileLiveFocusPresentation(
   }
 
   if (event.type === "action_parsed") {
-    return actionParsedPresentation(event, state, payload);
+    return withPublicStatus(
+      actionParsedPresentation(event, state, payload),
+      event,
+    );
   }
 
   if (event.type === "state_updated") {
@@ -152,6 +178,114 @@ export function deriveMobileLiveFocusPresentation(
   }
 
   return waitingPresentation(event.id, "等待对局进展");
+}
+
+function didNotSpeakPresentation(
+  event: LiveGameEvent,
+  state: GodViewState,
+): MobileLiveFocusPresentation {
+  const actor = resolveActor(event, state);
+  const status = livePublicStatusForEvent(event);
+  const reason = publicReasonLabel(status?.reasonCode ?? null);
+  const title = `${publicActorLabel(actor)}本轮未发言`;
+  return {
+    eventId: event.id,
+    kind: "waiting",
+    tone: "warning",
+    actorName: "法官",
+    actorSeat: null,
+    actorRole: null,
+    targetName: actor.name,
+    eyebrow: "法官提示",
+    title,
+    detail: reason || "本轮没有记录玩家发言",
+    progress: null,
+    accessibleText: `${title}，${reason || "本轮没有记录玩家发言"}`,
+    ...(status ? { statusBadge: status } : {}),
+  };
+}
+
+function canceledActionPresentation(
+  event: LiveGameEvent,
+  state: GodViewState,
+): MobileLiveFocusPresentation {
+  const actor = resolveActor(event, state);
+  const status = livePublicStatusForEvent(event);
+  const reason = publicReasonLabel(status?.reasonCode ?? null);
+  const title = `${publicActorLabel(actor)}公开行动已取消`;
+  return {
+    eventId: event.id,
+    kind: "waiting",
+    tone: "danger",
+    actorName: "法官",
+    actorSeat: null,
+    actorRole: null,
+    targetName: actor.name,
+    eyebrow: "流程变更",
+    title,
+    detail: reason || "流程状态已发生变化",
+    progress: null,
+    accessibleText: `${title}，${reason || "流程状态已发生变化"}`,
+    ...(status ? { statusBadge: status } : {}),
+  };
+}
+
+function phaseCompletedPresentation(
+  event: LiveGameEvent,
+): MobileLiveFocusPresentation {
+  const lifecycle = livePhaseLifecycleForEvent(event);
+  const phase = gamePhaseLabel(event.phase) || "当前";
+  const reason = publicReasonLabel(lifecycle?.completionReason ?? null);
+  const nextPhase = lifecycle?.nextPhase
+    ? gamePhaseLabel(lifecycle.nextPhase)
+    : "";
+  let detail = reason;
+  if (!detail) {
+    if (lifecycle?.completionStatus === "canceled") {
+      detail = "阶段已取消";
+    } else if (lifecycle?.completionStatus === "skipped") {
+      detail = "阶段已跳过";
+    } else if (
+      lifecycle?.terminal ||
+      lifecycle?.completionStatus === "terminal"
+    ) {
+      detail = "进入终局结算";
+    } else {
+      detail = nextPhase ? `下一阶段：${nextPhase}` : "准备进入下一阶段";
+    }
+  }
+  const title = `${phase}阶段完成`;
+  return {
+    eventId: event.id,
+    kind: "waiting",
+    tone:
+      lifecycle?.completionStatus === "canceled" ? "warning" : "success",
+    actorName: "法官",
+    actorSeat: null,
+    actorRole: null,
+    targetName: null,
+    eyebrow: "阶段推进",
+    title,
+    detail,
+    progress: null,
+    accessibleText: `${title}，${detail}`,
+    ...(lifecycle ? { phaseLifecycle: lifecycle } : {}),
+  };
+}
+
+function withPublicStatus(
+  presentation: MobileLiveFocusPresentation,
+  event: LiveGameEvent,
+): MobileLiveFocusPresentation {
+  const statusBadge = livePublicStatusForEvent(event);
+  if (!statusBadge) {
+    return presentation;
+  }
+  return {
+    ...presentation,
+    statusBadge,
+    accessibleText: `${presentation.accessibleText}，${statusBadge.label}`,
+  };
 }
 
 function lifecyclePresentation(
@@ -1112,6 +1246,10 @@ function speechActorLabel(actor: ResolvedActor): string {
     return actor.name;
   }
   return actor.label;
+}
+
+function publicActorLabel(actor: ResolvedActor): string {
+  return actor.seat === null ? actor.label : `${actor.seat}号玩家`;
 }
 
 function speechLabel(action: string | null): string {

@@ -21,6 +21,7 @@ from app.werewolf.checkpoint import (
     ResumeCheckpointManager,
     action_log_from_dict,
     game_state_from_dict,
+    lifecycle_ledger_from_checkpoint,
     round_log_from_dict,
     round_state_from_dict,
     resolved_rule_set_from_checkpoint,
@@ -162,6 +163,61 @@ class IdCapturingEventSink(CapturingEventSink):
     def publish(self, event_type: str, **kwargs: object) -> object:
         super().publish(event_type, **kwargs)
         return SimpleNamespace(id=len(self.events))
+
+
+class DurableLifecycleEventSink:
+    def __init__(self, *, run_id: str | None = None) -> None:
+        self.run_id = run_id
+        self.events: list[dict[str, object]] = []
+
+    def publish(self, event_type: str, **kwargs: object) -> object:
+        event = {"id": len(self.events) + 1, "type": event_type, **kwargs}
+        if self.run_id is not None:
+            event["run_id"] = self.run_id
+        self.events.append(event)
+        return SimpleNamespace(id=event["id"])
+
+    def publish_lifecycle(self, event_type: str, **kwargs: object) -> object:
+        payload = kwargs.get("payload")
+        assert isinstance(payload, dict)
+        phase_instance_id = payload["phase_instance_id"]
+        matches = [
+            event
+            for event in self.events
+            if event["type"] == event_type
+            and isinstance(event.get("payload"), dict)
+            and event["payload"].get("phase_instance_id") == phase_instance_id
+        ]
+        if matches:
+            assert len(matches) == 1
+            existing = matches[0]
+            assert {
+                key: value
+                for key, value in existing.items()
+                if key not in {"id", "type", "run_id"}
+            } == kwargs
+            return SimpleNamespace(id=existing["id"])
+        return self.publish(event_type, **kwargs)
+
+    def lifecycle_events(self) -> list[dict[str, object]]:
+        return [
+            copy.deepcopy(event)
+            for event in self.events
+            if event["type"] in {"phase_started", "phase_completed"}
+        ]
+
+
+class CrashBeforeLifecycleCheckpointManager(ResumeCheckpointManager):
+    def __init__(self, *args: object, crash_kind: str, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.crash_kind = crash_kind
+        self.crashed = False
+
+    def record_lifecycle_event(self, **kwargs: object) -> None:
+        if kwargs.get("lifecycle_kind") == self.crash_kind and not self.crashed:
+            self.crashed = True
+            raise RuntimeError(f"crashed before checkpointing {self.crash_kind}")
+        super().record_lifecycle_event(**kwargs)
 
 
 class CrashBeforeHunterPresentationSink(IdCapturingEventSink):
@@ -2332,6 +2388,531 @@ def test_replay_then_live_provider_uses_cached_response_first() -> None:
 
     assert json.loads(response)["vote"] == "李四"
     assert live_provider.calls == 1
+
+
+def _new_lifecycle_checkpoint_manager(
+    *,
+    record_store: DatabaseReplayStore,
+    state: GameState,
+    initial_checkpoint: dict[str, object] | None = None,
+    crash_kind: str | None = None,
+) -> ResumeCheckpointManager:
+    manager_type = (
+        CrashBeforeLifecycleCheckpointManager
+        if crash_kind is not None
+        else ResumeCheckpointManager
+    )
+    kwargs: dict[str, object] = {
+        "record_store": record_store,
+        "session_id": state.session_id,
+        "compiled_rule_set": legacy_official_compiled_rule_set("starter_6"),
+        "run_params": {
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+        "initial_checkpoint": initial_checkpoint,
+    }
+    if crash_kind is not None:
+        kwargs["crash_kind"] = crash_kind
+    manager = manager_type(**kwargs)
+    if initial_checkpoint is None:
+        manager.start_round(
+            state=state,
+            logs=[],
+            round_number=1,
+            active_players=[player.name for player in state.players],
+            rng_state=None,
+        )
+    return manager
+
+
+def _new_lifecycle_engine(
+    *,
+    state: GameState,
+    sink: DurableLifecycleEventSink,
+    manager: ResumeCheckpointManager,
+) -> GameEngine:
+    return GameEngine(
+        state=state,
+        provider=RejectingProvider(),
+        max_rounds=8,
+        rule_set=get_rule_set("starter_6"),
+        event_sink=sink,
+        checkpoint_manager=manager,
+        execution_mode="resume",
+        resume_from_round=1,
+    )
+
+
+def _complete_test_phase(
+    engine: GameEngine,
+    *,
+    phase: str,
+    next_phase: str | None,
+) -> None:
+    engine._complete_phase(
+        round_number=1,
+        phase=phase,
+        completion_status="completed",
+        completion_reason=f"{phase}_completed",
+        next_phase=next_phase,
+        terminal=False,
+    )
+
+
+def _captured_lifecycle_kinds(
+    sink: DurableLifecycleEventSink,
+) -> list[tuple[str, str, str]]:
+    return [
+        (
+            str(event["type"]),
+            str(event["phase"]),
+            str(event["payload"]["phase_instance_id"]),
+        )
+        for event in sink.events
+        if event["type"] in {"phase_started", "phase_completed"}
+    ]
+
+
+def test_lifecycle_recovery_reconciles_started_published_before_checkpoint(
+    record_store: DatabaseReplayStore,
+) -> None:
+    state = initialize_game_state(
+        session_id="game_1a000001",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=get_rule_set("starter_6"),
+    )
+    sink = DurableLifecycleEventSink()
+    crashing_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+        crash_kind="phase_started",
+    )
+    engine = _new_lifecycle_engine(
+        state=state,
+        sink=sink,
+        manager=crashing_manager,
+    )
+
+    with pytest.raises(RuntimeError, match="checkpointing phase_started"):
+        engine._start_phase(round_number=1, phase="night", payload={})
+
+    stale_checkpoint = record_store.load_resume_checkpoint(state.session_id)
+    assert lifecycle_ledger_from_checkpoint(stale_checkpoint)["events"] == []
+    recovered_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+        initial_checkpoint=stale_checkpoint,
+    )
+    recovered = _new_lifecycle_engine(
+        state=state,
+        sink=sink,
+        manager=recovered_manager,
+    )
+    assert recovered._start_phase(round_number=1, phase="night", payload={}) == (
+        "phase:r1:night:1"
+    )
+    _complete_test_phase(recovered, phase="night", next_phase="dawn_reveal")
+    recovered._start_phase(round_number=1, phase="dawn_reveal", payload={})
+    _complete_test_phase(recovered, phase="dawn_reveal", next_phase="day")
+
+    assert _captured_lifecycle_kinds(sink) == [
+        ("phase_started", "night", "phase:r1:night:1"),
+        ("phase_completed", "night", "phase:r1:night:1"),
+        ("phase_started", "dawn_reveal", "phase:r1:dawn_reveal:1"),
+        ("phase_completed", "dawn_reveal", "phase:r1:dawn_reveal:1"),
+    ]
+    ledger = lifecycle_ledger_from_checkpoint(
+        record_store.load_resume_checkpoint(state.session_id)
+    )
+    assert len(ledger["events"]) == 4
+
+
+def test_lifecycle_recovery_reconciles_completed_published_before_checkpoint_twice(
+    record_store: DatabaseReplayStore,
+) -> None:
+    state = initialize_game_state(
+        session_id="game_1a000002",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=get_rule_set("starter_6"),
+    )
+    sink = DurableLifecycleEventSink()
+    crashing_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+        crash_kind="phase_completed",
+    )
+    engine = _new_lifecycle_engine(
+        state=state,
+        sink=sink,
+        manager=crashing_manager,
+    )
+    engine._start_phase(round_number=1, phase="night", payload={})
+
+    with pytest.raises(RuntimeError, match="checkpointing phase_completed"):
+        _complete_test_phase(engine, phase="night", next_phase="dawn_reveal")
+
+    stale_checkpoint = record_store.load_resume_checkpoint(state.session_id)
+    assert len(lifecycle_ledger_from_checkpoint(stale_checkpoint)["events"]) == 1
+    first_recovery_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+        initial_checkpoint=stale_checkpoint,
+    )
+    first_recovery = _new_lifecycle_engine(
+        state=state,
+        sink=sink,
+        manager=first_recovery_manager,
+    )
+    first_recovery._start_phase(round_number=1, phase="night", payload={})
+    before_suppressed_action = len(sink.events)
+    first_recovery._publish(
+        "action_requested",
+        round_number=1,
+        phase="night",
+        action="remove",
+        payload={},
+    )
+    assert len(sink.events) == before_suppressed_action
+    _complete_test_phase(first_recovery, phase="night", next_phase="dawn_reveal")
+
+    second_checkpoint = record_store.load_resume_checkpoint(state.session_id)
+    second_recovery_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+        initial_checkpoint=second_checkpoint,
+    )
+    second_recovery = _new_lifecycle_engine(
+        state=state,
+        sink=sink,
+        manager=second_recovery_manager,
+    )
+    second_recovery._start_phase(round_number=1, phase="night", payload={})
+    _complete_test_phase(second_recovery, phase="night", next_phase="dawn_reveal")
+
+    assert _captured_lifecycle_kinds(sink) == [
+        ("phase_started", "night", "phase:r1:night:1"),
+        ("phase_completed", "night", "phase:r1:night:1"),
+    ]
+    assert len(lifecycle_ledger_from_checkpoint(second_checkpoint)["events"]) == 2
+
+
+def test_lifecycle_recovery_closes_checkpointed_open_phase_once(
+    record_store: DatabaseReplayStore,
+) -> None:
+    state = initialize_game_state(
+        session_id="game_1a000003",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=get_rule_set("starter_6"),
+    )
+    sink = DurableLifecycleEventSink()
+    manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+    )
+    engine = _new_lifecycle_engine(state=state, sink=sink, manager=manager)
+    engine._start_phase(round_number=1, phase="night", payload={})
+
+    checkpoint = record_store.load_resume_checkpoint(state.session_id)
+    recovered_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+        initial_checkpoint=checkpoint,
+    )
+    recovered = _new_lifecycle_engine(
+        state=state,
+        sink=sink,
+        manager=recovered_manager,
+    )
+    recovered._start_phase(round_number=1, phase="night", payload={})
+    recovered._publish(
+        "action_requested",
+        round_number=1,
+        phase="night",
+        action="remove",
+        payload={},
+    )
+    _complete_test_phase(recovered, phase="night", next_phase="dawn_reveal")
+
+    assert _captured_lifecycle_kinds(sink) == [
+        ("phase_started", "night", "phase:r1:night:1"),
+        ("phase_completed", "night", "phase:r1:night:1"),
+    ]
+    assert [event["type"] for event in sink.events].count("action_requested") == 1
+
+
+def test_lifecycle_recovery_starts_new_occurrence_after_forced_failure(
+    record_store: DatabaseReplayStore,
+) -> None:
+    state = initialize_game_state(
+        session_id="game_1a000005",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=get_rule_set("starter_6"),
+    )
+    sink = DurableLifecycleEventSink()
+    manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+    )
+    engine = _new_lifecycle_engine(state=state, sink=sink, manager=manager)
+    engine._start_phase(round_number=1, phase="night", payload={})
+    engine._complete_phase(
+        round_number=1,
+        phase="night",
+        completion_status="canceled",
+        completion_reason="forced_failure",
+        next_phase=None,
+        terminal=False,
+    )
+
+    checkpoint = record_store.load_resume_checkpoint(state.session_id)
+    recovered_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+        initial_checkpoint=checkpoint,
+    )
+    recovered = _new_lifecycle_engine(
+        state=state,
+        sink=sink,
+        manager=recovered_manager,
+    )
+    assert recovered._start_phase(round_number=1, phase="night", payload={}) == (
+        "phase:r1:night:2"
+    )
+    _complete_test_phase(recovered, phase="night", next_phase="dawn_reveal")
+
+    assert _captured_lifecycle_kinds(sink) == [
+        ("phase_started", "night", "phase:r1:night:1"),
+        ("phase_completed", "night", "phase:r1:night:1"),
+        ("phase_started", "night", "phase:r1:night:2"),
+        ("phase_completed", "night", "phase:r1:night:2"),
+    ]
+
+
+def test_lifecycle_ledger_scopes_local_event_ids_across_parent_and_child_runs(
+    record_store: DatabaseReplayStore,
+) -> None:
+    state = initialize_game_state(
+        session_id="game_1a000007",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=get_rule_set("starter_6"),
+    )
+    parent_sink = DurableLifecycleEventSink(run_id="run_parent")
+    parent_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+    )
+    parent = _new_lifecycle_engine(
+        state=state,
+        sink=parent_sink,
+        manager=parent_manager,
+    )
+    parent._start_phase(round_number=1, phase="night", payload={})
+    _complete_test_phase(parent, phase="night", next_phase="dawn_reveal")
+    parent_checkpoint = record_store.load_resume_checkpoint(state.session_id)
+
+    child_sink = DurableLifecycleEventSink(run_id="run_child")
+    child_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+        initial_checkpoint=parent_checkpoint,
+    )
+    child = _new_lifecycle_engine(
+        state=state,
+        sink=child_sink,
+        manager=child_manager,
+    )
+    child._start_phase(round_number=1, phase="night", payload={})
+    _complete_test_phase(child, phase="night", next_phase="dawn_reveal")
+    assert child_sink.events == []
+    child._start_phase(round_number=1, phase="dawn_reveal", payload={})
+    _complete_test_phase(child, phase="dawn_reveal", next_phase="day")
+
+    ledger = lifecycle_ledger_from_checkpoint(
+        record_store.load_resume_checkpoint(state.session_id)
+    )
+    assert {
+        (event["stream_id"], event["event_id"])
+        for event in ledger["events"]
+    } == {
+        ("run_parent", 1),
+        ("run_parent", 2),
+        ("run_child", 1),
+        ("run_child", 2),
+    }
+
+
+def test_terminal_settlement_recovery_closes_persisted_open_vote_phase(
+    record_store: DatabaseReplayStore,
+) -> None:
+    rule_set = get_rule_set("starter_6")
+    state = initialize_game_state(
+        session_id="game_1a000006",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=rule_set,
+    )
+    wolf = next(player for player in state.players if player.role == "狼人")
+    goods = [player for player in state.players if player.role != "狼人"][:2]
+    before = [wolf.name, *(player.name for player in goods)]
+    active = [player.name for player in goods]
+    round_state = RoundState(
+        number=1,
+        players=before,
+        exiled=wolf.name,
+        day_deaths=[DeathEvent(wolf.name, "vote_exile", "投票")],
+        exile_resolution_reason="unique_highest",
+    )
+    round_log = RoundLog(number=1)
+    sink = DurableLifecycleEventSink()
+    manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+    )
+    engine = GameEngine(
+        state=state,
+        provider=RejectingProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        checkpoint_manager=manager,
+    )
+    engine._start_phase(
+        round_number=1,
+        phase="vote",
+        payload={"active_players": before.copy()},
+    )
+    state.rounds.append(round_state)
+    for player in state.players:
+        assert player.gamestate is not None
+        player.gamestate.current_players = active.copy()
+    manager.record_terminal_settlement(
+        state=state,
+        logs=[round_log],
+        active_players=active,
+        terminal_settlement=_primary_terminal_settlement(stage="outcome_applied"),
+    )
+
+    provider = RejectingProvider()
+    result = resume_game(
+        session_id=state.session_id,
+        record_store=record_store,
+        provider=provider,
+        event_sink=sink,
+    )
+
+    assert result.winner == "好人阵营"
+    assert provider.calls == 0
+    assert _captured_lifecycle_kinds(sink) == [
+        ("phase_started", "vote", "phase:r1:vote:1"),
+        ("phase_completed", "vote", "phase:r1:vote:1"),
+    ]
+    completion = next(
+        event for event in sink.events if event["type"] == "phase_completed"
+    )
+    assert completion["payload"]["completion_status"] == "terminal"
+    assert completion["payload"]["completion_reason"] == "unique_highest"
+
+
+def test_legacy_checkpoint_without_lifecycle_ledger_rehydrates_from_event_store(
+    record_store: DatabaseReplayStore,
+) -> None:
+    state = initialize_game_state(
+        session_id="game_1a000004",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=get_rule_set("starter_6"),
+    )
+    sink = DurableLifecycleEventSink()
+    manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+    )
+    engine = _new_lifecycle_engine(state=state, sink=sink, manager=manager)
+    engine._start_phase(round_number=1, phase="night", payload={})
+    _complete_test_phase(engine, phase="night", next_phase="dawn_reveal")
+    legacy_checkpoint = record_store.load_resume_checkpoint(state.session_id)
+    legacy_checkpoint.pop("lifecycle_ledger")
+    record_store.save_resume_checkpoint(state.session_id, legacy_checkpoint)
+
+    recovered_manager = _new_lifecycle_checkpoint_manager(
+        record_store=record_store,
+        state=state,
+        initial_checkpoint=legacy_checkpoint,
+    )
+    recovered = _new_lifecycle_engine(
+        state=state,
+        sink=sink,
+        manager=recovered_manager,
+    )
+    recovered._start_phase(round_number=1, phase="night", payload={})
+    _complete_test_phase(recovered, phase="night", next_phase="dawn_reveal")
+
+    assert len(_captured_lifecycle_kinds(sink)) == 2
+    rewritten = record_store.load_resume_checkpoint(state.session_id)
+    assert len(lifecycle_ledger_from_checkpoint(rewritten)["events"]) == 2
+
+
+def test_lifecycle_ledger_rejects_duplicate_kind_or_wrong_source_event() -> None:
+    start = {
+        "lifecycle_kind": "phase_started",
+        "phase_instance_id": "phase:r1:night:1",
+        "round_number": 1,
+        "phase": "night",
+        "event_id": 4,
+        "payload": {"phase_instance_id": "phase:r1:night:1"},
+    }
+    duplicate = copy.deepcopy(start)
+    duplicate["event_id"] = 5
+    completion = {
+        "lifecycle_kind": "phase_completed",
+        "phase_instance_id": "phase:r1:night:1",
+        "round_number": 1,
+        "phase": "night",
+        "event_id": 6,
+        "payload": {
+            "phase_instance_id": "phase:r1:night:1",
+            "completion_status": "completed",
+            "completion_reason": "night_completed",
+            "next_phase": "dawn_reveal",
+            "terminal": False,
+            "source_event_id": 3,
+        },
+    }
+
+    with pytest.raises(ResumeCheckpointError, match="structure is invalid"):
+        lifecycle_ledger_from_checkpoint(
+            {
+                "lifecycle_ledger": {
+                    "schema_version": 1,
+                    "events": [start, duplicate],
+                }
+            }
+        )
+    with pytest.raises(ResumeCheckpointError, match="structure is invalid"):
+        lifecycle_ledger_from_checkpoint(
+            {
+                "lifecycle_ledger": {
+                    "schema_version": 1,
+                    "events": [start, completion],
+                }
+            }
+        )
 
 
 def test_replay_then_live_provider_drops_legacy_invalid_cached_response() -> None:

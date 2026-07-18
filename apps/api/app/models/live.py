@@ -247,6 +247,12 @@ class VoiceMaterializationJobRecord(Base):
     audience: Mapped[str] = mapped_column(
         String(32), nullable=False, default="player_public", server_default="player_public"
     )
+    speaker: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    effective_delivery: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    effective_context_texts: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    voice_config_version: Mapped[int | None] = mapped_column(nullable=True)
+    delivery_mapping_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    tts_request_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", server_default="pending"
     )
@@ -294,6 +300,11 @@ class VoiceUtteranceRecord(Base):
     speaker_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     speaker_name: Mapped[str] = mapped_column(String(120), nullable=False)
     speaker: Mapped[str] = mapped_column(String(160), nullable=False)
+    effective_delivery: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    effective_context_texts: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    voice_config_version: Mapped[int | None] = mapped_column(nullable=True)
+    delivery_mapping_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    tts_request_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
     action: Mapped[str | None] = mapped_column(String(80), nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     text_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

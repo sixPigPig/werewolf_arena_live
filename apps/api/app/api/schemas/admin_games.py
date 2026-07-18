@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.schemas.common import PaginationResponse
 from app.api.schemas.admin_p2 import AdminGameP2QualityV1
@@ -13,8 +13,8 @@ AdminGameStatus = Literal["complete", "partial"]
 AdminGameRunStatus = Literal["queued", "running", "completed", "failed", "canceled"]
 AdminQualityEvaluationStatus = Literal[
     "not_scheduled",
-    "pending",
-    "processing",
+    "queued",
+    "running",
     "completed",
     "failed",
     "superseded",
@@ -27,6 +27,63 @@ AdminQualityDataStatus = Literal[
     "unavailable",
 ]
 AdminQualityVerdict = Literal["pass", "warn", "fail", "unavailable"]
+AdminQualityCriticalActionOrigin = Literal[
+    "canceled",
+    "failed",
+    "model_after_retry",
+    "model_first_attempt",
+    "rule_default",
+    "state_machine",
+    "system_fallback",
+    "system_timeout",
+]
+AdminQualityCriticalInputCompleteness = Literal[
+    "complete",
+    "critical_public_fact_missing",
+    "private_observation_missing",
+    "rule_missing",
+    "unknown",
+]
+AdminQualityCriticalActionLegality = Literal[
+    "invalid_normalized",
+    "invalid_not_executed",
+    "invalid_system_fallback",
+    "legal_but_canceled",
+    "legal_executed",
+    "legal_system_result",
+    "not_executed",
+    "unknown",
+]
+AdminQualityCriticalReasoningObservation = Literal[
+    "hard_rule_conflict",
+    "identity_information_conflict",
+    "internal_logic_contradiction",
+    "not_assessed",
+    "not_available",
+    "used_unspecified_rule",
+]
+AdminQualityCriticalDirectImpact = Literal[
+    "canceled_no_effect",
+    "failed_no_effect",
+    "game_state_effect_applied",
+    "model_result_applied",
+    "no_state_change",
+    "phase_ended",
+    "system_result_applied",
+    "vote_recorded",
+]
+AdminQualityCriticalAttribution = Literal[
+    "canceled",
+    "model_internal_logic_contradiction",
+    "model_judgment_and_rule_input_gap",
+    "model_reasoning_error",
+    "not_determined",
+    "runtime_fallback",
+]
+AdminQualityCriticalClauseId = Annotated[
+    str,
+    Field(min_length=1, max_length=120, pattern=r"^[a-z0-9_.-]+$"),
+]
 AdminGameModelRequestStatus = Literal[
     "pending",
     "completed",
@@ -219,6 +276,9 @@ class AdminQualityPerformance(BaseModel):
     timeout_count: int = Field(ge=0)
     retry_count: int = Field(ge=0)
     fallback_count: int = Field(ge=0)
+    logical_action_counts: dict[str, int] = Field(default_factory=dict)
+    provider_attempt_counts: dict[str, int] = Field(default_factory=dict)
+    retry_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class AdminQualityContent(BaseModel):
@@ -230,6 +290,52 @@ class AdminQualityContent(BaseModel):
     speech_retry_exhausted_count: int = Field(ge=0)
     privacy_p0_issue_count: int = Field(ge=0)
     lineup_warning_count: int = Field(ge=0)
+
+
+class AdminQualityCriticalClauseCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    status: Literal["complete", "partial", "missing", "unknown"]
+    required_count: int = Field(ge=0, le=16)
+    included_count: int = Field(ge=0, le=16)
+    missing_count: int = Field(ge=0, le=16)
+    missing_clause_ids: list[AdminQualityCriticalClauseId] = Field(max_length=16)
+
+
+class AdminQualityCriticalAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    action_id: str = Field(
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    round_number: int | None = Field(default=None, ge=0, le=1_000_000)
+    action: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    action_origin: AdminQualityCriticalActionOrigin
+    input_completeness: AdminQualityCriticalInputCompleteness
+    action_legality: AdminQualityCriticalActionLegality
+    reasoning_observation: AdminQualityCriticalReasoningObservation
+    direct_impact: AdminQualityCriticalDirectImpact
+    attribution: AdminQualityCriticalAttribution
+    clause_ids: list[AdminQualityCriticalClauseId] = Field(max_length=16)
+    coverage: AdminQualityCriticalClauseCoverage
+
+
+class AdminQualityLatestSuccessfulResult(BaseModel):
+    evaluator_version: str = Field(max_length=40)
+    source_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    completed_at: datetime
 
 
 class AdminGameQualityEvaluationSummary(BaseModel):
@@ -245,7 +351,21 @@ class AdminGameQualityEvaluationSummary(BaseModel):
     voice: AdminQualityVoice
     performance: AdminQualityPerformance
     content: AdminQualityContent
+    critical_actions: list[AdminQualityCriticalAction] = Field(max_length=64)
     evaluated_at: datetime | None
+    source_revision: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    failure_reason: str | None = Field(default=None, max_length=64)
+    can_retry: bool = False
+    latest_successful_result: AdminQualityLatestSuccessfulResult | None = None
 
 
 class AdminGameQualityEvaluationResponse(BaseModel):

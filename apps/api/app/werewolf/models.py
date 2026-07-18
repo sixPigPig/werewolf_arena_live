@@ -54,6 +54,8 @@ class ActionLog:
     invalid_value: object | None = None
     fallback_choice: object | None = None
     fallback_reason: str | None = None
+    reason_code: str | None = None
+    effective_origin: Literal["model", "system_fallback", "state_machine", "none"] | None = None
     attempt_count: int = 1
     decision_schema: str | None = None
     decision_audit: dict[str, object] | None = None
@@ -74,6 +76,10 @@ class ActionLog:
     budget_ms: int | None = None
     first_token_ms: int | None = None
     fact_prompt_coverage: dict[str, Any] | None = None
+    effective_delivery: dict[str, Any] | None = None
+    effective_context_texts: list[str] = field(default_factory=list)
+    voice_config_version: int | None = None
+    delivery_mapping_version: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -87,6 +93,57 @@ class ActionLog:
             "fallback_reason": self.fallback_reason,
             "attempt_count": self.attempt_count,
         }
+        lifecycle_status = (
+            "failed" if self.execution_status == "timed_out" else self.execution_status
+        )
+        origin = self.effective_origin or (
+            "none"
+            if lifecycle_status in {"canceled", "failed"}
+            else "system_fallback"
+            if lifecycle_status == "fallback"
+            else "model"
+        )
+        attempt_ids = [
+            str(item["request_id"])
+            for item in self.lm_log.attempt_outcomes
+            if isinstance(item, dict) and isinstance(item.get("request_id"), str)
+        ]
+        attempt_results = [
+            str(item["attempt_result"])
+            for item in self.lm_log.attempt_outcomes
+            if isinstance(item, dict) and isinstance(item.get("attempt_result"), str)
+        ]
+        model_result = self.lm_log.result if isinstance(self.lm_log.result, dict) else {}
+        model_status = _model_result_status(
+            lifecycle_status=lifecycle_status,
+            effective_origin=origin,
+            reason_code=self.reason_code or self.fallback_reason,
+            has_model_result=bool(model_result),
+            has_provider_attempt=bool(attempt_ids),
+            attempt_results=attempt_results,
+        )
+        payload["model_result"] = {
+            "status": model_status,
+            "choice": (
+                _model_choice(model_result, self.action, self.raw_choice)
+                if model_status == "completed"
+                else self.raw_choice
+                if model_status == "invalid"
+                else None
+            ),
+            "reasoning": (
+                model_result.get("reasoning") if model_status == "completed" else None
+            ),
+            "attempt_ids": attempt_ids,
+        }
+        payload["effective_result"] = {
+            "origin": origin,
+            "choice": self.choice if origin != "none" else None,
+            "reason_code": self.reason_code or self.fallback_reason,
+        }
+        payload["lifecycle_status"] = lifecycle_status
+        if self.reason_code is not None:
+            payload["reason_code"] = self.reason_code
         if (
             self.execution_status != "completed"
             or self.duration_ms > 0
@@ -119,7 +176,67 @@ class ActionLog:
             )
         if self.fact_prompt_coverage is not None:
             payload["fact_prompt_coverage"] = copy.deepcopy(self.fact_prompt_coverage)
+        if self.effective_delivery is not None:
+            payload["effective_delivery"] = copy.deepcopy(self.effective_delivery)
+            payload["effective_context_texts"] = self.effective_context_texts.copy()
+            payload["voice_config_version"] = self.voice_config_version
+            payload["delivery_mapping_version"] = self.delivery_mapping_version
         return payload
+
+
+def _model_result_status(
+    *,
+    lifecycle_status: str,
+    effective_origin: str,
+    reason_code: str | None,
+    has_model_result: bool,
+    has_provider_attempt: bool,
+    attempt_results: list[str],
+) -> str:
+    reason = reason_code or ""
+    if lifecycle_status == "canceled":
+        return "canceled"
+    latest_attempt = attempt_results[-1] if attempt_results else None
+    if latest_attempt == "timed_out" or reason.startswith(
+        ("timeout", "batch_deadline")
+    ):
+        return "timed_out"
+    if latest_attempt == "invalid_response" or "invalid" in reason:
+        return "invalid"
+    if effective_origin in {"state_machine", "system_fallback"} and not has_provider_attempt:
+        return "not_requested"
+    if effective_origin == "model" and lifecycle_status == "completed" and has_model_result:
+        return "completed"
+    return "failed"
+
+
+def _model_choice(
+    result: dict[str, Any],
+    action: str,
+    raw_choice: object | None,
+) -> object | None:
+    if raw_choice is not None:
+        return raw_choice
+    for key in (
+        action,
+        "target",
+        "vote",
+        "say",
+        "protect",
+        "investigate",
+        "save",
+        "poison",
+        "shoot",
+        "run",
+        "withdraw",
+        "order",
+        "badge",
+        "self_explode",
+        "summary",
+    ):
+        if key in result:
+            return result[key]
+    return None
 
 
 @dataclass
@@ -160,6 +277,13 @@ class Player:
     avatar_prompt: str = ""
     avatar_image_url: str = ""
     profile_id: str | None = None
+    tts_speaker: str = ""
+    base_delivery_mood: str = "neutral"
+    base_delivery_intensity: str = "medium"
+    base_delivery_pace: str = "natural"
+    base_delivery_instruction: str = ""
+    voice_enabled: bool = True
+    voice_config_version: int = 1
     tags: list[str] = field(default_factory=list)
     observations: list[str] = field(default_factory=list)
     bidding_rationale: str = ""
@@ -186,6 +310,13 @@ class Player:
             "avatar_prompt": self.avatar_prompt,
             "avatar_image_url": self.avatar_image_url,
             "profile_id": self.profile_id,
+            "tts_speaker": self.tts_speaker,
+            "base_delivery_mood": self.base_delivery_mood,
+            "base_delivery_intensity": self.base_delivery_intensity,
+            "base_delivery_pace": self.base_delivery_pace,
+            "base_delivery_instruction": self.base_delivery_instruction,
+            "voice_enabled": self.voice_enabled,
+            "voice_config_version": self.voice_config_version,
             "tags": self.tags,
             "observations": self.observations,
             "bidding_rationale": self.bidding_rationale,
@@ -341,9 +472,13 @@ class RoundState:
     debate: list[DebateEntry] = field(default_factory=list)
     bids: list[dict[str, int]] = field(default_factory=list)
     votes: list[dict[str, str]] = field(default_factory=list)
+    vote_origins: dict[str, dict[str, str | None]] = field(default_factory=dict)
     exile_pk_candidates: list[str] = field(default_factory=list)
     exile_pk_speeches: list[dict[str, str]] = field(default_factory=list)
     exile_runoff_votes: dict[str, str] = field(default_factory=dict)
+    exile_runoff_vote_origins: dict[str, dict[str, str | None]] = field(
+        default_factory=dict
+    )
     exile_resolution_reason: str | None = None
     exile_last_words: dict[str, str] | None = None
     summaries: dict[str, str] = field(default_factory=dict)
@@ -358,9 +493,15 @@ class RoundState:
     sheriff_final_candidates: list[str] = field(default_factory=list)
     sheriff_voters: list[str] = field(default_factory=list)
     sheriff_votes: dict[str, str] = field(default_factory=dict)
+    sheriff_vote_origins: dict[str, dict[str, str | None]] = field(
+        default_factory=dict
+    )
     sheriff_pk_candidates: list[str] = field(default_factory=list)
     sheriff_pk_speeches: list[dict[str, str]] = field(default_factory=list)
     sheriff_runoff_votes: dict[str, str] = field(default_factory=dict)
+    sheriff_runoff_vote_origins: dict[str, dict[str, str | None]] = field(
+        default_factory=dict
+    )
     sheriff_elected: str | None = None
     speech_order: list[str] = field(default_factory=list)
     speech_order_choice: str | None = None
@@ -399,9 +540,13 @@ class RoundState:
             "debate": [entry.to_dict() for entry in self.debate],
             "bids": self.bids,
             "votes": self.votes,
+            "vote_origins": copy.deepcopy(self.vote_origins),
             "exile_pk_candidates": self.exile_pk_candidates,
             "exile_pk_speeches": self.exile_pk_speeches,
             "exile_runoff_votes": self.exile_runoff_votes,
+            "exile_runoff_vote_origins": copy.deepcopy(
+                self.exile_runoff_vote_origins
+            ),
             "exile_resolution_reason": self.exile_resolution_reason,
             "exile_last_words": copy.deepcopy(self.exile_last_words),
             "summaries": self.summaries,
@@ -416,9 +561,13 @@ class RoundState:
             "sheriff_final_candidates": self.sheriff_final_candidates,
             "sheriff_voters": self.sheriff_voters,
             "sheriff_votes": self.sheriff_votes,
+            "sheriff_vote_origins": copy.deepcopy(self.sheriff_vote_origins),
             "sheriff_pk_candidates": self.sheriff_pk_candidates,
             "sheriff_pk_speeches": self.sheriff_pk_speeches,
             "sheriff_runoff_votes": self.sheriff_runoff_votes,
+            "sheriff_runoff_vote_origins": copy.deepcopy(
+                self.sheriff_runoff_vote_origins
+            ),
             "sheriff_elected": self.sheriff_elected,
             "speech_order": self.speech_order,
             "speech_order_choice": self.speech_order_choice,

@@ -63,6 +63,50 @@ def test_public_game_started_excludes_role_and_private_player_state() -> None:
     ]
 
 
+def test_public_game_started_rule_contract_excludes_private_and_internal_clauses() -> None:
+    projected = project_live_event(
+        _event(
+            "game_started",
+            payload={
+                "players": [],
+                "active_players": [],
+                "rule_set": {
+                    "rule_text": "公共规则",
+                    "rule_contract": {
+                        "schema_version": 1,
+                        "canonical_hash": "a" * 64,
+                        "public_rule_text": "公共规则",
+                        "clauses": [
+                            {
+                                "clause_id": "public.v1",
+                                "audience": "player_public",
+                                "neutral_text_zh": "公开条款",
+                            },
+                            {
+                                "clause_id": "private.v1",
+                                "audience": "role_private",
+                                "neutral_text_zh": "角色私有条款",
+                            },
+                            {
+                                "clause_id": "internal.v1",
+                                "audience": "internal_only",
+                                "neutral_text_zh": None,
+                            },
+                        ],
+                    },
+                },
+            },
+        ),
+        "player_public",
+    )
+
+    assert projected is not None
+    contract = projected.payload["rule_set"]["rule_contract"]
+    assert [clause["clause_id"] for clause in contract["clauses"]] == ["public.v1"]
+    assert "角色私有条款" not in str(contract)
+    assert "internal.v1" not in str(contract)
+
+
 def test_god_view_game_started_includes_role_but_not_private_memory() -> None:
     projected = project_live_event(
         _event(
@@ -109,6 +153,82 @@ def test_public_game_resumed_keeps_only_resume_boundary_metadata() -> None:
         "attempt_no": 3,
         "terminal_recovery": True,
     }
+
+
+def test_late_result_discard_is_diagnostic_only_for_god_view() -> None:
+    event = _event(
+        "late_result_discarded",
+        action="vote",
+        payload={
+            "action_id": "act_late",
+            "request_id": "req_late",
+            "discard_reason": "deadline_result_already_committed",
+            "reasoning": "SENTINEL_PRIVATE_REASONING",
+        },
+    )
+
+    assert project_live_event(event, "player_public") is None
+    projected = project_live_event(event, "spectator_god_view")
+
+    assert projected is not None
+    assert projected.payload == {
+        "action_id": "act_late",
+        "request_id": "req_late",
+        "discard_reason": "deadline_result_already_committed",
+    }
+
+
+@pytest.mark.parametrize("audience", ["player_public", "spectator_god_view"])
+def test_phase_completed_keeps_only_its_safe_source_event_id(audience: str) -> None:
+    projected = project_live_event(
+        _event(
+            "phase_completed",
+            payload={
+                "phase_instance_id": "phase:r1:night:1",
+                "completion_status": "completed",
+                "completion_reason": "night_actions_resolved",
+                "next_phase": "dawn_reveal",
+                "terminal": False,
+                "source_event_id": 41,
+                "source": "private-origin",
+                "source_run_id": "run_private",
+                "source_metadata": {"reasoning": "private"},
+                "audience_policy": "public_lifecycle_v1",
+            },
+        ),
+        audience,  # type: ignore[arg-type]
+    )
+
+    assert projected is not None
+    assert projected.payload == {
+        "phase_instance_id": "phase:r1:night:1",
+        "completion_status": "completed",
+        "completion_reason": "night_actions_resolved",
+        "next_phase": "dawn_reveal",
+        "terminal": False,
+        "source_event_id": 41,
+        "audience_policy": "public_lifecycle_v1",
+    }
+
+
+@pytest.mark.parametrize("unsafe_value", [True, 0, -1, "41", {"id": 41}])
+def test_phase_completed_rejects_non_positive_or_non_integer_source_event_id(
+    unsafe_value: object,
+) -> None:
+    projected = project_live_event(
+        _event(
+            "phase_completed",
+            payload={
+                "phase_instance_id": "phase:r1:night:1",
+                "completion_status": "completed",
+                "source_event_id": unsafe_value,
+            },
+        ),
+        "player_public",
+    )
+
+    assert projected is not None
+    assert "source_event_id" not in projected.payload
 
 
 def test_public_model_progress_keeps_opaque_action_correlation_id() -> None:

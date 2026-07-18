@@ -672,6 +672,8 @@ def test_list_rule_sets_returns_published_database_revisions_default_first() -> 
     assert all(item["version"] == str(item["revision_no"]) for item in items)
     assert all(len(item["content_hash"]) == 64 for item in items)
     assert items[0]["is_default"] is True
+    assert "internal.werewolf.collective_fallback.v1" not in response.text
+    assert "狼队集体无有效刀口时" not in response.text
     assert set(items[0]["roles"][0]) == {
         "role",
         "count",
@@ -2380,6 +2382,13 @@ def test_create_game_run_resolves_profile_configs(
         "avatar_asset_id": "system-gothic-female-2",
         "catchphrases": [],
         "strategy_profile": "balanced",
+        "tts_speaker": "zh_female_gaolengyujie_uranus_bigtts",
+        "base_delivery_mood": "neutral",
+        "base_delivery_intensity": "medium",
+        "base_delivery_pace": "natural",
+        "base_delivery_instruction": "",
+        "voice_enabled": True,
+        "voice_config_version": 1,
         "tags": ["压迫", "控场"],
     }
     background_configs = captured[0]["player_configs"]
@@ -2675,6 +2684,13 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
             "avatar_asset_id": None,
             "catchphrases": [],
             "strategy_profile": "balanced",
+            "tts_speaker": "",
+            "base_delivery_mood": "neutral",
+            "base_delivery_intensity": "medium",
+            "base_delivery_pace": "natural",
+            "base_delivery_instruction": "",
+            "voice_enabled": True,
+            "voice_config_version": 1,
             "tags": ["控场"],
         }
     ]

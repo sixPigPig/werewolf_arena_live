@@ -370,9 +370,9 @@ function RunP2QualityPanel({
             </small>
           </article>
           <article>
-            <span>超时 / 降级</span>
+            <span>Provider 超时 / 系统降级</span>
             <strong>
-              {performance.timeout_count} / {performance.fallback_count}
+              {attempts?.timed_out_count ?? performance.timeout_count} / {actions?.fallback_count ?? "—"}
             </strong>
             <small>
               发言重写 {diagnostics.speech_quality.retry_count} · 耗尽{" "}
@@ -386,24 +386,29 @@ function RunP2QualityPanel({
               seat alias · 无效 {diagnostics.choice_normalization.invalid_count}
             </small>
           </article>
-          <article>
-            <span>Provider attempt 终态</span>
-            <strong>{attempts.attempt_count}</strong>
-            <small>
-              有效 {attempts.valid_response_count} · 非法{" "}
-              {attempts.invalid_response_count} · 超时 {attempts.timed_out_count} ·
-              取消 {attempts.canceled_count} · 传输失败{" "}
-              {attempts.transport_failed_count}
-            </small>
-          </article>
-          <article>
-            <span>Logical action 终态</span>
-            <strong>{actions.action_count}</strong>
-            <small>
-              完成 {actions.completed_count} · 降级 {actions.fallback_count} · 取消{" "}
-              {actions.canceled_count} · 失败 {actions.failed_count}
-            </small>
-          </article>
+          {attempts ? (
+            <article>
+              <span>Provider attempt 终态</span>
+              <strong>{attempts.attempt_count}</strong>
+              <small>
+                有效 {attempts.valid_response_count} · 非法{" "}
+                {attempts.invalid_response_count} · 超时 {attempts.timed_out_count} ·
+                取消 {attempts.canceled_count} · 传输失败{" "}
+                {attempts.transport_failed_count}
+              </small>
+            </article>
+          ) : null}
+          {actions ? (
+            <article>
+              <span>Logical action 来源</span>
+              <strong>{actions.action_count}</strong>
+              <small>
+                模型完成 {actions.completed_count} · 系统 fallback{" "}
+                {actions.fallback_count} · 取消 {actions.canceled_count} · 失败{" "}
+                {actions.failed_count}
+              </small>
+            </article>
+          ) : null}
         </div>
       )}
     </section>

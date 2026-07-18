@@ -9,7 +9,7 @@ import { ruleSetKeys } from "./query-keys";
 import { useRuleSetRepository } from "./repository";
 import RuleSetTransitionDialog from "./RuleSetTransitionDialog";
 import { presentRuleSetError, type RuleSetErrorContext } from "./error-presentation";
-import type { AdminRuleSetDetail, RuleSetOptions, RuleSetStatus, RuleSetValidation, RuleSetWarning } from "./types";
+import type { AdminRuleSetDetail, RuleContract, RuleContractClause, RuleSetOptions, RuleSetStatus, RuleSetValidation, RuleSetWarning } from "./types";
 
 type ValidationView = RuleSetValidation & { revision_lock_version: number };
 type Transition = "publish" | "default" | "archive" | "restore";
@@ -91,6 +91,7 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
 
   const transitionCandidates = (publishedRules.data?.items ?? []).filter((rule) => rule.id !== detail?.id);
   const transitionDialog = transition ? transitionPresentation(transition) : null;
+  const displayedContract = validation?.rule_contract ?? detail?.rule_contract;
 
   return <div className="admin-page rule-set-editor-page"><header className="page-heading rule-set-heading"><div><span className="page-kicker">CONTENT / RULES</span><h1>{isNew ? "新建游戏规则" : "游戏规则详情"}</h1>{detail ? <p><span>{STATUS[detail.status]}</span>{detail.is_default ? " · 默认规则" : ""} · 规则锁版本 {detail.lock_version} · 草稿版本 {detail.draft_revision?.revision_no ?? "无"}</p> : <p>创建结构化规则草稿</p>}</div>{!editable ? <span className="page-readiness-badge">只读权限</span> : null}</header>
     <div className="rule-set-editor-layout"><div className="rule-set-editor-main">
@@ -112,6 +113,7 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
       <Field label="警徽规则" error={errors.sheriff_badge_bomb_policy}><select aria-label="警徽规则" disabled={!draft.config.sheriff_enabled} onChange={(e) => changeConfig("sheriff_badge_bomb_policy", e.target.value as typeof draft.config.sheriff_badge_bomb_policy)} value={draft.config.sheriff_enabled ? draft.config.sheriff_badge_bomb_policy : options.sheriff_badge_bomb_policies[0]?.value}>{options.sheriff_badge_bomb_policies.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}</select></Field>
     </fieldset>{errors.form ? <p className="rule-set-error" role="alert">{errors.form}</p> : null}{requestError ? <p className="rule-set-error" role="alert">{presentRuleSetError(requestError, requestErrorContext)}</p> : null}{editable ? <div className="rule-set-form-actions"><button disabled={pending !== null} type="submit">保存草稿</button><button disabled={isNew || isDirty || !detail?.draft_revision || pending !== null} onClick={() => void validateSaved()} type="button">校验规则</button>{canPublish ? <button disabled={!validation?.valid || validation.revision_lock_version !== detail?.draft_revision?.lock_version || isDirty || pending !== null} onClick={(event) => openTransition("publish", event.currentTarget)} type="button">发布规则</button> : null}</div> : null}</form>
     {conflict ? <section className="rule-set-conflict" role="alert"><h2>规则版本冲突</h2><p>本地草稿已保留，请重新加载服务器版本后再合并。</p><button disabled={pending !== null} onClick={() => void reload()} type="button">{pending === "reload" ? "正在重新加载..." : "重新加载服务器版本"}</button></section> : null}
+    {displayedContract ? <RuleContractPanel contract={displayedContract} /> : null}
     </div><aside aria-label="规则摘要" className="rule-set-summary"><section><h2>配置摘要</h2><p>配置人数：{playerCount(draft)} 人</p><p>阵容：{roleSummary(draft, options) || "暂无角色"}</p>{detail ? <><p>生命周期：{STATUS[detail.status]}{detail.is_default ? " · 默认规则" : ""}</p><p>当前草稿修订：{revisionSummary(detail.draft_revision)}</p><p>当前发布修订：{revisionSummary(detail.published_revision)}</p><p>累计使用：{detail.usage.game_count} 场游戏 / {detail.usage.live_count} 场直播</p>{detail.warnings.map((warning) => <p key={`${warning.code}-${warning.path}`} role="alert">{warning.message}</p>)}</> : <p>尚未保存的新规则</p>}</section>
     <div className="rule-set-lifecycle-actions">{detail && canSetDefault && detail.status === "published" && !detail.is_default ? <button disabled={transitionPending || isDirty || !canQueryPublished} onClick={(event) => openTransition("default", event.currentTarget)} type="button">设为默认</button> : null}
     {detail && canArchive && detail.status !== "archived" ? <button disabled={transitionPending || isDirty || (detail.is_default && !canQueryPublished)} onClick={(event) => openTransition("archive", event.currentTarget)} type="button">归档规则</button> : null}
@@ -141,6 +143,20 @@ function UnsavedChangesDialog({ onDiscard, onKeepEditing }: { onDiscard: () => v
   return <div className="rule-set-dialog-backdrop"><section aria-describedby="unsaved-rule-description" aria-labelledby="unsaved-rule-title" aria-modal="true" className="rule-set-dialog" onKeyDown={handleKeyDown} ref={dialog} role="dialog"><h2 id="unsaved-rule-title">未保存规则</h2><p id="unsaved-rule-description">继续离开将放弃本次尚未保存的修改。</p><div className="rule-set-dialog-actions"><button onClick={close} ref={keepEditing} type="button">继续编辑</button><button onClick={onDiscard} type="button">放弃修改并离开</button></div></section></div>;
 }
 function Warning({ warning }: { warning: RuleSetWarning }) { return <p>{warning.path ? `${warning.path}：` : ""}{warning.message}</p>; }
+function RuleContractPanel({ contract }: { contract: RuleContract }) {
+  return <section aria-labelledby="rule-contract-title" className="rule-contract-panel">
+    <header><div><h2 id="rule-contract-title">规则契约与引擎覆盖</h2><p>只读代码契约，不支持在此编辑模型 Prompt。</p></div><span className={`rule-contract-readiness ${contract.publish_ready ? "is-covered" : "is-broken"}`}>{contract.publish_ready ? "可发布" : "阻止发布"}</span></header>
+    <dl className="rule-contract-meta"><div><dt>Schema</dt><dd>{contract.schema_version}</dd></div><div><dt>契约修订</dt><dd>{contract.revision_id}</dd></div><div><dt>Canonical hash</dt><dd><code>{contract.canonical_hash.slice(0, 12)}</code></dd></div><div><dt>总体覆盖</dt><dd>{contract.coverage_status === "covered" ? "完整" : "断链"}</dd></div></dl>
+    {contract.missing_p0_clause_ids.length ? <div className="rule-contract-blockers" role="alert"><strong>缺失 P0 条款</strong><ul>{contract.missing_p0_clause_ids.map((id) => <li key={id}><code>{id}</code></li>)}</ul></div> : null}
+    {contract.broken_engine_constraint_ids.length ? <div className="rule-contract-blockers" role="alert"><strong>断链的引擎约束</strong><ul>{contract.broken_engine_constraint_ids.map((id) => <li key={id}><code>{id}</code></li>)}</ul></div> : null}
+    <div className="rule-contract-table-scroll" tabIndex={0}><table aria-label="规则条款与引擎约束覆盖"><thead><tr><th>级别 / 条款</th><th>角色 / 阶段 / 动作</th><th>Audience</th><th>Engine constraints</th><th>模型规则文本</th><th>覆盖</th></tr></thead><tbody>{contract.clauses.map((clause) => <RuleContractRow clause={clause} key={clause.clause_id} />)}</tbody></table></div>
+  </section>;
+}
+function RuleContractRow({ clause }: { clause: RuleContractClause }) {
+  const scope = [{ label: "角色", values: clause.roles }, { label: "阶段", values: clause.phases }, { label: "动作", values: clause.actions }].filter(({ values }) => values.length).map(({ label, values }) => `${label}：${values.join("、")}`).join("；") || "全部适用";
+  const audience = { player_public: "玩家公开", role_private: "角色私有", internal_only: "仅内部" }[clause.audience];
+  return <tr><td><strong>{clause.priority}</strong><code>{clause.clause_id}</code></td><td>{scope}</td><td>{audience}</td><td><ul>{clause.engine_constraint_ids.map((id) => <li key={id}><code>{id}</code></li>)}</ul></td><td>{clause.model_rule_text ?? <em>不进入模型规则</em>}</td><td><span className={clause.coverage_status === "covered" ? "is-covered" : "is-broken"}>{clause.coverage_status === "covered" ? "已覆盖" : "断链"}</span>{clause.uncovered_engine_constraint_ids.map((id) => <code key={id}>{id}</code>)}</td></tr>;
+}
 function Loading() { return <div aria-live="polite" role="status">正在读取游戏规则...</div>; }
 function Message({ title, detail }: { title: string; detail: string }) { return <div className="admin-page" role="alert"><h1>{title}</h1><p>{detail}</p></div>; }
 function ErrorState({ error, retry }: { error: Error; retry: () => unknown }) { return <div className="admin-page" role="alert"><h1>无法读取游戏规则</h1><p>{presentRuleSetError(error, "load")}</p><button onClick={() => void retry()} type="button">重新加载</button></div>; }

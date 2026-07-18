@@ -3,6 +3,7 @@ import type {
   AdminPlayerProfile,
   AdminPlayerProfileAiDraft,
   AdminPlayerProfileList,
+  AdminPlayerVoicePreview,
   PlayerProfileAppearanceOption,
   PlayerProfileConstraints,
   PlayerProfileOption,
@@ -15,6 +16,22 @@ const PROFILE_STATUSES: PlayerProfileStatus[] = [
   "published",
   "archived",
 ];
+
+const DELIVERY_MOODS = [
+  "neutral",
+  "restrained",
+  "calm",
+  "confident",
+  "skeptical",
+  "tense",
+  "frustrated",
+  "urgent",
+  "sad",
+  "excited",
+  "playful",
+] as const;
+const DELIVERY_INTENSITIES = ["low", "medium", "high"] as const;
+const DELIVERY_PACES = ["slow", "natural", "fast"] as const;
 
 export function parseAdminPlayerProfileAiDraft(
   value: unknown,
@@ -85,6 +102,7 @@ export function parseAdminPlayerProfile(value: unknown): AdminPlayerProfile {
     ),
     talkativeness: tendency(record.talkativeness, "talkativeness"),
     example_messages: stringArray(record.example_messages, "example_messages"),
+    ...optionalVoiceFields(record),
     display_order: nonNegativeInteger(record.display_order, "display_order"),
     featured: booleanValue(record.featured, "featured"),
     tags: stringArray(record.tags, "tags"),
@@ -97,6 +115,131 @@ export function parseAdminPlayerProfile(value: unknown): AdminPlayerProfile {
     published_by: nullableString(record.published_by, "published_by"),
     updated_by: nullableString(record.updated_by, "updated_by"),
   };
+}
+
+export function parseAdminPlayerVoicePreview(
+  value: unknown,
+): AdminPlayerVoicePreview {
+  const record = recordValue(value);
+  const delivery = recordValue(record.effective_delivery);
+  const schemaVersion = positiveInteger(
+    delivery.schema_version,
+    "effective_delivery.schema_version",
+  );
+  if (schemaVersion !== 1) {
+    throw invalidContract("试听演绎 schema_version 无效");
+  }
+  const mood = enumString(
+    delivery.mood,
+    DELIVERY_MOODS,
+    "effective_delivery.mood",
+  );
+  const intensity = enumString(
+    delivery.intensity,
+    DELIVERY_INTENSITIES,
+    "effective_delivery.intensity",
+  );
+  const pace = enumString(
+    delivery.pace,
+    DELIVERY_PACES,
+    "effective_delivery.pace",
+  );
+  const contextTexts = stringArray(record.context_texts, "context_texts");
+  if (contextTexts.length > 4 || contextTexts.some((text) => text.length > 500)) {
+    throw invalidContract("试听 context_texts 数量超出限制");
+  }
+  const audioByteLength = positiveInteger(
+    record.audio_byte_length,
+    "audio_byte_length",
+  );
+  if (audioByteLength > 2 * 1024 * 1024) {
+    throw invalidContract("试听音频超出大小限制");
+  }
+  const audioFormat = requiredString(record.audio_format, "audio_format");
+  const mimeType = requiredString(record.mime_type, "mime_type");
+  if (audioFormat !== "mp3" || mimeType !== "audio/mpeg") {
+    throw invalidContract("试听音频格式无效");
+  }
+  const audioBase64 = requiredString(record.audio_base64, "audio_base64");
+  if (
+    audioBase64.length > 2_800_000 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(audioBase64)
+  ) {
+    throw invalidContract("试听音频编码无效");
+  }
+  const padding = audioBase64.endsWith("==")
+    ? 2
+    : audioBase64.endsWith("=")
+      ? 1
+      : 0;
+  const decodedLength = Math.floor((audioBase64.length * 3) / 4) - padding;
+  if (decodedLength !== audioByteLength) {
+    throw invalidContract("试听音频长度不一致");
+  }
+  return {
+    speaker: requiredString(record.speaker, "speaker"),
+    effective_delivery: {
+      schema_version: 1,
+      mood,
+      intensity,
+      pace,
+      instruction: stringValue(delivery.instruction),
+    },
+    context_texts: contextTexts,
+    delivery_mapping_version: requiredString(
+      record.delivery_mapping_version,
+      "delivery_mapping_version",
+    ),
+    audio_format: audioFormat,
+    mime_type: mimeType,
+    sample_rate: positiveInteger(record.sample_rate, "sample_rate"),
+    elapsed_ms: nonNegativeInteger(record.elapsed_ms, "elapsed_ms"),
+    audio_byte_length: audioByteLength,
+    audio_base64: audioBase64,
+  };
+}
+
+function optionalVoiceFields(
+  record: Record<string, unknown>,
+): Partial<AdminPlayerProfile> {
+  const parsed: Partial<AdminPlayerProfile> = {};
+  if ("tts_speaker" in record) {
+    parsed.tts_speaker = nullableString(record.tts_speaker, "tts_speaker");
+  }
+  if ("base_delivery_mood" in record) {
+    parsed.base_delivery_mood = nullableString(
+      record.base_delivery_mood,
+      "base_delivery_mood",
+    );
+  }
+  if ("base_delivery_intensity" in record) {
+    parsed.base_delivery_intensity = nullableString(
+      record.base_delivery_intensity,
+      "base_delivery_intensity",
+    );
+  }
+  if ("base_delivery_pace" in record) {
+    parsed.base_delivery_pace = nullableString(
+      record.base_delivery_pace,
+      "base_delivery_pace",
+    );
+  }
+  if ("base_delivery_instruction" in record) {
+    parsed.base_delivery_instruction = nullableString(
+      record.base_delivery_instruction,
+      "base_delivery_instruction",
+    );
+  }
+  if ("voice_enabled" in record) {
+    parsed.voice_enabled = booleanValue(record.voice_enabled, "voice_enabled");
+  }
+  if ("voice_config_version" in record) {
+    parsed.voice_config_version = positiveInteger(
+      record.voice_config_version,
+      "voice_config_version",
+    );
+  }
+  return parsed;
 }
 
 export function parseAdminPlayerProfileList(
@@ -261,6 +404,18 @@ function dateString(value: unknown, field: string) {
 
 function nullableDateString(value: unknown, field: string): string | null {
   return value === null ? null : dateString(value, field);
+}
+
+function enumString<const Value extends string>(
+  value: unknown,
+  allowed: readonly Value[],
+  field: string,
+): Value {
+  const parsed = requiredString(value, field);
+  if (!allowed.includes(parsed as Value)) {
+    throw invalidContract(`${field} 枚举值无效`);
+  }
+  return parsed as Value;
 }
 
 function invalidContract(detail: string) {

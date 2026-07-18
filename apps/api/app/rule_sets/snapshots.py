@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
 import re
-from dataclasses import replace
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 from app.models.rule_set import RuleSetRevisionRecord
@@ -48,7 +49,8 @@ from app.werewolf.rules import (
     TEAM_WEREWOLVES,
     RoleSpec,
     RuleSet,
-    rule_set_snapshot,
+    freeze_rule_set_snapshot,
+    validate_frozen_rule_contract_snapshot,
 )
 
 
@@ -93,6 +95,7 @@ _RUNTIME_FIELDS = (
 _RUNTIME_FIELD_SET = frozenset(_RUNTIME_FIELDS)
 _LEGACY_OPTIONAL_RUNTIME_FIELDS = frozenset({"exile_last_words_enabled"})
 _REVISION_FIELDS = frozenset({"revision_id", "revision_no", "schema_version", "content_hash"})
+_FROZEN_CONTRACT_FIELDS = frozenset({"rule_text", "rule_contract"})
 _ROLE_FIELDS = frozenset({"role", "count", "team", "model_group", "category"})
 _CONTENT_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 _CHANGED_FIELD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,119}")
@@ -321,7 +324,7 @@ def _compile_rule_set(
         sheriff_badge_bomb_policy=config.sheriff_badge_bomb_policy,
     )
     content_hash = rule_set_content_hash(config)
-    snapshot = rule_set_snapshot(rule_set)
+    snapshot = freeze_rule_set_snapshot(rule_set)
     if revision_id is not None and revision_no is not None:
         snapshot.update(
             {
@@ -408,11 +411,10 @@ def _resolve_snapshot(
             ),
             exile_last_words_enabled=False,
         )
-        legacy_snapshot = {
-            **compiled.snapshot,
-            "day_actions": list(legacy_rule_set.day_actions),
-            "exile_last_words_enabled": False,
-        }
+        legacy_snapshot = freeze_rule_set_snapshot(legacy_rule_set)
+        for field in _REVISION_FIELDS:
+            if field in compiled.snapshot:
+                legacy_snapshot[field] = compiled.snapshot[field]
         if "exile_last_words_enabled" not in snapshot:
             legacy_snapshot.pop("exile_last_words_enabled", None)
         compiled = replace(
@@ -422,6 +424,23 @@ def _resolve_snapshot(
         )
 
     _compare_runtime_snapshot(snapshot, compiled.snapshot)
+    present_frozen_fields = set(snapshot) & _FROZEN_CONTRACT_FIELDS
+    if present_frozen_fields:
+        try:
+            validate_frozen_rule_contract_snapshot(snapshot, compiled.rule_set)
+        except Exception as error:
+            raise ValueError("snapshot frozen rule contract is invalid") from error
+        frozen_snapshot = copy.deepcopy(compiled.snapshot)
+        for field in _FROZEN_CONTRACT_FIELDS:
+            frozen_snapshot[field] = copy.deepcopy(snapshot[field])
+        compiled = replace(compiled, snapshot=frozen_snapshot)
+    else:
+        legacy_snapshot = {
+            key: copy.deepcopy(value)
+            for key, value in compiled.snapshot.items()
+            if key not in _FROZEN_CONTRACT_FIELDS
+        }
+        compiled = replace(compiled, snapshot=legacy_snapshot)
     return compiled, config
 
 
@@ -430,7 +449,7 @@ def _validate_snapshot_shape(snapshot: Mapping[str, object]) -> bool:
         raise ValueError("rule set snapshot must be a mapping")
 
     fields = set(snapshot)
-    unknown = fields - _RUNTIME_FIELD_SET - _REVISION_FIELDS
+    unknown = fields - _RUNTIME_FIELD_SET - _REVISION_FIELDS - _FROZEN_CONTRACT_FIELDS
     if unknown:
         names = ", ".join(sorted(str(field) for field in unknown))
         raise ValueError(f"Unsupported snapshot fields: {names}")
@@ -443,6 +462,9 @@ def _validate_snapshot_shape(snapshot: Mapping[str, object]) -> bool:
     present_revision_fields = fields & _REVISION_FIELDS
     if present_revision_fields and present_revision_fields != _REVISION_FIELDS:
         raise ValueError("snapshot revision metadata must be all present or all absent")
+    present_frozen_fields = fields & _FROZEN_CONTRACT_FIELDS
+    if present_frozen_fields and present_frozen_fields != _FROZEN_CONTRACT_FIELDS:
+        raise ValueError("snapshot frozen rule contract fields must be all present or all absent")
     return bool(present_revision_fields)
 
 

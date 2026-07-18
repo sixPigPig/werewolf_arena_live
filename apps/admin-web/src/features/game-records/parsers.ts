@@ -16,6 +16,7 @@ import type {
   AdminGameRuleSet,
   AdminGameRun,
   AdminGameQualityEvaluation,
+  AdminGameQualityCriticalAction,
   AdminGameQualityIssues,
   AdminGameQualityRetry,
   AdminQualityDataStatus,
@@ -33,11 +34,30 @@ const RUN_STATUSES: LiveRunStatus[] = [
   "canceled",
 ];
 const QUALITY_EVALUATION_STATUSES: AdminQualityEvaluationStatus[] = [
-  "not_scheduled", "pending", "processing", "completed", "failed", "superseded",
+  "not_scheduled", "pending", "queued", "processing", "running", "completed", "failed", "superseded",
 ];
 const QUALITY_DATA_STATUSES: AdminQualityDataStatus[] = [
   "collecting", "available", "partial", "legacy", "unavailable",
 ];
+const CRITICAL_ACTION_ORIGINS = [
+  "canceled", "failed", "model_after_retry", "model_first_attempt", "rule_default", "state_machine", "system_fallback", "system_timeout",
+] as const;
+const CRITICAL_INPUT_COMPLETENESS = [
+  "complete", "critical_public_fact_missing", "private_observation_missing", "rule_missing", "unknown",
+] as const;
+const CRITICAL_ACTION_LEGALITY = [
+  "invalid_normalized", "invalid_not_executed", "invalid_system_fallback", "legal_but_canceled", "legal_executed", "legal_system_result", "not_executed", "unknown",
+] as const;
+const CRITICAL_REASONING_OBSERVATIONS = [
+  "hard_rule_conflict", "identity_information_conflict", "internal_logic_contradiction", "not_assessed", "not_available", "used_unspecified_rule",
+] as const;
+const CRITICAL_DIRECT_IMPACTS = [
+  "canceled_no_effect", "failed_no_effect", "game_state_effect_applied", "model_result_applied", "no_state_change", "phase_ended", "system_result_applied", "vote_recorded",
+] as const;
+const CRITICAL_ATTRIBUTIONS = [
+  "canceled", "model_internal_logic_contradiction", "model_judgment_and_rule_input_gap", "model_reasoning_error", "not_determined", "runtime_fallback",
+] as const;
+const CRITICAL_COVERAGE_STATUSES = ["complete", "partial", "missing", "unknown"] as const;
 const MODEL_REQUEST_STATUSES: AdminGameModelRequestStatus[] = [
   "pending",
   "completed",
@@ -184,6 +204,7 @@ export function parseAdminGameQualityEvaluation(
     schema_version: 1,
     evaluator_version: requiredString(record.evaluator_version, "quality_evaluation.evaluator_version"),
     evaluation_status: enumValue(record.evaluation_status, QUALITY_EVALUATION_STATUSES, "quality_evaluation.evaluation_status"),
+    ...optionalQualityTaskFields(record),
     data_status: enumValue(record.data_status, QUALITY_DATA_STATUSES, "quality_evaluation.data_status"),
     verdict: enumValue(record.verdict, ["pass", "warn", "fail", "unavailable"] as const, "quality_evaluation.verdict"),
     source_coverage: {
@@ -252,8 +273,207 @@ export function parseAdminGameQualityEvaluation(
       privacy_p0_issue_count: nonNegativeInteger(content.privacy_p0_issue_count, "quality_evaluation.content.privacy_p0_issue_count"),
       lineup_warning_count: nonNegativeInteger(content.lineup_warning_count, "quality_evaluation.content.lineup_warning_count"),
     },
+    critical_actions: parseQualityCriticalActions(record.critical_actions),
     evaluated_at: nullableDateString(record.evaluated_at, "quality_evaluation.evaluated_at"),
   };
+}
+
+function parseQualityCriticalActions(
+  value: unknown,
+): AdminGameQualityCriticalAction[] {
+  const items = arrayValue(value, "quality_evaluation.critical_actions");
+  if (items.length > 64) {
+    throw invalidContract("quality_evaluation.critical_actions 超过 64 条");
+  }
+  const seenActionIds = new Set<string>();
+  return items.map((value, index) => {
+    const path = `quality_evaluation.critical_actions[${index}]`;
+    const record = recordValue(value);
+    rejectUnexpectedKeys(
+      record,
+      [
+        "schema_version", "action_id", "round_number", "action", "action_origin",
+        "input_completeness", "action_legality", "reasoning_observation",
+        "direct_impact", "attribution", "clause_ids", "coverage",
+      ],
+      path,
+    );
+    if (record.schema_version !== 1) {
+      throw invalidContract(`${path}.schema_version 不受支持`);
+    }
+    const actionId = patternString(
+      record.action_id,
+      /^[A-Za-z0-9_-]{1,80}$/,
+      `${path}.action_id`,
+    );
+    if (seenActionIds.has(actionId)) {
+      throw invalidContract(`${path}.action_id 重复`);
+    }
+    seenActionIds.add(actionId);
+    const clauseIds = criticalClauseIds(record.clause_ids, `${path}.clause_ids`);
+    const coverage = recordValue(record.coverage);
+    rejectUnexpectedKeys(
+      coverage,
+      [
+        "schema_version", "status", "required_count", "included_count",
+        "missing_count", "missing_clause_ids",
+      ],
+      `${path}.coverage`,
+    );
+    if (coverage.schema_version !== 1) {
+      throw invalidContract(`${path}.coverage.schema_version 不受支持`);
+    }
+    const coverageStatus = enumValue(
+      coverage.status,
+      CRITICAL_COVERAGE_STATUSES,
+      `${path}.coverage.status`,
+    );
+    const requiredCount = boundedNonNegativeInteger(
+      coverage.required_count,
+      16,
+      `${path}.coverage.required_count`,
+    );
+    const includedCount = boundedNonNegativeInteger(
+      coverage.included_count,
+      16,
+      `${path}.coverage.included_count`,
+    );
+    const missingCount = boundedNonNegativeInteger(
+      coverage.missing_count,
+      16,
+      `${path}.coverage.missing_count`,
+    );
+    const missingClauseIds = criticalClauseIds(
+      coverage.missing_clause_ids,
+      `${path}.coverage.missing_clause_ids`,
+    );
+    const coverageShapeIsValid =
+      requiredCount === clauseIds.length &&
+      missingCount === missingClauseIds.length &&
+      missingClauseIds.every((clauseId) => clauseIds.includes(clauseId)) &&
+      ({
+        complete: includedCount === requiredCount && missingCount === 0,
+        partial: includedCount > 0 && missingCount > 0 && includedCount + missingCount === requiredCount,
+        missing: requiredCount > 0 && includedCount === 0 && missingCount === requiredCount,
+        unknown: includedCount === 0 && missingCount === 0,
+      })[coverageStatus];
+    if (!coverageShapeIsValid) {
+      throw invalidContract(`${path}.coverage 计数关系无效`);
+    }
+    return {
+      schema_version: 1,
+      action_id: actionId,
+      round_number: nullableBoundedNonNegativeInteger(
+        record.round_number,
+        1_000_000,
+        `${path}.round_number`,
+      ),
+      action: patternString(
+        record.action,
+        /^[a-z][a-z0-9_]{0,63}$/,
+        `${path}.action`,
+      ),
+      action_origin: enumValue(record.action_origin, CRITICAL_ACTION_ORIGINS, `${path}.action_origin`),
+      input_completeness: enumValue(record.input_completeness, CRITICAL_INPUT_COMPLETENESS, `${path}.input_completeness`),
+      action_legality: enumValue(record.action_legality, CRITICAL_ACTION_LEGALITY, `${path}.action_legality`),
+      reasoning_observation: enumValue(record.reasoning_observation, CRITICAL_REASONING_OBSERVATIONS, `${path}.reasoning_observation`),
+      direct_impact: enumValue(record.direct_impact, CRITICAL_DIRECT_IMPACTS, `${path}.direct_impact`),
+      attribution: enumValue(record.attribution, CRITICAL_ATTRIBUTIONS, `${path}.attribution`),
+      clause_ids: clauseIds,
+      coverage: {
+        schema_version: 1,
+        status: coverageStatus,
+        required_count: requiredCount,
+        included_count: includedCount,
+        missing_count: missingCount,
+        missing_clause_ids: missingClauseIds,
+      },
+    };
+  });
+}
+
+function criticalClauseIds(value: unknown, field: string): string[] {
+  const values = stringArray(value, field);
+  if (values.length > 16) {
+    throw invalidContract(`${field} 超过 16 条`);
+  }
+  const clauses = values.map((item, index) =>
+    patternString(item, /^[a-z0-9_.-]{1,120}$/, `${field}[${index}]`),
+  );
+  if (new Set(clauses).size !== clauses.length) {
+    throw invalidContract(`${field} 包含重复条目`);
+  }
+  return clauses;
+}
+
+function optionalQualityTaskFields(
+  record: Record<string, unknown>,
+): Partial<AdminGameQualityEvaluation> {
+  const parsed: Partial<AdminGameQualityEvaluation> = {};
+  if ("source_revision" in record) {
+    parsed.source_revision = requiredString(
+      record.source_revision,
+      "quality_evaluation.source_revision",
+    );
+  }
+  if ("created_at" in record) {
+    parsed.created_at = nullableDateString(
+      record.created_at,
+      "quality_evaluation.created_at",
+    );
+  }
+  if ("started_at" in record) {
+    parsed.started_at = nullableDateString(
+      record.started_at,
+      "quality_evaluation.started_at",
+    );
+  }
+  if ("completed_at" in record) {
+    parsed.completed_at = nullableDateString(
+      record.completed_at,
+      "quality_evaluation.completed_at",
+    );
+  }
+  if ("attempt_count" in record) {
+    parsed.attempt_count = nonNegativeInteger(
+      record.attempt_count,
+      "quality_evaluation.attempt_count",
+    );
+  }
+  if ("failure_reason" in record) {
+    parsed.failure_reason = nullableString(
+      record.failure_reason,
+      "quality_evaluation.failure_reason",
+    );
+  }
+  if ("can_retry" in record) {
+    parsed.can_retry = booleanValue(
+      record.can_retry,
+      "quality_evaluation.can_retry",
+    );
+  }
+  if ("latest_successful_result" in record) {
+    if (record.latest_successful_result === null) {
+      parsed.latest_successful_result = null;
+    } else {
+      const latest = recordValue(record.latest_successful_result);
+      parsed.latest_successful_result = {
+        evaluator_version: requiredString(
+          latest.evaluator_version,
+          "quality_evaluation.latest_successful_result.evaluator_version",
+        ),
+        source_revision: requiredString(
+          latest.source_revision,
+          "quality_evaluation.latest_successful_result.source_revision",
+        ),
+        completed_at: dateString(
+          latest.completed_at,
+          "quality_evaluation.latest_successful_result.completed_at",
+        ),
+      };
+    }
+  }
+  return parsed;
 }
 
 export function parseAdminGameQualityIssues(value: unknown): AdminGameQualityIssues {
@@ -685,6 +905,14 @@ function requiredString(value: unknown, field: string) {
   return parsed;
 }
 
+function patternString(value: unknown, pattern: RegExp, field: string) {
+  const parsed = requiredString(value, field);
+  if (!pattern.test(parsed)) {
+    throw invalidContract(`${field} 格式无效`);
+  }
+  return parsed;
+}
+
 function stringValue(value: unknown, field: string) {
   if (typeof value !== "string") {
     throw invalidContract(`${field} 不是字符串`);
@@ -726,6 +954,28 @@ function nonNegativeInteger(value: unknown, field: string) {
     throw invalidContract(`${field} 不是非负整数`);
   }
   return value;
+}
+
+function boundedNonNegativeInteger(
+  value: unknown,
+  maximum: number,
+  field: string,
+) {
+  const parsed = nonNegativeInteger(value, field);
+  if (parsed > maximum) {
+    throw invalidContract(`${field} 超过上限`);
+  }
+  return parsed;
+}
+
+function nullableBoundedNonNegativeInteger(
+  value: unknown,
+  maximum: number,
+  field: string,
+): number | null {
+  return value === null
+    ? null
+    : boundedNonNegativeInteger(value, maximum, field);
 }
 
 function nullableNonNegativeInteger(

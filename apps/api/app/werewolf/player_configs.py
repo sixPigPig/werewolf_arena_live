@@ -23,6 +23,13 @@ class PlayerConfig:
     avatar_asset_id: str | None = None
     catchphrases: tuple[str, ...] = ()
     strategy_profile: str = "balanced"
+    tts_speaker: str = ""
+    base_delivery_mood: str = "neutral"
+    base_delivery_intensity: str = "medium"
+    base_delivery_pace: str = "natural"
+    base_delivery_instruction: str = ""
+    voice_enabled: bool = True
+    voice_config_version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +45,13 @@ class PlayerConfig:
             "avatar_asset_id": self.avatar_asset_id,
             "catchphrases": list(self.catchphrases),
             "strategy_profile": self.strategy_profile,
+            "tts_speaker": self.tts_speaker,
+            "base_delivery_mood": self.base_delivery_mood,
+            "base_delivery_intensity": self.base_delivery_intensity,
+            "base_delivery_pace": self.base_delivery_pace,
+            "base_delivery_instruction": self.base_delivery_instruction,
+            "voice_enabled": self.voice_enabled,
+            "voice_config_version": self.voice_config_version,
             "tags": list(self.tags),
         }
 
@@ -122,6 +136,41 @@ def player_config_from_profile(
             or _profile_string(profile, "strategy_profile")
             or "balanced"
         ),
+        tts_speaker=(
+            _override_string(overrides, "tts_speaker")
+            or _profile_string(profile, "tts_speaker")
+            or ""
+        ),
+        base_delivery_mood=(
+            _override_string(overrides, "base_delivery_mood")
+            or _profile_string(profile, "base_delivery_mood")
+            or "neutral"
+        ),
+        base_delivery_intensity=(
+            _override_string(overrides, "base_delivery_intensity")
+            or _profile_string(profile, "base_delivery_intensity")
+            or "medium"
+        ),
+        base_delivery_pace=(
+            _override_string(overrides, "base_delivery_pace")
+            or _profile_string(profile, "base_delivery_pace")
+            or "natural"
+        ),
+        base_delivery_instruction=(
+            _override_string(overrides, "base_delivery_instruction")
+            or _profile_string(profile, "base_delivery_instruction")
+            or ""
+        ),
+        voice_enabled=(
+            _override_bool(overrides, "voice_enabled", default=True)
+            if "voice_enabled" in overrides
+            else _profile_bool(profile, "voice_enabled", default=True)
+        ),
+        voice_config_version=_profile_int(
+            profile,
+            "voice_config_version",
+            default=_profile_int(profile, "version", default=1),
+        ),
         tags=_tags_from_value(
             overrides["tags"] if "tags" in overrides else getattr(profile, "tags", ())
         ),
@@ -142,6 +191,24 @@ def player_config_from_dict(data: dict[str, Any]) -> PlayerConfig:
         avatar_asset_id=clean_optional_string(data.get("avatar_asset_id")),
         catchphrases=_tags_from_value(data.get("catchphrases")),
         strategy_profile=clean_optional_string(data.get("strategy_profile")) or "balanced",
+        tts_speaker=clean_optional_string(data.get("tts_speaker")) or "",
+        base_delivery_mood=(
+            clean_optional_string(data.get("base_delivery_mood")) or "neutral"
+        ),
+        base_delivery_intensity=(
+            clean_optional_string(data.get("base_delivery_intensity")) or "medium"
+        ),
+        base_delivery_pace=(
+            clean_optional_string(data.get("base_delivery_pace")) or "natural"
+        ),
+        base_delivery_instruction=(
+            clean_optional_string(data.get("base_delivery_instruction")) or ""
+        ),
+        voice_enabled=_bool_from_value(data.get("voice_enabled"), default=True),
+        voice_config_version=_int_from_value(
+            data.get("voice_config_version"),
+            default=1,
+        ),
         tags=_tags_from_value(data.get("tags")),
     )
 
@@ -193,6 +260,51 @@ def _profile_string(profile: object | None, key: str) -> str | None:
     if profile is None:
         return None
     return clean_optional_string(getattr(profile, key, None))
+
+
+def _override_bool(overrides: dict[str, Any], key: str, *, default: bool) -> bool:
+    if key not in overrides:
+        return default
+    return _bool_from_value(overrides.get(key), default=default)
+
+
+def _profile_bool(
+    profile: object | None,
+    key: str,
+    *,
+    default: bool,
+) -> bool:
+    if profile is None:
+        return default
+    return _bool_from_value(getattr(profile, key, None), default=default)
+
+
+def _profile_int(profile: object | None, key: str, *, default: int) -> int:
+    if profile is None:
+        return default
+    return _int_from_value(getattr(profile, key, None), default=default)
+
+
+def _bool_from_value(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return default
+
+
+def _int_from_value(value: object, *, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value) if value is not None else default
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(1, parsed)
 
 
 def _profile_avatar_image_url(profile: object | None) -> str | None:

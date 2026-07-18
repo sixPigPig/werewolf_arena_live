@@ -211,8 +211,10 @@ describe("admin live run flow", () => {
     expect(screen.getByText(/样本 18 · 最大值 13200 ms/)).toBeInTheDocument();
     expect(screen.getByText("Provider attempt 终态")).toBeInTheDocument();
     expect(screen.getByText(/有效 24 · 非法 1 · 超时 1/)).toBeInTheDocument();
-    expect(screen.getByText("Logical action 终态")).toBeInTheDocument();
-    expect(screen.getByText(/完成 22 · 降级 1 · 取消 0 · 失败 1/)).toBeInTheDocument();
+    expect(screen.getByText("Logical action 来源")).toBeInTheDocument();
+    expect(
+      screen.getByText(/模型完成 22 · 系统 fallback 1 · 取消 0 · 失败 1/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/需要 runs.debug.read 权限/)).toBeInTheDocument();
     expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
     expect(screen.getByText("doubao-seed-1-6-flash")).toBeInTheDocument();
@@ -220,6 +222,36 @@ describe("admin live run flow", () => {
       fetchMock.mock.calls.some(([input]) => String(input).endsWith("/debug")),
     ).toBe(false);
     expect(screen.queryByRole("button", { name: /停止|恢复|重试运行/ })).toBeNull();
+  });
+
+  it("does not synthesize attempt or logical-action distributions for older payloads", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["runs.read"]));
+      }
+      if (url.endsWith("/api/v1/admin/live-runs/run_active123")) {
+        return jsonResponse({
+          ...contractActiveLiveRunDetail,
+          p2_diagnostics: {
+            ...contractActiveLiveRunDetail.p2_diagnostics,
+            provider_attempt_outcomes: undefined,
+            logical_action_outcomes: undefined,
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/operations/runs/run_active123");
+
+    expect(
+      await screen.findByRole("heading", { name: "P2 运行质量" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Provider 超时 / 系统降级")).toBeInTheDocument();
+    expect(screen.getByText("1 / —")).toBeInTheDocument();
+    expect(screen.queryByText("Provider attempt 终态")).not.toBeInTheDocument();
+    expect(screen.queryByText("Logical action 来源")).not.toBeInTheDocument();
   });
 
   it("renders an explicit legacy P2 empty state without fake metrics", async () => {

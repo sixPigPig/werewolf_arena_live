@@ -1,4 +1,8 @@
 import type { LivePlayer, LiveSpectatorState } from "./liveSpectator";
+import {
+  livePublicStatusForEvent,
+  publicReasonLabel,
+} from "./liveEventMeta";
 import { eventTypeLabel } from "./liveLabels";
 import { projectLivePresentationEvents } from "./livePresentation";
 import type { LiveGameEvent } from "../types";
@@ -815,11 +819,21 @@ function collectTerminal(view: MutableGodView, event: LiveGameEvent) {
 
 function collectEventLine(view: MutableGodView, event: LiveGameEvent) {
   const line = eventLineFor(event, view.nameToSeat);
-  if (line) {
+  const duplicateNotSpoken =
+    line !== null &&
+    event.type === "action_parsed" &&
+    livePublicStatusForEvent(event)?.kind === "not_spoken" &&
+    view.eventLines.at(-1)?.text === line.text &&
+    view.eventLines.at(-1)?.round === line.round &&
+    view.eventLines.at(-1)?.phase === line.phase;
+  if (line && !duplicateNotSpoken) {
     view.eventLines.push(line);
   }
   if (
     event.type === "phase_started" ||
+    event.type === "phase_completed" ||
+    event.type === "player_did_not_speak" ||
+    event.type === "public_action_cancelled" ||
     event.type === "state_updated" ||
     event.type === "game_completed"
   ) {
@@ -918,7 +932,52 @@ function eventLineFor(
     };
   }
   if (event.type === "action_parsed") {
+    if (livePublicStatusForEvent(event)?.kind === "not_spoken") {
+      const actor = seatLabel(event.actor ?? "未知玩家", nameToSeat);
+      return {
+        id: event.id,
+        time: timeLabel(event),
+        text: `${actor} 本轮未发言`,
+        detail:
+          publicReasonLabel(
+            livePublicStatusForEvent(event)?.reasonCode ?? null,
+          ) || "本轮没有记录玩家发言",
+        tone: "warning",
+        round: event.round,
+        phase: event.phase,
+      };
+    }
     return actionParsedLine(event, payload, nameToSeat);
+  }
+  if (event.type === "player_did_not_speak") {
+    const actor = seatLabel(event.actor ?? "未知玩家", nameToSeat);
+    return {
+      id: event.id,
+      time: timeLabel(event),
+      text: `${actor} 本轮未发言`,
+      detail:
+        publicReasonLabel(
+          livePublicStatusForEvent(event)?.reasonCode ?? null,
+        ) || "本轮没有记录玩家发言",
+      tone: "warning",
+      round: event.round,
+      phase: event.phase,
+    };
+  }
+  if (event.type === "public_action_cancelled") {
+    const actor = seatLabel(event.actor ?? "当前玩家", nameToSeat);
+    return {
+      id: event.id,
+      time: timeLabel(event),
+      text: `${actor} 公开行动取消`,
+      detail:
+        publicReasonLabel(
+          livePublicStatusForEvent(event)?.reasonCode ?? null,
+        ) || "流程状态已发生变化",
+      tone: "danger",
+      round: event.round,
+      phase: event.phase,
+    };
   }
   if (
     event.type === "judge_cue" &&
@@ -958,6 +1017,16 @@ function eventLineFor(
       id: event.id,
       time: timeLabel(event),
       text: phaseEventText(event.phase),
+      tone: "default",
+      round: event.round,
+      phase: event.phase,
+    };
+  }
+  if (event.type === "phase_completed") {
+    return {
+      id: event.id,
+      time: timeLabel(event),
+      text: `${phaseDisplay(event.phase)}阶段完成`,
       tone: "default",
       round: event.round,
       phase: event.phase,
@@ -1043,6 +1112,7 @@ function actionParsedLine(
   }
 
   const choice = stringField(payload, "choice") || parsedChoice(payload);
+  const publicStatus = livePublicStatusForEvent(event);
   const targetSeat = choice ? seatLabel(choice, nameToSeat) : "";
   const base = {
     id: event.id,
@@ -1150,10 +1220,19 @@ function actionParsedLine(
     if (!event.actor || !choice) {
       return null;
     }
+    const actorSeat = seatLabel(event.actor, nameToSeat);
+    if (publicStatus?.kind === "system_fallback") {
+      return {
+        ...base,
+        text: `系统代投：${actorSeat} -> ${targetSeat}`,
+        detail: `系统代替 ${actorSeat} 投给 ${targetSeat}`,
+        tone: "warning",
+      };
+    }
     return {
       ...base,
-      text: `${seatLabel(event.actor, nameToSeat)} -> ${targetSeat}`,
-      detail: `${seatLabel(event.actor, nameToSeat)} 投给 ${targetSeat}`,
+      text: `${actorSeat} -> ${targetSeat}`,
+      detail: `${actorSeat} 投给 ${targetSeat}`,
       tone: "warning",
     };
   }
@@ -1161,8 +1240,14 @@ function actionParsedLine(
     if (choice === "destroy" || choice === "撕毁") {
       return {
         ...base,
-        text: "警徽撕毁",
-        detail: "警徽被撕毁",
+        text:
+          publicStatus?.kind === "rule_default"
+            ? "规则默认：警徽撕毁"
+            : "警徽撕毁",
+        detail:
+          publicStatus?.kind === "rule_default"
+            ? "按规则默认撕毁警徽"
+            : "警徽被撕毁",
         tone: "warning",
       };
     }
@@ -1761,6 +1846,21 @@ function stageFocusForEvent(event: LiveGameEvent): GodViewStageFocus {
     return stageFocusForStateUpdate(event);
   }
 
+  if (
+    event.type === "player_did_not_speak" ||
+    livePublicStatusForEvent(event)?.kind === "not_spoken"
+  ) {
+    return settledActorStageFocus(event.actor, "未发言");
+  }
+
+  if (event.type === "public_action_cancelled") {
+    return settledActorStageFocus(event.actor, "行动取消");
+  }
+
+  if (event.type === "phase_completed") {
+    return waitingStageFocus();
+  }
+
   if (event.actor) {
     return stageFocusForActorEvent(event);
   }
@@ -1770,6 +1870,18 @@ function stageFocusForEvent(event: LiveGameEvent): GodViewStageFocus {
   }
 
   return waitingStageFocus();
+}
+
+function settledActorStageFocus(
+  actorName: string | null,
+  label: string,
+): GodViewStageFocus {
+  return {
+    ...waitingStageFocus(),
+    actorName,
+    actorStatus: actorName ? { kind: "resolved", label } : null,
+    countdownLabel: label,
+  };
 }
 
 function stageFocusForStateUpdate(event: LiveGameEvent): GodViewStageFocus {

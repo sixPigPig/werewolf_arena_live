@@ -23,6 +23,7 @@ _KNOWN_EVENT_TYPES = frozenset(
         "game_started",
         "idiot_revealed",
         "judge_cue",
+        "late_result_discarded",
         "model_request_failed",
         "model_request_started",
         "model_response_delta",
@@ -30,6 +31,8 @@ _KNOWN_EVENT_TYPES = frozenset(
         "model_retry_scheduled",
         "model_thinking_tick",
         "phase_started",
+        "phase_completed",
+        "player_did_not_speak",
         "public_action_cancelled",
         "role_revealed",
         "round_started",
@@ -293,6 +296,10 @@ _ACTION_PAYLOAD_KEYS = frozenset(
         "visible_text",
         "vote_round",
         "warnings",
+        "action_origin",
+        "public_reason_code",
+        "speech_status",
+        "retry_completed",
     }
 )
 
@@ -311,6 +318,7 @@ _STATE_PAYLOAD_KEYS = frozenset(
         "exile_pk_speeches",
         "exile_resolution_reason",
         "exile_runoff_votes",
+        "exile_runoff_vote_origins",
         "hunter_shot",
         "hunter_shot_status",
         "idiot_revealed",
@@ -337,16 +345,19 @@ _STATE_PAYLOAD_KEYS = frozenset(
         "sheriff_pk_speeches",
         "sheriff_pre_election_bomb_count",
         "sheriff_runoff_votes",
+        "sheriff_runoff_vote_origins",
         "sheriff_speech_direction",
         "sheriff_speech_order",
         "sheriff_speeches",
         "sheriff_voters",
         "sheriff_votes",
+        "sheriff_vote_origins",
         "sheriff_withdrawn",
         "speech_order",
         "speech_order_choice",
         "vote_weights",
         "votes",
+        "vote_origins",
         "werewolf_self_exploded",
     }
 )
@@ -392,7 +403,29 @@ _PAYLOAD_KEYS_BY_EVENT_TYPE: dict[str, frozenset[str]] = {
         }
     ),
     "round_started": frozenset({"active_players", "playback", "round"}),
-    "phase_started": frozenset({"active_players", "narration_mode", "playback"}),
+    "phase_started": frozenset(
+        {"active_players", "narration_mode", "playback", "phase_instance_id"}
+    ),
+    "phase_completed": frozenset(
+        {
+            "phase_instance_id",
+            "completion_status",
+            "completion_reason",
+            "next_phase",
+            "terminal",
+            "source_event_id",
+            "audience_policy",
+        }
+    ),
+    "player_did_not_speak": frozenset(
+        {
+            "schema_version",
+            "visible_text",
+            "speech_status",
+            "action_origin",
+            "public_reason_code",
+        }
+    ),
     "public_action_cancelled": frozenset({"canceled_action", "reason_code"}),
     "judge_cue": _JUDGE_CUE_PAYLOAD_KEYS,
     "action_requested": _ACTION_PAYLOAD_KEYS,
@@ -404,6 +437,9 @@ _PAYLOAD_KEYS_BY_EVENT_TYPE: dict[str, frozenset[str]] = {
     "model_request_failed": _ACTION_PAYLOAD_KEYS,
     "model_response_received": _ACTION_PAYLOAD_KEYS,
     "model_retry_scheduled": _ACTION_PAYLOAD_KEYS,
+    "late_result_discarded": frozenset(
+        {"action_id", "request_id", "discard_reason"}
+    ),
     "state_updated": _STATE_PAYLOAD_KEYS,
     "role_revealed": frozenset({"player", "role"}),
     "idiot_revealed": frozenset({"player", "role"}),
@@ -448,6 +484,8 @@ def _event_is_visible(event: LiveEvent, audience: ProjectionAudience) -> bool:
         return False
     if event.type in _NEVER_EXTERNAL_EVENT_TYPES:
         return False
+    if event.type == "late_result_discarded":
+        return audience == "spectator_god_view"
     if event.action not in PRIVATE_ACTIONS:
         return not (
             audience == "player_public" and event.action in _PUBLIC_ONLY_HIDDEN_ACTIONS
@@ -464,6 +502,7 @@ def _action_is_known(event: LiveEvent) -> bool:
             "action_quality_warning",
             "action_requested",
             "judge_cue",
+            "late_result_discarded",
             "model_request_failed",
             "model_request_started",
             "model_response_delta",
@@ -486,6 +525,8 @@ def _action_is_known(event: LiveEvent) -> bool:
         "model_response_received",
         "model_retry_scheduled",
         "model_thinking_tick",
+        "late_result_discarded",
+        "player_did_not_speak",
     }:
         return event.action in _KNOWN_PLAYER_ACTIONS
     return False
@@ -539,6 +580,13 @@ def _project_payload(event: LiveEvent, audience: ProjectionAudience) -> dict[str
             in {"role_revealed", "idiot_revealed", "werewolf_self_exploded"}
         ),
     )
+    if event.type == "phase_completed":
+        source_event_id = payload.get("source_event_id")
+        if type(source_event_id) is int and source_event_id > 0:
+            # This is the opaque ID of the matching public phase_started event,
+            # not a private source payload. Keep the exception exact so other
+            # source-like fields still fail closed in the generic sanitizer.
+            projected["source_event_id"] = source_event_id
     if (
         event.type == "state_updated"
         and event.action == "night_resolved"
@@ -573,11 +621,9 @@ def _sanitize_mapping(
         normalized_key = str(key).lower()
         normalized_token = re.sub(r"[^a-z0-9]", "", normalized_key)
         if normalized_key == "rule_set" and isinstance(item, Mapping):
-            projected[str(key)] = _sanitize_mapping(
+            projected[str(key)] = _sanitize_rule_set(
                 item,
                 audience=audience,
-                allow_roles=True,
-                allow_team=True,
             )
             continue
         if normalized_key == "roles" and isinstance(item, Mapping) and not allow_roles:
@@ -597,6 +643,44 @@ def _sanitize_mapping(
             allow_roles=allow_roles,
             allow_team=allow_team,
         )
+    return projected
+
+
+def _sanitize_rule_set(
+    value: Mapping[str, Any],
+    *,
+    audience: ProjectionAudience,
+) -> dict[str, Any]:
+    projected = _sanitize_mapping(
+        value,
+        audience=audience,
+        allow_roles=True,
+        allow_team=True,
+    )
+    if audience != "player_public":
+        return projected
+    raw_contract = value.get("rule_contract")
+    if not isinstance(raw_contract, Mapping):
+        return projected
+    public_contract = {
+        key: _sanitize_value(item, audience=audience, key=str(key))
+        for key, item in raw_contract.items()
+        if key != "clauses"
+    }
+    raw_clauses = raw_contract.get("clauses")
+    if isinstance(raw_clauses, list):
+        public_contract["clauses"] = [
+            _sanitize_mapping(
+                clause,
+                audience=audience,
+                allow_roles=True,
+                allow_team=False,
+            )
+            for clause in raw_clauses
+            if isinstance(clause, Mapping)
+            and clause.get("audience") == "player_public"
+        ]
+    projected["rule_contract"] = public_contract
     return projected
 
 

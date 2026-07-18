@@ -12,9 +12,11 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
-from app.werewolf.action_quality import (
-    DETERMINISTIC_HARD_RULE_CODES,
-    action_quality_warnings,
+from app.werewolf.action_quality import action_quality_warnings
+from app.werewolf.checkpoint import (
+    ResumeCheckpointError,
+    lifecycle_event_entry,
+    merge_lifecycle_event_entries,
 )
 from app.werewolf.config import (
     DEFAULT_DEBATE_TURNS,
@@ -113,6 +115,11 @@ from app.werewolf.public_outcomes import (
     render_public_round_summary,
 )
 from app.werewolf.quality_telemetry import record_speech_quality
+from app.werewolf.speech_delivery import (
+    DELIVERY_MAPPING_VERSION,
+    compile_context_texts,
+    delivery_from_result,
+)
 from app.werewolf.rules import (
     ACTION_DEBATE,
     ACTION_EXILE_LAST_WORDS,
@@ -133,6 +140,7 @@ from app.werewolf.rules import (
     ACTION_PROTECT,
     ACTION_REMOVE,
     ACTION_SPEECH_ORDER,
+    ACTION_VOTE,
     ACTION_WITCH_POISON,
     ACTION_WITCH_SAVE,
     MODEL_GROUP_WEREWOLF,
@@ -142,9 +150,9 @@ from app.werewolf.rules import (
     TEAM_WEREWOLVES,
     WIN_CONDITION_SLAUGHTER_SIDE,
     RuleSet,
-    render_rule_text,
     role_category,
     rule_set_snapshot,
+    rule_text_from_snapshot,
 )
 from app.werewolf.self_explosion_audit import (
     build_self_explosion_audit_payload,
@@ -156,16 +164,7 @@ WEREWOLF_DISCUSSION_TIMEOUT_SECONDS = 15.0
 WEREWOLF_FINAL_VOTE_TIMEOUT_SECONDS = 15.0
 WEREWOLF_TIEBREAK_TIMEOUT_SECONDS = 10.0
 EventVisibility = Literal["public", "private"]
-HARD_ACTION_QUALITY_CODES = frozenset(
-    {
-        "appeals_to_missing_sheriff_voters",
-        "promises_ineligible_sheriff_vote",
-        "sheriff_speech_investigation_plan_without_seer_claim",
-        "assumes_future_round_in_endgame",
-        "ignores_terminal_risk",
-        "contradicts_public_vote_tally",
-    }
-) | DETERMINISTIC_HARD_RULE_CODES
+HARD_ACTION_QUALITY_CODES: frozenset[str] = frozenset()
 BUFFERED_QUALITY_ACTIONS = frozenset(
     {
         ACTION_SHERIFF_SPEECH,
@@ -177,11 +176,6 @@ BUFFERED_QUALITY_ACTIONS = frozenset(
 )
 PRIVATE_LENGTH_BUDGETED_ACTIONS = frozenset(
     {ACTION_WEREWOLF_DISCUSS, ACTION_WEREWOLF_KILL_VOTE}
-)
-REQUIRED_PUBLIC_SPEECH_FALLBACK = "本轮暂不追加判断，投票时我会给出明确选择。"
-OBJECTIVE_FACT_QUALITY_CODES = frozenset({"contradicts_public_vote_tally"})
-SAFE_FALLBACK_QUALITY_CODES = (
-    OBJECTIVE_FACT_QUALITY_CODES | DETERMINISTIC_HARD_RULE_CODES
 )
 SHERIFF_SPEECH_CONTEXT_MAX_CHARS = 180
 
@@ -195,6 +189,11 @@ def _compact_sheriff_speech_context(text: str) -> str:
 
 class MaxRoundsExceeded(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class _LifecycleEventReceipt:
+    id: int
 
 
 class GameCheckpointManager(Protocol):
@@ -271,6 +270,7 @@ class PlayerActionResult:
     duration_ms: int = 0
     budget_ms: int | None = None
     fallback_reason: str | None = None
+    reason_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -313,13 +313,34 @@ class _PublicActionInterruptedBySelfExplosion(ModelActionCanceled):
 
 
 class _BufferedEventSink:
-    def __init__(self, before_publish: Callable[[str], None] | None = None) -> None:
+    _LIFECYCLE_EVENT_TYPES = frozenset(
+        {
+            "model_request_started",
+            "model_attempt_completed",
+            "model_request_failed",
+            "model_retry_scheduled",
+        }
+    )
+
+    def __init__(
+        self,
+        before_publish: Callable[[str], None] | None = None,
+        lifecycle_destination: object | None = None,
+    ) -> None:
         self.events: list[tuple[str, dict[str, object]]] = []
         self._before_publish = before_publish
+        self._lifecycle_destination = lifecycle_destination
 
     def publish(self, event_type: str, **kwargs: object) -> None:
         if self._before_publish is not None:
             self._before_publish(event_type)
+        if (
+            self._lifecycle_destination is not None
+            and event_type in self._LIFECYCLE_EVENT_TYPES
+        ):
+            publish = getattr(self._lifecycle_destination, "publish")
+            publish(event_type, **kwargs)
+            return
         self.events.append((event_type, kwargs))
 
     def flush_to(self, event_sink: object) -> None:
@@ -330,25 +351,113 @@ class _BufferedEventSink:
     def flush_lifecycle_to(self, event_sink: object) -> None:
         publish = getattr(event_sink, "publish")
         for event_type, kwargs in self.events:
-            if event_type in {
-                "model_request_started",
-                "model_attempt_completed",
-                "model_request_failed",
-            }:
+            if event_type in self._LIFECYCLE_EVENT_TYPES:
                 publish(event_type, **kwargs)
 
 
-class _PublishGateSink:
+class _PrivateLifecycleEventSink:
+    """Persist private model lifecycle without private prompts, deltas, or choices."""
+
+    _ALLOWED_EVENT_TYPES = frozenset(
+        {
+            "model_request_started",
+            "model_attempt_completed",
+            "model_request_failed",
+            "model_retry_scheduled",
+            "late_result_discarded",
+        }
+    )
+    _ALLOWED_PAYLOAD_KEYS = frozenset(
+        {
+            "action_id",
+            "request_id",
+            "model",
+            "attempt",
+            "attempt_result",
+            "reason_code",
+            "discard_reason",
+        }
+    )
+
     def __init__(self, destination: object) -> None:
         self._destination = destination
+
+    def publish(self, event_type: str, **kwargs: object) -> None:
+        if event_type not in self._ALLOWED_EVENT_TYPES:
+            return
+        payload = kwargs.get("payload")
+        safe_payload = {
+            key: value
+            for key, value in (payload.items() if isinstance(payload, dict) else ())
+            if key in self._ALLOWED_PAYLOAD_KEYS
+            and isinstance(value, (str, int, float, bool))
+        }
+        publish = getattr(self._destination, "publish")
+        publish(event_type, **{**kwargs, "payload": safe_payload})
+
+
+class _PublishGateSink:
+    def __init__(
+        self,
+        destination: object,
+        *,
+        deadline_at_monotonic: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._destination = destination
+        self._deadline_at_monotonic = deadline_at_monotonic
+        self._monotonic = monotonic
         self._active = True
         self._lock = threading.Lock()
         self._active_attempts: dict[str, str] = {}
+        self._closed_attempts: dict[str, str] = {}
+        self._last_attempt: tuple[str, str] | None = None
         self._attempt_outcomes: list[dict[str, str]] = []
+        self._late_discarded_requests: set[str] = set()
 
     def publish(self, event_type: str, **kwargs: object) -> None:
         with self._lock:
-            if not self._active:
+            deadline_expired = (
+                self._deadline_at_monotonic is not None
+                and self._monotonic() >= self._deadline_at_monotonic
+            )
+            if not self._active or deadline_expired:
+                payload = kwargs.get("payload")
+                if isinstance(payload, dict):
+                    action_id = payload.get("action_id")
+                    request_id = payload.get("request_id")
+                    if (
+                        isinstance(action_id, str)
+                        and action_id
+                        and isinstance(request_id, str)
+                        and request_id
+                    ):
+                        self._last_attempt = (request_id, action_id)
+                        self._closed_attempts[request_id] = action_id
+                    if (
+                        event_type in {
+                            "model_attempt_completed",
+                            "model_request_failed",
+                        }
+                        and isinstance(action_id, str)
+                        and action_id
+                        and isinstance(request_id, str)
+                        and request_id
+                        and request_id not in self._late_discarded_requests
+                    ):
+                        self._late_discarded_requests.add(request_id)
+                        publish = getattr(self._destination, "publish")
+                        publish(
+                            "late_result_discarded",
+                            **{
+                                **kwargs,
+                                "payload": {
+                                    "action_id": action_id,
+                                    "request_id": request_id,
+                                    "discard_reason": "deadline_result_already_committed",
+                                },
+                            },
+                        )
                 return
             payload = kwargs.get("payload")
             if isinstance(payload, dict):
@@ -362,6 +471,7 @@ class _PublishGateSink:
                     and request_id
                 ):
                     self._active_attempts[request_id] = action_id
+                    self._last_attempt = (request_id, action_id)
                 elif event_type in {
                     "model_attempt_completed",
                     "model_request_failed",
@@ -403,12 +513,43 @@ class _PublishGateSink:
                     ),
                 ]
             )
+            self._closed_attempts = dict(self._active_attempts)
+            if not self._closed_attempts and self._last_attempt is not None:
+                request_id, action_id = self._last_attempt
+                self._closed_attempts[request_id] = action_id
             self._active_attempts.clear()
             self._active = False
+
+    def publish_late_discard(self, request: PlayerActionRequest) -> None:
+        with self._lock:
+            pending_attempt = next(iter(self._closed_attempts.items()), None)
+            if pending_attempt is None:
+                return
+            request_id, action_id = pending_attempt
+            if request_id in self._late_discarded_requests:
+                return
+            self._late_discarded_requests.add(request_id)
+            publish = getattr(self._destination, "publish")
+            publish(
+                "late_result_discarded",
+                round_number=request.round_state.number,
+                phase=request.phase,
+                actor=request.player.name,
+                action=request.action,
+                payload={
+                    "action_id": action_id,
+                    "request_id": request_id,
+                    "discard_reason": "deadline_result_already_committed",
+                },
+            )
 
     def attempt_outcomes(self) -> list[dict[str, str]]:
         with self._lock:
             return safe_attempt_outcomes(self._attempt_outcomes)
+
+    def result_was_late(self) -> bool:
+        with self._lock:
+            return bool(self._late_discarded_requests)
 
 
 class _OrderedBatchProvider:
@@ -537,7 +678,22 @@ OPTIONAL_ACTION_FALLBACKS = {
     ACTION_HUNTER_SHOOT: NO_HUNTER_SHOT,
     ACTION_WEREWOLF_SELF_EXPLOSION: WEREWOLF_NO_SELF_EXPLODE,
     ACTION_SHERIFF_WITHDRAW: SHERIFF_STAY,
+    ACTION_SHERIFF_BADGE: SHERIFF_BADGE_DESTROY,
+    ACTION_SHERIFF_RUN: SHERIFF_SKIP,
 }
+OPTIONAL_NO_ACTIONS = frozenset({ACTION_INVESTIGATE, ACTION_PROTECT})
+DETERMINISTIC_PUBLIC_FALLBACK_ACTIONS = frozenset(
+    {
+        ACTION_VOTE,
+        ACTION_SHERIFF_VOTE,
+        ACTION_SHERIFF_RUNOFF_VOTE,
+        ACTION_EXILE_RUNOFF_VOTE,
+        ACTION_SPEECH_ORDER,
+    }
+)
+RULE_DEFAULT_FALLBACK_ACTIONS = frozenset(
+    {ACTION_SHERIFF_BADGE, ACTION_SPEECH_ORDER}
+)
 
 
 def initialize_game_state(
@@ -578,6 +734,23 @@ def initialize_game_state(
             avatar_prompt=player_config.avatar_prompt if player_config else "",
             avatar_image_url=player_config.avatar_image_url if player_config else "",
             profile_id=player_config.profile_id if player_config else None,
+            tts_speaker=player_config.tts_speaker if player_config else "",
+            base_delivery_mood=(
+                player_config.base_delivery_mood if player_config else "neutral"
+            ),
+            base_delivery_intensity=(
+                player_config.base_delivery_intensity if player_config else "medium"
+            ),
+            base_delivery_pace=(
+                player_config.base_delivery_pace if player_config else "natural"
+            ),
+            base_delivery_instruction=(
+                player_config.base_delivery_instruction if player_config else ""
+            ),
+            voice_enabled=player_config.voice_enabled if player_config else True,
+            voice_config_version=(
+                player_config.voice_config_version if player_config else 1
+            ),
             tags=list(player_config.tags) if player_config else [],
         )
         if role_spec.role == WITCH:
@@ -661,6 +834,16 @@ class GameEngine:
         self._has_unsettled_deferred_night_deaths = False
         self._logical_action_occurrences: Counter[tuple[int, str, str, str]] = Counter()
         self._provider_attempt_occurrences: Counter[str] = Counter()
+        self._phase_occurrences: Counter[tuple[int, str]] = Counter()
+        self._active_phase_instances: dict[tuple[int, str], tuple[str, int | None]] = {}
+        self._known_lifecycle_events: dict[
+            tuple[str, str], dict[str, object]
+        ] = {}
+        self._suppressed_phase_replays: set[tuple[int, str]] = set()
+        self._reusable_phase_occurrences: dict[tuple[int, str], int] = {}
+        self._max_persisted_phase_occurrences: dict[tuple[int, str], int] = {}
+        self._initialized_phase_occurrences: set[tuple[int, str]] = set()
+        self._restore_lifecycle_contract()
 
     def run(self) -> list[RoundLog]:
         logs: list[RoundLog] = []
@@ -697,6 +880,7 @@ class GameEngine:
                         active_players
                     )
                     self._remember_terminal_keep_event(recovered_state_event)
+                    self._close_recovered_terminal_lifecycle(active_players)
                     return logs
             while not self.state.winner:
                 if len(self.state.rounds) >= self.max_rounds:
@@ -731,6 +915,14 @@ class GameEngine:
                 round_state.success = True
 
             return logs
+        except BaseException:
+            try:
+                self._cancel_active_phases(completion_reason="forced_failure")
+            except Exception:
+                # Preserve the original game failure. A failed lifecycle publish
+                # remains retryable because _complete_phase keeps its active entry.
+                pass
+            raise
         finally:
             self._shutdown_self_explosion_worker()
 
@@ -740,8 +932,7 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
     ) -> list[DeathEvent] | None:
-        self._publish(
-            "phase_started",
+        self._start_phase(
             round_number=round_state.number,
             phase="night",
             payload={"active_players": active_players.copy()},
@@ -825,62 +1016,30 @@ class GameEngine:
 
         self._run_witch_phase(round_state, round_log, active_players)
         pending_deaths = self._pending_night_deaths(round_state, active_players)
-        should_defer_deaths = (
-            self.rule_set.sheriff_enabled and round_state.number == 1 and not self.state.sheriff
+        should_defer_deaths = self._should_run_sheriff_election(round_state) and not (
+            pending_deaths
+            and self._deferred_deaths_are_inevitably_terminal(
+                pending_deaths,
+                active_players,
+            )
+        )
+        self._complete_phase(
+            round_number=round_state.number,
+            phase="night",
+            completion_status="completed",
+            completion_reason="night_actions_resolved",
+            next_phase=("sheriff_election" if should_defer_deaths else "dawn_reveal"),
+            terminal=False,
         )
         if should_defer_deaths:
             return pending_deaths
 
-        self._announce_night_deaths(
+        self._finish_deferred_night_deaths_if_needed(
             pending_deaths,
             round_state,
             round_log,
             active_players,
-            transfer_sheriff_badge=False,
         )
-
-        if round_state.night_deaths:
-            eliminated_names = "、".join(death.player for death in round_state.night_deaths)
-            self._announce(
-                active_players, f"第{round_state.number}轮：夜晚，{eliminated_names}出局。"
-            )
-            self._add_public_fact(
-                round_state.number,
-                "death",
-                f"第{round_state.number}轮：夜晚，{eliminated_names}出局。",
-                stage="night_resolution",
-                retention="critical",
-                details={
-                    "players": [death.player for death in round_state.night_deaths],
-                },
-            )
-        else:
-            self._announce(active_players, f"第{round_state.number}轮：夜晚无人出局。")
-        night_result_event = self._publish_state_updated(
-            round_state=round_state,
-            phase="night",
-            action="night_resolved",
-            payload={
-                "narration_mode": "explicit_v1",
-                "attacked": round_state.attacked,
-                "eliminated": round_state.eliminated,
-                "protected": round_state.protected,
-                "investigated": round_state.investigated,
-                "saved_by_witch": round_state.saved_by_witch,
-                "poisoned": round_state.poisoned,
-                "night_deaths": [death.to_dict() for death in round_state.night_deaths],
-                "active_players": active_players.copy(),
-            },
-        )
-        if self.state.winner:
-            self._remember_terminal_keep_event(night_result_event)
-        self._publish_dawn_result(round_state)
-        if not self._commit_terminal_winner(active_players, round_state):
-            self._transfer_sheriff_badge_after_night_deaths(
-                round_state,
-                round_log,
-                active_players,
-            )
 
         return None
 
@@ -937,10 +1096,19 @@ class GameEngine:
         latest_logs: dict[str, ActionLog] = {}
         discussion_lines: list[str] = []
         for wolf_name, target, action_log in discussion_results:
-            message = self._werewolf_action_message(action_log)
-            proposals[wolf_name] = target
             latest_logs[wolf_name] = action_log
             round_log.werewolf_discussion.append(action_log)
+            if target is None:
+                self._publish_werewolf_private_abstention(
+                    round_state=round_state,
+                    actor=wolf_name,
+                    action=ACTION_WEREWOLF_DISCUSS,
+                    decision_stage="proposal",
+                    action_log=action_log,
+                )
+                continue
+            message = self._werewolf_action_message(action_log)
+            proposals[wolf_name] = target
             round_state.werewolf_discussion.append(
                 {
                     "round": 1,
@@ -960,6 +1128,7 @@ class GameEngine:
                 target=target,
                 message=message,
                 decision_stage="proposal",
+                action_log=action_log,
             )
 
         complete_unanimous_proposal = (
@@ -991,15 +1160,22 @@ class GameEngine:
                     self.monotonic() + WEREWOLF_FINAL_VOTE_TIMEOUT_SECONDS
                 ),
             )
-            votes = proposals.copy()
+            votes: dict[str, str] = {}
             vote_logs = []
-            completed_final_voters: set[str] = set()
             for wolf_name, target, action_log in vote_results:
-                message = self._werewolf_action_message(action_log)
-                votes[wolf_name] = target
                 latest_logs[wolf_name] = action_log
                 vote_logs.append(action_log)
-                completed_final_voters.add(wolf_name)
+                if target is None:
+                    self._publish_werewolf_private_abstention(
+                        round_state=round_state,
+                        actor=wolf_name,
+                        action=ACTION_WEREWOLF_KILL_VOTE,
+                        decision_stage="final",
+                        action_log=action_log,
+                    )
+                    continue
+                message = self._werewolf_action_message(action_log)
+                votes[wolf_name] = target
                 self._publish_werewolf_private_action(
                     round_state=round_state,
                     actor=wolf_name,
@@ -1007,44 +1183,7 @@ class GameEngine:
                     target=target,
                     message=message,
                     decision_stage="final",
-                )
-            for wolf_name in speaking_order:
-                if wolf_name in completed_final_voters:
-                    continue
-                fallback_target = proposals.get(wolf_name)
-                fallback_reason = "final_vote_missing_reused_proposal"
-                if fallback_target not in candidates:
-                    fallback_target = self._deterministic_werewolf_vote_choice(
-                        round_state=round_state,
-                        wolf_name=wolf_name,
-                        candidates=candidates,
-                    )
-                    fallback_reason = "final_vote_missing_seeded_choice"
-                votes[wolf_name] = fallback_target
-                fallback_log = ActionLog(
-                    actor=wolf_name,
-                    action=ACTION_WEREWOLF_KILL_VOTE,
-                    options=candidates.copy(),
-                    choice=fallback_target,
-                    lm_log=LmLog(
-                        prompt="",
-                        raw_response="",
-                        result={"target": fallback_target, "message": ""},
-                    ),
-                    fallback_choice=fallback_target,
-                    fallback_reason=fallback_reason,
-                    execution_status="fallback",
-                )
-                vote_logs.append(fallback_log)
-                latest_logs[wolf_name] = fallback_log
-                self._publish_werewolf_private_action(
-                    round_state=round_state,
-                    actor=wolf_name,
-                    action=ACTION_WEREWOLF_KILL_VOTE,
-                    target=fallback_target,
-                    message="",
-                    decision_stage="final",
-                    fallback_reason=fallback_reason,
+                    action_log=action_log,
                 )
             round_log.werewolf_votes.append(vote_logs)
             decision_stage = "final_vote"
@@ -1085,12 +1224,38 @@ class GameEngine:
             final_target = None
 
         if final_target is None:
-            self._publish_night_judge_cue(
-                round_state,
-                "werewolves_sleep",
-                "狼人请闭眼。",
+            final_target = self._deterministic_werewolf_vote_choice(
+                round_state=round_state,
+                wolf_name="collective",
+                candidates=candidates,
             )
-            return None
+            resolution_log = ActionLog(
+                actor="system",
+                action=ACTION_REMOVE,
+                options=candidates.copy(),
+                choice=final_target,
+                lm_log=LmLog(
+                    prompt="",
+                    raw_response="",
+                    result={"target": final_target},
+                    action_id=self._next_logical_action_id(
+                        round_number=round_state.number,
+                        phase="night",
+                        actor="system",
+                        action=ACTION_REMOVE,
+                    ),
+                ),
+                fallback_choice=final_target,
+                fallback_reason="collective_no_result",
+                reason_code="collective_no_result",
+                effective_origin="system_fallback",
+                execution_status="fallback",
+            )
+            round_log.werewolf_votes.append([resolution_log])
+            vote_record["fallback"] = {
+                "source": "system_fallback",
+                "reason_code": "collective_no_result",
+            }
 
         vote_record["result"] = final_target
         round_log.eliminate = resolution_log or next(
@@ -1105,6 +1270,18 @@ class GameEngine:
             round_state=round_state,
             target=final_target,
             vote_round=1,
+            action_origin=(
+                "system_fallback"
+                if resolution_log is not None
+                and resolution_log.effective_origin == "system_fallback"
+                else "model"
+            ),
+            public_reason_code=(
+                resolution_log.reason_code
+                if resolution_log is not None
+                and resolution_log.effective_origin == "system_fallback"
+                else None
+            ),
         )
         return final_target
 
@@ -1113,12 +1290,21 @@ class GameEngine:
         requests: list[PlayerActionRequest],
         *,
         deadline_at_monotonic: float,
-    ) -> list[tuple[str, str, ActionLog]]:
+    ) -> list[tuple[str, str | None, ActionLog]]:
         if not requests:
             return []
 
         condition = threading.Condition()
         next_index = {"value": 0}
+        batch_started_at = self.monotonic()
+        gates = [
+            _PublishGateSink(
+                _PrivateLifecycleEventSink(self.event_sink),
+                deadline_at_monotonic=deadline_at_monotonic,
+                monotonic=self.monotonic,
+            )
+            for _request in requests
+        ]
         executor = ThreadPoolExecutor(max_workers=len(requests))
         futures = {
             executor.submit(
@@ -1130,41 +1316,169 @@ class GameEngine:
                     condition=condition,
                     next_index=next_index,
                 ),
-                NullEventSink(),
+                gates[index],
                 deadline_at_monotonic=deadline_at_monotonic,
                 timeout_fallback=False,
+                private_lifecycle_events=True,
             ): index
             for index, request in enumerate(requests)
         }
         wait_seconds = max(0.0, deadline_at_monotonic - self.monotonic())
         done, pending = wait(futures, timeout=wait_seconds)
         results: list[PlayerActionResult | None] = [None] * len(requests)
-        failures: set[int] = set()
+        failures: dict[int, tuple[str, list[dict[str, str]]]] = {}
         for future in done:
             index = futures[future]
             try:
-                results[index] = future.result()
-            except Exception:
-                failures.add(index)
+                candidate_result = future.result()
+                if gates[index].result_was_late():
+                    gates[index].close()
+                    failures[index] = (
+                        "batch_deadline",
+                        gates[index].attempt_outcomes(),
+                    )
+                else:
+                    results[index] = candidate_result
+            except Exception as exc:
+                if gates[index].result_was_late():
+                    gates[index].close()
+                    failures[index] = (
+                        "batch_deadline",
+                        gates[index].attempt_outcomes(),
+                    )
+                    continue
+                outcomes = safe_attempt_outcomes(
+                    getattr(exc, "attempt_outcomes", gates[index].attempt_outcomes())
+                )
+                reason_code = (
+                    "timeout"
+                    if isinstance(exc, ModelDeadlineExceeded)
+                    or (outcomes and outcomes[-1]["attempt_result"] == "timed_out")
+                    else "provider_failure"
+                )
+                failures[index] = (reason_code, outcomes)
         for future in pending:
-            future.cancel()
-            failures.add(futures[future])
+            index = futures[future]
+            gates[index].close()
+            canceled = future.cancel()
+            request = requests[index]
+            if not canceled:
+                future.add_done_callback(
+                    lambda _future, gate=gates[index], late_request=request: (
+                        gate.publish_late_discard(late_request)
+                    )
+                )
+            failures[index] = ("batch_deadline", gates[index].attempt_outcomes())
         executor.shutdown(wait=not pending, cancel_futures=bool(pending))
 
-        completed: list[tuple[str, str, ActionLog]] = []
+        completed: list[tuple[str, str | None, ActionLog]] = []
         for index, request in enumerate(requests):
             if index in failures:
+                reason_code, outcomes = failures[index]
+                completed.append(
+                    (
+                        request.player.name,
+                        None,
+                        self._failed_werewolf_action_log(
+                            request,
+                            reason_code=reason_code,
+                            attempt_outcomes=outcomes,
+                            started_at=batch_started_at,
+                        ),
+                    )
+                )
                 continue
             result = results[index]
             if result is None:
+                completed.append(
+                    (
+                        request.player.name,
+                        None,
+                        self._failed_werewolf_action_log(
+                            request,
+                            reason_code="missing_result",
+                            attempt_outcomes=gates[index].attempt_outcomes(),
+                            started_at=batch_started_at,
+                        ),
+                    )
+                )
                 continue
             try:
                 target, action_log = self._finalize_player_action_result(result)
             except Exception:
+                completed.append(
+                    (
+                        request.player.name,
+                        None,
+                        self._failed_werewolf_action_log(
+                            request,
+                            reason_code="invalid_exhausted",
+                            attempt_outcomes=result.lm_log.attempt_outcomes,
+                            started_at=batch_started_at,
+                        ),
+                    )
+                )
                 continue
             if isinstance(target, str) and target in request.options:
                 completed.append((request.player.name, target, action_log))
+            else:
+                action_log.choice = None
+                action_log.execution_status = "failed"
+                action_log.effective_origin = "none"
+                action_log.reason_code = action_log.reason_code or "invalid_exhausted"
+                action_log.fallback_choice = None
+                action_log.fallback_reason = None
+                completed.append((request.player.name, None, action_log))
         return completed
+
+    def _failed_werewolf_action_log(
+        self,
+        request: PlayerActionRequest,
+        *,
+        reason_code: str,
+        attempt_outcomes: object,
+        started_at: float,
+    ) -> ActionLog:
+        safe_outcomes = safe_attempt_outcomes(attempt_outcomes)
+        action_log = ActionLog(
+            actor=request.player.name,
+            action=request.action,
+            options=request.options.copy(),
+            choice=None,
+            lm_log=LmLog(
+                prompt="",
+                raw_response="",
+                result={},
+                action_id=request.action_id,
+                request_id=(safe_outcomes[-1]["request_id"] if safe_outcomes else None),
+                attempt_outcomes=safe_outcomes,
+            ),
+            reason_code=reason_code,
+            effective_origin="none",
+            attempt_count=len(safe_outcomes),
+            execution_status="failed",
+            duration_ms=max(0, round((self.monotonic() - started_at) * 1000)),
+            budget_ms=max(0, round((self.monotonic() - started_at) * 1000)),
+            fact_prompt_coverage=copy.deepcopy(request.fact_prompt_coverage),
+            voice_config_version=request.player.voice_config_version,
+        )
+        if self.action_budgets_enabled:
+            record_action_execution(
+                action_kind=self.action_execution_budget.for_action(request.action).kind,
+                model=request.player.model,
+                result="failed",
+                duration_ms=action_log.duration_ms,
+                first_token_ms=None,
+                fallback_reason=(
+                    "batch_deadline_empty_private_text"
+                    if reason_code == "batch_deadline"
+                    else "timeout_empty_private_text"
+                    if reason_code == "timeout"
+                    else None
+                ),
+                action_id=request.action_id,
+            )
+        return action_log
 
     def _rotating_werewolf_order(
         self,
@@ -1253,8 +1567,9 @@ class GameEngine:
                 self.monotonic() + WEREWOLF_TIEBREAK_TIMEOUT_SECONDS
             ),
         )
-        if results:
+        if results and results[0][1] is not None:
             _actor, target, action_log = results[0]
+            assert target is not None
             source = "model"
             message = self._werewolf_action_message(action_log)
             self._publish_werewolf_private_action(
@@ -1264,21 +1579,22 @@ class GameEngine:
                 target=target,
                 message=message,
                 decision_stage="tiebreak",
+                action_log=action_log,
             )
         else:
-            existing_vote = votes.get(tiebreaker)
-            if existing_vote in candidates:
-                target = existing_vote
-                source = "existing_vote"
-                fallback_reason = "tiebreak_missing_reused_existing_vote"
-            else:
-                target = self._deterministic_werewolf_tiebreak_choice(
-                    round_state=round_state,
-                    tiebreaker=tiebreaker,
-                    candidates=candidates,
-                )
-                source = "seeded_fallback"
-                fallback_reason = "tiebreak_missing_seeded_choice"
+            target = self._deterministic_werewolf_tiebreak_choice(
+                round_state=round_state,
+                tiebreaker=tiebreaker,
+                candidates=candidates,
+            )
+            source = "system_fallback"
+            failed_log = results[0][2] if results else None
+            fallback_reason = (
+                "tiebreak_timeout_seeded_choice"
+                if failed_log is not None
+                and failed_log.reason_code in {"timeout", "batch_deadline"}
+                else "tiebreak_missing_seeded_choice"
+            )
             action_log = ActionLog(
                 actor=tiebreaker,
                 action=ACTION_WEREWOLF_KILL_VOTE,
@@ -1288,10 +1604,43 @@ class GameEngine:
                     prompt="",
                     raw_response="",
                     result={"target": target, "message": ""},
+                    action_id=(
+                        failed_log.lm_log.action_id
+                        if failed_log is not None
+                        else request.action_id
+                    ),
+                    request_id=(
+                        failed_log.lm_log.request_id
+                        if failed_log is not None
+                        else None
+                    ),
+                    attempt_outcomes=(
+                        failed_log.lm_log.attempt_outcomes.copy()
+                        if failed_log is not None
+                        else []
+                    ),
                 ),
                 fallback_choice=target,
                 fallback_reason=fallback_reason,
+                reason_code=(
+                    failed_log.reason_code
+                    if failed_log is not None
+                    else "system_fallback"
+                ),
+                effective_origin="system_fallback",
                 execution_status="fallback",
+                duration_ms=(failed_log.duration_ms if failed_log is not None else 0),
+                budget_ms=(failed_log.budget_ms if failed_log is not None else None),
+                fact_prompt_coverage=(
+                    copy.deepcopy(failed_log.fact_prompt_coverage)
+                    if failed_log is not None
+                    else copy.deepcopy(request.fact_prompt_coverage)
+                ),
+                voice_config_version=(
+                    failed_log.voice_config_version
+                    if failed_log is not None
+                    else request.player.voice_config_version
+                ),
             )
             self._publish_werewolf_private_action(
                 round_state=round_state,
@@ -1301,6 +1650,9 @@ class GameEngine:
                 message="",
                 decision_stage="tiebreak",
                 fallback_reason=fallback_reason,
+                action_origin="system_fallback",
+                public_reason_code=action_log.reason_code,
+                action_log=action_log,
             )
 
         target_label = self._public_player_reference(target)
@@ -1361,11 +1713,67 @@ class GameEngine:
         message: str,
         decision_stage: str,
         fallback_reason: str | None = None,
+        action_origin: str = "model",
+        public_reason_code: str | None = None,
+        action_log: ActionLog | None = None,
     ) -> None:
         public_target = self._public_player_reference(target)
         public_result: dict[str, object] = {"target": public_target}
         if message:
             public_result["message"] = message
+        payload: dict[str, object] = {
+            "action_id": (
+                action_log.lm_log.action_id if action_log is not None else None
+            ),
+            "request_id": (
+                action_log.lm_log.request_id if action_log is not None else None
+            ),
+            "choice": public_target,
+            "result": public_result,
+            "visible_result": public_result,
+            "message": message,
+            "decision_stage": decision_stage,
+            "vote_round": 1,
+            "action_origin": action_origin,
+            "public_reason_code": public_reason_code,
+            **({"fallback_reason": fallback_reason} if fallback_reason else {}),
+        }
+        if (
+            message
+            and action_log is not None
+            and action_log.effective_delivery is not None
+        ):
+            player = self.state.player_by_name()[actor]
+            payload["voice_snapshot"] = {
+                "enabled": player.voice_enabled,
+                "speaker": player.tts_speaker,
+                "effective_delivery": copy.deepcopy(
+                    action_log.effective_delivery
+                ),
+                "effective_context_texts": (
+                    action_log.effective_context_texts.copy()
+                ),
+                "voice_config_version": action_log.voice_config_version,
+                "delivery_mapping_version": action_log.delivery_mapping_version,
+            }
+        self._publish(
+            "action_parsed",
+            round_number=round_state.number,
+            phase="night",
+            actor=actor,
+            action=action,
+            payload=payload,
+        )
+
+    def _publish_werewolf_private_abstention(
+        self,
+        *,
+        round_state: RoundState,
+        actor: str,
+        action: str,
+        decision_stage: str,
+        action_log: ActionLog,
+    ) -> None:
         self._publish(
             "action_parsed",
             round_number=round_state.number,
@@ -1373,13 +1781,16 @@ class GameEngine:
             actor=actor,
             action=action,
             payload={
-                "choice": public_target,
-                "result": public_result,
-                "visible_result": public_result,
-                "message": message,
+                "action_id": action_log.lm_log.action_id,
+                "request_id": action_log.lm_log.request_id,
+                "choice": None,
+                "result": {},
+                "visible_result": {},
+                "message": "",
                 "decision_stage": decision_stage,
                 "vote_round": 1,
-                **({"fallback_reason": fallback_reason} if fallback_reason else {}),
+                "action_origin": "none",
+                "public_reason_code": action_log.reason_code,
             },
         )
 
@@ -1411,6 +1822,8 @@ class GameEngine:
         round_state: RoundState,
         target: str,
         vote_round: int,
+        action_origin: str = "model",
+        public_reason_code: str | None = None,
     ) -> None:
         public_target = self._public_player_reference(target)
         public_result = {"target": public_target}
@@ -1426,6 +1839,8 @@ class GameEngine:
                 "visible_result": public_result,
                 "vote_round": vote_round,
                 "final_target": True,
+                "action_origin": action_origin,
+                "public_reason_code": public_reason_code,
             },
         )
         self._publish_night_judge_cue(
@@ -1593,6 +2008,7 @@ class GameEngine:
         active_players: list[str],
         *,
         transfer_sheriff_badge: bool = True,
+        settlement_phase: str = "night",
     ) -> None:
         pending_night_deaths = self._record_night_deaths(deaths, round_state, active_players)
         self._resolve_night_death_aftermath(
@@ -1602,6 +2018,7 @@ class GameEngine:
             round_log,
             active_players,
             transfer_sheriff_badge=transfer_sheriff_badge,
+            phase=settlement_phase,
         )
 
     def _record_night_deaths(
@@ -1642,10 +2059,12 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
         transfer_sheriff_badge: bool = True,
+        phase: str = "night",
     ) -> None:
         hunter_contexts = self._hunter_settlement_contexts(
             deaths,
-            phase="night",
+            phase=phase,
+            death_phase="night",
             excluded_shot_targets=pending_night_deaths,
             excluded_badge_targets=pending_night_deaths,
             transfer_sheriff_badge=False,
@@ -1660,7 +2079,7 @@ class GameEngine:
             self._begin_terminal_settlement(
                 round_state=round_state,
                 active_players=active_players,
-                phase="night",
+                phase=phase,
                 primary_actor=None,
                 hunter_contexts=hunter_contexts,
                 continuation_kind="night_death_aftermath",
@@ -1677,7 +2096,7 @@ class GameEngine:
                 round_state=round_state,
                 round_log=round_log,
                 active_players=active_players,
-                phase="night",
+                phase=phase,
                 excluded_shot_targets=pending_night_deaths,
                 excluded_badge_targets=pending_night_deaths,
                 transfer_sheriff_badge=False,
@@ -1694,7 +2113,7 @@ class GameEngine:
                     round_state=round_state,
                     round_log=round_log,
                     active_players=active_players,
-                    phase="night",
+                    phase=phase,
                     excluded_badge_targets=night_death_players,
                 )
             self._complete_cleared_terminal_continuation(active_players)
@@ -1708,6 +2127,7 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
         phase: str,
+        death_phase: Literal["night", "day"] | None = None,
         excluded_shot_targets: set[str] | None = None,
         excluded_badge_targets: set[str] | None = None,
         transfer_sheriff_badge: bool = True,
@@ -1734,6 +2154,7 @@ class GameEngine:
                 active_players=active_players,
                 death_cause=death_cause,
                 phase=phase,
+                death_phase=death_phase,
                 excluded_shot_targets=excluded_shot_targets,
                 excluded_badge_targets=excluded_badge_targets,
                 transfer_sheriff_badge=transfer_sheriff_badge,
@@ -1745,6 +2166,7 @@ class GameEngine:
                 round_log=round_log,
                 active_players=active_players,
                 phase=phase,
+                death_phase=death_phase,
                 excluded_badge_targets=excluded_badge_targets,
                 transfer_sheriff_badge=transfer_sheriff_badge,
             )
@@ -1811,6 +2233,7 @@ class GameEngine:
             active_players=active_players,
             death_cause=death_cause,
             phase=phase,
+            death_phase=death_phase,
             excluded_shot_targets=excluded_shot_targets,
             excluded_badge_targets=excluded_badge_targets,
             transfer_sheriff_badge=transfer_sheriff_badge,
@@ -1822,6 +2245,7 @@ class GameEngine:
             round_log=round_log,
             active_players=active_players,
             phase=phase,
+            death_phase=death_phase,
             excluded_badge_targets=excluded_badge_targets,
             transfer_sheriff_badge=transfer_sheriff_badge,
         )
@@ -1835,6 +2259,7 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
         phase: str,
+        death_phase: Literal["night", "day"] | None = None,
         excluded_badge_targets: set[str] | None,
         transfer_sheriff_badge: bool,
     ) -> None:
@@ -1844,7 +2269,10 @@ class GameEngine:
             round_state.hunter_shot = shot_player
             self._remove_player(active_players, shot_player)
             death = DeathEvent(shot_player, "hunter_shot", hunter.name)
-            if phase == "night":
+            effective_death_phase = death_phase or (
+                "night" if phase in {"night", "dawn_reveal"} else "day"
+            )
+            if effective_death_phase == "night":
                 round_state.night_deaths.append(death)
             else:
                 round_state.day_deaths.append(death)
@@ -1916,47 +2344,25 @@ class GameEngine:
         active_players: list[str],
         pending_night_deaths: list[DeathEvent] | None = None,
     ) -> None:
-        self._publish(
-            "phase_started",
-            round_number=round_state.number,
-            phase="day",
-            payload={
-                "active_players": active_players.copy(),
-                "narration_mode": "explicit_v1",
-            },
-        )
-        if pending_night_deaths and self._deferred_deaths_are_inevitably_terminal(
-            pending_night_deaths,
-            active_players,
-        ):
-            self._finish_deferred_night_deaths_if_needed(
+        skip_sheriff_election = bool(
+            pending_night_deaths
+            and self._deferred_deaths_are_inevitably_terminal(
                 pending_night_deaths,
-                round_state,
-                round_log,
                 active_players,
             )
-            pending_night_deaths = None
-            if self.state.winner:
-                return
-
+        )
+        sheriff_election_interrupted = False
         self._has_unsettled_deferred_night_deaths = bool(pending_night_deaths)
         try:
-            sheriff_election_interrupted = self._run_sheriff_election_if_needed(
-                round_state,
-                round_log,
-                active_players,
-            )
+            if not skip_sheriff_election:
+                sheriff_election_interrupted = self._run_sheriff_election_if_needed(
+                    round_state,
+                    round_log,
+                    active_players,
+                    "dawn_reveal" if pending_night_deaths is not None else "day",
+                )
         finally:
             self._has_unsettled_deferred_night_deaths = False
-        if sheriff_election_interrupted:
-            self._finish_deferred_night_deaths_if_needed(
-                pending_night_deaths,
-                round_state,
-                round_log,
-                active_players,
-            )
-            self._finish_self_explosion_day(round_state, round_log, active_players)
-            return
 
         self._finish_deferred_night_deaths_if_needed(
             pending_night_deaths,
@@ -1964,17 +2370,35 @@ class GameEngine:
             round_log,
             active_players,
         )
+        if sheriff_election_interrupted:
+            self._finish_self_explosion_day(round_state, round_log, active_players)
+            return
         if self.state.winner:
             return
 
+        self._start_phase(
+            round_number=round_state.number,
+            phase="day",
+            payload={
+                "active_players": active_players.copy(),
+                "narration_mode": "explicit_v1",
+            },
+        )
         if self._run_debate_phase(round_state, round_log, active_players):
             self._finish_self_explosion_day(round_state, round_log, active_players)
             return
 
         self._cancel_pending_self_explosion()
         self._self_explosion_locked = True
-        self._publish(
-            "phase_started",
+        self._complete_phase(
+            round_number=round_state.number,
+            phase="day",
+            completion_status="completed",
+            completion_reason="day_speech_completed",
+            next_phase="vote",
+            terminal=False,
+        )
+        self._start_phase(
             round_number=round_state.number,
             phase="vote",
             payload={"active_players": active_players.copy()},
@@ -1983,21 +2407,35 @@ class GameEngine:
             votes, vote_logs = self._run_voting(round_state, active_players)
             round_state.votes.append(votes)
             round_log.votes.append(vote_logs)
+            round_state.vote_origins = _vote_origins(vote_logs)
             if votes:
                 self._add_public_fact(
                     round_state.number,
                     "vote",
                     f"第{round_state.number}轮票型："
-                    + "；".join(f"{voter}->{target}" for voter, target in votes.items()),
+                    + "；".join(
+                        _public_vote_line(
+                            voter,
+                            target,
+                            round_state.vote_origins.get(voter),
+                        )
+                        for voter, target in votes.items()
+                    ),
                     stage="vote",
                     retention="important",
-                    details={"votes": votes.copy()},
+                    details={
+                        "votes": votes.copy(),
+                        "vote_origins": copy.deepcopy(round_state.vote_origins),
+                    },
                 )
             self._publish_state_updated(
                 round_state=round_state,
                 phase="vote",
                 action="vote",
-                payload={"votes": votes},
+                payload={
+                    "votes": votes,
+                    "vote_origins": copy.deepcopy(round_state.vote_origins),
+                },
             )
 
             interrupted_by_self_explosion = self._run_exile_vote_resolution(
@@ -2024,9 +2462,21 @@ class GameEngine:
                 "exile_pk_candidates": round_state.exile_pk_candidates.copy(),
                 "exile_pk_speeches": copy.deepcopy(round_state.exile_pk_speeches),
                 "exile_runoff_votes": round_state.exile_runoff_votes.copy(),
+                "exile_runoff_vote_origins": copy.deepcopy(
+                    round_state.exile_runoff_vote_origins
+                ),
+                "vote_origins": copy.deepcopy(round_state.vote_origins),
                 "exile_resolution_reason": round_state.exile_resolution_reason,
                 "active_players": active_players.copy(),
             },
+        )
+        self._complete_phase(
+            round_number=round_state.number,
+            phase="vote",
+            completion_status="terminal" if self._get_winner(active_players) else "completed",
+            completion_reason=round_state.exile_resolution_reason or "vote_resolved",
+            next_phase=None if self._get_winner(active_players) else "summary",
+            terminal=bool(self._get_winner(active_players)),
         )
         if self._commit_terminal_winner(active_players, round_state):
             return
@@ -2039,7 +2489,38 @@ class GameEngine:
         round_log: RoundLog,
         active_players: list[str],
     ) -> None:
-        self._publish_self_explosion_update(round_state, active_players)
+        active_phase = next(
+            (
+                phase
+                for phase in ("vote", "day")
+                if (round_state.number, phase) in self._active_phase_instances
+            ),
+            None,
+        )
+        if active_phase is None:
+            active_phase = "day"
+            self._start_phase(
+                round_number=round_state.number,
+                phase=active_phase,
+                payload={
+                    "active_players": active_players.copy(),
+                    "narration_mode": "explicit_v1",
+                },
+            )
+        self._publish_self_explosion_update(
+            round_state,
+            active_players,
+            phase=active_phase,
+        )
+        terminal = bool(self.state.winner or self._get_winner(active_players))
+        self._complete_phase(
+            round_number=round_state.number,
+            phase=active_phase,
+            completion_status="terminal" if terminal else "canceled",
+            completion_reason="self_explosion",
+            next_phase=None if terminal else "summary",
+            terminal=terminal,
+        )
         if self._commit_terminal_winner(active_players, round_state):
             return
         self._publish_public_round_brief(round_state, active_players)
@@ -2055,6 +2536,11 @@ class GameEngine:
         if pending_night_deaths is None:
             return
 
+        self._start_phase(
+            round_number=round_state.number,
+            phase="dawn_reveal",
+            payload={"active_players": active_players.copy()},
+        )
         pending_night_death_players = self._record_night_deaths(
             pending_night_deaths,
             round_state,
@@ -2067,6 +2553,7 @@ class GameEngine:
             round_log,
             active_players,
             transfer_sheriff_badge=False,
+            phase="dawn_reveal",
         )
         if round_state.night_deaths:
             eliminated_names = "、".join(death.player for death in round_state.night_deaths)
@@ -2111,6 +2598,15 @@ class GameEngine:
                 round_log,
                 active_players,
             )
+        terminal = bool(self.state.winner) and not round_state.day_ended_by_self_explosion
+        self._complete_phase(
+            round_number=round_state.number,
+            phase="dawn_reveal",
+            completion_status="terminal" if terminal else "completed",
+            completion_reason="night_result_presented",
+            next_phase=None if terminal else "day",
+            terminal=terminal,
+        )
 
     def _transfer_sheriff_badge_after_night_deaths(
         self,
@@ -2127,12 +2623,17 @@ class GameEngine:
                 round_state=round_state,
                 round_log=round_log,
                 active_players=active_players,
-                phase="night",
+                phase="dawn_reveal",
                 excluded_badge_targets=night_death_players,
             )
         self._complete_cleared_terminal_continuation(active_players)
 
     def _publish_dawn_result(self, round_state: RoundState) -> None:
+        self._start_phase(
+            round_number=round_state.number,
+            phase="dawn_reveal",
+            payload={},
+        )
         primary_presentation = self._terminal_primary_presentation(round_state)
         if (
             primary_presentation is not None
@@ -2144,12 +2645,18 @@ class GameEngine:
             for event in round_state.public_outcome_events
             if event.kind == "night_death" and event.target_player_id
         ]
-        self._publish_judge_cue(round_state, "day", dawn_result_cue(public_players))
+        self._publish_judge_cue(
+            round_state,
+            "dawn_reveal",
+            dawn_result_cue(public_players),
+        )
 
     def _publish_self_explosion_update(
         self,
         round_state: RoundState,
         active_players: list[str],
+        *,
+        phase: str = "day",
     ) -> None:
         primary_presentation = self._terminal_primary_presentation(round_state)
         self_explosion_payload: dict[str, object] = {
@@ -2178,7 +2685,7 @@ class GameEngine:
             self_explosion_payload["narration_mode"] = "explicit_v1"
         self_explosion_event = self._publish_state_updated(
             round_state=round_state,
-            phase="day",
+            phase=phase,
             actor=round_state.werewolf_self_exploded,
             action=ACTION_WEREWOLF_SELF_EXPLOSION,
             payload=self_explosion_payload,
@@ -2203,7 +2710,7 @@ class GameEngine:
             interruption = round_state.interruption
             self._publish_judge_cues(
                 round_state,
-                "day",
+                phase,
                 self_explosion_cues(
                     self_explosion_outcome.actor_player_id,
                     stage=interruption.stage if interruption else "day",
@@ -2270,8 +2777,23 @@ class GameEngine:
             if action_result is None:
                 return True
             message, action_log = action_result
+            round_log.debate.append(action_log)
             if not isinstance(message, str) or not message:
-                raise ValueError(f"{speaker} did not return a valid debate message.")
+                completed_speakers.append(speaker)
+                if self._maybe_run_werewolf_self_explosion(
+                    round_state,
+                    round_log,
+                    active_players,
+                    PublicStageCursor(
+                        stage="debate",
+                        ordered_actors=tuple(speech_order),
+                        completed_actors=tuple(completed_speakers),
+                        current_actor=speaker,
+                        timing="after_actor",
+                    ),
+                ):
+                    return True
+                continue
             self._publish_action_quality_warnings(
                 round_state=round_state,
                 phase="day",
@@ -2284,7 +2806,6 @@ class GameEngine:
 
             entry = DebateEntry(speaker=speaker, message=message)
             round_state.debate.append(entry)
-            round_log.debate.append(action_log)
             completed_speakers.append(speaker)
             self._record_public_debate(active_players, entry)
             self._add_public_fact(
@@ -2366,7 +2887,8 @@ class GameEngine:
                 canceled_log.lm_log.request_id = canceled_log.lm_log.attempt_outcomes[-1][
                     "request_id"
                 ]
-            canceled_log.fallback_reason = "canceled_self_explosion"
+            canceled_log.reason_code = "self_explosion_cancelled"
+            canceled_log.effective_origin = "none"
             round_log.canceled_actions.append(canceled_log)
             self._record_synthetic_logical_action(
                 canceled_log,
@@ -2452,6 +2974,7 @@ class GameEngine:
         active_wolves = [
             name for name in active_players if self._is_werewolf(players_by_name[name])
         ]
+        action_phase = self._public_stage_phase(cursor)
         requests = tuple(
             self._build_player_action_request(
                 player=players_by_name[name],
@@ -2459,7 +2982,7 @@ class GameEngine:
                 options=[WEREWOLF_SELF_EXPLODE, WEREWOLF_NO_SELF_EXPLODE],
                 result_key="self_explode",
                 round_state=round_state,
-                phase="day",
+                phase=action_phase,
                 extra_world_state={
                     "self_explosion_stage": self._self_explosion_stage_description(cursor),
                     "self_explosion_decision_context": (
@@ -2546,7 +3069,8 @@ class GameEngine:
                 pending.requests[index],
                 started_at=pending.started_at,
             )
-            canceled_log.fallback_reason = "superseded"
+            canceled_log.reason_code = "phase_advanced"
+            canceled_log.effective_origin = "none"
             self._record_self_explosion_decision(
                 action_log=canceled_log,
                 round_state=round_state,
@@ -2712,6 +3236,7 @@ class GameEngine:
             round_state=round_state,
             round_log=round_log,
             active_players=active_players,
+            phase=self._public_stage_phase(cursor),
         )
         interruption_text = self._stage_interruption_text(
             round_state.number,
@@ -2793,7 +3318,7 @@ class GameEngine:
         self._publish(
             "public_action_cancelled",
             round_number=context.round_state.number,
-            phase="day",
+            phase=self._public_stage_phase(context.cursor),
             actor=context.actor,
             payload={
                 "action_id": context.action_id,
@@ -2949,7 +3474,10 @@ class GameEngine:
                 request,
                 started_at=pending.started_at,
             )
-            action_log.fallback_reason = reason
+            action_log.reason_code = (
+                "phase_advanced" if reason != "canceled_terminal" else "terminal"
+            )
+            action_log.effective_origin = "none"
             if round_state is not None and round_log is not None:
                 self._record_self_explosion_decision(
                     action_log=action_log,
@@ -3122,6 +3650,13 @@ class GameEngine:
             return f"{cursor.current_actor} {label}后"
         return f"{label}前"
 
+    def _public_stage_phase(self, cursor: PublicStageCursor) -> str:
+        if cursor.stage.startswith("sheriff_"):
+            return "sheriff_election"
+        if cursor.stage.startswith("exile_"):
+            return "vote"
+        return "day"
+
     def _resolve_werewolf_self_explosion(
         self,
         *,
@@ -3129,6 +3664,7 @@ class GameEngine:
         round_state: RoundState,
         round_log: RoundLog,
         active_players: list[str],
+        phase: str = "day",
     ) -> None:
         players_by_name = self.state.player_by_name()
         players_by_name[wolf].revealed_role = True
@@ -3161,7 +3697,7 @@ class GameEngine:
             self._begin_terminal_settlement(
                 round_state=round_state,
                 active_players=active_players,
-                phase="day",
+                phase=phase,
                 primary_actor=wolf,
             )
         if terminal_candidate and self._has_unsettled_deferred_night_deaths:
@@ -3175,7 +3711,7 @@ class GameEngine:
                 round_state=round_state,
                 round_log=round_log,
                 active_players=active_players,
-                phase="day",
+                phase=phase,
             )
             return
 
@@ -3210,6 +3746,47 @@ class GameEngine:
         round_state: RoundState,
         round_log: RoundLog,
         active_players: list[str],
+        next_phase: str = "day",
+    ) -> bool:
+        if not self._should_run_sheriff_election(round_state):
+            round_state.sheriff = self.state.sheriff
+            return False
+        self._start_phase(
+            round_number=round_state.number,
+            phase="sheriff_election",
+            payload={"active_players": active_players.copy()},
+        )
+        try:
+            interrupted = self._run_sheriff_election_core(
+                round_state,
+                round_log,
+                active_players,
+            )
+        except BaseException:
+            self._complete_phase(
+                round_number=round_state.number,
+                phase="sheriff_election",
+                completion_status="canceled",
+                completion_reason="forced_failure",
+                next_phase=None,
+                terminal=bool(self._get_winner(active_players)),
+            )
+            raise
+        self._complete_phase(
+            round_number=round_state.number,
+            phase="sheriff_election",
+            completion_status="canceled" if interrupted else "completed",
+            completion_reason=("self_explosion" if interrupted else "election_resolved"),
+            next_phase=next_phase,
+            terminal=False,
+        )
+        return interrupted
+
+    def _run_sheriff_election_core(
+        self,
+        round_state: RoundState,
+        round_log: RoundLog,
+        active_players: list[str],
     ) -> bool:
         round_state.sheriff = self.state.sheriff
         if not self._should_run_sheriff_election(round_state):
@@ -3217,7 +3794,7 @@ class GameEngine:
 
         self._publish_judge_cue(
             round_state,
-            "day",
+            "sheriff_election",
             cue_spec(
                 "sheriff_raise_hands",
                 static_asset_id="sheriff_raise_hands",
@@ -3233,7 +3810,7 @@ class GameEngine:
                 options=[SHERIFF_RUN, SHERIFF_SKIP],
                 result_key="run",
                 round_state=round_state,
-                phase="day",
+                phase="sheriff_election",
             )
             for name in active_players
         ]
@@ -3293,7 +3870,7 @@ class GameEngine:
                 round_state=round_state,
                 round_log=round_log,
                 active_players=active_players,
-                phase="day",
+                phase="sheriff_election",
                 cursor=PublicStageCursor(
                     stage="sheriff_speech",
                     ordered_actors=tuple(sheriff_speech_order),
@@ -3307,11 +3884,25 @@ class GameEngine:
             message, action_log = action_result
             round_log.sheriff_speech.append(action_log)
             if not isinstance(message, str) or not message:
-                raise ValueError(f"{name} did not return a valid sheriff speech.")
+                completed_sheriff_speakers.append(name)
+                if self._maybe_run_werewolf_self_explosion(
+                    round_state,
+                    round_log,
+                    active_players,
+                    PublicStageCursor(
+                        stage="sheriff_speech",
+                        ordered_actors=tuple(sheriff_speech_order),
+                        completed_actors=tuple(completed_sheriff_speakers),
+                        current_actor=name,
+                        timing="after_actor",
+                    ),
+                ):
+                    return True
+                continue
             round_state.sheriff_speeches.append({"speaker": name, "message": message})
             self._publish_action_quality_warnings(
                 round_state=round_state,
-                phase="day",
+                phase="sheriff_election",
                 actor=name,
                 action=ACTION_SHERIFF_SPEECH,
                 text=message,
@@ -3359,7 +3950,7 @@ class GameEngine:
                 options=[SHERIFF_WITHDRAW, SHERIFF_STAY],
                 result_key="withdraw",
                 round_state=round_state,
-                phase="day",
+                phase="sheriff_election",
             )
             for name in candidates
         ]
@@ -3420,7 +4011,7 @@ class GameEngine:
                 options=final_candidates,
                 result_key="sheriff_vote",
                 round_state=round_state,
-                phase="day",
+                phase="sheriff_election",
             )
             for name in voters
         ]
@@ -3432,6 +4023,29 @@ class GameEngine:
             round_log.sheriff_votes.append(action_log)
             if isinstance(vote, str) and vote in final_candidates:
                 round_state.sheriff_votes[name] = vote
+        round_state.sheriff_vote_origins = _vote_origins(round_log.sheriff_votes)
+        if round_state.sheriff_votes:
+            self._add_public_fact(
+                round_state.number,
+                "vote",
+                f"第{round_state.number}轮警长票型："
+                + "；".join(
+                    _public_vote_line(
+                        voter,
+                        target,
+                        round_state.sheriff_vote_origins.get(voter),
+                    )
+                    for voter, target in round_state.sheriff_votes.items()
+                ),
+                stage="sheriff_vote",
+                retention="important",
+                details={
+                    "votes": round_state.sheriff_votes.copy(),
+                    "vote_origins": copy.deepcopy(
+                        round_state.sheriff_vote_origins
+                    ),
+                },
+            )
 
         first_round_winners = self._plurality_winners(round_state.sheriff_votes)
         if not first_round_winners:
@@ -3452,17 +4066,20 @@ class GameEngine:
         round_state.sheriff_pk_candidates = pk_candidates
         self._publish_state_updated(
             round_state=round_state,
-            phase="day",
+            phase="sheriff_election",
             action="sheriff_pk_started",
             payload={
                 "narration_mode": "explicit_v1",
                 "sheriff_pk_candidates": pk_candidates.copy(),
                 "sheriff_voters": round_state.sheriff_voters.copy(),
                 "sheriff_votes": round_state.sheriff_votes.copy(),
+                "sheriff_vote_origins": copy.deepcopy(
+                    round_state.sheriff_vote_origins
+                ),
             },
         )
         tie_cues = sheriff_tie_cues([self._public_player_reference(name) for name in pk_candidates])
-        self._publish_judge_cues(round_state, "day", tie_cues[:2])
+        self._publish_judge_cues(round_state, "sheriff_election", tie_cues[:2])
 
         if self._maybe_run_werewolf_self_explosion(
             round_state,
@@ -3497,7 +4114,7 @@ class GameEngine:
                 round_state=round_state,
                 round_log=round_log,
                 active_players=active_players,
-                phase="day",
+                phase="sheriff_election",
                 cursor=PublicStageCursor(
                     stage="sheriff_pk_speech",
                     ordered_actors=tuple(pk_candidates),
@@ -3511,11 +4128,25 @@ class GameEngine:
             message, action_log = action_result
             round_log.sheriff_pk_speech.append(action_log)
             if not isinstance(message, str) or not message:
-                raise ValueError(f"{name} did not return a valid sheriff PK speech.")
+                completed_pk_speakers.append(name)
+                if self._maybe_run_werewolf_self_explosion(
+                    round_state,
+                    round_log,
+                    active_players,
+                    PublicStageCursor(
+                        stage="sheriff_pk_speech",
+                        ordered_actors=tuple(pk_candidates),
+                        completed_actors=tuple(completed_pk_speakers),
+                        current_actor=name,
+                        timing="after_actor",
+                    ),
+                ):
+                    return True
+                continue
             round_state.sheriff_pk_speeches.append({"speaker": name, "message": message})
             self._publish_action_quality_warnings(
                 round_state=round_state,
-                phase="day",
+                phase="sheriff_election",
                 actor=name,
                 action=ACTION_SHERIFF_PK_SPEECH,
                 text=message,
@@ -3555,7 +4186,7 @@ class GameEngine:
         ):
             return True
 
-        self._publish_judge_cue(round_state, "day", tie_cues[2])
+        self._publish_judge_cue(round_state, "sheriff_election", tie_cues[2])
 
         runoff_vote_requests = [
             self._build_player_action_request(
@@ -3564,7 +4195,7 @@ class GameEngine:
                 options=pk_candidates,
                 result_key="sheriff_vote",
                 round_state=round_state,
-                phase="day",
+                phase="sheriff_election",
             )
             for name in voters
         ]
@@ -3576,6 +4207,31 @@ class GameEngine:
             round_log.sheriff_runoff_votes.append(action_log)
             if isinstance(vote, str) and vote in pk_candidates:
                 round_state.sheriff_runoff_votes[name] = vote
+        round_state.sheriff_runoff_vote_origins = _vote_origins(
+            round_log.sheriff_runoff_votes
+        )
+        if round_state.sheriff_runoff_votes:
+            self._add_public_fact(
+                round_state.number,
+                "vote",
+                f"第{round_state.number}轮警长PK票型："
+                + "；".join(
+                    _public_vote_line(
+                        voter,
+                        target,
+                        round_state.sheriff_runoff_vote_origins.get(voter),
+                    )
+                    for voter, target in round_state.sheriff_runoff_votes.items()
+                ),
+                stage="sheriff_runoff_vote",
+                retention="important",
+                details={
+                    "votes": round_state.sheriff_runoff_votes.copy(),
+                    "vote_origins": copy.deepcopy(
+                        round_state.sheriff_runoff_vote_origins
+                    ),
+                },
+            )
 
         sheriff = self._plurality_winner(round_state.sheriff_runoff_votes)
         if sheriff is None:
@@ -3744,7 +4400,7 @@ class GameEngine:
         )
         self._publish_state_updated(
             round_state=round_state,
-            phase="day",
+            phase="sheriff_election",
             actor=sheriff,
             action="sheriff_election_resolved",
             payload={
@@ -3756,7 +4412,13 @@ class GameEngine:
                 "sheriff_final_candidates": resolution.final_candidates.copy(),
                 "sheriff_voters": resolution.voters.copy(),
                 "sheriff_votes": resolution.votes.copy(),
+                "sheriff_vote_origins": copy.deepcopy(
+                    round_state.sheriff_vote_origins
+                ),
                 "sheriff_runoff_votes": resolution.runoff_votes.copy(),
+                "sheriff_runoff_vote_origins": copy.deepcopy(
+                    round_state.sheriff_runoff_vote_origins
+                ),
                 "sheriff_badge_lost": resolution.badge_lost,
                 "sheriff_badge_lost_reason": round_state.sheriff_badge_lost_reason,
                 "sheriff_election_pending": resolution.election_pending,
@@ -3794,7 +4456,7 @@ class GameEngine:
         )
         self._publish_judge_cues(
             round_state,
-            "day",
+            "sheriff_election",
             sheriff_election_cues(public_resolution),
         )
 
@@ -3973,7 +4635,21 @@ class GameEngine:
             message, action_log = action_result
             round_log.exile_pk_speech.append(action_log)
             if not isinstance(message, str) or not message:
-                raise ValueError(f"{name} did not return a valid exile PK speech.")
+                completed_pk_speakers.append(name)
+                if self._maybe_run_werewolf_self_explosion(
+                    round_state,
+                    round_log,
+                    active_players,
+                    PublicStageCursor(
+                        stage="exile_pk_speech",
+                        ordered_actors=tuple(pk_candidates),
+                        completed_actors=tuple(completed_pk_speakers),
+                        current_actor=name,
+                        timing="after_actor",
+                    ),
+                ):
+                    return True
+                continue
             round_state.exile_pk_speeches.append({"speaker": name, "message": message})
             self._publish_action_quality_warnings(
                 round_state=round_state,
@@ -4042,17 +4718,30 @@ class GameEngine:
             round_state.exile_runoff_votes[name] = vote
             round_log.exile_runoff_votes.append(action_log)
 
+        round_state.exile_runoff_vote_origins = _vote_origins(
+            round_log.exile_runoff_votes
+        )
+
         self._add_public_fact(
             round_state.number,
             "vote",
             f"第{round_state.number}轮放逐PK票型："
             + "；".join(
-                f"{voter}->{target}"
+                _public_vote_line(
+                    voter,
+                    target,
+                    round_state.exile_runoff_vote_origins.get(voter),
+                )
                 for voter, target in round_state.exile_runoff_votes.items()
             ),
             stage="exile_runoff_vote",
             retention="important",
-            details={"votes": round_state.exile_runoff_votes.copy()},
+            details={
+                "votes": round_state.exile_runoff_votes.copy(),
+                "vote_origins": copy.deepcopy(
+                    round_state.exile_runoff_vote_origins
+                ),
+            },
         )
         self._publish_state_updated(
             round_state=round_state,
@@ -4063,6 +4752,9 @@ class GameEngine:
                 "exile_pk_candidates": pk_candidates.copy(),
                 "exile_pk_speeches": copy.deepcopy(round_state.exile_pk_speeches),
                 "exile_runoff_votes": round_state.exile_runoff_votes.copy(),
+                "exile_runoff_vote_origins": copy.deepcopy(
+                    round_state.exile_runoff_vote_origins
+                ),
                 "vote_weights": round_state.vote_weights.copy(),
                 "active_players": active_players.copy(),
             },
@@ -4096,6 +4788,9 @@ class GameEngine:
                 "narration_mode": "explicit_v1",
                 "exile_pk_candidates": pk_candidates.copy(),
                 "exile_runoff_votes": round_state.exile_runoff_votes.copy(),
+                "exile_runoff_vote_origins": copy.deepcopy(
+                    round_state.exile_runoff_vote_origins
+                ),
                 "exile_resolution_reason": round_state.exile_resolution_reason,
                 "active_players": active_players.copy(),
             },
@@ -4129,6 +4824,10 @@ class GameEngine:
                 "exile_pk_candidates": round_state.exile_pk_candidates.copy(),
                 "exile_pk_speeches": copy.deepcopy(round_state.exile_pk_speeches),
                 "exile_runoff_votes": round_state.exile_runoff_votes.copy(),
+                "exile_runoff_vote_origins": copy.deepcopy(
+                    round_state.exile_runoff_vote_origins
+                ),
+                "vote_origins": copy.deepcopy(round_state.vote_origins),
                 "exile_resolution_reason": reason_code,
                 "active_players": active_players.copy(),
             },
@@ -4329,16 +5028,9 @@ class GameEngine:
             return
         self._cancel_pending_self_explosion()
         public_player = self._public_player_reference(exiled)
-        self._publish(
-            "phase_started",
-            round_number=round_state.number,
-            phase="last_words",
-            actor=exiled,
-            payload={"active_players": active_players.copy()},
-        )
         self._publish_judge_cue(
             round_state,
-            "last_words",
+            "vote",
             exile_last_words_cue(public_player),
         )
         message: object | None = None
@@ -4351,7 +5043,7 @@ class GameEngine:
                 options=[],
                 result_key="say",
                 round_state=round_state,
-                phase="last_words",
+                phase="vote",
                 extra_world_state={
                     "hard_state": {
                         "actor_alive": False,
@@ -4364,8 +5056,11 @@ class GameEngine:
             reason_code = "model_failure"
         if action_log is not None:
             round_log.exile_last_words = action_log
-            if action_log.fallback_reason:
-                reason_code = action_log.fallback_reason
+            reason_code = (
+                action_log.fallback_reason
+                or action_log.reason_code
+                or reason_code
+            )
         accepted_message = message.strip() if isinstance(message, str) else ""
         status = "completed" if accepted_message else "skipped"
         round_state.exile_last_words = {
@@ -4388,7 +5083,7 @@ class GameEngine:
         else:
             self._publish_judge_cue(
                 round_state,
-                "last_words",
+                "vote",
                 exile_last_words_skipped_cue(public_player, reason_code),
             )
         # A potential hunter shot can make this exile terminal. Persist the
@@ -4426,7 +5121,30 @@ class GameEngine:
                     self._public_player_reference(option)
                     for option in action_log.options
                 ],
+                "action_origin": _effective_action_origin(action_log),
+                "public_reason_code": _public_action_reason_code(action_log),
+                "speech_status": (
+                    "not_spoken"
+                    if action_log.execution_status == "failed"
+                    else "spoken"
+                ),
+                "retry_completed": len(action_log.lm_log.attempt_outcomes) > 1
+                or action_log.lm_log.speech_quality_attempt_count > 1,
             }
+            if action_log.effective_delivery is not None:
+                player = self.state.player_by_name()[exiled]
+                parsed_payload["voice_snapshot"] = {
+                    "enabled": player.voice_enabled,
+                    "speaker": player.tts_speaker,
+                    "effective_delivery": copy.deepcopy(
+                        action_log.effective_delivery
+                    ),
+                    "effective_context_texts": (
+                        action_log.effective_context_texts.copy()
+                    ),
+                    "voice_config_version": action_log.voice_config_version,
+                    "delivery_mapping_version": action_log.delivery_mapping_version,
+                }
             if action_log.fallback_choice is not None:
                 parsed_payload.update(
                     {
@@ -4446,7 +5164,7 @@ class GameEngine:
             self._publish(
                 "action_parsed",
                 round_number=round_state.number,
-                phase="last_words",
+                phase="vote",
                 actor=exiled,
                 action=ACTION_EXILE_LAST_WORDS,
                 payload=parsed_payload,
@@ -4461,7 +5179,7 @@ class GameEngine:
             state_payload["presentation_id"] = state_presentation_id
         self._publish_state_updated(
             round_state=round_state,
-            phase="last_words",
+            phase="vote",
             actor=exiled,
             action=ACTION_EXILE_LAST_WORDS,
             payload=state_payload,
@@ -4685,8 +5403,7 @@ class GameEngine:
         round_state: RoundState,
         active_players: list[str],
     ) -> None:
-        self._publish(
-            "phase_started",
+        self._start_phase(
             round_number=round_state.number,
             phase="summary",
             payload={"active_players": active_players.copy()},
@@ -4718,6 +5435,7 @@ class GameEngine:
             for name in active_players
         ]
         if not requests:
+            self._complete_round_summary_phase(round_state, active_players)
             return
 
         condition = threading.Condition()
@@ -4753,6 +5471,21 @@ class GameEngine:
                 round_log.summaries.append(action_log)
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
+        self._complete_round_summary_phase(round_state, active_players)
+
+    def _complete_round_summary_phase(
+        self,
+        round_state: RoundState,
+        active_players: list[str],
+    ) -> None:
+        self._complete_phase(
+            round_number=round_state.number,
+            phase="summary",
+            completion_status="completed",
+            completion_reason="round_memories_recorded",
+            next_phase="night" if not self._get_winner(active_players) else None,
+            terminal=bool(self._get_winner(active_players)),
+        )
 
     def _public_round_brief(self, round_state: RoundState) -> str:
         if round_state.public_outcome_events:
@@ -4932,6 +5665,7 @@ class GameEngine:
         event_sink: object | None = None,
         deadline_at_monotonic: float | None = None,
         timeout_fallback: bool = True,
+        private_lifecycle_events: bool = False,
     ) -> PlayerActionResult:
         self._require_non_terminal_player_action(
             action=request.action,
@@ -4940,6 +5674,11 @@ class GameEngine:
         )
         action_provider = provider or self.provider
         public_event_sink = event_sink or self.event_sink
+        model_event_sink = (
+            public_event_sink
+            if request.event_visibility == "public" or private_lifecycle_events
+            else NullEventSink()
+        )
         started_at = self.monotonic()
         budget_spec = self.action_execution_budget.for_action(request.action)
         call_options = budget_spec.call_options(started_at) if self.action_budgets_enabled else None
@@ -4978,21 +5717,13 @@ class GameEngine:
                     request,
                     action_provider,
                     call_options=call_options,
-                    event_sink=(
-                        public_event_sink
-                        if request.event_visibility == "public"
-                        else NullEventSink()
-                    ),
+                    event_sink=model_event_sink,
                 )
             else:
                 value, lm_log = self._generate_action_for_request(
                     request,
                     action_provider,
-                    event_sink=(
-                        public_event_sink
-                        if request.event_visibility == "public"
-                        else NullEventSink()
-                    ),
+                    event_sink=model_event_sink,
                     call_options=call_options,
                 )
         except ModelDeadlineExceeded as exc:
@@ -5085,7 +5816,12 @@ class GameEngine:
         quality_retry_started_at: float | None = None
         quality_attempt_outcomes: list[dict[str, str]] = []
         for quality_attempt in range(2):
-            buffer = _BufferedEventSink(self._interrupt_public_action_if_self_explosion_ready)
+            buffer = _BufferedEventSink(
+                self._interrupt_public_action_if_self_explosion_ready,
+                lifecycle_destination=(
+                    event_sink if isinstance(event_sink, _PublishGateSink) else None
+                ),
+            )
             try:
                 value, lm_log = self._generate_action_for_request(
                     request,
@@ -5161,29 +5897,18 @@ class GameEngine:
                     ),
                 )
                 buffer.flush_lifecycle_to(event_sink)
-                if any(
-                    code in SAFE_FALLBACK_QUALITY_CODES for code in hard_warnings
+                if (
+                    request.action in PRIVATE_LENGTH_BUDGETED_ACTIONS
+                    and length_warning is not None
+                    and isinstance(speech_text, str)
                 ):
-                    value = (
-                        ""
-                        if request.action == ACTION_EXILE_LAST_WORDS
-                        else REQUIRED_PUBLIC_SPEECH_FALLBACK
-                    )
-                    lm_log.result = {request.result_key: value}
-                    lm_log.raw_response = ""
-                    return value, lm_log
-                if length_warning is not None and isinstance(speech_text, str):
                     character_limit = speech_character_limit(request.action)
                     if character_limit is None:
                         raise RuntimeError("missing speech character limit")
                     accepted_text = truncate_speech_to_complete_sentence(
                         speech_text,
                         max_chars=character_limit,
-                        fallback=(
-                            "本轮狼队暂不追加判断。"
-                            if request.action in PRIVATE_LENGTH_BUDGETED_ACTIONS
-                            else REQUIRED_PUBLIC_SPEECH_FALLBACK
-                        ),
+                        fallback="",
                     )
                     accepted_result: dict[str, object] = {
                         speech_result_key: accepted_text,
@@ -5194,6 +5919,13 @@ class GameEngine:
                     lm_log.raw_response = ""
                     if speech_result_key == request.result_key:
                         value = accepted_text
+                    return value, lm_log
+                if request.event_visibility == "public":
+                    value = ""
+                    result = dict(lm_log.result or {})
+                    result[request.result_key] = ""
+                    lm_log.result = result
+                    lm_log.raw_response = ""
                     return value, lm_log
                 return value, lm_log
             initial_codes = hard_warnings.copy()
@@ -5427,14 +6159,22 @@ class GameEngine:
         attempt_outcomes: object = None,
     ) -> PlayerActionResult:
         result: dict[str, object]
+        execution_status: Literal["fallback", "failed"] = "fallback"
+        failure_reason: str | None = None
         if request.action == ACTION_EXILE_LAST_WORDS:
             value = ""
             result = {request.result_key: value}
             reason = "timeout_last_words_skipped"
         elif request.action in BUFFERED_QUALITY_ACTIONS:
-            value: object | None = REQUIRED_PUBLIC_SPEECH_FALLBACK
+            value = ""
             result = {request.result_key: value}
-            reason = "timeout_neutral_public_speech"
+            reason = "timeout"
+            failure_reason = reason
+            execution_status = "failed"
+        elif request.action in OPTIONAL_NO_ACTIONS:
+            value = None
+            result = {request.result_key: None}
+            reason = "timeout_optional_no_action"
         else:
             optional_fallback = self._optional_fallback_choice(request)
             if optional_fallback is not None:
@@ -5452,7 +6192,19 @@ class GameEngine:
                 result = {request.result_key: value}
                 reason = "timeout_empty_private_text"
         if timeout_source == "batch":
-            reason = reason.replace("timeout_", "batch_deadline_", 1)
+            reason = (
+                "batch_deadline"
+                if reason == "timeout"
+                else reason.replace("timeout_", "batch_deadline_", 1)
+            )
+            if failure_reason is not None:
+                failure_reason = reason
+        if request.action in RULE_DEFAULT_FALLBACK_ACTIONS:
+            reason_code = "rule_default"
+        elif timeout_source == "batch":
+            reason_code = "batch_deadline"
+        else:
+            reason_code = "timeout"
         safe_outcomes = safe_attempt_outcomes(attempt_outcomes)
         return PlayerActionResult(
             request=request,
@@ -5469,13 +6221,14 @@ class GameEngine:
                 ),
                 attempt_outcomes=safe_outcomes,
             ),
-            execution_status="fallback",
+            execution_status=execution_status,
             duration_ms=max(
                 0,
                 round((self.monotonic() - started_at) * 1000),
             ),
             budget_ms=budget_ms,
-            fallback_reason=reason,
+            fallback_reason=reason if execution_status == "fallback" else None,
+            reason_code=failure_reason or reason_code,
         )
 
     def _deterministic_timeout_choice(
@@ -5515,6 +6268,27 @@ class GameEngine:
                 retry_exhausted=False,
                 initial_codes=[],
             )
+        effective_delivery: dict[str, object] | None = None
+        effective_context_texts: list[str] = []
+        speech_text = (
+            value
+            if request.action in BUFFERED_QUALITY_ACTIONS
+            else (lm_log.result or {}).get("message")
+            if request.action in PRIVATE_LENGTH_BUDGETED_ACTIONS
+            else None
+        )
+        if isinstance(speech_text, str) and speech_text.strip():
+            effective_delivery = delivery_from_result(
+                lm_log.result,
+                base_mood=player.base_delivery_mood,
+                base_intensity=player.base_delivery_intensity,
+                base_pace=player.base_delivery_pace,
+                base_instruction=player.base_delivery_instruction,
+            )
+            effective_context_texts = compile_context_texts(effective_delivery)
+            normalized_result = dict(lm_log.result or {})
+            normalized_result["delivery"] = copy.deepcopy(effective_delivery)
+            lm_log.result = normalized_result
         action_log = ActionLog(
             actor=player.name,
             action=request.action,
@@ -5532,12 +6306,20 @@ class GameEngine:
             execution_status=result.execution_status,
             duration_ms=result.duration_ms,
             budget_ms=result.budget_ms,
+            reason_code=result.reason_code,
             first_token_ms=(lm_log.first_token_ms if self.action_budgets_enabled else None),
             fact_prompt_coverage=copy.deepcopy(request.fact_prompt_coverage),
+            effective_delivery=copy.deepcopy(effective_delivery),
+            effective_context_texts=effective_context_texts.copy(),
+            voice_config_version=player.voice_config_version,
+            delivery_mapping_version=(
+                DELIVERY_MAPPING_VERSION if effective_delivery is not None else None
+            ),
         )
         if result.fallback_reason is not None:
             action_log.fallback_reason = result.fallback_reason
             action_log.fallback_choice = value
+            action_log.effective_origin = "system_fallback"
         if lm_log.speech_quality_report is not None:
             record_speech_quality(
                 phase=request.phase,
@@ -5548,38 +6330,72 @@ class GameEngine:
             )
         invalid_error = self._invalid_player_action_error(result)
         if invalid_error is not None:
-            fallback_choice = self._optional_fallback_choice(request)
-            fallback_reason = "optional_action_invalid"
-            if request.action == ACTION_EXILE_LAST_WORDS:
-                fallback_choice = ""
-                fallback_reason = "last_words_invalid_skipped"
-            elif request.action in BUFFERED_QUALITY_ACTIONS:
-                fallback_choice = REQUIRED_PUBLIC_SPEECH_FALLBACK
-                fallback_reason = "required_public_speech_invalid"
-            if fallback_choice is None:
-                raise invalid_error
-            invalid_value = self._invalid_value_from_result(result)
-            value = fallback_choice
-            fallback_result = dict(lm_log.result or {})
-            fallback_result[request.result_key] = fallback_choice
-            lm_log.result = fallback_result
-            action_log.choice = str(fallback_choice)
-            action_log.invalid_value = invalid_value
-            action_log.fallback_choice = fallback_choice
-            action_log.fallback_reason = fallback_reason
-            action_log.execution_status = "fallback"
-            action_log.attempt_count = max(1, len(lm_log.invalid_attempts))
-            if request.event_visibility == "public":
-                self._publish_invalid_action_fallback_warning(
-                    request=request,
-                    invalid_value=invalid_value,
-                    fallback_choice=fallback_choice,
-                    warning=(
-                        "required_speech_fallback"
-                        if request.action in BUFFERED_QUALITY_ACTIONS
-                        else "off_option_fallback"
-                    ),
+            if request.action in BUFFERED_QUALITY_ACTIONS:
+                invalid_value = self._invalid_value_from_result(result)
+                value = ""
+                normalized_result = {request.result_key: ""}
+                lm_log.result = normalized_result
+                effective_delivery = None
+                effective_context_texts = []
+                action_log.choice = None
+                action_log.invalid_value = invalid_value
+                action_log.fallback_choice = None
+                action_log.fallback_reason = None
+                action_log.reason_code = (
+                    result.reason_code
+                    or (
+                        "quality_exhausted"
+                        if lm_log.speech_quality_retry_exhausted
+                        else "invalid_exhausted"
+                    )
                 )
+                action_log.execution_status = "failed"
+                action_log.effective_origin = "none"
+                action_log.effective_delivery = None
+                action_log.effective_context_texts = []
+                action_log.delivery_mapping_version = None
+            else:
+                fallback_choice = self._optional_fallback_choice(request)
+                fallback_reason = "optional_action_invalid"
+                allow_none_fallback = request.action in OPTIONAL_NO_ACTIONS
+                if allow_none_fallback:
+                    fallback_reason = "invalid_optional_no_action"
+                elif request.action in DETERMINISTIC_PUBLIC_FALLBACK_ACTIONS:
+                    fallback_choice = self._deterministic_timeout_choice(request)
+                    fallback_reason = "invalid_deterministic_legal_choice"
+                if request.action == ACTION_EXILE_LAST_WORDS:
+                    fallback_choice = ""
+                    fallback_reason = "last_words_invalid_skipped"
+                if request.action in RULE_DEFAULT_FALLBACK_ACTIONS:
+                    fallback_reason = "invalid_rule_default"
+                if fallback_choice is None and not allow_none_fallback:
+                    raise invalid_error
+                invalid_value = self._invalid_value_from_result(result)
+                value = fallback_choice
+                fallback_result = dict(lm_log.result or {})
+                fallback_result[request.result_key] = fallback_choice
+                lm_log.result = fallback_result
+                action_log.choice = (
+                    str(fallback_choice) if fallback_choice is not None else None
+                )
+                action_log.invalid_value = invalid_value
+                action_log.fallback_choice = fallback_choice
+                action_log.fallback_reason = fallback_reason
+                action_log.reason_code = (
+                    "rule_default"
+                    if request.action in RULE_DEFAULT_FALLBACK_ACTIONS
+                    else "invalid_exhausted"
+                )
+                action_log.execution_status = "fallback"
+                action_log.effective_origin = "system_fallback"
+                action_log.attempt_count = max(1, len(lm_log.invalid_attempts))
+                if request.event_visibility == "public":
+                    self._publish_invalid_action_fallback_warning(
+                        request=request,
+                        invalid_value=invalid_value,
+                        fallback_choice=fallback_choice,
+                        warning="off_option_fallback",
+                    )
         elif checkpoint and self._is_checkpointable_player_action_result(result):
             self._checkpoint_player_action_success(result)
         if self.action_budgets_enabled:
@@ -5593,6 +6409,11 @@ class GameEngine:
                 action_id=lm_log.action_id or request.action_id,
             )
         if request.event_visibility == "public":
+            if (
+                request.action in BUFFERED_QUALITY_ACTIONS
+                and action_log.execution_status == "failed"
+            ):
+                self._publish_player_did_not_speak(request, action_log)
             record_model_progress_event("model_response_received")
             self._publish(
                 "model_response_received",
@@ -5615,7 +6436,28 @@ class GameEngine:
                 "result": visible_result,
                 "visible_result": visible_result,
                 "options": request.public_options.copy(),
+                "action_origin": _effective_action_origin(action_log),
+                "public_reason_code": _public_action_reason_code(action_log),
+                "speech_status": (
+                    "not_spoken"
+                    if request.action in BUFFERED_QUALITY_ACTIONS
+                    and action_log.execution_status == "failed"
+                    else "spoken"
+                    if request.action in BUFFERED_QUALITY_ACTIONS
+                    else None
+                ),
+                "retry_completed": len(lm_log.attempt_outcomes) > 1
+                or lm_log.speech_quality_attempt_count > 1,
             }
+            if effective_delivery is not None:
+                parsed_payload["voice_snapshot"] = {
+                    "enabled": player.voice_enabled,
+                    "speaker": player.tts_speaker,
+                    "effective_delivery": copy.deepcopy(effective_delivery),
+                    "effective_context_texts": effective_context_texts.copy(),
+                    "voice_config_version": player.voice_config_version,
+                    "delivery_mapping_version": DELIVERY_MAPPING_VERSION,
+                }
             if request.action == ACTION_EXILE_LAST_WORDS:
                 speech_presentation_id = (
                     self._terminal_exile_last_words_presentation_id("speech")
@@ -5662,11 +6504,22 @@ class GameEngine:
             self._publish_player_action_requested(request)
 
         batch_started_at = self.monotonic()
+        batch_timeout = self._batch_deadline_seconds(requests)
+        batch_deadline_at = (
+            batch_started_at + batch_timeout if batch_timeout is not None else None
+        )
         results: list[PlayerActionResult | None] = [None] * len(requests)
         exceptions: dict[int, Exception] = {}
         condition = threading.Condition()
         next_index = {"value": 0}
-        gates = [_PublishGateSink(self.event_sink) for _ in requests]
+        gates = [
+            _PublishGateSink(
+                self.event_sink,
+                deadline_at_monotonic=batch_deadline_at,
+                monotonic=self.monotonic,
+            )
+            for _request in requests
+        ]
         executor = ThreadPoolExecutor(max_workers=len(requests))
         futures = {
             executor.submit(
@@ -5682,19 +6535,33 @@ class GameEngine:
             ): index
             for index, request in enumerate(requests)
         }
-        batch_timeout = self._batch_deadline_seconds(requests)
         done, pending = wait(futures, timeout=batch_timeout)
+        late_done: set[Future[PlayerActionResult]] = set()
         for future in done:
             index = futures[future]
             try:
-                results[index] = future.result()
+                candidate_result = future.result()
+                if gates[index].result_was_late():
+                    late_done.add(future)
+                else:
+                    results[index] = candidate_result
             except Exception as exc:
-                exceptions[index] = exc
-        for future in pending:
+                if gates[index].result_was_late():
+                    late_done.add(future)
+                else:
+                    exceptions[index] = exc
+        deadline_futures = set(pending) | late_done
+        for future in deadline_futures:
             index = futures[future]
             gates[index].close()
-            future.cancel()
+            canceled = future.cancel()
             request = requests[index]
+            if not canceled:
+                future.add_done_callback(
+                    lambda _future, gate=gates[index], late_request=request: (
+                        gate.publish_late_discard(late_request)
+                    )
+                )
             budget_spec = self.action_execution_budget.for_action(request.action)
             results[index] = self._timeout_fallback_result(
                 request,
@@ -5706,13 +6573,22 @@ class GameEngine:
         if self.action_budgets_enabled:
             record_action_batch(
                 action_kind=self.action_execution_budget.for_action(requests[0].action).kind,
-                result=("deadline" if pending else "failed" if exceptions else "completed"),
+                result=(
+                    "deadline"
+                    if deadline_futures
+                    else "failed"
+                    if exceptions
+                    else "completed"
+                ),
                 duration_ms=max(
                     0,
                     round((self.monotonic() - batch_started_at) * 1000),
                 ),
             )
-        executor.shutdown(wait=not pending, cancel_futures=bool(pending))
+        executor.shutdown(
+            wait=not deadline_futures,
+            cancel_futures=bool(deadline_futures),
+        )
 
         if exceptions:
             self._checkpoint_player_action_results(results)
@@ -5858,6 +6734,12 @@ class GameEngine:
 
     def _invalid_player_action_error(self, result: PlayerActionResult) -> ValueError | None:
         request = result.request
+        if (
+            request.action in OPTIONAL_NO_ACTIONS
+            and result.execution_status == "fallback"
+            and result.value is None
+        ):
+            return None
         if request.action in BUFFERED_QUALITY_ACTIONS and (
             not isinstance(result.value, str) or not result.value.strip()
         ):
@@ -5902,6 +6784,41 @@ class GameEngine:
                 "invalid_value": invalid_value,
                 "fallback_choice": self._public_action_value(fallback_choice),
                 "allowed_values": request.public_options.copy(),
+            },
+        )
+
+    def _publish_player_did_not_speak(
+        self,
+        request: PlayerActionRequest,
+        action_log: ActionLog,
+    ) -> None:
+        public_player = self._public_player_reference(request.player.name)
+        reason_code = _public_action_reason_code(action_log) or "failed"
+        visible_text = f"{public_player}本轮未发言。"
+        self._publish(
+            "player_did_not_speak",
+            round_number=request.round_state.number,
+            phase=request.phase,
+            actor=request.player.name,
+            action=request.action,
+            payload={
+                "schema_version": 1,
+                "visible_text": visible_text,
+                "speech_status": "not_spoken",
+                "action_origin": "none",
+                "public_reason_code": reason_code,
+            },
+        )
+        self._add_public_fact(
+            request.round_state.number,
+            "interruption",
+            f"第{request.round_state.number}轮：{visible_text}",
+            stage=request.action,
+            actor=request.player.name,
+            retention="important",
+            details={
+                "speech_status": "not_spoken",
+                "public_reason_code": reason_code,
             },
         )
 
@@ -5962,6 +6879,319 @@ class GameEngine:
             error=error,
         )
 
+    def _restore_lifecycle_contract(self) -> None:
+        checkpoint_events: list[Mapping[str, object]] = []
+        if self.checkpoint_manager is not None:
+            loader = getattr(self.checkpoint_manager, "lifecycle_events", None)
+            if callable(loader):
+                loaded = loader()
+                if not isinstance(loaded, list):
+                    raise ResumeCheckpointError("invalid_structure")
+                checkpoint_events = loaded
+
+        persisted_events: list[Mapping[str, object]] = []
+        persisted_loader = getattr(self.event_sink, "lifecycle_events", None)
+        if callable(persisted_loader):
+            for event in persisted_loader():
+                event_type = (
+                    event.get("type")
+                    if isinstance(event, Mapping)
+                    else getattr(event, "type", None)
+                )
+                event_id = (
+                    event.get("id")
+                    if isinstance(event, Mapping)
+                    else getattr(event, "id", None)
+                )
+                round_number = (
+                    event.get("round_number", event.get("round"))
+                    if isinstance(event, Mapping)
+                    else getattr(event, "round", None)
+                )
+                phase = (
+                    event.get("phase")
+                    if isinstance(event, Mapping)
+                    else getattr(event, "phase", None)
+                )
+                payload = (
+                    event.get("payload")
+                    if isinstance(event, Mapping)
+                    else getattr(event, "payload", None)
+                )
+                stream_id = (
+                    event.get("run_id")
+                    if isinstance(event, Mapping)
+                    else getattr(event, "run_id", None)
+                )
+                if stream_id is None:
+                    stream_id = getattr(self.event_sink, "run_id", None)
+                if (
+                    event_type not in {"phase_started", "phase_completed"}
+                    or type(event_id) is not int
+                    or type(round_number) is not int
+                    or type(phase) is not str
+                    or not isinstance(payload, Mapping)
+                    or type(payload.get("phase_instance_id")) is not str
+                ):
+                    continue
+                persisted_events.append(
+                    lifecycle_event_entry(
+                        lifecycle_kind=event_type,
+                        phase_instance_id=str(payload["phase_instance_id"]),
+                        round_number=round_number,
+                        phase=phase,
+                        event_id=event_id,
+                        payload=payload,
+                        stream_id=(stream_id if isinstance(stream_id, str) else None),
+                    )
+                )
+
+        merged = merge_lifecycle_event_entries(
+            checkpoint_events,
+            persisted_events,
+        )
+        merged_events = merged.get("events", [])
+        if not isinstance(merged_events, list):
+            raise ResumeCheckpointError("invalid_structure")
+        self._known_lifecycle_events = {
+            (
+                str(entry["phase_instance_id"]),
+                str(entry["lifecycle_kind"]),
+            ): copy.deepcopy(entry)
+            for entry in merged_events
+        }
+        lifecycle_by_instance: dict[str, dict[str, dict[str, object]]] = {}
+        for entry in merged_events:
+            phase_instance_id = str(entry["phase_instance_id"])
+            lifecycle_by_instance.setdefault(phase_instance_id, {})[
+                str(entry["lifecycle_kind"])
+            ] = entry
+        for phase_instance_id, instance in lifecycle_by_instance.items():
+            started = instance.get("phase_started")
+            if started is None:
+                continue
+            key = (int(started["round_number"]), str(started["phase"]))
+            try:
+                occurrence = int(phase_instance_id.rsplit(":", 1)[1])
+            except (IndexError, ValueError) as exc:
+                raise ResumeCheckpointError("invalid_structure") from exc
+            self._max_persisted_phase_occurrences[key] = max(
+                occurrence,
+                self._max_persisted_phase_occurrences.get(key, 0),
+            )
+            completed = instance.get("phase_completed")
+            completion_payload = (
+                completed.get("payload")
+                if isinstance(completed, Mapping)
+                else None
+            )
+            forced_failure = bool(
+                isinstance(completion_payload, Mapping)
+                and completion_payload.get("completion_status") == "canceled"
+                and completion_payload.get("completion_reason") == "forced_failure"
+            )
+            if not forced_failure:
+                self._reusable_phase_occurrences[key] = max(
+                    occurrence,
+                    self._reusable_phase_occurrences.get(key, 0),
+                )
+        if self.checkpoint_manager is not None and persisted_events:
+            reconcile = getattr(
+                self.checkpoint_manager,
+                "reconcile_lifecycle_events",
+                None,
+            )
+            if callable(reconcile):
+                reconcile(persisted_events)
+
+    def _next_phase_occurrence(self, key: tuple[int, str]) -> int:
+        if key not in self._initialized_phase_occurrences:
+            self._initialized_phase_occurrences.add(key)
+            occurrence = self._reusable_phase_occurrences.get(key)
+            if occurrence is None:
+                occurrence = self._max_persisted_phase_occurrences.get(key, 0) + 1
+            self._phase_occurrences[key] = occurrence
+            return occurrence
+        self._phase_occurrences[key] += 1
+        return self._phase_occurrences[key]
+
+    def _close_recovered_terminal_lifecycle(
+        self,
+        active_players: list[str],
+    ) -> None:
+        completed_instances = {
+            phase_instance_id
+            for phase_instance_id, lifecycle_kind in self._known_lifecycle_events
+            if lifecycle_kind == "phase_completed"
+        }
+        open_starts = [
+            entry
+            for (phase_instance_id, lifecycle_kind), entry in self._known_lifecycle_events.items()
+            if lifecycle_kind == "phase_started"
+            and phase_instance_id not in completed_instances
+        ]
+        if not open_starts:
+            return
+        if len(open_starts) != 1 or not self.state.rounds:
+            raise RuntimeError("Terminal recovery has an ambiguous open lifecycle phase")
+        started = open_starts[0]
+        round_number = int(started["round_number"])
+        phase = str(started["phase"])
+        phase_instance_id = str(started["phase_instance_id"])
+        source_event_id = int(started["event_id"])
+        key = (round_number, phase)
+        self._active_phase_instances[key] = (phase_instance_id, source_event_id)
+        round_state = self.state.rounds[-1]
+
+        if phase == "sheriff_election" and round_state.werewolf_self_exploded:
+            self._complete_phase(
+                round_number=round_number,
+                phase=phase,
+                completion_status="canceled",
+                completion_reason="self_explosion",
+                next_phase="day",
+                terminal=False,
+            )
+            self._start_phase(
+                round_number=round_number,
+                phase="day",
+                payload={
+                    "active_players": active_players.copy(),
+                    "narration_mode": "explicit_v1",
+                },
+            )
+            self._complete_phase(
+                round_number=round_number,
+                phase="day",
+                completion_status="terminal",
+                completion_reason="self_explosion",
+                next_phase=None,
+                terminal=True,
+            )
+            return
+
+        completion_reason = (
+            round_state.exile_resolution_reason or "vote_resolved"
+            if phase == "vote"
+            else "self_explosion"
+            if phase == "day" and round_state.werewolf_self_exploded
+            else "night_result_presented"
+            if phase in {"night", "dawn_reveal"}
+            else "terminal_recovery_completed"
+        )
+        self._complete_phase(
+            round_number=round_number,
+            phase=phase,
+            completion_status="terminal",
+            completion_reason=completion_reason,
+            next_phase=None,
+            terminal=True,
+        )
+
+    def _publish_lifecycle(
+        self,
+        event_type: Literal["phase_started", "phase_completed"],
+        *,
+        round_number: int,
+        phase: str,
+        actor: str | None,
+        payload: dict[str, object],
+    ) -> object | None:
+        publisher = getattr(self.event_sink, "publish_lifecycle", None)
+        if callable(publisher):
+            return publisher(
+                event_type,
+                round_number=round_number,
+                phase=phase,
+                actor=actor,
+                payload=payload,
+            )
+        return self.event_sink.publish(
+            event_type,
+            round_number=round_number,
+            phase=phase,
+            actor=actor,
+            action=None,
+            payload=payload,
+        )
+
+    def _known_lifecycle_receipt(
+        self,
+        *,
+        lifecycle_kind: Literal["phase_started", "phase_completed"],
+        phase_instance_id: str,
+        round_number: int,
+        phase: str,
+        payload: Mapping[str, object],
+    ) -> _LifecycleEventReceipt | None:
+        entry = self._known_lifecycle_events.get(
+            (phase_instance_id, lifecycle_kind)
+        )
+        if entry is None:
+            return None
+        if (
+            entry.get("round_number") != round_number
+            or entry.get("phase") != phase
+            or entry.get("payload") != dict(payload)
+            or type(entry.get("event_id")) is not int
+        ):
+            raise RuntimeError("Lifecycle replay conflicts with the persisted contract")
+        return _LifecycleEventReceipt(id=int(entry["event_id"]))
+
+    def _record_lifecycle_receipt(
+        self,
+        *,
+        lifecycle_kind: Literal["phase_started", "phase_completed"],
+        phase_instance_id: str,
+        round_number: int,
+        phase: str,
+        payload: Mapping[str, object],
+        event: object | None,
+    ) -> None:
+        event_id = getattr(event, "id", None)
+        if type(event_id) is not int:
+            return
+        key = (phase_instance_id, lifecycle_kind)
+        existing = self._known_lifecycle_events.get(key)
+        existing_stream_id = (
+            existing.get("stream_id") if isinstance(existing, Mapping) else None
+        )
+        entry = lifecycle_event_entry(
+            lifecycle_kind=lifecycle_kind,
+            phase_instance_id=phase_instance_id,
+            round_number=round_number,
+            phase=phase,
+            event_id=event_id,
+            payload=payload,
+            stream_id=(
+                str(existing_stream_id)
+                if isinstance(existing_stream_id, str)
+                else str(self.event_sink.run_id)
+                if isinstance(getattr(self.event_sink, "run_id", None), str)
+                else None
+            ),
+        )
+        if existing is not None and existing != entry:
+            raise RuntimeError("Lifecycle event identity is not unique")
+        self._known_lifecycle_events[key] = entry
+        if self.checkpoint_manager is None:
+            return
+        recorder = getattr(self.checkpoint_manager, "record_lifecycle_event", None)
+        if callable(recorder):
+            recorder(
+                lifecycle_kind=lifecycle_kind,
+                phase_instance_id=phase_instance_id,
+                round_number=round_number,
+                phase=phase,
+                event_id=event_id,
+                payload=payload,
+                stream_id=(
+                    str(entry["stream_id"])
+                    if isinstance(entry.get("stream_id"), str)
+                    else None
+                ),
+            )
+
     def _publish(
         self,
         event_type: str,
@@ -5972,6 +7202,13 @@ class GameEngine:
         action: str | None = None,
         payload: dict[str, object] | None = None,
     ) -> object | None:
+        if (
+            type(round_number) is int
+            and type(phase) is str
+            and (round_number, phase) in self._suppressed_phase_replays
+            and event_type not in {"phase_started", "phase_completed"}
+        ):
+            return None
         return self.event_sink.publish(
             event_type,
             round_number=round_number,
@@ -5980,6 +7217,125 @@ class GameEngine:
             action=action,
             payload=payload,
         )
+
+    def _start_phase(
+        self,
+        *,
+        round_number: int,
+        phase: str,
+        payload: dict[str, object],
+        actor: str | None = None,
+    ) -> str:
+        key = (round_number, phase)
+        current = self._active_phase_instances.get(key)
+        if current is not None:
+            return current[0]
+        occurrence = self._next_phase_occurrence(key)
+        phase_instance_id = f"phase:r{round_number}:{phase}:{occurrence}"
+        event_payload = {**payload, "phase_instance_id": phase_instance_id}
+        event = self._known_lifecycle_receipt(
+            lifecycle_kind="phase_started",
+            phase_instance_id=phase_instance_id,
+            round_number=round_number,
+            phase=phase,
+            payload=event_payload,
+        )
+        if event is None:
+            event = self._publish_lifecycle(
+                "phase_started",
+                round_number=round_number,
+                phase=phase,
+                actor=actor,
+                payload=event_payload,
+            )
+        source_event_id = getattr(event, "id", None)
+        self._active_phase_instances[key] = (
+            phase_instance_id,
+            source_event_id if type(source_event_id) is int else None,
+        )
+        if (phase_instance_id, "phase_completed") in self._known_lifecycle_events:
+            self._suppressed_phase_replays.add(key)
+        self._record_lifecycle_receipt(
+            lifecycle_kind="phase_started",
+            phase_instance_id=phase_instance_id,
+            round_number=round_number,
+            phase=phase,
+            payload=event_payload,
+            event=event,
+        )
+        return phase_instance_id
+
+    def _complete_phase(
+        self,
+        *,
+        round_number: int,
+        phase: str,
+        completion_status: Literal["completed", "skipped", "canceled", "terminal"],
+        completion_reason: str,
+        next_phase: str | None,
+        terminal: bool,
+    ) -> object | None:
+        key = (round_number, phase)
+        active = self._active_phase_instances.get(key)
+        if active is None:
+            return None
+        phase_instance_id, source_event_id = active
+        event_payload = {
+            "phase_instance_id": phase_instance_id,
+            "completion_status": completion_status,
+            "completion_reason": completion_reason,
+            "next_phase": next_phase,
+            "terminal": terminal,
+            "source_event_id": source_event_id,
+            "audience_policy": "public_lifecycle_v1",
+        }
+        event = self._known_lifecycle_receipt(
+            lifecycle_kind="phase_completed",
+            phase_instance_id=phase_instance_id,
+            round_number=round_number,
+            phase=phase,
+            payload=event_payload,
+        )
+        if event is None:
+            event = self._publish_lifecycle(
+                "phase_completed",
+                round_number=round_number,
+                phase=phase,
+                actor=None,
+                payload=event_payload,
+            )
+        self._record_lifecycle_receipt(
+            lifecycle_kind="phase_completed",
+            phase_instance_id=phase_instance_id,
+            round_number=round_number,
+            phase=phase,
+            payload=event_payload,
+            event=event,
+        )
+        if self._active_phase_instances.get(key) == active:
+            self._active_phase_instances.pop(key, None)
+            self._suppressed_phase_replays.discard(key)
+        return event
+
+    def _cancel_active_phases(self, *, completion_reason: str) -> None:
+        active_phases = sorted(
+            self._active_phase_instances.items(),
+            key=lambda item: (
+                item[1][1] if item[1][1] is not None else -1,
+                item[0][0],
+                item[0][1],
+            ),
+            reverse=True,
+        )
+        for (round_number, phase), _active in active_phases:
+            self._complete_phase(
+                round_number=round_number,
+                phase=phase,
+                completion_status="canceled",
+                completion_reason=completion_reason,
+                next_phase=None,
+                terminal=bool(self.state.winner),
+            )
 
     def _remember_terminal_keep_event(self, event: object | None) -> None:
         event_id = getattr(event, "id", None)
@@ -6153,7 +7509,10 @@ class GameEngine:
             "debate": debate,
             "debate_guidance": self._debate_guidance(player, active_players, round_state),
             "personality": player.personality,
-            "rule_text": render_rule_text(self.rule_set),
+            "rule_text": rule_text_from_snapshot(
+                self.state.rule_set,
+                fallback_rule_set=self.rule_set,
+            ),
             "rule_set_snapshot": copy.deepcopy(self.state.rule_set),
             "werewolf_context": self._werewolf_context(player, active_players),
             "sheriff_election": self._sheriff_election_context(round_state),
@@ -6889,6 +8248,7 @@ class GameEngine:
         deaths: list[DeathEvent],
         *,
         phase: str,
+        death_phase: Literal["night", "day"] | None = None,
         excluded_shot_targets: set[str] | None = None,
         excluded_badge_targets: set[str] | None = None,
         transfer_sheriff_badge: bool = False,
@@ -6899,6 +8259,7 @@ class GameEngine:
                 "actor": death.player,
                 "death_cause": death.cause,
                 "phase": phase,
+                **({"death_phase": death_phase} if death_phase else {}),
                 "excluded_shot_targets": sorted(excluded_shot_targets or set()),
                 "excluded_badge_targets": sorted(excluded_badge_targets or set()),
                 "transfer_sheriff_badge": transfer_sheriff_badge,
@@ -6939,6 +8300,7 @@ class GameEngine:
         active_players: list[str],
         death_cause: str,
         phase: str,
+        death_phase: Literal["night", "day"] | None = None,
         excluded_shot_targets: set[str],
         excluded_badge_targets: set[str] | None,
         transfer_sheriff_badge: bool,
@@ -6960,6 +8322,7 @@ class GameEngine:
                         "actor": hunter.name,
                         "death_cause": death_cause,
                         "phase": phase,
+                        **({"death_phase": death_phase} if death_phase else {}),
                         "excluded_shot_targets": sorted(excluded_shot_targets),
                         "excluded_badge_targets": sorted(excluded_badge_targets or set()),
                         "transfer_sheriff_badge": transfer_sheriff_badge,
@@ -7171,6 +8534,14 @@ class GameEngine:
                 raise RuntimeError("Hunter settlement snapshot is malformed")
             death_cause = str(details.get("death_cause") or "vote_exile")
             phase = str(details.get("phase") or "vote")
+            raw_death_phase = details.get("death_phase")
+            death_phase: Literal["night", "day"] = (
+                raw_death_phase
+                if raw_death_phase in {"night", "day"}
+                else "night"
+                if phase in {"night", "dawn_reveal"}
+                else "day"
+            )
             excluded_shot_targets = {
                 str(value) for value in details.get("excluded_shot_targets", [])
             }
@@ -7195,6 +8566,7 @@ class GameEngine:
                     round_log=round_log,
                     active_players=active_players,
                     phase=phase,
+                    death_phase=death_phase,
                     excluded_shot_targets=excluded_shot_targets,
                     excluded_badge_targets=excluded_badge_targets,
                     transfer_sheriff_badge=transfer_badge,
@@ -7209,6 +8581,7 @@ class GameEngine:
                 round_log=round_log,
                 active_players=active_players,
                 phase=phase,
+                death_phase=death_phase,
                 excluded_badge_targets=excluded_badge_targets,
                 transfer_sheriff_badge=transfer_badge,
             )
@@ -7346,6 +8719,10 @@ class GameEngine:
                         round_state.exile_pk_speeches
                     ),
                     "exile_runoff_votes": round_state.exile_runoff_votes.copy(),
+                    "exile_runoff_vote_origins": copy.deepcopy(
+                        round_state.exile_runoff_vote_origins
+                    ),
+                    "vote_origins": copy.deepcopy(round_state.vote_origins),
                     "exile_resolution_reason": round_state.exile_resolution_reason,
                     "active_players": active_players.copy(),
                 },
@@ -7563,6 +8940,60 @@ class GameEngine:
                 player.gamestate.current_players = active_players.copy()
                 if player.name not in active_players:
                     player.gamestate.debate = []
+
+
+def _effective_action_origin(action_log: ActionLog) -> str:
+    if action_log.effective_origin is not None:
+        return action_log.effective_origin
+    if action_log.execution_status in {"canceled", "failed", "timed_out"}:
+        return "none"
+    if action_log.execution_status == "fallback" or action_log.fallback_reason:
+        return "system_fallback"
+    return "model"
+
+
+def _vote_origins(
+    action_logs: list[ActionLog],
+) -> dict[str, dict[str, str | None]]:
+    return {
+        action_log.actor: {
+            "origin": _effective_action_origin(action_log),
+            "reason_code": _public_action_reason_code(action_log),
+        }
+        for action_log in action_logs
+    }
+
+
+def _public_vote_line(
+    voter: str,
+    target: str,
+    origin: Mapping[str, object] | None,
+) -> str:
+    label = f"{voter}->{target}"
+    if isinstance(origin, Mapping) and origin.get("origin") == "system_fallback":
+        return f"{label}（系统代投）"
+    return label
+
+
+def _public_action_reason_code(action_log: ActionLog) -> str | None:
+    reason = action_log.reason_code or action_log.fallback_reason
+    if not reason:
+        return None
+    if reason.startswith("batch_deadline"):
+        return "batch_deadline"
+    if reason.startswith("timeout"):
+        return "timeout"
+    if "invalid" in reason:
+        return "invalid_exhausted"
+    if "quality" in reason:
+        return "quality_exhausted"
+    if "self_explosion" in reason:
+        return "self_explosion_cancelled"
+    if reason in {"superseded", "expired", "canceled_terminal"}:
+        return "phase_advanced"
+    if "badge" in reason or "rule" in reason:
+        return "rule_default"
+    return reason
 
 
 def _visible_action_result(

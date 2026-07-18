@@ -190,10 +190,57 @@ class AdminRuleSetWarning(BaseModel):
     message: str = Field(min_length=1, max_length=500)
 
 
+class AdminRuleContractClause(BaseModel):
+    clause_id: str = Field(min_length=1, max_length=160)
+    priority: Literal["P0", "P1", "P2"]
+    roles: list[str] = Field(max_length=20)
+    phases: list[str] = Field(max_length=20)
+    actions: list[str] = Field(max_length=30)
+    audience: Literal["player_public", "role_private", "internal_only"]
+    engine_constraint_ids: list[str] = Field(min_length=1, max_length=20)
+    model_rule_text: str | None = Field(default=None, min_length=1, max_length=2000)
+    coverage_status: Literal["covered", "broken"]
+    uncovered_engine_constraint_ids: list[str] = Field(max_length=20)
+
+    @model_validator(mode="after")
+    def require_safe_model_text_and_consistent_coverage(self) -> "AdminRuleContractClause":
+        if (self.audience == "internal_only") != (self.model_rule_text is None):
+            raise ValueError("Model rule text must match the clause audience")
+        if (self.coverage_status == "covered") != (not self.uncovered_engine_constraint_ids):
+            raise ValueError("Clause coverage status is inconsistent")
+        return self
+
+
+class AdminRuleContractResponse(BaseModel):
+    schema_version: int = Field(ge=1)
+    revision_id: str = Field(min_length=1, max_length=80)
+    canonical_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    coverage_status: Literal["covered", "broken"]
+    publish_ready: bool
+    missing_p0_clause_ids: list[str] = Field(max_length=20)
+    broken_engine_constraint_ids: list[str] = Field(max_length=50)
+    clauses: list[AdminRuleContractClause] = Field(max_length=100)
+
+    @model_validator(mode="after")
+    def require_consistent_publish_readiness(self) -> "AdminRuleContractResponse":
+        if self.publish_ready != (self.coverage_status == "covered"):
+            raise ValueError("Contract publish readiness is inconsistent")
+        if self.publish_ready and (
+            self.missing_p0_clause_ids
+            or self.broken_engine_constraint_ids
+            or any(clause.coverage_status != "covered" for clause in self.clauses)
+        ):
+            raise ValueError("Publishable contract cannot contain coverage blockers")
+        if len({clause.clause_id for clause in self.clauses}) != len(self.clauses):
+            raise ValueError("Rule clause IDs must be unique")
+        return self
+
+
 class AdminRuleSetValidationResponse(BaseModel):
     valid: bool
     errors: list[AdminRuleSetWarning] = Field(max_length=50)
     warnings: list[AdminRuleSetWarning] = Field(max_length=50)
+    rule_contract: AdminRuleContractResponse | None = None
     compiled_snapshot: dict[str, object] | None = None
     content_hash: str | None = Field(default=None, min_length=64, max_length=64)
     rule_text_preview: str | None = Field(default=None, max_length=10_000)
@@ -203,6 +250,7 @@ class AdminRuleSetDetailResponse(AdminRuleSetResponse):
     revisions: list[AdminRuleSetHistoryRevisionResponse] = Field(max_length=50)
     usage: AdminRuleSetUsage
     warnings: list[AdminRuleSetWarning] = Field(max_length=10)
+    rule_contract: AdminRuleContractResponse | None = None
 
 
 class AdminRuleRoleOption(BaseModel):

@@ -14,6 +14,7 @@ from app.werewolf.lm import (
     parse_json_object,
 )
 from app.werewolf.prompts_zh import build_prompt
+from app.werewolf.rules import get_rule_set, rule_set_snapshot
 from app.werewolf.providers import (
     ARK_AGENT_PLAN_MODELS,
     ArkAgentPlanProvider,
@@ -55,6 +56,52 @@ def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
     assert '"vote"' in prompt
     assert "字段含义：reasoning=推理，vote=投票对象" in prompt
     assert schema["required"] == ["reasoning", "vote"]
+
+
+def test_prompt_separates_rules_public_facts_private_state_and_candidates() -> None:
+    rule = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    prompt, _schema = build_prompt(
+        "witch_save",
+        {
+            **_world_state_for_special_action("女巫", "4号玩家、不使用解药"),
+            "rule_text": "你正在进行一局数字版狼人杀。\n狼人不能袭击狼队友。",
+            "rule_set_snapshot": rule_set_snapshot(rule),
+            "public_facts": ["第1轮警长是4号玩家。"],
+            "observations": ["今晚被狼人袭击的是4号玩家。"],
+        },
+    )
+
+    headings = [
+        "公共固定规则：",
+        "角色私有规则：",
+        "当前私人身份与设定：",
+        "当前公开状态：",
+        "你的私人观察（当前）：",
+        "本次合法动作与候选：",
+    ]
+    positions = [prompt.index(heading) for heading in headings]
+    assert positions == sorted(positions)
+    assert "候选人：4号玩家、不使用解药" in prompt
+
+
+def test_prompt_projects_allowlisted_private_clause_and_never_internal_clause() -> None:
+    snapshot = rule_set_snapshot(get_rule_set("classic_12_seer_witch_hunter_idiot"))
+    snapshot["rule_contract"] = {
+        "injected_clause_ids": ["internal.werewolf.collective_fallback.v1"],
+        "neutral_text_zh": "SENTINEL_INTERNAL_RULE_TEXT",
+    }
+
+    prompt, _schema = build_prompt(
+        "werewolf_discuss",
+        {
+            **_world_state_for_special_action("狼人", "4号玩家"),
+            "rule_set_snapshot": snapshot,
+        },
+    )
+
+    assert "狼人知道自己的狼人队友" in prompt
+    assert "狼队集体无有效刀口" not in prompt
+    assert "SENTINEL_INTERNAL_RULE_TEXT" not in prompt
 
 
 def test_build_prompt_supports_witch_save_action() -> None:
@@ -440,7 +487,7 @@ def test_prompt_allows_explicit_custom_chinese_state_text() -> None:
     assert "你的出局原因：因自定义角色技能出局" in prompt
 
 
-def test_prompt_renders_hunter_and_terminal_hard_state_constraints() -> None:
+def test_prompt_renders_hunter_state_without_hidden_terminal_prediction() -> None:
     prompt, _schema = build_prompt(
         "debate",
         {
@@ -454,7 +501,7 @@ def test_prompt_renders_hunter_and_terminal_hard_state_constraints() -> None:
     )
 
     assert "存活状态下不能主动开枪" in prompt
-    assert "不存在下一轮或下一夜" in prompt
+    assert "不存在下一轮或下一夜" not in prompt
 
 
 @pytest.mark.parametrize(
@@ -536,7 +583,7 @@ def _prompt_rule_snapshot(**overrides: object) -> dict[str, object]:
     return snapshot
 
 
-def test_werewolf_self_explosion_prompt_mentions_chain_cost() -> None:
+def test_werewolf_self_explosion_prompt_keeps_facts_without_strategy_coaching() -> None:
     prompt, _schema = build_prompt(
         "werewolf_self_explosion",
         {
@@ -548,8 +595,22 @@ def test_werewolf_self_explosion_prompt_mentions_chain_cost() -> None:
         },
     )
 
-    assert "已有狼人自爆" in prompt
-    assert "收益不明确时选择不自爆" in prompt
+    assert "第1轮：2号玩家自爆为狼人" in prompt
+    assert "第2轮：7号玩家自爆为狼人" in prompt
+    assert "收益不明确时选择不自爆" not in prompt
+    assert "默认选择不自爆" not in prompt
+
+
+def test_self_explosion_prompt_ignores_hidden_terminal_prediction() -> None:
+    world_state = _world_state_for_special_action("狼人", "自爆、不自爆")
+    world_state["self_explosion_decision_context"] = {
+        "explosion_would_end_game": True,
+    }
+
+    prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
+
+    assert "按当前人数和屠边条件" not in prompt
+    assert "必须明确胜负方向" not in prompt
 
 
 @pytest.mark.parametrize("weight", [1.0, 1.5, 2.0])

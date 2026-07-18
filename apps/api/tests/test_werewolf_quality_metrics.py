@@ -137,9 +137,7 @@ def test_terminal_quality_metrics_have_exact_denominators_histograms_and_voice_s
                         "included_critical_count": 1,
                         "missing_critical_count": 1,
                     },
-                    "speech_quality_report": {
-                        "issues": [{"code": "repeated_debate_phrase"}]
-                    },
+                    "speech_quality_report": {"issues": [{"code": "repeated_debate_phrase"}]},
                     "speech_quality_attempt_count": 2,
                     "speech_quality_retry_exhausted": False,
                     "lm_log": {"result": {"say": "公开发言"}},
@@ -216,6 +214,24 @@ def test_terminal_quality_metrics_have_exact_denominators_histograms_and_voice_s
     assert report.performance["game_duration_ms"] == 600_000
     assert report.performance["action_duration_histogram"]["buckets"]["+Inf"] == 1
     assert report.performance["first_token_histogram"]["buckets"]["0.25"] == 1
+    assert report.performance["logical_action_counts"] == {
+        "completed_by_model": 1,
+        "completed_by_system_fallback": 0,
+        "canceled": 0,
+        "failed": 0,
+    }
+    assert report.performance["provider_attempt_counts"] == {
+        "valid": 0,
+        "invalid": 0,
+        "timeout": 0,
+        "transport_failure": 0,
+        "canceled": 0,
+    }
+    assert report.performance["retry_counts"] == {
+        "provider_retry": 0,
+        "format_retry": 0,
+        "quality_rewrite": 1,
+    }
     assert report.content["repeated_speech_rate"] == 1.0
     assert report.content["speech_rewrite_recovered_count"] == 1
 
@@ -246,6 +262,123 @@ def test_action_histograms_are_cumulative_and_keep_inf_equal_to_count() -> None:
         'werewolf_model_action_duration_seconds_bucket{action_kind="public_speech",'
         'provider="deepseek",result="completed",le="+Inf"} 1'
     ) in metrics
+
+
+def test_timeout_metrics_separate_provider_attempts_from_logical_fallbacks() -> None:
+    logs = [
+        {
+            "number": 1,
+            "actions": [
+                {
+                    "actor": "1号玩家",
+                    "action": "vote",
+                    "options": ["2号玩家"],
+                    "choice": "2号玩家",
+                    "lifecycle_status": "fallback",
+                    "fallback_reason": "timeout_deterministic_legal_choice",
+                    "lm_log": {
+                        "action_id": "act_timeout_fallback",
+                        "request_id": "req_timeout_2",
+                        "prompt": "",
+                        "result": None,
+                        "attempt_outcomes": [
+                            {
+                                "action_id": "act_timeout_fallback",
+                                "request_id": "req_timeout_1",
+                                "attempt_result": "timed_out",
+                            },
+                            {
+                                "action_id": "act_timeout_fallback",
+                                "request_id": "req_timeout_2",
+                                "attempt_result": "timed_out",
+                            },
+                        ],
+                    },
+                },
+                {
+                    "actor": "2号玩家",
+                    "action": "vote",
+                    "options": ["1号玩家"],
+                    "choice": "1号玩家",
+                    "lifecycle_status": "completed",
+                    "lm_log": {
+                        "action_id": "act_retry_recovered",
+                        "request_id": "req_retry_2",
+                        "prompt": "",
+                        "result": {"reasoning": "", "vote": "1号玩家"},
+                        "attempt_outcomes": [
+                            {
+                                "action_id": "act_retry_recovered",
+                                "request_id": "req_retry_1",
+                                "attempt_result": "timed_out",
+                            },
+                            {
+                                "action_id": "act_retry_recovered",
+                                "request_id": "req_retry_2",
+                                "attempt_result": "valid_response",
+                            },
+                        ],
+                    },
+                },
+                {
+                    "actor": "3号玩家",
+                    "action": "vote",
+                    "options": ["1号玩家"],
+                    "choice": None,
+                    "lifecycle_status": "timed_out",
+                    "lm_log": {
+                        "action_id": "act_legacy_lifecycle_timeout",
+                        "request_id": None,
+                        "prompt": "",
+                        "result": None,
+                    },
+                },
+                {
+                    "actor": "4号玩家",
+                    "action": "vote",
+                    "options": ["1号玩家"],
+                    "choice": "1号玩家",
+                    "lifecycle_status": "fallback",
+                    "fallback_reason": "invalid_deterministic_legal_choice",
+                    "lm_log": {
+                        "action_id": "act_invalid_after_timeout",
+                        "request_id": "req_invalid_2",
+                        "prompt": "",
+                        "result": None,
+                        "attempt_outcomes": [
+                            {
+                                "action_id": "act_invalid_after_timeout",
+                                "request_id": "req_invalid_1",
+                                "attempt_result": "timed_out",
+                            },
+                            {
+                                "action_id": "act_invalid_after_timeout",
+                                "request_id": "req_invalid_2",
+                                "attempt_result": "invalid_response",
+                            },
+                        ],
+                    },
+                },
+            ],
+        }
+    ]
+    bundle = build_quality_evaluation_bundle(
+        state={"session_id": "game_timeout_split", "rounds": []},
+        logs=logs,
+    )
+
+    performance = evaluate_quality_bundle(bundle, hmac_key="test-key").performance
+
+    assert performance["timeout_count"] == 4
+    assert performance["provider_timeout_count"] == 4
+    assert performance["logical_timeout_fallback_count"] == 1
+    assert performance["provider_attempt_counts"]["timeout"] == 4
+    assert performance["logical_action_counts"] == {
+        "completed_by_model": 1,
+        "completed_by_system_fallback": 2,
+        "canceled": 0,
+        "failed": 1,
+    }
 
 
 def test_quality_prometheus_aggregates_only_fixed_safe_fields() -> None:

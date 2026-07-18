@@ -349,12 +349,45 @@ describe("admin game record flow", () => {
       screen.getByRole("heading", { name: "P2 对局质量" }),
     ).toBeInTheDocument();
     expect(screen.getByText("自动修复")).toBeInTheDocument();
+    expect(screen.getByText("Provider attempt")).toBeInTheDocument();
+    expect(screen.getByText("Logical action 来源")).toBeInTheDocument();
+    expect(
+      screen.getByText(/模型完成 22 · 系统 fallback 1 · 取消 0 · 失败 1/),
+    ).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "P2 质量门槛" })).toHaveClass(
       "game-quality-list",
+    );
+    expect(screen.getByLabelText("赛后复盘任务状态")).toHaveTextContent(
+      "已完成 / 2",
+    );
+    expect(screen.getByLabelText("赛后复盘任务状态")).toHaveTextContent(
+      "source-revis · p3-v1",
+    );
+    expect(screen.getByLabelText("赛后复盘任务状态")).toHaveTextContent(
+      "最近成功结果",
+    );
+    expect(screen.getByLabelText("赛后复盘任务状态")).toHaveTextContent(
+      "不可重试",
     );
     expect(screen.getByLabelText("P3 来源覆盖")).toHaveClass(
       "game-quality-coverage",
     );
+    const criticalDecisions = screen.getByRole("list", {
+      name: "P3 关键决策",
+    });
+    expect(
+      within(criticalDecisions).getByText("第 1 轮 · 放逐投票"),
+    ).toBeInTheDocument();
+    expect(within(criticalDecisions).getByText("缺少规则条款")).toBeInTheDocument();
+    expect(within(criticalDecisions).getByText("合法且已执行")).toBeInTheDocument();
+    expect(within(criticalDecisions).getByText("使用了未提供规则")).toBeInTheDocument();
+    expect(within(criticalDecisions).getByText("票型已记录")).toBeInTheDocument();
+    expect(
+      within(criticalDecisions).getByText(/模型判断与规则输入共同影响/),
+    ).toBeInTheDocument();
+    expect(
+      within(criticalDecisions).getByText(/规则覆盖：缺失 0\/1/),
+    ).toBeInTheDocument();
     expect(screen.getByText("分析 · 控场")).toBeInTheDocument();
     expect(
       screen.getByText("我会先听完大家的上警理由。"),
@@ -607,6 +640,7 @@ describe("admin game record flow", () => {
           quality_evaluation: {
             ...contractGameDetail.quality_evaluation,
             data_status: "partial",
+            can_retry: true,
           },
         });
       }
@@ -638,6 +672,43 @@ describe("admin game record flow", () => {
         String(input).endsWith("/quality-evaluation/retry"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("honors server retry eligibility instead of legacy status heuristics", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["games.read", "games.debug.read"]));
+      }
+      if (url.endsWith("/api/v1/admin/games/game_1234abcd")) {
+        return jsonResponse({
+          ...contractGameDetail,
+          quality_evaluation: {
+            ...contractGameDetail.quality_evaluation,
+            evaluation_status: "failed",
+            data_status: "partial",
+            failure_reason: "worker_unavailable",
+            can_retry: false,
+          },
+        });
+      }
+      const modelResponse = modelRequestFixtureResponse(url);
+      if (modelResponse) return modelResponse;
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/operations/games/game_1234abcd");
+
+    expect(
+      await screen.findByText("worker_unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("不可重试")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "关键决策" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "重试质量评估" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps base detail available when the optional debug request fails", async () => {

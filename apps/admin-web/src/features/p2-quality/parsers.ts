@@ -212,16 +212,9 @@ function parseChoice(value: unknown): AdminP2ChoiceNormalization {
 
 function parseProviderAttemptOutcomes(
   value: unknown,
-): AdminP2ProviderAttemptOutcomes {
+): AdminP2ProviderAttemptOutcomes | null {
   if (value === undefined) {
-    return {
-      attempt_count: 0,
-      valid_response_count: 0,
-      invalid_response_count: 0,
-      timed_out_count: 0,
-      canceled_count: 0,
-      transport_failed_count: 0,
-    };
+    return null;
   }
   const record = recordValue(value, "provider_attempt_outcomes");
   const parsed = {
@@ -266,15 +259,9 @@ function parseProviderAttemptOutcomes(
 
 function parseLogicalActionOutcomes(
   value: unknown,
-): AdminP2LogicalActionOutcomes {
+): AdminP2LogicalActionOutcomes | null {
   if (value === undefined) {
-    return {
-      action_count: 0,
-      completed_count: 0,
-      fallback_count: 0,
-      canceled_count: 0,
-      failed_count: 0,
-    };
+    return null;
   }
   const record = recordValue(value, "logical_action_outcomes");
   const parsed = {

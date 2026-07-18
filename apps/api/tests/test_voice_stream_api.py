@@ -215,6 +215,31 @@ class RecordingTtsClient:
         yield b"abc"
 
 
+class ContextRecordingTtsClient:
+    instances: list["ContextRecordingTtsClient"] = []
+
+    def __init__(self, config: VolcengineTtsConfig) -> None:
+        self.config = config
+        self.calls: list[dict] = []
+        ContextRecordingTtsClient.instances.append(self)
+
+    async def synthesize(
+        self,
+        *,
+        speaker: str,
+        text_chunks: list[str],
+        context_texts: list[str] | tuple[str, ...] | None = None,
+    ) -> AsyncIterator[bytes]:
+        self.calls.append(
+            {
+                "speaker": speaker,
+                "text_chunks": text_chunks,
+                "context_texts": list(context_texts) if context_texts else None,
+            }
+        )
+        yield b"abc"
+
+
 class MultiChunkTtsClient:
     instances: list["MultiChunkTtsClient"] = []
 
@@ -472,6 +497,44 @@ def create_run(registry: LiveRunRegistry):
         seed=21,
         max_rounds=8,
         **classic_rule_kwargs(),
+    )
+
+
+def publish_accepted_debate(
+    registry: LiveRunRegistry,
+    run_id: str,
+    *,
+    actor: str,
+    request_id: str,
+    say: str,
+):
+    return registry.publish(
+        run_id,
+        "action_parsed",
+        actor=actor,
+        action="debate",
+        payload={
+            "request_id": request_id,
+            "action_origin": "model",
+            "public_reason_code": None,
+            "speech_status": "spoken",
+            "retry_completed": False,
+            "visible_result": {"say": say},
+            "voice_snapshot": {
+                "enabled": True,
+                "speaker": "player",
+                "effective_delivery": {
+                    "schema_version": 1,
+                    "mood": "calm",
+                    "intensity": "medium",
+                    "pace": "natural",
+                    "instruction": "",
+                },
+                "effective_context_texts": [],
+                "voice_config_version": 1,
+                "delivery_mapping_version": "delivery-v1",
+            },
+        },
     )
 
 
@@ -921,16 +984,12 @@ def test_voice_stream_service_streams_public_voice_events_and_unsubscribes(tmp_p
                 "is_public": True,
             },
         )
-        public_event = registry.publish(
+        public_event = publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-public",
-                "visible_text": "我是阿青，我先发言。",
-                "is_public": True,
-            },
+            request_id="req-public",
+            say="我是阿青，我先发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -1417,16 +1476,12 @@ def test_voice_stream_service_streams_multiple_audio_chunks_per_utterance(tmp_pa
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-public",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-public",
+            say="我先发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -1469,16 +1524,12 @@ def test_voice_stream_service_forwards_and_persists_subtitle_timing_events() -> 
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-subtitle",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-subtitle",
+            say="我先发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -1531,16 +1582,12 @@ def test_voice_stream_service_persists_successful_utterance_chunks_and_completio
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-persist",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-persist",
+            say="我先发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -1670,20 +1717,66 @@ def test_voice_stream_service_ignores_public_action_when_flag_is_false() -> None
     assert player_calls == []
 
 
+def test_voice_stream_service_does_not_speak_delta_or_rejected_draft() -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+    )
+
+    async def stream_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-rejected",
+                "visible_text": "这是尚未通过校验的初稿。",
+                "is_public": True,
+            },
+        )
+        registry.publish(
+            run.run_id,
+            "action_quality_warning",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-rejected",
+                "visible_result": {"say": "这是被拒绝的完整初稿。"},
+                "warning_codes": ["speech_quality_rejected"],
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_events())
+
+    player_calls = [
+        call
+        for instance in RecordingTtsClient.instances
+        for call in instance.calls
+        if call["speaker"] == "player"
+    ]
+    assert player_calls == []
+
+
 def test_voice_stream_service_does_not_replay_historical_events_on_connect() -> None:
     RecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
-    registry.publish(
+    publish_accepted_debate(
+        registry,
         run.run_id,
-        "model_response_delta",
         actor="阿青",
-        action="debate",
-        payload={
-            "request_id": "req-historical",
-            "visible_text": "这是连接前的历史发言。",
-            "is_public": True,
-        },
+        request_id="req-historical",
+        say="这是连接前的历史发言。",
     )
     websocket = FakeWebSocket()
     service = LiveVoiceStreamService(
@@ -1695,16 +1788,12 @@ def test_voice_stream_service_does_not_replay_historical_events_on_connect() -> 
     async def stream_new_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-live",
-                "visible_text": "这是连接后的现场发言。",
-                "is_public": True,
-            },
+            request_id="req-live",
+            say="这是连接后的现场发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -1849,16 +1938,12 @@ def test_voice_stream_service_replays_recent_complete_utterance_then_streams_fut
     async def stream_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket, current_event_id=7))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="白石",
-            action="debate",
-            payload={
-                "request_id": "req-live-after-replay",
-                "visible_text": "这是重连后的现场发言。",
-                "is_public": True,
-            },
+            request_id="req-live-after-replay",
+            say="这是重连后的现场发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -2229,27 +2314,19 @@ def test_voice_stream_service_continues_after_synthesis_error(tmp_path) -> None:
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        first_event = registry.publish(
+        first_event = publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-fails",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-fails",
+            say="我先发言。",
         )
-        second_event = registry.publish(
+        second_event = publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="白石",
-            action="debate",
-            payload={
-                "request_id": "req-recovers",
-                "visible_text": "我继续发言。",
-                "is_public": True,
-            },
+            request_id="req-recovers",
+            say="我继续发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -2298,27 +2375,19 @@ def test_voice_stream_service_persists_synthesis_failure_and_continues() -> None
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-fails",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-fails",
+            say="我先发言。",
         )
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="白石",
-            action="debate",
-            payload={
-                "request_id": "req-recovers",
-                "visible_text": "我继续发言。",
-                "is_public": True,
-            },
+            request_id="req-recovers",
+            say="我继续发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -2368,16 +2437,12 @@ def test_voice_stream_service_continues_audio_when_persistence_fails(
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-persist-fails",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-persist-fails",
+            say="我先发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -2421,16 +2486,12 @@ def test_voice_stream_service_skips_dependent_persistence_after_upsert_failure(
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-persist-parent-fails",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-persist-parent-fails",
+            say="我先发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -2457,7 +2518,7 @@ def test_voice_stream_service_skips_dependent_persistence_after_upsert_failure(
     ] == ["upsert_utterance"]
 
 
-def test_voice_stream_service_groups_immediate_deltas_by_request_id() -> None:
+def test_voice_stream_service_uses_accepted_speech_after_immediate_deltas() -> None:
     RecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
@@ -2471,7 +2532,7 @@ def test_voice_stream_service_groups_immediate_deltas_by_request_id() -> None:
     async def stream_live_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        first_event = registry.publish(
+        registry.publish(
             run.run_id,
             "model_response_delta",
             actor="阿青",
@@ -2493,9 +2554,16 @@ def test_voice_stream_service_groups_immediate_deltas_by_request_id() -> None:
                 "is_public": True,
             },
         )
+        accepted_event = publish_accepted_debate(
+            registry,
+            run.run_id,
+            actor="阿青",
+            request_id="req-shared",
+            say="我是阿青，我继续发言。",
+        )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
-        assert websocket.messages[0]["source_event_id"] == first_event.id
+        assert websocket.messages[0]["source_event_id"] == accepted_event.id
 
     asyncio.run(stream_live_events())
 
@@ -2645,7 +2713,81 @@ def test_voice_stream_service_uses_final_speech_when_no_deltas_were_streamed() -
     ]
 
 
-def test_voice_stream_service_groups_delayed_deltas_by_request_id() -> None:
+@pytest.mark.parametrize(
+    ("resource_id", "speaker", "expected_contexts"),
+    [
+        (
+            "seed-tts-2.0",
+            "zh_female_gaolengyujie_uranus_bigtts",
+            ["保持冷静且自然地表达。"],
+        ),
+        ("seed-tts-1.0", "zh_female_gaolengyujie_uranus_bigtts", None),
+        ("seed-tts-2.0", "S_clone_voice_001", None),
+    ],
+)
+def test_voice_stream_only_forwards_context_texts_for_supported_tts_capability(
+    resource_id: str,
+    speaker: str,
+    expected_contexts: list[str] | None,
+) -> None:
+    ContextRecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=replace(BASE_TTS_CONFIG, resource_id=resource_id),
+        client_factory=ContextRecordingTtsClient,
+    )
+
+    async def stream_live_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "action_parsed",
+            actor="阿青",
+            action="debate",
+            payload={
+                "request_id": "req-context-capability",
+                "visible_result": {"say": "这是带演绎要求的发言。"},
+                "voice_snapshot": {
+                    "enabled": True,
+                    "speaker": speaker,
+                    "effective_delivery": {
+                        "schema_version": 1,
+                        "mood": "calm",
+                        "intensity": "medium",
+                        "pace": "natural",
+                        "instruction": "",
+                    },
+                    "effective_context_texts": ["保持冷静且自然地表达。"],
+                    "voice_config_version": 1,
+                    "delivery_mapping_version": "delivery-v1",
+                },
+            },
+        )
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_live_events())
+
+    calls = [
+        call
+        for instance in ContextRecordingTtsClient.instances
+        for call in instance.calls
+        if call["speaker"] == speaker
+    ]
+    assert calls == [
+        {
+            "speaker": speaker,
+            "text_chunks": ["这是带演绎要求的发言。"],
+            "context_texts": expected_contexts,
+        }
+    ]
+
+
+def test_voice_stream_service_waits_for_accepted_speech_after_delayed_deltas() -> None:
     RecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
@@ -2681,6 +2823,20 @@ def test_voice_stream_service_groups_delayed_deltas_by_request_id() -> None:
                 "visible_text": "第二句。",
                 "is_public": True,
             },
+        )
+        await asyncio.sleep(0.02)
+        assert [
+            call
+            for instance in RecordingTtsClient.instances
+            for call in instance.calls
+            if call["speaker"] == "player"
+        ] == []
+        publish_accepted_debate(
+            registry,
+            run.run_id,
+            actor="阿青",
+            request_id="req-delayed",
+            say="第一句，第二句。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -2721,27 +2877,19 @@ def test_voice_stream_service_waits_for_playback_ack_before_next_tts_request() -
             )
         )
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-first",
-                "visible_text": "我是第一位发言。",
-                "is_public": True,
-            },
+            request_id="req-first",
+            say="我是第一位发言。",
         )
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="白石",
-            action="debate",
-            payload={
-                "request_id": "req-second",
-                "visible_text": "我是第二位发言。",
-                "is_public": True,
-            },
+            request_id="req-second",
+            say="我是第二位发言。",
         )
         await wait_for_messages(websocket, 3)
 
@@ -2796,27 +2944,19 @@ def test_voice_stream_service_releases_playback_ack_wait_after_timeout(
             )
         )
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-first",
-                "visible_text": "我是第一位发言。",
-                "is_public": True,
-            },
+            request_id="req-first",
+            say="我是第一位发言。",
         )
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="白石",
-            action="debate",
-            payload={
-                "request_id": "req-second",
-                "visible_text": "我是第二位发言。",
-                "is_public": True,
-            },
+            request_id="req-second",
+            say="我是第二位发言。",
         )
 
         await wait_for_messages(websocket, 6)
@@ -2848,16 +2988,12 @@ def test_voice_stream_service_cleans_up_pending_synthesis_on_disconnect() -> Non
     async def stream_and_disconnect_during_synthesis() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-public",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-public",
+            say="我先发言。",
         )
         for _ in range(120):
             if PendingTtsClient.iterators:
@@ -2901,16 +3037,12 @@ def test_voice_stream_service_marks_utterance_failed_when_voice_start_disconnect
     async def stream_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-public",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-public",
+            say="我先发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -2945,16 +3077,12 @@ def test_voice_stream_service_marks_utterance_failed_when_voice_end_disconnects(
     async def stream_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-public",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-public",
+            say="我先发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
@@ -2990,16 +3118,12 @@ def test_voice_stream_service_completes_when_disconnect_task_finishes_after_voic
     async def stream_events() -> None:
         task = asyncio.create_task(service.stream_run(run.run_id, websocket))
         await wait_for_subscription(registry, run.run_id)
-        registry.publish(
+        publish_accepted_debate(
+            registry,
             run.run_id,
-            "model_response_delta",
             actor="阿青",
-            action="debate",
-            payload={
-                "request_id": "req-public",
-                "visible_text": "我先发言。",
-                "is_public": True,
-            },
+            request_id="req-public",
+            say="我先发言。",
         )
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)

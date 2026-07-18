@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import replace
 import json
 import logging
 import queue
@@ -123,6 +124,7 @@ from app.werewolf.replay_playback import (
 from app.werewolf.rules import (
     DEFAULT_RULE_SET_ID,
     OFFICIAL_RULE_SETS,
+    freeze_rule_set_snapshot,
     role_summary,
     rule_set_snapshot,
 )
@@ -783,7 +785,7 @@ def complete_player_configs_from_library(
         )
         for profile in available_profiles
     ]
-    return plan_diverse_lineup(
+    lineup = plan_diverse_lineup(
         configs,
         candidates,
         player_count=player_count,
@@ -792,6 +794,13 @@ def complete_player_configs_from_library(
         locked_seats=locked_seats,
         policy=policy or _lineup_quality_policy(),
     )
+    return [
+        replace(
+            config,
+            tts_speaker=config.tts_speaker or settings.ark_tts_player_speaker,
+        )
+        for config in lineup
+    ]
 
 
 def _lineup_quality_policy() -> LineupQualityPolicyV1:
@@ -832,7 +841,17 @@ def _static_rule_set_entries() -> list[tuple[CompiledRuleSet, PublicRuleSetCatal
                 "content_hash": content_hash,
             }
         )
-        compiled = resolve_rule_set_snapshot(snapshot)
+        legacy_compiled = resolve_rule_set_snapshot(snapshot)
+        frozen_snapshot = freeze_rule_set_snapshot(legacy_compiled.rule_set)
+        frozen_snapshot.update(
+            {
+                "revision_id": revision_id,
+                "revision_no": 1,
+                "schema_version": 1,
+                "content_hash": content_hash,
+            }
+        )
+        compiled = resolve_rule_set_snapshot(frozen_snapshot)
         catalog_snapshot: dict[str, object] = dict(compiled.snapshot)
         catalog_snapshot.update(
             {
