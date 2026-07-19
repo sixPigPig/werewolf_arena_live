@@ -37,6 +37,7 @@ from app.player_profiles.service import update_player_profile
 from app.werewolf.providers import configured_model_options
 from app.werewolf.player_avatar_assets import create_avatar_asset
 from app.werewolf.tts_speaker_catalog import (
+    TtsDialectOption,
     TtsSpeakerCatalogUnavailable,
     TtsSpeakerOption,
     tts_speaker_catalog,
@@ -538,7 +539,9 @@ def test_voice_config_version_tracks_effective_normalized_changes_only(
 ) -> None:
     _, csrf_token = _login(context, monkeypatch)
     draft = _create_draft(context, csrf_token)
+    assert draft["gender"] == "female"
     assert draft["tts_speaker"] is None
+    assert draft["tts_dialect"] is None
     assert draft["base_delivery_mood"] == "neutral"
     assert draft["base_delivery_intensity"] == "medium"
     assert draft["base_delivery_pace"] == "natural"
@@ -698,6 +701,93 @@ def test_admin_allows_unrelated_edit_of_legacy_unsupported_speaker_but_not_repla
     assert persisted.tts_speaker == "S_legacy_clone_voice_001"
 
 
+@pytest.mark.parametrize(
+    ("values", "detail"),
+    [
+        (
+            {
+                "gender": "female",
+                "tts_speaker": "zh_male_m191_uranus_bigtts",
+            },
+            "gender does not match",
+        ),
+        (
+            {
+                "gender": "male",
+                "tts_speaker": "en_male_tim_uranus_bigtts",
+            },
+            "delivery context requires",
+        ),
+        (
+            {
+                "gender": "female",
+                "tts_speaker": "zh_female_gaolengyujie_uranus_bigtts",
+                "tts_dialect": "sichuan",
+            },
+            "dialect is not supported",
+        ),
+    ],
+)
+def test_admin_rejects_invalid_gender_speaker_dialect_combinations(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+    values: dict[str, str],
+    detail: str,
+) -> None:
+    monkeypatch.setattr(settings, "ark_tts_resource_id", "seed-tts-2.0")
+    _, csrf_token = _login(context, monkeypatch)
+
+    response = context.client.post(
+        "/api/v1/admin/player-profiles",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "display_name": "组合校验",
+            "model": _model_name(),
+            **values,
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert detail in response.json()["detail"]
+
+
+def test_admin_persists_supported_tts2_dialect_and_tracks_voice_version(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "ark_tts_resource_id", "seed-tts-2.0")
+    _, csrf_token = _login(context, monkeypatch)
+    created = context.client.post(
+        "/api/v1/admin/player-profiles",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "display_name": "四川口音玩家",
+            "model": _model_name(),
+            "gender": "female",
+            "tts_speaker": "zh_female_vv_uranus_bigtts",
+            "tts_dialect": "sichuan",
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    payload = created.json()
+    assert payload["gender"] == "female"
+    assert payload["tts_dialect"] == "sichuan"
+    assert payload["voice_config_version"] == 1
+
+    updated = context.client.patch(
+        f"/api/v1/admin/player-profiles/{payload['id']}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "expected_version": payload["version"],
+            "tts_dialect": "northeast",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["tts_dialect"] == "northeast"
+    assert updated.json()["voice_config_version"] == 2
+
+
 def test_admin_voice_preview_compiles_safe_delivery_without_live_artifacts(
     context: AdminProfilesContext,
     monkeypatch: pytest.MonkeyPatch,
@@ -714,6 +804,7 @@ def test_admin_voice_preview_compiles_safe_delivery_without_live_artifacts(
         json={
             "say": "  我先听完这一轮，再给出判断。  ",
             "speaker": "zh_female_vv_uranus_bigtts",
+            "dialect": "sichuan",
             "base_delivery": {
                 "mood": "calm",
                 "intensity": "low",
@@ -731,6 +822,7 @@ def test_admin_voice_preview_compiles_safe_delivery_without_live_artifacts(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["speaker"] == "zh_female_vv_uranus_bigtts"
+    assert payload["dialect"] == "sichuan"
     assert payload["effective_delivery"] == {
         "schema_version": 1,
         "mood": "tense",
@@ -748,6 +840,7 @@ def test_admin_voice_preview_compiles_safe_delivery_without_live_artifacts(
     assert "3号" not in "".join(payload["context_texts"])
     assert "急切反驳" not in "".join(payload["context_texts"])
     assert "低沉、清晰" in "".join(payload["context_texts"])
+    assert "四川话" in "".join(payload["context_texts"])
     assert "preview-secret-api-key" not in response.text
     assert "source_event_id" not in response.text
     assert "utterance_id" not in response.text
@@ -1050,10 +1143,17 @@ def test_tts_speaker_options_returns_supported_voice_types(
             TtsSpeakerOption(
                 voice_type="zh_female_vv_uranus_bigtts",
                 name="Vivi 2.0",
+                gender="female",
+                dialects=(
+                    TtsDialectOption(id="sichuan", label="四川话"),
+                    TtsDialectOption(id="shaanxi", label="陕西话"),
+                    TtsDialectOption(id="northeast", label="东北话"),
+                ),
             ),
             TtsSpeakerOption(
-                voice_type="en_male_tim_uranus_bigtts",
-                name="Tim",
+                voice_type="zh_male_m191_uranus_bigtts",
+                name="云舟",
+                gender="male",
             ),
         ),
     )
@@ -1067,8 +1167,19 @@ def test_tts_speaker_options_returns_supported_voice_types(
             {
                 "voice_type": "zh_female_vv_uranus_bigtts",
                 "name": "Vivi 2.0",
+                "gender": "female",
+                "dialects": [
+                    {"id": "sichuan", "label": "四川话"},
+                    {"id": "shaanxi", "label": "陕西话"},
+                    {"id": "northeast", "label": "东北话"},
+                ],
             },
-            {"voice_type": "en_male_tim_uranus_bigtts", "name": "Tim"},
+            {
+                "voice_type": "zh_male_m191_uranus_bigtts",
+                "name": "云舟",
+                "gender": "male",
+                "dialects": [],
+            },
         ],
     }
 

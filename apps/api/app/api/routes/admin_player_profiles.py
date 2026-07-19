@@ -81,6 +81,8 @@ from app.werewolf.speech_delivery import (
 from app.werewolf.tts_speaker_catalog import (
     TtsSpeakerCatalogUnavailable,
     VolcengineTtsSpeakerCatalog,
+    dialects_for_tts_speaker,
+    gender_for_tts_speaker,
     tts_speaker_catalog,
 )
 from app.werewolf.voice import chunk_text_for_tts
@@ -167,9 +169,13 @@ async def preview_player_profile_voice(
         )
 
     speaker = request_body.speaker or config.player_speaker.strip()
-    if not supports_tts_context_texts(
-        resource_id=config.resource_id,
-        speaker=speaker,
+    if (
+        not speaker.startswith("zh_")
+        or gender_for_tts_speaker(speaker) is None
+        or not supports_tts_context_texts(
+            resource_id=config.resource_id,
+            speaker=speaker,
+        )
     ):
         raise _voice_preview_problem(
             status_code=422,
@@ -188,7 +194,22 @@ async def preview_player_profile_voice(
         base_pace=str(base_delivery["pace"]),
         base_instruction=str(base_delivery["instruction"]),
     )
-    context_texts = compile_context_texts(effective_delivery)
+    try:
+        _ensure_tts_dialect_supported(
+            speaker=speaker,
+            dialect=request_body.dialect,
+        )
+    except PlayerProfileValidationError as exc:
+        raise _voice_preview_problem(
+            status_code=422,
+            code="admin_player_voice_preview_dialect_unsupported",
+            title="Voice preview dialect unsupported",
+            detail="所选音色不支持这个方言，请重新选择。",
+        ) from exc
+    context_texts = compile_context_texts(
+        effective_delivery,
+        dialect=request_body.dialect or "",
+    )
     audio = bytearray()
     started_at = time.monotonic()
     try:
@@ -231,6 +252,7 @@ async def preview_player_profile_voice(
     _set_private_headers(request, response)
     return AdminPlayerVoicePreviewResponse(
         speaker=speaker,
+        dialect=request_body.dialect,
         effective_delivery=effective_delivery,
         context_texts=context_texts,
         delivery_mapping_version=DELIVERY_MAPPING_VERSION,
@@ -447,7 +469,15 @@ def get_profile_tts_speakers(
     return AdminPlayerTtsSpeakersResponse(
         resource_id=settings.ark_tts_resource_id,
         items=[
-            {"voice_type": item.voice_type, "name": item.name}
+            {
+                "voice_type": item.voice_type,
+                "name": item.name,
+                "gender": item.gender,
+                "dialects": [
+                    {"id": dialect.id, "label": dialect.label}
+                    for dialect in item.dialects
+                ],
+            }
             for item in items
         ],
     )
@@ -472,6 +502,8 @@ def create_profile(
     try:
         _ensure_profile_tts_context_capability(
             requested_speaker=request_body.tts_speaker,
+            gender=request_body.gender,
+            dialect=request_body.tts_dialect,
         )
         _ensure_configured_model(request_body.model)
         profile = create_player_profile(
@@ -550,10 +582,16 @@ def update_profile(
         existing = get_player_profile(db, profile_id)
         updates = request_body.model_dump(exclude_unset=True)
         updates.pop("expected_version")
-        if "tts_speaker" in updates:
+        if "tts_speaker" in updates and not updates["tts_speaker"]:
+            updates.setdefault("tts_dialect", None)
+        if {"gender", "tts_speaker", "tts_dialect"} & updates.keys():
             _ensure_profile_tts_context_capability(
-                requested_speaker=updates["tts_speaker"],
+                requested_speaker=updates.get("tts_speaker", existing.tts_speaker),
                 current_speaker=existing.tts_speaker,
+                gender=str(updates.get("gender", existing.gender)),
+                current_gender=existing.gender,
+                dialect=updates.get("tts_dialect", existing.tts_dialect),
+                current_dialect=existing.tts_dialect,
             )
         if "model" in updates and updates["model"] != existing.model:
             _ensure_configured_model(str(updates["model"]))
@@ -916,16 +954,53 @@ def _ensure_profile_tts_context_capability(
     *,
     requested_speaker: object,
     current_speaker: str | None = None,
+    gender: str = "female",
+    current_gender: str | None = None,
+    dialect: object = None,
+    current_dialect: str | None = None,
 ) -> None:
     speaker = str(requested_speaker or "").strip()
-    if not speaker or speaker == str(current_speaker or "").strip():
+    normalized_dialect = str(dialect or "").strip()
+    if not speaker:
+        if normalized_dialect:
+            raise PlayerProfileValidationError(
+                "tts_dialect requires an explicit TTS 2.0 speaker"
+            )
         return
-    if supports_tts_context_texts(
-        resource_id=settings.ark_tts_resource_id,
-        speaker=speaker,
+    unchanged_legacy_selection = (
+        speaker == str(current_speaker or "").strip()
+        and gender == str(current_gender or gender)
+        and normalized_dialect == str(current_dialect or "").strip()
+    )
+    if unchanged_legacy_selection:
+        return
+    expected_gender = gender_for_tts_speaker(speaker)
+    if (
+        speaker.startswith("zh_")
+        and expected_gender is not None
+        and supports_tts_context_texts(
+            resource_id=settings.ark_tts_resource_id,
+            speaker=speaker,
+        )
     ):
+        if gender != expected_gender:
+            raise PlayerProfileValidationError(
+                "tts_speaker gender does not match the player gender"
+            )
+        _ensure_tts_dialect_supported(speaker=speaker, dialect=normalized_dialect)
         return
     raise PlayerProfileValidationError(PROFILE_TTS_CONTEXT_UNSUPPORTED_DETAIL)
+
+
+def _ensure_tts_dialect_supported(*, speaker: str, dialect: object) -> None:
+    normalized = str(dialect or "").strip()
+    if not normalized:
+        return
+    allowed = {item.id for item in dialects_for_tts_speaker(speaker)}
+    if normalized not in allowed:
+        raise PlayerProfileValidationError(
+            "tts_dialect is not supported by the selected TTS 2.0 speaker"
+        )
 
 
 def _set_private_headers(request: Request, response: Response) -> None:

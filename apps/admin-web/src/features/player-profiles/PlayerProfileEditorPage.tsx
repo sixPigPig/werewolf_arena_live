@@ -39,6 +39,7 @@ import { usePlayerProfileRepository } from "@/features/player-profiles/repositor
 import type {
   AdminPlayerProfile,
   AdminPlayerVoicePreview,
+  PlayerGender,
   PlayerProfileEditableFields,
   PlayerProfileOptions,
   PlayerProfileStatus,
@@ -183,7 +184,9 @@ function PlayerProfileEditor({
     strategy_profile: options.strategies[0]?.id ?? "balanced",
     appearance_id: options.appearances[0]?.id ?? "default",
     avatar_asset_id: options.appearances[0]?.avatar_asset_id ?? null,
+    gender: "female" as const,
     tts_speaker: null,
+    tts_dialect: null,
     base_delivery_mood: "neutral",
     base_delivery_intensity: "medium",
     base_delivery_pace: "natural",
@@ -269,12 +272,22 @@ function PlayerProfileEditor({
       : profile?.avatar_image_url ?? selectedAppearance?.avatar_image_url ?? "";
   const hasVoiceConfig =
     draft.tts_speaker !== undefined ||
+    draft.tts_dialect !== undefined ||
     draft.base_delivery_mood !== undefined ||
     draft.base_delivery_intensity !== undefined ||
     draft.base_delivery_pace !== undefined ||
     draft.base_delivery_instruction !== undefined ||
     draft.voice_enabled !== undefined ||
     profile?.voice_config_version !== undefined;
+  const genderedTtsSpeakerOptions = ttsSpeakerOptions.filter(
+    (option) => option.gender === draft.gender,
+  );
+  const selectedTtsSpeaker = ttsSpeakerOptions.find(
+    (option) => option.voice_type === draft.tts_speaker,
+  );
+  const selectedDialect = selectedTtsSpeaker?.dialects.find(
+    (option) => option.id === draft.tts_dialect,
+  );
 
   function updateDraft<Key extends keyof PlayerProfileEditableFields>(
     field: Key,
@@ -296,6 +309,52 @@ function PlayerProfileEditor({
     setVoicePreviewError(null);
   }
 
+  function updateGender(gender: PlayerGender) {
+    setDraft((current) => {
+      const speaker = ttsSpeakerOptions.find(
+        (option) => option.voice_type === current.tts_speaker,
+      );
+      if (!speaker || speaker.gender === gender) {
+        return { ...current, gender };
+      }
+      return { ...current, gender, tts_speaker: null, tts_dialect: null };
+    });
+    setFormErrors((current) => ({
+      ...current,
+      gender: undefined,
+      tts_speaker: undefined,
+      tts_dialect: undefined,
+      form: undefined,
+    }));
+    setSuccessMessage(null);
+    setVoicePreview(null);
+    setVoicePreviewError(null);
+  }
+
+  function updateTtsSpeaker(speaker: string | null) {
+    const option = ttsSpeakerOptions.find(
+      (item) => item.voice_type === speaker,
+    );
+    setDraft((current) => ({
+      ...current,
+      tts_speaker: speaker,
+      tts_dialect: option?.dialects.some(
+        (dialect) => dialect.id === current.tts_dialect,
+      )
+        ? current.tts_dialect
+        : null,
+    }));
+    setFormErrors((current) => ({
+      ...current,
+      tts_speaker: undefined,
+      tts_dialect: undefined,
+      form: undefined,
+    }));
+    setSuccessMessage(null);
+    setVoicePreview(null);
+    setVoicePreviewError(null);
+  }
+
   async function previewDraftVoice() {
     if (!canEdit || voicePreviewPending || !voicePreviewSay.trim()) {
       return;
@@ -307,6 +366,7 @@ function PlayerProfileEditor({
       const result = await repository.previewVoice({
         say: voicePreviewSay.trim(),
         speaker: draft.tts_speaker?.trim() || null,
+        dialect: draft.tts_dialect ?? null,
         base_delivery: {
           mood: draft.base_delivery_mood ?? null,
           intensity: draft.base_delivery_intensity ?? null,
@@ -602,6 +662,19 @@ function PlayerProfileEditor({
                     ))}
                   </select>
                 </Field>
+                <Field label="角色性别" error={formErrors.gender} required>
+                  <select
+                    aria-invalid={Boolean(formErrors.gender)}
+                    name="gender"
+                    onChange={(event) =>
+                      updateGender(event.target.value as PlayerGender)
+                    }
+                    value={draft.gender}
+                  >
+                    <option value="female">女</option>
+                    <option value="male">男</option>
+                  </select>
+                </Field>
                 <Field
                   className="is-wide"
                   label="一句话简介"
@@ -740,7 +813,7 @@ function PlayerProfileEditor({
             {hasVoiceConfig ? (
               <section aria-labelledby="player-tts-title" className="player-form-section">
                 <SectionHeading
-                  description="玩家音色可继承全局配置；基础演绎留空时分别重置为内置 neutral、medium 与 natural。"
+                  description="音色按角色性别联动，只展示支持中文或中文方言的 TTS 2.0 音色。"
                   id="player-tts-title"
                   title="玩家音色与基础演绎"
                 />
@@ -766,11 +839,38 @@ function PlayerProfileEditor({
                       error={formErrors.tts_speaker}
                       isError={ttsSpeakersError}
                       isPending={ttsSpeakersPending}
-                      onChange={(speaker) => updateDraft("tts_speaker", speaker)}
+                      gender={draft.gender}
+                      onChange={updateTtsSpeaker}
                       onRetry={onRetryTtsSpeakers}
-                      options={ttsSpeakerOptions}
+                      options={genderedTtsSpeakerOptions}
                       value={draft.tts_speaker ?? null}
                     />
+                  ) : null}
+                  {selectedTtsSpeaker?.dialects.length ? (
+                    <Field
+                      error={formErrors.tts_dialect}
+                      label="中文方言"
+                      help="仅展示当前音色在火山引擎 TTS 2.0 中明确支持的方言。"
+                    >
+                      <select
+                        aria-invalid={Boolean(formErrors.tts_dialect)}
+                        name="tts_dialect"
+                        onChange={(event) =>
+                          updateDraft(
+                            "tts_dialect",
+                            (event.target.value || null) as PlayerProfileEditableFields["tts_dialect"],
+                          )
+                        }
+                        value={draft.tts_dialect ?? ""}
+                      >
+                        <option value="">普通话 / 不指定方言</option>
+                        {selectedTtsSpeaker.dialects.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
                   ) : null}
                   {draft.base_delivery_mood !== undefined ? (
                     <Field
@@ -871,6 +971,7 @@ function PlayerProfileEditor({
                   {draft.voice_enabled === false
                     ? "语音关闭"
                     : draft.tts_speaker || "继承全局音色"}
+                  {selectedDialect ? ` · ${selectedDialect.label}` : ""}
                   {profile?.voice_config_version !== undefined
                     ? ` · 配置版本 ${profile.voice_config_version}`
                     : ""}
@@ -981,13 +1082,10 @@ function PlayerProfileEditor({
                   ) : null}
                   {voicePreview ? (
                     <div className="player-voice-preview-result" role="status">
-                      <audio
-                        aria-label="玩家语音试听"
-                        controls
-                        src={`data:${voicePreview.mime_type};base64,${voicePreview.audio_base64}`}
-                      />
+                      <VoicePreviewAudio preview={voicePreview} />
                       <dl>
                         <div><dt>音色</dt><dd>{voicePreview.speaker}</dd></div>
+                        <div><dt>方言</dt><dd>{selectedDialect?.label ?? "普通话"}</dd></div>
                         <div><dt>格式</dt><dd>{voicePreview.audio_format}</dd></div>
                         <div><dt>采样率</dt><dd>{voicePreview.sample_rate} Hz</dd></div>
                         <div><dt>耗时</dt><dd>{voicePreview.elapsed_ms} ms</dd></div>
@@ -1098,6 +1196,7 @@ function PlayerProfileEditor({
             <p>{draft.short_description.trim() || "尚未填写一句话简介。"}</p>
             <dl>
               <div><dt>模型</dt><dd>{draft.model || "未选择"}</dd></div>
+              <div><dt>性别</dt><dd>{draft.gender === "female" ? "女" : "男"}</dd></div>
               <div><dt>性格</dt><dd>{optionLabel(options.personalities, draft.personality_id)}</dd></div>
               <div><dt>策略</dt><dd>{optionLabel(options.strategies, draft.strategy_profile)}</dd></div>
               {hasVoiceConfig ? (
@@ -1107,6 +1206,7 @@ function PlayerProfileEditor({
                     {draft.voice_enabled === false
                       ? "关闭"
                       : draft.tts_speaker || "继承全局音色"}
+                    {selectedDialect ? ` · ${selectedDialect.label}` : ""}
                   </dd>
                 </div>
               ) : null}
@@ -1252,6 +1352,7 @@ function PlayerProfileEditor({
 
 function TtsSpeakerField({
   error,
+  gender,
   isError,
   isPending,
   onChange,
@@ -1260,6 +1361,7 @@ function TtsSpeakerField({
   value,
 }: {
   error?: string;
+  gender: PlayerGender;
   isError: boolean;
   isPending: boolean;
   onChange: (value: string | null) => void;
@@ -1279,10 +1381,20 @@ function TtsSpeakerField({
   const [isOpen, setIsOpen] = useState(false);
   const selected = options.find((option) => option.voice_type === value);
   const legacyOption = value && !selected
-    ? { voice_type: value, name: "当前已保存（不在可用列表）" }
+    ? {
+        voice_type: value,
+        name: "当前已保存（不在可用列表）",
+        gender,
+        dialects: [],
+      }
     : null;
   const displayedOptions = [
-    { voice_type: "", name: "继承全局玩家音色" },
+    {
+      voice_type: "",
+      name: "继承全局玩家音色",
+      gender,
+      dialects: [],
+    },
     ...(legacyOption ? [legacyOption] : []),
     ...options,
   ];
@@ -1440,8 +1552,8 @@ function TtsSpeakerField({
         ) : null}
       </div>
       <small id={helpId}>
-        仅列出当前 seed-tts-2.0
-        双向流兼容音色；留空表示继承全局 player_speaker。
+        仅列出与角色性别匹配、支持中文的 seed-tts-2.0
+        双向流音色；留空表示继承全局 player_speaker。
       </small>
       {error ? (
         <small className="player-field-error" id={errorId} role="alert">
@@ -1449,6 +1561,42 @@ function TtsSpeakerField({
         </small>
       ) : null}
     </div>
+  );
+}
+
+function VoicePreviewAudio({ preview }: { preview: AdminPlayerVoicePreview }) {
+  const fallbackSource = `data:${preview.mime_type};base64,${preview.audio_base64}`;
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    if (typeof URL.createObjectURL !== "function") {
+      return undefined;
+    }
+    try {
+      const binary = window.atob(preview.audio_base64);
+      const bytes = Uint8Array.from(binary, (character) =>
+        character.charCodeAt(0),
+      );
+      const objectUrl = URL.createObjectURL(
+        new Blob([bytes], { type: preview.mime_type }),
+      );
+      if (audioRef.current) {
+        audioRef.current.src = objectUrl;
+      }
+      return () => URL.revokeObjectURL(objectUrl);
+    } catch {
+      return undefined;
+    }
+  }, [preview.audio_base64, preview.mime_type]);
+
+  return (
+    <audio
+      aria-label="玩家语音试听"
+      autoPlay
+      controls
+      ref={audioRef}
+      src={fallbackSource}
+    />
   );
 }
 

@@ -19,6 +19,7 @@ PLAYER_REFERENCE_IN_TEXT_RE = re.compile(
     r"(?:玩家)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})号(?:位)?(?:玩家)?"
 )
 LOW_NOVELTY_THRESHOLD = 0.45
+REPETITION_REWRITE_THRESHOLD = 0.3
 SPEECH_MISSION_KINDS = (
     "fact_checker",
     "vote_analyst",
@@ -239,9 +240,9 @@ def assign_speech_mission(
             position = list(speech_order).index(speaker)
         except ValueError:
             position = len(prior_messages)
-        digest = hashlib.sha256(
-            f"{round_number}:{stage}:{personality_id}".encode()
-        ).digest()
+        # Keep one rotation for the whole stage. Personality already shapes the
+        # player prompt; including it here lets speakers collide before one cycle ends.
+        digest = hashlib.sha256(f"{round_number}:{stage}".encode()).digest()
         offset = digest[0] % len(SPEECH_MISSION_KINDS)
         kind = SPEECH_MISSION_KINDS[(offset + position) % len(SPEECH_MISSION_KINDS)]
         reason_code = "round_robin"
@@ -357,7 +358,11 @@ def evaluate_speech_quality(
         issues.append(
             SpeechQualityIssueV1(
                 code="repeated_debate_phrase",
-                severity="rewrite" if not new_signatures else "warning",
+                severity=(
+                    "rewrite"
+                    if not new_signatures and similarity >= REPETITION_REWRITE_THRESHOLD
+                    else "warning"
+                ),
                 score=similarity,
                 evidence_spans=whole_text_span,
             )

@@ -54,6 +54,21 @@ describe("admin player profile flow", () => {
     ).toBe(true);
   });
 
+  it("shows each player's configured speaker and dialect in the list", async () => {
+    await updatePreviewPlayerProfile("preview-draft-1", {
+      expected_version: 2,
+      tts_speaker: "zh_female_vv_uranus_bigtts",
+      tts_dialect: "sichuan",
+    });
+
+    renderRoute("/content/players");
+
+    expect(
+      await screen.findByText("音色：Vivi 2.0 · 四川话"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("音色：继承全局").length).toBeGreaterThan(0);
+  });
+
   it("keeps server filter and empty state in the URL", async () => {
     const user = userEvent.setup();
     const { router } = renderRoute("/content/players");
@@ -213,6 +228,47 @@ describe("admin player profile flow", () => {
     ).toBeInTheDocument();
   });
 
+  it("links role gender to Chinese TTS 2.0 speakers and dialect controls", async () => {
+    const user = userEvent.setup();
+    renderRoute("/content/players/preview-draft-1");
+    const gender = await screen.findByRole("combobox", { name: /^角色性别/ });
+    const speaker = screen.getByRole("combobox", { name: /^玩家音色 / });
+
+    await user.click(speaker);
+    expect(
+      screen.getByRole("option", {
+        name: /zh_female_vv_uranus_bigtts Vivi 2.0/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: /zh_male_m191_uranus_bigtts/ }),
+    ).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.selectOptions(gender, "male");
+    await user.click(speaker);
+    expect(
+      screen.getByRole("option", { name: /zh_male_m191_uranus_bigtts 云舟/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: /zh_female_vv_uranus_bigtts/ }),
+    ).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("combobox", { name: /^中文方言/ })).toBeNull();
+
+    await user.selectOptions(gender, "female");
+    await user.click(speaker);
+    await user.click(
+      screen.getByRole("option", {
+        name: /zh_female_vv_uranus_bigtts Vivi 2.0/,
+      }),
+    );
+    const dialect = screen.getByRole("combobox", { name: /^中文方言/ });
+    expect(dialect).toHaveValue("");
+    await user.selectOptions(dialect, "sichuan");
+    expect(dialect).toHaveValue("sichuan");
+  });
+
   it("previews the current unsaved voice draft and shows bounded safe output", async () => {
     const user = userEvent.setup();
     renderRoute("/content/players/preview-draft-1");
@@ -223,6 +279,10 @@ describe("admin player profile flow", () => {
       await screen.findByRole("option", {
         name: /zh_female_vv_uranus_bigtts Vivi 2.0/,
       }),
+    );
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /^中文方言/ }),
+      "sichuan",
     );
     const sayInput = screen.getByRole("textbox", { name: /^试听文本/ });
     await user.clear(sayInput);
@@ -241,7 +301,7 @@ describe("admin player profile flow", () => {
     const audio = await screen.findByLabelText("玩家语音试听");
     expect(audio).toHaveAttribute(
       "src",
-      expect.stringMatching(/^data:audio\/mpeg;base64,/),
+      expect.stringMatching(/^(data:audio\/mpeg;base64,|blob:)/),
     );
     expect(
       screen.getAllByText("zh_female_vv_uranus_bigtts").length,
@@ -251,6 +311,7 @@ describe("admin player profile flow", () => {
       .getByText("安全 context_texts")
       .closest(".player-voice-context-texts");
     expect(contextPanel).toBeInTheDocument();
+    expect(contextPanel).toHaveTextContent("四川话");
     expect(screen.getByText(/tense \/ medium \/ natural/)).toBeInTheDocument();
     expect(contextPanel).not.toHaveTextContent("3号狼人");
     expect(screen.getByRole("button", { name: "保存修改" })).toBeEnabled();
@@ -347,6 +408,9 @@ describe("admin player profile flow", () => {
       if (url.endsWith("/api/v1/admin/player-profile-options")) {
         return jsonResponse(contractOptions);
       }
+      if (url.endsWith("/api/v1/admin/player-profile-tts-speakers")) {
+        return jsonResponse(contractTtsSpeakers);
+      }
       if (url.includes("/api/v1/admin/player-profiles?")) {
         const requestUrl = new URL(url, "https://admin.test");
         const page = Number(requestUrl.searchParams.get("page"));
@@ -399,6 +463,9 @@ describe("admin player profile flow", () => {
       if (url.endsWith("/api/v1/admin/player-profile-options")) {
         return jsonResponse(contractOptions);
       }
+      if (url.endsWith("/api/v1/admin/player-profile-tts-speakers")) {
+        return jsonResponse(contractTtsSpeakers);
+      }
       if (url.includes("/api/v1/admin/player-profiles?")) {
         return listResponse;
       }
@@ -446,6 +513,7 @@ const serverProfile: AdminPlayerProfile = {
   short_description: "来自服务器",
   background_story: "",
   speaking_style: "",
+  gender: "female",
   catchphrases: [],
   strategy_profile: "logic_leader",
   risk_tolerance: 3,
@@ -492,6 +560,18 @@ const contractOptions = {
     example_messages_max_items: 5,
     example_message_max_length: 240,
   },
+};
+
+const contractTtsSpeakers = {
+  resource_id: "seed-tts-2.0",
+  items: [
+    {
+      voice_type: "zh_female_vv_uranus_bigtts",
+      name: "Vivi 2.0",
+      gender: "female",
+      dialects: [{ id: "sichuan", label: "四川话" }],
+    },
+  ],
 };
 
 function jsonResponse(body: unknown, status = 200) {

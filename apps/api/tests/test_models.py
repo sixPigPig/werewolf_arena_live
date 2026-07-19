@@ -247,7 +247,9 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "short_description",
         "background_story",
         "speaking_style",
+        "gender",
         "tts_speaker",
+        "tts_dialect",
         "base_delivery_mood",
         "base_delivery_intensity",
         "base_delivery_pace",
@@ -282,7 +284,9 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
     assert table.c.model.nullable is False
     assert table.c.personality_id.nullable is False
     assert table.c.appearance_id.nullable is False
+    _assert_string_column(table.c.gender, length=12, nullable=False)
     _assert_string_column(table.c.tts_speaker, length=160, nullable=False)
+    _assert_string_column(table.c.tts_dialect, length=16, nullable=False)
     _assert_string_column(table.c.base_delivery_mood, length=24, nullable=False)
     _assert_string_column(table.c.base_delivery_intensity, length=16, nullable=False)
     _assert_string_column(table.c.base_delivery_pace, length=16, nullable=False)

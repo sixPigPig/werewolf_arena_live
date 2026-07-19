@@ -24,6 +24,7 @@ class PlayerConfig:
     catchphrases: tuple[str, ...] = ()
     strategy_profile: str = "balanced"
     tts_speaker: str = ""
+    tts_dialect: str = ""
     base_delivery_mood: str = "neutral"
     base_delivery_intensity: str = "medium"
     base_delivery_pace: str = "natural"
@@ -46,6 +47,7 @@ class PlayerConfig:
             "catchphrases": list(self.catchphrases),
             "strategy_profile": self.strategy_profile,
             "tts_speaker": self.tts_speaker,
+            "tts_dialect": self.tts_dialect,
             "base_delivery_mood": self.base_delivery_mood,
             "base_delivery_intensity": self.base_delivery_intensity,
             "base_delivery_pace": self.base_delivery_pace,
@@ -141,6 +143,11 @@ def player_config_from_profile(
             or _profile_string(profile, "tts_speaker")
             or ""
         ),
+        tts_dialect=(
+            _override_string(overrides, "tts_dialect")
+            or _profile_string(profile, "tts_dialect")
+            or ""
+        ),
         base_delivery_mood=(
             _override_string(overrides, "base_delivery_mood")
             or _profile_string(profile, "base_delivery_mood")
@@ -192,6 +199,7 @@ def player_config_from_dict(data: dict[str, Any]) -> PlayerConfig:
         catchphrases=_tags_from_value(data.get("catchphrases")),
         strategy_profile=clean_optional_string(data.get("strategy_profile")) or "balanced",
         tts_speaker=clean_optional_string(data.get("tts_speaker")) or "",
+        tts_dialect=clean_optional_string(data.get("tts_dialect")) or "",
         base_delivery_mood=(
             clean_optional_string(data.get("base_delivery_mood")) or "neutral"
         ),

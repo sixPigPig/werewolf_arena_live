@@ -249,6 +249,35 @@ def test_speech_mission_scheduler_is_deterministic_and_spreads_round_tasks() -> 
     assert len({mission.kind for mission in first}) == 6
 
 
+def test_speech_mission_scheduler_uses_one_shared_rotation_across_personalities() -> None:
+    order = [f"玩家{seat}" for seat in range(1, 9)]
+    personality_ids = [
+        "cautious",
+        "balanced",
+        "aggressive",
+        "deceptive",
+        "analytical",
+        "aggressive",
+        "cautious",
+        "analytical",
+    ]
+    missions = [
+        assign_speech_mission(
+            round_number=1,
+            stage="debate",
+            speaker=speaker,
+            speech_order=order,
+            personality_id=personality_id,
+        )
+        for speaker, personality_id in zip(order, personality_ids, strict=True)
+    ]
+
+    assert len({mission.kind for mission in missions[:6]}) == 6
+    assert [mission.kind for mission in missions[6:]] == [
+        mission.kind for mission in missions[:2]
+    ]
+
+
 def test_speech_mission_scheduler_inserts_counterpoint_after_unsupported_agreement() -> None:
     mission = assign_speech_mission(
         round_number=1,
@@ -314,6 +343,28 @@ def test_speech_quality_requires_rewrite_for_copy_without_new_proposition() -> N
     assert "repeated_debate_phrase" in report.hard_failure_codes
     assert report.new_proposition_count == 0
     assert report.to_dict()["schema_version"] == 1
+
+
+def test_speech_quality_keeps_low_overlap_shared_fact_as_warning() -> None:
+    mission = SpeechMissionV1(
+        schema_version=1,
+        kind="contradiction_hunter",
+        instruction="指出具体矛盾。",
+        reason_code="test",
+    )
+    report = evaluate_speech_quality(
+        text="第一晚平安夜，我认为还要听后面发言。",
+        prior_texts=["第一晚平安夜，无人出局。"],
+        mission=mission,
+    )
+
+    repetition_issue = next(
+        issue for issue in report.issues if issue.code == "repeated_debate_phrase"
+    )
+    assert report.lexical_similarity < 0.3
+    assert report.new_proposition_count == 0
+    assert repetition_issue.severity == "warning"
+    assert report.requires_rewrite is False
 
 
 def test_speech_quality_allows_similar_opening_with_new_public_fact() -> None:

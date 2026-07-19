@@ -14,6 +14,7 @@ import { usePlayerProfileRepository } from "@/features/player-profiles/repositor
 import type {
   AdminPlayerProfile,
   PlayerProfileStatus,
+  PlayerTtsSpeakerOption,
 } from "@/features/player-profiles/types";
 
 const STATUS_LABELS: Record<PlayerProfileStatus, string> = {
@@ -39,6 +40,11 @@ export default function PlayerProfilesPage() {
     queryKey: playerProfileKeys.list(params),
     queryFn: ({ signal }) => repository.list(params, signal),
     placeholderData: keepPreviousData,
+  });
+  const ttsSpeakersQuery = useQuery({
+    queryKey: playerProfileKeys.ttsSpeakers(),
+    queryFn: ({ signal }) => repository.getTtsSpeakers(signal),
+    staleTime: 60 * 60_000,
   });
   const data = profilesQuery.data;
 
@@ -228,6 +234,7 @@ export default function PlayerProfilesPage() {
                 canWrite={canWrite}
                 key={profile.id}
                 profile={profile}
+                ttsSpeakerOptions={ttsSpeakersQuery.data?.items ?? []}
               />
             ))}
           </ul>
@@ -255,15 +262,18 @@ function PlayerListItem({
   canPublish,
   canWrite,
   profile,
+  ttsSpeakerOptions,
 }: {
   canPublish: boolean;
   canWrite: boolean;
   profile: AdminPlayerProfile;
+  ttsSpeakerOptions: PlayerTtsSpeakerOption[];
 }) {
   const canEdit =
     profile.status !== "archived" &&
     canWrite &&
     (profile.status !== "published" || canPublish);
+  const voiceLabel = playerVoiceLabel(profile, ttsSpeakerOptions);
   return (
     <li className="player-admin-row">
       <div className="player-admin-identity">
@@ -288,6 +298,9 @@ function PlayerListItem({
       <div className="player-admin-model-cell">
         <strong>{profile.model}</strong>
         <small>{profile.personality_id} · {profile.strategy_profile}</small>
+        <small title={profile.tts_speaker ?? "继承全局玩家音色"}>
+          音色：{voiceLabel}
+        </small>
       </div>
       <div className="player-admin-tags-cell">
         {profile.tags.slice(0, 2).map((tag) => (
@@ -310,6 +323,26 @@ function PlayerListItem({
       </div>
     </li>
   );
+}
+
+function playerVoiceLabel(
+  profile: AdminPlayerProfile,
+  options: PlayerTtsSpeakerOption[],
+) {
+  const disabled = profile.voice_enabled === false ? "已关闭 · " : "";
+  if (!profile.tts_speaker) {
+    return `${disabled}继承全局`;
+  }
+  const speaker = options.find(
+    (option) => option.voice_type === profile.tts_speaker,
+  );
+  if (!speaker) {
+    return `${disabled}${profile.tts_speaker}`;
+  }
+  const dialect = speaker.dialects.find(
+    (option) => option.id === profile.tts_dialect,
+  );
+  return `${disabled}${speaker.name}${dialect ? ` · ${dialect.label}` : ""}`;
 }
 
 function PlayerPagination({

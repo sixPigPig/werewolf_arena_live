@@ -33,6 +33,8 @@ const DELIVERY_MOODS = [
 ] as const;
 const DELIVERY_INTENSITIES = ["low", "medium", "high"] as const;
 const DELIVERY_PACES = ["slow", "natural", "fast"] as const;
+const PLAYER_GENDERS = ["female", "male"] as const;
+const TTS_DIALECTS = ["sichuan", "shaanxi", "northeast"] as const;
 
 export function parseAdminPlayerProfileAiDraft(
   value: unknown,
@@ -92,6 +94,7 @@ export function parseAdminPlayerProfile(value: unknown): AdminPlayerProfile {
     short_description: stringValue(record.short_description),
     background_story: stringValue(record.background_story),
     speaking_style: stringValue(record.speaking_style),
+    gender: enumString(record.gender, PLAYER_GENDERS, "gender"),
     catchphrases: stringArray(record.catchphrases, "catchphrases"),
     strategy_profile: requiredString(record.strategy_profile, "strategy_profile"),
     risk_tolerance: tendency(record.risk_tolerance, "risk_tolerance"),
@@ -179,6 +182,7 @@ export function parseAdminPlayerVoicePreview(
   }
   return {
     speaker: requiredString(record.speaker, "speaker"),
+    dialect: nullableEnumString(record.dialect, TTS_DIALECTS, "dialect"),
     effective_delivery: {
       schema_version: 1,
       mood,
@@ -206,6 +210,13 @@ function optionalVoiceFields(
   const parsed: Partial<AdminPlayerProfile> = {};
   if ("tts_speaker" in record) {
     parsed.tts_speaker = nullableString(record.tts_speaker, "tts_speaker");
+  }
+  if ("tts_dialect" in record) {
+    parsed.tts_dialect = nullableEnumString(
+      record.tts_dialect,
+      TTS_DIALECTS,
+      "tts_dialect",
+    );
   }
   if ("base_delivery_mood" in record) {
     parsed.base_delivery_mood = nullableString(
@@ -288,6 +299,8 @@ export function parsePlayerTtsSpeakerOptions(
       return {
         voice_type: requiredString(option.voice_type, "voice_type"),
         name: requiredString(option.name, "name"),
+        gender: enumString(option.gender, PLAYER_GENDERS, "gender"),
+        dialects: dialectOptionArray(option.dialects),
       };
     }),
   };
@@ -345,6 +358,19 @@ function appearanceArray(value: unknown): PlayerProfileAppearanceOption[] {
         "appearance.avatar_asset_id",
       ),
       avatar_image_url: stringValue(record.avatar_image_url),
+    };
+  });
+}
+
+function dialectOptionArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    throw invalidContract("音色方言选项格式无效");
+  }
+  return value.map((item) => {
+    const record = recordValue(item);
+    return {
+      id: enumString(record.id, TTS_DIALECTS, "dialect.id"),
+      label: requiredString(record.label, "dialect.label"),
     };
   });
 }
@@ -436,6 +462,14 @@ function enumString<const Value extends string>(
     throw invalidContract(`${field} 枚举值无效`);
   }
   return parsed as Value;
+}
+
+function nullableEnumString<const Value extends string>(
+  value: unknown,
+  allowed: readonly Value[],
+  field: string,
+): Value | null {
+  return value === null ? null : enumString(value, allowed, field);
 }
 
 function invalidContract(detail: string) {

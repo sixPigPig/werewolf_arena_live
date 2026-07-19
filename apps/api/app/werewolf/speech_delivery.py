@@ -40,6 +40,11 @@ _MOOD_TEXT = {
 }
 _INTENSITY_TEXT = {"low": "收敛", "medium": "适中", "high": "明显"}
 _PACE_TEXT = {"slow": "稍慢", "natural": "自然", "fast": "稍快"}
+_DIALECT_TEXT = {
+    "sichuan": "四川话",
+    "shaanxi": "陕西话",
+    "northeast": "东北话",
+}
 _ALLOWED_INSTRUCTION_CUES = (
     "克制",
     "平静",
@@ -101,16 +106,22 @@ def normalize_delivery(
     }
 
 
-def compile_context_texts(delivery: Mapping[str, object] | None) -> list[str]:
+def compile_context_texts(
+    delivery: Mapping[str, object] | None,
+    *,
+    dialect: str = "",
+) -> list[str]:
     normalized = normalize_delivery(delivery or {})
     mood = _MOOD_TEXT[str(normalized["mood"])]
     intensity = _INTENSITY_TEXT[str(normalized["intensity"])]
     pace = _PACE_TEXT[str(normalized["pace"])]
     instruction = str(normalized.get("instruction") or "")
     extra = f"；演绎提示为{instruction}" if instruction else ""
+    dialect_text = _DIALECT_TEXT.get(dialect.strip().lower(), "")
+    dialect_instruction = f"；使用{dialect_text}自然表达" if dialect_text else ""
     return [
         "像真人在狼人杀现场自然接话，不要使用播音腔。"
-        f"情绪{mood}；表达力度{intensity}；语速{pace}{extra}。"
+        f"情绪{mood}；表达力度{intensity}；语速{pace}{dialect_instruction}{extra}。"
     ]
 
 

@@ -14,6 +14,8 @@ from app.werewolf.player_presets import (
 )
 
 PlayerProfileStatus = Literal["draft", "published", "archived"]
+PlayerGender = Literal["female", "male"]
+PlayerTtsDialect = Literal["sichuan", "shaanxi", "northeast"]
 PlayerDeliveryMood = Literal[
     "neutral",
     "restrained",
@@ -83,10 +85,15 @@ class AdminPlayerProfileContent(AdminRequestModel):
     short_description: str = Field(default="", max_length=160)
     background_story: str = Field(default="", max_length=1200)
     speaking_style: str = Field(default="", max_length=800)
+    gender: PlayerGender = "female"
     tts_speaker: str | None = Field(
         default=None,
         max_length=160,
         description="Null inherits the globally configured TTS speaker.",
+    )
+    tts_dialect: PlayerTtsDialect | None = Field(
+        default=None,
+        description="Only available when the selected TTS 2.0 speaker supports dialects.",
     )
     base_delivery_mood: PlayerDeliveryMood | None = Field(
         default=None,
@@ -202,10 +209,15 @@ class AdminPlayerProfileUpdate(AdminRequestModel):
     short_description: str | None = Field(default=None, max_length=160)
     background_story: str | None = Field(default=None, max_length=1200)
     speaking_style: str | None = Field(default=None, max_length=800)
+    gender: PlayerGender | None = None
     tts_speaker: str | None = Field(
         default=None,
         max_length=160,
         description="Null clears the override and inherits the global TTS speaker.",
+    )
+    tts_dialect: PlayerTtsDialect | None = Field(
+        default=None,
+        description="Null clears the dialect override.",
     )
     base_delivery_mood: PlayerDeliveryMood | None = Field(
         default=None,
@@ -240,6 +252,7 @@ class AdminPlayerProfileUpdate(AdminRequestModel):
         nullable_fields = {
             "avatar_asset_id",
             "tts_speaker",
+            "tts_dialect",
             "base_delivery_mood",
             "base_delivery_intensity",
             "base_delivery_pace",
@@ -359,6 +372,7 @@ class AdminPlayerVoicePreviewDelivery(AdminRequestModel):
 class AdminPlayerVoicePreviewRequest(AdminRequestModel):
     say: str = Field(min_length=1, max_length=240)
     speaker: str | None = Field(default=None, max_length=160)
+    dialect: PlayerTtsDialect | None = None
     base_delivery: AdminPlayerVoicePreviewDelivery = Field(
         default_factory=AdminPlayerVoicePreviewDelivery
     )
@@ -389,6 +403,7 @@ class AdminPlayerVoiceEffectiveDelivery(BaseModel):
 
 class AdminPlayerVoicePreviewResponse(BaseModel):
     speaker: str = Field(min_length=1, max_length=160)
+    dialect: PlayerTtsDialect | None
     effective_delivery: AdminPlayerVoiceEffectiveDelivery
     context_texts: list[str] = Field(max_length=4)
     delivery_mapping_version: str = Field(min_length=1, max_length=40)
@@ -413,9 +428,11 @@ class AdminPlayerProfileResponse(BaseModel):
     short_description: str
     background_story: str
     speaking_style: str
+    gender: PlayerGender
     tts_speaker: str | None = Field(
         description="Null means this profile inherits the global TTS speaker."
     )
+    tts_dialect: PlayerTtsDialect | None
     base_delivery_mood: PlayerDeliveryMood = Field(
         description="Resolved profile mood; null input resets this to neutral."
     )
@@ -482,9 +499,16 @@ class AdminPlayerProfileOptionsResponse(BaseModel):
     constraints: PlayerProfileConstraints
 
 
+class AdminPlayerTtsDialectOption(BaseModel):
+    id: PlayerTtsDialect
+    label: str
+
+
 class AdminPlayerTtsSpeakerOption(BaseModel):
     voice_type: str
     name: str
+    gender: PlayerGender
+    dialects: list[AdminPlayerTtsDialectOption]
 
 
 class AdminPlayerTtsSpeakersResponse(BaseModel):

@@ -12,17 +12,19 @@ from app.werewolf.tts_speaker_catalog import (
 
 SPEAKER_DOCUMENT = """
 ## "豆包语音合成模型2.0" 音色列表
-|场景|音色名称|voice_type|能力|备注|
-|通用|Vivi 2.0|zh_female_vv_uranus_bigtts|指令遵循||
-|通用|单向音色|zh_female_one_way_uranus_bigtts|Context|仅限单向流使用，不支持双向流|
-|通用|旧模型格式|zh_female_legacy_bigtts|指令遵循||
+|场景|音色名称|voice_type|语种/方言|备注|
+|通用|Vivi 2.0|zh_female_vv_uranus_bigtts|语种：中文、日文|指令遵循|
+||||方言：四川、陕西、东北||
+|通用|云舟|zh_male_m191_uranus_bigtts|语种：中文|指令遵循|
+|通用|单向音色|zh_female_one_way_uranus_bigtts|语种：中文|仅限单向流使用，不支持双向流|
+|通用|旧模型格式|zh_female_legacy_bigtts|语种：中文|指令遵循|
 ## "豆包语音合成模型2.0" 多语种音色列表
-|场景|音色名称|voice_type|能力|备注|
-|英语|Tim|en_male_tim_uranus_bigtts|指令遵循||
-|英语|Tim 重复|en_male_tim_uranus_bigtts|指令遵循||
+|场景|音色名称|voice_type|语种/方言|备注|
+|英语|Tim|en_male_tim_uranus_bigtts|语种：英语|指令遵循|
+|英语|Tim 重复|en_male_tim_uranus_bigtts|语种：英语|指令遵循|
 ## "豆包语音合成模型1.0" 音色列表
-|场景|音色名称|voice_type|能力|备注|
-|通用|旧 Vivi|zh_female_old_uranus_bigtts|指令遵循||
+|场景|音色名称|voice_type|语种/方言|备注|
+|通用|旧 Vivi|zh_female_old_uranus_bigtts|语种：中文|指令遵循|
 """
 
 
@@ -32,10 +34,16 @@ def test_parse_supported_tts_speakers_keeps_compatible_bidirectional_2_0_rows() 
         resource_id="seed-tts-2.0",
     )
 
-    assert [(option.voice_type, option.name) for option in options] == [
-        ("zh_female_vv_uranus_bigtts", "Vivi 2.0"),
-        ("en_male_tim_uranus_bigtts", "Tim"),
+    assert [(option.voice_type, option.name, option.gender) for option in options] == [
+        ("zh_female_vv_uranus_bigtts", "Vivi 2.0", "female"),
+        ("zh_male_m191_uranus_bigtts", "云舟", "male"),
     ]
+    assert [(item.id, item.label) for item in options[0].dialects] == [
+        ("sichuan", "四川话"),
+        ("shaanxi", "陕西话"),
+        ("northeast", "东北话"),
+    ]
+    assert options[1].dialects == ()
 
 
 def test_parse_supported_tts_speakers_rejects_incompatible_resource() -> None:

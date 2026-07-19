@@ -73,3 +73,12 @@ def test_free_text_instruction_is_compiled_to_allowlisted_cues_only() -> None:
     assert "请自然一点" not in context
     assert "播音员" not in context
     assert "坚定、自然、停顿、反问、短句" in context
+
+
+def test_compile_context_texts_adds_only_supported_chinese_dialect() -> None:
+    sichuan = compile_context_texts({}, dialect="sichuan")[0]
+    unknown = compile_context_texts({}, dialect="cantonese")[0]
+
+    assert "四川话" in sichuan
+    assert "cantonese" not in unknown
+    assert "方言" not in unknown

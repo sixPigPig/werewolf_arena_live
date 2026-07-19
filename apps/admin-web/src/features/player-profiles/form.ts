@@ -26,6 +26,7 @@ export function inputFromProfile(
     short_description: profile.short_description,
     background_story: profile.background_story,
     speaking_style: profile.speaking_style,
+    gender: profile.gender,
     catchphrases: profile.catchphrases,
     strategy_profile: profile.strategy_profile,
     risk_tolerance: profile.risk_tolerance,
@@ -147,6 +148,7 @@ const PLAYER_PROFILE_FORM_FIELDS = new Set<keyof PlayerProfileEditableFields>([
     keyof PlayerProfileEditableFields
   >,
   "tts_speaker",
+  "tts_dialect",
   "base_delivery_mood",
   "base_delivery_intensity",
   "base_delivery_pace",
@@ -200,6 +202,7 @@ function voiceInputFromProfile(
   (
     [
       "tts_speaker",
+      "tts_dialect",
       "base_delivery_mood",
       "base_delivery_intensity",
       "base_delivery_pace",
@@ -221,6 +224,7 @@ function cleanOptionalVoiceInput(
   (
     [
       "tts_speaker",
+      "tts_dialect",
       "base_delivery_mood",
       "base_delivery_intensity",
       "base_delivery_pace",

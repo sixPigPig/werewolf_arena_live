@@ -278,6 +278,7 @@ class Player:
     avatar_image_url: str = ""
     profile_id: str | None = None
     tts_speaker: str = ""
+    tts_dialect: str = ""
     base_delivery_mood: str = "neutral"
     base_delivery_intensity: str = "medium"
     base_delivery_pace: str = "natural"
@@ -311,6 +312,7 @@ class Player:
             "avatar_image_url": self.avatar_image_url,
             "profile_id": self.profile_id,
             "tts_speaker": self.tts_speaker,
+            "tts_dialect": self.tts_dialect,
             "base_delivery_mood": self.base_delivery_mood,
             "base_delivery_intensity": self.base_delivery_intensity,
             "base_delivery_pace": self.base_delivery_pace,

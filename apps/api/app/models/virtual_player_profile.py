@@ -51,6 +51,14 @@ class VirtualPlayerProfile(Base):
             name="ck_virtual_player_profiles_delivery_pace",
         ),
         CheckConstraint(
+            "gender IN ('female', 'male')",
+            name="ck_virtual_player_profiles_gender",
+        ),
+        CheckConstraint(
+            "tts_dialect IN ('', 'sichuan', 'shaanxi', 'northeast')",
+            name="ck_virtual_player_profiles_tts_dialect",
+        ),
+        CheckConstraint(
             "voice_config_version >= 1",
             name="ck_virtual_player_profiles_voice_version_positive",
         ),
@@ -97,8 +105,14 @@ class VirtualPlayerProfile(Base):
     short_description: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     background_story: Mapped[str] = mapped_column(Text, nullable=False, default="")
     speaking_style: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    gender: Mapped[str] = mapped_column(
+        String(12), nullable=False, default="female", server_default="female"
+    )
     tts_speaker: Mapped[str] = mapped_column(
         String(160), nullable=False, default="", server_default=""
+    )
+    tts_dialect: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="", server_default=""
     )
     base_delivery_mood: Mapped[str] = mapped_column(
         String(24), nullable=False, default="neutral", server_default="neutral"

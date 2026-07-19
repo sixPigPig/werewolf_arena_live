@@ -735,6 +735,7 @@ def initialize_game_state(
             avatar_image_url=player_config.avatar_image_url if player_config else "",
             profile_id=player_config.profile_id if player_config else None,
             tts_speaker=player_config.tts_speaker if player_config else "",
+            tts_dialect=player_config.tts_dialect if player_config else "",
             base_delivery_mood=(
                 player_config.base_delivery_mood if player_config else "neutral"
             ),
@@ -6285,7 +6286,10 @@ class GameEngine:
                 base_pace=player.base_delivery_pace,
                 base_instruction=player.base_delivery_instruction,
             )
-            effective_context_texts = compile_context_texts(effective_delivery)
+            effective_context_texts = compile_context_texts(
+                effective_delivery,
+                dialect=player.tts_dialect,
+            )
             normalized_result = dict(lm_log.result or {})
             normalized_result["delivery"] = copy.deepcopy(effective_delivery)
             lm_log.result = normalized_result

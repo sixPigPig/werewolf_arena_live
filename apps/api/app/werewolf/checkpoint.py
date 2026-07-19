@@ -1009,6 +1009,7 @@ def player_from_dict(data: dict[str, Any]) -> Player:
         avatar_image_url=str(data.get("avatar_image_url") or ""),
         profile_id=str(data["profile_id"]) if data.get("profile_id") is not None else None,
         tts_speaker=str(data.get("tts_speaker") or ""),
+        tts_dialect=str(data.get("tts_dialect") or ""),
         base_delivery_mood=str(data.get("base_delivery_mood") or "neutral"),
         base_delivery_intensity=str(
             data.get("base_delivery_intensity") or "medium"

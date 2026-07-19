@@ -27,6 +27,12 @@ describe("preview player repository", () => {
     expect(speakers.items).toContainEqual({
       voice_type: "zh_female_vv_uranus_bigtts",
       name: "Vivi 2.0",
+      gender: "female",
+      dialects: [
+        { id: "sichuan", label: "四川话" },
+        { id: "shaanxi", label: "陕西话" },
+        { id: "northeast", label: "东北话" },
+      ],
     });
     expect(
       [...list.items.map((item) => item.avatar_image_url), ...options.appearances.map((item) => item.avatar_image_url)]

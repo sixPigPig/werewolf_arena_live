@@ -51,7 +51,9 @@ _EDITABLE_PROFILE_FIELDS = frozenset(
         "short_description",
         "background_story",
         "speaking_style",
+        "gender",
         "tts_speaker",
+        "tts_dialect",
         "base_delivery_mood",
         "base_delivery_intensity",
         "base_delivery_pace",
@@ -241,7 +243,9 @@ def create_player_profile(
         short_description=str(data.get("short_description") or ""),
         background_story=str(data.get("background_story") or ""),
         speaking_style=str(data.get("speaking_style") or ""),
+        gender=str(data.get("gender") or "female"),
         tts_speaker=str(data.get("tts_speaker") or ""),
+        tts_dialect=str(data.get("tts_dialect") or ""),
         base_delivery_mood=str(data.get("base_delivery_mood") or "neutral"),
         base_delivery_intensity=str(data.get("base_delivery_intensity") or "medium"),
         base_delivery_pace=str(data.get("base_delivery_pace") or "natural"),
@@ -305,7 +309,9 @@ def update_player_profile(
     strategy_profile = str(data.get("strategy_profile", profile.strategy_profile))
     _validate_presets(personality_id, appearance_id, strategy_profile)
     voice_fields = {
+        "gender",
         "tts_speaker",
+        "tts_dialect",
         "base_delivery_mood",
         "base_delivery_intensity",
         "base_delivery_pace",
@@ -314,6 +320,8 @@ def update_player_profile(
     }
     if "tts_speaker" in data:
         data["tts_speaker"] = str(data["tts_speaker"] or "")
+    if "tts_dialect" in data:
+        data["tts_dialect"] = str(data["tts_dialect"] or "")
     if "base_delivery_mood" in data:
         data["base_delivery_mood"] = str(data["base_delivery_mood"] or "neutral")
     if "base_delivery_intensity" in data:

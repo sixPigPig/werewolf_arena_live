@@ -15,7 +15,8 @@ import type {
 const PREVIEW_AVATAR_DATA_URL =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Crect width='96' height='96' rx='20' fill='%23d1e9ff'/%3E%3Ccircle cx='48' cy='38' r='17' fill='%23175cd3'/%3E%3Cpath d='M18 88c3-19 15-29 30-29s27 10 30 29' fill='%231849a9'/%3E%3C/svg%3E";
 const PREVIEW_PLAYER_SPEAKER = "zh_female_gaolengyujie_uranus_bigtts";
-const PREVIEW_AUDIO_BASE64 = "cHJldmlldy1hdWRpbw==";
+const PREVIEW_AUDIO_BASE64 =
+  "SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYxLjcuMTAwAAAAAAAAAAAAAAD/84TAAAAAAAAAAAAASW5mbwAAAA8AAAANAAAFoAAzMzMzMzMzRERERERERERVVVVVVVVVVWZmZmZmZmZ3d3d3d3d3d4iIiIiIiIiImZmZmZmZmaqqqqqqqqqqu7u7u7u7u7vMzMzMzMzM3d3d3d3d3d3u7u7u7u7u7v////////8AAAAATGF2YzYxLjE5AAAAAAAAAAAAAAAAJAOQAAAAAAAABaDm6t4RAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/80TEABKAijwexpKELoYb4XeztnbO2ds7Z2ztr67FiKAIqBQAOgYtucVmBk6SDwIqMsAACAICgkRo0aNGjbB8EAQBAEMHz+UOfv1n/9Hv//+/o9/R/+gmm5AKANmZmZj/80TECRJwcnReHgxnMoCA0tK6IiyPSf4JBZkAgEiRI0FBQUFAoKCgoMFBQUFAoKCgoMFBQUFAoKCgoMFBQUFAoKCm//////////////H//+3GyqpIYgoEhguGi6PK4FX/80TEEhLIeeQA5/qANPElQyEoWWNGdAUDBvAIAxqNQhqEhOUwBCwRAOsE3WSTdu913q1XI/27+TV/p+3b/Tan/q96F67Vqv///KHVTFtTENMd4yuTAGwGgwD4DdMC1Cr/80TEGRPIceQAz/hkAxGJsIMlrDdjAlAL0yWHjglVMxnMyqDgcIURmSwNOXAW9qrV3p/2fp/6f9/9diLu1evRoX7FVf//+u/jB2KoeggGDBMOTDIbDGk4TPiljFJWfAz/80TEHBOQdeQA7/iArqDfjBUwSs1itTimgMznwyaDQgMJrtMfuHKTMz12qnM9/Tci/e3/1/R/sT+v2dCrVWLV///tC0RAtG4HA4eHIcdzNACNihc+MOjJgwTA1CwCGML/80TEIBRQeeAA5/qADQL8yRQEw0wgwBQgYDchApO1o0Fyixf5rtXl7UfquTfuSv3/e3bv3+m77m9PyK7NxRX///qu0kKAgjNSNCM2/jAMAHEwGUDsMEEC1TF9XS8zLwP/80TEIRVAceAAz/hktzA8QLYx4UTi/YM1KQy8GwEKi9K1n5o64MurpVoxD/vRoyP3dC39mz9i7925qtGi9K9dicAEECD+//Kjvr0T6EYDBcJTBASDDEhzGZEDPHHTE6n/80TEHxeA2eFO7+qA8XMprELTBVgVYDZC8A6bjwNAHUDMQIAYF4WkCDxkCDk2XH+vVq1b7Z/9c7u5FXv6FvTvRb/KTv3N6tOlftRpwA/n/2gbGnYnqHAkaG5joBGaQ2b/80TEFBVodeFA5/qAxCMfHZpkuQ72agWCdmEJAcBlEgxjTgpgwg4EDQdAtOxo8AQ3T3je1Wu5K2fsLWep7Nn5NWvTo+eVp6/b0LtXYi9K///6z6qBFpTILM1g2rTAMQH/80TEEROgceQAz/hkWMBmAuzBCQkgxfJfcMy1C/DBAgHswqYDbXZMoqMySGgEGUfmWw9eyDfsXp0f7d6dn/7Nm7+u3d69X2rt2IqEpjUCuuzhkajScqeSEZdgs+CBQJT/80TEFRWIvhgC15iEZhPBhAqOGJcE8AQG09zASAQL3IVgAB2NQkjcPxEK6Eteifco3aJ9iFqJx8IiE0BwiaCxMCBYWMmAtGkDPNs//83VWFUyWBWwsOsxPpFVG5D5BOj/80TEERYI4jwAy9LFGCSRlGmHwJ3Hd6ArA5kxyF9raH2WApiWluO5FqBNqFPDJQnPkpEVURuaQqpTc0hWThjQNEWCoiwTSsE0qoaVUVW0VWl6vfSqBZOcAKGsmG56u9b/80TECxBAmegWYxJMpmmWocWkoORME4TyAVwwPmSZCqo+P2KyqagOGgZFCWLCoZMqF+Ki2sU/qF/8U//+Kf1C/+zrTEFNRTMuMTAwqqqqqqqqqqqqqqqqqqqqqqqqqqo=";
 const PREVIEW_ALLOWED_DELIVERY_CUES = [
   "克制",
   "平静",
@@ -84,12 +85,28 @@ const PREVIEW_OPTIONS: PlayerProfileOptions = {
 const PREVIEW_TTS_SPEAKERS: PlayerTtsSpeakerOptions = {
   resource_id: "seed-tts-2.0",
   items: [
-    { voice_type: "zh_female_vv_uranus_bigtts", name: "Vivi 2.0" },
+    {
+      voice_type: "zh_female_vv_uranus_bigtts",
+      name: "Vivi 2.0",
+      gender: "female",
+      dialects: [
+        { id: "sichuan", label: "四川话" },
+        { id: "shaanxi", label: "陕西话" },
+        { id: "northeast", label: "东北话" },
+      ],
+    },
     {
       voice_type: "zh_female_gaolengyujie_uranus_bigtts",
       name: "高冷御姐 2.0",
+      gender: "female",
+      dialects: [],
     },
-    { voice_type: "en_male_tim_uranus_bigtts", name: "Tim" },
+    {
+      voice_type: "zh_male_m191_uranus_bigtts",
+      name: "云舟",
+      gender: "male",
+      dialects: [],
+    },
   ],
 };
 
@@ -114,6 +131,7 @@ const FIXTURE_PROFILES: AdminPlayerProfile[] = [
     strategy_profile: "pressure_attacker",
     short_description: "正在打磨的高压问询型玩家。",
     tts_speaker: null,
+    tts_dialect: null,
     base_delivery_mood: "restrained",
     base_delivery_intensity: "medium",
     base_delivery_pace: "natural",
@@ -222,7 +240,10 @@ export async function previewPlayerProfileVoice(
     throw validationError("say", "请输入试听文本");
   }
   const speaker = request.speaker?.trim() || PREVIEW_PLAYER_SPEAKER;
-  if (!/^[a-z0-9_]+_uranus_bigtts$/.test(speaker)) {
+  const speakerOption = PREVIEW_TTS_SPEAKERS.items.find(
+    (option) => option.voice_type === speaker,
+  );
+  if (!speakerOption) {
     throw new AdminApiError({
       problem: {
         type: "about:blank",
@@ -233,6 +254,12 @@ export async function previewPlayerProfileVoice(
         request_id: "preview-voice-unsupported",
       },
     });
+  }
+  if (
+    request.dialect &&
+    !speakerOption.dialects.some((option) => option.id === request.dialect)
+  ) {
+    throw validationError("tts_dialect", "所选音色不支持这个方言");
   }
   const base = {
     mood: request.base_delivery.mood || "neutral",
@@ -253,18 +280,25 @@ export async function previewPlayerProfileVoice(
   const extra = effectiveDelivery.instruction
     ? `；演绎提示为${effectiveDelivery.instruction}`
     : "";
+  const dialectLabel = speakerOption.dialects.find(
+    (option) => option.id === request.dialect,
+  )?.label;
+  const dialectInstruction = dialectLabel
+    ? `；使用${dialectLabel}自然表达`
+    : "";
   return Promise.resolve({
     speaker,
+    dialect: request.dialect,
     effective_delivery: effectiveDelivery,
     context_texts: [
-      `像真人在狼人杀现场自然接话，不要使用播音腔。情绪${effectiveDelivery.mood}；表达力度${effectiveDelivery.intensity}；语速${effectiveDelivery.pace}${extra}。`,
+      `像真人在狼人杀现场自然接话，不要使用播音腔。情绪${effectiveDelivery.mood}；表达力度${effectiveDelivery.intensity}；语速${effectiveDelivery.pace}${dialectInstruction}${extra}。`,
     ],
     delivery_mapping_version: "delivery-v1",
     audio_format: "mp3",
     mime_type: "audio/mpeg",
     sample_rate: 24_000,
     elapsed_ms: 12,
-    audio_byte_length: 13,
+    audio_byte_length: 1484,
     audio_base64: PREVIEW_AUDIO_BASE64,
   });
 }
@@ -380,6 +414,7 @@ function fixtureProfile(
     short_description: "预览玩家简介",
     background_story: "长期观察圆桌局的复盘型玩家。",
     speaking_style: "先列证据，再给结论。",
+    gender: "female",
     catchphrases: ["我先盘票型"],
     strategy_profile: "logic_leader",
     risk_tolerance: 2,

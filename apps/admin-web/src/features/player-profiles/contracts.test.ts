@@ -30,6 +30,7 @@ export const contractProfile: AdminPlayerProfile = {
   short_description: "逻辑控场",
   background_story: "长期复盘。",
   speaking_style: "先列证据。",
+  gender: "female",
   catchphrases: ["我先盘票型"],
   strategy_profile: "logic_leader",
   risk_tolerance: 2,
@@ -61,6 +62,7 @@ const createRequest: CreatePlayerProfileRequest = {
   short_description: contractProfile.short_description,
   background_story: contractProfile.background_story,
   speaking_style: contractProfile.speaking_style,
+  gender: contractProfile.gender,
   catchphrases: contractProfile.catchphrases,
   strategy_profile: contractProfile.strategy_profile,
   risk_tolerance: contractProfile.risk_tolerance,
@@ -75,6 +77,7 @@ const createRequest: CreatePlayerProfileRequest = {
 
 const voicePreviewResponse = {
   speaker: "zh_female_vv_uranus_bigtts",
+  dialect: "sichuan" as const,
   effective_delivery: {
     schema_version: 1,
     mood: "tense",
@@ -116,6 +119,7 @@ describe("admin player profile contract", () => {
     const voiceProfile = {
       ...contractProfile,
       tts_speaker: "zh_female_vv_uranus_bigtts",
+      tts_dialect: "sichuan" as const,
       base_delivery_mood: "restrained",
       base_delivery_intensity: "medium",
       base_delivery_pace: "natural",
@@ -161,6 +165,12 @@ describe("admin player profile contract", () => {
         {
           voice_type: "zh_female_vv_uranus_bigtts",
           name: "Vivi 2.0",
+          gender: "female",
+          dialects: [
+            { id: "sichuan", label: "四川话" },
+            { id: "shaanxi", label: "陕西话" },
+            { id: "northeast", label: "东北话" },
+          ],
         },
       ],
     };
@@ -283,6 +293,7 @@ describe("admin player profile contract", () => {
     const request = {
       say: "我先听完这一轮。",
       speaker: null,
+      dialect: null,
       base_delivery: {
         mood: "calm",
         intensity: "medium",

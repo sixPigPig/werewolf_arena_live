@@ -5460,6 +5460,58 @@ def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
     assert "所以我仍然保持这个判断" not in str(action_log.to_dict())
 
 
+def test_engine_builds_one_shared_speech_mission_rotation_for_mixed_lineup() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_shared_speech_mission_rotation",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260719,
+        rule_set=rule_set,
+    )
+    personality_ids = [
+        "cautious",
+        "balanced",
+        "aggressive",
+        "deceptive",
+        "analytical",
+        "aggressive",
+        "cautious",
+        "analytical",
+    ]
+    for player, personality_id in zip(state.players, personality_ids, strict=True):
+        player.personality_id = personality_id
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.speech_order = active_players.copy()
+    round_state.debate = [DebateEntry(speaker="法官", message="第一晚平安夜。")]
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=CapturingEventSink(),
+    )
+
+    requests = [
+        engine._build_player_action_request(
+            player=player,
+            action=ACTION_DEBATE,
+            options=[],
+            result_key="say",
+            round_state=round_state,
+            phase="day",
+        )
+        for player in state.players
+    ]
+    mission_kinds = [
+        str(request.world_state["speech_mission"]["kind"]) for request in requests
+    ]
+
+    assert len(set(mission_kinds[:6])) == 6
+    assert mission_kinds[6:] == mission_kinds[:2]
+
+
 def test_public_speech_quality_retry_exhaustion_publishes_did_not_speak() -> None:
     class ExhaustedSpeechProvider:
         def __init__(self) -> None:
@@ -5471,7 +5523,7 @@ def test_public_speech_quality_retry_exhaustion_publishes_did_not_speak() -> Non
             speech = (
                 "第一轮全票挂警徽定狼，所以我保持原判断。"
                 if self.calls == 1
-                else "第一轮全票挂警徽定狼，我还是不改判断。"
+                else "第一轮全票挂警徽定狼，所以我还是保持原判断。"
             )
             return ['{"reasoning":"质量检查",', f'"say":"{speech}"', "}"]
 
@@ -5524,7 +5576,7 @@ def test_public_speech_quality_retry_exhaustion_publishes_did_not_speak() -> Non
     assert action_log.fallback_reason is None
     public_blob = str(sink.events)
     assert "所以我保持原判断" not in public_blob
-    assert "我还是不改判断" not in public_blob
+    assert "所以我还是保持原判断" not in public_blob
     assert "本轮未发言" in public_blob
     assert [event["type"] for event in sink.events].count("player_did_not_speak") == 1
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
@@ -5533,6 +5585,72 @@ def test_public_speech_quality_retry_exhaustion_publishes_did_not_speak() -> Non
     assert action_log.speech_quality_retry_exhausted is True
     assert action_log.speech_quality_report is not None
     assert action_log.speech_quality_report["requires_rewrite"] is True
+
+
+def test_public_speech_low_overlap_shared_fact_is_accepted_without_retry() -> None:
+    class SharedFactProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
+            del model, prompt, temperature
+            self.calls += 1
+            return [
+                '{"reasoning":"共享事实但不是复制",',
+                '"say":"第一晚平安夜，我认为还要听后面发言。"',
+                "}",
+            ]
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            return "".join(self.stream_json(model=model, prompt=prompt, temperature=temperature))
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_speech_shared_fact",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260719,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    speaker = state.players[1]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.speech_order = active_players.copy()
+    round_state.debate = [
+        DebateEntry(speaker=active_players[0], message="第一晚平安夜，无人出局。")
+    ]
+    provider = SharedFactProvider()
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        speech_quality_retry_enabled=True,
+    )
+
+    message, action_log = engine._player_action(
+        player=speaker,
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert provider.calls == 1
+    assert message == "第一晚平安夜，我认为还要听后面发言。"
+    assert action_log.choice == message
+    assert action_log.execution_status == "completed"
+    assert action_log.speech_quality_attempt_count == 1
+    assert action_log.speech_quality_retry_exhausted is False
+    assert action_log.speech_quality_report is not None
+    assert action_log.speech_quality_report["requires_rewrite"] is False
+    issues = action_log.speech_quality_report["issues"]
+    repetition = next(item for item in issues if item["code"] == "repeated_debate_phrase")
+    assert repetition["severity"] == "warning"
+    assert all(event["type"] != "player_did_not_speak" for event in sink.events)
 
 
 def test_public_speech_length_retry_exhaustion_publishes_did_not_speak() -> None:

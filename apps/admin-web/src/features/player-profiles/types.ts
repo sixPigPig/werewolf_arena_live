@@ -1,4 +1,6 @@
 export type PlayerProfileStatus = "draft" | "published" | "archived";
+export type PlayerGender = "female" | "male";
+export type PlayerTtsDialect = "sichuan" | "shaanxi" | "northeast";
 
 export type AdminPlayerProfile = {
   id: string;
@@ -13,6 +15,7 @@ export type AdminPlayerProfile = {
   short_description: string;
   background_story: string;
   speaking_style: string;
+  gender: PlayerGender;
   catchphrases: string[];
   strategy_profile: string;
   risk_tolerance: number;
@@ -22,6 +25,7 @@ export type AdminPlayerProfile = {
   talkativeness: number;
   example_messages: string[];
   tts_speaker?: string | null;
+  tts_dialect?: PlayerTtsDialect | null;
   base_delivery_mood?: string | null;
   base_delivery_intensity?: string | null;
   base_delivery_pace?: string | null;
@@ -80,6 +84,7 @@ export type PlayerProfileEditableFields = {
   short_description: string;
   background_story: string;
   speaking_style: string;
+  gender: PlayerGender;
   catchphrases: string[];
   strategy_profile: string;
   risk_tolerance: number;
@@ -89,6 +94,7 @@ export type PlayerProfileEditableFields = {
   talkativeness: number;
   example_messages: string[];
   tts_speaker?: string | null;
+  tts_dialect?: PlayerTtsDialect | null;
   base_delivery_mood?: string | null;
   base_delivery_intensity?: string | null;
   base_delivery_pace?: string | null;
@@ -100,7 +106,7 @@ export type PlayerProfileEditableFields = {
 
 export type AdminPlayerProfileAiDraft = Omit<
   PlayerProfileEditableFields,
-  "appearance_id" | "avatar_asset_id" | "featured" | "model"
+  "appearance_id" | "avatar_asset_id" | "featured" | "gender" | "model"
 >;
 
 export type CreatePlayerProfileRequest = PlayerProfileEditableFields;
@@ -124,12 +130,14 @@ export type PlayerVoicePreviewDeliveryInput = {
 export type PlayerVoicePreviewRequest = {
   say: string;
   speaker: string | null;
+  dialect: PlayerTtsDialect | null;
   base_delivery: PlayerVoicePreviewDeliveryInput;
   turn_delivery: PlayerVoicePreviewDeliveryInput;
 };
 
 export type AdminPlayerVoicePreview = {
   speaker: string;
+  dialect: PlayerTtsDialect | null;
   effective_delivery: {
     schema_version: 1;
     mood: string;
@@ -178,6 +186,8 @@ export type PlayerProfileOptions = {
 export type PlayerTtsSpeakerOption = {
   voice_type: string;
   name: string;
+  gender: PlayerGender;
+  dialects: Array<{ id: PlayerTtsDialect; label: string }>;
 };
 
 export type PlayerTtsSpeakerOptions = {
@@ -195,6 +205,7 @@ export const DEFAULT_PLAYER_PROFILE_INPUT: PlayerProfileEditableFields = {
   short_description: "",
   background_story: "",
   speaking_style: "",
+  gender: "female",
   catchphrases: [],
   strategy_profile: "balanced",
   risk_tolerance: 3,

@@ -5,7 +5,7 @@ import logging
 import re
 import threading
 import time
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -32,9 +32,47 @@ class TtsSpeakerCatalogUnavailable(RuntimeError):
 
 
 @dataclass(frozen=True)
+class TtsDialectOption:
+    id: Literal["sichuan", "shaanxi", "northeast"]
+    label: str
+
+
+@dataclass(frozen=True)
 class TtsSpeakerOption:
     voice_type: str
     name: str
+    gender: Literal["female", "male"]
+    dialects: tuple[TtsDialectOption, ...] = ()
+
+
+_DIALECT_OPTIONS = (
+    ("四川", TtsDialectOption(id="sichuan", label="四川话")),
+    ("陕西", TtsDialectOption(id="shaanxi", label="陕西话")),
+    ("东北", TtsDialectOption(id="northeast", label="东北话")),
+)
+
+
+def gender_for_tts_speaker(voice_type: str) -> Literal["female", "male"] | None:
+    if "_female_" in voice_type:
+        return "female"
+    if "_male_" in voice_type:
+        return "male"
+    return None
+
+
+def _dialects_from_details(details: str) -> tuple[TtsDialectOption, ...]:
+    if "方言" not in details:
+        return ()
+    dialect_details = details.split("方言", maxsplit=1)[1]
+    return tuple(option for name, option in _DIALECT_OPTIONS if name in dialect_details)
+
+
+def dialects_for_tts_speaker(voice_type: str) -> tuple[TtsDialectOption, ...]:
+    """Return the stable dialect contract supported by the configured UI/API."""
+
+    if voice_type.strip() == "zh_female_vv_uranus_bigtts":
+        return tuple(option for _name, option in _DIALECT_OPTIONS)
+    return ()
 
 
 def parse_supported_tts_speakers(
@@ -50,25 +88,52 @@ def parse_supported_tts_speakers(
         heading = section.splitlines()[0] if section else ""
         if "豆包语音合成模型2.0" not in heading:
             continue
-        for line in section.splitlines():
-            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-            if len(cells) < 3:
-                continue
-            name = cells[1]
-            voice_type = cells[2]
+        current: tuple[str, str, list[str]] | None = None
+
+        def append_current() -> None:
+            if current is None:
+                return
+            name, voice_type, row_parts = current
+            row_text = " ".join(row_parts)
+            gender = gender_for_tts_speaker(voice_type)
             if (
-                not name
-                or voice_type in seen
-                or "仅限单向流" in line
-                or "不支持双向流" in line
+                voice_type in seen
+                or gender is None
+                or "中文" not in row_text
+                or "仅限单向流" in row_text
+                or "不支持双向流" in row_text
                 or not supports_tts_context_texts(
                     resource_id=resource_id,
                     speaker=voice_type,
                 )
             ):
-                continue
+                return
             seen.add(voice_type)
-            options.append(TtsSpeakerOption(voice_type=voice_type, name=name))
+            options.append(
+                TtsSpeakerOption(
+                    voice_type=voice_type,
+                    name=name,
+                    gender=gender,
+                    dialects=_dialects_from_details(row_text),
+                )
+            )
+
+        for line in section.splitlines():
+            stripped_line = line.strip()
+            if not stripped_line.startswith("|"):
+                continue
+            raw_cells = stripped_line.split("|")
+            cells = [cell.strip() for cell in raw_cells[1:-1]]
+            if len(cells) < 3:
+                continue
+            name = cells[1]
+            voice_type = cells[2]
+            if name and voice_type:
+                append_current()
+                current = (name, voice_type, [line])
+            elif current is not None:
+                current[2].append(line)
+        append_current()
 
     if not options:
         raise TtsSpeakerCatalogUnavailable(
