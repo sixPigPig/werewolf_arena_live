@@ -866,4 +866,56 @@ describe("useLiveDirector seekToEventId", () => {
     });
     expect(result.current.effectiveDurationMs).toBeGreaterThan(0);
   });
+
+  it("uses speechId instead of an intersecting event range when available", () => {
+    vi.useFakeTimers();
+    const speechEvents = [
+      event({
+        id: 1,
+        type: "model_request_started",
+        actor: "1号玩家",
+        action: "debate",
+        payload: { request_id: "request-1" },
+      }),
+      event({
+        id: 2,
+        type: "model_response_delta",
+        actor: "1号玩家",
+        action: "debate",
+        payload: {
+          request_id: "request-1",
+          speech_id: "speech-1",
+          visible_text: "这是同一次逻辑发言。",
+        },
+      }),
+      event({ id: 3, type: "phase_started", round: 1, phase: "vote" }),
+    ];
+    const { result } = renderHook(() => useLiveDirector(speechEvents));
+
+    expect(result.current.currentCue).toMatchObject({
+      eventId: 1,
+      latestEventId: 2,
+      speechId: "speech-1",
+    });
+
+    act(() => {
+      result.current.completeVoicePlayback({
+        id: "wrong-speech:1",
+        speechId: "speech-2",
+        sourceEventId: 1,
+        lastSourceEventId: 2,
+      });
+    });
+    expect(result.current.effectiveDurationMs).toBeGreaterThan(0);
+
+    act(() => {
+      result.current.completeVoicePlayback({
+        id: "right-speech:1",
+        speechId: "speech-1",
+        sourceEventId: 999,
+        lastSourceEventId: 999,
+      });
+    });
+    expect(result.current.effectiveDurationMs).toBe(0);
+  });
 });

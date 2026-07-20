@@ -308,7 +308,11 @@ class AdminLivenessTimingCoverage(BaseModel):
 class AdminLivenessFeatureModes(BaseModel):
     style_gate: Literal["legacy", "async_observe"] | None = None
     actor_mind: Literal["off", "shadow", "read"] | None = None
-    sentence_stream: Literal["off", "committed_segments"] | None = None
+    sentence_stream: Literal[
+        "off",
+        "committed_segments",
+        "committed_segments_v2",
+    ] | None = None
     affect_delivery: Literal["off", "shadow", "on"] | None = None
     tts_prefetch_depth: Literal[0, 1] | None = None
     voice_preempt: Literal["off", "deterministic"] | None = None

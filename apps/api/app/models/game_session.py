@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -106,6 +107,10 @@ class ActorMindSnapshotRecord(Base):
 class SpeechTurnReceiptRecord(Base):
     __tablename__ = "speech_turn_receipts"
     __table_args__ = (
+        CheckConstraint(
+            "speech_stream_mode IN ('segments_v1', 'segments_v2')",
+            name="ck_speech_turn_receipts_stream_mode",
+        ),
         Index("ix_speech_turn_receipts_session_status", "session_id", "status"),
     )
 
@@ -119,6 +124,12 @@ class SpeechTurnReceiptRecord(Base):
     round: Mapped[int | None] = mapped_column(nullable=True)
     phase: Mapped[str | None] = mapped_column(String(40), nullable=True)
     action: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    speech_stream_mode: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="segments_v1",
+        server_default="segments_v1",
+    )
     experience_revision: Mapped[str] = mapped_column(String(40), nullable=False)
     plan_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     fence: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -131,6 +142,9 @@ class SpeechTurnReceiptRecord(Base):
         String(80), nullable=True
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False)
+    final_segment_index: Mapped[int | None] = mapped_column(nullable=True)
+    sealed_source_run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sealed_source_event_id: Mapped[int | None] = mapped_column(nullable=True)
     final_text: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     delivery_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     actor_mind_revision_before: Mapped[int | None] = mapped_column(nullable=True)

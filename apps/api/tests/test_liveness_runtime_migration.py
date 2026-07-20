@@ -27,6 +27,12 @@ ROLLOUT_MIGRATION_PATH = (
     / "versions"
     / "20260720_33_add_liveness_rollout_config.py"
 )
+SPEECH_STREAM_V2_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "alembic"
+    / "versions"
+    / "20260720_34_add_speech_stream_v2_contract.py"
+)
 
 
 def load_migration() -> ModuleType:
@@ -52,6 +58,17 @@ def load_rollout_migration() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "liveness_rollout_migration",
         ROLLOUT_MIGRATION_PATH,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_speech_stream_v2_migration() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "speech_stream_v2_migration",
+        SPEECH_STREAM_V2_MIGRATION_PATH,
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -211,3 +228,58 @@ def test_liveness_rollout_migration_upgrade_and_downgrade() -> None:
 
         migration.downgrade()
         assert "liveness_rollout_configs" not in sa.inspect(connection).get_table_names()
+
+
+def test_speech_stream_v2_migration_upgrade_and_downgrade() -> None:
+    migration = load_speech_stream_v2_migration()
+    assert migration.revision == "20260720_34"
+    assert migration.down_revision == "20260720_33"
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    metadata = sa.MetaData()
+    sa.Table(
+        "speech_turn_receipts",
+        metadata,
+        sa.Column("session_id", sa.String(32), primary_key=True),
+        sa.Column("action_id", sa.String(40), primary_key=True),
+    )
+    metadata.create_all(engine)
+
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO speech_turn_receipts (session_id, action_id) "
+                "VALUES ('game_existing', 'action_existing')"
+            )
+        )
+        migration.op = Operations(
+            MigrationContext.configure(connection, opts={"render_as_batch": True})
+        )
+        migration.upgrade()
+        inspector = sa.inspect(connection)
+        assert {
+            "speech_stream_mode",
+            "final_segment_index",
+            "sealed_source_run_id",
+            "sealed_source_event_id",
+        } <= {
+            item["name"]
+            for item in inspector.get_columns("speech_turn_receipts")
+        }
+        constraints = {
+            item["name"]
+            for item in inspector.get_check_constraints("speech_turn_receipts")
+        }
+        assert "ck_speech_turn_receipts_stream_mode" in constraints
+        assert connection.execute(
+            sa.text(
+                "SELECT speech_stream_mode FROM speech_turn_receipts "
+                "WHERE session_id = 'game_existing'"
+            )
+        ).scalar_one() == "segments_v1"
+
+        migration.downgrade()
+        assert {
+            item["name"]
+            for item in sa.inspect(connection).get_columns("speech_turn_receipts")
+        } == {"session_id", "action_id"}

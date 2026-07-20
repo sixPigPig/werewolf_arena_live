@@ -652,7 +652,11 @@ def _liveness_feature_modes(value: object) -> dict[str, object]:
     allowed = {
         "style_gate": {"legacy", "async_observe"},
         "actor_mind": {"off", "shadow", "read"},
-        "sentence_stream": {"off", "committed_segments"},
+        "sentence_stream": {
+            "off",
+            "committed_segments",
+            "committed_segments_v2",
+        },
         "affect_delivery": {"off", "shadow", "on"},
         "voice_preempt": {"off", "deterministic"},
     }

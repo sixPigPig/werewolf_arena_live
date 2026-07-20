@@ -1144,6 +1144,21 @@ def test_liveness_runtime_tables_are_private_session_scoped_contracts() -> None:
         "playback_session_id",
         "utterance_id",
     }
+    _assert_string_column(
+        receipts.c.speech_stream_mode,
+        length=24,
+        nullable=False,
+    )
+    assert receipts.c.final_segment_index.nullable is True
+    _assert_string_column(
+        receipts.c.sealed_source_run_id,
+        length=32,
+        nullable=True,
+    )
+    assert receipts.c.sealed_source_event_id.nullable is True
+    assert {
+        constraint.name for constraint in receipts.constraints if constraint.name
+    } >= {"ck_speech_turn_receipts_stream_mode"}
     _assert_foreign_key(
         actor_minds.c.session_id,
         target="game_sessions.session_id",

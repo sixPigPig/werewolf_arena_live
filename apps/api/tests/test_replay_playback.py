@@ -42,6 +42,7 @@ def test_reconstructed_replay_uses_safe_committed_segment_receipt_without_double
                             },
                             "speech_turn_receipt": {
                                 "speech_id": "sp_1",
+                                "speech_stream_mode": "segments_v2",
                                 "status": "complete",
                                 "final_text": speech,
                                 "segments": [
@@ -83,6 +84,12 @@ def test_reconstructed_replay_uses_safe_committed_segment_receipt_without_double
     ]
     assert parsed["payload"]["visible_result"] == {"say": speech}
     assert parsed["payload"]["tts_suppressed_by_segments"] is True
+    assert [event["payload"]["segment_final"] for event in speech_events] == [
+        False,
+        False,
+    ]
+    assert parsed["payload"]["speech_stream_mode"] == "segments_v2"
+    assert parsed["payload"]["final_segment_index"] == 1
 
 
 def test_public_game_session_drops_unsafe_state_and_round_public_facts() -> None:

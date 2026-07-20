@@ -12,4 +12,5 @@ export * from "./livePresentation";
 export * from "./liveSpectator";
 export * from "./liveVoiceStream";
 export * from "./liveVoiceSubtitleClock";
+export * from "./speechPlaybackSession";
 export * from "./useGameRunEvents";

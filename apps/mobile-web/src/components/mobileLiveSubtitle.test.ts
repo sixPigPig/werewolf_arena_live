@@ -333,6 +333,27 @@ describe("committedSpeechToMobileSubtitle", () => {
     });
   });
 
+  it("treats a segments-v2 action as the authoritative speech seal", () => {
+    const closing = liveEvent(4, "action_parsed", {
+      speech_id: "speech-1",
+      speech_stream_mode: "segments_v2",
+      segment_count: 2,
+      final_segment_index: 1,
+      speech_status: "spoken",
+      say: "第一句。第二句！",
+    });
+    expect(
+      committedSpeechToMobileSubtitle({
+        events: [first, second, closing],
+        godViewState: godView([{ name: "阿青", seatNumber: 2 }]),
+      }),
+    ).toMatchObject({
+      completedText: "第一句第二句！",
+      speakerName: "2号玩家",
+      text: "第一句第二句！",
+    });
+  });
+
   it("marks deterministic sentence-boundary interruptions", () => {
     const interrupted = liveEvent(4, "speech_turn_interrupted", {
       speech_id: "speech-1",

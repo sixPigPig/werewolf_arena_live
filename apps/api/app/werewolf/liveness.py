@@ -8,7 +8,11 @@ from typing import Any, Literal, Mapping
 
 StyleGateMode = Literal["legacy", "async_observe"]
 ActorMindMode = Literal["off", "shadow", "read"]
-SentenceStreamMode = Literal["off", "committed_segments"]
+SentenceStreamMode = Literal[
+    "off",
+    "committed_segments",
+    "committed_segments_v2",
+]
 AffectDeliveryMode = Literal["off", "shadow", "on"]
 VoicePreemptMode = Literal["off", "deterministic"]
 
@@ -41,7 +45,7 @@ class LivenessFeatureModesV1:
         sentence_stream = _enum_value(
             payload,
             "sentence_stream",
-            {"off", "committed_segments"},
+            {"off", "committed_segments", "committed_segments_v2"},
             "off",
         )
         affect_delivery = _enum_value(
@@ -139,6 +143,7 @@ def liveness_experience_v1(
     *,
     feature_modes: LivenessFeatureModesV1 | None = None,
 ) -> LivenessExperienceSnapshotV1:
+    resolved_modes = feature_modes or LivenessFeatureModesV1()
     return LivenessExperienceSnapshotV1(
         schema_version=1,
         experience_revision="liveness-v1",
@@ -147,10 +152,14 @@ def liveness_experience_v1(
         turn_policy_version="turn-policy-v1",
         renderer_version="persona-renderer-v1",
         quality_gate_version="hard-speech-gate-v1",
-        speech_stream_version="speech-v1",
+        speech_stream_version=(
+            "speech-v2"
+            if resolved_modes.sentence_stream == "committed_segments_v2"
+            else "speech-v1"
+        ),
         affect_mapping_version="affect-delivery-v2",
         prompt_revision="lifelike-prompt-v1",
-        feature_modes=feature_modes or LivenessFeatureModesV1(),
+        feature_modes=resolved_modes,
     )
 
 
@@ -176,10 +185,10 @@ def assign_liveness_experiment_v1(
         LivenessFeatureModesV1(
             style_gate="async_observe",
             actor_mind="read",
-            sentence_stream="committed_segments",
+            sentence_stream="off",
             affect_delivery="on",
-            tts_prefetch_depth=1,
-            voice_preempt="deterministic",
+            tts_prefetch_depth=0,
+            voice_preempt="off",
         )
         if treatment
         else LivenessFeatureModesV1(
@@ -245,7 +254,11 @@ def liveness_experience_from_storage(value: object) -> LivenessExperienceSnapsho
     allowed_modes: dict[str, set[object]] = {
         "style_gate": {"legacy", "async_observe"},
         "actor_mind": {"off", "shadow", "read"},
-        "sentence_stream": {"off", "committed_segments"},
+        "sentence_stream": {
+            "off",
+            "committed_segments",
+            "committed_segments_v2",
+        },
         "affect_delivery": {"off", "shadow", "on"},
         "tts_prefetch_depth": {0, 1},
         "voice_preempt": {"off", "deterministic"},
@@ -255,7 +268,14 @@ def liveness_experience_from_storage(value: object) -> LivenessExperienceSnapsho
         or any(modes.get(name) not in allowed for name, allowed in allowed_modes.items())
     ):
         raise LivenessSnapshotError("invalid liveness feature modes")
-    return LivenessExperienceSnapshotV1.from_dict(value)
+    snapshot = LivenessExperienceSnapshotV1.from_dict(value)
+    uses_segments_v2 = (
+        snapshot.feature_modes.sentence_stream == "committed_segments_v2"
+    )
+    uses_speech_v2 = snapshot.speech_stream_version == "speech-v2"
+    if uses_segments_v2 != uses_speech_v2:
+        raise LivenessSnapshotError("segments v2 and speech-v2 must be paired")
+    return snapshot
 
 
 def _clean_string(value: object) -> str:

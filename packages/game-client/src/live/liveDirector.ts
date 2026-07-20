@@ -17,6 +17,7 @@ export type DirectorCueImportance = "normal" | "action" | "key" | "terminal";
 export type DirectorCue = {
   eventId: number;
   latestEventId: number;
+  speechId?: string;
   presentationId?: string;
   presentationOccurrenceKey?: string;
   type: string;
@@ -190,6 +191,11 @@ export function buildDirectorCues(events: LiveGameEvent[]): DirectorCue[] {
       const requestCue = requestId ? requestCueById.get(requestId) : undefined;
       if (!requestCue) {
         continue;
+      }
+
+      const speechId = stringField(payload, "speech_id");
+      if (speechId) {
+        requestCue.cue.speechId = speechId;
       }
 
       const visibleText = stringField(payload, "visible_text");
@@ -749,11 +755,14 @@ export function useLiveDirector(
         return;
       }
       lastVoiceCompletionIdRef.current = completion.id;
-      if (
-        currentCue &&
-        completion.sourceEventId <= currentCue.latestEventId &&
-        completion.lastSourceEventId >= currentCue.eventId
-      ) {
+      const matchesCurrentCue = completion.speechId
+        ? currentCue?.speechId === completion.speechId
+        : Boolean(
+            currentCue &&
+              completion.sourceEventId <= currentCue.latestEventId &&
+              completion.lastSourceEventId >= currentCue.eventId,
+          );
+      if (currentCue && matchesCurrentCue) {
         setVoiceCompletedCueId(currentCue.eventId);
       }
     },
@@ -1245,15 +1254,15 @@ function normalizeSpeechText(text: string): string {
 }
 
 function cueBase(event: LiveGameEvent): DirectorCue {
-  const presentationId = stringField(
-    payloadForEvent(event),
-    "presentation_id",
-  );
+  const payload = payloadForEvent(event);
+  const presentationId = stringField(payload, "presentation_id");
+  const speechId = stringField(payload, "speech_id");
   const publicStatus = livePublicStatusForEvent(event);
   const phaseLifecycle = livePhaseLifecycleForEvent(event);
   return {
     eventId: event.id,
     latestEventId: event.id,
+    ...(speechId ? { speechId } : {}),
     ...(presentationId
       ? {
           presentationId,

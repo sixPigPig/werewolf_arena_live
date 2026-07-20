@@ -23,6 +23,10 @@ import {
   committedSpeechToMobileSubtitle,
   voiceSubtitleToMobileSubtitle,
 } from "../components/mobileLiveSubtitle";
+import {
+  isVoicePlaybackBlocking,
+  mapVoiceCompletionToTimeline,
+} from "./liveVoiceDirectorBridge";
 
 const EMPTY_EVENTS: LiveGameEvent[] = [];
 
@@ -118,14 +122,23 @@ export function LivePage() {
   useEffect(() => {
     const shouldHold =
       voiceEnabled &&
-      isVoicePlaybackBlocking(voiceCurrentItem, directorSourceEventId);
+      isVoicePlaybackBlocking(
+        voiceCurrentItem,
+        directorSourceEventId,
+        director.currentCue?.speechId,
+      );
     // Voice playback depends on the current director event, so this feeds the
     // next render's hold flag back into the director without marking a user pause.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setVoiceAdvanceHold((current) =>
       current === shouldHold ? current : shouldHold,
     );
-  }, [directorSourceEventId, voiceCurrentItem, voiceEnabled]);
+  }, [
+    director.currentCue?.speechId,
+    directorSourceEventId,
+    voiceCurrentItem,
+    voiceEnabled,
+  ]);
   const handleToggleVoice = async () => {
     if (voiceEnabled && voice.connectionState === "error") {
       setVoiceEnabled(false);
@@ -313,30 +326,6 @@ function isTerminalRunStatus(status: string | undefined) {
   return status === "completed" || status === "failed" || status === "canceled";
 }
 
-function isVoicePlaybackBlocking(
-  currentItem:
-    | {
-        lastSourceEventId?: number;
-        sourceEventId: number;
-        status: string;
-      }
-    | null
-    | undefined,
-  currentEventId: number | null,
-) {
-  if (!currentItem || currentEventId === null) {
-    return false;
-  }
-
-  // Hold the speech cue from playback start, not after every coalesced delta.
-  const playbackEventId = currentItem.sourceEventId;
-  if (playbackEventId > currentEventId) {
-    return false;
-  }
-
-  return currentItem.status !== "played" && currentItem.status !== "error";
-}
-
 function sourceEventIdForCurrentRun(
   events: LiveGameEvent[],
   timelineEventId: number | null,
@@ -350,37 +339,4 @@ function sourceEventIdForCurrentRun(
     return null;
   }
   return event.source_event_id ?? event.id;
-}
-
-function mapVoiceCompletionToTimeline(
-  events: LiveGameEvent[],
-  completion: {
-    id: string;
-    sourceEventId: number;
-    lastSourceEventId: number;
-  } | null,
-  currentRunId: string | undefined,
-) {
-  if (!completion || !currentRunId) {
-    return null;
-  }
-  const coveredTimelineIds = events
-    .filter((event) => {
-      const sourceRunId = event.source_run_id ?? event.run_id;
-      const sourceEventId = event.source_event_id ?? event.id;
-      return (
-        sourceRunId === currentRunId &&
-        sourceEventId >= completion.sourceEventId &&
-        sourceEventId <= completion.lastSourceEventId
-      );
-    })
-    .map((event) => event.id);
-  if (coveredTimelineIds.length === 0) {
-    return null;
-  }
-  return {
-    id: completion.id,
-    sourceEventId: Math.min(...coveredTimelineIds),
-    lastSourceEventId: Math.max(...coveredTimelineIds),
-  };
 }

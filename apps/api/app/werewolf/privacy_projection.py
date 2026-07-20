@@ -311,6 +311,7 @@ _ACTION_PAYLOAD_KEYS = frozenset(
         "segment_index",
         "segment_final",
         "segment_count",
+        "final_segment_index",
         "experience_revision",
         "tts_suppressed_by_segments",
         "retry_completed",

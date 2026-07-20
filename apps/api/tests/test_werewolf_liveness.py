@@ -78,6 +78,38 @@ def test_liveness_snapshot_round_trip_freezes_feature_modes() -> None:
     assert restored.to_dict() == source.to_dict()
 
 
+def test_segments_v2_snapshot_round_trip_uses_versioned_speech_contract() -> None:
+    source = liveness_experience_v1(
+        feature_modes=LivenessFeatureModesV1(
+            sentence_stream="committed_segments_v2",
+        )
+    )
+
+    restored = liveness_experience_from_storage(source.to_dict())
+
+    assert restored == source
+    assert restored.speech_stream_version == "speech-v2"
+
+
+@pytest.mark.parametrize(
+    ("sentence_stream", "speech_stream_version"),
+    [
+        ("committed_segments_v2", "speech-v1"),
+        ("committed_segments", "speech-v2"),
+    ],
+)
+def test_segments_v2_snapshot_rejects_mismatched_contract_versions(
+    sentence_stream: str,
+    speech_stream_version: str,
+) -> None:
+    snapshot = liveness_experience_v1().to_dict()
+    snapshot["feature_modes"]["sentence_stream"] = sentence_stream
+    snapshot["speech_stream_version"] = speech_stream_version
+
+    with pytest.raises(LivenessSnapshotError, match="must be paired"):
+        liveness_experience_from_storage(snapshot)
+
+
 def test_liveness_experiment_assignment_is_session_stable_and_stage_bounded() -> None:
     control = assign_liveness_experiment_v1(
         session_id="game_stable",
@@ -101,10 +133,10 @@ def test_liveness_experiment_assignment_is_session_stable_and_stage_bounded() ->
     assert treatment == repeated
     assert treatment.variant == "treatment"
     assert treatment.snapshot.feature_modes.actor_mind == "read"
-    assert treatment.snapshot.feature_modes.sentence_stream == "committed_segments"
+    assert treatment.snapshot.feature_modes.sentence_stream == "off"
     assert treatment.snapshot.feature_modes.affect_delivery == "on"
-    assert treatment.snapshot.feature_modes.tts_prefetch_depth == 1
-    assert treatment.snapshot.feature_modes.voice_preempt == "deterministic"
+    assert treatment.snapshot.feature_modes.tts_prefetch_depth == 0
+    assert treatment.snapshot.feature_modes.voice_preempt == "off"
 
 
 def test_liveness_metrics_use_only_bounded_labels_and_stage_denominators() -> None:
@@ -448,6 +480,7 @@ def test_action_parsed_finalizes_and_cross_checks_speech_receipt() -> None:
                 payload={
                     "schema_version": 2,
                     "commit_state": "accepted_segment",
+                    "speech_stream_mode": "segments_v2",
                     "action_id": "act_finalize",
                     "request_id": "req_finalize",
                     "speech_id": speech_id,
@@ -475,8 +508,9 @@ def test_action_parsed_finalizes_and_cross_checks_speech_receipt() -> None:
                 payload={
                     "action_id": "act_finalize",
                     "speech_id": speech_id,
-                    "speech_stream_mode": "segments_v1",
+                    "speech_stream_mode": "segments_v2",
                     "segment_count": 1,
+                    "final_segment_index": 0,
                     "speech_status": "spoken",
                     "visible_result": {"say": text},
                 },
@@ -486,5 +520,109 @@ def test_action_parsed_finalizes_and_cross_checks_speech_receipt() -> None:
 
         receipt = db.get(SpeechTurnReceiptRecord, ("game_finalize", "act_finalize"))
         assert receipt is not None
+        assert receipt.speech_stream_mode == "segments_v2"
         assert receipt.status == "complete"
         assert receipt.final_text == text
+        assert receipt.final_segment_index == 0
+        assert receipt.sealed_source_run_id == "run_finalize"
+        assert receipt.sealed_source_event_id == 4
+        checkpoint = store.checkpoint_speech_receipts("game_finalize")["act_finalize"]
+        assert checkpoint["speech_stream_mode"] == "segments_v2"
+        assert checkpoint["final_segment_index"] == 0
+        assert checkpoint["sealed_source_run_id"] == "run_finalize"
+        assert checkpoint["sealed_source_event_id"] == 4
+        changed_checkpoint = dict(checkpoint)
+        changed_checkpoint["sealed_source_event_id"] = 999
+        with pytest.raises(LivenessIntegrityError, match="seal mismatch"):
+            store.validate_checkpoint_speech_receipts(
+                "game_finalize",
+                {"act_finalize": changed_checkpoint},
+            )
+        preseal_checkpoint = dict(checkpoint)
+        preseal_checkpoint["status"] = "partial"
+        preseal_checkpoint.pop("final_segment_index")
+        preseal_checkpoint.pop("sealed_source_run_id")
+        preseal_checkpoint.pop("sealed_source_event_id")
+        reconciled = store.reconcile_checkpoint_speech_receipts(
+            "game_finalize",
+            {"act_finalize": preseal_checkpoint},
+        )["act_finalize"]
+        assert reconciled["status"] == "complete"
+        assert reconciled["final_segment_index"] == 0
+        assert reconciled["sealed_source_event_id"] == 4
+
+        store.finalize_speech_turn(
+            LiveEvent(
+                id=4,
+                type="action_parsed",
+                run_id="run_finalize",
+                session_id="game_finalize",
+                created_at="2026-07-19T00:00:01Z",
+                round=1,
+                phase="day",
+                actor="1号玩家",
+                action="debate",
+                payload={
+                    "action_id": "act_finalize",
+                    "speech_id": speech_id,
+                    "speech_stream_mode": "segments_v2",
+                    "segment_count": 1,
+                    "final_segment_index": 0,
+                    "speech_status": "spoken",
+                    "visible_result": {"say": text},
+                },
+            )
+        )
+
+        with pytest.raises(LivenessIntegrityError, match="already sealed"):
+            store.finalize_speech_turn(
+                LiveEvent(
+                    id=6,
+                    type="action_parsed",
+                    run_id="run_finalize",
+                    session_id="game_finalize",
+                    created_at="2026-07-19T00:00:03Z",
+                    round=1,
+                    phase="day",
+                    actor="1号玩家",
+                    action="debate",
+                    payload={
+                        "action_id": "act_finalize",
+                        "speech_id": speech_id,
+                        "speech_stream_mode": "segments_v2",
+                        "segment_count": 1,
+                        "final_segment_index": 0,
+                        "speech_status": "spoken",
+                        "visible_result": {"say": text},
+                    },
+                )
+            )
+
+        with pytest.raises(LivenessIntegrityError, match="sealed"):
+            store.stage_committed_segment(
+                LiveEvent(
+                    id=5,
+                    type="model_response_delta",
+                    run_id="run_finalize",
+                    session_id="game_finalize",
+                    created_at="2026-07-19T00:00:02Z",
+                    round=1,
+                    phase="day",
+                    actor="1号玩家",
+                    action="debate",
+                    payload={
+                        "schema_version": 2,
+                        "commit_state": "accepted_segment",
+                        "speech_stream_mode": "segments_v2",
+                        "action_id": "act_finalize",
+                        "request_id": "req_finalize",
+                        "speech_id": speech_id,
+                        "segment_id": "seg_after_seal",
+                        "segment_index": 1,
+                        "segment_final": False,
+                        "presentation_id": "pres_after_seal",
+                        "experience_revision": "liveness-v1",
+                        "visible_text": "封口后不得追加。",
+                    },
+                )
+            )

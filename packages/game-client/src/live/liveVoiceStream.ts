@@ -18,6 +18,11 @@ import {
   subtitleElapsedMsForItem,
   type LiveVoiceSubtitleClock,
 } from "./liveVoiceSubtitleClock";
+import {
+  createSpeechPlaybackShadowState,
+  speechPlaybackSessionReducer,
+  type SpeechPlaybackShadowAction,
+} from "./speechPlaybackSession";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const STALE_EVENT_DISTANCE = 8;
@@ -40,6 +45,16 @@ export type VoiceAudience = "player_public" | "spectator_god_view";
 type VoicePlaybackAckStatus = "completed" | "interrupted" | "skipped" | "failed";
 
 export type LiveVoiceMessage =
+  | {
+      type: "speech_opened";
+      speech_id: string;
+      source_event_id: number;
+      speaker_kind: "player" | "judge";
+      speaker_name: string;
+      audience?: VoiceAudience;
+      audio_format: string;
+      sample_rate: number;
+    }
   | {
       type: "voice_start";
       utterance_id: string;
@@ -98,6 +113,21 @@ export type LiveVoiceMessage =
       fade_out_ms: number;
     }
   | {
+      type: "speech_sealed";
+      speech_id: string;
+      final_segment_index: number;
+      segment_count: number;
+      speech_status: "spoken" | "partial" | "interrupted";
+      last_source_event_id: number;
+    }
+  | {
+      type: "speech_preempted";
+      speech_id: string;
+      reason: string;
+      cut_after_segment_index?: number;
+      fade_out_ms?: number;
+    }
+  | {
       type: "voice_unavailable";
       reason?: string;
       message?: string;
@@ -130,6 +160,7 @@ export type LiveVoiceSubtitle = {
 
 export type VoicePlaybackCompletion = {
   id: string;
+  speechId?: string;
   sourceEventId: number;
   lastSourceEventId: number;
 };
@@ -259,7 +290,12 @@ export function enqueueVoiceMessage(
     return queue;
   }
 
-  if (message.type === "voice_preempt") {
+  if (
+    message.type === "speech_opened" ||
+    message.type === "speech_sealed" ||
+    message.type === "speech_preempted" ||
+    message.type === "voice_preempt"
+  ) {
     return queue;
   }
 
@@ -676,6 +712,18 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
     );
   }
 
+  if (value.type === "speech_opened") {
+    return (
+      typeof value.speech_id === "string" &&
+      typeof value.source_event_id === "number" &&
+      isSpeakerKind(value.speaker_kind) &&
+      typeof value.speaker_name === "string" &&
+      (value.audience === undefined || isVoiceAudience(value.audience)) &&
+      typeof value.audio_format === "string" &&
+      typeof value.sample_rate === "number"
+    );
+  }
+
   if (value.type === "voice_start") {
     return (
       typeof value.utterance_id === "string" &&
@@ -750,7 +798,106 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
     );
   }
 
+  if (value.type === "speech_sealed") {
+    return (
+      typeof value.speech_id === "string" &&
+      typeof value.final_segment_index === "number" &&
+      Number.isInteger(value.final_segment_index) &&
+      value.final_segment_index >= 0 &&
+      typeof value.segment_count === "number" &&
+      Number.isInteger(value.segment_count) &&
+      value.segment_count >= 1 &&
+      (value.speech_status === "spoken" ||
+        value.speech_status === "partial" ||
+        value.speech_status === "interrupted") &&
+      typeof value.last_source_event_id === "number"
+    );
+  }
+
+  if (value.type === "speech_preempted") {
+    return (
+      typeof value.speech_id === "string" &&
+      typeof value.reason === "string" &&
+      (value.cut_after_segment_index === undefined ||
+        (typeof value.cut_after_segment_index === "number" &&
+          Number.isInteger(value.cut_after_segment_index) &&
+          value.cut_after_segment_index >= 0)) &&
+      (value.fade_out_ms === undefined ||
+        (typeof value.fade_out_ms === "number" &&
+          Number.isFinite(value.fade_out_ms) &&
+          value.fade_out_ms >= 0))
+    );
+  }
+
   return false;
+}
+
+function speechPlaybackShadowActionForMessage(
+  message: LiveVoiceMessage,
+): SpeechPlaybackShadowAction | null {
+  if (message.type === "speech_opened") {
+    return {
+      type: "speech_opened",
+      speechId: message.speech_id,
+      sourceEventId: message.source_event_id,
+      speaker: message.speaker_name,
+      audience: message.audience ?? "player_public",
+    };
+  }
+  if (
+    message.type === "voice_start" &&
+    message.speech_id &&
+    message.segment_id &&
+    message.segment_index !== undefined
+  ) {
+    return {
+      type: "segment_received",
+      speechId: message.speech_id,
+      utteranceId: message.utterance_id,
+      segmentId: message.segment_id,
+      segmentIndex: message.segment_index,
+      sourceEventId: message.source_event_id,
+      lastSourceEventId: liveVoiceMessageLastSourceEventId(message),
+      speaker: message.speaker_name,
+      audience: message.audience ?? "player_public",
+    };
+  }
+  if (message.type === "voice_end") {
+    return {
+      type: "segment_ready",
+      utteranceId: message.utterance_id,
+      durationMs: message.duration_ms,
+    };
+  }
+  if (message.type === "voice_error" && message.utterance_id) {
+    return {
+      type: "segment_finished",
+      utteranceId: message.utterance_id,
+      status: "failed",
+    };
+  }
+  if (message.type === "speech_sealed") {
+    return {
+      type: "speech_sealed",
+      speechId: message.speech_id,
+      finalSegmentIndex: message.final_segment_index,
+      segmentCount: message.segment_count,
+      speechStatus: message.speech_status,
+      lastSourceEventId: message.last_source_event_id,
+    };
+  }
+  if (
+    message.type === "speech_preempted" ||
+    message.type === "voice_preempt"
+  ) {
+    return {
+      type: "speech_preempted",
+      speechId: message.speech_id,
+      cutAfterSegmentIndex: message.cut_after_segment_index,
+      reason: message.reason,
+    };
+  }
+  return null;
 }
 
 function isLiveVoiceSubtitleCueMessage(value: unknown) {
@@ -792,6 +939,11 @@ export function useLiveVoiceStream(
     voiceQueueReducer,
     undefined,
     createVoiceQueue,
+  );
+  const [speechPlaybackShadow, dispatchSpeechPlaybackShadow] = useReducer(
+    speechPlaybackSessionReducer,
+    undefined,
+    createSpeechPlaybackShadowState,
   );
   const [subtitleClock, setSubtitleClock] =
     useState<LiveVoiceSubtitleClock>(null);
@@ -1004,6 +1156,13 @@ export function useLiveVoiceStream(
     for (const item of preemptedItems) {
       consumedUtteranceIdsRef.current.add(item.utteranceId);
       sendPlaybackAck(item.utteranceId, "interrupted");
+      if (import.meta.env.DEV) {
+        dispatchSpeechPlaybackShadow({
+          type: "segment_finished",
+          utteranceId: item.utteranceId,
+          status: "interrupted",
+        });
+      }
       dispatch({
         type: "utterance_played",
         utteranceId: item.utteranceId,
@@ -1030,6 +1189,13 @@ export function useLiveVoiceStream(
       }
       consumedUtteranceIdsRef.current.add(item.utteranceId);
       sendPlaybackAck(item.utteranceId, "skipped");
+      if (import.meta.env.DEV) {
+        dispatchSpeechPlaybackShadow({
+          type: "segment_finished",
+          utteranceId: item.utteranceId,
+          status: "skipped",
+        });
+      }
       dispatch({
         type: "utterance_played",
         utteranceId: item.utteranceId,
@@ -1044,14 +1210,31 @@ export function useLiveVoiceStream(
         | "sourceEventId"
         | "lastSourceEventId"
         | "presentationId"
+        | "speechId"
+        | "segmentId"
+        | "segmentIndex"
+        | "segmentFinal"
       >,
     ) => {
       if (item.presentationId) {
         playedPresentationIdsRef.current.add(item.presentationId);
       }
+      // v2 segments deliberately never claim speech completion. During phase 2
+      // the shadow reducer owns that calculation; v1 keeps its final-segment
+      // completion and truly legacy utterances retain the event-range fallback.
+      const isSegmentedSpeech = Boolean(
+        item.speechId &&
+          (item.segmentId ||
+            item.segmentIndex !== undefined ||
+            item.segmentFinal !== undefined),
+      );
+      if (isSegmentedSpeech && item.segmentFinal !== true) {
+        return;
+      }
       playbackCompletionSequenceRef.current += 1;
       setLastCompletedPlayback({
         id: `${item.utteranceId}:${playbackCompletionSequenceRef.current}`,
+        ...(item.speechId ? { speechId: item.speechId } : {}),
         sourceEventId: item.sourceEventId,
         lastSourceEventId: item.lastSourceEventId,
       });
@@ -1067,11 +1250,28 @@ export function useLiveVoiceStream(
         | "sourceEventId"
         | "lastSourceEventId"
         | "presentationId"
+        | "speechId"
+        | "segmentId"
+        | "segmentIndex"
+        | "segmentFinal"
       >,
       status: "completed" | "failed" = "completed",
     ) => {
+      const playbackStartedAt = playbackStartedAtMsRef.current.get(utteranceId);
+      const playedMs =
+        playbackStartedAt === undefined
+          ? undefined
+          : Math.max(0, Date.now() - playbackStartedAt);
       consumedUtteranceIdsRef.current.add(utteranceId);
       sendPlaybackAck(utteranceId, status);
+      if (import.meta.env.DEV) {
+        dispatchSpeechPlaybackShadow({
+          type: "segment_finished",
+          utteranceId,
+          status,
+          ...(playedMs === undefined ? {} : { playedMs }),
+        });
+      }
       scheduledPcmChunkIndexesRef.current.delete(utteranceId);
       pcmEndTimesRef.current.delete(utteranceId);
       pcmSubtitleStartTimesRef.current.delete(utteranceId);
@@ -1102,6 +1302,10 @@ export function useLiveVoiceStream(
         | "sourceEventId"
         | "lastSourceEventId"
         | "presentationId"
+        | "speechId"
+        | "segmentId"
+        | "segmentIndex"
+        | "segmentFinal"
       >;
     }) => {
       clearPcmCompletionTimeout();
@@ -1375,6 +1579,12 @@ export function useLiveVoiceStream(
             type: "utterance_started",
             utteranceId: currentItem.utteranceId,
           });
+          if (import.meta.env.DEV) {
+            dispatchSpeechPlaybackShadow({
+              type: "segment_started",
+              utteranceId: currentItem.utteranceId,
+            });
+          }
         }
 
         pcmEndTimesRef.current.set(currentItem.utteranceId, latestEndTime);
@@ -1424,6 +1634,13 @@ export function useLiveVoiceStream(
         return;
       }
       isConsumed = true;
+      const playbackStartedAt = playbackStartedAtMsRef.current.get(
+        currentItem.utteranceId,
+      );
+      const playedMs =
+        playbackStartedAt === undefined
+          ? undefined
+          : Math.max(0, Date.now() - playbackStartedAt);
       consumedUtteranceIdsRef.current.add(currentItem.utteranceId);
       setSubtitleClock((current) =>
         current?.utteranceId === currentItem.utteranceId ? null : current,
@@ -1432,6 +1649,14 @@ export function useLiveVoiceStream(
         currentItem.utteranceId,
         completed ? "completed" : "failed",
       );
+      if (import.meta.env.DEV) {
+        dispatchSpeechPlaybackShadow({
+          type: "segment_finished",
+          utteranceId: currentItem.utteranceId,
+          status: completed ? "completed" : "failed",
+          ...(playedMs === undefined ? {} : { playedMs }),
+        });
+      }
       dispatch({
         type: "utterance_played",
         utteranceId: currentItem.utteranceId,
@@ -1491,6 +1716,12 @@ export function useLiveVoiceStream(
         type: "utterance_started",
         utteranceId: currentItem.utteranceId,
       });
+      if (import.meta.env.DEV) {
+        dispatchSpeechPlaybackShadow({
+          type: "segment_started",
+          utteranceId: currentItem.utteranceId,
+        });
+      }
     } catch {
       reportPlaybackError();
       return;
@@ -1516,6 +1747,13 @@ export function useLiveVoiceStream(
       }
       consumedUtteranceIdsRef.current.add(blobPlaybackKey);
       sendPlaybackAck(blobPlaybackKey, "failed");
+      if (import.meta.env.DEV) {
+        dispatchSpeechPlaybackShadow({
+          type: "segment_finished",
+          utteranceId: blobPlaybackKey,
+          status: "failed",
+        });
+      }
       dispatch({
         type: "queue_error",
         message: "Unable to play live voice audio.",
@@ -1569,6 +1807,13 @@ export function useLiveVoiceStream(
 
       consumedUtteranceIdsRef.current.add(utteranceId);
       sendPlaybackAck(utteranceId, "failed");
+      if (import.meta.env.DEV) {
+        dispatchSpeechPlaybackShadow({
+          type: "segment_finished",
+          utteranceId,
+          status: "failed",
+        });
+      }
       dispatch({
         type: "queue_error",
         message: "Unable to play live voice audio.",
@@ -1664,6 +1909,9 @@ export function useLiveVoiceStream(
     setLastCompletedPlayback(null);
     setSubtitleClock(null);
     dispatch({ type: "reset" });
+    if (import.meta.env.DEV) {
+      dispatchSpeechPlaybackShadow({ type: "reset" });
+    }
 
     if (!enabled || !streamUrl || !runId || !hasCurrentEventId) {
       setConnectionState("idle");
@@ -1778,6 +2026,13 @@ export function useLiveVoiceStream(
           return;
         }
 
+        if (import.meta.env.DEV) {
+          const shadowAction = speechPlaybackShadowActionForMessage(parsed);
+          if (shadowAction) {
+            dispatchSpeechPlaybackShadow(shadowAction);
+          }
+        }
+
         if (parsed.type === "voice_unavailable") {
           isActive = false;
           setConnectionState("unavailable");
@@ -1804,6 +2059,13 @@ export function useLiveVoiceStream(
         ) {
           consumedUtteranceIdsRef.current.add(parsed.utterance_id);
           sendPlaybackAck(parsed.utterance_id, "skipped");
+          if (import.meta.env.DEV) {
+            dispatchSpeechPlaybackShadow({
+              type: "segment_finished",
+              utteranceId: parsed.utterance_id,
+              status: "skipped",
+            });
+          }
           return;
         }
 
@@ -1837,6 +2099,9 @@ export function useLiveVoiceStream(
     currentSubtitle,
     errors: visibleQueue.errors,
     lastCompletedPlayback,
+    speechPlaybackShadow: import.meta.env.DEV
+      ? speechPlaybackShadow
+      : null,
     unlockAudio,
   };
 }

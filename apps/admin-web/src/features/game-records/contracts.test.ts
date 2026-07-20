@@ -50,6 +50,26 @@ describe("admin game records contract", () => {
     ).toEqual(contractGameModelRequestDetail);
   });
 
+  it("accepts the durable segments-v2 quality contract", () => {
+    const parsed = parseAdminGameDetail({
+      ...contractGameDetail,
+      quality_evaluation: {
+        ...contractGameDetail.quality_evaluation,
+        liveness: {
+          ...contractGameDetail.quality_evaluation.liveness,
+          feature_modes: {
+            ...contractGameDetail.quality_evaluation.liveness!.feature_modes,
+            sentence_stream: "committed_segments_v2",
+          },
+        },
+      },
+    });
+
+    expect(parsed.quality_evaluation.liveness?.feature_modes.sentence_stream).toBe(
+      "committed_segments_v2",
+    );
+  });
+
   it("keeps review-task metadata optional while validating present fields", () => {
     const legacyEvaluation = { ...contractGameDetail.quality_evaluation };
     delete legacyEvaluation.source_revision;

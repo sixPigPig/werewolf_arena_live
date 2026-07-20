@@ -352,7 +352,11 @@ export type AdminGameQualityEvaluation = {
     feature_modes: {
       style_gate?: "legacy" | "async_observe" | null;
       actor_mind?: "off" | "shadow" | "read" | null;
-      sentence_stream?: "off" | "committed_segments" | null;
+      sentence_stream?:
+        | "off"
+        | "committed_segments"
+        | "committed_segments_v2"
+        | null;
       affect_delivery?: "off" | "shadow" | "on" | null;
       tts_prefetch_depth?: 0 | 1 | null;
       voice_preempt?: "off" | "deterministic" | null;

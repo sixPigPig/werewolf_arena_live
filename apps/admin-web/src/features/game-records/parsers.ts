@@ -296,7 +296,11 @@ function parseQualityLiveness(
     feature_modes: {
       style_gate: optionalEnumValue(featureModes.style_gate, ["legacy", "async_observe"] as const, "quality_evaluation.liveness.feature_modes.style_gate"),
       actor_mind: optionalEnumValue(featureModes.actor_mind, ["off", "shadow", "read"] as const, "quality_evaluation.liveness.feature_modes.actor_mind"),
-      sentence_stream: optionalEnumValue(featureModes.sentence_stream, ["off", "committed_segments"] as const, "quality_evaluation.liveness.feature_modes.sentence_stream"),
+      sentence_stream: optionalEnumValue(
+        featureModes.sentence_stream,
+        ["off", "committed_segments", "committed_segments_v2"] as const,
+        "quality_evaluation.liveness.feature_modes.sentence_stream",
+      ),
       affect_delivery: optionalEnumValue(featureModes.affect_delivery, ["off", "shadow", "on"] as const, "quality_evaluation.liveness.feature_modes.affect_delivery"),
       tts_prefetch_depth: optionalEnumValue(featureModes.tts_prefetch_depth, [0, 1] as const, "quality_evaluation.liveness.feature_modes.tts_prefetch_depth"),
       voice_preempt: optionalEnumValue(featureModes.voice_preempt, ["off", "deterministic"] as const, "quality_evaluation.liveness.feature_modes.voice_preempt"),

@@ -964,10 +964,10 @@ def test_create_game_run_uses_persisted_admin_liveness_rollout(
     assert saved.liveness_experience_snapshot["feature_modes"] == {
         "style_gate": "async_observe",
         "actor_mind": "read",
-        "sentence_stream": "committed_segments",
+        "sentence_stream": "off",
         "affect_delivery": "on",
-        "tts_prefetch_depth": 1,
-        "voice_preempt": "deterministic",
+        "tts_prefetch_depth": 0,
+        "voice_preempt": "off",
     }
 
 

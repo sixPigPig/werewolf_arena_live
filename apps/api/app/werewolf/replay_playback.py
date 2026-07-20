@@ -510,6 +510,7 @@ def _publish_action_events(
     receipt = _validated_speech_turn_receipt(action_log, expected_text=visible_text)
     if receipt is not None:
         segments = receipt["segments"]
+        speech_stream_mode = receipt["speech_stream_mode"]
         for index, segment in enumerate(segments):
             publish(
                 "model_response_delta",
@@ -524,9 +525,14 @@ def _publish_action_events(
                     "action_id": _optional_str(lm_log.get("action_id")),
                     "request_id": _optional_str(lm_log.get("request_id")),
                     "speech_id": receipt["speech_id"],
+                    "speech_stream_mode": speech_stream_mode,
                     "segment_id": segment["segment_id"],
                     "segment_index": index,
-                    "segment_final": index == len(segments) - 1,
+                    "segment_final": (
+                        index == len(segments) - 1
+                        if speech_stream_mode == "segments_v1"
+                        else False
+                    ),
                     "delta": segment["text"],
                     "visible_text": segment["text"],
                     "field": "say",
@@ -561,14 +567,21 @@ def _publish_action_events(
                 {
                     "schema_version": 1,
                     "speech_id": receipt["speech_id"],
-                    "speech_stream_mode": "segments_v1",
+                    "speech_stream_mode": speech_stream_mode,
                     "segment_count": len(receipt["segments"]),
                     "speech_status": (
                         "interrupted"
                         if receipt["status"] == "interrupted"
+                        else "partial"
+                        if receipt["status"] == "partial"
                         else "spoken"
                     ),
                     "tts_suppressed_by_segments": True,
+                    **(
+                        {"final_segment_index": len(receipt["segments"]) - 1}
+                        if speech_stream_mode == "segments_v2"
+                        else {}
+                    ),
                 }
                 if receipt is not None
                 else {}
@@ -588,12 +601,14 @@ def _validated_speech_turn_receipt(
     if not isinstance(value, dict):
         raise ValueError("invalid speech turn receipt")
     speech_id = value.get("speech_id")
+    speech_stream_mode = value.get("speech_stream_mode") or "segments_v1"
     status = value.get("status")
     segments = value.get("segments")
     final_text = value.get("final_text")
     if (
         not isinstance(speech_id, str)
         or not speech_id
+        or speech_stream_mode not in {"segments_v1", "segments_v2"}
         or status not in {"complete", "partial", "interrupted"}
         or not isinstance(segments, list)
         or not segments
@@ -628,6 +643,7 @@ def _validated_speech_turn_receipt(
         raise ValueError("invalid speech turn receipt")
     return {
         "speech_id": speech_id,
+        "speech_stream_mode": speech_stream_mode,
         "status": status,
         "segments": normalized,
     }

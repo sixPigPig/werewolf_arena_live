@@ -232,12 +232,20 @@ function emitReadyUtterance(
     mimeType = "audio/mpeg",
     presentationId,
     sampleRate = 24000,
+    segmentFinal,
+    segmentId,
+    segmentIndex,
+    speechId,
   }: {
     audioFormat?: string;
     data?: string;
     mimeType?: string;
     presentationId?: string;
     sampleRate?: number;
+    segmentFinal?: boolean;
+    segmentId?: string;
+    segmentIndex?: number;
+    speechId?: string;
   } = {},
 ) {
   socket.emit({
@@ -245,6 +253,10 @@ function emitReadyUtterance(
     utterance_id: utteranceId,
     source_event_id: sourceEventId,
     ...(presentationId ? { presentation_id: presentationId } : {}),
+    ...(speechId ? { speech_id: speechId } : {}),
+    ...(segmentId ? { segment_id: segmentId } : {}),
+    ...(segmentIndex === undefined ? {} : { segment_index: segmentIndex }),
+    ...(segmentFinal === undefined ? {} : { segment_final: segmentFinal }),
     speaker_kind: "player",
     speaker_name: "阿青",
     mime_type: mimeType,
@@ -814,6 +826,82 @@ describe("live voice stream", () => {
         utterance_id: "voice-segment-0",
         status: "interrupted",
         played_ms: expect.any(Number),
+      }),
+    );
+  });
+
+  it("accepts v2 logical messages and computes a shadow speech session", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 3,
+        enabled: true,
+        isPaused: true,
+      }),
+    );
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      socket.emit({
+        type: "speech_opened",
+        speech_id: "speech-shadow",
+        source_event_id: 4,
+        speaker_kind: "player",
+        speaker_name: "1号玩家",
+        audience: "player_public",
+        audio_format: "pcm",
+        sample_rate: 24000,
+      });
+      socket.emit(
+        voiceStartMessage({
+          utterance_id: "voice-shadow-1",
+          speech_id: "speech-shadow",
+          segment_id: "segment-shadow-1",
+          segment_index: 1,
+          segment_final: false,
+          speaker_name: "1号玩家",
+        }),
+      );
+      socket.emit(
+        voiceStartMessage({
+          utterance_id: "voice-shadow-0",
+          speech_id: "speech-shadow",
+          segment_id: "segment-shadow-0",
+          segment_index: 0,
+          segment_final: false,
+          speaker_name: "1号玩家",
+        }),
+      );
+      socket.emit({
+        type: "voice_end",
+        utterance_id: "voice-shadow-0",
+        duration_ms: 900,
+      });
+      socket.emit({
+        type: "voice_end",
+        utterance_id: "voice-shadow-1",
+        duration_ms: 1100,
+      });
+      socket.emit({
+        type: "speech_sealed",
+        speech_id: "speech-shadow",
+        final_segment_index: 1,
+        segment_count: 2,
+        speech_status: "spoken",
+        last_source_event_id: 6,
+      });
+    });
+
+    await waitFor(() =>
+      expect(
+        result.current.speechPlaybackShadow?.sessions["speech-shadow"],
+      ).toMatchObject({
+        state: "sealed",
+        highestContiguousIndex: 1,
+        finalSegmentIndex: 1,
+        bufferedMs: 2000,
+        completionEmitted: false,
       }),
     );
   });
@@ -2167,6 +2255,53 @@ describe("live voice stream", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(2);
     expect(audioElements[1].src).toBe("blob:voice-2");
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:voice-1");
+  });
+
+  it("does not publish a speech completion for an intermediate segment", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubObjectUrls(["blob:segment-0", "blob:segment-1"]);
+    const { audioElements, play } = stubAudioElement();
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 5,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      emitReadyUtterance(socket, "voice-segment-0", 4, {
+        speechId: "speech-1",
+        segmentId: "segment-0",
+        segmentIndex: 0,
+        segmentFinal: false,
+      });
+      emitReadyUtterance(socket, "voice-segment-1", 5, {
+        speechId: "speech-1",
+        segmentId: "segment-1",
+        segmentIndex: 1,
+        segmentFinal: true,
+      });
+    });
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    act(() => {
+      audioElements[0].dispatchEvent(new Event("ended"));
+    });
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(result.current.lastCompletedPlayback).toBeNull();
+
+    act(() => {
+      audioElements[1].dispatchEvent(new Event("ended"));
+    });
+    await waitFor(() =>
+      expect(result.current.lastCompletedPlayback).toMatchObject({
+        speechId: "speech-1",
+        sourceEventId: 5,
+        lastSourceEventId: 5,
+      }),
+    );
   });
 
   it("does not play ready audio before the director reaches the source event", async () => {

@@ -22,6 +22,7 @@ from app.werewolf.live import LiveEvent
 
 SERVER_PLAYBACK_STATUSES = frozenset({"acked", "connection_lost", "ack_timeout"})
 CLIENT_PLAYBACK_STATUSES = frozenset({"completed", "interrupted", "skipped", "failed"})
+SPEECH_STREAM_MODES = frozenset({"segments_v1", "segments_v2"})
 
 
 class LivenessIntegrityError(RuntimeError):
@@ -128,12 +129,12 @@ class LivenessRuntimeStore:
         )
         return {
             action_id: {
-                **copy.deepcopy(receipt),
                 **(
                     copy.deepcopy(checkpoint_receipts[action_id])
                     if action_id in checkpoint_receipts
                     else {}
                 ),
+                **copy.deepcopy(receipt),
             }
             for action_id, receipt in durable.items()
         }
@@ -160,22 +161,36 @@ class LivenessRuntimeStore:
             )
             result[stored.action_id] = {
                 "speech_id": segments[0].speech_id if segments else "",
-                "speech_stream_mode": "segments_v1",
+                "speech_stream_mode": stored.speech_stream_mode,
                 "status": stored.status,
                 "segment_count": len(segments),
                 "segments": [
                     {
-                    "segment_id": stored_segment.segment_id,
-                    "segment_index": index,
-                    "text": stored_segment.text,
-                    "presentation_id": stored_segment.presentation_id,
-                    "source_event_id": stored_segment.source_event_id,
-                    "source_run_id": stored_segment.source_run_id,
+                        "segment_id": stored_segment.segment_id,
+                        "segment_index": index,
+                        "text": stored_segment.text,
+                        "presentation_id": stored_segment.presentation_id,
+                        "source_event_id": stored_segment.source_event_id,
+                        "source_run_id": stored_segment.source_run_id,
                     }
                     for index, stored_segment in enumerate(segments)
                 ],
                 "final_text": stored.final_text,
                 "accepted_renderer_request_id": stored.accepted_renderer_request_id,
+                **(
+                    {"final_segment_index": stored.final_segment_index}
+                    if stored.final_segment_index is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "sealed_source_run_id": stored.sealed_source_run_id,
+                        "sealed_source_event_id": stored.sealed_source_event_id,
+                    }
+                    if stored.sealed_source_run_id is not None
+                    and stored.sealed_source_event_id is not None
+                    else {}
+                ),
             }
         return result
 
@@ -199,12 +214,37 @@ class LivenessRuntimeStore:
                 key: copy.deepcopy(checkpoint.get(key))
                 for key in core_keys
             }
+            checkpoint_core["speech_stream_mode"] = (
+                checkpoint.get("speech_stream_mode") or "segments_v1"
+            )
             durable_core = {
                 key: copy.deepcopy(durable.get(key))
                 for key in core_keys
             }
-            if checkpoint_core != durable_core:
+            durable_core["speech_stream_mode"] = durable.get("speech_stream_mode")
+            status_advanced_at_seal = (
+                checkpoint_core.get("status") == "partial"
+                and durable_core.get("status") in {"complete", "interrupted"}
+                and {
+                    key: value
+                    for key, value in checkpoint_core.items()
+                    if key != "status"
+                }
+                == {
+                    key: value
+                    for key, value in durable_core.items()
+                    if key != "status"
+                }
+            )
+            if checkpoint_core != durable_core and not status_advanced_at_seal:
                 raise LivenessIntegrityError("checkpoint speech receipt mismatch")
+            for key in (
+                "final_segment_index",
+                "sealed_source_run_id",
+                "sealed_source_event_id",
+            ):
+                if key in checkpoint and checkpoint.get(key) != durable.get(key):
+                    raise LivenessIntegrityError("checkpoint speech seal mismatch")
 
     def stage_committed_segment(self, event: LiveEvent) -> None:
         payload = event.payload
@@ -221,10 +261,19 @@ class LivenessRuntimeStore:
         presentation_id = _required_string(payload, "presentation_id")
         text = _required_string(payload, "visible_text")
         request_id = _optional_string(payload.get("request_id"))
+        speech_stream_mode = payload.get("speech_stream_mode") or "segments_v1"
         segment_index = payload.get("segment_index")
         segment_final = payload.get("segment_final")
-        if type(segment_index) is not int or segment_index < 0 or type(segment_final) is not bool:
+        if speech_stream_mode not in SPEECH_STREAM_MODES:
+            raise LivenessIntegrityError("invalid committed speech stream mode")
+        if (
+            type(segment_index) is not int
+            or segment_index < 0
+            or type(segment_final) is not bool
+        ):
             raise LivenessIntegrityError("invalid committed segment position")
+        if speech_stream_mode == "segments_v2" and segment_final:
+            raise LivenessIntegrityError("segments v2 cannot self-finalize")
         text_hash = hashlib.sha256(text.encode()).hexdigest()
         receipt_key = (event.session_id, action_id)
         receipt = self.db.get(SpeechTurnReceiptRecord, receipt_key)
@@ -236,6 +285,7 @@ class LivenessRuntimeStore:
                 round=event.round,
                 phase=event.phase,
                 action=event.action,
+                speech_stream_mode=speech_stream_mode,
                 experience_revision=_required_string(payload, "experience_revision"),
                 plan_id=_optional_string(payload.get("plan_id")),
                 fence=(
@@ -251,7 +301,11 @@ class LivenessRuntimeStore:
                     else []
                 ),
                 accepted_renderer_request_id=request_id,
-                status="complete" if segment_final else "partial",
+                status=(
+                    "complete"
+                    if speech_stream_mode == "segments_v1" and segment_final
+                    else "partial"
+                ),
                 final_text="",
                 delivery_snapshot=(
                     copy.deepcopy(payload.get("voice_snapshot"))
@@ -266,6 +320,7 @@ class LivenessRuntimeStore:
             or receipt.round != event.round
             or receipt.phase != event.phase
             or receipt.action != event.action
+            or receipt.speech_stream_mode != speech_stream_mode
         ):
             raise LivenessIntegrityError("speech receipt identity mismatch")
 
@@ -282,6 +337,8 @@ class LivenessRuntimeStore:
             ):
                 raise LivenessIntegrityError("committed segment receipt mismatch")
             return
+        if receipt.sealed_source_event_id is not None:
+            raise LivenessIntegrityError("sealed speech cannot accept another segment")
 
         prior_segments = list(
             self.db.scalars(
@@ -313,15 +370,19 @@ class LivenessRuntimeStore:
             )
         )
         receipt.final_text = "".join([*(item.text for item in prior_segments), text])
-        receipt.status = "complete" if segment_final else "partial"
+        receipt.status = (
+            "complete"
+            if speech_stream_mode == "segments_v1" and segment_final
+            else "partial"
+        )
         receipt.accepted_renderer_request_id = request_id
 
     def finalize_speech_turn(self, event: LiveEvent) -> None:
         payload = event.payload
-        if (
-            event.type != "action_parsed"
-            or payload.get("speech_stream_mode") != "segments_v1"
-        ):
+        if event.type != "action_parsed":
+            return
+        speech_stream_mode = payload.get("speech_stream_mode")
+        if speech_stream_mode not in SPEECH_STREAM_MODES:
             return
         action_id = _required_string(payload, "action_id")
         speech_id = _required_string(payload, "speech_id")
@@ -331,9 +392,27 @@ class LivenessRuntimeStore:
             raise LivenessIntegrityError("invalid finalized speech segment count")
         if speech_status not in {"spoken", "partial", "interrupted"}:
             raise LivenessIntegrityError("invalid finalized speech status")
+        final_segment_index = payload.get("final_segment_index")
+        if speech_stream_mode == "segments_v2":
+            if (
+                type(final_segment_index) is not int
+                or final_segment_index != segment_count - 1
+            ):
+                raise LivenessIntegrityError("invalid segments v2 final index")
+        elif final_segment_index is None:
+            final_segment_index = segment_count - 1
         receipt = self.db.get(SpeechTurnReceiptRecord, (event.session_id, action_id))
         if receipt is None:
             raise LivenessIntegrityError("finalized speech has no durable receipt")
+        if receipt.speech_stream_mode != speech_stream_mode:
+            raise LivenessIntegrityError("finalized speech stream mode mismatch")
+        already_sealed = receipt.sealed_source_event_id is not None
+        if already_sealed and not (
+            receipt.sealed_source_run_id == event.run_id
+            and receipt.sealed_source_event_id == event.id
+            and receipt.final_segment_index == final_segment_index
+        ):
+            raise LivenessIntegrityError("speech already sealed")
         segments = list(
             self.db.scalars(
                 select(SpeechTurnSegmentRecord)
@@ -361,14 +440,22 @@ class LivenessRuntimeStore:
             )
             if visible_speech is not None and visible_speech != final_text:
                 raise LivenessIntegrityError("finalized public speech differs from receipt")
-        receipt.final_text = final_text
-        receipt.status = (
+        finalized_status = (
             "complete"
             if speech_status == "spoken"
             else "partial"
             if speech_status == "partial"
             else "interrupted"
         )
+        if already_sealed:
+            if receipt.final_text != final_text or receipt.status != finalized_status:
+                raise LivenessIntegrityError("replayed speech seal changed content")
+            return
+        receipt.final_text = final_text
+        receipt.status = finalized_status
+        receipt.final_segment_index = final_segment_index
+        receipt.sealed_source_run_id = event.run_id
+        receipt.sealed_source_event_id = event.id
 
     def record_playback_observation(
         self,

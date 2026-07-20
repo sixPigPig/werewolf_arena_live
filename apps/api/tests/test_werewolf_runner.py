@@ -5527,6 +5527,109 @@ def test_liveness_v1_commits_first_complete_sentence_before_renderer_finishes() 
     assert first_segment_index < renderer_completed_index
 
 
+def test_segments_v2_seals_speech_when_all_sentences_were_committed_before_finish() -> None:
+    class FullyIncrementalRendererProvider:
+        def stream_json(self, **_kwargs) -> Generator[str, None, None]:
+            yield '{"reasoning":"公开表达","say":"我先回应上一位。'
+            yield "这个问题我还要再听一下！"
+            yield '"}'
+
+        def complete_json(self, **kwargs) -> str:
+            return "".join(self.stream_json(**kwargs))
+
+    class SpeechSealCheckpoint(RecordingCheckpointManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.receipts: list[tuple[str, dict[str, object]]] = []
+
+        def actor_minds(self) -> dict:
+            return {}
+
+        def speech_turn_receipt(self, _action_id: str) -> None:
+            return None
+
+        def record_actor_minds(self, *_args, **_kwargs) -> None:
+            return None
+
+        def record_speech_turn_receipt(
+            self,
+            action_id: str,
+            receipt: dict[str, object],
+        ) -> None:
+            self.receipts.append((action_id, copy.deepcopy(receipt)))
+
+    class RunCapturingEventSink(CapturingEventSink):
+        def publish(self, event_type: str, **kwargs: object) -> object:
+            published = super().publish(event_type, **kwargs)
+            return SimpleNamespace(id=published.id, run_id="run_segments_v2")
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_segments_v2_seal",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260720,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.speech_order = active_players.copy()
+    sink = RunCapturingEventSink()
+    checkpoint = SpeechSealCheckpoint()
+    experience = liveness_experience_v1(
+        feature_modes=LivenessFeatureModesV1(
+            sentence_stream="committed_segments_v2"
+        )
+    )
+    engine = GameEngine(
+        state=state,
+        provider=FullyIncrementalRendererProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        checkpoint_manager=checkpoint,
+        liveness_experience_snapshot=experience.to_dict(),
+    )
+
+    message, action_log = engine._player_action(
+        player=state.players[0],
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    segments = [
+        event
+        for event in sink.events
+        if event["type"] == "model_response_delta"
+        and event["payload"].get("commit_state") == "accepted_segment"
+    ]
+    parsed = next(event for event in sink.events if event["type"] == "action_parsed")
+    assert message == "我先回应上一位。这个问题我还要再听一下！"
+    assert [event["payload"]["segment_index"] for event in segments] == [0, 1]
+    assert [event["payload"]["segment_final"] for event in segments] == [False, False]
+    assert all(
+        event["payload"]["speech_stream_mode"] == "segments_v2"
+        for event in segments
+    )
+    assert parsed["payload"]["speech_stream_mode"] == "segments_v2"
+    assert parsed["payload"]["segment_count"] == 2
+    assert parsed["payload"]["final_segment_index"] == 1
+    assert parsed["payload"]["speech_status"] == "spoken"
+    assert parsed["payload"]["tts_suppressed_by_segments"] is True
+    assert action_log.speech_turn_receipt is not None
+    assert action_log.speech_turn_receipt["speech_stream_mode"] == "segments_v2"
+    assert action_log.speech_turn_receipt["segment_count"] == 2
+    assert checkpoint.successes[0]["speech_turn_receipt"]["status"] == "partial"
+    sealed_receipt = checkpoint.receipts[-1][1]
+    assert sealed_receipt["status"] == "complete"
+    assert sealed_receipt["final_segment_index"] == 1
+    assert sealed_receipt["sealed_source_run_id"] == "run_segments_v2"
+    assert sealed_receipt["sealed_source_event_id"] == sink.events.index(parsed) + 1
+
+
 def test_liveness_resume_keeps_partial_committed_text_without_calling_provider() -> None:
     class ProviderMustNotRun:
         def complete_json(self, **_kwargs) -> str:

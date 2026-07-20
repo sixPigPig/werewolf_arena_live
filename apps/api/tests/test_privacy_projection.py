@@ -452,9 +452,10 @@ def test_committed_speech_projection_keeps_segment_identity_and_hides_voice_snap
                 "action_id": "act_1",
                 "request_id": "req_1",
                 "speech_id": "sp_1",
+                "speech_stream_mode": "segments_v2",
                 "segment_id": "seg_1",
                 "segment_index": 0,
-                "segment_final": True,
+                "segment_final": False,
                 "experience_revision": "liveness-v1",
                 "delta": "我先听后置位。",
                 "visible_text": "我先听后置位。",
@@ -475,15 +476,42 @@ def test_committed_speech_projection_keeps_segment_identity_and_hides_voice_snap
         "action_id": "act_1",
         "request_id": "req_1",
         "speech_id": "sp_1",
+        "speech_stream_mode": "segments_v2",
         "segment_id": "seg_1",
         "segment_index": 0,
-        "segment_final": True,
+        "segment_final": False,
         "experience_revision": "liveness-v1",
         "delta": "我先听后置位。",
         "visible_text": "我先听后置位。",
         "is_public": True,
         "presentation_id": "pres_1",
     }
+
+
+def test_segments_v2_action_seal_keeps_only_public_contract_fields() -> None:
+    projected = project_live_event(
+        _event(
+            "action_parsed",
+            action="debate",
+            payload={
+                "schema_version": 1,
+                "action_id": "act_1",
+                "speech_id": "sp_1",
+                "speech_stream_mode": "segments_v2",
+                "segment_count": 2,
+                "final_segment_index": 1,
+                "speech_status": "spoken",
+                "tts_suppressed_by_segments": True,
+                "private_debug": "must-not-project",
+            },
+        ),
+        "player_public",
+    )
+
+    assert projected is not None
+    assert projected.payload["speech_stream_mode"] == "segments_v2"
+    assert projected.payload["final_segment_index"] == 1
+    assert "private_debug" not in projected.payload
 
 
 def test_actor_brain_lifecycle_is_not_projected_to_any_viewer() -> None:

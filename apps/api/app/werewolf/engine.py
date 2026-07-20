@@ -6254,12 +6254,26 @@ class GameEngine:
             or request.action in PRIVATE_LENGTH_BUDGETED_ACTIONS
         )
 
+    def _committed_speech_stream_mode(
+        self,
+        request: PlayerActionRequest,
+    ) -> Literal["segments_v1", "segments_v2"] | None:
+        if request.event_visibility != "public":
+            return None
+        sentence_stream = self.liveness_experience.feature_modes.sentence_stream
+        if sentence_stream == "committed_segments":
+            return "segments_v1"
+        if sentence_stream == "committed_segments_v2":
+            return "segments_v2"
+        return None
+
     def _committed_speech_observer(
         self,
         request: PlayerActionRequest,
         *,
         event_sink: object,
         speech_id: str,
+        speech_stream_mode: Literal["segments_v1", "segments_v2"],
         voice_snapshot: dict[str, object] | None,
     ) -> _CommittedSpeechObserver:
         character_limit = speech_character_limit(request.action) or 220
@@ -6291,7 +6305,10 @@ class GameEngine:
                 segment_index=segment_index,
                 text=text,
                 request_id=request_id,
-                segment_final=segment_final,
+                segment_final=(
+                    segment_final if speech_stream_mode == "segments_v1" else False
+                ),
+                speech_stream_mode=speech_stream_mode,
                 voice_snapshot=voice_snapshot,
             )
 
@@ -6311,6 +6328,7 @@ class GameEngine:
         text: str,
         request_id: str,
         segment_final: bool,
+        speech_stream_mode: Literal["segments_v1", "segments_v2"],
         voice_snapshot: dict[str, object] | None,
         renderer_attempts: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
@@ -6328,6 +6346,7 @@ class GameEngine:
             "request_id": request_id,
             "model": request.player.model,
             "speech_id": speech_id,
+            "speech_stream_mode": speech_stream_mode,
             "segment_id": segment_id,
             "segment_index": segment_index,
             "segment_final": segment_final,
@@ -6404,6 +6423,7 @@ class GameEngine:
         lm_log: LmLog,
         observer: _CommittedSpeechObserver,
         speech_id: str,
+        speech_stream_mode: Literal["segments_v1", "segments_v2"],
     ) -> None:
         if not observer.segments:
             return
@@ -6429,7 +6449,7 @@ class GameEngine:
         )
         lm_log.speech_turn_receipt = {
             "speech_id": speech_id,
-            "speech_stream_mode": "segments_v1",
+            "speech_stream_mode": speech_stream_mode,
             "status": receipt_status,
             "segment_count": len(observer.receipt_segments),
             "segments": copy.deepcopy(observer.receipt_segments),
@@ -6500,11 +6520,10 @@ class GameEngine:
             request.event_visibility == "public"
             and self.liveness_experience.feature_modes.style_gate == "async_observe"
         )
-        committed_segment_mode = (
-            request.event_visibility == "public"
-            and self.liveness_experience.feature_modes.sentence_stream
-            == "committed_segments"
-        )
+        speech_stream_mode = self._committed_speech_stream_mode(request)
+        committed_segment_mode = speech_stream_mode is not None
+        if committed_segment_mode:
+            assert speech_stream_mode is not None
         liveness_hard_gate = self.liveness_experience.experience_revision != "legacy-v0"
         if committed_segment_mode:
             restored = self._restored_committed_speech(request)
@@ -6542,6 +6561,7 @@ class GameEngine:
                     request,
                     event_sink=event_sink,
                     speech_id=speech_id,
+                    speech_stream_mode=speech_stream_mode,
                     voice_snapshot=voice_snapshot,
                 )
                 if speech_id is not None
@@ -6574,6 +6594,7 @@ class GameEngine:
                     lm_log=lm_log,
                     observer=observer,
                     speech_id=speech_id,
+                    speech_stream_mode=speech_stream_mode,
                 )
             quality_attempt_outcomes = safe_attempt_outcomes(
                 [*quality_attempt_outcomes, *lm_log.attempt_outcomes]
@@ -6757,12 +6778,15 @@ class GameEngine:
         speech_id = receipt.get("speech_id")
         segments = receipt.get("segments")
         status = receipt.get("status")
+        expected_stream_mode = self._committed_speech_stream_mode(request)
+        stored_stream_mode = receipt.get("speech_stream_mode") or "segments_v1"
         if (
             not isinstance(speech_id, str)
             or not speech_id
             or not isinstance(segments, list)
             or not segments
             or status not in {"partial", "complete", "interrupted"}
+            or stored_stream_mode != expected_stream_mode
         ):
             raise ResumeCheckpointError("invalid_structure")
         ordered_text: list[str] = []
@@ -6806,6 +6830,9 @@ class GameEngine:
             or lm_log.speech_turn_receipt is not None
         ):
             return
+        speech_stream_mode = self._committed_speech_stream_mode(request)
+        if speech_stream_mode is None:
+            raise RuntimeError("committed speech has no stream mode")
         plan = request.world_state.get("public_turn_plan")
         safe_plan = plan if isinstance(plan, dict) else {}
         renderer_attempts = [
@@ -6828,10 +6855,14 @@ class GameEngine:
                 "request_id": lm_log.request_id,
                 "model": request.player.model,
                 "speech_id": lm_log.speech_id,
+                "speech_stream_mode": speech_stream_mode,
                 "segment_id": segment_id,
                 "segment_index": segment_index,
-                "segment_final": segment_index
-                == len(lm_log.committed_speech_segments) - 1,
+                "segment_final": (
+                    segment_index == len(lm_log.committed_speech_segments) - 1
+                    if speech_stream_mode == "segments_v1"
+                    else False
+                ),
                 "delta": text,
                 "visible_text": text,
                 "field": request.result_key,
@@ -6868,8 +6899,12 @@ class GameEngine:
             receipt_segments.append(receipt_segment)
             lm_log.speech_turn_receipt = {
                 "speech_id": lm_log.speech_id,
-                "speech_stream_mode": "segments_v1",
-                "status": "complete" if payload["segment_final"] else "partial",
+                "speech_stream_mode": speech_stream_mode,
+                "status": (
+                    "complete"
+                    if segment_index == len(lm_log.committed_speech_segments) - 1
+                    else "partial"
+                ),
                 "segment_count": len(receipt_segments),
                 "segments": copy.deepcopy(receipt_segments),
                 "final_text": "".join(
@@ -7448,12 +7483,20 @@ class GameEngine:
                     if isinstance(lm_log.speech_turn_receipt, dict)
                     else None
                 )
+                speech_stream_mode = (
+                    lm_log.speech_turn_receipt.get("speech_stream_mode")
+                    if isinstance(lm_log.speech_turn_receipt, dict)
+                    else None
+                )
+                if speech_stream_mode not in {"segments_v1", "segments_v2"}:
+                    raise RuntimeError("committed speech receipt has invalid stream mode")
+                segment_count = len(lm_log.committed_speech_segments)
                 parsed_payload.update(
                     {
                         "schema_version": 1,
                         "speech_id": lm_log.speech_id,
-                        "speech_stream_mode": "segments_v1",
-                        "segment_count": len(lm_log.committed_speech_segments),
+                        "speech_stream_mode": speech_stream_mode,
+                        "segment_count": segment_count,
                         "speech_status": (
                             "partial"
                             if receipt_status == "partial"
@@ -7462,6 +7505,11 @@ class GameEngine:
                             else "spoken"
                         ),
                         "tts_suppressed_by_segments": True,
+                        **(
+                            {"final_segment_index": segment_count - 1}
+                            if speech_stream_mode == "segments_v2"
+                            else {}
+                        ),
                     }
                 )
             elif voice_snapshot is not None:
@@ -7483,13 +7531,18 @@ class GameEngine:
                         "attempt_count": action_log.attempt_count,
                     }
                 )
-            self._publish(
+            parsed_event = self._publish(
                 "action_parsed",
                 round_number=request.round_state.number,
                 phase=request.phase,
                 actor=player.name,
                 action=request.action,
                 payload=parsed_payload,
+            )
+            self._checkpoint_segments_v2_seal(
+                request=request,
+                lm_log=lm_log,
+                parsed_event=parsed_event,
             )
             if (
                 lm_log.speech_id is not None
@@ -7716,6 +7769,15 @@ class GameEngine:
 
     def _checkpoint_player_action_success(self, result: PlayerActionResult) -> None:
         request = result.request
+        checkpoint_receipt = copy.deepcopy(result.lm_log.speech_turn_receipt)
+        if (
+            isinstance(checkpoint_receipt, dict)
+            and checkpoint_receipt.get("speech_stream_mode") == "segments_v2"
+        ):
+            checkpoint_receipt["status"] = "partial"
+            checkpoint_receipt.pop("final_segment_index", None)
+            checkpoint_receipt.pop("sealed_source_run_id", None)
+            checkpoint_receipt.pop("sealed_source_event_id", None)
         self._checkpoint_model_success(
             actor=request.player.name,
             action=request.action,
@@ -7724,8 +7786,47 @@ class GameEngine:
             raw_response=result.lm_log.raw_response,
             prompt=result.lm_log.prompt,
             logical_action_id=request.action_id,
-            speech_turn_receipt=result.lm_log.speech_turn_receipt,
+            speech_turn_receipt=checkpoint_receipt,
         )
+
+    def _checkpoint_segments_v2_seal(
+        self,
+        *,
+        request: PlayerActionRequest,
+        lm_log: LmLog,
+        parsed_event: object | None,
+    ) -> None:
+        receipt = lm_log.speech_turn_receipt
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("speech_stream_mode") != "segments_v2"
+            or self.checkpoint_manager is None
+        ):
+            return
+        source_run_id = getattr(parsed_event, "run_id", None)
+        source_event_id = getattr(parsed_event, "id", None)
+        if (
+            not isinstance(source_run_id, str)
+            or not source_run_id
+            or type(source_event_id) is not int
+        ):
+            return
+        recorder = getattr(
+            self.checkpoint_manager,
+            "record_speech_turn_receipt",
+            None,
+        )
+        if not callable(recorder):
+            return
+        sealed_receipt = copy.deepcopy(receipt)
+        sealed_receipt.update(
+            {
+                "final_segment_index": len(lm_log.committed_speech_segments) - 1,
+                "sealed_source_run_id": source_run_id,
+                "sealed_source_event_id": source_event_id,
+            }
+        )
+        recorder(request.action_id, sealed_receipt)
 
     def _checkpoint_player_action_results(
         self,
