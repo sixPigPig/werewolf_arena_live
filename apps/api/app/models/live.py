@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -70,6 +71,16 @@ class LiveRunRecord(Base):
     )
     p2_diagnostics: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict
+    )
+    liveness_experience_revision: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, index=True
+    )
+    liveness_experience_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    liveness_experiment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    liveness_experiment_variant: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
     winner: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -297,6 +308,11 @@ class VoiceUtteranceRecord(Base):
     last_source_event_id: Mapped[int] = mapped_column(nullable=False)
     presentation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    action_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    speech_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    segment_id: Mapped[str | None] = mapped_column(String(40), nullable=True, unique=True)
+    segment_index: Mapped[int | None] = mapped_column(nullable=True)
+    segment_final: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     speaker_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     speaker_name: Mapped[str] = mapped_column(String(120), nullable=False)
     speaker: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -315,6 +331,12 @@ class VoiceUtteranceRecord(Base):
         String(30), nullable=False, default="pending", server_default="pending", index=True
     )
     duration_ms: Mapped[int | None] = mapped_column(nullable=True)
+    tts_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    first_audio_chunk_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     subtitle_timings: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

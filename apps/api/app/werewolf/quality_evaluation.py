@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import re
 import unicodedata
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -195,6 +196,7 @@ class GameQualityEvaluationV1:
     voice: dict[str, Any]
     performance: dict[str, Any]
     content: dict[str, Any]
+    liveness: dict[str, Any]
     critical_actions: tuple[SafeCriticalActionV1, ...]
     safe_issues: tuple[SafeQualityIssueV1, ...]
     evaluated_at: str
@@ -218,6 +220,7 @@ class GameQualityEvaluationV1:
             "voice": self.voice.copy(),
             "performance": self.performance.copy(),
             "content": self.content.copy(),
+            "liveness": self.liveness.copy(),
             "critical_actions": [action.to_dict() for action in self.critical_actions],
             "evaluated_at": self.evaluated_at,
         }
@@ -344,10 +347,248 @@ def evaluate_quality_bundle(
         voice=voice,
         performance=_performance_metrics(bundle),
         content=content,
+        liveness=_liveness_metrics(bundle),
         critical_actions=_critical_action_cards(bundle),
         safe_issues=tuple(issues),
         evaluated_at=timestamp,
     )
+
+
+def _liveness_metrics(bundle: QualityEvaluationBundleV1) -> dict[str, Any]:
+    runtime = bundle.liveness_runtime if isinstance(bundle.liveness_runtime, dict) else {}
+    snapshot = runtime.get("experience_snapshot")
+    safe_snapshot = snapshot if isinstance(snapshot, dict) else {}
+    feature_modes = safe_snapshot.get("feature_modes")
+    action_logs = [
+        item
+        for item in _iter_action_logs(bundle.logs)
+        if item.get("action")
+        in {
+            "debate",
+            "sheriff_speech",
+            "sheriff_pk_speech",
+            "exile_pk_speech",
+            "exile_last_words",
+        }
+    ]
+    timing_fields = (
+        "turn_ready_at",
+        "actor_brain_started_at",
+        "turn_plan_ready_at",
+        "renderer_started_at",
+        "first_model_delta_at",
+        "first_clause_committed_at",
+    )
+    timing_coverage = {field: 0 for field in timing_fields}
+    prompt_chars: list[int] = []
+    hard_gate_ms: list[int] = []
+    hard_retry_count = 0
+    hard_exhausted_count = 0
+    partial_count = 0
+    interrupted_count = 0
+    stage_values: dict[str, list[int]] = {
+        "turn_to_actor_brain": [],
+        "actor_brain_to_plan": [],
+        "plan_to_renderer": [],
+        "renderer_to_first_delta": [],
+        "first_delta_to_clause": [],
+        "turn_to_first_clause": [],
+    }
+    stage_pairs = (
+        ("turn_to_actor_brain", "turn_ready_at", "actor_brain_started_at"),
+        ("actor_brain_to_plan", "actor_brain_started_at", "turn_plan_ready_at"),
+        ("plan_to_renderer", "turn_plan_ready_at", "renderer_started_at"),
+        ("renderer_to_first_delta", "renderer_started_at", "first_model_delta_at"),
+        ("first_delta_to_clause", "first_model_delta_at", "first_clause_committed_at"),
+        ("turn_to_first_clause", "turn_ready_at", "first_clause_committed_at"),
+    )
+    turn_ready_by_speech: dict[str, int] = {}
+    for action_log in action_logs:
+        timing = action_log.get("liveness_timing")
+        safe_timing = timing if isinstance(timing, dict) else {}
+        for field in timing_fields:
+            if type(safe_timing.get(field)) is int:
+                timing_coverage[field] += 1
+        for name, started_field, finished_field in stage_pairs:
+            started = safe_timing.get(started_field)
+            finished = safe_timing.get(finished_field)
+            if type(started) is int and type(finished) is int and finished >= started:
+                stage_values[name].append(finished - started)
+        prompt_size = action_log.get("prompt_chars")
+        if type(prompt_size) is int and prompt_size >= 0:
+            prompt_chars.append(prompt_size)
+        gate_duration = safe_timing.get("hard_gate_duration_ms")
+        if type(gate_duration) is int and gate_duration >= 0:
+            hard_gate_ms.append(gate_duration)
+        lm_log = action_log.get("lm_log")
+        safe_lm_log = lm_log if isinstance(lm_log, dict) else {}
+        hard_retry_count += max(
+            0,
+            _non_negative_int(safe_lm_log.get("hard_speech_gate_rejected_count")),
+        )
+        if safe_lm_log.get("speech_generation_status") == "partial_hard_gate_stop":
+            hard_exhausted_count += 1
+        receipt = action_log.get("speech_turn_receipt")
+        safe_receipt = receipt if isinstance(receipt, dict) else {}
+        speech_id = safe_receipt.get("speech_id") or safe_lm_log.get("speech_id")
+        turn_ready_at = safe_timing.get("turn_ready_at")
+        if isinstance(speech_id, str) and type(turn_ready_at) is int:
+            turn_ready_by_speech[speech_id] = turn_ready_at
+        partial_count += safe_receipt.get("status") == "partial"
+        interrupted_count += safe_receipt.get("status") == "interrupted"
+
+    voice_timings = runtime.get("voice_timings")
+    safe_voice_timings = voice_timings if isinstance(voice_timings, list) else []
+    tts_to_audio_ms: list[int] = []
+    turn_to_audio_by_speech: dict[str, int] = {}
+    voice_status_counts: dict[str, int] = {}
+    voice_timing_coverage = {"tts_started_at": 0, "first_audio_chunk_at": 0}
+    for item in safe_voice_timings:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "unknown")
+        voice_status_counts[status] = voice_status_counts.get(status, 0) + 1
+        started = _datetime_ms(item.get("tts_started_at"))
+        first_audio = _datetime_ms(item.get("first_audio_chunk_at"))
+        if started is not None:
+            voice_timing_coverage["tts_started_at"] += 1
+        if first_audio is not None:
+            voice_timing_coverage["first_audio_chunk_at"] += 1
+        if started is not None and first_audio is not None and first_audio >= started:
+            tts_to_audio_ms.append(first_audio - started)
+        speech_id = item.get("speech_id")
+        turn_ready_at = turn_ready_by_speech.get(speech_id) if isinstance(speech_id, str) else None
+        if (
+            isinstance(speech_id, str)
+            and turn_ready_at is not None
+            and first_audio is not None
+            and first_audio >= turn_ready_at
+        ):
+            latency = first_audio - turn_ready_at
+            current = turn_to_audio_by_speech.get(speech_id)
+            turn_to_audio_by_speech[speech_id] = (
+                latency if current is None else min(current, latency)
+            )
+
+    observations = runtime.get("playback_observations")
+    safe_observations = observations if isinstance(observations, list) else []
+    playback_status_counts: dict[str, int] = {}
+    playback_timing_coverage = {
+        "playback_started_at": 0,
+        "playback_finished_at": 0,
+        "ack_received_at": 0,
+    }
+    playback_windows: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for item in safe_observations:
+        if not isinstance(item, dict):
+            continue
+        client_status = str(item.get("client_status") or "unknown")
+        playback_status_counts[client_status] = (
+            playback_status_counts.get(client_status, 0) + 1
+        )
+        for field in playback_timing_coverage:
+            if _datetime_ms(item.get(field)) is not None:
+                playback_timing_coverage[field] += 1
+        playback_session_id = item.get("playback_session_id")
+        playback_started = _datetime_ms(item.get("playback_started_at"))
+        playback_finished = _datetime_ms(item.get("playback_finished_at"))
+        if (
+            isinstance(playback_session_id, str)
+            and playback_started is not None
+            and playback_finished is not None
+            and playback_finished >= playback_started
+        ):
+            playback_windows[playback_session_id].append(
+                (playback_started, playback_finished)
+            )
+
+    speaker_gap_ms: list[int] = []
+    for windows in playback_windows.values():
+        ordered = sorted(windows)
+        for previous, current in zip(ordered, ordered[1:], strict=False):
+            if current[0] >= previous[1]:
+                speaker_gap_ms.append(current[0] - previous[1])
+
+    actor_mind = runtime.get("actor_mind")
+    safe_actor_mind = actor_mind if isinstance(actor_mind, dict) else {}
+    denominator = len(action_logs)
+    return {
+        "experience_revision": runtime.get("experience_revision"),
+        "experiment_id": runtime.get("experiment_id"),
+        "variant": runtime.get("variant"),
+        "feature_modes": feature_modes if isinstance(feature_modes, dict) else {},
+        "public_speech_count": denominator,
+        "timing_coverage": {
+            field: {
+                "count": count,
+                "denominator": denominator,
+                "rate": count / denominator if denominator else None,
+            }
+            for field, count in timing_coverage.items()
+        },
+        "stage_latency_ms": {
+            name: _latency_summary(values) for name, values in stage_values.items()
+        },
+        "prompt_chars": _latency_summary(prompt_chars),
+        "hard_gate_duration_ms": _latency_summary(hard_gate_ms),
+        "hard_retry_count": hard_retry_count,
+        "hard_retry_rate": hard_retry_count / denominator if denominator else None,
+        "hard_exhausted_count": hard_exhausted_count,
+        "hard_exhausted_rate": (
+            hard_exhausted_count / denominator if denominator else None
+        ),
+        "partial_speech_count": partial_count,
+        "interrupted_speech_count": interrupted_count,
+        "voice_timing_coverage": {
+            **voice_timing_coverage,
+            "denominator": len(safe_voice_timings),
+        },
+        "tts_to_first_audio_ms": _latency_summary(tts_to_audio_ms),
+        "turn_to_first_audio_ms": _latency_summary(
+            list(turn_to_audio_by_speech.values())
+        ),
+        "voice_status_counts": voice_status_counts,
+        "playback_timing_coverage": {
+            **playback_timing_coverage,
+            "denominator": len(safe_observations),
+        },
+        "playback_status_counts": playback_status_counts,
+        "speaker_gap_ms": _latency_summary(speaker_gap_ms),
+        "actor_mind": {
+            "snapshot_count": _non_negative_int(safe_actor_mind.get("snapshot_count")),
+            "update_count": _non_negative_int(safe_actor_mind.get("update_count")),
+            "source_complete_count": _non_negative_int(
+                safe_actor_mind.get("source_complete_count")
+            ),
+        },
+    }
+
+
+def _latency_summary(values: list[int]) -> dict[str, int | None]:
+    ordered = sorted(value for value in values if value >= 0)
+    return {
+        "count": len(ordered),
+        "p50": _nearest_rank(ordered, 0.50),
+        "p95": _nearest_rank(ordered, 0.95),
+        "max": max(ordered, default=None),
+    }
+
+
+def _nearest_rank(values: list[int], quantile: float) -> int | None:
+    if not values:
+        return None
+    index = max(0, min(len(values) - 1, int((len(values) * quantile) - 1e-9)))
+    return values[index]
+
+
+def _datetime_ms(value: object) -> int | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return round(parsed.timestamp() * 1000)
 
 
 def _artifact_invariant_issues(

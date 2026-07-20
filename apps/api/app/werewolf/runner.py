@@ -25,6 +25,7 @@ from app.werewolf.config import DEFAULT_MAX_ROUNDS
 from app.werewolf.engine import GameEngine, initialize_game_state
 from app.werewolf.execution_budget import ActionExecutionBudgetV1
 from app.werewolf.live import GameRunCanceled, NullEventSink, strict_json_equal
+from app.werewolf.liveness import liveness_experience_from_storage
 from app.werewolf.lm import ModelProvider
 from app.werewolf.models import GameState, RoundLog
 from app.werewolf.player_configs import PlayerConfig
@@ -58,6 +59,9 @@ def run_game(
     session_id: str | None = None,
     event_sink: object | None = None,
     player_configs: list[PlayerConfig] | None = None,
+    liveness_experience_snapshot: dict[str, object] | None = None,
+    liveness_experiment_id: str | None = None,
+    liveness_experiment_variant: str | None = None,
 ) -> RunGameResult:
     started_at = _utc_now()
     session_id = session_id or new_session_id()
@@ -76,6 +80,17 @@ def run_game(
         "content_hash": compiled_rule_set.content_hash,
         "rule_set_snapshot": copy.deepcopy(compiled_rule_set.snapshot),
         "player_configs": [config.to_dict() for config in player_configs or []],
+        **(
+            {
+                "liveness_experience_snapshot": liveness_experience_from_storage(
+                    liveness_experience_snapshot
+                ).to_dict(),
+                "liveness_experiment_id": liveness_experiment_id,
+                "liveness_experiment_variant": liveness_experiment_variant,
+            }
+            if liveness_experience_snapshot is not None
+            else {}
+        ),
     }
     state = initialize_game_state(
         session_id=session_id,
@@ -109,6 +124,7 @@ def run_game(
             action_budgets_enabled=settings.werewolf_action_budgets_enabled,
             action_execution_budget=_action_execution_budget(),
             fallback_seed=seed,
+            liveness_experience_snapshot=liveness_experience_snapshot,
         )
         logs = engine.run()
     except ReplayWriteFencedError:
@@ -255,6 +271,11 @@ def resume_game(
             fallback_seed=fallback_seed,
             execution_mode="resume",
             resume_from_round=int(checkpoint.get("round_number") or len(state.rounds) + 1),
+            liveness_experience_snapshot=(
+                run_params.get("liveness_experience_snapshot")
+                if isinstance(run_params.get("liveness_experience_snapshot"), dict)
+                else None
+            ),
         )
         if terminal_settlement is not None:
             engine.prepare_terminal_settlement_recovery(

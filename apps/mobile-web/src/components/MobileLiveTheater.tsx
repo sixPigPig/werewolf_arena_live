@@ -470,6 +470,9 @@ function LiveSubtitle({ subtitle }: LiveSubtitleProps) {
   return (
     <div aria-label="直播字幕" className={className} role="status">
       <strong>{subtitle.speakerName}</strong>
+      {subtitle.statusLabel ? (
+        <em className="mobile-live-subtitle-status">{subtitle.statusLabel}</em>
+      ) : null}
       <span aria-label={subtitle.text} className="mobile-live-subtitle-text">
         <span
           aria-hidden="true"

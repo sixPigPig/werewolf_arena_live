@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -139,6 +140,26 @@ def _speech_properties() -> dict[str, Any]:
     }
 
 SCHEMAS: dict[str, dict[str, Any]] = {
+    "actor_plan": {
+        "type": "object",
+        "properties": {
+            "stimulus_sources": {"type": "array"},
+            "response_targets": {"type": "array", "items": {"type": "string"}},
+            "primary_speech_act": {"type": "string"},
+            "secondary_speech_act": {"type": ["string", "null"]},
+            "social_goal": {"type": "string"},
+            "public_points": {"type": "array"},
+            "must_reference_public_fact_ids": {"type": "array"},
+            "length_band": {"type": "string"},
+            "affect_impulse": {"type": "string"},
+        },
+        "required": [
+            "primary_speech_act",
+            "social_goal",
+            "length_band",
+            "affect_impulse",
+        ],
+    },
     "debate": {
         "type": "object",
         "properties": _speech_properties(),
@@ -340,6 +361,18 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
     if action not in SCHEMAS:
         raise ValueError(f"Unsupported action: {action}")
 
+    if action == "actor_plan":
+        return _build_actor_plan_prompt(world_state), SCHEMAS[action]
+
+    if action in {
+        "debate",
+        "sheriff_speech",
+        "sheriff_pk_speech",
+        "exile_pk_speech",
+        "exile_last_words",
+    } and isinstance(world_state.get("public_speech_scene"), dict):
+        return _build_public_speech_scene_prompt(action, world_state), SCHEMAS[action]
+
     speech_guidance_sections = []
     if action in {
         "debate",
@@ -376,6 +409,59 @@ def build_prompt(action: str, world_state: dict[str, Any]) -> tuple[str, dict[st
         _render_json_example(action),
     ]
     return "\n\n".join(section for section in sections if section.strip()), SCHEMAS[action]
+
+
+def _build_public_speech_scene_prompt(action: str, world_state: dict[str, Any]) -> str:
+    scene = world_state["public_speech_scene"]
+    action_label = ACTION_PROMPT_LABELS.get(action, "公开发言")
+    character_limit = {
+        "debate": 220,
+        "sheriff_speech": 180,
+        "sheriff_pk_speech": 180,
+        "exile_pk_speech": 180,
+        "exile_last_words": 150,
+    }[action]
+    scene_json = json.dumps(
+        scene,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        "你是狼人杀桌边口语表达器。你只能使用下面公开场景中的信息，"
+        "不知道任何玩家真实身份、夜间秘密或私人推理。\n"
+        f"当前动作：{action_label}。\n"
+        f"公开场景：{scene_json}\n"
+        "把 turn_plan 表达成自然、即兴、像在接上一位话的中文口语。"
+        "允许简短附和、犹豫、改口或反问；不要写分析报告，不要解释规则，不要复述整桌信息。"
+        "没有新内容时可以只说一两句，不得编造某人说过的话。\n"
+        f"say 最多 {character_limit} 个汉字，并尽量在完整句边界结束。"
+        "不要输出 reasoning、身份判断过程或 delivery；演绎参数由服务端确定性编译。\n"
+        "请只输出合法 JSON，不要输出 Markdown 或解释性前后缀。\n"
+        '输出结构示例：{"say":"自然口语发言"}'
+    )
+
+
+def _build_actor_plan_prompt(world_state: dict[str, Any]) -> str:
+    packet = world_state.get("actor_scene_packet")
+    packet_json = json.dumps(
+        packet if isinstance(packet, dict) else {},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        "你是狼人杀角色的私有行动规划器。根据私有场景选择这次公开发言的行为策略，"
+        "但输出中不得写自由文本推理、真实身份、队友、夜间行动或私有事实。\n"
+        f"私有场景：{packet_json}\n"
+        "只输出结构化计划：primary_speech_act 可选 respond/agree/challenge/ask/defend/"
+        "hedge/change_mind/redirect/defuse/tease/vote_only/brief_pass/summarize；"
+        "social_goal 可选 persuade/probe/defend_self/protect_target/shift_pressure/"
+        "build_alliance/signal_uncertainty/close_turn；length_band 可选 brief/normal/extended；"
+        "affect_impulse 可选 restrained/steady/sharper/softer。玩家、fact_id 和事件坐标"
+        "只能从输入中选择，无法确认时输出空数组。\n"
+        "请只输出合法 JSON，不要输出 Markdown 或解释性前后缀。"
+    )
 
 
 def _render_public_rules(world_state: dict[str, Any]) -> str:

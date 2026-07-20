@@ -3,15 +3,36 @@ import { describe, expect, it } from "vitest";
 import type {
   GodViewPlayer,
   GodViewState,
+  LiveGameEvent,
   LiveNarrativeState,
   NarrativeCue,
 } from "@werewolf-arena/game-client";
 
 import {
+  committedSpeechToMobileSubtitle,
   deriveMobileLiveSubtitle,
   type MobileLiveSubtitle,
   voiceSubtitleToMobileSubtitle,
 } from "./mobileLiveSubtitle";
+
+function liveEvent(
+  id: number,
+  type: string,
+  payload: Record<string, unknown>,
+): LiveGameEvent {
+  return {
+    id,
+    type,
+    run_id: "run-1",
+    session_id: "session-1",
+    created_at: "2026-07-20T00:00:00Z",
+    round: 1,
+    phase: "day",
+    actor: "阿青",
+    action: "debate",
+    payload,
+  };
+}
 
 type TestPlayer = Pick<GodViewPlayer, "name" | "seatNumber">;
 
@@ -273,5 +294,76 @@ describe("voiceSubtitleToMobileSubtitle", () => {
       pendingText: "5票",
       text: "现在是3.5票",
     });
+  });
+});
+
+describe("committedSpeechToMobileSubtitle", () => {
+  const first = liveEvent(2, "model_response_delta", {
+    schema_version: 2,
+    commit_state: "accepted_segment",
+    speech_id: "speech-1",
+    segment_index: 0,
+    visible_text: "第一句。",
+  });
+  const second = liveEvent(3, "model_response_delta", {
+    schema_version: 2,
+    commit_state: "accepted_segment",
+    speech_id: "speech-1",
+    segment_index: 1,
+    visible_text: "第二句！",
+  });
+
+  it("groups accepted sentences by speech id without appending action_parsed say", () => {
+    const closing = liveEvent(4, "action_parsed", {
+      speech_id: "speech-1",
+      speech_stream_mode: "segments_v1",
+      speech_status: "partial",
+      say: "第一句。第二句！",
+    });
+    expect(
+      committedSpeechToMobileSubtitle({
+        events: [first, second, closing],
+        godViewState: godView([{ name: "阿青", seatNumber: 2 }]),
+      }),
+    ).toMatchObject({
+      completedText: "第一句第二句！",
+      speakerName: "2号玩家",
+      statusLabel: "部分发言",
+      text: "第一句第二句！",
+    });
+  });
+
+  it("marks deterministic sentence-boundary interruptions", () => {
+    const interrupted = liveEvent(4, "speech_turn_interrupted", {
+      speech_id: "speech-1",
+      speech_status: "interrupted",
+      visible_text: "第一句。第二句！",
+    });
+    expect(
+      committedSpeechToMobileSubtitle({
+        events: [first, second, interrupted],
+        godViewState: godView([{ name: "阿青", seatNumber: 2 }]),
+      }),
+    ).toMatchObject({
+      statusLabel: "发言被打断",
+      text: "第一句第二句！",
+    });
+  });
+
+  it("rejects raw or unaccepted schema-v2 deltas", () => {
+    expect(
+      committedSpeechToMobileSubtitle({
+        events: [
+          liveEvent(2, "model_response_delta", {
+            schema_version: 2,
+            commit_state: "candidate",
+            speech_id: "speech-private",
+            segment_index: 0,
+            visible_text: "不应公开",
+          }),
+        ],
+        godViewState: godView([]),
+      }),
+    ).toBeNull();
   });
 });

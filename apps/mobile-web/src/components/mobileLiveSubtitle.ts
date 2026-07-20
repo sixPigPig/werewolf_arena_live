@@ -1,6 +1,7 @@
 import type {
   deriveGodViewState,
   deriveLiveNarrativeState,
+  LiveGameEvent,
   LiveVoiceSubtitle,
 } from "@werewolf-arena/game-client";
 import {
@@ -28,6 +29,7 @@ export type MobileLiveSubtitle = {
   text: string;
   tone: "judge" | "player" | "private";
   colorIndex: number;
+  statusLabel?: "部分发言" | "发言被打断";
 };
 
 const PLAYER_COLOR_COUNT = 8;
@@ -122,6 +124,115 @@ export function voiceSubtitleToMobileSubtitle(
     speakerName: subtitle.speakerName,
     tone: "player",
   };
+}
+
+/**
+ * Uses durable, hard-gate accepted sentence events when audio is unavailable or
+ * has not started yet. A speech is grouped by speech_id; action_parsed only
+ * closes the group and never appends the final say again.
+ */
+export function committedSpeechToMobileSubtitle({
+  events,
+  godViewState,
+}: {
+  events: LiveGameEvent[];
+  godViewState: Pick<GodViewState, "players">;
+}): MobileLiveSubtitle | null {
+  const terminal = events.at(-1);
+  if (!terminal) {
+    return null;
+  }
+
+  const terminalPayload = terminal.payload;
+  const terminalSpeechId = stringPayloadField(terminalPayload, "speech_id");
+  const isAcceptedSegment = isAcceptedSpeechSegment(terminal);
+  const isInterrupted = terminal.type === "speech_turn_interrupted";
+  const isSegmentFinalizer =
+    terminal.type === "action_parsed" &&
+    stringPayloadField(terminalPayload, "speech_stream_mode") === "segments_v1";
+  if (
+    !terminalSpeechId ||
+    (!isAcceptedSegment && !isInterrupted && !isSegmentFinalizer)
+  ) {
+    return null;
+  }
+
+  const segmentEvents = events
+    .filter(
+      (event) =>
+        isAcceptedSpeechSegment(event) &&
+        stringPayloadField(event.payload, "speech_id") === terminalSpeechId,
+    )
+    .sort(
+      (left, right) =>
+        integerPayloadField(left.payload, "segment_index") -
+        integerPayloadField(right.payload, "segment_index"),
+    );
+  const seenIndexes = new Set<number>();
+  const text = segmentEvents
+    .filter((event) => {
+      const index = integerPayloadField(event.payload, "segment_index");
+      if (seenIndexes.has(index)) return false;
+      seenIndexes.add(index);
+      return true;
+    })
+    .map((event) => stringPayloadField(event.payload, "visible_text"))
+    .join("");
+  const fallbackText = isInterrupted
+    ? stringPayloadField(terminalPayload, "visible_text")
+    : "";
+  const visibleText = stripSubtitlePunctuation(text || fallbackText);
+  if (!visibleText) {
+    return null;
+  }
+
+  const speakerKey = terminal.actor?.trim() || segmentEvents.at(-1)?.actor?.trim() || "";
+  const speakerName = playerSeatSubtitleName(speakerKey, godViewState.players);
+  const speechStatus = stringPayloadField(terminalPayload, "speech_status");
+  const statusLabel =
+    isInterrupted || speechStatus === "interrupted"
+      ? "发言被打断"
+      : speechStatus === "partial"
+        ? "部分发言"
+        : undefined;
+  return {
+    activeText: "",
+    completedText: visibleText,
+    pageIndex: 0,
+    pendingText: "",
+    speakerName,
+    text: visibleText,
+    tone: "player",
+    colorIndex: playerColorIndex(speakerKey || speakerName, godViewState.players),
+    ...(statusLabel ? { statusLabel } : {}),
+  };
+}
+
+function isAcceptedSpeechSegment(event: LiveGameEvent): boolean {
+  return (
+    event.type === "model_response_delta" &&
+    event.payload.schema_version === 2 &&
+    event.payload.commit_state === "accepted_segment" &&
+    typeof event.payload.segment_index === "number" &&
+    Number.isInteger(event.payload.segment_index) &&
+    event.payload.segment_index >= 0
+  );
+}
+
+function stringPayloadField(
+  payload: Record<string, unknown>,
+  field: string,
+): string {
+  const value = payload[field];
+  return typeof value === "string" ? value : "";
+}
+
+function integerPayloadField(
+  payload: Record<string, unknown>,
+  field: string,
+): number {
+  const value = payload[field];
+  return typeof value === "number" && Number.isInteger(value) ? value : -1;
 }
 
 function mobileSubtitleProgress(subtitle: LiveVoiceSubtitle) {

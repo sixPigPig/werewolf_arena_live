@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import copy
 from dataclasses import replace
 import json
 import logging
@@ -75,6 +76,12 @@ from app.werewolf.lineup_quality import (
     evaluate_lineup_quality,
     plan_diverse_lineup,
 )
+from app.werewolf.liveness import (
+    assign_liveness_experiment_v1,
+    liveness_experience_from_storage,
+)
+from app.werewolf.liveness_store import LivenessRuntimeStore
+from app.werewolf.liveness_rollout import get_liveness_rollout_config
 from app.werewolf.live import (
     EventSink,
     GameRunCanceled,
@@ -617,6 +624,41 @@ class SessionVoiceStore:
         finally:
             db.close()
 
+    def load_utterance(self, utterance_id: str) -> dict[str, Any] | None:
+        db = self.session_factory()
+        try:
+            return DatabaseVoiceStore(
+                db,
+                session_id=self.session_id,
+            ).load_utterance(utterance_id)
+        finally:
+            db.close()
+
+    def record_playback_observation(
+        self,
+        *,
+        playback_session_id: str,
+        utterance_id: str,
+        server_terminal_status: str,
+        client_status: str | None = None,
+        played_ms: int | None = None,
+    ) -> None:
+        db = self.session_factory()
+        try:
+            LivenessRuntimeStore(db).record_playback_observation(
+                playback_session_id=playback_session_id,
+                utterance_id=utterance_id,
+                server_terminal_status=server_terminal_status,
+                client_status=client_status,
+                played_ms=played_ms,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
 
 live_registry = LiveRunRegistry(
     live_store=SessionLiveStore(),
@@ -1126,8 +1168,20 @@ def create_game_run(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        session_id = new_session_id()
+        liveness_rollout = get_liveness_rollout_config(
+            db,
+            fallback_experiment_id=settings.werewolf_liveness_experiment_id,
+            fallback_treatment_percent=settings.werewolf_liveness_rollout_percent,
+        )
+        liveness_assignment = assign_liveness_experiment_v1(
+            session_id=session_id,
+            experiment_id=liveness_rollout.experiment_id,
+            treatment_percent=liveness_rollout.treatment_percent,
+            experience_revision=liveness_rollout.experience_revision,
+        )
         run = registry.prepare_run(
-            session_id=new_session_id(),
+            session_id=session_id,
             villager_model=request_body.villager_model,
             werewolf_model=request_body.werewolf_model,
             seed=request_body.seed,
@@ -1140,6 +1194,9 @@ def create_game_run(
             player_configs=player_configs,
             lineup_quality_warnings=lineup_quality_warnings(player_configs),
             lineup_quality_report=lineup_report.to_dict(),
+            liveness_experience_snapshot=liveness_assignment.snapshot.to_dict(),
+            liveness_experiment_id=liveness_assignment.experiment_id,
+            liveness_experiment_variant=liveness_assignment.variant,
         )
         DatabaseLiveStore(db).stage_new_run(run)
         staged = True
@@ -1565,6 +1622,23 @@ def start_resume_game_run(
             rule_set_content_hash=compiled.content_hash,
             rule_set=compiled.snapshot,
             player_configs=checkpoint_player_configs,
+            liveness_experience_snapshot=(
+                liveness_experience_from_storage(
+                    run_params.get("liveness_experience_snapshot")
+                ).to_dict()
+                if run_params.get("liveness_experience_snapshot") is not None
+                else None
+            ),
+            liveness_experiment_id=(
+                run_params.get("liveness_experiment_id")
+                if isinstance(run_params.get("liveness_experiment_id"), str)
+                else None
+            ),
+            liveness_experiment_variant=(
+                run_params.get("liveness_experiment_variant")
+                if isinstance(run_params.get("liveness_experiment_variant"), str)
+                else None
+            ),
         )
         _require_live_run_matches_checkpoint(run, compiled)
         if not created:
@@ -1944,6 +2018,7 @@ def _run_game_in_background(
     db = SessionLocal()
     try:
         worker_id, fence_token = registry.write_fence(run_id)
+        live_run = registry.get_run(run_id)
         with registry.maintain_lease(run_id):
             result = run_game(
                 record_store=DatabaseReplayStore(
@@ -1960,6 +2035,11 @@ def _run_game_in_background(
                 session_id=session_id,
                 event_sink=EventSink(registry, run_id, fence_token=fence_token),
                 player_configs=player_configs,
+                liveness_experience_snapshot=copy.deepcopy(
+                    live_run.liveness_experience_snapshot
+                ),
+                liveness_experiment_id=live_run.liveness_experiment_id,
+                liveness_experiment_variant=live_run.liveness_experiment_variant,
             )
     except GameRunCanceled:
         registry.mark_canceled(run_id)

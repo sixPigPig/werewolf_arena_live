@@ -80,6 +80,11 @@ class ActionLog:
     effective_context_texts: list[str] = field(default_factory=list)
     voice_config_version: int | None = None
     delivery_mapping_version: str | None = None
+    liveness_experience_revision: str | None = None
+    prompt_chars: int | None = None
+    scene_packet_chars: int | None = None
+    liveness_timing: dict[str, int] = field(default_factory=dict)
+    speech_turn_receipt: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -181,6 +186,13 @@ class ActionLog:
             payload["effective_context_texts"] = self.effective_context_texts.copy()
             payload["voice_config_version"] = self.voice_config_version
             payload["delivery_mapping_version"] = self.delivery_mapping_version
+        if self.liveness_experience_revision is not None:
+            payload["liveness_experience_revision"] = self.liveness_experience_revision
+            payload["prompt_chars"] = self.prompt_chars
+            payload["scene_packet_chars"] = self.scene_packet_chars
+            payload["liveness_timing"] = self.liveness_timing.copy()
+        if self.speech_turn_receipt is not None:
+            payload["speech_turn_receipt"] = copy.deepcopy(self.speech_turn_receipt)
         return payload
 
 

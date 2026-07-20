@@ -7,6 +7,7 @@ from typing import Any
 
 DELIVERY_SCHEMA_VERSION = 1
 DELIVERY_MAPPING_VERSION = "delivery-v1"
+AFFECT_DELIVERY_MAPPING_VERSION = "affect-delivery-v2"
 DELIVERY_MOODS = frozenset(
     {
         "neutral",
@@ -135,6 +136,57 @@ def delivery_from_result(
 ) -> dict[str, Any]:
     return normalize_delivery(
         result.get("delivery") if result is not None else None,
+        base_mood=base_mood,
+        base_intensity=base_intensity,
+        base_pace=base_pace,
+        base_instruction=base_instruction,
+    )
+
+
+def compile_affect_delivery_v2(
+    *,
+    base_mood: str,
+    base_intensity: str,
+    base_pace: str,
+    base_instruction: str,
+    public_affect: Mapping[str, object] | None,
+    speech_act: str | None,
+    phase: str,
+    previous_delivery: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
+    """Compile bounded delivery from public affect without model-authored facts."""
+
+    affect = public_affect if isinstance(public_affect, Mapping) else {}
+    mood = _enum_value(affect.get("mood"), DELIVERY_MOODS, base_mood, "neutral")
+    intensity = _enum_value(
+        affect.get("intensity"),
+        DELIVERY_INTENSITIES,
+        base_intensity,
+        "medium",
+    )
+    pace = _enum_value(affect.get("pace"), DELIVERY_PACES, base_pace, "natural")
+    normalized_act = speech_act.strip().lower() if isinstance(speech_act, str) else ""
+    if normalized_act in {"challenge", "accuse", "defend", "correct"}:
+        if intensity == "low":
+            intensity = "medium"
+        if mood in {"neutral", "calm", "restrained"}:
+            mood = "skeptical" if normalized_act in {"challenge", "correct"} else "tense"
+    if phase in {"exile_last_words", "hunter_shoot"} and pace == "fast":
+        pace = "natural"
+
+    previous = normalize_delivery(previous_delivery or {}) if previous_delivery else None
+    if previous is not None:
+        if previous["intensity"] == "low" and intensity == "high":
+            intensity = "medium"
+        if previous["pace"] == "slow" and pace == "fast":
+            pace = "natural"
+
+    return normalize_delivery(
+        {
+            "mood": mood,
+            "intensity": intensity,
+            "pace": pace,
+        },
         base_mood=base_mood,
         base_intensity=base_intensity,
         base_pace=base_pace,

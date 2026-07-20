@@ -108,6 +108,11 @@ class VoiceUtterance:
     speaker: str
     text: str
     action: str | None
+    action_id: str | None = None
+    speech_id: str | None = None
+    segment_id: str | None = None
+    segment_index: int | None = None
+    segment_final: bool | None = None
     presentation_id: str | None = None
     last_source_event_id: int | None = None
     static_asset_id: str | None = None
@@ -169,11 +174,17 @@ def is_public_speech_event(event: LiveEvent) -> bool:
         event.type == "model_response_delta"
         and event.action in PUBLIC_SPEECH_ACTIONS
         and event.payload.get("is_public") is True
+        and event.payload.get("schema_version") == 2
+        and event.payload.get("commit_state") == "accepted_segment"
+        and isinstance(event.payload.get("speech_id"), str)
+        and isinstance(event.payload.get("segment_id"), str)
     )
 
 
 def is_public_complete_speech_event(event: LiveEvent) -> bool:
     if event.type != "action_parsed" or event.action not in PUBLIC_SPEECH_ACTIONS:
+        return False
+    if event.payload.get("tts_suppressed_by_segments") is True:
         return False
     visible_result = event.payload.get("visible_result")
     return (
@@ -203,6 +214,8 @@ def voice_job_candidate(
     if event.type == "game_resumed" and event.payload.get("terminal_recovery") is True:
         return None
     if audience == "spectator_god_view" and is_god_view_private_speech_event(event):
+        return "player"
+    if is_public_speech_event(event):
         return "player"
     if is_public_complete_speech_event(event):
         return "player"
@@ -294,6 +307,19 @@ def event_to_voice_utterance(
             speaker=config.player_speaker,
             text=visible_text,
             action=event.action,
+            action_id=_string_payload(event, "action_id") or None,
+            speech_id=_string_payload(event, "speech_id") or None,
+            segment_id=_string_payload(event, "segment_id") or None,
+            segment_index=(
+                event.payload.get("segment_index")
+                if type(event.payload.get("segment_index")) is int
+                else None
+            ),
+            segment_final=(
+                event.payload.get("segment_final")
+                if type(event.payload.get("segment_final")) is bool
+                else None
+            ),
             presentation_id=presentation_id,
         )
 
@@ -320,6 +346,19 @@ def event_to_voice_utterance(
             speaker=config.player_speaker,
             text=visible_text,
             action=event.action,
+            action_id=_string_payload(event, "action_id") or None,
+            speech_id=_string_payload(event, "speech_id") or None,
+            segment_id=_string_payload(event, "segment_id") or None,
+            segment_index=(
+                event.payload.get("segment_index")
+                if type(event.payload.get("segment_index")) is int
+                else None
+            ),
+            segment_final=(
+                event.payload.get("segment_final")
+                if type(event.payload.get("segment_final")) is bool
+                else None
+            ),
             presentation_id=presentation_id,
         )
 
@@ -395,6 +434,10 @@ def build_voice_messages(
     chunk_index: int,
     audience: VoiceAudience = "player_public",
     presentation_id: str | None = None,
+    speech_id: str | None = None,
+    segment_id: str | None = None,
+    segment_index: int | None = None,
+    segment_final: bool | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     start_message: dict[str, Any] = {
         "type": "voice_start",
@@ -411,6 +454,14 @@ def build_voice_messages(
         start_message["last_source_event_id"] = last_source_event_id
     if presentation_id:
         start_message["presentation_id"] = presentation_id
+    if speech_id:
+        start_message["speech_id"] = speech_id
+    if segment_id:
+        start_message["segment_id"] = segment_id
+    if segment_index is not None:
+        start_message["segment_index"] = segment_index
+    if segment_final is not None:
+        start_message["segment_final"] = segment_final
 
     return (
         start_message,

@@ -19,14 +19,17 @@ from app.db.base import Base
 from app.werewolf.config import HUNTER, SEER, WEREWOLF, WITCH
 from app.werewolf.checkpoint import player_from_dict, round_log_from_dict, round_state_from_dict
 from app.werewolf.engine import (
+    ActivePublicActionContext,
     GameEngine,
     MaxRoundsExceeded,
     NO_HUNTER_SHOT,
     NO_WITCH_POISON,
+    PendingSelfExplosionBatch,
     PublicStageCursor,
     SHERIFF_SKIP,
     WEREWOLF_NO_SELF_EXPLODE,
     WEREWOLF_SELF_EXPLODE,
+    _PublicActionInterruptedBySelfExplosion,
     initialize_game_state,
 )
 from app.werewolf.execution_budget import (
@@ -34,6 +37,7 @@ from app.werewolf.execution_budget import (
     ModelDeadlineExceeded,
 )
 from app.werewolf.live import NullEventSink
+from app.werewolf.liveness import LivenessFeatureModesV1, liveness_experience_v1
 from app.werewolf.lm import FakeProvider
 from app.werewolf.models import DeathEvent, DebateEntry, RoundLog, RoundState
 from app.werewolf.player_configs import PlayerConfig
@@ -4591,6 +4595,80 @@ def test_self_explosion_interrupts_unpublished_public_speech_immediately() -> No
     engine._shutdown_self_explosion_worker()
 
 
+def test_self_explosion_preempts_already_committed_speech_at_sentence_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
+    state = initialize_game_state(
+        session_id="self_explosion_preempts_committed_speech",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260725,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    actor = active_players[0]
+    round_state = RoundState(number=2, players=active_players.copy())
+    round_log = RoundLog(number=2)
+    cursor = PublicStageCursor(
+        stage="debate",
+        ordered_actors=tuple(active_players),
+        current_actor=actor,
+        timing="before_actor",
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=ScriptedChineseProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+    action_id = "act-preempt-committed"
+    engine._active_public_action = ActivePublicActionContext(
+        round_state=round_state,
+        round_log=round_log,
+        active_players=active_players,
+        cursor=cursor,
+        actor=actor,
+        action=ACTION_DEBATE,
+        action_id=action_id,
+    )
+    engine._pending_self_explosion = PendingSelfExplosionBatch(
+        round_number=2,
+        active_wolves=(),
+        requests=(),
+        futures=(),
+        started_at=0.0,
+        cursor=cursor,
+    )
+    engine._active_committed_speech[action_id] = {
+        "speech_id": "sp-preempt-committed",
+        "segments": [{"segment_index": 0, "text": "我先说完这一句。"}],
+        "visible_text": "我先说完这一句。",
+    }
+    monkeypatch.setattr(
+        engine,
+        "_accept_ready_self_explosion",
+        lambda *args, **kwargs: True,
+    )
+
+    with pytest.raises(_PublicActionInterruptedBySelfExplosion):
+        engine._interrupt_public_action_if_self_explosion_ready(
+            "model_response_delta"
+        )
+
+    preempt = next(
+        event for event in sink.events if event["type"] == "speech_playback_preempted"
+    )
+    assert preempt["payload"]["speech_id"] == "sp-preempt-committed"
+    assert preempt["payload"]["reason"] == "self_explosion"
+    assert preempt["payload"]["cut_after_segment_index"] == 0
+    assert not any(
+        event["type"] == "public_action_cancelled" for event in sink.events
+    )
+
+
 def test_self_explosion_window_expires_after_its_next_public_boundary() -> None:
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -5291,6 +5369,240 @@ def test_ineligible_vote_appeal_is_preserved_without_semantic_rewrite() -> None:
     assert "警下玩家请把票投给我" in public_blob
     assert [event["type"] for event in sink.events].count("model_retry_scheduled") == 0
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
+
+
+def test_liveness_v1_publishes_only_stable_committed_speech_segments() -> None:
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_committed_segments",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260719,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    speaker = state.players[1]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.speech_order = active_players.copy()
+    round_state.debate = [
+        DebateEntry(
+            speaker=active_players[0],
+            message="先看后置位，不要急着下结论。",
+        )
+    ]
+    provider = FakeProvider(
+        [
+            {
+                "reasoning": "回应上一位。",
+                "say": "我同意先听后置位。现在别急着归票！",
+            }
+        ]
+    )
+    sink = CapturingEventSink()
+    experience = liveness_experience_v1(
+        feature_modes=LivenessFeatureModesV1(
+            sentence_stream="committed_segments"
+        )
+    )
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        speech_quality_retry_enabled=True,
+        liveness_experience_snapshot=experience.to_dict(),
+    )
+
+    message, action_log = engine._player_action(
+        player=speaker,
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    segments = [
+        event
+        for event in sink.events
+        if event["type"] == "model_response_delta"
+    ]
+    assert message == "我同意先听后置位。现在别急着归票！"
+    assert provider.calls == 2
+    assert [event["payload"]["visible_text"] for event in segments] == [
+        "我同意先听后置位。",
+        "现在别急着归票！",
+    ]
+    assert [event["payload"]["segment_index"] for event in segments] == [0, 1]
+    assert [event["payload"]["segment_final"] for event in segments] == [False, True]
+    assert len({event["payload"]["speech_id"] for event in segments}) == 1
+    assert len({event["payload"]["segment_id"] for event in segments}) == 2
+    assert all(
+        event["payload"]["commit_state"] == "accepted_segment"
+        for event in segments
+    )
+    parsed = next(event for event in sink.events if event["type"] == "action_parsed")
+    assert parsed["payload"]["tts_suppressed_by_segments"] is True
+    assert parsed["payload"]["segment_count"] == 2
+    assert "voice_snapshot" not in parsed["payload"]
+    assert action_log.speech_quality_attempt_count == 1
+    assert "你是狼人杀桌边口语表达器" in action_log.lm_log.prompt
+    assert "身份是" not in action_log.lm_log.prompt
+    assert '"reasoning":' not in action_log.lm_log.prompt
+    assert action_log.speech_turn_receipt is not None
+    assert action_log.speech_turn_receipt["final_text"] == message
+    assert [
+        item["source_event_id"]
+        for item in action_log.speech_turn_receipt["segments"]
+    ] == [sink.events.index(event) + 1 for event in segments]
+
+
+def test_liveness_v1_commits_first_complete_sentence_before_renderer_finishes() -> None:
+    class IncrementalRendererProvider:
+        def __init__(self, sink: CapturingEventSink) -> None:
+            self.sink = sink
+            self.first_sentence_was_committed_while_streaming = False
+
+        def stream_json(self, **_kwargs) -> Generator[str, None, None]:
+            yield '{"reasoning":"公开表达","say":"我先回应上一位。'
+            self.first_sentence_was_committed_while_streaming = any(
+                event["type"] == "model_response_delta"
+                and event["payload"].get("commit_state") == "accepted_segment"
+                for event in self.sink.events
+            )
+            yield '这个问题我还要再听一下！"}'
+
+        def complete_json(self, **kwargs) -> str:
+            return "".join(self.stream_json(**kwargs))
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_incremental_committed_segments",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260720,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.speech_order = active_players.copy()
+    sink = CapturingEventSink()
+    provider = IncrementalRendererProvider(sink)
+    experience = liveness_experience_v1(
+        feature_modes=LivenessFeatureModesV1(
+            sentence_stream="committed_segments"
+        )
+    )
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        liveness_experience_snapshot=experience.to_dict(),
+    )
+
+    message, action_log = engine._player_action(
+        player=state.players[0],
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert provider.first_sentence_was_committed_while_streaming is True
+    assert message == "我先回应上一位。这个问题我还要再听一下！"
+    assert action_log.lm_log.speech_generation_status == "complete"
+    event_types = [event["type"] for event in sink.events]
+    first_segment_index = event_types.index("model_response_delta")
+    assert event_types.index("model_request_started") < first_segment_index
+    renderer_completed_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "model_attempt_completed"
+        and event["payload"].get("generation_stage") == "renderer"
+    )
+    assert first_segment_index < renderer_completed_index
+
+
+def test_liveness_resume_keeps_partial_committed_text_without_calling_provider() -> None:
+    class ProviderMustNotRun:
+        def complete_json(self, **_kwargs) -> str:
+            raise AssertionError("partial committed speech must not be regenerated")
+
+    class PartialSpeechCheckpoint:
+        def actor_minds(self) -> dict:
+            return {}
+
+        def speech_turn_receipt(self, _action_id: str) -> dict:
+            return {
+                "speech_id": "sp_recovered",
+                "speech_stream_mode": "segments_v1",
+                "status": "partial",
+                "segment_count": 1,
+                "segments": [
+                    {
+                        "segment_id": "seg_recovered",
+                        "segment_index": 0,
+                        "text": "这句已经被观众听见。",
+                        "presentation_id": "pres_recovered",
+                        "source_run_id": "run_previous",
+                        "source_event_id": 11,
+                    }
+                ],
+                "final_text": "这句已经被观众听见。",
+                "accepted_renderer_request_id": "req_previous",
+            }
+
+        def record_success(self, **_kwargs) -> None:
+            return None
+
+        def record_actor_minds(self, *_args, **_kwargs) -> None:
+            return None
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_resume_committed_segment",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260719,
+        rule_set=rule_set,
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=ProviderMustNotRun(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        checkpoint_manager=PartialSpeechCheckpoint(),
+        liveness_experience_snapshot=liveness_experience_v1(
+            feature_modes=LivenessFeatureModesV1(
+                sentence_stream="committed_segments"
+            )
+        ).to_dict(),
+    )
+    round_state = RoundState(
+        number=1,
+        players=[player.name for player in state.players],
+    )
+
+    message, action_log = engine._player_action(
+        player=state.players[0],
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert message == "这句已经被观众听见。"
+    assert action_log.speech_turn_receipt["status"] == "partial"
+    assert not any(event["type"] == "model_response_delta" for event in sink.events)
+    parsed = next(event for event in sink.events if event["type"] == "action_parsed")
+    assert parsed["payload"]["speech_status"] == "partial"
 
 
 def test_non_seer_investigation_plan_is_preserved_without_semantic_rewrite() -> None:

@@ -197,6 +197,7 @@ export function parseAdminGameQualityEvaluation(
   const voice = recordValue(record.voice);
   const performance = recordValue(record.performance);
   const content = recordValue(record.content);
+  const liveness = parseQualityLiveness(record.liveness);
   if (record.schema_version !== 1) {
     throw invalidContract("quality_evaluation.schema_version 不受支持");
   }
@@ -273,9 +274,145 @@ export function parseAdminGameQualityEvaluation(
       privacy_p0_issue_count: nonNegativeInteger(content.privacy_p0_issue_count, "quality_evaluation.content.privacy_p0_issue_count"),
       lineup_warning_count: nonNegativeInteger(content.lineup_warning_count, "quality_evaluation.content.lineup_warning_count"),
     },
+    liveness,
     critical_actions: parseQualityCriticalActions(record.critical_actions),
     evaluated_at: nullableDateString(record.evaluated_at, "quality_evaluation.evaluated_at"),
   };
+}
+
+function parseQualityLiveness(
+  value: unknown,
+): AdminGameQualityEvaluation["liveness"] {
+  if (value === undefined) {
+    return emptyQualityLiveness();
+  }
+  const raw = recordValue(value);
+  const featureModes = recordValue(raw.feature_modes);
+  const actorMind = recordValue(raw.actor_mind);
+  return {
+    experience_revision: nullableString(raw.experience_revision, "quality_evaluation.liveness.experience_revision"),
+    experiment_id: nullableString(raw.experiment_id, "quality_evaluation.liveness.experiment_id"),
+    variant: nullableString(raw.variant, "quality_evaluation.liveness.variant"),
+    feature_modes: {
+      style_gate: optionalEnumValue(featureModes.style_gate, ["legacy", "async_observe"] as const, "quality_evaluation.liveness.feature_modes.style_gate"),
+      actor_mind: optionalEnumValue(featureModes.actor_mind, ["off", "shadow", "read"] as const, "quality_evaluation.liveness.feature_modes.actor_mind"),
+      sentence_stream: optionalEnumValue(featureModes.sentence_stream, ["off", "committed_segments"] as const, "quality_evaluation.liveness.feature_modes.sentence_stream"),
+      affect_delivery: optionalEnumValue(featureModes.affect_delivery, ["off", "shadow", "on"] as const, "quality_evaluation.liveness.feature_modes.affect_delivery"),
+      tts_prefetch_depth: optionalEnumValue(featureModes.tts_prefetch_depth, [0, 1] as const, "quality_evaluation.liveness.feature_modes.tts_prefetch_depth"),
+      voice_preempt: optionalEnumValue(featureModes.voice_preempt, ["off", "deterministic"] as const, "quality_evaluation.liveness.feature_modes.voice_preempt"),
+    },
+    public_speech_count: nonNegativeInteger(raw.public_speech_count, "quality_evaluation.liveness.public_speech_count"),
+    timing_coverage: parseTimingCoverageRecord(raw.timing_coverage),
+    stage_latency_ms: parseLatencyRecord(raw.stage_latency_ms),
+    prompt_chars: parseLatencySummary(raw.prompt_chars, "quality_evaluation.liveness.prompt_chars"),
+    hard_gate_duration_ms: parseLatencySummary(raw.hard_gate_duration_ms, "quality_evaluation.liveness.hard_gate_duration_ms"),
+    hard_retry_count: nonNegativeInteger(raw.hard_retry_count, "quality_evaluation.liveness.hard_retry_count"),
+    hard_retry_rate: nullableRate(raw.hard_retry_rate, "quality_evaluation.liveness.hard_retry_rate"),
+    hard_exhausted_count: nonNegativeInteger(raw.hard_exhausted_count, "quality_evaluation.liveness.hard_exhausted_count"),
+    hard_exhausted_rate: nullableRate(raw.hard_exhausted_rate, "quality_evaluation.liveness.hard_exhausted_rate"),
+    partial_speech_count: nonNegativeInteger(raw.partial_speech_count, "quality_evaluation.liveness.partial_speech_count"),
+    interrupted_speech_count: nonNegativeInteger(raw.interrupted_speech_count, "quality_evaluation.liveness.interrupted_speech_count"),
+    voice_timing_coverage: parseCountRecord(raw.voice_timing_coverage, "quality_evaluation.liveness.voice_timing_coverage"),
+    tts_to_first_audio_ms: parseLatencySummary(raw.tts_to_first_audio_ms, "quality_evaluation.liveness.tts_to_first_audio_ms"),
+    turn_to_first_audio_ms: parseLatencySummary(raw.turn_to_first_audio_ms, "quality_evaluation.liveness.turn_to_first_audio_ms"),
+    voice_status_counts: parseCountRecord(raw.voice_status_counts, "quality_evaluation.liveness.voice_status_counts"),
+    playback_timing_coverage: parseCountRecord(raw.playback_timing_coverage, "quality_evaluation.liveness.playback_timing_coverage"),
+    playback_status_counts: parseCountRecord(raw.playback_status_counts, "quality_evaluation.liveness.playback_status_counts"),
+    speaker_gap_ms: parseLatencySummary(raw.speaker_gap_ms, "quality_evaluation.liveness.speaker_gap_ms"),
+    actor_mind: {
+      snapshot_count: nonNegativeInteger(actorMind.snapshot_count, "quality_evaluation.liveness.actor_mind.snapshot_count"),
+      update_count: nonNegativeInteger(actorMind.update_count, "quality_evaluation.liveness.actor_mind.update_count"),
+      source_complete_count: nonNegativeInteger(actorMind.source_complete_count, "quality_evaluation.liveness.actor_mind.source_complete_count"),
+    },
+  };
+}
+
+function emptyQualityLiveness(): AdminGameQualityEvaluation["liveness"] {
+  const emptyLatency = { count: 0, p50: null, p95: null, max: null };
+  return {
+    experience_revision: null,
+    experiment_id: null,
+    variant: null,
+    feature_modes: {},
+    public_speech_count: 0,
+    timing_coverage: {},
+    stage_latency_ms: {},
+    prompt_chars: { ...emptyLatency },
+    hard_gate_duration_ms: { ...emptyLatency },
+    hard_retry_count: 0,
+    hard_retry_rate: null,
+    hard_exhausted_count: 0,
+    hard_exhausted_rate: null,
+    partial_speech_count: 0,
+    interrupted_speech_count: 0,
+    voice_timing_coverage: {},
+    tts_to_first_audio_ms: { ...emptyLatency },
+    turn_to_first_audio_ms: { ...emptyLatency },
+    voice_status_counts: {},
+    playback_timing_coverage: {},
+    playback_status_counts: {},
+    speaker_gap_ms: { ...emptyLatency },
+    actor_mind: { snapshot_count: 0, update_count: 0, source_complete_count: 0 },
+  };
+}
+
+function parseLatencySummary(value: unknown, path: string) {
+  const raw = recordValue(value);
+  return {
+    count: nonNegativeInteger(raw.count, `${path}.count`),
+    p50: nullableNonNegativeInteger(raw.p50, `${path}.p50`),
+    p95: nullableNonNegativeInteger(raw.p95, `${path}.p95`),
+    max: nullableNonNegativeInteger(raw.max, `${path}.max`),
+  };
+}
+
+function parseLatencyRecord(value: unknown) {
+  const raw = recordValue(value);
+  return Object.fromEntries(
+    Object.entries(raw).map(([key, item]) => [
+      key,
+      parseLatencySummary(item, `quality_evaluation.liveness.stage_latency_ms.${key}`),
+    ]),
+  );
+}
+
+function parseTimingCoverageRecord(value: unknown) {
+  const raw = recordValue(value);
+  return Object.fromEntries(
+    Object.entries(raw).map(([key, item]) => {
+      const coverage = recordValue(item);
+      const path = `quality_evaluation.liveness.timing_coverage.${key}`;
+      return [key, {
+        count: nonNegativeInteger(coverage.count, `${path}.count`),
+        denominator: nonNegativeInteger(coverage.denominator, `${path}.denominator`),
+        rate: nullableRate(coverage.rate, `${path}.rate`),
+      }];
+    }),
+  );
+}
+
+function parseCountRecord(value: unknown, path: string): Record<string, number> {
+  const raw = recordValue(value);
+  return Object.fromEntries(
+    Object.entries(raw).map(([key, item]) => [
+      key,
+      nonNegativeInteger(item, `${path}.${key}`),
+    ]),
+  );
+}
+
+function optionalEnumValue<T extends string | number>(
+  value: unknown,
+  allowed: readonly T[],
+  field: string,
+): T | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  return enumValue(value, allowed, field);
 }
 
 function parseQualityCriticalActions(
@@ -1007,12 +1144,15 @@ function nullableRate(value: unknown, field: string): number | null {
   return value;
 }
 
-function enumValue<Value extends string>(
+function enumValue<Value extends string | number>(
   value: unknown,
   allowed: readonly Value[],
   field: string,
 ): Value {
-  const parsed = stringValue(value, field);
+  const expectsNumber = allowed.some((item) => typeof item === "number");
+  const parsed = expectsNumber
+    ? nonNegativeInteger(value, field)
+    : stringValue(value, field);
   if (!allowed.includes(parsed as Value)) {
     throw invalidContract(`${field} 状态无效`);
   }

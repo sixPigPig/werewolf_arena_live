@@ -1,0 +1,618 @@
+{
+  "schema_version": 1,
+  "scope": "text_behavior_pilot_not_release_gate",
+  "panel": {
+    "schema_version": 1,
+    "review_id": "review_bdce85c602352d5f",
+    "experiment_id": "liveness-renderer-pilot-20260720",
+    "cluster_unit": "scenario_id",
+    "judgments_total": 36,
+    "judgments_usable": 36,
+    "reviewer_count": 3,
+    "scenario_count": 12,
+    "minimum_reviewers_per_item": 3,
+    "skipped_count": 0,
+    "missing_media_count": 0,
+    "damaged_media_count": 0,
+    "missing_or_damaged_rate": 0.0,
+    "candidate_preference": 0.6805555555555555,
+    "confidence_interval_95": {
+      "lower": 0.5833333333333334,
+      "upper": 0.7638888888888888
+    },
+    "slices": {
+      "endgame": {
+        "judgments": 3,
+        "candidate_preference": 0.6666666666666666
+      },
+      "endgame_pressure": {
+        "judgments": 3,
+        "candidate_preference": 0.6666666666666666
+      },
+      "ordinary_inference": {
+        "judgments": 3,
+        "candidate_preference": 0.6666666666666666
+      },
+      "ordinary_opening": {
+        "judgments": 3,
+        "candidate_preference": 1.0
+      },
+      "ordinary_pressure": {
+        "judgments": 3,
+        "candidate_preference": 0.3333333333333333
+      },
+      "ordinary_relationship": {
+        "judgments": 3,
+        "candidate_preference": 0.5
+      },
+      "ordinary_response": {
+        "judgments": 3,
+        "candidate_preference": 0.8333333333333334
+      },
+      "relationship_continuity": {
+        "judgments": 3,
+        "candidate_preference": 0.8333333333333334
+      },
+      "self_defense": {
+        "judgments": 3,
+        "candidate_preference": 0.6666666666666666
+      },
+      "sheriff": {
+        "judgments": 3,
+        "candidate_preference": 0.6666666666666666
+      },
+      "sheriff_persona": {
+        "judgments": 3,
+        "candidate_preference": 0.6666666666666666
+      },
+      "sheriff_pk": {
+        "judgments": 3,
+        "candidate_preference": 0.6666666666666666
+      }
+    },
+    "gates": {
+      "point_at_least_60_percent": true,
+      "ci_lower_above_50_percent": true,
+      "every_slice_at_least_50_percent": false,
+      "at_least_three_reviewers_per_item": true
+    }
+  },
+  "per_judge": {
+    "judge_codex": {
+      "schema_version": 1,
+      "review_id": "review_bdce85c602352d5f",
+      "experiment_id": "liveness-renderer-pilot-20260720",
+      "cluster_unit": "scenario_id",
+      "judgments_total": 12,
+      "judgments_usable": 12,
+      "reviewer_count": 1,
+      "scenario_count": 12,
+      "minimum_reviewers_per_item": 1,
+      "skipped_count": 0,
+      "missing_media_count": 0,
+      "damaged_media_count": 0,
+      "missing_or_damaged_rate": 0.0,
+      "candidate_preference": 0.75,
+      "confidence_interval_95": {
+        "lower": 0.5,
+        "upper": 1.0
+      },
+      "slices": {
+        "endgame": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "endgame_pressure": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "ordinary_inference": {
+          "judgments": 1,
+          "candidate_preference": 0.0
+        },
+        "ordinary_opening": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "ordinary_pressure": {
+          "judgments": 1,
+          "candidate_preference": 0.0
+        },
+        "ordinary_relationship": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "ordinary_response": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "relationship_continuity": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "self_defense": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "sheriff": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "sheriff_persona": {
+          "judgments": 1,
+          "candidate_preference": 0.0
+        },
+        "sheriff_pk": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        }
+      },
+      "gates": {
+        "point_at_least_60_percent": true,
+        "ci_lower_above_50_percent": false,
+        "every_slice_at_least_50_percent": false,
+        "at_least_three_reviewers_per_item": false
+      }
+    },
+    "judge_glm-5-2-260617": {
+      "schema_version": 1,
+      "review_id": "review_bdce85c602352d5f",
+      "experiment_id": "liveness-renderer-pilot-20260720",
+      "cluster_unit": "scenario_id",
+      "judgments_total": 12,
+      "judgments_usable": 12,
+      "reviewer_count": 1,
+      "scenario_count": 12,
+      "minimum_reviewers_per_item": 1,
+      "skipped_count": 0,
+      "missing_media_count": 0,
+      "damaged_media_count": 0,
+      "missing_or_damaged_rate": 0.0,
+      "candidate_preference": 0.5833333333333334,
+      "confidence_interval_95": {
+        "lower": 0.375,
+        "upper": 0.7916666666666666
+      },
+      "slices": {
+        "endgame": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "endgame_pressure": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "ordinary_inference": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "ordinary_opening": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "ordinary_pressure": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "ordinary_relationship": {
+          "judgments": 1,
+          "candidate_preference": 0.0
+        },
+        "ordinary_response": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "relationship_continuity": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "self_defense": {
+          "judgments": 1,
+          "candidate_preference": 0.0
+        },
+        "sheriff": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "sheriff_persona": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "sheriff_pk": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        }
+      },
+      "gates": {
+        "point_at_least_60_percent": false,
+        "ci_lower_above_50_percent": false,
+        "every_slice_at_least_50_percent": false,
+        "at_least_three_reviewers_per_item": false
+      }
+    },
+    "judge_deepseek-v4-pro": {
+      "schema_version": 1,
+      "review_id": "review_bdce85c602352d5f",
+      "experiment_id": "liveness-renderer-pilot-20260720",
+      "cluster_unit": "scenario_id",
+      "judgments_total": 12,
+      "judgments_usable": 12,
+      "reviewer_count": 1,
+      "scenario_count": 12,
+      "minimum_reviewers_per_item": 1,
+      "skipped_count": 0,
+      "missing_media_count": 0,
+      "damaged_media_count": 0,
+      "missing_or_damaged_rate": 0.0,
+      "candidate_preference": 0.7083333333333334,
+      "confidence_interval_95": {
+        "lower": 0.5833333333333334,
+        "upper": 0.8333333333333334
+      },
+      "slices": {
+        "endgame": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "endgame_pressure": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "ordinary_inference": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "ordinary_opening": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "ordinary_pressure": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "ordinary_relationship": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "ordinary_response": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "relationship_continuity": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "self_defense": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "sheriff": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        },
+        "sheriff_persona": {
+          "judgments": 1,
+          "candidate_preference": 1.0
+        },
+        "sheriff_pk": {
+          "judgments": 1,
+          "candidate_preference": 0.5
+        }
+      },
+      "gates": {
+        "point_at_least_60_percent": true,
+        "ci_lower_above_50_percent": true,
+        "every_slice_at_least_50_percent": true,
+        "at_least_three_reviewers_per_item": false
+      }
+    }
+  },
+  "orientation_stability": {
+    "judge_codex": {
+      "stable_items": 12,
+      "total_items": 12,
+      "items": [
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_076b4e71b5b88c24",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_2e28d68a0b6703d0",
+          "first_choice": "left",
+          "swapped_choice": "left",
+          "stable": true,
+          "final_choice": "left"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_3ec387ab62938e98",
+          "first_choice": "left",
+          "swapped_choice": "left",
+          "stable": true,
+          "final_choice": "left"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_55b5f96f24fc6a5a",
+          "first_choice": "left",
+          "swapped_choice": "left",
+          "stable": true,
+          "final_choice": "left"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_8f2ceaf86db27bf5",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_a47d95acbd590544",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_d1282bd735c555c5",
+          "first_choice": "left",
+          "swapped_choice": "left",
+          "stable": true,
+          "final_choice": "left"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_d7af171514dbde26",
+          "first_choice": "left",
+          "swapped_choice": "left",
+          "stable": true,
+          "final_choice": "left"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_ed10701382646bde",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_f24884dda5cb0c3f",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_f978bd647c3f3428",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_codex",
+          "item_id": "item_fa7a03c1060a214d",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        }
+      ]
+    },
+    "judge_glm-5-2-260617": {
+      "stable_items": 6,
+      "total_items": 12,
+      "items": [
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_076b4e71b5b88c24",
+          "first_choice": "right",
+          "swapped_choice": "tie",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_2e28d68a0b6703d0",
+          "first_choice": "tie",
+          "swapped_choice": "right",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_3ec387ab62938e98",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_55b5f96f24fc6a5a",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_8f2ceaf86db27bf5",
+          "first_choice": "right",
+          "swapped_choice": "tie",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_a47d95acbd590544",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_d1282bd735c555c5",
+          "first_choice": "left",
+          "swapped_choice": "tie",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_d7af171514dbde26",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_ed10701382646bde",
+          "first_choice": "tie",
+          "swapped_choice": "right",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_f24884dda5cb0c3f",
+          "first_choice": "left",
+          "swapped_choice": "right",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_f978bd647c3f3428",
+          "first_choice": "left",
+          "swapped_choice": "left",
+          "stable": true,
+          "final_choice": "left"
+        },
+        {
+          "reviewer_id": "judge_glm-5-2-260617",
+          "item_id": "item_fa7a03c1060a214d",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        }
+      ]
+    },
+    "judge_deepseek-v4-pro": {
+      "stable_items": 5,
+      "total_items": 12,
+      "items": [
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_076b4e71b5b88c24",
+          "first_choice": "right",
+          "swapped_choice": "left",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_2e28d68a0b6703d0",
+          "first_choice": "left",
+          "swapped_choice": "right",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_3ec387ab62938e98",
+          "first_choice": "left",
+          "swapped_choice": "left",
+          "stable": true,
+          "final_choice": "left"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_55b5f96f24fc6a5a",
+          "first_choice": "left",
+          "swapped_choice": "right",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_8f2ceaf86db27bf5",
+          "first_choice": "right",
+          "swapped_choice": "left",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_a47d95acbd590544",
+          "first_choice": "right",
+          "swapped_choice": "left",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_d1282bd735c555c5",
+          "first_choice": "left",
+          "swapped_choice": "right",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_d7af171514dbde26",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_ed10701382646bde",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_f24884dda5cb0c3f",
+          "first_choice": "left",
+          "swapped_choice": "right",
+          "stable": false,
+          "final_choice": "tie"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_f978bd647c3f3428",
+          "first_choice": "left",
+          "swapped_choice": "left",
+          "stable": true,
+          "final_choice": "left"
+        },
+        {
+          "reviewer_id": "judge_deepseek-v4-pro",
+          "item_id": "item_fa7a03c1060a214d",
+          "first_choice": "right",
+          "swapped_choice": "right",
+          "stable": true,
+          "final_choice": "right"
+        }
+      ]
+    }
+  }
+}

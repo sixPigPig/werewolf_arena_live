@@ -44,7 +44,15 @@ def test_public_speech_event_matches_supported_actions() -> None:
         "model_response_delta",
         actor="阿青",
         action="debate",
-        payload={"request_id": "req-1", "visible_text": "我先发言。", "is_public": True},
+        payload={
+            "schema_version": 2,
+            "commit_state": "accepted_segment",
+            "request_id": "req-1",
+            "speech_id": "sp_test",
+            "segment_id": "seg_test_1",
+            "visible_text": "我先发言。",
+            "is_public": True,
+        },
     )
 
     assert is_public_speech_event(event) is True
@@ -75,6 +83,24 @@ def test_complete_public_speech_is_materialized_from_action_parsed() -> None:
     assert utterance.request_id == "req-final"
     assert utterance.speaker_name == "1号玩家"
     assert utterance.text == "这是最终完整发言。"
+
+
+def test_segment_final_action_does_not_create_duplicate_full_speech_voice() -> None:
+    event = live_event(
+        10,
+        "action_parsed",
+        actor="阿青",
+        action="debate",
+        payload={
+            "speech_id": "sp_test",
+            "speech_stream_mode": "segments_v1",
+            "tts_suppressed_by_segments": True,
+            "visible_result": {"say": "这是已经逐句提交的完整发言。"},
+        },
+    )
+
+    assert is_public_complete_speech_event(event) is False
+    assert voice_job_candidate(event) is None
 
 
 def test_exile_last_words_use_the_exiled_players_public_voice() -> None:
@@ -413,7 +439,15 @@ def test_event_to_player_voice_utterance_uses_visible_text() -> None:
         "model_response_delta",
         actor="阿青",
         action="sheriff_speech",
-        payload={"request_id": "req-8", "visible_text": "我竞选警长。", "is_public": True},
+        payload={
+            "schema_version": 2,
+            "commit_state": "accepted_segment",
+            "request_id": "req-8",
+            "speech_id": "sp_test",
+            "segment_id": "seg_test_8",
+            "visible_text": "我竞选警长。",
+            "is_public": True,
+        },
     )
 
     utterance = event_to_voice_utterance(event, config)
@@ -434,7 +468,15 @@ def test_event_to_player_voice_utterance_uses_seat_label_when_available() -> Non
         "model_response_delta",
         actor="阿青",
         action="debate",
-        payload={"request_id": "req-8", "visible_text": "我先发言。", "is_public": True},
+        payload={
+            "schema_version": 2,
+            "commit_state": "accepted_segment",
+            "request_id": "req-8",
+            "speech_id": "sp_test",
+            "segment_id": "seg_test_8",
+            "visible_text": "我先发言。",
+            "is_public": True,
+        },
     )
 
     utterance = event_to_voice_utterance(event, config, player_seats={"阿青": 1})
@@ -453,7 +495,11 @@ def test_event_to_player_voice_utterance_preserves_model_visible_text() -> None:
         actor="阿青",
         action="debate",
         payload={
+            "schema_version": 2,
+            "commit_state": "accepted_segment",
             "request_id": "req-8",
+            "speech_id": "sp_test",
+            "segment_id": "seg_test_8",
             "visible_text": "我觉得白石像狼，先听南风发言。",
             "is_public": True,
         },

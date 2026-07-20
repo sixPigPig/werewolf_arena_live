@@ -1,0 +1,151 @@
+{
+  "ratings": [
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_fa7a03c1060a214d",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_ed10701382646bde",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_55b5f96f24fc6a5a",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_f24884dda5cb0c3f",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_a47d95acbd590544",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_f978bd647c3f3428",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_076b4e71b5b88c24",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_d1282bd735c555c5",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_8f2ceaf86db27bf5",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_d7af171514dbde26",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_2e28d68a0b6703d0",
+      "media_status": "ok|missing|damaged"
+    },
+    {
+      "choice": "left|right|tie|skip",
+      "dimensions": {
+        "emotion_fit": "1-5",
+        "persona_distinctiveness": "1-5",
+        "relationship_continuity": "1-5",
+        "responsiveness": "1-5",
+        "spoken_naturalness": "1-5"
+      },
+      "item_id": "item_3ec387ab62938e98",
+      "media_status": "ok|missing|damaged"
+    }
+  ],
+  "review_id": "review_bdce85c602352d5f",
+  "reviewer_id": "replace-with-anonymous-reviewer-id",
+  "schema_version": 1
+}

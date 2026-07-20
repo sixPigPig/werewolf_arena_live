@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const pcmMocks = vi.hoisted(() => ({
   close: vi.fn().mockResolvedValue(undefined),
   createPcmAudioScheduler: vi.fn(),
+  fadeOut: vi.fn().mockResolvedValue(undefined),
   resume: vi.fn().mockResolvedValue(undefined),
   schedule: vi.fn().mockResolvedValue({
     duration: 0.01,
@@ -31,11 +32,13 @@ const originalRevokeObjectURL = URL.revokeObjectURL;
 
 function resetPcmMocks() {
   pcmMocks.close.mockReset();
+  pcmMocks.fadeOut.mockReset();
   pcmMocks.resume.mockReset();
   pcmMocks.schedule.mockReset();
   pcmMocks.suspend.mockReset();
   pcmMocks.createPcmAudioScheduler.mockReset();
   pcmMocks.close.mockResolvedValue(undefined);
+  pcmMocks.fadeOut.mockResolvedValue(undefined);
   pcmMocks.resume.mockResolvedValue(undefined);
   pcmMocks.schedule.mockResolvedValue({
     duration: 0.01,
@@ -45,6 +48,7 @@ function resetPcmMocks() {
   pcmMocks.suspend.mockResolvedValue(undefined);
   pcmMocks.createPcmAudioScheduler.mockReturnValue({
     close: pcmMocks.close,
+    fadeOut: pcmMocks.fadeOut,
     resume: pcmMocks.resume,
     schedule: pcmMocks.schedule,
     suspend: pcmMocks.suspend,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import sys
 from datetime import datetime
@@ -36,6 +37,13 @@ from app.werewolf.private_memory_cleanup import cleanup_private_round_memory
 from app.werewolf.quality_store import enqueue_recent_missing_evaluations
 from app.werewolf.quality_worker import run_quality_evaluation_worker
 from app.werewolf.live import LiveRunRegistry
+from app.werewolf.liveness_review import (
+    analyze_review_ratings,
+    build_review_package,
+    load_manifest,
+    load_ratings,
+    write_review_package,
+)
 from app.werewolf.runner import GameRunError, run_game
 from app.werewolf.rules import DEFAULT_RULE_SET_ID, freeze_rule_set_snapshot, get_rule_set
 from app.werewolf.voice_materializer import (
@@ -188,6 +196,26 @@ def _build_parser() -> argparse.ArgumentParser:
     quality_backfill_parser.add_argument("--limit", type=int, default=100)
     quality_backfill_parser.add_argument("--apply", action="store_true")
     quality_backfill_parser.set_defaults(func=_backfill_quality_evaluations_command)
+
+    review_export_parser = subparsers.add_parser(
+        "export-liveness-review",
+        help="Export a deterministic anonymous frozen-scene A/B review package.",
+    )
+    review_export_parser.add_argument("--manifest", type=Path, required=True)
+    review_export_parser.add_argument("--output-dir", type=Path, required=True)
+    review_export_parser.add_argument("--randomization-seed", required=True)
+    review_export_parser.set_defaults(func=_export_liveness_review_command)
+
+    review_analyze_parser = subparsers.add_parser(
+        "analyze-liveness-review",
+        help="Analyze anonymous ratings with scenario-cluster bootstrap intervals.",
+    )
+    review_analyze_parser.add_argument("--answer-key", type=Path, required=True)
+    review_analyze_parser.add_argument("--ratings", type=Path, action="append", required=True)
+    review_analyze_parser.add_argument("--output", type=Path)
+    review_analyze_parser.add_argument("--bootstrap-samples", type=int, default=10_000)
+    review_analyze_parser.add_argument("--bootstrap-seed", type=int, default=0)
+    review_analyze_parser.set_defaults(func=_analyze_liveness_review_command)
 
     live_reaper_parser = subparsers.add_parser(
         "run-live-run-reaper",
@@ -641,6 +669,53 @@ def _backfill_quality_evaluations_command(args: argparse.Namespace) -> int:
         f"mode={'apply' if args.apply else 'dry-run'} matched={result['matched']} "
         f"enqueued={result['enqueued']} skipped={result['skipped']}"
     )
+    return 0
+
+
+def _export_liveness_review_command(args: argparse.Namespace) -> int:
+    try:
+        manifest = load_manifest(args.manifest)
+        package = build_review_package(
+            manifest,
+            randomization_seed=args.randomization_seed,
+        )
+        write_review_package(
+            package,
+            args.output_dir,
+            media_root=args.manifest.parent,
+        )
+    except Exception as exc:
+        print(f"liveness review export failed: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"review_id={package.reviewer_packet['review_id']} "
+        f"items={len(package.reviewer_packet['items'])} output={args.output_dir}"
+    )
+    return 0
+
+
+def _analyze_liveness_review_command(args: argparse.Namespace) -> int:
+    try:
+        answer_key = json.loads(args.answer_key.read_text(encoding="utf-8"))
+        ratings = [
+            rating
+            for path in args.ratings
+            for rating in load_ratings(path)
+        ]
+        result = analyze_review_ratings(
+            answer_key=answer_key,
+            ratings=ratings,
+            bootstrap_samples=args.bootstrap_samples,
+            bootstrap_seed=args.bootstrap_seed,
+        )
+        rendered = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
+        if args.output is not None:
+            args.output.write_text(rendered + "\n", encoding="utf-8")
+        else:
+            print(rendered)
+    except Exception as exc:
+        print(f"liveness review analysis failed: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

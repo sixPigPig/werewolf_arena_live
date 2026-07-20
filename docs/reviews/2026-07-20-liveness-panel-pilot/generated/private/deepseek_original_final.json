@@ -1,0 +1,160 @@
+{
+  "ratings": [
+    {
+      "item_id": "item_fa7a03c1060a214d",
+      "choice": "right",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 3,
+        "emotion_fit": 4,
+        "relationship_continuity": 3,
+        "factual_grounding": 3
+      },
+      "reason": "右以‘呃，第一晚平安夜，信息不多啊。大家有什么看法吗？’开头，语气词和短语更贴近真人听完前文后的自然反应，左的‘公开信息显示…’等用语过于书面，有报告腔。"
+    },
+    {
+      "item_id": "item_ed10701382646bde",
+      "choice": "right",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 3,
+        "emotion_fit": 4,
+        "relationship_continuity": 3,
+        "factual_grounding": 4
+      },
+      "reason": "右的‘1号玩家，你漏了一种可能啊…’以口语化提醒回应1号发言，自然补完同刀同守，而左的‘投错一次村民…好人容错只剩一轮’虽分析到位，但更像教学复盘，临场接话感不足。"
+    },
+    {
+      "item_id": "item_55b5f96f24fc6a5a",
+      "choice": "left",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 3,
+        "factual_grounding": 3
+      },
+      "reason": "左以‘6号，你刚才因为1号漏了一种可能性就挂他，是不是有点急了？’直接质疑，短句口语符合即时反应；右的‘1号开头说两种可能…’较结构化，带报告感。"
+    },
+    {
+      "item_id": "item_f24884dda5cb0c3f",
+      "choice": "left",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      },
+      "reason": "左的‘标准能不能统一一下？’掷地有声，抓住3号选择性忽视的漏洞，生活化语言；右虽详列票型但过于周密，‘你现在必须给出理由’等略带训练痕迹。"
+    },
+    {
+      "item_id": "item_a47d95acbd590544",
+      "choice": "right",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 3,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      },
+      "reason": "右的‘你一直反问别人，却始终不回答…这让我很难信任你。’是自然的不信任表达；左刻意强调‘互动变化’‘关系线变了’，活人感雕琢过度。"
+    },
+    {
+      "item_id": "item_f978bd647c3f3428",
+      "choice": "left",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 3,
+        "emotion_fit": 3,
+        "relationship_continuity": 3,
+        "factual_grounding": 3
+      },
+      "reason": "左仅一句‘能告诉大家吗？’直接提问，符合现场玩家急于获取信息的状态；右的长篇推理虽有逻辑，但‘一个被跳过的事实’等属于复盘用语，不够即兴。"
+    },
+    {
+      "item_id": "item_076b4e71b5b88c24",
+      "choice": "right",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 5
+      },
+      "reason": "右以‘你昨天用不共边票型替3号降低狼面，今天却突然把票口转向8号’点出矛盾，口语化‘逻辑链条断了吧？’非常自然；左的‘先确认公开事实’开头显得刻板。"
+    },
+    {
+      "item_id": "item_d1282bd735c555c5",
+      "choice": "left",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 3,
+        "factual_grounding": 3
+      },
+      "reason": "左的‘说不通吧？’和‘别藏着’直抒胸臆，符合对场上混乱逻辑的不耐烦；右的‘我补一个被遗漏的角度’太像教学开场，临场感弱。"
+    },
+    {
+      "item_id": "item_8f2ceaf86db27bf5",
+      "choice": "right",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 3,
+        "relationship_continuity": 3,
+        "factual_grounding": 3
+      },
+      "reason": "右的‘警徽流先留一个，后面再报。过了。’有瑕疵但更真实，左的完美预言家发言太标准，反而像教科书，不如右有活人感。"
+    },
+    {
+      "item_id": "item_d7af171514dbde26",
+      "choice": "right",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 3,
+        "relationship_continuity": 3,
+        "factual_grounding": 3
+      },
+      "reason": "右的‘哎，2号玩家啊，村民一个，上来凑个热闹。’十分生动，左虽也有‘不装大尾巴狼’，但整体竞选发言冗长，不如右简短即兴。"
+    },
+    {
+      "item_id": "item_2e28d68a0b6703d0",
+      "choice": "left",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 5,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      },
+      "reason": "左的‘我早就说了…别转移话题’是典型的即时回呛，带情绪；右的‘这是因果链’和‘票型会说话’有格言感，不够自然。"
+    },
+    {
+      "item_id": "item_3ec387ab62938e98",
+      "choice": "left",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 5,
+        "relationship_continuity": 4,
+        "factual_grounding": 5
+      },
+      "reason": "左以反问‘这个推理置信度有多高？’开场，随后解释并反击，语流自然；右的‘这条推论我先给置信度’措辞生硬，不像日常对话。"
+    }
+  ]
+}

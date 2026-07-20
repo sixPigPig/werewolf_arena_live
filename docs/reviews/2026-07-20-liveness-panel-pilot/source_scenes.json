@@ -1,0 +1,374 @@
+{
+  "schema_version": 1,
+  "experiment_id": "liveness-renderer-pilot-20260720",
+  "generator_model": "deepseek-v4-flash",
+  "scenarios": [
+    {
+      "scenario_id": "ordinary-opening-001",
+      "slice": "ordinary_opening",
+      "action": "debate",
+      "speaker": "1号玩家",
+      "context": "第1轮首置位发言。昨夜平安夜，8人都存活；白天还没有其他玩家发言。",
+      "baseline_text": "公开信息显示第一轮夜晚无人出局，我提一个可验证的疑点：这轮平安夜要么是守卫守中了要杀的人，要么就是狼人主动选择了空刀。大家可以聊聊自己对平安夜的看法，我先过，听听后面所有人的发言再归票。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "1号玩家",
+        "persona_style": "谨慎、先观察，不在信息不足时站死边",
+        "public_state_boundary": {"round": 1, "remaining_players": "1至8号", "options": "公开发言", "eligibility": {}},
+        "recent_committed_turns": [],
+        "relevant_public_facts": [{"fact_id": "night-1-peace", "text": "第一夜无人出局，是平安夜", "trust_class": "confirmed"}],
+        "public_stimulus": ["第一夜平安夜，当前是白天首置位"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-opening-001", "action_id": "pilot-opening-001", "fence": {"round": 1, "phase": "day_debate"},
+          "stimulus_sources": [], "response_targets": [], "primary_speech_act": "hedge", "secondary_speech_act": "ask", "social_goal": "signal_uncertainty",
+          "public_points": [{"kind": "ask", "target": null, "strength": "low", "basis_public_sources": []}],
+          "must_reference_public_fact_ids": ["night-1-peace"], "length_band": "brief", "affect_impulse": "restrained"
+        }
+      },
+      "source_trace": {"session_id": "game_7ebbafee", "round": 1, "stage": "debate", "actor": "鹿眠"}
+    },
+    {
+      "scenario_id": "ordinary-correction-002",
+      "slice": "ordinary_response",
+      "action": "debate",
+      "speaker": "4号玩家",
+      "context": "第1轮中置位。1号刚把平安夜解释成守卫守中或狼人空刀，并说先听后置位。",
+      "baseline_text": "1号把平安夜归为两种可能，但漏了一种：守卫和狼人选了同一个人，同刀同守也是平安夜。这点需要补上。另外第一轮信息本来就少，投错一次村民，夜里再倒一个，直接进六人两狼的残局，好人容错只剩一轮。所以我不急着归票，先听2号和3号把话说完，投票前再看谁的发言跟票型对不上。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "4号玩家",
+        "persona_style": "冷静、擅长纠错和算轮次，但不轻易强归",
+        "public_state_boundary": {"round": 1, "remaining_players": "1至8号", "options": "公开发言", "eligibility": {}},
+        "recent_committed_turns": ["1号：平安夜可能是守卫守中或狼人空刀，我先听后面发言再归票。"],
+        "relevant_public_facts": [
+          {"fact_id": "night-1-peace", "text": "第一夜无人出局", "trust_class": "confirmed"},
+          {"fact_id": "seat-1-claim", "text": "1号只列出了守中和空刀两种解释", "trust_class": "public_speech"}
+        ],
+        "public_stimulus": ["上一位遗漏了同刀同守的可能"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-correction-002", "action_id": "pilot-correction-002", "fence": {"round": 1, "phase": "day_debate"},
+          "stimulus_sources": [], "response_targets": ["1号玩家"], "primary_speech_act": "respond", "secondary_speech_act": "hedge", "social_goal": "persuade",
+          "public_points": [{"kind": "challenge", "target": "1号玩家", "strength": "low", "basis_public_sources": []}],
+          "must_reference_public_fact_ids": ["night-1-peace", "seat-1-claim"], "length_band": "normal", "affect_impulse": "steady"
+        }
+      },
+      "source_trace": {"session_id": "game_7ebbafee", "round": 1, "stage": "debate", "actor": "祁野"}
+    },
+    {
+      "scenario_id": "ordinary-resist-pileon-003",
+      "slice": "ordinary_relationship",
+      "action": "debate",
+      "speaker": "7号玩家",
+      "context": "第1轮。1号遗漏一种平安夜解释，4号已补全；6号随即以此强挂1号。当前信息很少，2、3、5、8号还没说话。",
+      "baseline_text": "1号开头说两种可能，4号补了第三种，这本身正常，平安夜可能性本来就该一起摆出来讨论。6号现在直接挂票1号，理由是1号‘漏了同刀同守’，但这个补全是4号做的，6号没补内容，只补情绪。第一轮信息这么少，6号这么快锁定票，我暂时不会跟。我现在的范围是6号和2号，2号还没说话，6号先记一笔，听完2号、3号、5号、8号再收窄。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "7号玩家",
+        "persona_style": "慢热、重视增量信息，反感情绪裹挟",
+        "public_state_boundary": {"round": 1, "remaining_players": "1至8号", "options": "公开发言", "eligibility": {}},
+        "recent_committed_turns": [
+          "1号：平安夜可能是守中或空刀，我先听后面。",
+          "4号：还可能同刀同守，先不急着归票。",
+          "6号：1号漏了同刀同守，我先挂1号。"
+        ],
+        "relevant_public_facts": [
+          {"fact_id": "night-1-peace", "text": "第一夜平安夜", "trust_class": "confirmed"},
+          {"fact_id": "seat-6-vote", "text": "6号因1号遗漏一种可能而率先挂票1号", "trust_class": "public_speech"}
+        ],
+        "public_stimulus": ["6号在信息不足时强挂1号"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-pileon-003", "action_id": "pilot-pileon-003", "fence": {"round": 1, "phase": "day_debate"},
+          "stimulus_sources": [], "response_targets": ["6号玩家"], "primary_speech_act": "challenge", "secondary_speech_act": "hedge", "social_goal": "shift_pressure",
+          "public_points": [{"kind": "suspect", "target": "6号玩家", "strength": "medium", "basis_public_sources": []}],
+          "must_reference_public_fact_ids": ["seat-6-vote"], "length_band": "normal", "affect_impulse": "restrained"
+        }
+      },
+      "source_trace": {"session_id": "game_7ebbafee", "round": 1, "stage": "debate", "actor": "老周"}
+    },
+    {
+      "scenario_id": "ordinary-cross-examine-004",
+      "slice": "ordinary_pressure",
+      "action": "debate",
+      "speaker": "4号玩家",
+      "context": "第2轮。1号质疑第一轮四名未发言玩家一致跟票；3号再次强归1号，并称未发言也能投。4号上一轮曾反对过早锁票。",
+      "baseline_text": "3号，你刚才说‘今天全票挂1号’，但你自己第1轮也没发言，一样跟票6号。1号两轮都在主动产出信息，你两轮只在做一件事——归票1号。我问你一个具体的：5号和8号第1轮同样零发言跟票，你为什么不把他们放进怀疑范围，只盯1号？5号、8号，投票前你们必须给出投6号的理由和当前怀疑对象，不说话我默认票型有问题。这一票我先看5号和8号怎么回，再落。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "4号玩家",
+        "persona_style": "直接追问具体矛盾，重视前后标准一致",
+        "public_state_boundary": {"round": 2, "remaining_players": "1、2、3、4、5、8号", "options": "公开发言", "eligibility": {}},
+        "recent_committed_turns": [
+          "1号：第一轮有四个人没发言就跟票，这个一致性太巧。",
+          "2号：1号需要解释为什么第一轮不拍身份。",
+          "3号：没发言不代表不能投，今天全票挂1号。"
+        ],
+        "relevant_public_facts": [
+          {"fact_id": "round-1-vote", "text": "第一轮除6号外其余玩家都投了6号", "trust_class": "confirmed"},
+          {"fact_id": "seat-3-repeat", "text": "3号连续两轮把票口压向1号", "trust_class": "public_speech"}
+        ],
+        "public_stimulus": ["3号再次强归1号，却没有同样审视5号和8号"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-cross-004", "action_id": "pilot-cross-004", "fence": {"round": 2, "phase": "day_debate"},
+          "stimulus_sources": [], "response_targets": ["3号玩家", "5号玩家"], "primary_speech_act": "challenge", "secondary_speech_act": "ask", "social_goal": "probe",
+          "public_points": [{"kind": "challenge", "target": "3号玩家", "strength": "high", "basis_public_sources": []}],
+          "must_reference_public_fact_ids": ["round-1-vote", "seat-3-repeat"], "length_band": "normal", "affect_impulse": "sharper"
+        }
+      },
+      "source_trace": {"session_id": "game_7ebbafee", "round": 2, "stage": "debate", "actor": "祁野"}
+    },
+    {
+      "scenario_id": "ordinary-relationship-shift-005",
+      "slice": "relationship_continuity",
+      "action": "debate",
+      "speaker": "9号玩家",
+      "context": "第1轮警长竞选后。3号自称女巫却回避‘干净’的定义，4号预言家给出警徽流及原因。9号先前已追问3号。",
+      "baseline_text": "回应3号：你让我追问4号，但4号说了验人是底气，这算因果链。可你怎么不回答我和12号的‘干净’定义？你避开了，反而问我——这本身就是互动变化。我记住这条线。目前4号警徽流有逻辑，3号逃避核心问题。我票向暂定4号，但会听完10号。关系线变了，我盯着3号后续补不补解释。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "9号玩家",
+        "persona_style": "敏感于互动变化，愿意暂时站边但保留回滚",
+        "public_state_boundary": {"round": 1, "remaining_players": "1至12号除夜间出局者", "options": "公开发言", "eligibility": {}},
+        "recent_committed_turns": [
+          "3号：我是真女巫，拿警徽出发言差的，站错我晚上毒自己。",
+          "4号：我是预言家，验人是我敢留警徽流的底气。",
+          "12号：3号请回答‘干净’到底指什么。"
+        ],
+        "relevant_public_facts": [
+          {"fact_id": "seat-3-evasion", "text": "3号没有回答9号和12号对‘干净’定义的追问", "trust_class": "public_speech"},
+          {"fact_id": "seat-4-answer", "text": "4号回答警徽流来源是验人底气", "trust_class": "public_speech"}
+        ],
+        "public_stimulus": ["3号反问9号，却仍未回答9号原问题"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-relation-005", "action_id": "pilot-relation-005", "fence": {"round": 1, "phase": "day_debate"},
+          "stimulus_sources": [], "response_targets": ["3号玩家", "4号玩家"], "primary_speech_act": "respond", "secondary_speech_act": "challenge", "social_goal": "probe",
+          "public_points": [
+            {"kind": "suspect", "target": "3号玩家", "strength": "medium", "basis_public_sources": []},
+            {"kind": "trust", "target": "4号玩家", "strength": "low", "basis_public_sources": []}
+          ],
+          "must_reference_public_fact_ids": ["seat-3-evasion", "seat-4-answer"], "length_band": "normal", "affect_impulse": "sharper"
+        }
+      },
+      "source_trace": {"session_id": "game_16060126", "round": 1, "stage": "debate", "actor": "小满"}
+    },
+    {
+      "scenario_id": "ordinary-badge-gap-006",
+      "slice": "ordinary_inference",
+      "action": "debate",
+      "speaker": "10号玩家",
+      "context": "第2轮。4号预言家夜间死亡，临死把警徽给11号；4号此前的警徽流先验10后验12，12号也已死亡。11号尚未传递验人信息。",
+      "baseline_text": "10号。一个被跳过的事实：4号警徽流先验我10号后验12号，12号昨晚也倒了。4号夜间死亡把警徽飞给11号——如果4号真验了我，警徽流向应该携带查验结果的信息。11号接了警徽，却没有任何关于4号验人的传递说明。两条路：要么4号根本没验我，警徽流只是竞选话术；要么11号接徽时隐瞒了信息。不管哪种，11号需要正面交代接警徽时有没有收到4号的验人指向。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "10号玩家",
+        "persona_style": "安静但会抓被跳过的程序性事实，表达克制",
+        "public_state_boundary": {"round": 2, "remaining_players": "1、3、5、7、8、9、10、11号", "options": "公开发言", "eligibility": {}},
+        "recent_committed_turns": ["天亮公布4号和12号夜间出局，4号的警徽移交给11号。"],
+        "relevant_public_facts": [
+          {"fact_id": "badge-flow", "text": "4号竞选时声明先验10号、后验12号", "trust_class": "confirmed"},
+          {"fact_id": "badge-transfer", "text": "4号死亡后警徽由11号继承", "trust_class": "confirmed"}
+        ],
+        "public_stimulus": ["11号接警徽后尚未说明是否收到验人指向"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-badge-006", "action_id": "pilot-badge-006", "fence": {"round": 2, "phase": "day_debate"},
+          "stimulus_sources": [], "response_targets": ["11号玩家"], "primary_speech_act": "ask", "secondary_speech_act": "challenge", "social_goal": "probe",
+          "public_points": [{"kind": "ask", "target": "11号玩家", "strength": "high", "basis_public_sources": []}],
+          "must_reference_public_fact_ids": ["badge-flow", "badge-transfer"], "length_band": "normal", "affect_impulse": "steady"
+        }
+      },
+      "source_trace": {"session_id": "game_16060126", "round": 2, "stage": "debate", "actor": "沈雾"}
+    },
+    {
+      "scenario_id": "endgame-counterexample-007",
+      "slice": "endgame",
+      "action": "debate",
+      "speaker": "5号玩家",
+      "context": "第3轮仅剩6人。1号想投8号，理由是8号上警退水没解释；但1号上一轮曾用票型判断3号不是狼。3号遗言已确认女巫，8号曾与3号一起投11号。",
+      "baseline_text": "5号。先确认公开事实：第2轮投11号的只有3号和8号，这点1号没说错。但1号上轮自己说过‘2号投3说明2与3不共边，3号非狼’——3号遗言确认是女巫，8号跟女巫投11号，在票型上是跟好人站队，不是冲票。反问1号：如果8号是狼，跟着真女巫投自己狼队友11，收益是什么？我找不到。11号夜里被刀、警徽撕毁，获利的是不用再应对1.5票警长权重的人。8号上轮敢陪3号投11，票型上反而是好人倾向。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "5号玩家",
+        "persona_style": "喜欢用反事实检验关系链，语气冷静但会明确反驳",
+        "public_state_boundary": {"round": 3, "remaining_players": "1、5、7、8、9、10号", "options": "公开发言", "eligibility": {}},
+        "recent_committed_turns": ["1号：8号上警退水一直没说动机，今天我投8号。"],
+        "relevant_public_facts": [
+          {"fact_id": "round-2-vote", "text": "第2轮只有3号和8号投11号", "trust_class": "confirmed"},
+          {"fact_id": "seat-3-role", "text": "3号遗言确认自己是女巫", "trust_class": "confirmed"},
+          {"fact_id": "seat-1-prior", "text": "1号上一轮用不共边票型替3号降低狼面", "trust_class": "public_speech"}
+        ],
+        "public_stimulus": ["1号今天把票口转向曾和女巫同票的8号"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-endgame-007", "action_id": "pilot-endgame-007", "fence": {"round": 3, "phase": "day_debate"},
+          "stimulus_sources": [], "response_targets": ["1号玩家", "8号玩家"], "primary_speech_act": "challenge", "secondary_speech_act": "defend", "social_goal": "shift_pressure",
+          "public_points": [
+            {"kind": "challenge", "target": "1号玩家", "strength": "high", "basis_public_sources": []},
+            {"kind": "defend", "target": "8号玩家", "strength": "medium", "basis_public_sources": []}
+          ],
+          "must_reference_public_fact_ids": ["round-2-vote", "seat-3-role", "seat-1-prior"], "length_band": "normal", "affect_impulse": "sharper"
+        }
+      },
+      "source_trace": {"session_id": "game_16060126", "round": 3, "stage": "debate", "actor": "林砚"}
+    },
+    {
+      "scenario_id": "endgame-hidden-information-008",
+      "slice": "endgame_pressure",
+      "action": "debate",
+      "speaker": "9号玩家",
+      "context": "第4轮仅剩6人。上一轮7号在8号预言家发言前自爆，导致8号没能公布验人；前置位有人认为自爆是为保护12号，但12号当夜死亡。",
+      "baseline_text": "我补一个被遗漏的角度：7号自爆的时间点是在8号发言之前，狼队最怕的是8号报出真实验人信息，而不是保护12号。7号自爆迫使白天直接结束，8号无法报验，这才是核心收益。5号说7号自爆是为了保护12号不被投，但12号当晚就被刀，如果12号是狼，狼队自爆保他再刀他毫无逻辑；如果12号是好人，自爆保一个好人再刀，也不合理。所以保护12号不是动机，隐藏8号验人信息才是。现在8号必须回答：你第2夜验了谁？第3夜验了谁？如果答不出或矛盾，8号就是狼；如果能闭环，我们按验人重新排坑。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "9号玩家",
+        "persona_style": "擅长从时序找动机，越到残局越简洁强硬",
+        "public_state_boundary": {"round": 4, "remaining_players": "1、2、5、8、9、11号", "options": "公开发言", "eligibility": {}},
+        "recent_committed_turns": [
+          "5号：7号自爆可能是在保护12号。",
+          "2号：8号必须主动报出两夜验人。",
+          "1号：也可能是7号想吞掉12号已经露出的破绽。"
+        ],
+        "relevant_public_facts": [
+          {"fact_id": "explode-order", "text": "7号在8号发言前自爆，白天随即结束", "trust_class": "confirmed"},
+          {"fact_id": "seat-12-death", "text": "12号在自爆后的夜间死亡", "trust_class": "confirmed"}
+        ],
+        "public_stimulus": ["关于7号自爆动机的解释发生分歧"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-hidden-008", "action_id": "pilot-hidden-008", "fence": {"round": 4, "phase": "day_debate"},
+          "stimulus_sources": [], "response_targets": ["5号玩家", "8号玩家"], "primary_speech_act": "redirect", "secondary_speech_act": "ask", "social_goal": "probe",
+          "public_points": [
+            {"kind": "challenge", "target": "5号玩家", "strength": "medium", "basis_public_sources": []},
+            {"kind": "ask", "target": "8号玩家", "strength": "high", "basis_public_sources": []}
+          ],
+          "must_reference_public_fact_ids": ["explode-order", "seat-12-death"], "length_band": "normal", "affect_impulse": "sharper"
+        }
+      },
+      "source_trace": {"session_id": "game_dd132553", "round": 4, "stage": "debate", "actor": "小满"}
+    },
+    {
+      "scenario_id": "sheriff-concise-claim-009",
+      "slice": "sheriff",
+      "action": "sheriff_speech",
+      "speaker": "9号玩家",
+      "context": "第1轮警长竞选。9号是警上较早发言位，要公开昨夜查验、今日票口和警徽流。",
+      "baseline_text": "我是预言家，昨晚查了7号，狼人。今天出7，警徽流先11后12。竞选警长，归票明确，警徽会交给最信任的好人。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "9号玩家",
+        "persona_style": "寡言、报关键信息，不做长篇铺垫",
+        "public_state_boundary": {"round": 1, "remaining_players": "1至12号", "options": "竞选警长发言", "eligibility": {}},
+        "recent_committed_turns": ["前置位有人竞选警长，但尚无人公开预言家查验。"],
+        "relevant_public_facts": [
+          {"fact_id": "seer-claim", "text": "9号公开声称自己是预言家", "trust_class": "public_speech"},
+          {"fact_id": "check-seat-7", "text": "9号公开声称昨夜查验7号为狼人", "trust_class": "public_speech"}
+        ],
+        "public_stimulus": ["需要在竞选中明确查验、票口和后续验人顺序"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-sheriff-009", "action_id": "pilot-sheriff-009", "fence": {"round": 1, "phase": "sheriff_speech"},
+          "stimulus_sources": [], "response_targets": ["7号玩家"], "primary_speech_act": "vote_only", "secondary_speech_act": "summarize", "social_goal": "persuade",
+          "public_points": [{"kind": "vote_intent", "target": "7号玩家", "strength": "high", "basis_public_sources": []}],
+          "must_reference_public_fact_ids": ["check-seat-7"], "length_band": "brief", "affect_impulse": "steady"
+        }
+      },
+      "source_trace": {"session_id": "game_07eb730b", "round": 1, "stage": "sheriff_speech", "actor": "小满"}
+    },
+    {
+      "scenario_id": "sheriff-colloquial-010",
+      "slice": "sheriff_persona",
+      "action": "sheriff_speech",
+      "speaker": "2号玩家",
+      "context": "第1轮警长竞选。9号跳预言家查杀7号但没报完整警徽流；6号跳女巫，称平安夜用了解药且毒药还在。2号是普通村民，也上警竞选。",
+      "baseline_text": "大家好，2号村民上警。先表态：我就是个平民，没预言家的查验，也没女巫的瓶瓶罐罐，所以警徽流我给不了，也不装大尾巴狼乱指路。聊几句现状。9号跳预言家查杀7号，这个力度大，但警徽流没报，我站边上先听9号后面怎么补。6号跳女巫，平安夜能闭环，逻辑上没硬伤，但解药用了、毒药还在，这瓶毒药后面落到谁头上才是关键，我盯着。如果我当选警长，发言顺序按警下先开始，警上后排，让信息充分露出来再定归。归票前我会把每个人的站边和矛盾点摆桌上，谁的逻辑链断了、谁的故事太挤，直接拎出来。警徽只交给逻辑最正的好人，不交感情票、不交场面票。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "2号玩家",
+        "persona_style": "市井幽默、愿意自嘲，但关键判断不含糊",
+        "public_state_boundary": {"round": 1, "remaining_players": "1至12号", "options": "竞选警长发言", "eligibility": {}},
+        "recent_committed_turns": [
+          "9号跳预言家，称7号是查杀，但没有完整报出警徽流。",
+          "6号跳女巫，称平安夜用了解药，毒药仍在。"
+        ],
+        "relevant_public_facts": [
+          {"fact_id": "seat-9-claim", "text": "9号公开跳预言家并查杀7号", "trust_class": "public_speech"},
+          {"fact_id": "seat-6-claim", "text": "6号公开跳女巫并称已经使用解药", "trust_class": "public_speech"}
+        ],
+        "public_stimulus": ["神职对跳信息尚未完全闭环，2号以村民身份竞选"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-sheriff-010", "action_id": "pilot-sheriff-010", "fence": {"round": 1, "phase": "sheriff_speech"},
+          "stimulus_sources": [], "response_targets": ["9号玩家", "6号玩家"], "primary_speech_act": "summarize", "secondary_speech_act": "hedge", "social_goal": "build_alliance",
+          "public_points": [
+            {"kind": "ask", "target": "9号玩家", "strength": "medium", "basis_public_sources": []},
+            {"kind": "trust", "target": "6号玩家", "strength": "low", "basis_public_sources": []}
+          ],
+          "must_reference_public_fact_ids": ["seat-9-claim", "seat-6-claim"], "length_band": "extended", "affect_impulse": "steady"
+        }
+      },
+      "source_trace": {"session_id": "game_07eb730b", "round": 1, "stage": "sheriff_speech", "actor": "七喜"}
+    },
+    {
+      "scenario_id": "sheriff-pk-defense-011",
+      "slice": "sheriff_pk",
+      "action": "sheriff_pk_speech",
+      "speaker": "4号玩家",
+      "context": "警长竞选PK。3号女巫质疑4号没有回答为何敢留警徽流；9号和12号此前追问3号所谓‘干净’的定义，3号一直没回答。4号声称6号是自己的金水。",
+      "baseline_text": "3号，你说我没回答你的问题，但警上原话在：你问为什么敢留警徽流，我答了——验人是底气。这是因果链。反过来，9号和12号都问了你的‘干净’是什么意思，你到现在没答。你说站错毒自己，但好人不需要用自毒换信任。我的底牌是验人信息，6号在场可以印证。警下好人，票型会说话。",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "4号玩家",
+        "persona_style": "强硬、短句、有被误解时会立刻反打",
+        "public_state_boundary": {"round": 1, "remaining_players": "1至12号除夜间出局者", "options": "警长PK发言", "eligibility": {}},
+        "recent_committed_turns": [
+          "3号：4号没回答我为什么敢留警徽流，警下好人把票给我。",
+          "9号和12号此前都追问3号‘干净’是什么意思。"
+        ],
+        "relevant_public_facts": [
+          {"fact_id": "seat-4-prior-answer", "text": "4号此前回答过：验人是留下警徽流的底气", "trust_class": "public_speech"},
+          {"fact_id": "seat-3-evasion", "text": "3号仍未解释‘干净’的定义", "trust_class": "public_speech"}
+        ],
+        "public_stimulus": ["3号在PK中指责4号没有回答已回答过的问题"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-pk-011", "action_id": "pilot-pk-011", "fence": {"round": 1, "phase": "sheriff_pk_speech"},
+          "stimulus_sources": [], "response_targets": ["3号玩家"], "primary_speech_act": "defend", "secondary_speech_act": "challenge", "social_goal": "defend_self",
+          "public_points": [
+            {"kind": "defend", "target": "4号玩家", "strength": "high", "basis_public_sources": []},
+            {"kind": "challenge", "target": "3号玩家", "strength": "high", "basis_public_sources": []}
+          ],
+          "must_reference_public_fact_ids": ["seat-4-prior-answer", "seat-3-evasion"], "length_band": "normal", "affect_impulse": "sharper"
+        }
+      },
+      "source_trace": {"session_id": "game_16060126", "round": 1, "stage": "sheriff_pk_speech", "actor": "祁野"}
+    },
+    {
+      "scenario_id": "endgame-self-defense-012",
+      "slice": "self_defense",
+      "action": "debate",
+      "speaker": "1号玩家",
+      "context": "第3轮。上一轮投票前9号尚未翻牌白痴，警长8号归票9号，除10号和9号自己外全场都投9号；随后10号夜间死亡。12号据此指控1号可能因10号点中自己而刀10号。",
+      "baseline_text": "这条推论我先给置信度，12号说1号是狼所以刀10号，只有低置信。我先解释投9号的问题：第二轮投票前9号还没翻牌白痴，当时警长8号归票就是9号，我看公开票型，除了10号和9号自己，场上所有人都投了9号，总不能说全场除了10号全是狼吧？我跟着警长归票走，这个行为没什么可洗的，也没什么可黑的。其次，你说狼刀10号是因为10号点对了我，反过来想，狼刀10号也可能是10号点错了我，狼借刀脏我，这个可能性为什么不提？",
+      "public_speech_scene": {
+        "schema_version": 1,
+        "public_actor_name": "1号玩家",
+        "persona_style": "会标注判断置信度，被打时先澄清事实再给反例",
+        "public_state_boundary": {"round": 3, "remaining_players": "1、2、5、7、8、9、11、12号", "options": "公开发言", "eligibility": {}},
+        "recent_committed_turns": [
+          "9号：上一轮1号投了我，现在10号夜里死亡，1号需要解释。",
+          "11号：1号的白天投票和10号夜间死亡没有直接因果。",
+          "12号：10号是唯一投1号的人，狼刀10号说明1号可能是狼。"
+        ],
+        "relevant_public_facts": [
+          {"fact_id": "round-2-majority", "text": "上一轮除10号和9号外其余有票玩家都投了9号", "trust_class": "confirmed"},
+          {"fact_id": "seat-9-reveal", "text": "9号在被放逐后翻牌白痴", "trust_class": "confirmed"},
+          {"fact_id": "seat-10-death", "text": "10号随后在夜间死亡", "trust_class": "confirmed"}
+        ],
+        "public_stimulus": ["12号把10号夜死与1号上轮被10号投票直接关联"],
+        "turn_plan": {
+          "schema_version": 1, "plan_id": "pilot-defense-012", "action_id": "pilot-defense-012", "fence": {"round": 3, "phase": "day_debate"},
+          "stimulus_sources": [], "response_targets": ["12号玩家"], "primary_speech_act": "defend", "secondary_speech_act": "challenge", "social_goal": "defend_self",
+          "public_points": [
+            {"kind": "defend", "target": "1号玩家", "strength": "high", "basis_public_sources": []},
+            {"kind": "challenge", "target": "12号玩家", "strength": "medium", "basis_public_sources": []}
+          ],
+          "must_reference_public_fact_ids": ["round-2-majority", "seat-9-reveal", "seat-10-death"], "length_band": "normal", "affect_impulse": "sharper"
+        }
+      },
+      "source_trace": {"session_id": "game_dd132553", "round": 3, "stage": "debate", "actor": "鹿眠"}
+    }
+  ]
+}

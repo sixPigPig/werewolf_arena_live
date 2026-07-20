@@ -6,12 +6,14 @@ import json
 import logging
 import queue
 import time
+import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
+from weakref import WeakKeyDictionary
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -23,6 +25,7 @@ from app.werewolf.voice import (
     VoiceUtterance,
     build_voice_messages,
     chunk_text_for_tts,
+    deterministic_voice_utterance_id,
     event_to_voice_utterance,
     is_public_complete_speech_event,
     is_public_speech_event,
@@ -44,6 +47,8 @@ TERMINAL_RUN_STATUSES = {"completed", "failed", "canceled"}
 IDLE_POLL_SECONDS = 0.1
 REQUEST_DELTA_COALESCE_SECONDS = 0.5
 PLAYBACK_ACK_TIMEOUT_SECONDS = 60.0
+MATERIALIZED_VOICE_WAIT_SECONDS = 15.0
+MATERIALIZED_VOICE_POLL_SECONDS = 0.05
 TERMINAL_UNAVAILABLE_MESSAGE = "语音只支持进行中的实时对局；该对局已结束或异常中断。"
 
 
@@ -110,6 +115,20 @@ class VoiceStore(Protocol):
     def load_chunks(self, utterance_id: str) -> list[bytes]:
         pass
 
+    def load_utterance(self, utterance_id: str) -> dict[str, Any] | None:
+        pass
+
+    def record_playback_observation(
+        self,
+        *,
+        playback_session_id: str,
+        utterance_id: str,
+        server_terminal_status: str,
+        client_status: str | None = None,
+        played_ms: int | None = None,
+    ) -> None:
+        pass
+
 
 @dataclass
 class VoiceStreamContext:
@@ -162,7 +181,154 @@ class RecentUtteranceReplayResult:
     last_source_event_id: int | None = None
 
 
-PlaybackAckQueue = asyncio.Queue[str]
+@dataclass(frozen=True)
+class PlaybackAck:
+    utterance_id: str
+    client_status: str = "completed"
+    played_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class PlaybackAckResult:
+    server_terminal_status: str
+    ack: PlaybackAck | None = None
+
+    def __bool__(self) -> bool:
+        return self.server_terminal_status != "connection_lost"
+
+
+PlaybackAckQueue = asyncio.Queue[PlaybackAck | str]
+_DEFERRED_PLAYBACK_ACKS: WeakKeyDictionary[PlaybackAckQueue, dict[str, PlaybackAck]] = (
+    WeakKeyDictionary()
+)
+
+
+class VoiceSynthesisBroker:
+    """Fan out durable materialized audio without becoming a second TTS producer."""
+
+    def __init__(
+        self,
+        *,
+        websocket: WebSocket,
+        voice_store: VoiceStore,
+        disconnect_task: asyncio.Task[None],
+        playback_acks: PlaybackAckQueue | None,
+        playback_session_id: str | None,
+        wait_seconds: float = MATERIALIZED_VOICE_WAIT_SECONDS,
+        prefetch_depth: int = 1,
+    ) -> None:
+        self.websocket = websocket
+        self.voice_store = voice_store
+        self.disconnect_task = disconnect_task
+        self.playback_acks = playback_acks
+        self.playback_session_id = playback_session_id
+        self.wait_seconds = max(0.1, wait_seconds)
+        self.prefetch_depth = max(0, prefetch_depth)
+        self._queue: asyncio.Queue[VoiceUtterance | None] = asyncio.Queue()
+        self._preempted_speech_ids: set[str] = set()
+        self._task = asyncio.create_task(self._run())
+
+    async def enqueue(self, utterance: VoiceUtterance) -> None:
+        await self._queue.put(utterance)
+
+    async def preempt(
+        self,
+        *,
+        speech_id: str,
+        reason: str,
+        trigger_source: dict[str, object] | None,
+        cut_after_segment_index: int | None,
+    ) -> None:
+        self._preempted_speech_ids.add(speech_id)
+        await self.websocket.send_json(
+            {
+                "type": "voice_preempt",
+                "speech_id": speech_id,
+                "reason": reason,
+                **(
+                    {"trigger_source": trigger_source}
+                    if trigger_source is not None
+                    else {}
+                ),
+                **(
+                    {"cut_after_segment_index": cut_after_segment_index}
+                    if cut_after_segment_index is not None
+                    else {}
+                ),
+                "fade_out_ms": 120,
+            }
+        )
+
+    async def close(self, *, drain: bool) -> None:
+        if not drain:
+            self._task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._task
+            return
+        await self._queue.put(None)
+        try:
+            await asyncio.wait_for(
+                self._task,
+                timeout=self.wait_seconds + 1.0,
+            )
+        except TimeoutError:
+            self._task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._task
+
+    async def _run(self) -> None:
+        pending_acks: deque[str] = deque()
+        while True:
+            utterance = await self._queue.get()
+            if utterance is None:
+                return
+            if (
+                utterance.speech_id is not None
+                and utterance.speech_id in self._preempted_speech_ids
+            ):
+                continue
+            while len(pending_acks) > self.prefetch_depth:
+                if not await _wait_for_playback_ack(
+                    pending_acks.popleft(),
+                    self.playback_acks,
+                    self.disconnect_task,
+                    voice_store=self.voice_store,
+                    playback_session_id=self.playback_session_id,
+                ):
+                    return
+            materialized = await _wait_for_materialized_voice(
+                self.voice_store,
+                utterance,
+                disconnect_task=self.disconnect_task,
+                wait_seconds=self.wait_seconds,
+            )
+            if materialized is None:
+                if self.disconnect_task.done():
+                    return
+                await self.websocket.send_json(
+                    {
+                        "type": "voice_error",
+                        "utterance_id": utterance.utterance_id,
+                        "source_event_id": utterance.source_event_id,
+                        "message": "Voice materialization unavailable",
+                    }
+                )
+                continue
+            record, chunks = materialized
+            if (
+                utterance.speech_id is not None
+                and utterance.speech_id in self._preempted_speech_ids
+            ):
+                continue
+            if not await _send_materialized_voice(
+                self.websocket,
+                record,
+                chunks,
+                disconnect_task=self.disconnect_task,
+            ):
+                return
+            if self.playback_acks is not None:
+                pending_acks.append(utterance.utterance_id)
 
 
 class LiveVoiceStreamService:
@@ -176,6 +342,7 @@ class LiveVoiceStreamService:
         judge_voice_asset_dir: Path = DEFAULT_JUDGE_VOICE_ASSET_DIR,
         judge_voice_asset_loader: Callable[[str], StaticJudgeVoiceAsset | None] | None = None,
         persist_streamed_voices: bool = True,
+        materialized_voice_wait_seconds: float = MATERIALIZED_VOICE_WAIT_SECONDS,
     ) -> None:
         self.registry = registry
         self.config = config
@@ -184,6 +351,7 @@ class LiveVoiceStreamService:
         self.judge_voice_asset_dir = judge_voice_asset_dir
         self.judge_voice_asset_loader = judge_voice_asset_loader
         self.persist_streamed_voices = persist_streamed_voices
+        self.materialized_voice_wait_seconds = materialized_voice_wait_seconds
 
     @property
     def available(self) -> bool:
@@ -225,7 +393,24 @@ class LiveVoiceStreamService:
 
         voice_store = self.voice_store_factory(run.session_id) if self.voice_store_factory else None
         playback_acks: PlaybackAckQueue | None = asyncio.Queue() if playback_ack_required else None
+        playback_session_id = (
+            f"pbs_{uuid.uuid4().hex}" if playback_ack_required else None
+        )
         disconnect_task = asyncio.create_task(_watch_websocket_control(websocket, playback_acks))
+        voice_broker = (
+            VoiceSynthesisBroker(
+                websocket=websocket,
+                voice_store=voice_store,
+                disconnect_task=disconnect_task,
+                playback_acks=playback_acks,
+                playback_session_id=playback_session_id,
+                wait_seconds=self.materialized_voice_wait_seconds,
+                prefetch_depth=1,
+            )
+            if voice_store is not None
+            else None
+        )
+        drain_broker = False
         subscriber: queue.Queue[LiveEvent] | None = None
         speaker_config = VoiceSpeakerConfig(
             player_speaker=self.config.player_speaker,
@@ -240,6 +425,7 @@ class LiveVoiceStreamService:
                 audience=audience,
                 disconnect_task=disconnect_task,
                 playback_acks=playback_acks,
+                playback_session_id=playback_session_id,
             )
             if not recent_replay.should_continue:
                 return
@@ -277,6 +463,46 @@ class LiveVoiceStreamService:
                 if event is None:
                     continue
                 is_terminal = event.type in TERMINAL_EVENT_TYPES
+                if event.type == "speech_playback_preempted":
+                    speech_id = event.payload.get("speech_id")
+                    if isinstance(speech_id, str) and speech_id:
+                        reason = event.payload.get("reason")
+                        trigger_source = event.payload.get("trigger_source")
+                        cut_after_segment_index = event.payload.get(
+                            "cut_after_segment_index"
+                        )
+                        if voice_broker is not None:
+                            await voice_broker.preempt(
+                                speech_id=speech_id,
+                                reason=(
+                                    reason
+                                    if isinstance(reason, str)
+                                    else "phase_advanced"
+                                ),
+                                trigger_source=(
+                                    trigger_source
+                                    if isinstance(trigger_source, dict)
+                                    else None
+                                ),
+                                cut_after_segment_index=(
+                                    cut_after_segment_index
+                                    if type(cut_after_segment_index) is int
+                                    else None
+                                ),
+                            )
+                        else:
+                            await websocket.send_json(
+                                {
+                                    "type": "voice_preempt",
+                                    "speech_id": speech_id,
+                                    "reason": (
+                                        reason
+                                        if isinstance(reason, str)
+                                        else "phase_advanced"
+                                    ),
+                                    "fade_out_ms": 120,
+                                }
+                            )
                 _update_voice_context_before_event(voice_context, event)
                 utterance = event_to_voice_utterance(
                     event,
@@ -286,13 +512,10 @@ class LiveVoiceStreamService:
                     peaceful_night=voice_context.peaceful_night,
                 )
                 if utterance is not None and utterance.speaker_kind == "player":
-                    if is_public_speech_event(event):
-                        utterance = None
-                    else:
-                        utterance = _apply_voice_snapshot(
-                            utterance,
-                            canonical_event,
-                        )
+                    utterance = _apply_voice_snapshot(
+                        utterance,
+                        canonical_event,
+                    )
                 if utterance is not None and audience == "spectator_god_view":
                     public_event = project_live_event(canonical_event, "player_public")
                     public_speaker_kind = (
@@ -310,6 +533,29 @@ class LiveVoiceStreamService:
                     and utterance.request_id in streamed_delta_request_ids
                     and is_public_complete_speech_event(event)
                 ):
+                    utterance = None
+
+                if utterance is not None and is_public_speech_event(event):
+                    utterance = replace(
+                        utterance,
+                        utterance_id=deterministic_voice_utterance_id(
+                            utterance.run_id,
+                            utterance.source_event_id,
+                            utterance.speaker_kind,
+                            audience=utterance.audience,
+                        ),
+                    )
+                    if voice_broker is not None:
+                        await voice_broker.enqueue(utterance)
+                    else:
+                        await websocket.send_json(
+                            {
+                                "type": "voice_error",
+                                "utterance_id": utterance.utterance_id,
+                                "source_event_id": utterance.source_event_id,
+                                "message": "Voice materialization store unavailable",
+                            }
+                        )
                     utterance = None
 
                 if utterance is not None:
@@ -340,7 +586,9 @@ class LiveVoiceStreamService:
                             static_asset,
                             disconnect_task,
                             persistence_store,
+                            voice_store,
                             playback_acks,
+                            playback_session_id,
                         ):
                             return
                     elif chunks and not await self._stream_utterance(
@@ -349,17 +597,24 @@ class LiveVoiceStreamService:
                         chunks,
                         disconnect_task,
                         persistence_store,
+                        voice_store,
                         playback_acks,
+                        playback_session_id,
                     ):
                         return
 
                 _update_voice_context_after_event(voice_context, event)
 
                 if is_terminal:
+                    drain_broker = True
                     return
         except WebSocketDisconnect:
             return
         finally:
+            if voice_broker is not None:
+                await voice_broker.close(
+                    drain=drain_broker and not disconnect_task.done(),
+                )
             disconnect_task.cancel()
             with suppress(asyncio.CancelledError):
                 await disconnect_task
@@ -393,7 +648,9 @@ class LiveVoiceStreamService:
         asset: StaticJudgeVoiceAsset,
         disconnect_task: asyncio.Task[None],
         voice_store: VoiceStore | None,
+        playback_observation_store: VoiceStore | None,
         playback_acks: PlaybackAckQueue | None,
+        playback_session_id: str | None,
     ) -> bool:
         duration_ms = static_judge_voice_duration_ms(asset)
         persistence_enabled = _persist_voice_operation(
@@ -493,6 +750,8 @@ class LiveVoiceStreamService:
                 utterance.utterance_id,
                 playback_acks,
                 disconnect_task,
+                voice_store=playback_observation_store,
+                playback_session_id=playback_session_id,
             ):
                 return False
         except asyncio.CancelledError:
@@ -518,7 +777,9 @@ class LiveVoiceStreamService:
         chunks: list[str],
         disconnect_task: asyncio.Task[None],
         voice_store: VoiceStore | None,
+        playback_observation_store: VoiceStore | None,
         playback_acks: PlaybackAckQueue | None,
+        playback_session_id: str | None,
     ) -> bool:
         started_at = time.monotonic()
         audio_format = self.config.audio_format
@@ -551,6 +812,26 @@ class LiveVoiceStreamService:
                     **(
                         {"last_source_event_id": utterance.last_source_event_id}
                         if utterance.last_source_event_id is not None
+                        else {}
+                    ),
+                    **(
+                        {"speech_id": utterance.speech_id}
+                        if utterance.speech_id is not None
+                        else {}
+                    ),
+                    **(
+                        {"segment_id": utterance.segment_id}
+                        if utterance.segment_id is not None
+                        else {}
+                    ),
+                    **(
+                        {"segment_index": utterance.segment_index}
+                        if utterance.segment_index is not None
+                        else {}
+                    ),
+                    **(
+                        {"segment_final": utterance.segment_final}
+                        if utterance.segment_final is not None
                         else {}
                     ),
                     "speaker_kind": utterance.speaker_kind,
@@ -736,6 +1017,8 @@ class LiveVoiceStreamService:
                 utterance.utterance_id,
                 playback_acks,
                 disconnect_task,
+                voice_store=playback_observation_store,
+                playback_session_id=playback_session_id,
             ):
                 return False
         except asyncio.CancelledError:
@@ -765,14 +1048,14 @@ async def _watch_websocket_control(
             if message.get("type") == "websocket.disconnect":
                 return
             if playback_acks is not None:
-                utterance_id = _playback_ack_utterance_id(message)
-                if utterance_id is not None:
-                    playback_acks.put_nowait(utterance_id)
+                acknowledgement = _playback_ack(message)
+                if acknowledgement is not None:
+                    playback_acks.put_nowait(acknowledgement)
     except WebSocketDisconnect:
         return
 
 
-def _playback_ack_utterance_id(message: dict[str, Any]) -> str | None:
+def _playback_ack(message: dict[str, Any]) -> PlaybackAck | None:
     text = message.get("text")
     if not isinstance(text, str):
         return None
@@ -783,7 +1066,19 @@ def _playback_ack_utterance_id(message: dict[str, Any]) -> str | None:
     if not isinstance(payload, dict) or payload.get("type") != "voice_played":
         return None
     utterance_id = payload.get("utterance_id")
-    return utterance_id if isinstance(utterance_id, str) else None
+    if not isinstance(utterance_id, str) or not utterance_id:
+        return None
+    client_status = payload.get("status", "completed")
+    if client_status not in {"completed", "interrupted", "skipped", "failed"}:
+        return None
+    played_ms = payload.get("played_ms")
+    if played_ms is not None and (type(played_ms) is not int or played_ms < 0):
+        return None
+    return PlaybackAck(
+        utterance_id=utterance_id,
+        client_status=client_status,
+        played_ms=played_ms,
+    )
 
 
 def _build_voice_context(events: list[LiveEvent]) -> VoiceStreamContext:
@@ -1142,6 +1437,166 @@ def _int_manifest_value(data: dict[str, Any], key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
+async def _wait_for_materialized_voice(
+    voice_store: VoiceStore,
+    utterance: VoiceUtterance,
+    *,
+    disconnect_task: asyncio.Task[None],
+    wait_seconds: float,
+) -> tuple[dict[str, Any], list[bytes]] | None:
+    expected_utterance_id = deterministic_voice_utterance_id(
+        utterance.run_id,
+        utterance.source_event_id,
+        utterance.speaker_kind,
+        audience=utterance.audience,
+    )
+    if expected_utterance_id != utterance.utterance_id:
+        return None
+    deadline = asyncio.get_running_loop().time() + wait_seconds
+    while not disconnect_task.done():
+        try:
+            record = voice_store.load_utterance(expected_utterance_id)
+        except Exception:
+            logger.warning(
+                "Materialized voice lookup failed",
+                exc_info=True,
+                extra={"utterance_id": expected_utterance_id},
+            )
+            return None
+        if record is not None and record.get("status") == "complete":
+            try:
+                chunks = voice_store.load_chunks(expected_utterance_id)
+            except Exception:
+                logger.warning(
+                    "Materialized voice chunk load failed",
+                    exc_info=True,
+                    extra={"utterance_id": expected_utterance_id},
+                )
+                return None
+            if chunks:
+                return record, chunks
+        if record is not None and record.get("status") == "failed":
+            return None
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return None
+        await asyncio.sleep(min(MATERIALIZED_VOICE_POLL_SECONDS, remaining))
+    return None
+
+
+async def _send_materialized_voice(
+    websocket: WebSocket,
+    utterance: dict[str, Any],
+    chunks: list[bytes],
+    *,
+    disconnect_task: asyncio.Task[None],
+) -> bool:
+    utterance_id = utterance.get("utterance_id")
+    source_event_id = utterance.get("source_event_id")
+    last_source_event_id = utterance.get("last_source_event_id")
+    speaker_kind = utterance.get("speaker_kind")
+    speaker_name = utterance.get("speaker_name")
+    mime_type = utterance.get("mime_type")
+    audio_format = utterance.get("audio_format")
+    sample_rate = utterance.get("sample_rate")
+    audience = utterance.get("audience")
+    duration_ms = utterance.get("duration_ms")
+    if (
+        not isinstance(utterance_id, str)
+        or type(source_event_id) is not int
+        or speaker_kind not in {"player", "judge"}
+        or not isinstance(speaker_name, str)
+        or not isinstance(mime_type, str)
+        or not isinstance(audio_format, str)
+        or type(sample_rate) is not int
+    ):
+        return False
+    if type(last_source_event_id) is not int:
+        last_source_event_id = source_event_id
+    if type(duration_ms) is not int:
+        duration_ms = 0
+    if audience not in {"player_public", "spectator_god_view"}:
+        audience = "player_public"
+    start_message, _chunk, _end = build_voice_messages(
+        utterance_id=utterance_id,
+        source_event_id=source_event_id,
+        last_source_event_id=last_source_event_id,
+        speaker_kind=speaker_kind,
+        speaker_name=speaker_name,
+        audio=chunks[0],
+        mime_type=mime_type,
+        duration_ms=duration_ms,
+        audio_format=audio_format,
+        sample_rate=sample_rate,
+        chunk_index=0,
+        audience=audience,
+        presentation_id=(
+            utterance.get("presentation_id")
+            if isinstance(utterance.get("presentation_id"), str)
+            else None
+        ),
+        speech_id=(
+            utterance.get("speech_id")
+            if isinstance(utterance.get("speech_id"), str)
+            else None
+        ),
+        segment_id=(
+            utterance.get("segment_id")
+            if isinstance(utterance.get("segment_id"), str)
+            else None
+        ),
+        segment_index=(
+            utterance.get("segment_index")
+            if type(utterance.get("segment_index")) is int
+            else None
+        ),
+        segment_final=(
+            utterance.get("segment_final")
+            if type(utterance.get("segment_final")) is bool
+            else None
+        ),
+    )
+    if not await _send_replay_message(websocket, start_message, disconnect_task):
+        return False
+    subtitle_timings = _subtitle_timings_from_utterance(utterance)
+    if subtitle_timings and not await _send_replay_message(
+        websocket,
+        {
+            "type": "subtitle_timing",
+            "utterance_id": utterance_id,
+            "cues": subtitle_timings,
+        },
+        disconnect_task,
+    ):
+        return False
+    for chunk_index, audio in enumerate(chunks):
+        _start, chunk_message, _end = build_voice_messages(
+            utterance_id=utterance_id,
+            source_event_id=source_event_id,
+            last_source_event_id=last_source_event_id,
+            speaker_kind=speaker_kind,
+            speaker_name=speaker_name,
+            audio=audio,
+            mime_type=mime_type,
+            duration_ms=duration_ms,
+            audio_format=audio_format,
+            sample_rate=sample_rate,
+            chunk_index=chunk_index,
+            audience=audience,
+        )
+        if not await _send_replay_message(websocket, chunk_message, disconnect_task):
+            return False
+    return await _send_replay_message(
+        websocket,
+        {
+            "type": "voice_end",
+            "utterance_id": utterance_id,
+            "duration_ms": duration_ms,
+        },
+        disconnect_task,
+    )
+
+
 async def _replay_recent_utterance(
     websocket: WebSocket,
     voice_store: VoiceStore | None,
@@ -1151,6 +1606,7 @@ async def _replay_recent_utterance(
     audience: ProjectionAudience = "player_public",
     disconnect_task: asyncio.Task[None],
     playback_acks: PlaybackAckQueue | None,
+    playback_session_id: str | None,
 ) -> RecentUtteranceReplayResult:
     if voice_store is None or current_event_id is None:
         return RecentUtteranceReplayResult(should_continue=True)
@@ -1198,6 +1654,10 @@ async def _replay_recent_utterance(
     audio_format = utterance.get("audio_format")
     audience = utterance.get("audience")
     presentation_id = utterance.get("presentation_id")
+    speech_id = utterance.get("speech_id")
+    segment_id = utterance.get("segment_id")
+    segment_index = utterance.get("segment_index")
+    segment_final = utterance.get("segment_final")
     if not isinstance(presentation_id, str) or not presentation_id:
         presentation_id = None
     if audience not in {"player_public", "spectator_god_view"}:
@@ -1228,6 +1688,10 @@ async def _replay_recent_utterance(
         chunk_index=0,
         audience=audience,
         presentation_id=presentation_id,
+        speech_id=speech_id if isinstance(speech_id, str) else None,
+        segment_id=segment_id if isinstance(segment_id, str) else None,
+        segment_index=segment_index if type(segment_index) is int else None,
+        segment_final=segment_final if type(segment_final) is bool else None,
     )
     if not await _send_replay_message(websocket, start_message, disconnect_task):
         return RecentUtteranceReplayResult(should_continue=False)
@@ -1274,6 +1738,8 @@ async def _replay_recent_utterance(
         utterance_id,
         playback_acks,
         disconnect_task,
+        voice_store=voice_store,
+        playback_session_id=playback_session_id,
     ):
         return RecentUtteranceReplayResult(should_continue=False)
     return RecentUtteranceReplayResult(
@@ -1322,19 +1788,50 @@ async def _wait_for_playback_ack(
     utterance_id: str,
     playback_acks: PlaybackAckQueue | None,
     disconnect_task: asyncio.Task[None],
-) -> bool:
+    *,
+    voice_store: VoiceStore | None = None,
+    playback_session_id: str | None = None,
+) -> PlaybackAckResult:
     if playback_acks is None:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        return True
+        return PlaybackAckResult(server_terminal_status="acked")
+
+    deferred = _DEFERRED_PLAYBACK_ACKS.setdefault(playback_acks, {})
+    if utterance_id in deferred:
+        result = PlaybackAckResult(
+            server_terminal_status="acked",
+            ack=deferred.pop(utterance_id),
+        )
+        _record_playback_observation(
+            voice_store,
+            playback_session_id=playback_session_id,
+            result=result,
+            utterance_id=utterance_id,
+        )
+        return result
 
     deadline = asyncio.get_running_loop().time() + PLAYBACK_ACK_TIMEOUT_SECONDS
     while True:
         if disconnect_task.done():
-            return False
+            result = PlaybackAckResult(server_terminal_status="connection_lost")
+            _record_playback_observation(
+                voice_store,
+                playback_session_id=playback_session_id,
+                result=result,
+                utterance_id=utterance_id,
+            )
+            return result
         remaining_seconds = deadline - asyncio.get_running_loop().time()
         if remaining_seconds <= 0:
-            return True
+            result = PlaybackAckResult(server_terminal_status="ack_timeout")
+            _record_playback_observation(
+                voice_store,
+                playback_session_id=playback_session_id,
+                result=result,
+                utterance_id=utterance_id,
+            )
+            return result
         ack_task = asyncio.create_task(playback_acks.get())
         done, pending = await asyncio.wait(
             {ack_task, disconnect_task},
@@ -1346,11 +1843,72 @@ async def _wait_for_playback_ack(
             with suppress(asyncio.CancelledError):
                 await ack_task
         if not done:
-            return True
+            result = PlaybackAckResult(server_terminal_status="ack_timeout")
+            _record_playback_observation(
+                voice_store,
+                playback_session_id=playback_session_id,
+                result=result,
+                utterance_id=utterance_id,
+            )
+            return result
         if disconnect_task in done:
-            return False
-        if ack_task.result() == utterance_id:
-            return True
+            result = PlaybackAckResult(server_terminal_status="connection_lost")
+            _record_playback_observation(
+                voice_store,
+                playback_session_id=playback_session_id,
+                result=result,
+                utterance_id=utterance_id,
+            )
+            return result
+        acknowledgement_value = ack_task.result()
+        acknowledgement = (
+            acknowledgement_value
+            if isinstance(acknowledgement_value, PlaybackAck)
+            else PlaybackAck(utterance_id=acknowledgement_value)
+        )
+        if acknowledgement.utterance_id == utterance_id:
+            result = PlaybackAckResult(
+                server_terminal_status="acked",
+                ack=acknowledgement,
+            )
+            _record_playback_observation(
+                voice_store,
+                playback_session_id=playback_session_id,
+                result=result,
+                utterance_id=utterance_id,
+            )
+            return result
+        deferred[acknowledgement.utterance_id] = acknowledgement
+
+
+def _record_playback_observation(
+    voice_store: VoiceStore | None,
+    *,
+    playback_session_id: str | None,
+    result: PlaybackAckResult,
+    utterance_id: str,
+) -> None:
+    if voice_store is None or playback_session_id is None:
+        return
+    acknowledgement = result.ack
+    try:
+        voice_store.record_playback_observation(
+            playback_session_id=playback_session_id,
+            utterance_id=utterance_id,
+            server_terminal_status=result.server_terminal_status,
+            client_status=(acknowledgement.client_status if acknowledgement else None),
+            played_ms=(acknowledgement.played_ms if acknowledgement else None),
+        )
+    except Exception:
+        logger.warning(
+            "Voice playback observation persistence failed",
+            exc_info=True,
+            extra={
+                "utterance_id": utterance_id,
+                "playback_session_id": playback_session_id,
+                "server_terminal_status": result.server_terminal_status,
+            },
+        )
 
 
 def _persist_voice_operation(
@@ -1445,7 +2003,11 @@ def _apply_voice_snapshot(
             if isinstance(mapping_version, str) and mapping_version
             else None
         ),
-        tts_request_source="accepted_player_action",
+        tts_request_source=(
+            "committed_speech_segment"
+            if utterance.segment_id is not None
+            else "accepted_player_action"
+        ),
     )
 
 

@@ -19,6 +19,9 @@ from app.werewolf.checkpoint import (
     resolved_rule_set_from_checkpoint,
 )
 from app.werewolf.live import validate_rule_set_revision_metadata
+from app.werewolf.liveness import liveness_experience_from_storage
+from app.werewolf.actor_mind import ActorMindV1
+from app.werewolf.liveness_store import LivenessRuntimeStore
 from app.werewolf.models import GameState, RoundLog
 from app.rule_sets.types import CompiledRuleSet
 from app.werewolf.quality_store import enqueue_quality_evaluation
@@ -90,6 +93,7 @@ class DatabaseReplayStore:
                     "round_count": record.round_count,
                     "created_at": _format_datetime(record.created_at),
                     "rule_set": copy.deepcopy(record.rule_set),
+                    "liveness_experience": _liveness_summary(record),
                     "resumable": checkpoint is not None,
                 }
             )
@@ -115,6 +119,7 @@ class DatabaseReplayStore:
             "state": public_state,
             "logs": copy.deepcopy(logs),
             "resumable": _valid_checkpoint_or_none(session_id, payload.checkpoint) is not None,
+            "liveness_experience": _liveness_summary(record),
         }
 
     def load_resume_checkpoint(self, session_id: str) -> dict[str, Any]:
@@ -124,8 +129,32 @@ class DatabaseReplayStore:
             error = ResumeCheckpointError("missing")
             report_resume_checkpoint_error(error)
             raise error
-        _validated_checkpoint_payload(session_id, payload.checkpoint)
-        return copy.deepcopy(payload.checkpoint)
+        checkpoint = copy.deepcopy(payload.checkpoint)
+        _validated_checkpoint_payload(session_id, checkpoint)
+        private_runtime = checkpoint.get("private_runtime")
+        generation_runtime = checkpoint.get("generation_runtime")
+        try:
+            if isinstance(private_runtime, dict):
+                actor_minds = private_runtime.get("actor_minds")
+                if isinstance(actor_minds, dict):
+                    LivenessRuntimeStore(self.db).validate_checkpoint_actor_minds(
+                        session_id,
+                        actor_minds,
+                    )
+            if isinstance(generation_runtime, dict):
+                receipts = generation_runtime.get("speech_turn_receipts")
+                if isinstance(receipts, dict):
+                    generation_runtime["speech_turn_receipts"] = LivenessRuntimeStore(
+                        self.db
+                    ).reconcile_checkpoint_speech_receipts(
+                        session_id,
+                        receipts,
+                    )
+        except Exception as exc:
+            error = ResumeCheckpointError("invalid_structure")
+            report_resume_checkpoint_error(error)
+            raise error from exc
+        return checkpoint
 
     def save_game(self, state: GameState, logs: list[RoundLog]) -> None:
         self.save_game_payload(
@@ -213,6 +242,7 @@ class DatabaseReplayStore:
             record.winner = str(state.get("winner") or "") or None
             record.round_count = len(rounds)
             _apply_rule_set_projection(record, rule_set_projection)
+            self._apply_liveness_projection(record)
             record.resumable = resumable
 
             payload = self._get_or_create_payload(session_id)
@@ -258,6 +288,8 @@ class DatabaseReplayStore:
             record.winner = str(state.get("winner") or "") or None
             record.round_count = len(rounds)
             _apply_rule_set_projection(record, rule_set_projection)
+            self._apply_liveness_projection(record, checkpoint=_checkpoint)
+            self._apply_actor_mind_projection(record, checkpoint=_checkpoint)
             record.resumable = True
 
             payload = self._get_or_create_payload(session_id)
@@ -268,6 +300,28 @@ class DatabaseReplayStore:
         except Exception:
             self.db.rollback()
             raise
+
+    def _apply_actor_mind_projection(
+        self,
+        record: GameSessionRecord,
+        *,
+        checkpoint: dict[str, Any],
+    ) -> None:
+        runtime = checkpoint.get("private_runtime")
+        if not isinstance(runtime, dict):
+            return
+        values = runtime.get("actor_minds")
+        if not isinstance(values, dict):
+            return
+        store = LivenessRuntimeStore(self.db)
+        for actor, value in values.items():
+            if not isinstance(actor, str) or not actor:
+                raise ResumeCheckpointError("invalid_structure")
+            try:
+                mind = ActorMindV1.from_dict(value, actor=actor)
+            except ValueError as exc:
+                raise ResumeCheckpointError("invalid_structure") from exc
+            store.save_actor_mind(record.session_id, mind)
 
     def clear_resume_checkpoint(self, session_id: str) -> None:
         self._validate_session_id(session_id)
@@ -293,6 +347,39 @@ class DatabaseReplayStore:
             self.db.add(record)
             self.db.flush()
         return record
+
+    def _apply_liveness_projection(
+        self,
+        record: GameSessionRecord,
+        *,
+        checkpoint: dict[str, Any] | None = None,
+    ) -> None:
+        snapshot: object = None
+        experiment_id: object = None
+        variant: object = None
+        if self.run_id is not None:
+            live_run = self.db.get(LiveRunRecord, self.run_id)
+            if live_run is not None and live_run.session_id == record.session_id:
+                snapshot = live_run.liveness_experience_snapshot
+                experiment_id = live_run.liveness_experiment_id
+                variant = live_run.liveness_experiment_variant
+        if snapshot is None and isinstance(checkpoint, dict):
+            run_params = checkpoint.get("run_params")
+            if isinstance(run_params, dict):
+                snapshot = run_params.get("liveness_experience_snapshot")
+                experiment_id = run_params.get("liveness_experiment_id")
+                variant = run_params.get("liveness_experiment_variant")
+        if snapshot is None:
+            return
+        experience = liveness_experience_from_storage(snapshot)
+        record.liveness_experience_revision = experience.experience_revision
+        record.liveness_experience_snapshot = experience.to_dict()
+        record.liveness_experiment_id = (
+            experiment_id if isinstance(experiment_id, str) and experiment_id else None
+        )
+        record.liveness_experiment_variant = (
+            variant if isinstance(variant, str) and variant else None
+        )
 
     def _get_or_create_payload(self, session_id: str) -> GameReplayPayload:
         payload = self.db.get(GameReplayPayload, session_id)
@@ -401,6 +488,15 @@ def _apply_rule_set_projection(
     record.rule_set = copy.deepcopy(rule_set)
 
 
+def _liveness_summary(record: GameSessionRecord) -> dict[str, Any]:
+    return liveness_experience_from_storage(
+        record.liveness_experience_snapshot
+    ).public_summary(
+        experiment_id=record.liveness_experiment_id,
+        variant=record.liveness_experiment_variant,
+    )
+
+
 def _checkpoint_rule_set_projection(
     state: dict[str, Any],
     compiled: CompiledRuleSet,
@@ -438,6 +534,20 @@ def _validated_checkpoint_payload_unreported(
         raise ResumeCheckpointError("invalid_structure")
     if checkpoint.get("session_id") != session_id:
         raise ResumeCheckpointError("invalid_structure")
+    if checkpoint.get("schema_version") == 3:
+        private_runtime = checkpoint.get("private_runtime")
+        generation_runtime = checkpoint.get("generation_runtime")
+        if (
+            not isinstance(private_runtime, dict)
+            or not isinstance(private_runtime.get("actor_minds_at_round_start"), dict)
+            or not isinstance(private_runtime.get("actor_minds"), dict)
+            or not isinstance(generation_runtime, dict)
+            or not isinstance(generation_runtime.get("speech_turn_receipts"), dict)
+        ):
+            raise ResumeCheckpointError("invalid_structure")
+        _validate_checkpoint_speech_receipts(
+            generation_runtime["speech_turn_receipts"]
+        )
 
     state = checkpoint.get("state_at_round_start")
     if not isinstance(state, dict):
@@ -455,6 +565,39 @@ def _validated_checkpoint_payload_unreported(
     lifecycle_ledger_from_checkpoint(checkpoint)
     compiled = resolved_rule_set_from_checkpoint(checkpoint)
     return state, logs, checkpoint, rounds, compiled
+
+
+def _validate_checkpoint_speech_receipts(value: dict[str, Any]) -> None:
+    for action_id, receipt in value.items():
+        if not isinstance(action_id, str) or not action_id or not isinstance(receipt, dict):
+            raise ResumeCheckpointError("invalid_structure")
+        speech_id = receipt.get("speech_id")
+        segments = receipt.get("segments")
+        status = receipt.get("status")
+        segment_count = receipt.get("segment_count")
+        if (
+            not isinstance(speech_id, str)
+            or not speech_id
+            or not isinstance(segments, list)
+            or status not in {"partial", "complete", "interrupted"}
+            or type(segment_count) is not int
+            or segment_count != len(segments)
+        ):
+            raise ResumeCheckpointError("invalid_structure")
+        texts: list[str] = []
+        for index, segment in enumerate(segments):
+            if (
+                not isinstance(segment, dict)
+                or type(segment.get("segment_index")) is not int
+                or segment.get("segment_index") != index
+                or not isinstance(segment.get("segment_id"), str)
+                or not isinstance(segment.get("text"), str)
+                or not segment["text"]
+            ):
+                raise ResumeCheckpointError("invalid_structure")
+            texts.append(str(segment["text"]))
+        if receipt.get("final_text") != "".join(texts):
+            raise ResumeCheckpointError("invalid_structure")
 
 
 def _valid_checkpoint_or_none(session_id: str, checkpoint: Any) -> dict[str, Any] | None:

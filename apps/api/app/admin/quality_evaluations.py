@@ -168,6 +168,7 @@ def build_admin_quality_summary(
     summary["voice"] = _voice(raw.get("voice"))
     summary["performance"] = _performance(raw.get("performance"))
     summary["content"] = _content(raw.get("content"))
+    summary["liveness"] = _liveness(raw.get("liveness"))
     summary["critical_actions"] = (
         _critical_actions(raw.get("critical_actions"))
         if terminal and data_status != "legacy"
@@ -419,6 +420,7 @@ def _empty_summary(
             "privacy_p0_issue_count": 0,
             "lineup_warning_count": 0,
         },
+        "liveness": _liveness({}),
         "critical_actions": [],
         "evaluated_at": evaluated_at,
         "source_revision": source_revision,
@@ -597,6 +599,117 @@ def _content(value: object) -> dict[str, Any]:
             ),
         ),
         "repeated_speech_rate": _rate(raw.get("repeated_speech_rate")),
+    }
+
+
+def _liveness(value: object) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    actor_mind = raw.get("actor_mind")
+    safe_actor_mind = actor_mind if isinstance(actor_mind, dict) else {}
+    return {
+        "experience_revision": _safe_text(raw.get("experience_revision"), 40) or None,
+        "experiment_id": _safe_text(raw.get("experiment_id"), 64) or None,
+        "variant": _safe_text(raw.get("variant"), 64) or None,
+        "feature_modes": _liveness_feature_modes(raw.get("feature_modes")),
+        "public_speech_count": _count(raw.get("public_speech_count")),
+        "timing_coverage": _timing_coverage(raw.get("timing_coverage")),
+        "stage_latency_ms": _stage_latencies(raw.get("stage_latency_ms")),
+        "prompt_chars": _latency_summary(raw.get("prompt_chars")),
+        "hard_gate_duration_ms": _latency_summary(
+            raw.get("hard_gate_duration_ms")
+        ),
+        "hard_retry_count": _count(raw.get("hard_retry_count")),
+        "hard_retry_rate": _rate(raw.get("hard_retry_rate")),
+        "hard_exhausted_count": _count(raw.get("hard_exhausted_count")),
+        "hard_exhausted_rate": _rate(raw.get("hard_exhausted_rate")),
+        "partial_speech_count": _count(raw.get("partial_speech_count")),
+        "interrupted_speech_count": _count(raw.get("interrupted_speech_count")),
+        "voice_timing_coverage": _count_map(raw.get("voice_timing_coverage")),
+        "tts_to_first_audio_ms": _latency_summary(
+            raw.get("tts_to_first_audio_ms")
+        ),
+        "turn_to_first_audio_ms": _latency_summary(
+            raw.get("turn_to_first_audio_ms")
+        ),
+        "voice_status_counts": _count_map(raw.get("voice_status_counts")),
+        "playback_timing_coverage": _count_map(
+            raw.get("playback_timing_coverage")
+        ),
+        "playback_status_counts": _count_map(raw.get("playback_status_counts")),
+        "speaker_gap_ms": _latency_summary(raw.get("speaker_gap_ms")),
+        "actor_mind": {
+            "snapshot_count": _count(safe_actor_mind.get("snapshot_count")),
+            "update_count": _count(safe_actor_mind.get("update_count")),
+            "source_complete_count": _count(
+                safe_actor_mind.get("source_complete_count")
+            ),
+        },
+    }
+
+
+def _liveness_feature_modes(value: object) -> dict[str, object]:
+    raw = value if isinstance(value, dict) else {}
+    allowed = {
+        "style_gate": {"legacy", "async_observe"},
+        "actor_mind": {"off", "shadow", "read"},
+        "sentence_stream": {"off", "committed_segments"},
+        "affect_delivery": {"off", "shadow", "on"},
+        "voice_preempt": {"off", "deterministic"},
+    }
+    result: dict[str, object] = {
+        key: value if isinstance(value, str) and value in choices else None
+        for key, choices in allowed.items()
+        if (value := raw.get(key)) is not None
+    }
+    prefetch = raw.get("tts_prefetch_depth")
+    if type(prefetch) is int and prefetch in {0, 1}:
+        result["tts_prefetch_depth"] = prefetch
+    return result
+
+
+def _timing_coverage(value: object) -> dict[str, dict[str, Any]]:
+    raw = value if isinstance(value, dict) else {}
+    fields = (
+        "turn_ready_at",
+        "actor_brain_started_at",
+        "turn_plan_ready_at",
+        "renderer_started_at",
+        "first_model_delta_at",
+        "first_clause_committed_at",
+    )
+    result: dict[str, dict[str, Any]] = {}
+    for field in fields:
+        item = raw.get(field)
+        safe = item if isinstance(item, dict) else {}
+        result[field] = {
+            "count": _count(safe.get("count")),
+            "denominator": _count(safe.get("denominator")),
+            "rate": _rate(safe.get("rate")),
+        }
+    return result
+
+
+def _stage_latencies(value: object) -> dict[str, dict[str, int | None]]:
+    raw = value if isinstance(value, dict) else {}
+    return {
+        name: _latency_summary(raw.get(name))
+        for name in (
+            "turn_to_actor_brain",
+            "actor_brain_to_plan",
+            "plan_to_renderer",
+            "renderer_to_first_delta",
+            "first_delta_to_clause",
+        )
+    }
+
+
+def _latency_summary(value: object) -> dict[str, int | None]:
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "count": _count(raw.get("count")),
+        "p50": _optional_count(raw.get("p50")),
+        "p95": _optional_count(raw.get("p95")),
+        "max": _optional_count(raw.get("max")),
     }
 
 

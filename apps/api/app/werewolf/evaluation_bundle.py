@@ -115,6 +115,7 @@ class QualityEvaluationBundleV1:
     source_revision: str
     started_at: str | None = None
     completed_at: str | None = None
+    liveness_runtime: dict[str, Any] = field(default_factory=dict)
 
 
 def build_quality_evaluation_bundle(
@@ -126,6 +127,7 @@ def build_quality_evaluation_bundle(
     run_id: str | None = None,
     started_at: str | None = None,
     completed_at: str | None = None,
+    liveness_runtime: dict[str, Any] | None = None,
 ) -> QualityEvaluationBundleV1:
     events = sorted(
         [event for event in live_events or [] if isinstance(event, dict)],
@@ -154,6 +156,7 @@ def build_quality_evaluation_bundle(
         "voice_utterances": voices,
         "started_at": started_at,
         "completed_at": completed_at,
+        "liveness_runtime": liveness_runtime or {},
     }
     source_revision = hashlib.sha256(
         json.dumps(
@@ -178,6 +181,7 @@ def build_quality_evaluation_bundle(
         source_revision=source_revision,
         started_at=started_at,
         completed_at=completed_at,
+        liveness_runtime=dict(liveness_runtime or {}),
     )
 
 

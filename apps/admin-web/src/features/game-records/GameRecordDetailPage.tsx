@@ -667,6 +667,24 @@ function GameP3QualityPanel({
               </small>
             </article>
             <article>
+              <span>活人感链路</span>
+              <strong>
+                首句 P95 {quality.liveness.stage_latency_ms.turn_to_first_clause?.p95 ?? "—"} ms
+              </strong>
+              <small>
+                首音频 P95 {quality.liveness.turn_to_first_audio_ms.p95 ?? "—"} ms · 换人空档 P95 {quality.liveness.speaker_gap_ms.p95 ?? "—"} ms · 硬重试 {quality.liveness.hard_retry_count}/{quality.liveness.public_speech_count}
+              </small>
+            </article>
+            <article>
+              <span>角色连续性</span>
+              <strong>
+                心智更新 {quality.liveness.actor_mind.update_count}
+              </strong>
+              <small>
+                {quality.liveness.experience_revision ?? "legacy"} · {quality.liveness.variant ?? "未分流"} · partial/interrupted {quality.liveness.partial_speech_count}/{quality.liveness.interrupted_speech_count}
+              </small>
+            </article>
+            <article>
               <span>安全问题</span>
               <strong>P0 {quality.issue_counts.P0} · P1 {quality.issue_counts.P1} · P2 {quality.issue_counts.P2}</strong>
               <small>问题正文和私密证据不会进入 Admin 响应</small>

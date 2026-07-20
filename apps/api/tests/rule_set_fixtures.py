@@ -215,7 +215,7 @@ def complete_resume_checkpoint(
     include_rule_metadata: bool | None = None,
 ) -> dict[str, object]:
     if include_rule_metadata is None:
-        include_rule_metadata = checkpoint_schema_version == 2
+        include_rule_metadata = checkpoint_schema_version >= 2
     run_params: dict[str, object] = {
         "villager_model": "deepseek-chat",
         "werewolf_model": "deepseek-chat",
@@ -233,7 +233,7 @@ def complete_resume_checkpoint(
                 "rule_set_snapshot": copy.deepcopy(compiled.snapshot),
             }
         )
-    return {
+    checkpoint: dict[str, object] = {
         "schema_version": checkpoint_schema_version,
         "session_id": session_id,
         "state_at_round_start": {
@@ -253,3 +253,10 @@ def complete_resume_checkpoint(
         "failed_request": None,
         "last_error": None,
     }
+    if checkpoint_schema_version >= 3:
+        checkpoint["private_runtime"] = {
+            "actor_minds_at_round_start": {},
+            "actor_minds": {},
+        }
+        checkpoint["generation_runtime"] = {"speech_turn_receipts": {}}
+    return checkpoint

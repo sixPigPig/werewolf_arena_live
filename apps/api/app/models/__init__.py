@@ -4,7 +4,14 @@ from app.models.admin import (
     AdminUserProvisioningRequest,
     AuditEvent,
 )
-from app.models.game_session import GameReplayPayload, GameSessionRecord
+from app.models.game_session import (
+    ActorMindSnapshotRecord,
+    GameReplayPayload,
+    GameSessionRecord,
+    SpeechTurnReceiptRecord,
+    SpeechTurnSegmentRecord,
+    VoicePlaybackObservationRecord,
+)
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord, JudgeVoiceGenerationJob
 from app.models.live import (
     GodViewLiveEventRecord,
@@ -15,6 +22,7 @@ from app.models.live import (
     VoiceMaterializationJobRecord,
     VoiceUtteranceRecord,
 )
+from app.models.liveness_rollout import LivenessRolloutConfigRecord
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.public import PublicSession, UserFavoritePlayerProfile
@@ -29,6 +37,7 @@ __all__ = [
     "AdminOidcLoginAttempt",
     "AdminUserProvisioningRequest",
     "AuditEvent",
+    "ActorMindSnapshotRecord",
     "GameReplayPayload",
     "GameSessionRecord",
     "GameQualityEvaluationRecord",
@@ -37,6 +46,7 @@ __all__ = [
     "GodViewLiveEventRecord",
     "LiveEventRecord",
     "LiveRunRecord",
+    "LivenessRolloutConfigRecord",
     "ModelConfigurationRecord",
     "PublicLiveEventRecord",
     "PlayerAvatarAsset",
@@ -44,10 +54,13 @@ __all__ = [
     "RuleSetRecord",
     "RuleSetRevisionRecord",
     "RuntimeWorkerRecord",
+    "SpeechTurnReceiptRecord",
+    "SpeechTurnSegmentRecord",
     "User",
     "UserFavoritePlayerProfile",
     "VoiceAudioChunkRecord",
     "VoiceMaterializationJobRecord",
+    "VoicePlaybackObservationRecord",
     "VoiceUtteranceRecord",
     "VirtualPlayerProfile",
 ]

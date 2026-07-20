@@ -775,6 +775,10 @@ export type PlaybackVoiceUtterance = {
   audience?: "player_public" | "spectator_god_view";
   source_event_id: number;
   last_source_event_id: number;
+  speech_id?: string | null;
+  segment_id?: string | null;
+  segment_index?: number | null;
+  segment_final?: boolean | null;
   presentation_id?: string;
   speaker_kind: "player" | "judge";
   speaker_name: string;

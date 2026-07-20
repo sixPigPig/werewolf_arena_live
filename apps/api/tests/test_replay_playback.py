@@ -4,6 +4,87 @@ from app.werewolf.replay_playback import (
 )
 
 
+def test_reconstructed_replay_uses_safe_committed_segment_receipt_without_double_speech() -> None:
+    speech = "我先听后置位。现在不急着归票！"
+    playback = build_replay_playback(
+        {
+            "session_id": "game_segment_receipt",
+            "status": "complete",
+            "state": {
+                "session_id": "game_segment_receipt",
+                "players": [
+                    {"name": "1号玩家", "role": "村民", "model": "model"},
+                    {"name": "2号玩家", "role": "狼人", "model": "model"},
+                ],
+                "rounds": [
+                    {
+                        "number": 1,
+                        "players": ["1号玩家", "2号玩家"],
+                        "night_deaths": [],
+                        "day_deaths": [],
+                    }
+                ],
+                "winner": "好人阵营",
+            },
+            "logs": [
+                {
+                    "number": 1,
+                    "debate": [
+                        {
+                            "actor": "1号玩家",
+                            "action": "debate",
+                            "options": [],
+                            "choice": speech,
+                            "lm_log": {
+                                "action_id": "act_1",
+                                "request_id": "req_1",
+                                "result": {"say": speech},
+                            },
+                            "speech_turn_receipt": {
+                                "speech_id": "sp_1",
+                                "status": "complete",
+                                "final_text": speech,
+                                "segments": [
+                                    {
+                                        "segment_id": "seg_1",
+                                        "segment_index": 0,
+                                        "text": "我先听后置位。",
+                                        "presentation_id": "pres_1",
+                                    },
+                                    {
+                                        "segment_id": "seg_2",
+                                        "segment_index": 1,
+                                        "text": "现在不急着归票！",
+                                        "presentation_id": "pres_2",
+                                    },
+                                ],
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    speech_events = [
+        event
+        for event in playback["events"]
+        if event["type"] == "model_response_delta"
+        and event.get("action") == "debate"
+    ]
+    parsed = next(
+        event
+        for event in playback["events"]
+        if event["type"] == "action_parsed" and event.get("action") == "debate"
+    )
+    assert [event["payload"]["visible_text"] for event in speech_events] == [
+        "我先听后置位。",
+        "现在不急着归票！",
+    ]
+    assert parsed["payload"]["visible_result"] == {"say": speech}
+    assert parsed["payload"]["tts_suppressed_by_segments"] is True
+
+
 def test_public_game_session_drops_unsafe_state_and_round_public_facts() -> None:
     safe_fact = {
         "round_number": 1,

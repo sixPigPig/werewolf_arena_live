@@ -17,7 +17,6 @@ from alembic.operations import Operations
 from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.orm import Session
 
-from app.models.game_session import GameSessionRecord
 
 
 MIGRATIONS_DIR = Path(__file__).parents[1] / "alembic" / "versions"
@@ -910,13 +909,23 @@ def test_backfill_links_only_exact_official_legacy_snapshots(
 
     with Session(migrated_database) as db:
         for session_id, rule_set_id in exact_game_ids.items():
-            record = db.get(GameSessionRecord, session_id)
+            record = db.execute(
+                text(
+                    """
+                    SELECT rule_set_id, rule_set_revision_id,
+                           rule_set_revision_no, rule_set_content_hash
+                    FROM game_sessions
+                    WHERE session_id = :session_id
+                    """
+                ),
+                {"session_id": session_id},
+            ).mappings().one_or_none()
             assert record is not None
             match = FROZEN_MATCHES[rule_set_id]
-            assert record.rule_set_id == rule_set_id
-            assert record.rule_set_revision_id == match["revision_id"]
-            assert record.rule_set_revision_no == 1
-            assert record.rule_set_content_hash == match["content_hash"]
+            assert record["rule_set_id"] == rule_set_id
+            assert record["rule_set_revision_id"] == match["revision_id"]
+            assert record["rule_set_revision_no"] == 1
+            assert record["rule_set_content_hash"] == match["content_hash"]
 
         for run_id, rule_set_id in exact_run_ids.items():
             record = db.execute(
@@ -944,18 +953,37 @@ def test_backfill_links_only_exact_official_legacy_snapshots(
             "game_fullwidth": "starter_6",
         }
         for session_id, expected_rule_set_id in unmatched_games.items():
-            record = db.get(GameSessionRecord, session_id)
+            record = db.execute(
+                text(
+                    """
+                    SELECT rule_set_id, rule_set_revision_id,
+                           rule_set_revision_no, rule_set_content_hash
+                    FROM game_sessions
+                    WHERE session_id = :session_id
+                    """
+                ),
+                {"session_id": session_id},
+            ).mappings().one_or_none()
             assert record is not None
-            assert record.rule_set_id == expected_rule_set_id
-            assert record.rule_set_revision_id is None
-            assert record.rule_set_revision_no is None
-            assert record.rule_set_content_hash is None
+            assert record["rule_set_id"] == expected_rule_set_id
+            assert record["rule_set_revision_id"] is None
+            assert record["rule_set_revision_no"] is None
+            assert record["rule_set_content_hash"] is None
 
         for session_id in ("game_empty_id", "game_null_snap"):
-            record = db.get(GameSessionRecord, session_id)
+            record = db.execute(
+                text(
+                    """
+                    SELECT rule_set_id, rule_set_revision_id
+                    FROM game_sessions
+                    WHERE session_id = :session_id
+                    """
+                ),
+                {"session_id": session_id},
+            ).mappings().one_or_none()
             assert record is not None
-            assert record.rule_set_id is None
-            assert record.rule_set_revision_id is None
+            assert record["rule_set_id"] is None
+            assert record["rule_set_revision_id"] is None
 
         unmatched_runs = {
             "run_changed1": "preserved_changed",

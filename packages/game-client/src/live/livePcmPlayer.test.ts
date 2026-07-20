@@ -79,6 +79,15 @@ function createFakeAudioContext(options: { currentTime: number }): FakeAudioCont
   const context = {
     buffers,
     close: vi.fn(async () => undefined),
+    createGain: vi.fn(() => ({
+      connect: vi.fn(),
+      gain: {
+        cancelScheduledValues: vi.fn(),
+        linearRampToValueAtTime: vi.fn(),
+        setValueAtTime: vi.fn(),
+        value: 1,
+      },
+    })),
     createBuffer: vi.fn(
       (_numberOfChannels: number, length: number, sampleRate: number): FakeAudioBuffer => {
         const buffer = {

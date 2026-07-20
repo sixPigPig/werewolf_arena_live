@@ -6,6 +6,7 @@ export type PcmScheduledChunk = {
 
 export type PcmAudioScheduler = {
   close(): Promise<void>;
+  fadeOut(durationMs: number): Promise<void>;
   resume(): Promise<void>;
   schedule(base64Pcm: string, sampleRate: number): Promise<PcmScheduledChunk>;
   suspend(): Promise<void>;
@@ -42,9 +43,21 @@ export function pcm16ToFloat32(samples: Int16Array): Float32Array<ArrayBuffer> {
 
 export function createPcmAudioScheduler(context: AudioContext): PcmAudioScheduler {
   let nextPlaybackTime = context.currentTime;
+  const outputGain = context.createGain();
+  outputGain.connect(context.destination);
 
   return {
     async close(): Promise<void> {
+      await context.close();
+    },
+
+    async fadeOut(durationMs: number): Promise<void> {
+      const seconds = Math.max(0.08, Math.min(0.15, durationMs / 1000));
+      const now = context.currentTime;
+      outputGain.gain.cancelScheduledValues(now);
+      outputGain.gain.setValueAtTime(outputGain.gain.value, now);
+      outputGain.gain.linearRampToValueAtTime(0, now + seconds);
+      await new Promise((resolve) => globalThis.setTimeout(resolve, seconds * 1000));
       await context.close();
     },
 
@@ -63,7 +76,7 @@ export function createPcmAudioScheduler(context: AudioContext): PcmAudioSchedule
 
       const source = context.createBufferSource();
       source.buffer = buffer;
-      source.connect(context.destination);
+      source.connect(outputGain);
 
       const startTime = Math.max(nextPlaybackTime, context.currentTime);
       source.start(startTime);

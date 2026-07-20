@@ -7,13 +7,21 @@ from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.models.admin import AdminSession, AuditEvent
-from app.models.game_session import GameReplayPayload, GameSessionRecord
+from app.models.game_session import (
+    ActorMindSnapshotRecord,
+    GameReplayPayload,
+    GameSessionRecord,
+    SpeechTurnReceiptRecord,
+    SpeechTurnSegmentRecord,
+    VoicePlaybackObservationRecord,
+)
 from app.models.live import (
     LiveEventRecord,
     LiveRunRecord,
     VoiceAudioChunkRecord,
     VoiceUtteranceRecord,
 )
+from app.models.liveness_rollout import LivenessRolloutConfigRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.public import PublicSession, UserFavoritePlayerProfile
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
@@ -446,6 +454,40 @@ def test_game_session_table_is_registered_in_metadata() -> None:
     assert "game_sessions" in Base.metadata.tables
 
 
+def test_liveness_rollout_config_table_matches_expected_schema() -> None:
+    table = LivenessRolloutConfigRecord.__table__
+
+    assert table.name == "liveness_rollout_configs"
+    assert set(table.columns.keys()) == {
+        "id",
+        "revision",
+        "experience_revision",
+        "experiment_id",
+        "treatment_percent",
+        "updated_by_user_id",
+        "created_at",
+        "updated_at",
+    }
+    assert table.c.id.primary_key is True
+    _assert_string_column(table.c.id, length=40, nullable=False)
+    _assert_string_column(table.c.experience_revision, length=40, nullable=False)
+    _assert_string_column(table.c.experiment_id, length=64, nullable=False)
+    assert table.c.treatment_percent.nullable is False
+    _assert_foreign_key(
+        table.c.updated_by_user_id,
+        target="users.id",
+        ondelete="SET NULL",
+    )
+    assert table.c.created_at.server_default is not None
+    assert table.c.updated_at.server_default is not None
+    assert {
+        constraint.name for constraint in table.constraints if constraint.name
+    } >= {
+        "ck_liveness_rollout_configs_revision_positive",
+        "ck_liveness_rollout_configs_treatment_percent",
+    }
+
+
 def test_game_session_table_matches_expected_schema() -> None:
     table = GameSessionRecord.__table__
     column_names = set(table.columns.keys())
@@ -461,6 +503,10 @@ def test_game_session_table_matches_expected_schema() -> None:
         "rule_set_content_hash",
         "rule_set",
         "resumable",
+        "liveness_experience_revision",
+        "liveness_experience_snapshot",
+        "liveness_experiment_id",
+        "liveness_experiment_variant",
         "created_at",
         "updated_at",
     }
@@ -512,6 +558,10 @@ def test_live_run_table_matches_expected_schema() -> None:
         "lineup_quality_warnings",
         "lineup_quality_report",
         "p2_diagnostics",
+        "liveness_experience_revision",
+        "liveness_experience_snapshot",
+        "liveness_experiment_id",
+        "liveness_experiment_variant",
         "winner",
         "error",
         "created_at",
@@ -996,6 +1046,11 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
         "last_source_event_id",
         "presentation_id",
         "request_id",
+        "action_id",
+        "speech_id",
+        "segment_id",
+        "segment_index",
+        "segment_final",
         "speaker_kind",
         "speaker_name",
         "speaker",
@@ -1007,6 +1062,8 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
         "mime_type",
         "status",
         "duration_ms",
+        "tts_started_at",
+        "first_audio_chunk_at",
         "subtitle_timings",
         "error_message",
         "effective_delivery",
@@ -1029,6 +1086,11 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
     assert table.c.last_source_event_id.nullable is False
     _assert_string_column(table.c.presentation_id, length=64, nullable=True)
     _assert_string_column(table.c.request_id, length=80, nullable=True)
+    _assert_string_column(table.c.action_id, length=40, nullable=True)
+    _assert_string_column(table.c.speech_id, length=40, nullable=True)
+    _assert_string_column(table.c.segment_id, length=40, nullable=True)
+    assert table.c.segment_index.nullable is True
+    assert table.c.segment_final.nullable is True
     _assert_string_column(table.c.speaker_kind, length=20, nullable=False)
     _assert_string_column(table.c.speaker_name, length=120, nullable=False)
     _assert_string_column(table.c.speaker, length=160, nullable=False)
@@ -1054,12 +1116,48 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
     _assert_index(table, "ix_voice_utterances_session_id", ["session_id"])
     _assert_index(table, "ix_voice_utterances_run_source_event", ["run_id", "source_event_id"])
     _assert_index(table, "ix_voice_utterances_request_id", ["request_id"])
+    _assert_index(table, "ix_voice_utterances_action_id", ["action_id"])
+    _assert_index(table, "ix_voice_utterances_speech_id", ["speech_id"])
     _assert_index(table, "ix_voice_utterances_text_hash", ["text_hash"])
     _assert_index(table, "ix_voice_utterances_status", ["status"])
     _assert_index(
         table,
         "ix_voice_utterances_session_audience",
         ["session_id", "audience"],
+    )
+
+
+def test_liveness_runtime_tables_are_private_session_scoped_contracts() -> None:
+    actor_minds = ActorMindSnapshotRecord.__table__
+    receipts = SpeechTurnReceiptRecord.__table__
+    segments = SpeechTurnSegmentRecord.__table__
+    observations = VoicePlaybackObservationRecord.__table__
+
+    assert set(actor_minds.primary_key.columns.keys()) == {"session_id", "actor"}
+    assert set(receipts.primary_key.columns.keys()) == {"session_id", "action_id"}
+    assert set(segments.primary_key.columns.keys()) == {
+        "session_id",
+        "action_id",
+        "segment_index",
+    }
+    assert set(observations.primary_key.columns.keys()) == {
+        "playback_session_id",
+        "utterance_id",
+    }
+    _assert_foreign_key(
+        actor_minds.c.session_id,
+        target="game_sessions.session_id",
+        ondelete="CASCADE",
+    )
+    _assert_foreign_key(
+        receipts.c.session_id,
+        target="game_sessions.session_id",
+        ondelete="CASCADE",
+    )
+    _assert_foreign_key(
+        observations.c.utterance_id,
+        target="voice_utterances.utterance_id",
+        ondelete="CASCADE",
     )
 
 

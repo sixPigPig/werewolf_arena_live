@@ -18,6 +18,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.routes.games import SessionLiveStore
 from app.db.base import Base
+from app.models.game_session import (
+    GameSessionRecord,
+    SpeechTurnReceiptRecord,
+    SpeechTurnSegmentRecord,
+)
 from app.models.live import (
     GodViewLiveEventRecord,
     LiveEventRecord,
@@ -43,6 +48,11 @@ from app.werewolf.live_store import (
     activation_ack_schema_inventory_complete,
 )
 from app.werewolf.orphan_reaper import run_next_orphan_recovery
+from app.werewolf.speech_gate import (
+    stable_segment_id,
+    stable_segment_presentation_id,
+    stable_speech_id,
+)
 from tests.rule_set_fixtures import (
     legacy_official_compiled_rule_set,
     managed_official_compiled_rule_set,
@@ -3179,6 +3189,84 @@ def test_live_store_creates_voice_job_with_narratable_event(db_session: Session)
     assert job.session_id == run.session_id
     assert job.status == "pending"
     assert job.attempt_count == 0
+
+
+def test_live_store_atomically_persists_committed_segment_projection_receipt_and_voice_job(
+    db_session: Session,
+) -> None:
+    registry = LiveRunRegistry()
+    run = registry.create_run(
+        session_id="game_segment_job",
+        villager_model="deepseek-chat",
+        werewolf_model="deepseek-chat",
+        seed=7,
+        max_rounds=8,
+    )
+    speech_id = stable_speech_id(run.session_id, "act_segment", "speech-v1")
+    text_value = "我先听后置位。"
+    segment_id = stable_segment_id(speech_id, 0, text_value)
+    event = registry.publish(
+        run.run_id,
+        "model_response_delta",
+        round_number=1,
+        phase="day",
+        actor="阿青",
+        action="debate",
+        payload={
+            "schema_version": 2,
+            "commit_state": "accepted_segment",
+            "generation_stage": "renderer",
+            "action_id": "act_segment",
+            "request_id": "req_segment",
+            "speech_id": speech_id,
+            "segment_id": segment_id,
+            "segment_index": 0,
+            "segment_final": True,
+            "delta": text_value,
+            "visible_text": text_value,
+            "field": "say",
+            "is_public": True,
+            "presentation_id": stable_segment_presentation_id(segment_id),
+            "experience_revision": "liveness-v1",
+            "voice_snapshot": {
+                "enabled": True,
+                "speaker": "player-speaker",
+                "effective_delivery": {"mood": "calm"},
+                "effective_context_texts": ["平静自然"],
+                "voice_config_version": 2,
+                "delivery_mapping_version": "v2",
+            },
+        },
+    )
+    store = DatabaseLiveStore(db_session)
+    store.save_run(run)
+    db_session.add(GameSessionRecord(session_id=run.session_id, status="partial"))
+    db_session.commit()
+
+    store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
+
+    receipt = db_session.get(
+        SpeechTurnReceiptRecord,
+        (run.session_id, "act_segment"),
+    )
+    segment = db_session.get(
+        SpeechTurnSegmentRecord,
+        (run.session_id, "act_segment", 0),
+    )
+    job = db_session.get(
+        VoiceMaterializationJobRecord,
+        (run.run_id, event.id, "player"),
+    )
+    public_event = db_session.get(PublicLiveEventRecord, (run.run_id, event.id))
+    assert receipt is not None and receipt.status == "complete"
+    assert receipt.final_text == text_value
+    assert segment is not None and segment.segment_id == segment_id
+    assert public_event is not None
+    assert public_event.payload["segment_id"] == segment_id
+    assert "voice_snapshot" not in public_event.payload
+    assert job is not None
+    assert job.tts_request_source == "committed_speech_segment"
+    assert job.speaker == "player-speaker"
 
 
 def test_live_store_creates_god_view_only_private_voice_job(db_session: Session) -> None:

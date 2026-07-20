@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.rule_sets.telemetry import render_rule_set_metrics
 from app.werewolf.execution_telemetry import render_action_execution_metrics
+from app.werewolf.liveness_telemetry import render_liveness_metrics
 from app.werewolf.quality_evaluation_telemetry import render_quality_evaluation_metrics
 from app.werewolf.quality_telemetry import render_speech_quality_metrics
 from app.werewolf.worker_telemetry import render_live_run_metrics
@@ -26,6 +27,7 @@ def read_metrics(db: Session = Depends(get_db)) -> Response:
         content += render_rule_set_metrics(db)
         content += render_speech_quality_metrics()
         content += render_action_execution_metrics()
+        content += render_liveness_metrics()
         content += render_quality_evaluation_metrics(
             db,
             worker_max_age_seconds=settings.quality_evaluation_probe_max_age_seconds,

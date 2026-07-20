@@ -292,6 +292,60 @@ class AdminQualityContent(BaseModel):
     lineup_warning_count: int = Field(ge=0)
 
 
+class AdminLivenessLatencySummary(BaseModel):
+    count: int = Field(ge=0)
+    p50: int | None = Field(default=None, ge=0)
+    p95: int | None = Field(default=None, ge=0)
+    max: int | None = Field(default=None, ge=0)
+
+
+class AdminLivenessTimingCoverage(BaseModel):
+    count: int = Field(ge=0)
+    denominator: int = Field(ge=0)
+    rate: float | None = Field(default=None, ge=0, le=1)
+
+
+class AdminLivenessFeatureModes(BaseModel):
+    style_gate: Literal["legacy", "async_observe"] | None = None
+    actor_mind: Literal["off", "shadow", "read"] | None = None
+    sentence_stream: Literal["off", "committed_segments"] | None = None
+    affect_delivery: Literal["off", "shadow", "on"] | None = None
+    tts_prefetch_depth: Literal[0, 1] | None = None
+    voice_preempt: Literal["off", "deterministic"] | None = None
+
+
+class AdminLivenessActorMind(BaseModel):
+    snapshot_count: int = Field(ge=0)
+    update_count: int = Field(ge=0)
+    source_complete_count: int = Field(ge=0)
+
+
+class AdminQualityLiveness(BaseModel):
+    experience_revision: str | None = Field(default=None, max_length=40)
+    experiment_id: str | None = Field(default=None, max_length=64)
+    variant: str | None = Field(default=None, max_length=64)
+    feature_modes: AdminLivenessFeatureModes
+    public_speech_count: int = Field(ge=0)
+    timing_coverage: dict[str, AdminLivenessTimingCoverage]
+    stage_latency_ms: dict[str, AdminLivenessLatencySummary]
+    prompt_chars: AdminLivenessLatencySummary
+    hard_gate_duration_ms: AdminLivenessLatencySummary
+    hard_retry_count: int = Field(ge=0)
+    hard_retry_rate: float | None = Field(default=None, ge=0, le=1)
+    hard_exhausted_count: int = Field(ge=0)
+    hard_exhausted_rate: float | None = Field(default=None, ge=0, le=1)
+    partial_speech_count: int = Field(ge=0)
+    interrupted_speech_count: int = Field(ge=0)
+    voice_timing_coverage: dict[str, int]
+    tts_to_first_audio_ms: AdminLivenessLatencySummary
+    turn_to_first_audio_ms: AdminLivenessLatencySummary
+    voice_status_counts: dict[str, int]
+    playback_timing_coverage: dict[str, int]
+    playback_status_counts: dict[str, int]
+    speaker_gap_ms: AdminLivenessLatencySummary
+    actor_mind: AdminLivenessActorMind
+
+
 class AdminQualityCriticalClauseCoverage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -351,6 +405,7 @@ class AdminGameQualityEvaluationSummary(BaseModel):
     voice: AdminQualityVoice
     performance: AdminQualityPerformance
     content: AdminQualityContent
+    liveness: AdminQualityLiveness
     critical_actions: list[AdminQualityCriticalAction] = Field(max_length=64)
     evaluated_at: datetime | None
     source_revision: str | None = Field(

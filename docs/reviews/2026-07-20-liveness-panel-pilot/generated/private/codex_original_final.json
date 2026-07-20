@@ -1,0 +1,76 @@
+{
+  "ratings": [
+    {
+      "item_id": "item_fa7a03c1060a214d",
+      "choice": "right",
+      "dimensions": {"responsiveness": 4, "spoken_naturalness": 5, "persona_distinctiveness": 3, "emotion_fit": 4, "relationship_continuity": 3, "factual_grounding": 5},
+      "reason": "右侧的停顿和短问句符合首置位没有信息时的真实开口；左侧的‘公开信息显示’和‘可验证的疑点’像事后整理稿。"
+    },
+    {
+      "item_id": "item_ed10701382646bde",
+      "choice": "right",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 4, "persona_distinctiveness": 4, "emotion_fit": 4, "relationship_continuity": 5, "factual_grounding": 5},
+      "reason": "右侧直接对1号说‘你漏了一种可能’，随后用‘不是要强打你’收住力度，像听完上一位后的即时修正；左侧轮次推演偏书面。"
+    },
+    {
+      "item_id": "item_55b5f96f24fc6a5a",
+      "choice": "left",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 5, "persona_distinctiveness": 3, "emotion_fit": 4, "relationship_continuity": 4, "factual_grounding": 5},
+      "reason": "左侧直接追问6号是否挂得太急，接话自然且没有把信息不足包装成完整分析报告；右侧观点更丰富，但名单式收窄略像预先整理。"
+    },
+    {
+      "item_id": "item_f24884dda5cb0c3f",
+      "choice": "right",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 4, "persona_distinctiveness": 5, "emotion_fit": 5, "relationship_continuity": 5, "factual_grounding": 5},
+      "reason": "右侧不仅指出3号标准不一，还当场把问题抛给5号和8号并说明自己等回应再落票，延续了4号不早锁票的人设；左侧过于压缩。"
+    },
+    {
+      "item_id": "item_a47d95acbd590544",
+      "choice": "right",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 4, "persona_distinctiveness": 4, "emotion_fit": 4, "relationship_continuity": 5, "factual_grounding": 5},
+      "reason": "右侧把不信任和暂时站边直接说出来，像真实态度变化；左侧的‘互动变化’和‘关系线变了’是在给自己的行为贴分析标签。"
+    },
+    {
+      "item_id": "item_f978bd647c3f3428",
+      "choice": "right",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 3, "persona_distinctiveness": 4, "emotion_fit": 4, "relationship_continuity": 5, "factual_grounding": 5},
+      "reason": "左侧把接警徽的11号误问成了昨晚验人的人，事实角色关系错误；右侧虽长，但准确追问11号是否收到4号的验人指向。"
+    },
+    {
+      "item_id": "item_076b4e71b5b88c24",
+      "choice": "right",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 4, "persona_distinctiveness": 4, "emotion_fit": 5, "relationship_continuity": 5, "factual_grounding": 5},
+      "reason": "右侧直接拿1号昨天使用过的票型标准反问其今天为何改口，既有前情连续性又有桌边对抗感；左侧论证完整但更像复盘记录。"
+    },
+    {
+      "item_id": "item_d1282bd735c555c5",
+      "choice": "left",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 5, "persona_distinctiveness": 4, "emotion_fit": 5, "relationship_continuity": 4, "factual_grounding": 5},
+      "reason": "左侧用一句反问击穿保护12号的解释，立刻转向催8号报验人，符合六人残局的时间压力；右侧把同一推理展开了三遍。"
+    },
+    {
+      "item_id": "item_8f2ceaf86db27bf5",
+      "choice": "right",
+      "dimensions": {"responsiveness": 4, "spoken_naturalness": 5, "persona_distinctiveness": 5, "emotion_fit": 4, "relationship_continuity": 3, "factual_grounding": 4},
+      "reason": "右侧自报身份、查杀、票口后用‘过了’结束，节奏像寡言玩家现场发言；左侧信息更全，但尾部是模板化的竞选承诺。"
+    },
+    {
+      "item_id": "item_d7af171514dbde26",
+      "choice": "left",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 4, "persona_distinctiveness": 5, "emotion_fit": 4, "relationship_continuity": 5, "factual_grounding": 5},
+      "reason": "左侧的‘瓶瓶罐罐’和‘不装大尾巴狼’不是孤立口头禅，后面还接了具体警长安排，人物完整；右侧的‘凑个热闹’削弱了竞选动机，像刻意加语气词。"
+    },
+    {
+      "item_id": "item_2e28d68a0b6703d0",
+      "choice": "left",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 5, "persona_distinctiveness": 5, "emotion_fit": 5, "relationship_continuity": 4, "factual_grounding": 5},
+      "reason": "左侧以‘我没回答？’直接反打并让3号别转移话题，像PK时的即时交锋；右侧多次解释‘因果链’和底牌，书面感更重。"
+    },
+    {
+      "item_id": "item_3ec387ab62938e98",
+      "choice": "left",
+      "dimensions": {"responsiveness": 5, "spoken_naturalness": 4, "persona_distinctiveness": 4, "emotion_fit": 5, "relationship_continuity": 5, "factual_grounding": 5},
+      "reason": "左侧面对12号直接追问并解释自己的票，最后把压力返还给12号，交锋顺畅；右侧开头‘我先给置信度，只有低置信’明显像结构化分析口令。"
+    }
+  ]
+}

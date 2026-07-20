@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const pcmMocks = vi.hoisted(() => ({
   close: vi.fn().mockResolvedValue(undefined),
   createPcmAudioScheduler: vi.fn(),
+  fadeOut: vi.fn().mockResolvedValue(undefined),
   resume: vi.fn().mockResolvedValue(undefined),
   schedule: vi.fn().mockResolvedValue({
     duration: 0.01,
@@ -62,11 +63,13 @@ const originalRevokeObjectURL = URL.revokeObjectURL;
 
 function resetPcmMocks() {
   pcmMocks.close.mockReset();
+  pcmMocks.fadeOut.mockReset();
   pcmMocks.resume.mockReset();
   pcmMocks.schedule.mockReset();
   pcmMocks.suspend.mockReset();
   pcmMocks.createPcmAudioScheduler.mockReset();
   pcmMocks.close.mockResolvedValue(undefined);
+  pcmMocks.fadeOut.mockResolvedValue(undefined);
   pcmMocks.resume.mockResolvedValue(undefined);
   pcmMocks.schedule.mockResolvedValue({
     duration: 0.01,
@@ -76,6 +79,7 @@ function resetPcmMocks() {
   pcmMocks.suspend.mockResolvedValue(undefined);
   pcmMocks.createPcmAudioScheduler.mockReturnValue({
     close: pcmMocks.close,
+    fadeOut: pcmMocks.fadeOut,
     resume: pcmMocks.resume,
     schedule: pcmMocks.schedule,
     suspend: pcmMocks.suspend,
@@ -370,6 +374,27 @@ describe("live voice stream", () => {
     expect(queue.items[0].chunks).toEqual(["YWJj"]);
   });
 
+  it("preserves committed speech grouping and segment order metadata", () => {
+    const queue = enqueueVoiceMessage(
+      createVoiceQueue(),
+      voiceStartMessage({
+        utterance_id: "voice-segment-2",
+        speech_id: "sp-1",
+        segment_id: "seg-2",
+        segment_index: 1,
+        segment_final: true,
+      }),
+    );
+
+    expect(queue.items[0]).toMatchObject({
+      utteranceId: "voice-segment-2",
+      speechId: "sp-1",
+      segmentId: "seg-2",
+      segmentIndex: 1,
+      segmentFinal: true,
+    });
+  });
+
   it("attaches subtitle timings to the matching utterance", () => {
     let queue = createVoiceQueue();
     queue = enqueueVoiceMessage(queue, voiceStartMessage());
@@ -613,6 +638,7 @@ describe("live voice stream", () => {
         JSON.stringify({
           type: "voice_played",
           utterance_id: "judge-old",
+          status: "skipped",
         }),
       ),
     );
@@ -663,8 +689,14 @@ describe("live voice stream", () => {
     });
 
     await waitFor(() => {
-      expect(socket.send).toHaveBeenCalledWith(
-        JSON.stringify({ type: "voice_played", utterance_id: "voice-before" }),
+      expect(
+        socket.send.mock.calls.map(([message]) => JSON.parse(String(message))),
+      ).toContainEqual(
+        expect.objectContaining({
+          type: "voice_played",
+          utterance_id: "voice-before",
+          status: "interrupted",
+        }),
       );
     });
     expect(pause).toHaveBeenCalled();
@@ -685,10 +717,13 @@ describe("live voice stream", () => {
     });
 
     await waitFor(() => {
-      expect(socket.send).toHaveBeenCalledWith(
-        JSON.stringify({
+      expect(
+        socket.send.mock.calls.map(([message]) => JSON.parse(String(message))),
+      ).toContainEqual(
+        expect.objectContaining({
           type: "voice_played",
           utterance_id: "voice-late-before",
+          status: "interrupted",
         }),
       );
     });
@@ -712,10 +747,75 @@ describe("live voice stream", () => {
     );
     const acks = socket.send.mock.calls.map(([message]) => JSON.parse(String(message)));
     expect(acks).toEqual([
-      { type: "voice_played", utterance_id: "voice-before" },
-      { type: "voice_played", utterance_id: "voice-late-before" },
+      expect.objectContaining({
+        type: "voice_played",
+        utterance_id: "voice-before",
+        status: "interrupted",
+      }),
+      expect.objectContaining({
+        type: "voice_played",
+        utterance_id: "voice-late-before",
+        status: "interrupted",
+      }),
     ]);
     expect(audioElements).toHaveLength(1);
+  });
+
+  it("fades and acknowledges the active committed speech on voice_preempt", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubAudioContext({ state: "running" });
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 4,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      socket.emit(
+        voiceStartMessage({
+          utterance_id: "voice-segment-0",
+          speech_id: "sp-preempt",
+          segment_id: "seg-preempt-0",
+          segment_index: 0,
+          audio_format: "pcm",
+          mime_type: "audio/pcm",
+        }),
+      );
+      socket.emit(
+        audioChunkMessage({
+          utterance_id: "voice-segment-0",
+          audio_format: "pcm",
+          mime_type: "audio/pcm",
+        }),
+      );
+    });
+    await waitFor(() => expect(pcmMocks.schedule).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      socket.emit({
+        type: "voice_preempt",
+        speech_id: "sp-preempt",
+        reason: "self_explosion",
+        fade_out_ms: 120,
+        cut_after_segment_index: 0,
+      });
+    });
+
+    await waitFor(() => expect(pcmMocks.fadeOut).toHaveBeenCalledWith(120));
+    await waitFor(() => expect(result.current.currentItem).toBeNull());
+    const ack = JSON.parse(String(socket.send.mock.calls.at(-1)?.[0]));
+    expect(ack).toEqual(
+      expect.objectContaining({
+        type: "voice_played",
+        utterance_id: "voice-segment-0",
+        status: "interrupted",
+        played_ms: expect.any(Number),
+      }),
+    );
   });
 
   it("does not connect until enabled", () => {
@@ -978,7 +1078,11 @@ describe("live voice stream", () => {
 
     await waitFor(() =>
       expect(childSocket.send).toHaveBeenCalledWith(
-        JSON.stringify({ type: "voice_played", utterance_id: "voice-child" }),
+        JSON.stringify({
+          type: "voice_played",
+          utterance_id: "voice-child",
+          status: "skipped",
+        }),
       ),
     );
     expect(play).toHaveBeenCalledTimes(1);
@@ -1347,8 +1451,12 @@ describe("live voice stream", () => {
       audioElements[0].dispatchEvent(new Event("ended"));
     });
 
-    expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: "voice_played", utterance_id: "voice-1" }),
+    expect(JSON.parse(String(socket.send.mock.calls.at(-1)?.[0]))).toEqual(
+      expect.objectContaining({
+        type: "voice_played",
+        utterance_id: "voice-1",
+        status: "completed",
+      }),
     );
   });
 
@@ -2018,8 +2126,12 @@ describe("live voice stream", () => {
 
     expect(result.current.currentItem).toBeNull();
     expect(result.current.lastCompletedPlayback).toBeNull();
-    expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: "voice_played", utterance_id: "voice-1" }),
+    expect(JSON.parse(String(socket.send.mock.calls.at(-1)?.[0]))).toEqual(
+      expect.objectContaining({
+        type: "voice_played",
+        utterance_id: "voice-1",
+        status: "failed",
+      }),
     );
   });
 
@@ -2261,8 +2373,12 @@ describe("live voice stream", () => {
     });
 
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
-    expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: "voice_played", utterance_id: "voice-1" }),
+    expect(JSON.parse(String(socket.send.mock.calls[0]?.[0]))).toEqual(
+      expect.objectContaining({
+        type: "voice_played",
+        utterance_id: "voice-1",
+        status: "failed",
+      }),
     );
     expect(result.current.connectionState).toBe("open");
     expect(result.current.errors).toEqual(["Unable to play live voice audio."]);

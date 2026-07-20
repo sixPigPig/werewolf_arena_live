@@ -37,6 +37,7 @@ export type LiveVoiceConnectionState =
   | "unavailable";
 
 export type VoiceAudience = "player_public" | "spectator_god_view";
+type VoicePlaybackAckStatus = "completed" | "interrupted" | "skipped" | "failed";
 
 export type LiveVoiceMessage =
   | {
@@ -45,6 +46,10 @@ export type LiveVoiceMessage =
       source_event_id: number;
       last_source_event_id?: number;
       presentation_id?: string;
+      speech_id?: string;
+      segment_id?: string;
+      segment_index?: number;
+      segment_final?: boolean;
       speaker_kind: "player" | "judge";
       speaker_name: string;
       audience?: VoiceAudience;
@@ -80,6 +85,17 @@ export type LiveVoiceMessage =
       utterance_id?: string;
       source_event_id?: number;
       message: string;
+    }
+  | {
+      type: "voice_preempt";
+      speech_id: string;
+      reason: string;
+      trigger_source?: {
+        source_event_id: number;
+        source_run_id: string;
+      };
+      cut_after_segment_index?: number;
+      fade_out_ms: number;
     }
   | {
       type: "voice_unavailable";
@@ -123,6 +139,10 @@ export type LiveVoiceQueueItem = {
   sourceEventId: number;
   lastSourceEventId: number;
   presentationId?: string;
+  speechId?: string;
+  segmentId?: string;
+  segmentIndex?: number;
+  segmentFinal?: boolean;
   audience?: VoiceAudience;
   speakerKind: "player" | "judge";
   speakerName: string;
@@ -239,6 +259,10 @@ export function enqueueVoiceMessage(
     return queue;
   }
 
+  if (message.type === "voice_preempt") {
+    return queue;
+  }
+
   if (message.type === "voice_error") {
     return {
       ...queue,
@@ -279,6 +303,10 @@ export function enqueueVoiceMessage(
                 ),
                 presentationId:
                   message.presentation_id ?? item.presentationId,
+                speechId: message.speech_id ?? item.speechId,
+                segmentId: message.segment_id ?? item.segmentId,
+                segmentIndex: message.segment_index ?? item.segmentIndex,
+                segmentFinal: message.segment_final ?? item.segmentFinal,
                 speakerKind: message.speaker_kind,
                 speakerName: message.speaker_name,
                 audience: message.audience ?? "player_public",
@@ -303,6 +331,14 @@ export function enqueueVoiceMessage(
           lastSourceEventId,
           ...(message.presentation_id
             ? { presentationId: message.presentation_id }
+            : {}),
+          ...(message.speech_id ? { speechId: message.speech_id } : {}),
+          ...(message.segment_id ? { segmentId: message.segment_id } : {}),
+          ...(message.segment_index !== undefined
+            ? { segmentIndex: message.segment_index }
+            : {}),
+          ...(message.segment_final !== undefined
+            ? { segmentFinal: message.segment_final }
             : {}),
           speakerKind: message.speaker_kind,
           speakerName: message.speaker_name,
@@ -648,6 +684,14 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
         typeof value.last_source_event_id === "number") &&
       (value.presentation_id === undefined ||
         typeof value.presentation_id === "string") &&
+      (value.speech_id === undefined || typeof value.speech_id === "string") &&
+      (value.segment_id === undefined || typeof value.segment_id === "string") &&
+      (value.segment_index === undefined ||
+        (typeof value.segment_index === "number" &&
+          Number.isInteger(value.segment_index) &&
+          value.segment_index >= 0)) &&
+      (value.segment_final === undefined ||
+        typeof value.segment_final === "boolean") &&
       isSpeakerKind(value.speaker_kind) &&
       typeof value.speaker_name === "string" &&
       (value.audience === undefined || isVoiceAudience(value.audience)) &&
@@ -685,6 +729,25 @@ function isLiveVoiceMessage(value: unknown): value is LiveVoiceMessage {
 
   if (value.type === "voice_error") {
     return typeof value.message === "string";
+  }
+
+  if (value.type === "voice_preempt") {
+    return (
+      typeof value.speech_id === "string" &&
+      typeof value.reason === "string" &&
+      typeof value.fade_out_ms === "number" &&
+      Number.isFinite(value.fade_out_ms) &&
+      value.fade_out_ms >= 80 &&
+      value.fade_out_ms <= 150 &&
+      (value.cut_after_segment_index === undefined ||
+        (typeof value.cut_after_segment_index === "number" &&
+          Number.isInteger(value.cut_after_segment_index) &&
+          value.cut_after_segment_index >= 0)) &&
+      (value.trigger_source === undefined ||
+        (isRecord(value.trigger_source) &&
+          typeof value.trigger_source.source_run_id === "string" &&
+          typeof value.trigger_source.source_event_id === "number"))
+    );
   }
 
   return false;
@@ -771,6 +834,8 @@ export function useLiveVoiceStream(
     [currentEventId, queue, streamUrl, terminalVoiceWindow],
   );
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const queueItemsRef = useRef<LiveVoiceQueueItem[]>(queue.items);
+  queueItemsRef.current = queue.items;
   const audioContextRef = useRef<AudioContext | null>(null);
   const pcmSchedulerRef = useRef<PcmAudioScheduler | null>(null);
   const pcmCompletionTimeoutRef = useRef<
@@ -778,7 +843,10 @@ export function useLiveVoiceStream(
   >(null);
   const socketRef = useRef<WebSocket | null>(null);
   const acknowledgedUtteranceIdsRef = useRef<Set<string>>(new Set());
-  const pendingPlaybackAckIdsRef = useRef<Set<string>>(new Set());
+  const pendingPlaybackAckIdsRef = useRef<Map<string, VoicePlaybackAckStatus>>(
+    new Map(),
+  );
+  const playbackStartedAtMsRef = useRef<Map<string, number>>(new Map());
   const pcmEndTimesRef = useRef<Map<string, number>>(new Map());
   const pcmSubtitleStartTimesRef = useRef<Map<string, number>>(new Map());
   const scheduledPcmChunkIndexesRef = useRef<Map<string, Set<number>>>(
@@ -811,25 +879,103 @@ export function useLiveVoiceStream(
       // AudioContext cleanup is best-effort.
     });
   }, [clearPcmCompletionTimeout]);
-  const sendPlaybackAck = useCallback((utteranceId: string) => {
+  const sendPlaybackAck = useCallback((
+    utteranceId: string,
+    status: VoicePlaybackAckStatus = "completed",
+  ) => {
     if (acknowledgedUtteranceIdsRef.current.has(utteranceId)) {
       return;
     }
     const socket = socketRef.current;
     if (!socket) {
-      pendingPlaybackAckIdsRef.current.add(utteranceId);
+      pendingPlaybackAckIdsRef.current.set(utteranceId, status);
       return;
     }
     try {
+      const playbackStartedAt = playbackStartedAtMsRef.current.get(utteranceId);
+      const playedMs =
+        playbackStartedAt === undefined
+          ? undefined
+          : Math.max(0, Date.now() - playbackStartedAt);
       socket.send(
-        JSON.stringify({ type: "voice_played", utterance_id: utteranceId }),
+        JSON.stringify({
+          type: "voice_played",
+          utterance_id: utteranceId,
+          status,
+          ...(playedMs === undefined ? {} : { played_ms: playedMs }),
+        }),
       );
       acknowledgedUtteranceIdsRef.current.add(utteranceId);
       pendingPlaybackAckIdsRef.current.delete(utteranceId);
+      playbackStartedAtMsRef.current.delete(utteranceId);
     } catch {
-      pendingPlaybackAckIdsRef.current.add(utteranceId);
+      pendingPlaybackAckIdsRef.current.set(utteranceId, status);
     }
   }, []);
+  const preemptSpeech = useCallback((message: Extract<LiveVoiceMessage, { type: "voice_preempt" }>) => {
+    const items = queueItemsRef.current.filter(
+      (item) =>
+        item.speechId === message.speech_id &&
+        item.status !== "played" &&
+        item.status !== "error",
+    );
+    if (items.length === 0) {
+      return;
+    }
+    let finalized = false;
+    const finalize = () => {
+      if (finalized) {
+        return;
+      }
+      finalized = true;
+      for (const item of items) {
+        consumedUtteranceIdsRef.current.add(item.utteranceId);
+        sendPlaybackAck(item.utteranceId, "interrupted");
+        dispatch({
+          type: "utterance_played",
+          utteranceId: item.utteranceId,
+        });
+      }
+    };
+    const playingItem = items.find((item) => item.status === "playing");
+    if (!playingItem) {
+      finalize();
+      return;
+    }
+    setSubtitleClock(null);
+    if (isPcmAudioFormat(playingItem.audioFormat)) {
+      const scheduler = pcmSchedulerRef.current;
+      audioContextRef.current = null;
+      pcmSchedulerRef.current = null;
+      pcmEndTimesRef.current.clear();
+      pcmSubtitleStartTimesRef.current.clear();
+      scheduledPcmChunkIndexesRef.current.clear();
+      clearPcmCompletionTimeout();
+      if (scheduler) {
+        void scheduler.fadeOut(message.fade_out_ms).finally(finalize);
+        return;
+      }
+      finalize();
+      return;
+    }
+    const audio = audioRef.current;
+    if (!audio) {
+      finalize();
+      return;
+    }
+    const initialVolume = audio.volume;
+    const startedAt = Date.now();
+    const lowerVolume = () => {
+      const progress = Math.min(1, (Date.now() - startedAt) / message.fade_out_ms);
+      audio.volume = initialVolume * (1 - progress);
+      if (progress >= 1) {
+        finalize();
+        return;
+      }
+      globalThis.setTimeout(lowerVolume, 16);
+    };
+    lowerVolume();
+  }, [clearPcmCompletionTimeout, sendPlaybackAck]);
   useEffect(() => {
     if (!enabled || !terminalVoiceWindow) {
       return;
@@ -857,7 +1003,7 @@ export function useLiveVoiceStream(
     }
     for (const item of preemptedItems) {
       consumedUtteranceIdsRef.current.add(item.utteranceId);
-      sendPlaybackAck(item.utteranceId);
+      sendPlaybackAck(item.utteranceId, "interrupted");
       dispatch({
         type: "utterance_played",
         utteranceId: item.utteranceId,
@@ -883,7 +1029,7 @@ export function useLiveVoiceStream(
         continue;
       }
       consumedUtteranceIdsRef.current.add(item.utteranceId);
-      sendPlaybackAck(item.utteranceId);
+      sendPlaybackAck(item.utteranceId, "skipped");
       dispatch({
         type: "utterance_played",
         utteranceId: item.utteranceId,
@@ -922,9 +1068,10 @@ export function useLiveVoiceStream(
         | "lastSourceEventId"
         | "presentationId"
       >,
+      status: "completed" | "failed" = "completed",
     ) => {
       consumedUtteranceIdsRef.current.add(utteranceId);
-      sendPlaybackAck(utteranceId);
+      sendPlaybackAck(utteranceId, status);
       scheduledPcmChunkIndexesRef.current.delete(utteranceId);
       pcmEndTimesRef.current.delete(utteranceId);
       pcmSubtitleStartTimesRef.current.delete(utteranceId);
@@ -1137,7 +1284,7 @@ export function useLiveVoiceStream(
         type: "queue_error",
         message: "Unable to play live voice audio.",
       });
-      consumePcmUtterance(currentItem.utteranceId);
+      consumePcmUtterance(currentItem.utteranceId, undefined, "failed");
     };
 
     const schedulePcmChunks = async () => {
@@ -1147,7 +1294,7 @@ export function useLiveVoiceStream(
           type: "queue_error",
           message: "当前浏览器不支持语音播放。",
         });
-        consumePcmUtterance(currentItem.utteranceId);
+        consumePcmUtterance(currentItem.utteranceId, undefined, "failed");
         return;
       }
 
@@ -1220,6 +1367,10 @@ export function useLiveVoiceStream(
         }
 
         if (didSchedule && currentItem.status !== "playing") {
+          playbackStartedAtMsRef.current.set(
+            currentItem.utteranceId,
+            Date.now(),
+          );
           dispatch({
             type: "utterance_started",
             utteranceId: currentItem.utteranceId,
@@ -1277,7 +1428,10 @@ export function useLiveVoiceStream(
       setSubtitleClock((current) =>
         current?.utteranceId === currentItem.utteranceId ? null : current,
       );
-      sendPlaybackAck(currentItem.utteranceId);
+      sendPlaybackAck(
+        currentItem.utteranceId,
+        completed ? "completed" : "failed",
+      );
       dispatch({
         type: "utterance_played",
         utteranceId: currentItem.utteranceId,
@@ -1332,6 +1486,7 @@ export function useLiveVoiceStream(
       audio.src = objectUrl;
       audioRef.current = audio;
       audio.addEventListener("ended", markPlayed);
+      playbackStartedAtMsRef.current.set(currentItem.utteranceId, Date.now());
       dispatch({
         type: "utterance_started",
         utteranceId: currentItem.utteranceId,
@@ -1360,7 +1515,7 @@ export function useLiveVoiceStream(
         return;
       }
       consumedUtteranceIdsRef.current.add(blobPlaybackKey);
-      sendPlaybackAck(blobPlaybackKey);
+      sendPlaybackAck(blobPlaybackKey, "failed");
       dispatch({
         type: "queue_error",
         message: "Unable to play live voice audio.",
@@ -1413,7 +1568,7 @@ export function useLiveVoiceStream(
       }
 
       consumedUtteranceIdsRef.current.add(utteranceId);
-      sendPlaybackAck(utteranceId);
+      sendPlaybackAck(utteranceId, "failed");
       dispatch({
         type: "queue_error",
         message: "Unable to play live voice audio.",
@@ -1503,6 +1658,7 @@ export function useLiveVoiceStream(
     consumedUtteranceIdsRef.current.clear();
     acknowledgedUtteranceIdsRef.current.clear();
     pendingPlaybackAckIdsRef.current.clear();
+    playbackStartedAtMsRef.current.clear();
     playbackCompletionSequenceRef.current = 0;
     pcmSubtitleStartTimesRef.current.clear();
     setLastCompletedPlayback(null);
@@ -1593,8 +1749,8 @@ export function useLiveVoiceStream(
       nextSocket.onopen = () => {
         if (isActive) {
           setConnectionState("open");
-          for (const utteranceId of pendingPlaybackAckIdsRef.current) {
-            sendPlaybackAck(utteranceId);
+          for (const [utteranceId, status] of pendingPlaybackAckIdsRef.current) {
+            sendPlaybackAck(utteranceId, status);
           }
         }
       };
@@ -1636,13 +1792,18 @@ export function useLiveVoiceStream(
           return;
         }
 
+        if (parsed.type === "voice_preempt") {
+          preemptSpeech(parsed);
+          return;
+        }
+
         if (
           parsed.type === "voice_start" &&
           parsed.presentation_id &&
           playedPresentationIdsRef.current.has(parsed.presentation_id)
         ) {
           consumedUtteranceIdsRef.current.add(parsed.utterance_id);
-          sendPlaybackAck(parsed.utterance_id);
+          sendPlaybackAck(parsed.utterance_id, "skipped");
           return;
         }
 
@@ -1659,7 +1820,15 @@ export function useLiveVoiceStream(
       }
       socket?.close();
     };
-  }, [audience, enabled, hasCurrentEventId, runId, sendPlaybackAck, streamUrl]);
+  }, [
+    audience,
+    enabled,
+    hasCurrentEventId,
+    preemptSpeech,
+    runId,
+    sendPlaybackAck,
+    streamUrl,
+  ]);
 
   return {
     connectionState,

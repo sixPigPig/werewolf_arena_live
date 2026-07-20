@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "review_id": "review_bdce85c602352d5f",
+  "reviewer_id": "user",
+  "ratings": [
+    {
+      "item_id": "item_076b4e71b5b88c24",
+      "choice": "left|right|tie|skip",
+      "media_status": "ok",
+      "dimensions": {}
+    },
+    {
+      "item_id": "item_fa7a03c1060a214d",
+      "choice": "left|right|tie|skip",
+      "media_status": "ok",
+      "dimensions": {}
+    },
+    {
+      "item_id": "item_f24884dda5cb0c3f",
+      "choice": "left|right|tie|skip",
+      "media_status": "ok",
+      "dimensions": {}
+    },
+    {
+      "item_id": "item_55b5f96f24fc6a5a",
+      "choice": "left|right|tie|skip",
+      "media_status": "ok",
+      "dimensions": {}
+    }
+  ]
+}

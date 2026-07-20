@@ -19,7 +19,10 @@ import {
   MobileLiveTheater,
   MobileLiveTheaterTopBar,
 } from "../components/MobileLiveTheater";
-import { voiceSubtitleToMobileSubtitle } from "../components/mobileLiveSubtitle";
+import {
+  committedSpeechToMobileSubtitle,
+  voiceSubtitleToMobileSubtitle,
+} from "../components/mobileLiveSubtitle";
 
 const EMPTY_EVENTS: LiveGameEvent[] = [];
 
@@ -191,8 +194,10 @@ export function LivePage() {
     ],
   );
   const subtitle = useMemo(
-    () => voiceSubtitleToMobileSubtitle(voice.currentSubtitle),
-    [voice.currentSubtitle],
+    () =>
+      voiceSubtitleToMobileSubtitle(voice.currentSubtitle) ??
+      committedSpeechToMobileSubtitle({ events: stageEvents, godViewState }),
+    [godViewState, stageEvents, voice.currentSubtitle],
   );
   const liveStatus = deriveLiveNavStatus({
     backlogCount: director.backlogCount,
@@ -272,8 +277,12 @@ export function LivePage() {
 }
 
 function isLiveSpeakerDelta(event: LiveGameEvent) {
+  const isAcceptedV2Segment =
+    event.payload.schema_version !== 2 ||
+    event.payload.commit_state === "accepted_segment";
   return (
     event.type === "model_response_delta" &&
+    isAcceptedV2Segment &&
     (event.action === "debate" ||
       event.action === "sheriff_speech" ||
       event.action === "sheriff_pk_speech" ||

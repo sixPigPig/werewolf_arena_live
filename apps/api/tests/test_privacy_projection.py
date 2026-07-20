@@ -440,6 +440,67 @@ def test_public_speech_delta_remains_visible() -> None:
     assert projected.payload["delta"] == "我认为2号可疑"
 
 
+def test_committed_speech_projection_keeps_segment_identity_and_hides_voice_snapshot() -> None:
+    projected = project_live_event(
+        _event(
+            "model_response_delta",
+            action="debate",
+            payload={
+                "schema_version": 2,
+                "commit_state": "accepted_segment",
+                "generation_stage": "renderer",
+                "action_id": "act_1",
+                "request_id": "req_1",
+                "speech_id": "sp_1",
+                "segment_id": "seg_1",
+                "segment_index": 0,
+                "segment_final": True,
+                "experience_revision": "liveness-v1",
+                "delta": "我先听后置位。",
+                "visible_text": "我先听后置位。",
+                "is_public": True,
+                "presentation_id": "pres_1",
+                "voice_snapshot": {"speaker": "private-speaker"},
+                "renderer_attempts": [{"request_id": "req_1"}],
+            },
+        ),
+        "player_public",
+    )
+
+    assert projected is not None
+    assert projected.payload == {
+        "schema_version": 2,
+        "commit_state": "accepted_segment",
+        "generation_stage": "renderer",
+        "action_id": "act_1",
+        "request_id": "req_1",
+        "speech_id": "sp_1",
+        "segment_id": "seg_1",
+        "segment_index": 0,
+        "segment_final": True,
+        "experience_revision": "liveness-v1",
+        "delta": "我先听后置位。",
+        "visible_text": "我先听后置位。",
+        "is_public": True,
+        "presentation_id": "pres_1",
+    }
+
+
+def test_actor_brain_lifecycle_is_not_projected_to_any_viewer() -> None:
+    event = _event(
+        "model_request_started",
+        action="debate",
+        payload={
+            "action_id": "act_1",
+            "request_id": "req_plan_1",
+            "generation_stage": "planner",
+        },
+    )
+
+    assert project_live_event(event, "player_public") is None
+    assert project_live_event(event, "spectator_god_view") is None
+
+
 def test_failed_run_never_receives_terminal_role_reveal() -> None:
     projected = project_live_event(
         _event(

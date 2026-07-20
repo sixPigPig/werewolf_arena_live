@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "review_id": "review_bdce85c602352d5f",
+  "scope": "uniform_random_human_sample",
+  "population_size": 12,
+  "sample_size": 4,
+  "candidate_wins": 4,
+  "baseline_wins": 0,
+  "ties": 0,
+  "candidate_preference": 1.0,
+  "confidence_interval_95": null,
+  "confidence_note": "Exploratory n=4 random sample; no inferential interval or release claim.",
+  "items": [
+    {
+      "display_order": 1,
+      "item_id": "item_076b4e71b5b88c24",
+      "choice": "right",
+      "reason": "能感觉有明显的情绪",
+      "scenario_id": "endgame-counterexample-007",
+      "slice": "endgame",
+      "candidate_side": "right",
+      "candidate_score": 1.0,
+      "machine_final_choices": {
+        "judge_codex": "right",
+        "judge_glm-5-2-260617": "tie",
+        "judge_deepseek-v4-pro": "tie"
+      }
+    },
+    {
+      "display_order": 2,
+      "item_id": "item_fa7a03c1060a214d",
+      "choice": "right",
+      "reason": "没有生硬的编造事实",
+      "scenario_id": "ordinary-opening-001",
+      "slice": "ordinary_opening",
+      "candidate_side": "right",
+      "candidate_score": 1.0,
+      "machine_final_choices": {
+        "judge_codex": "right",
+        "judge_glm-5-2-260617": "right",
+        "judge_deepseek-v4-pro": "right"
+      }
+    },
+    {
+      "display_order": 3,
+      "item_id": "item_f24884dda5cb0c3f",
+      "choice": "left",
+      "reason": "有情绪",
+      "scenario_id": "ordinary-cross-examine-004",
+      "slice": "ordinary_pressure",
+      "candidate_side": "left",
+      "candidate_score": 1.0,
+      "machine_final_choices": {
+        "judge_codex": "right",
+        "judge_glm-5-2-260617": "tie",
+        "judge_deepseek-v4-pro": "tie"
+      }
+    },
+    {
+      "display_order": 4,
+      "item_id": "item_55b5f96f24fc6a5a",
+      "choice": "left",
+      "reason": "有情绪",
+      "scenario_id": "ordinary-resist-pileon-003",
+      "slice": "ordinary_relationship",
+      "candidate_side": "left",
+      "candidate_score": 1.0,
+      "machine_final_choices": {
+        "judge_codex": "left",
+        "judge_glm-5-2-260617": "right",
+        "judge_deepseek-v4-pro": "tie"
+      }
+    }
+  ],
+  "three_model_panel_candidate_preference": 0.6805555555555555
+}

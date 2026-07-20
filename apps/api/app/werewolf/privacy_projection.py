@@ -41,6 +41,8 @@ _KNOWN_EVENT_TYPES = frozenset(
         "run_started",
         "run_stop_requested",
         "state_updated",
+        "speech_playback_preempted",
+        "speech_turn_interrupted",
         "werewolf_self_exploded",
     }
 )
@@ -247,6 +249,7 @@ _COMMON_RUN_PAYLOAD_KEYS = frozenset(
         "event_count",
         "lineup_quality_report",
         "lineup_quality_warnings",
+        "liveness_experience",
         "max_rounds",
         "playback",
         "player_configs",
@@ -299,6 +302,17 @@ _ACTION_PAYLOAD_KEYS = frozenset(
         "action_origin",
         "public_reason_code",
         "speech_status",
+        "schema_version",
+        "commit_state",
+        "generation_stage",
+        "speech_id",
+        "speech_stream_mode",
+        "segment_id",
+        "segment_index",
+        "segment_final",
+        "segment_count",
+        "experience_revision",
+        "tts_suppressed_by_segments",
         "retry_completed",
     }
 )
@@ -427,6 +441,32 @@ _PAYLOAD_KEYS_BY_EVENT_TYPE: dict[str, frozenset[str]] = {
         }
     ),
     "public_action_cancelled": frozenset({"canceled_action", "reason_code"}),
+    "speech_playback_preempted": frozenset(
+        {
+            "schema_version",
+            "action_id",
+            "speech_id",
+            "reason",
+            "trigger_source",
+            "terminal_revision",
+            "cut_after_segment_index",
+            "audience",
+        }
+    ),
+    "speech_turn_interrupted": frozenset(
+        {
+            "schema_version",
+            "action_id",
+            "speech_id",
+            "speech_status",
+            "visible_text",
+            "committed_segment_count",
+            "interruption_mode",
+            "reason",
+            "trigger_source",
+            "terminal_revision",
+        }
+    ),
     "judge_cue": _JUDGE_CUE_PAYLOAD_KEYS,
     "action_requested": _ACTION_PAYLOAD_KEYS,
     "action_parsed": _ACTION_PAYLOAD_KEYS,
@@ -484,6 +524,8 @@ def _event_is_visible(event: LiveEvent, audience: ProjectionAudience) -> bool:
         return False
     if event.type in _NEVER_EXTERNAL_EVENT_TYPES:
         return False
+    if event.payload.get("generation_stage") == "planner":
+        return False
     if event.type == "late_result_discarded":
         return audience == "spectator_god_view"
     if event.action not in PRIVATE_ACTIONS:
@@ -509,6 +551,8 @@ def _action_is_known(event: LiveEvent) -> bool:
             "model_response_received",
             "model_retry_scheduled",
             "model_thinking_tick",
+            "speech_playback_preempted",
+            "speech_turn_interrupted",
             "state_updated",
         }
     if event.type == "judge_cue":
@@ -527,6 +571,8 @@ def _action_is_known(event: LiveEvent) -> bool:
         "model_thinking_tick",
         "late_result_discarded",
         "player_did_not_speak",
+        "speech_playback_preempted",
+        "speech_turn_interrupted",
     }:
         return event.action in _KNOWN_PLAYER_ACTIONS
     return False
@@ -587,6 +633,17 @@ def _project_payload(event: LiveEvent, audience: ProjectionAudience) -> dict[str
             # not a private source payload. Keep the exception exact so other
             # source-like fields still fail closed in the generic sanitizer.
             projected["source_event_id"] = source_event_id
+    if event.type in {"speech_playback_preempted", "speech_turn_interrupted"}:
+        trigger_source = payload.get("trigger_source")
+        if (
+            isinstance(trigger_source, Mapping)
+            and set(trigger_source) == {"source_run_id", "source_event_id"}
+            and isinstance(trigger_source.get("source_run_id"), str)
+            and bool(trigger_source.get("source_run_id"))
+            and type(trigger_source.get("source_event_id")) is int
+            and trigger_source.get("source_event_id", 0) > 0
+        ):
+            projected["trigger_source"] = dict(trigger_source)
     if (
         event.type == "state_updated"
         and event.action == "night_resolved"

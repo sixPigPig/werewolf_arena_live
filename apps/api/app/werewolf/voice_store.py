@@ -80,6 +80,11 @@ class DatabaseVoiceStore:
                 last_source_event_id=last_source_event_id,
                 presentation_id=utterance.presentation_id,
                 request_id=utterance.request_id,
+                action_id=utterance.action_id,
+                speech_id=utterance.speech_id,
+                segment_id=utterance.segment_id,
+                segment_index=utterance.segment_index,
+                segment_final=utterance.segment_final,
                 speaker_kind=utterance.speaker_kind,
                 speaker_name=utterance.speaker_name,
                 speaker=utterance.speaker,
@@ -95,6 +100,7 @@ class DatabaseVoiceStore:
                 sample_rate=sample_rate,
                 mime_type=mime_type,
                 status=status,
+                tts_started_at=datetime.now(tz=UTC),
             )
             self.db.add(record)
         else:
@@ -120,6 +126,8 @@ class DatabaseVoiceStore:
             record.text_hash = text_hash
             if status not in TERMINAL_STATUSES:
                 record.status = status
+            if record.tts_started_at is None:
+                record.tts_started_at = datetime.now(tz=UTC)
         self._commit()
 
     def claim_streamed_utterance(
@@ -204,6 +212,9 @@ class DatabaseVoiceStore:
             if bytes(existing.audio) != audio:
                 raise ValueError(f"Voice chunk {utterance_id}:{chunk_index} has incompatible audio")
             return
+        utterance = self.db.get(VoiceUtteranceRecord, utterance_id)
+        if utterance is not None and utterance.first_audio_chunk_at is None:
+            utterance.first_audio_chunk_at = datetime.now(tz=UTC)
         self.db.add(
             VoiceAudioChunkRecord(
                 utterance_id=utterance_id,
@@ -313,7 +324,15 @@ class DatabaseVoiceStore:
         self._commit()
 
     def load_utterance(self, utterance_id: str) -> dict[str, Any] | None:
-        record = self.db.get(VoiceUtteranceRecord, utterance_id)
+        record = (
+            self.db.query(VoiceUtteranceRecord)
+            .execution_options(populate_existing=True)
+            .filter(
+                VoiceUtteranceRecord.utterance_id == utterance_id,
+                VoiceUtteranceRecord.session_id == self.session_id,
+            )
+            .one_or_none()
+        )
         if record is None:
             return None
         return _utterance_record_to_dict(
@@ -611,6 +630,19 @@ def _utterance_record_to_dict(
             else {}
         ),
         "request_id": record.request_id,
+        "action_id": record.action_id,
+        **({"speech_id": record.speech_id} if record.speech_id is not None else {}),
+        **({"segment_id": record.segment_id} if record.segment_id is not None else {}),
+        **(
+            {"segment_index": record.segment_index}
+            if record.segment_index is not None
+            else {}
+        ),
+        **(
+            {"segment_final": record.segment_final}
+            if record.segment_final is not None
+            else {}
+        ),
         "speaker_kind": record.speaker_kind,
         "speaker_name": record.speaker_name,
         "speaker": record.speaker,
@@ -650,6 +682,18 @@ def _playback_voice_from_record(
         "audience": record.audience,
         "source_event_id": record.source_event_id,
         "last_source_event_id": record.last_source_event_id,
+        **({"speech_id": record.speech_id} if record.speech_id is not None else {}),
+        **({"segment_id": record.segment_id} if record.segment_id is not None else {}),
+        **(
+            {"segment_index": record.segment_index}
+            if record.segment_index is not None
+            else {}
+        ),
+        **(
+            {"segment_final": record.segment_final}
+            if record.segment_final is not None
+            else {}
+        ),
         **(
             {"presentation_id": presentation_id or record.presentation_id}
             if presentation_id or record.presentation_id
@@ -825,6 +869,11 @@ def _raise_for_incompatible_upsert(
         ("session_id", record.session_id, session_id),
         ("audience", record.audience, utterance.audience),
         ("request_id", record.request_id, utterance.request_id),
+        ("action_id", record.action_id, utterance.action_id),
+        ("speech_id", record.speech_id, utterance.speech_id),
+        ("segment_id", record.segment_id, utterance.segment_id),
+        ("segment_index", record.segment_index, utterance.segment_index),
+        ("segment_final", record.segment_final, utterance.segment_final),
         ("speaker_kind", record.speaker_kind, utterance.speaker_kind),
         ("speaker_name", record.speaker_name, utterance.speaker_name),
         ("speaker", record.speaker, utterance.speaker),

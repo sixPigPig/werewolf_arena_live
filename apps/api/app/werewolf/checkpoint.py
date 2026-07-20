@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from app.rule_sets.telemetry import record_rule_checkpoint_failure
 from app.rule_sets.types import CompiledRuleSet
+from app.werewolf.actor_mind import ActorMindV1
 from app.werewolf.lm import (
     LmLog,
     ModelProvider,
@@ -37,8 +38,8 @@ from app.werewolf.public_outcomes import (
 )
 
 RESUME_CHECKPOINT_FILE = "resume_checkpoint.json"
-CHECKPOINT_SCHEMA_VERSION = 2
-SUPPORTED_CHECKPOINT_SCHEMA_VERSIONS = frozenset({1, 2})
+CHECKPOINT_SCHEMA_VERSION = 3
+SUPPORTED_CHECKPOINT_SCHEMA_VERSIONS = frozenset({1, 2, 3})
 LIFECYCLE_LEDGER_SCHEMA_VERSION = 1
 LIFECYCLE_EVENT_KINDS = frozenset({"phase_started", "phase_completed"})
 TERMINAL_SETTLEMENT_SCHEMA_VERSION = "settlement_v1"
@@ -74,6 +75,11 @@ _EXECUTION_RUN_PARAM_NAMES = (
     "seed",
     "max_rounds",
     "player_configs",
+)
+_OPTIONAL_LIVENESS_RUN_PARAM_NAMES = (
+    "liveness_experience_snapshot",
+    "liveness_experiment_id",
+    "liveness_experiment_variant",
 )
 _DUPLICATE_RULE_PARAM_NAMES = (
     "revision_id",
@@ -767,6 +773,13 @@ class ResumeCheckpointManager:
         }
         self.run_params.update(
             {
+                name: copy.deepcopy(run_params[name])
+                for name in _OPTIONAL_LIVENESS_RUN_PARAM_NAMES
+                if name in run_params
+            }
+        )
+        self.run_params.update(
+            {
                 "rule_set_id": compiled_rule_set.rule_set.id,
                 "revision_id": compiled_rule_set.revision_id,
                 "revision_no": compiled_rule_set.revision_no,
@@ -827,7 +840,82 @@ class ResumeCheckpointManager:
             "failed_request": None,
             "last_error": None,
             "lifecycle_ledger": copy.deepcopy(self._lifecycle_ledger),
+            "private_runtime": {
+                "actor_minds_at_round_start": {},
+                "actor_minds": {},
+            },
+            "generation_runtime": {"speech_turn_receipts": {}},
         }
+        self._save()
+
+    def actor_minds(self) -> dict[str, ActorMindV1]:
+        if self._checkpoint is None:
+            return {}
+        runtime = self._checkpoint.get("private_runtime")
+        if not isinstance(runtime, Mapping):
+            return {}
+        payload = runtime.get("actor_minds")
+        if not isinstance(payload, Mapping):
+            return {}
+        result: dict[str, ActorMindV1] = {}
+        for actor, value in payload.items():
+            if not isinstance(actor, str) or not actor:
+                raise ResumeCheckpointError("invalid_structure")
+            try:
+                result[actor] = ActorMindV1.from_dict(value, actor=actor)
+            except ValueError as exc:
+                raise ResumeCheckpointError("invalid_structure") from exc
+        return result
+
+    def record_actor_minds(
+        self,
+        minds: Mapping[str, ActorMindV1],
+        *,
+        at_round_start: bool = False,
+    ) -> None:
+        if self._checkpoint is None:
+            return
+        runtime = self._checkpoint.setdefault("private_runtime", {})
+        if not isinstance(runtime, dict):
+            raise ResumeCheckpointError("invalid_structure")
+        payload = {
+            actor: mind.to_dict()
+            for actor, mind in sorted(minds.items())
+            if actor == mind.actor
+        }
+        runtime["actor_minds"] = copy.deepcopy(payload)
+        if at_round_start:
+            runtime["actor_minds_at_round_start"] = copy.deepcopy(payload)
+        self._save()
+
+    def speech_turn_receipt(self, action_id: str) -> dict[str, Any] | None:
+        if self._checkpoint is None:
+            return None
+        runtime = self._checkpoint.get("generation_runtime")
+        if not isinstance(runtime, Mapping):
+            return None
+        receipts = runtime.get("speech_turn_receipts")
+        if not isinstance(receipts, Mapping):
+            return None
+        value = receipts.get(action_id)
+        return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else None
+
+    def record_speech_turn_receipt(
+        self,
+        action_id: str,
+        receipt: Mapping[str, object],
+    ) -> None:
+        if self._checkpoint is None:
+            return
+        if not action_id or receipt.get("speech_id") is None:
+            raise ResumeCheckpointError("invalid_structure")
+        runtime = self._checkpoint.setdefault("generation_runtime", {})
+        if not isinstance(runtime, dict):
+            raise ResumeCheckpointError("invalid_structure")
+        receipts = runtime.setdefault("speech_turn_receipts", {})
+        if not isinstance(receipts, dict):
+            raise ResumeCheckpointError("invalid_structure")
+        receipts[action_id] = copy.deepcopy(dict(receipt))
         self._save()
 
     def lifecycle_events(self) -> list[dict[str, object]]:
@@ -880,6 +968,9 @@ class ResumeCheckpointManager:
         model: str,
         raw_response: str,
         prompt: str | None = None,
+        actor_minds: Mapping[str, ActorMindV1] | None = None,
+        logical_action_id: str | None = None,
+        speech_turn_receipt: Mapping[str, object] | None = None,
     ) -> None:
         if self._checkpoint is None:
             return
@@ -892,10 +983,59 @@ class ResumeCheckpointManager:
         }
         if prompt is not None:
             cached_response["prompt"] = prompt
+        if actor_minds is not None:
+            runtime = self._checkpoint.setdefault("private_runtime", {})
+            if not isinstance(runtime, dict):
+                raise ResumeCheckpointError("invalid_structure")
+            runtime["actor_minds"] = {
+                actor_name: mind.to_dict()
+                for actor_name, mind in sorted(actor_minds.items())
+                if actor_name == mind.actor
+            }
+        if speech_turn_receipt is not None:
+            if not logical_action_id or speech_turn_receipt.get("speech_id") is None:
+                raise ResumeCheckpointError("invalid_structure")
+            generation_runtime = self._checkpoint.setdefault(
+                "generation_runtime",
+                {},
+            )
+            if not isinstance(generation_runtime, dict):
+                raise ResumeCheckpointError("invalid_structure")
+            receipts = generation_runtime.setdefault("speech_turn_receipts", {})
+            if not isinstance(receipts, dict):
+                raise ResumeCheckpointError("invalid_structure")
+            receipts[logical_action_id] = copy.deepcopy(dict(speech_turn_receipt))
         self._checkpoint["cached_model_responses"].append(cached_response)
         self._checkpoint["failed_request"] = None
         self._checkpoint["last_error"] = None
         self._save()
+
+    def cached_model_response_exists(
+        self,
+        *,
+        actor: str,
+        action: str,
+        phase: str,
+        model: str,
+        prompt: str,
+    ) -> bool:
+        if self._checkpoint is None:
+            return False
+        responses = self._checkpoint.get("cached_model_responses")
+        if not isinstance(responses, list):
+            return False
+        return any(
+            isinstance(response, Mapping)
+            and response.get("actor") == actor
+            and response.get("action") == action
+            and response.get("phase") == phase
+            and response.get("model") == model
+            and (
+                response.get("prompt") == prompt
+                or "prompt" not in response
+            )
+            for response in responses
+        )
 
     def record_failure(
         self,
@@ -1285,6 +1425,31 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
             invalid_attempts=copy.deepcopy(lm_log_data.get("invalid_attempts", [])),
             raw_choice=lm_log_data.get("raw_choice"),
             choice_normalization_kind=lm_log_data.get("choice_normalization_kind"),
+            liveness_timing=(
+                {
+                    str(key): int(value)
+                    for key, value in lm_log_data.get("liveness_timing", {}).items()
+                    if isinstance(key, str) and type(value) is int
+                }
+                if isinstance(lm_log_data.get("liveness_timing"), dict)
+                else {}
+            ),
+            committed_speech_segments=[
+                str(item)
+                for item in lm_log_data.get("committed_speech_segments", [])
+                if isinstance(item, str) and item
+            ],
+            speech_id=(
+                str(lm_log_data["speech_id"])
+                if isinstance(lm_log_data.get("speech_id"), str)
+                and lm_log_data.get("speech_id")
+                else None
+            ),
+            speech_turn_receipt=(
+                copy.deepcopy(lm_log_data["speech_turn_receipt"])
+                if isinstance(lm_log_data.get("speech_turn_receipt"), dict)
+                else None
+            ),
         ),
         invalid_value=data.get("invalid_value"),
         fallback_choice=data.get("fallback_choice"),
@@ -1354,6 +1519,35 @@ def action_log_from_dict(data: dict[str, Any]) -> ActionLog:
         delivery_mapping_version=(
             str(data["delivery_mapping_version"])
             if data.get("delivery_mapping_version") is not None
+            else None
+        ),
+        liveness_experience_revision=(
+            str(data["liveness_experience_revision"])
+            if data.get("liveness_experience_revision") is not None
+            else None
+        ),
+        prompt_chars=(
+            max(0, int(data["prompt_chars"]))
+            if data.get("prompt_chars") is not None
+            else None
+        ),
+        scene_packet_chars=(
+            max(0, int(data["scene_packet_chars"]))
+            if data.get("scene_packet_chars") is not None
+            else None
+        ),
+        liveness_timing=(
+            {
+                str(key): int(value)
+                for key, value in data.get("liveness_timing", {}).items()
+                if isinstance(key, str) and type(value) is int
+            }
+            if isinstance(data.get("liveness_timing"), dict)
+            else {}
+        ),
+        speech_turn_receipt=(
+            copy.deepcopy(data["speech_turn_receipt"])
+            if isinstance(data.get("speech_turn_receipt"), dict)
             else None
         ),
     )

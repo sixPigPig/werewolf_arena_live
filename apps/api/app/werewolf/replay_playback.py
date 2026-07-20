@@ -507,6 +507,33 @@ def _publish_action_events(
             "options": options,
         },
     )
+    receipt = _validated_speech_turn_receipt(action_log, expected_text=visible_text)
+    if receipt is not None:
+        segments = receipt["segments"]
+        for index, segment in enumerate(segments):
+            publish(
+                "model_response_delta",
+                round_number=round_number,
+                phase=phase,
+                actor=actor,
+                action=action,
+                payload={
+                    "schema_version": 2,
+                    "commit_state": "accepted_segment",
+                    "generation_stage": "renderer",
+                    "action_id": _optional_str(lm_log.get("action_id")),
+                    "request_id": _optional_str(lm_log.get("request_id")),
+                    "speech_id": receipt["speech_id"],
+                    "segment_id": segment["segment_id"],
+                    "segment_index": index,
+                    "segment_final": index == len(segments) - 1,
+                    "delta": segment["text"],
+                    "visible_text": segment["text"],
+                    "field": "say",
+                    "is_public": True,
+                    "presentation_id": segment["presentation_id"],
+                },
+            )
     publish(
         "model_response_received",
         round_number=round_number,
@@ -530,8 +557,80 @@ def _publish_action_events(
             "result": public_result,
             "visible_result": public_result,
             "visible_text": visible_text,
+            **(
+                {
+                    "schema_version": 1,
+                    "speech_id": receipt["speech_id"],
+                    "speech_stream_mode": "segments_v1",
+                    "segment_count": len(receipt["segments"]),
+                    "speech_status": (
+                        "interrupted"
+                        if receipt["status"] == "interrupted"
+                        else "spoken"
+                    ),
+                    "tts_suppressed_by_segments": True,
+                }
+                if receipt is not None
+                else {}
+            ),
         },
     )
+
+
+def _validated_speech_turn_receipt(
+    action_log: dict[str, Any],
+    *,
+    expected_text: str,
+) -> dict[str, Any] | None:
+    value = action_log.get("speech_turn_receipt")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("invalid speech turn receipt")
+    speech_id = value.get("speech_id")
+    status = value.get("status")
+    segments = value.get("segments")
+    final_text = value.get("final_text")
+    if (
+        not isinstance(speech_id, str)
+        or not speech_id
+        or status not in {"complete", "partial", "interrupted"}
+        or not isinstance(segments, list)
+        or not segments
+        or not isinstance(final_text, str)
+        or final_text != expected_text
+    ):
+        raise ValueError("invalid speech turn receipt")
+    normalized: list[dict[str, str]] = []
+    for index, item in enumerate(segments):
+        if not isinstance(item, dict) or item.get("segment_index") != index:
+            raise ValueError("invalid speech turn receipt")
+        segment_id = item.get("segment_id")
+        text = item.get("text")
+        presentation_id = item.get("presentation_id")
+        if (
+            not isinstance(segment_id, str)
+            or not segment_id
+            or not isinstance(text, str)
+            or not text
+            or not isinstance(presentation_id, str)
+            or not presentation_id
+        ):
+            raise ValueError("invalid speech turn receipt")
+        normalized.append(
+            {
+                "segment_id": segment_id,
+                "text": text,
+                "presentation_id": presentation_id,
+            }
+        )
+    if "".join(item["text"] for item in normalized) != final_text:
+        raise ValueError("invalid speech turn receipt")
+    return {
+        "speech_id": speech_id,
+        "status": status,
+        "segments": normalized,
+    }
 
 
 def _publish_werewolf_decision_events(

@@ -39,6 +39,7 @@ from app.werewolf.live import (
     validate_prepared_run,
     validate_rule_set_revision_metadata,
 )
+from app.werewolf.liveness_store import LivenessRuntimeStore
 from app.werewolf.privacy_projection import ProjectionAudience, project_live_event
 from app.werewolf.session_timeline import (
     SessionTimeline,
@@ -99,6 +100,12 @@ class DatabaseLiveStore:
             lineup_quality_warnings=copy.deepcopy(run.lineup_quality_warnings),
             lineup_quality_report=copy.deepcopy(run.lineup_quality_report),
             p2_diagnostics=copy.deepcopy(run.p2_diagnostics),
+            liveness_experience_revision=run.liveness_experience_revision,
+            liveness_experience_snapshot=copy.deepcopy(
+                run.liveness_experience_snapshot
+            ),
+            liveness_experiment_id=run.liveness_experiment_id,
+            liveness_experiment_variant=run.liveness_experiment_variant,
             winner=run.winner,
             error=run.error,
             created_at=parse_live_datetime(run.created_at) or datetime.now(tz=UTC),
@@ -201,6 +208,12 @@ class DatabaseLiveStore:
         record.lineup_quality_warnings = copy.deepcopy(run.lineup_quality_warnings)
         record.lineup_quality_report = copy.deepcopy(run.lineup_quality_report)
         record.p2_diagnostics = copy.deepcopy(run.p2_diagnostics)
+        record.liveness_experience_revision = run.liveness_experience_revision
+        record.liveness_experience_snapshot = copy.deepcopy(
+            run.liveness_experience_snapshot
+        )
+        record.liveness_experiment_id = run.liveness_experiment_id
+        record.liveness_experiment_variant = run.liveness_experiment_variant
         if is_new or run.control_version >= record.control_version:
             record.stop_requested_at = parse_live_datetime(run.stop_requested_at)
             record.control_version = run.control_version
@@ -893,6 +906,12 @@ class DatabaseLiveStore:
             lineup_quality_warnings=copy.deepcopy(record.lineup_quality_warnings or []),
             lineup_quality_report=copy.deepcopy(record.lineup_quality_report or {}),
             p2_diagnostics=copy.deepcopy(record.p2_diagnostics or {}),
+            liveness_experience_revision=record.liveness_experience_revision,
+            liveness_experience_snapshot=copy.deepcopy(
+                record.liveness_experience_snapshot
+            ),
+            liveness_experiment_id=record.liveness_experiment_id,
+            liveness_experiment_variant=record.liveness_experiment_variant,
             status=record.status,
             created_at=format_live_datetime(record.created_at),
             started_at=_format_optional_datetime(record.started_at),
@@ -1084,6 +1103,9 @@ class DatabaseLiveStore:
         event_record = _event_record(event)
         self.db.add(event_record)
         self.db.flush([event_record])
+        liveness_store = LivenessRuntimeStore(self.db)
+        liveness_store.stage_committed_segment(event)
+        liveness_store.finalize_speech_turn(event)
 
         public_event = project_live_event(event, "player_public")
         god_view_event = project_live_event(event, "spectator_god_view")
@@ -1161,7 +1183,11 @@ class DatabaseLiveStore:
                     else None
                 ),
                 "tts_request_source": (
-                    "accepted_player_action"
+                    "committed_speech_segment"
+                    if speaker_kind == "player"
+                    and event.type == "model_response_delta"
+                    and event.payload.get("commit_state") == "accepted_segment"
+                    else "accepted_player_action"
                     if speaker_kind == "player"
                     else "judge_event"
                 ),
@@ -1283,6 +1309,10 @@ def _stored_expected_state_matches(
             "lineup_quality_warnings": record.lineup_quality_warnings,
             "lineup_quality_report": record.lineup_quality_report,
             "p2_diagnostics": record.p2_diagnostics,
+            "liveness_experience_revision": record.liveness_experience_revision,
+            "liveness_experience_snapshot": record.liveness_experience_snapshot,
+            "liveness_experiment_id": record.liveness_experiment_id,
+            "liveness_experiment_variant": record.liveness_experiment_variant,
             "winner": record.winner,
             "error": record.error,
             "worker_id": record.worker_id,

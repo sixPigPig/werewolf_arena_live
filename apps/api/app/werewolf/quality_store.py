@@ -9,7 +9,13 @@ from typing import Any
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
-from app.models.game_session import GameReplayPayload, GameSessionRecord
+from app.models.game_session import (
+    ActorMindSnapshotRecord,
+    GameReplayPayload,
+    GameSessionRecord,
+    SpeechTurnReceiptRecord,
+    VoicePlaybackObservationRecord,
+)
 from app.models.live import (
     LiveEventRecord,
     LiveRunRecord,
@@ -66,6 +72,7 @@ def build_database_quality_bundle(
     if run_record is not None and run_record.session_id != session_id:
         raise QualityEvaluationSourceUnavailable("quality evaluation run does not match session")
     effective_run_id = run_record.run_id if run_record is not None else None
+    session_record = db.get(GameSessionRecord, session_id)
     events: list[dict[str, Any]] = []
     voices: list[dict[str, Any]] = []
     if effective_run_id:
@@ -139,7 +146,95 @@ def build_database_quality_bundle(
         completed_at=(
             _format_datetime(run_record.completed_at) if run_record is not None else None
         ),
+        liveness_runtime=_liveness_runtime_summary(
+            db,
+            session_record=session_record,
+            run_id=effective_run_id,
+        ),
     )
+
+
+def _liveness_runtime_summary(
+    db: Session,
+    *,
+    session_record: GameSessionRecord | None,
+    run_id: str | None,
+) -> dict[str, Any]:
+    if session_record is None:
+        return {}
+    minds = list(
+        db.scalars(
+            select(ActorMindSnapshotRecord).where(
+                ActorMindSnapshotRecord.session_id == session_record.session_id
+            )
+        )
+    )
+    receipts = list(
+        db.scalars(
+            select(SpeechTurnReceiptRecord).where(
+                SpeechTurnReceiptRecord.session_id == session_record.session_id
+            )
+        )
+    )
+    observations = list(
+        db.scalars(
+            select(VoicePlaybackObservationRecord).where(
+                VoicePlaybackObservationRecord.session_id == session_record.session_id
+            )
+        )
+    )
+    return {
+        "experience_revision": session_record.liveness_experience_revision,
+        "experience_snapshot": session_record.liveness_experience_snapshot or {},
+        "experiment_id": session_record.liveness_experiment_id,
+        "variant": session_record.liveness_experiment_variant,
+        "actor_mind": {
+            "snapshot_count": len(minds),
+            "update_count": sum(max(0, mind.revision) for mind in minds),
+            "source_complete_count": sum(
+                bool(mind.last_source_run_id) and mind.last_source_event_id is not None
+                for mind in minds
+            ),
+        },
+        "speech_receipt_status_counts": {
+            status: sum(receipt.status == status for receipt in receipts)
+            for status in ("complete", "partial", "interrupted")
+        },
+        "voice_timings": [
+            {
+                "speech_id": voice.speech_id,
+                "tts_started_at": _format_datetime(voice.tts_started_at),
+                "first_audio_chunk_at": _format_datetime(voice.first_audio_chunk_at),
+                "completed_at": _format_datetime(voice.completed_at),
+                "status": voice.status,
+            }
+            for voice in (
+                db.scalars(
+                    select(VoiceUtteranceRecord).where(
+                        VoiceUtteranceRecord.session_id == session_record.session_id,
+                        *(
+                            (VoiceUtteranceRecord.run_id == run_id,)
+                            if run_id is not None
+                            else ()
+                        ),
+                    )
+                )
+            )
+        ],
+        "playback_observations": [
+            {
+                "playback_session_id": item.playback_session_id,
+                "speech_id": item.speech_id,
+                "server_terminal_status": item.server_terminal_status,
+                "client_status": item.client_status,
+                "played_ms": item.played_ms,
+                "playback_started_at": _format_datetime(item.playback_started_at),
+                "playback_finished_at": _format_datetime(item.playback_finished_at),
+                "ack_received_at": _format_datetime(item.ack_received_at),
+            }
+            for item in observations
+        ],
+    }
 
 
 def enqueue_quality_evaluation(

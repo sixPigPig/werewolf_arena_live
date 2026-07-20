@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import random
 import re
 import threading
@@ -12,7 +13,17 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
-from app.werewolf.action_quality import action_quality_warnings
+from app.werewolf.action_quality import (
+    DETERMINISTIC_HARD_RULE_CODES,
+    action_quality_warnings,
+)
+from app.werewolf.actor_mind import (
+    ActorMindReducer,
+    ActorMindStimulusV1,
+    ActorMindV1,
+    EventCoordinateV1,
+    public_affect_projection,
+)
 from app.werewolf.checkpoint import (
     ResumeCheckpointError,
     lifecycle_event_entry,
@@ -50,6 +61,10 @@ from app.werewolf.execution_telemetry import (
     record_model_progress_event,
 )
 from app.werewolf.live import NullEventSink
+from app.werewolf.liveness import (
+    LivenessExperienceSnapshotV1,
+    liveness_experience_from_storage,
+)
 from app.werewolf.judge_narration import (
     JudgeCueSpec,
     cue_spec,
@@ -72,6 +87,7 @@ from app.werewolf.lm import (
     LmLog,
     ModelActionCanceled,
     ModelProvider,
+    VisibleTextCommitResult,
     generate_action_with_events,
     safe_attempt_outcomes,
 )
@@ -114,11 +130,28 @@ from app.werewolf.public_outcomes import (
     latest_player_outcome_event,
     render_public_round_summary,
 )
+from app.werewolf.scene_packet import build_actor_scene_packet, build_public_speech_scene
+from app.werewolf.speech_gate import (
+    HardSpeechGateReportV1,
+    IncrementalSpeechSegmenter,
+    hard_speech_gate,
+    split_complete_speech_segments,
+    stable_segment_id,
+    stable_segment_presentation_id,
+    stable_speech_id,
+)
 from app.werewolf.quality_telemetry import record_speech_quality
+from app.werewolf.liveness_telemetry import record_liveness_speech
 from app.werewolf.speech_delivery import (
+    AFFECT_DELIVERY_MAPPING_VERSION,
     DELIVERY_MAPPING_VERSION,
+    compile_affect_delivery_v2,
     compile_context_texts,
     delivery_from_result,
+)
+from app.werewolf.turn_planning import (
+    fallback_public_turn_plan,
+    public_turn_plan_from_model,
 )
 from app.werewolf.rules import (
     ACTION_DEBATE,
@@ -164,7 +197,7 @@ WEREWOLF_DISCUSSION_TIMEOUT_SECONDS = 15.0
 WEREWOLF_FINAL_VOTE_TIMEOUT_SECONDS = 15.0
 WEREWOLF_TIEBREAK_TIMEOUT_SECONDS = 10.0
 EventVisibility = Literal["public", "private"]
-HARD_ACTION_QUALITY_CODES: frozenset[str] = frozenset()
+HARD_ACTION_QUALITY_CODES: frozenset[str] = DETERMINISTIC_HARD_RULE_CODES
 BUFFERED_QUALITY_ACTIONS = frozenset(
     {
         ACTION_SHERIFF_SPEECH,
@@ -217,6 +250,9 @@ class GameCheckpointManager(Protocol):
         model: str,
         raw_response: str,
         prompt: str | None = None,
+        actor_minds: Mapping[str, ActorMindV1] | None = None,
+        logical_action_id: str | None = None,
+        speech_turn_receipt: Mapping[str, object] | None = None,
     ) -> None:
         pass
 
@@ -331,7 +367,7 @@ class _BufferedEventSink:
         self._before_publish = before_publish
         self._lifecycle_destination = lifecycle_destination
 
-    def publish(self, event_type: str, **kwargs: object) -> None:
+    def publish(self, event_type: str, **kwargs: object) -> object | None:
         if self._before_publish is not None:
             self._before_publish(event_type)
         if (
@@ -343,9 +379,25 @@ class _BufferedEventSink:
             return
         self.events.append((event_type, kwargs))
 
-    def flush_to(self, event_sink: object) -> None:
+    def flush_to(
+        self,
+        event_sink: object,
+        *,
+        accepted_visible_text: str | None = None,
+    ) -> None:
         publish = getattr(event_sink, "publish")
+        visible_text_published = False
         for event_type, kwargs in self.events:
+            if event_type == "model_response_delta" and accepted_visible_text is not None:
+                if visible_text_published or not accepted_visible_text:
+                    continue
+                payload = kwargs.get("payload")
+                safe_payload = dict(payload) if isinstance(payload, dict) else {}
+                safe_payload["delta"] = accepted_visible_text
+                safe_payload["visible_text"] = accepted_visible_text
+                publish(event_type, **{**kwargs, "payload": safe_payload})
+                visible_text_published = True
+                continue
             publish(event_type, **kwargs)
 
     def flush_lifecycle_to(self, event_sink: object) -> None:
@@ -353,6 +405,127 @@ class _BufferedEventSink:
         for event_type, kwargs in self.events:
             if event_type in self._LIFECYCLE_EVENT_TYPES:
                 publish(event_type, **kwargs)
+
+
+class _CommittedSpeechObserver:
+    def __init__(
+        self,
+        *,
+        character_limit: int,
+        gate: Callable[[str], HardSpeechGateReportV1],
+        commit: Callable[[int, str, str, bool], dict[str, object]],
+    ) -> None:
+        self.character_limit = character_limit
+        self._gate = gate
+        self._commit = commit
+        self._segmenter = IncrementalSpeechSegmenter()
+        self._request_id = ""
+        self.segments: list[str] = []
+        self.receipt_segments: list[dict[str, object]] = []
+        self.rejected_count = 0
+        self.codes: list[str] = []
+        self.stopped = False
+        self.length_truncated = False
+        self.first_committed_at_ms: int | None = None
+        self.hard_gate_duration_ms = 0
+
+    @property
+    def committed_text(self) -> str:
+        return "".join(self.segments)
+
+    def start_attempt(self, *, action_id: str, request_id: str) -> None:
+        del action_id
+        if self.segments:
+            return
+        self._request_id = request_id
+        self._segmenter = IncrementalSpeechSegmenter()
+        self.stopped = False
+
+    def append(self, text: str) -> None:
+        if self.stopped:
+            return
+        for segment in self._segmenter.append(text):
+            if not self._accept(segment, final=False):
+                break
+
+    def finish(self, final_text: str) -> VisibleTextCommitResult:
+        if not self.stopped:
+            try:
+                final_segments = self._segmenter.finish(final_text)
+            except ValueError:
+                self._reject(("invalid_public_speech",))
+                final_segments = []
+            for index, segment in enumerate(final_segments):
+                if not self._accept(
+                    segment,
+                    final=index == len(final_segments) - 1,
+                ):
+                    break
+        if self.segments:
+            return VisibleTextCommitResult(
+                text=self.committed_text,
+                status=(
+                    "partial_hard_gate_stop"
+                    if self.stopped
+                    else "complete"
+                ),
+            )
+        return VisibleTextCommitResult(
+            text="",
+            status="partial_hard_gate_stop",
+            should_retry=True,
+        )
+
+    def fail(self, reason_code: str) -> VisibleTextCommitResult:
+        if self.segments:
+            return VisibleTextCommitResult(
+                text=self.committed_text,
+                status=(
+                    "interrupted"
+                    if reason_code == "canceled"
+                    else "partial_provider_failure"
+                ),
+            )
+        if reason_code == "hard_gate_rejected":
+            self._reject((reason_code,))
+        return VisibleTextCommitResult(
+            text="",
+            status="partial_provider_failure",
+            should_retry=True,
+        )
+
+    def _accept(self, segment: str, *, final: bool) -> bool:
+        if len(self.committed_text) + len(segment) > self.character_limit:
+            self.length_truncated = True
+            self.stopped = True
+            return False
+        gate_started_ns = time.perf_counter_ns()
+        report = self._gate(self.committed_text + segment)
+        self.hard_gate_duration_ms += max(
+            0,
+            round((time.perf_counter_ns() - gate_started_ns) / 1_000_000),
+        )
+        if not report.accepted:
+            self._reject(report.codes)
+            return False
+        receipt = self._commit(
+            len(self.segments),
+            segment,
+            self._request_id,
+            final,
+        )
+        self.segments.append(segment)
+        self.receipt_segments.append(copy.deepcopy(receipt))
+        if self.first_committed_at_ms is None:
+            self.first_committed_at_ms = round(time.time() * 1000)
+        return True
+
+    def _reject(self, codes: tuple[str, ...]) -> None:
+        self.rejected_count += 1
+        for code in codes:
+            if code not in self.codes:
+                self.codes.append(code)
+        self.stopped = True
 
 
 class _PrivateLifecycleEventSink:
@@ -374,6 +547,7 @@ class _PrivateLifecycleEventSink:
             "model",
             "attempt",
             "attempt_result",
+            "generation_stage",
             "reason_code",
             "discard_reason",
         }
@@ -382,7 +556,7 @@ class _PrivateLifecycleEventSink:
     def __init__(self, destination: object) -> None:
         self._destination = destination
 
-    def publish(self, event_type: str, **kwargs: object) -> None:
+    def publish(self, event_type: str, **kwargs: object) -> object | None:
         if event_type not in self._ALLOWED_EVENT_TYPES:
             return
         payload = kwargs.get("payload")
@@ -415,7 +589,7 @@ class _PublishGateSink:
         self._attempt_outcomes: list[dict[str, str]] = []
         self._late_discarded_requests: set[str] = set()
 
-    def publish(self, event_type: str, **kwargs: object) -> None:
+    def publish(self, event_type: str, **kwargs: object) -> object | None:
         with self._lock:
             deadline_expired = (
                 self._deadline_at_monotonic is not None
@@ -458,7 +632,7 @@ class _PublishGateSink:
                                 },
                             },
                         )
-                return
+                return None
             payload = kwargs.get("payload")
             if isinstance(payload, dict):
                 action_id = payload.get("action_id")
@@ -496,7 +670,7 @@ class _PublishGateSink:
                         )
                         self._active_attempts.pop(request_id, None)
             publish = getattr(self._destination, "publish")
-            publish(event_type, **kwargs)
+            return publish(event_type, **kwargs)
 
     def close(self) -> None:
         with self._lock:
@@ -805,6 +979,7 @@ class GameEngine:
         monotonic: Callable[[], float] = time.monotonic,
         execution_mode: Literal["new", "resume"] = "new",
         resume_from_round: int | None = None,
+        liveness_experience_snapshot: dict[str, object] | None = None,
     ) -> None:
         self.state = state
         self.provider = provider
@@ -822,10 +997,27 @@ class GameEngine:
         self.monotonic = monotonic
         self.execution_mode = execution_mode
         self.resume_from_round = resume_from_round
+        self.liveness_experience: LivenessExperienceSnapshotV1 = (
+            liveness_experience_from_storage(liveness_experience_snapshot)
+        )
+        self._actor_minds: dict[str, ActorMindV1] = {
+            player.name: ActorMindV1(actor=player.name)
+            for player in state.players
+            if self.liveness_experience.feature_modes.actor_mind != "off"
+        }
+        if self.checkpoint_manager is not None and self._actor_minds:
+            loader = getattr(self.checkpoint_manager, "actor_minds", None)
+            if callable(loader):
+                restored_minds = loader()
+                if isinstance(restored_minds, dict):
+                    for actor, mind in restored_minds.items():
+                        if actor in self._actor_minds and isinstance(mind, ActorMindV1):
+                            self._actor_minds[actor] = mind
         self.logs: list[RoundLog] = []
         self._self_explosion_executor: ThreadPoolExecutor | None = None
         self._pending_self_explosion: PendingSelfExplosionBatch | None = None
         self._active_public_action: ActivePublicActionContext | None = None
+        self._active_committed_speech: dict[str, dict[str, object]] = {}
         self._self_explosion_locked = False
         self.terminal_keep_from_event_id: int | None = None
         self._terminal_primary_event: object | None = None
@@ -3316,18 +3508,59 @@ class GameEngine:
             self._pending_self_explosion = None
             return
         self._pending_self_explosion = None
-        self._publish(
-            "public_action_cancelled",
-            round_number=context.round_state.number,
-            phase=self._public_stage_phase(context.cursor),
-            actor=context.actor,
-            payload={
-                "action_id": context.action_id,
-                "canceled_action": context.action,
-                "reason_code": "werewolf_self_explosion",
-            },
-        )
+        committed = self._active_committed_speech.get(context.action_id)
+        segments = committed.get("segments") if isinstance(committed, dict) else None
+        if isinstance(segments, list) and segments:
+            trigger_source = self._latest_live_event_coordinate()
+            committed["trigger_source"] = copy.deepcopy(trigger_source)
+            committed["interruption_reason"] = "self_explosion"
+            self._publish(
+                "speech_playback_preempted",
+                round_number=context.round_state.number,
+                phase=self._public_stage_phase(context.cursor),
+                actor=context.actor,
+                action=context.action,
+                payload={
+                    "schema_version": 1,
+                    "action_id": context.action_id,
+                    "speech_id": committed["speech_id"],
+                    "reason": "self_explosion",
+                    "trigger_source": trigger_source,
+                    "cut_after_segment_index": len(segments) - 1,
+                    "audience": "player_public",
+                },
+            )
+        else:
+            self._publish(
+                "public_action_cancelled",
+                round_number=context.round_state.number,
+                phase=self._public_stage_phase(context.cursor),
+                actor=context.actor,
+                payload={
+                    "action_id": context.action_id,
+                    "canceled_action": context.action,
+                    "reason_code": "werewolf_self_explosion",
+                },
+            )
         raise _PublicActionInterruptedBySelfExplosion()
+
+    def _latest_live_event_coordinate(self) -> dict[str, object]:
+        run_id = getattr(self.event_sink, "run_id", None)
+        registry = getattr(self.event_sink, "registry", None)
+        if isinstance(run_id, str) and registry is not None:
+            events_after = getattr(registry, "events_after", None)
+            if callable(events_after):
+                events = events_after(run_id)
+                if events:
+                    return {
+                        "source_run_id": run_id,
+                        "source_event_id": events[-1].id,
+                    }
+        captured = getattr(self.event_sink, "events", None)
+        return {
+            "source_run_id": run_id if isinstance(run_id, str) else "local",
+            "source_event_id": max(1, len(captured) if isinstance(captured, list) else 1),
+        }
 
     def _start_pending_self_explosion(
         self,
@@ -5614,6 +5847,50 @@ class GameEngine:
             actor=player.name,
             action=action,
         )
+        if (
+            action in BUFFERED_QUALITY_ACTIONS
+            and self.liveness_experience.scene_packet_version == "scene-packet-v1"
+        ):
+            mind = self._actor_minds.get(player.name)
+            actor_packet = build_actor_scene_packet(
+                world_state,
+                actor_mind=(
+                    mind
+                    if self.liveness_experience.feature_modes.actor_mind == "read"
+                    else None
+                ),
+            )
+            mission_payload = world_state.get("speech_mission")
+            mission_kind = (
+                str(mission_payload.get("kind") or "")
+                if isinstance(mission_payload, dict)
+                else None
+            )
+            recent_turns = world_state.get("debate")
+            response_target = None
+            if isinstance(recent_turns, list) and recent_turns:
+                latest = str(recent_turns[-1])
+                candidate = latest.split("：", 1)[0].strip()
+                if candidate and candidate != str(world_state.get("name") or ""):
+                    response_target = candidate
+            plan = fallback_public_turn_plan(
+                action_id=action_id,
+                fence={
+                    "action_id": action_id,
+                    "round": round_state.number,
+                    "phase": phase,
+                    "active_roster_hash": hashlib.sha256(
+                        "|".join(sorted(public_options)).encode()
+                    ).hexdigest()[:16],
+                },
+                mission_kind=mission_kind,
+                response_target=response_target,
+            )
+            public_scene = build_public_speech_scene(world_state, turn_plan=plan)
+            world_state["actor_scene_packet"] = actor_packet.to_dict()
+            world_state["scene_packet_hash"] = actor_packet.content_hash()
+            world_state["public_turn_plan"] = plan.to_dict()
+            world_state["public_speech_scene"] = public_scene.to_dict()
         return PlayerActionRequest(
             player=player,
             action=action,
@@ -5659,6 +5936,133 @@ class GameEngine:
         material = f"{action_id}:{attempt}"
         return f"req_{hashlib.sha256(material.encode()).hexdigest()[:12]}"
 
+    def _plan_public_speech_request(
+        self,
+        request: PlayerActionRequest,
+        provider: ModelProvider,
+        *,
+        event_sink: object,
+        call_options: ModelCallOptions | None,
+    ) -> None:
+        if (
+            request.event_visibility != "public"
+            or request.action not in BUFFERED_QUALITY_ACTIONS
+            or self.liveness_experience.experience_revision == "legacy-v0"
+            or not isinstance(request.world_state.get("actor_scene_packet"), dict)
+        ):
+            return
+        current_plan = request.world_state.get("public_turn_plan")
+        fallback_plan = current_plan if isinstance(current_plan, dict) else {}
+        fence = fallback_plan.get("fence")
+        safe_fence = dict(fence) if isinstance(fence, Mapping) else {}
+        planner_started_at = round(time.time() * 1000)
+        plan_log: LmLog | None = None
+        plan_value: object = None
+        try:
+            plan_value, plan_log = generate_action_with_events(
+                provider=provider,
+                action="actor_plan",
+                world_state={
+                    "actor_scene_packet": copy.deepcopy(
+                        request.world_state["actor_scene_packet"]
+                    )
+                },
+                model=request.player.model,
+                event_sink=_PrivateLifecycleEventSink(event_sink),
+                event_context={
+                    "round_number": request.round_state.number,
+                    "phase": request.phase,
+                    "actor": request.player.name,
+                    "action": request.action,
+                },
+                action_id_factory=lambda: request.action_id,
+                request_id_factory=lambda: self._next_provider_attempt_id(
+                    request.action_id
+                ),
+                retries=1,
+                enable_progress_ticks=False,
+                call_options=call_options,
+                generation_stage="planner",
+            )
+        except (ModelActionCanceled, ModelDeadlineExceeded):
+            raise
+        except Exception:
+            plan_value = None
+        recognized_plan_fields = {
+            "primary_speech_act",
+            "secondary_speech_act",
+            "social_goal",
+            "public_points",
+            "length_band",
+            "affect_impulse",
+        }
+        if isinstance(plan_value, Mapping) and recognized_plan_fields & set(plan_value):
+            allowed_sources, allowed_fact_ids = self._public_plan_references(request)
+            plan = public_turn_plan_from_model(
+                plan_value,
+                action_id=request.action_id,
+                fence=safe_fence,
+                allowed_targets={
+                    name
+                    for name in request.round_state.players
+                    if name != request.player.name
+                },
+                allowed_sources=allowed_sources,
+                allowed_fact_ids=allowed_fact_ids,
+            )
+            request.world_state["public_turn_plan"] = plan.to_dict()
+        else:
+            plan = public_turn_plan_from_model(
+                fallback_plan,
+                action_id=request.action_id,
+                fence=safe_fence,
+                allowed_targets={
+                    name
+                    for name in request.round_state.players
+                    if name != request.player.name
+                },
+                allowed_sources=set(),
+                allowed_fact_ids=set(),
+            )
+            request.world_state["public_turn_plan"] = plan.to_dict()
+        request.world_state["public_speech_scene"] = build_public_speech_scene(
+            request.world_state,
+            turn_plan=plan,
+        ).to_dict()
+        if plan_log is not None:
+            request.world_state["planner_request_id"] = plan_log.request_id
+            request.world_state["planner_attempts"] = safe_attempt_outcomes(
+                plan_log.attempt_outcomes
+            )
+        request.world_state["_liveness_timing"] = {
+            "actor_brain_started_at": planner_started_at,
+            "turn_plan_ready_at": round(time.time() * 1000),
+        }
+
+    def _public_plan_references(
+        self,
+        request: PlayerActionRequest,
+    ) -> tuple[set[tuple[str, int]], set[str]]:
+        sources: set[tuple[str, int]] = set()
+        fact_ids: set[str] = set()
+        public_facts = request.world_state.get("public_facts")
+        if not isinstance(public_facts, list):
+            return sources, fact_ids
+        for item in public_facts:
+            if not isinstance(item, Mapping):
+                continue
+            fact_id = item.get("fact_id")
+            if isinstance(fact_id, str) and fact_id:
+                fact_ids.add(fact_id)
+            source = item.get("source")
+            if not isinstance(source, Mapping):
+                continue
+            source_run_id = source.get("source_run_id")
+            source_event_id = source.get("source_event_id")
+            if isinstance(source_run_id, str) and type(source_event_id) is int:
+                sources.add((source_run_id, source_event_id))
+        return sources, fact_ids
+
     def _execute_player_action_request(
         self,
         request: PlayerActionRequest,
@@ -5681,6 +6085,7 @@ class GameEngine:
             else NullEventSink()
         )
         started_at = self.monotonic()
+        actor_brain_started_at_ms = round(time.time() * 1000)
         budget_spec = self.action_execution_budget.for_action(request.action)
         call_options = budget_spec.call_options(started_at) if self.action_budgets_enabled else None
         if deadline_at_monotonic is not None:
@@ -5712,7 +6117,15 @@ class GameEngine:
                         effective_remaining,
                     ),
                 )
+        renderer_started_at_ms = actor_brain_started_at_ms
         try:
+            self._plan_public_speech_request(
+                request,
+                action_provider,
+                event_sink=model_event_sink,
+                call_options=call_options,
+            )
+            renderer_started_at_ms = round(time.time() * 1000)
             if self._should_buffer_quality_action(request):
                 value, lm_log = self._generate_buffered_quality_action(
                     request,
@@ -5749,6 +6162,36 @@ class GameEngine:
             raise
         if isinstance(value, str) and request.public_choice_to_internal:
             value = request.public_choice_to_internal.get(value, value)
+        if self.liveness_experience.experience_revision != "legacy-v0":
+            prepared_timing = request.world_state.get("_liveness_timing")
+            safe_prepared_timing = (
+                prepared_timing if isinstance(prepared_timing, dict) else {}
+            )
+            lm_log.liveness_timing = {
+                **lm_log.liveness_timing,
+                "turn_ready_at": actor_brain_started_at_ms,
+                "actor_brain_started_at": int(
+                    safe_prepared_timing.get(
+                        "actor_brain_started_at",
+                        actor_brain_started_at_ms,
+                    )
+                ),
+                "turn_plan_ready_at": int(
+                    safe_prepared_timing.get(
+                        "turn_plan_ready_at",
+                        actor_brain_started_at_ms,
+                    )
+                ),
+                "renderer_started_at": renderer_started_at_ms,
+                **(
+                    {
+                        "first_model_delta_at": actor_brain_started_at_ms
+                        + lm_log.first_token_ms
+                    }
+                    if lm_log.first_token_ms is not None
+                    else {}
+                ),
+            }
         return PlayerActionResult(
             request=request,
             value=value,
@@ -5773,6 +6216,8 @@ class GameEngine:
         event_sink: object,
         world_state: dict[str, object] | None = None,
         call_options: ModelCallOptions | None = None,
+        visible_text_observer: _CommittedSpeechObserver | None = None,
+        retries: int = 3,
     ) -> tuple[object | None, LmLog]:
         return generate_action_with_events(
             provider=provider,
@@ -5781,6 +6226,7 @@ class GameEngine:
             model=request.player.model,
             allowed_values=request.public_options if request.public_options else None,
             result_key=request.result_key,
+            retries=retries,
             event_sink=event_sink,
             event_context={
                 "round_number": request.round_state.number,
@@ -5793,6 +6239,10 @@ class GameEngine:
                 request.action_id
             ),
             call_options=call_options,
+            visible_text_observer=visible_text_observer,
+            generation_stage=(
+                "renderer" if visible_text_observer is not None else None
+            ),
         )
 
     def _should_buffer_quality_action(self, request: PlayerActionRequest) -> bool:
@@ -5804,6 +6254,239 @@ class GameEngine:
             or request.action in PRIVATE_LENGTH_BUDGETED_ACTIONS
         )
 
+    def _committed_speech_observer(
+        self,
+        request: PlayerActionRequest,
+        *,
+        event_sink: object,
+        speech_id: str,
+        voice_snapshot: dict[str, object] | None,
+    ) -> _CommittedSpeechObserver:
+        character_limit = speech_character_limit(request.action) or 220
+
+        def gate(candidate: str) -> HardSpeechGateReportV1:
+            candidate_log = LmLog(
+                prompt="",
+                raw_response="",
+                result={request.result_key: candidate},
+                action_id=request.action_id,
+            )
+            return hard_speech_gate(
+                candidate,
+                deterministic_codes=tuple(
+                    self._hard_quality_warnings(request, candidate_log)
+                ),
+            )
+
+        def commit(
+            segment_index: int,
+            text: str,
+            request_id: str,
+            segment_final: bool,
+        ) -> dict[str, object]:
+            return self._commit_speech_segment(
+                request=request,
+                event_sink=event_sink,
+                speech_id=speech_id,
+                segment_index=segment_index,
+                text=text,
+                request_id=request_id,
+                segment_final=segment_final,
+                voice_snapshot=voice_snapshot,
+            )
+
+        return _CommittedSpeechObserver(
+            character_limit=character_limit,
+            gate=gate,
+            commit=commit,
+        )
+
+    def _commit_speech_segment(
+        self,
+        *,
+        request: PlayerActionRequest,
+        event_sink: object,
+        speech_id: str,
+        segment_index: int,
+        text: str,
+        request_id: str,
+        segment_final: bool,
+        voice_snapshot: dict[str, object] | None,
+        renderer_attempts: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        self._interrupt_public_action_if_self_explosion_ready(
+            "model_response_delta"
+        )
+        plan = request.world_state.get("public_turn_plan")
+        safe_plan = plan if isinstance(plan, dict) else {}
+        segment_id = stable_segment_id(speech_id, segment_index, text)
+        payload: dict[str, object] = {
+            "schema_version": 2,
+            "commit_state": "accepted_segment",
+            "generation_stage": "renderer",
+            "action_id": request.action_id,
+            "request_id": request_id,
+            "model": request.player.model,
+            "speech_id": speech_id,
+            "segment_id": segment_id,
+            "segment_index": segment_index,
+            "segment_final": segment_final,
+            "delta": text,
+            "visible_text": text,
+            "field": request.result_key,
+            "is_public": True,
+            "presentation_id": stable_segment_presentation_id(segment_id),
+            "experience_revision": self.liveness_experience.experience_revision,
+            "quality_gate_version": self.liveness_experience.quality_gate_version,
+            "plan_id": safe_plan.get("plan_id"),
+            "fence": copy.deepcopy(safe_plan.get("fence")),
+            "scene_packet_hash": request.world_state.get("scene_packet_hash"),
+            "planner_request_id": request.world_state.get("planner_request_id"),
+            "renderer_attempts": copy.deepcopy(renderer_attempts or []),
+        }
+        if voice_snapshot is not None:
+            payload["voice_snapshot"] = copy.deepcopy(voice_snapshot)
+        publish = getattr(event_sink, "publish")
+        published = publish(
+            "model_response_delta",
+            round_number=request.round_state.number,
+            phase=request.phase,
+            actor=request.player.name,
+            action=request.action,
+            payload=payload,
+        )
+        if isinstance(event_sink, _PublishGateSink) and published is None:
+            raise ModelDeadlineExceeded("speech segment missed publication fence")
+        self._reduce_actor_minds_from_public_event(
+            published,
+            event_type="model_response_delta",
+            phase=request.phase,
+            payload=payload,
+        )
+        receipt_segment: dict[str, object] = {
+            "segment_id": segment_id,
+            "segment_index": segment_index,
+            "text": text,
+            "presentation_id": payload["presentation_id"],
+        }
+        source_event_id = getattr(published, "id", None)
+        source_run_id = getattr(published, "run_id", None)
+        if type(source_event_id) is int:
+            receipt_segment["source_event_id"] = source_event_id
+        if isinstance(source_run_id, str) and source_run_id:
+            receipt_segment["source_run_id"] = source_run_id
+        active_speech = self._active_committed_speech.get(request.action_id)
+        prior_segments = (
+            active_speech.get("segments", [])
+            if isinstance(active_speech, dict)
+            else []
+        )
+        if not isinstance(prior_segments, list):
+            prior_segments = []
+        prior_visible_text = (
+            active_speech.get("visible_text", "")
+            if isinstance(active_speech, dict)
+            else ""
+        )
+        self._active_committed_speech[request.action_id] = {
+            "speech_id": speech_id,
+            "segments": [
+                *copy.deepcopy(prior_segments),
+                copy.deepcopy(receipt_segment),
+            ],
+            "visible_text": str(prior_visible_text) + text,
+        }
+        return receipt_segment
+
+    def _attach_committed_speech_observer(
+        self,
+        *,
+        lm_log: LmLog,
+        observer: _CommittedSpeechObserver,
+        speech_id: str,
+    ) -> None:
+        if not observer.segments:
+            return
+        status = lm_log.speech_generation_status or "complete"
+        receipt_status = (
+            "complete"
+            if status == "complete"
+            else "interrupted"
+            if status == "interrupted"
+            else "partial"
+        )
+        lm_log.speech_id = speech_id
+        lm_log.committed_speech_segments = observer.segments.copy()
+        lm_log.hard_speech_gate_codes = observer.codes.copy()
+        lm_log.hard_speech_gate_rejected_count = observer.rejected_count
+        if observer.first_committed_at_ms is not None:
+            lm_log.liveness_timing.setdefault(
+                "first_clause_committed_at",
+                observer.first_committed_at_ms,
+            )
+        lm_log.liveness_timing["hard_gate_duration_ms"] = (
+            observer.hard_gate_duration_ms
+        )
+        lm_log.speech_turn_receipt = {
+            "speech_id": speech_id,
+            "speech_stream_mode": "segments_v1",
+            "status": receipt_status,
+            "segment_count": len(observer.receipt_segments),
+            "segments": copy.deepcopy(observer.receipt_segments),
+            "final_text": observer.committed_text,
+            "accepted_renderer_request_id": lm_log.request_id,
+            "final_status": status,
+        }
+        if observer.length_truncated:
+            lm_log.speech_turn_receipt["length_truncated"] = True
+
+    def _liveness_voice_snapshot(
+        self,
+        request: PlayerActionRequest,
+    ) -> dict[str, object]:
+        player = request.player
+        plan = request.world_state.get("public_turn_plan")
+        safe_plan = plan if isinstance(plan, dict) else {}
+        mind = self._actor_minds.get(player.name)
+        if (
+            self.liveness_experience.feature_modes.affect_delivery == "on"
+            and mind is not None
+        ):
+            effective_delivery = compile_affect_delivery_v2(
+                base_mood=player.base_delivery_mood,
+                base_intensity=player.base_delivery_intensity,
+                base_pace=player.base_delivery_pace,
+                base_instruction=player.base_delivery_instruction,
+                public_affect=public_affect_projection(mind),
+                speech_act=(
+                    str(safe_plan.get("primary_speech_act"))
+                    if safe_plan.get("primary_speech_act") is not None
+                    else None
+                ),
+                phase=request.phase,
+            )
+            mapping_version = AFFECT_DELIVERY_MAPPING_VERSION
+        else:
+            effective_delivery = delivery_from_result(
+                None,
+                base_mood=player.base_delivery_mood,
+                base_intensity=player.base_delivery_intensity,
+                base_pace=player.base_delivery_pace,
+                base_instruction=player.base_delivery_instruction,
+            )
+            mapping_version = DELIVERY_MAPPING_VERSION
+        return {
+            "enabled": player.voice_enabled,
+            "speaker": player.tts_speaker,
+            "effective_delivery": copy.deepcopy(effective_delivery),
+            "effective_context_texts": compile_context_texts(
+                effective_delivery,
+                dialect=player.tts_dialect,
+            ),
+            "voice_config_version": player.voice_config_version,
+            "delivery_mapping_version": mapping_version,
+        }
+
     def _generate_buffered_quality_action(
         self,
         request: PlayerActionRequest,
@@ -5813,6 +6496,34 @@ class GameEngine:
         event_sink: object,
     ) -> tuple[object | None, LmLog]:
         world_state = copy.deepcopy(request.world_state)
+        async_style_observe = (
+            request.event_visibility == "public"
+            and self.liveness_experience.feature_modes.style_gate == "async_observe"
+        )
+        committed_segment_mode = (
+            request.event_visibility == "public"
+            and self.liveness_experience.feature_modes.sentence_stream
+            == "committed_segments"
+        )
+        liveness_hard_gate = self.liveness_experience.experience_revision != "legacy-v0"
+        if committed_segment_mode:
+            restored = self._restored_committed_speech(request)
+            if restored is not None:
+                return restored
+        speech_id = (
+            stable_speech_id(
+                self.state.session_id,
+                request.action_id,
+                self.liveness_experience.speech_stream_version,
+            )
+            if committed_segment_mode
+            else None
+        )
+        voice_snapshot = (
+            self._liveness_voice_snapshot(request)
+            if committed_segment_mode
+            else None
+        )
         initial_codes: list[str] = []
         quality_retry_started_at: float | None = None
         quality_attempt_outcomes: list[dict[str, str]] = []
@@ -5820,8 +6531,21 @@ class GameEngine:
             buffer = _BufferedEventSink(
                 self._interrupt_public_action_if_self_explosion_ready,
                 lifecycle_destination=(
-                    event_sink if isinstance(event_sink, _PublishGateSink) else None
+                    event_sink
+                    if committed_segment_mode
+                    or isinstance(event_sink, _PublishGateSink)
+                    else None
                 ),
+            )
+            observer = (
+                self._committed_speech_observer(
+                    request,
+                    event_sink=event_sink,
+                    speech_id=speech_id,
+                    voice_snapshot=voice_snapshot,
+                )
+                if speech_id is not None
+                else None
             )
             try:
                 value, lm_log = self._generate_action_for_request(
@@ -5830,6 +6554,8 @@ class GameEngine:
                     event_sink=buffer,
                     world_state=world_state,
                     call_options=call_options,
+                    visible_text_observer=observer,
+                    retries=2 if observer is not None else 3,
                 )
             except Exception as exc:
                 setattr(
@@ -5843,6 +6569,12 @@ class GameEngine:
                     ),
                 )
                 raise
+            if observer is not None and speech_id is not None:
+                self._attach_committed_speech_observer(
+                    lm_log=lm_log,
+                    observer=observer,
+                    speech_id=speech_id,
+                )
             quality_attempt_outcomes = safe_attempt_outcomes(
                 [*quality_attempt_outcomes, *lm_log.attempt_outcomes]
             )
@@ -5851,6 +6583,8 @@ class GameEngine:
             hard_warnings = (
                 self._hard_quality_warnings(request, lm_log)
                 if request.event_visibility == "public"
+                and liveness_hard_gate
+                and not (observer is not None and observer.segments)
                 else []
             )
             speech_text, speech_result_key = self._speech_text_for_length_budget(
@@ -5864,14 +6598,49 @@ class GameEngine:
                 hard_warnings.append("invalid_public_speech")
             if isinstance(speech_text, str):
                 length_warning = speech_length_violation(request.action, speech_text)
-                if length_warning is not None:
+                if length_warning is not None and async_style_observe:
+                    character_limit = speech_character_limit(request.action)
+                    if character_limit is None:
+                        raise RuntimeError("missing speech character limit")
+                    accepted_text = truncate_speech_to_complete_sentence(
+                        speech_text,
+                        max_chars=character_limit,
+                        fallback="本轮暂不追加判断。",
+                    )
+                    value = accepted_text
+                    normalized_result = dict(lm_log.result or {})
+                    normalized_result[speech_result_key] = accepted_text
+                    lm_log.result = normalized_result
+                    speech_text = accepted_text
+                elif length_warning is not None:
                     hard_warnings.append(length_warning)
             hard_warnings = list(dict.fromkeys(hard_warnings))
-            if self.speech_quality_retry_enabled and quality_report is not None:
+            if (
+                request.event_visibility == "public"
+                and liveness_hard_gate
+                and isinstance(speech_text, str)
+                and not (observer is not None and observer.segments)
+            ):
+                gate_report = hard_speech_gate(
+                    speech_text,
+                    deterministic_codes=tuple(hard_warnings),
+                )
+                hard_warnings = list(gate_report.codes)
+            if (
+                self.speech_quality_retry_enabled
+                and not async_style_observe
+                and quality_report is not None
+            ):
                 hard_warnings = list(
                     dict.fromkeys([*hard_warnings, *quality_report.hard_failure_codes])
                 )
             if not hard_warnings:
+                if committed_segment_mode and isinstance(speech_text, str):
+                    if lm_log.speech_id is None:
+                        lm_log.speech_id = speech_id
+                        lm_log.committed_speech_segments = split_complete_speech_segments(
+                            speech_text
+                        )
                 self._attach_speech_quality_metadata(
                     request=request,
                     lm_log=lm_log,
@@ -5883,7 +6652,17 @@ class GameEngine:
                         quality_retry_started_at
                     ),
                 )
-                buffer.flush_to(event_sink)
+                if committed_segment_mode:
+                    buffer.flush_lifecycle_to(event_sink)
+                else:
+                    buffer.flush_to(
+                        event_sink,
+                        accepted_visible_text=(
+                            speech_text
+                            if async_style_observe and isinstance(speech_text, str)
+                            else None
+                        ),
+                    )
                 return value, lm_log
             if quality_attempt == 1:
                 self._attach_speech_quality_metadata(
@@ -5962,6 +6741,150 @@ class GameEngine:
             result = lm_log.result or {}
             return result.get("message"), "message"
         return value, request.result_key
+
+    def _restored_committed_speech(
+        self,
+        request: PlayerActionRequest,
+    ) -> tuple[str, LmLog] | None:
+        if self.checkpoint_manager is None:
+            return None
+        loader = getattr(self.checkpoint_manager, "speech_turn_receipt", None)
+        if not callable(loader):
+            return None
+        receipt = loader(request.action_id)
+        if not isinstance(receipt, dict):
+            return None
+        speech_id = receipt.get("speech_id")
+        segments = receipt.get("segments")
+        status = receipt.get("status")
+        if (
+            not isinstance(speech_id, str)
+            or not speech_id
+            or not isinstance(segments, list)
+            or not segments
+            or status not in {"partial", "complete", "interrupted"}
+        ):
+            raise ResumeCheckpointError("invalid_structure")
+        ordered_text: list[str] = []
+        for index, item in enumerate(segments):
+            if (
+                not isinstance(item, dict)
+                or type(item.get("segment_index")) is not int
+                or item.get("segment_index") != index
+                or not isinstance(item.get("segment_id"), str)
+                or not isinstance(item.get("text"), str)
+                or not item["text"]
+            ):
+                raise ResumeCheckpointError("invalid_structure")
+            ordered_text.append(str(item["text"]))
+        final_text = "".join(ordered_text)
+        if receipt.get("final_text") != final_text:
+            raise ResumeCheckpointError("invalid_structure")
+        request_id = receipt.get("accepted_renderer_request_id")
+        lm_log = LmLog(
+            prompt="",
+            raw_response="",
+            result={request.result_key: final_text},
+            action_id=request.action_id,
+            request_id=request_id if isinstance(request_id, str) else None,
+            committed_speech_segments=ordered_text,
+            speech_id=speech_id,
+            speech_turn_receipt=copy.deepcopy(receipt),
+        )
+        return final_text, lm_log
+
+    def _publish_committed_speech_segments(
+        self,
+        *,
+        request: PlayerActionRequest,
+        lm_log: LmLog,
+        voice_snapshot: dict[str, object] | None,
+    ) -> None:
+        if (
+            not lm_log.speech_id
+            or not lm_log.committed_speech_segments
+            or lm_log.speech_turn_receipt is not None
+        ):
+            return
+        plan = request.world_state.get("public_turn_plan")
+        safe_plan = plan if isinstance(plan, dict) else {}
+        renderer_attempts = [
+            {
+                "request_id": item["request_id"],
+                "outcome": item["attempt_result"],
+            }
+            for item in safe_attempt_outcomes(lm_log.attempt_outcomes)
+        ]
+        committed_at = round(time.time() * 1000)
+        lm_log.liveness_timing.setdefault("first_clause_committed_at", committed_at)
+        receipt_segments: list[dict[str, object]] = []
+        for segment_index, text in enumerate(lm_log.committed_speech_segments):
+            segment_id = stable_segment_id(lm_log.speech_id, segment_index, text)
+            payload: dict[str, object] = {
+                "schema_version": 2,
+                "commit_state": "accepted_segment",
+                "generation_stage": "renderer",
+                "action_id": request.action_id,
+                "request_id": lm_log.request_id,
+                "model": request.player.model,
+                "speech_id": lm_log.speech_id,
+                "segment_id": segment_id,
+                "segment_index": segment_index,
+                "segment_final": segment_index
+                == len(lm_log.committed_speech_segments) - 1,
+                "delta": text,
+                "visible_text": text,
+                "field": request.result_key,
+                "is_public": True,
+                "presentation_id": stable_segment_presentation_id(segment_id),
+                "experience_revision": self.liveness_experience.experience_revision,
+                "plan_id": safe_plan.get("plan_id"),
+                "fence": copy.deepcopy(safe_plan.get("fence")),
+                "scene_packet_hash": request.world_state.get("scene_packet_hash"),
+                "renderer_attempts": copy.deepcopy(renderer_attempts),
+            }
+            if voice_snapshot is not None:
+                payload["voice_snapshot"] = copy.deepcopy(voice_snapshot)
+            published = self._publish(
+                "model_response_delta",
+                round_number=request.round_state.number,
+                phase=request.phase,
+                actor=request.player.name,
+                action=request.action,
+                payload=payload,
+            )
+            receipt_segment: dict[str, object] = {
+                "segment_id": segment_id,
+                "segment_index": segment_index,
+                "text": text,
+                "presentation_id": payload["presentation_id"],
+            }
+            source_event_id = getattr(published, "id", None)
+            source_run_id = getattr(published, "run_id", None)
+            if type(source_event_id) is int:
+                receipt_segment["source_event_id"] = source_event_id
+            if isinstance(source_run_id, str) and source_run_id:
+                receipt_segment["source_run_id"] = source_run_id
+            receipt_segments.append(receipt_segment)
+            lm_log.speech_turn_receipt = {
+                "speech_id": lm_log.speech_id,
+                "speech_stream_mode": "segments_v1",
+                "status": "complete" if payload["segment_final"] else "partial",
+                "segment_count": len(receipt_segments),
+                "segments": copy.deepcopy(receipt_segments),
+                "final_text": "".join(
+                    item["text"] for item in receipt_segments if isinstance(item["text"], str)
+                ),
+                "accepted_renderer_request_id": lm_log.request_id,
+            }
+            if self.checkpoint_manager is not None:
+                recorder = getattr(
+                    self.checkpoint_manager,
+                    "record_speech_turn_receipt",
+                    None,
+                )
+                if callable(recorder):
+                    recorder(request.action_id, lm_log.speech_turn_receipt)
 
     def _hard_quality_warnings(
         self,
@@ -6278,14 +7201,37 @@ class GameEngine:
             if request.action in PRIVATE_LENGTH_BUDGETED_ACTIONS
             else None
         )
+        delivery_mapping_version = DELIVERY_MAPPING_VERSION
         if isinstance(speech_text, str) and speech_text.strip():
-            effective_delivery = delivery_from_result(
-                lm_log.result,
-                base_mood=player.base_delivery_mood,
-                base_intensity=player.base_delivery_intensity,
-                base_pace=player.base_delivery_pace,
-                base_instruction=player.base_delivery_instruction,
-            )
+            mind = self._actor_minds.get(player.name)
+            plan = request.world_state.get("public_turn_plan")
+            safe_plan = plan if isinstance(plan, dict) else {}
+            if (
+                self.liveness_experience.feature_modes.affect_delivery == "on"
+                and mind is not None
+            ):
+                effective_delivery = compile_affect_delivery_v2(
+                    base_mood=player.base_delivery_mood,
+                    base_intensity=player.base_delivery_intensity,
+                    base_pace=player.base_delivery_pace,
+                    base_instruction=player.base_delivery_instruction,
+                    public_affect=public_affect_projection(mind),
+                    speech_act=(
+                        str(safe_plan.get("primary_speech_act"))
+                        if safe_plan.get("primary_speech_act") is not None
+                        else None
+                    ),
+                    phase=request.phase,
+                )
+                delivery_mapping_version = AFFECT_DELIVERY_MAPPING_VERSION
+            else:
+                effective_delivery = delivery_from_result(
+                    lm_log.result,
+                    base_mood=player.base_delivery_mood,
+                    base_intensity=player.base_delivery_intensity,
+                    base_pace=player.base_delivery_pace,
+                    base_instruction=player.base_delivery_instruction,
+                )
             effective_context_texts = compile_context_texts(
                 effective_delivery,
                 dialect=player.tts_dialect,
@@ -6293,6 +7239,33 @@ class GameEngine:
             normalized_result = dict(lm_log.result or {})
             normalized_result["delivery"] = copy.deepcopy(effective_delivery)
             lm_log.result = normalized_result
+        voice_snapshot = (
+            {
+                "enabled": player.voice_enabled,
+                "speaker": player.tts_speaker,
+                "effective_delivery": copy.deepcopy(effective_delivery),
+                "effective_context_texts": effective_context_texts.copy(),
+                "voice_config_version": player.voice_config_version,
+                "delivery_mapping_version": delivery_mapping_version,
+            }
+            if effective_delivery is not None
+            else None
+        )
+        if request.event_visibility == "public":
+            self._publish_committed_speech_segments(
+                request=request,
+                lm_log=lm_log,
+                voice_snapshot=voice_snapshot,
+            )
+        if (
+            self.liveness_experience.experience_revision != "legacy-v0"
+            and isinstance(speech_text, str)
+            and speech_text.strip()
+        ):
+            lm_log.liveness_timing.setdefault(
+                "first_clause_committed_at",
+                round(time.time() * 1000),
+            )
         action_log = ActionLog(
             actor=player.name,
             action=request.action,
@@ -6317,8 +7290,23 @@ class GameEngine:
             effective_context_texts=effective_context_texts.copy(),
             voice_config_version=player.voice_config_version,
             delivery_mapping_version=(
-                DELIVERY_MAPPING_VERSION if effective_delivery is not None else None
+                delivery_mapping_version if effective_delivery is not None else None
             ),
+            liveness_experience_revision=self.liveness_experience.experience_revision,
+            prompt_chars=len(lm_log.prompt),
+            scene_packet_chars=(
+                len(
+                    json.dumps(
+                        request.world_state.get("actor_scene_packet"),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
+                if isinstance(request.world_state.get("actor_scene_packet"), dict)
+                else None
+            ),
+            liveness_timing=lm_log.liveness_timing.copy(),
+            speech_turn_receipt=copy.deepcopy(lm_log.speech_turn_receipt),
         )
         if result.fallback_reason is not None:
             action_log.fallback_reason = result.fallback_reason
@@ -6401,6 +7389,7 @@ class GameEngine:
                         warning="off_option_fallback",
                     )
         elif checkpoint and self._is_checkpointable_player_action_result(result):
+            self._record_accepted_actor_behavior(request, lm_log)
             self._checkpoint_player_action_success(result)
         if self.action_budgets_enabled:
             record_action_execution(
@@ -6453,15 +7442,30 @@ class GameEngine:
                 "retry_completed": len(lm_log.attempt_outcomes) > 1
                 or lm_log.speech_quality_attempt_count > 1,
             }
-            if effective_delivery is not None:
-                parsed_payload["voice_snapshot"] = {
-                    "enabled": player.voice_enabled,
-                    "speaker": player.tts_speaker,
-                    "effective_delivery": copy.deepcopy(effective_delivery),
-                    "effective_context_texts": effective_context_texts.copy(),
-                    "voice_config_version": player.voice_config_version,
-                    "delivery_mapping_version": DELIVERY_MAPPING_VERSION,
-                }
+            if lm_log.speech_id is not None:
+                receipt_status = (
+                    lm_log.speech_turn_receipt.get("status")
+                    if isinstance(lm_log.speech_turn_receipt, dict)
+                    else None
+                )
+                parsed_payload.update(
+                    {
+                        "schema_version": 1,
+                        "speech_id": lm_log.speech_id,
+                        "speech_stream_mode": "segments_v1",
+                        "segment_count": len(lm_log.committed_speech_segments),
+                        "speech_status": (
+                            "partial"
+                            if receipt_status == "partial"
+                            else "interrupted"
+                            if receipt_status == "interrupted"
+                            else "spoken"
+                        ),
+                        "tts_suppressed_by_segments": True,
+                    }
+                )
+            elif voice_snapshot is not None:
+                parsed_payload["voice_snapshot"] = copy.deepcopy(voice_snapshot)
             if request.action == ACTION_EXILE_LAST_WORDS:
                 speech_presentation_id = (
                     self._terminal_exile_last_words_presentation_id("speech")
@@ -6486,6 +7490,61 @@ class GameEngine:
                 actor=player.name,
                 action=request.action,
                 payload=parsed_payload,
+            )
+            if (
+                lm_log.speech_id is not None
+                and isinstance(lm_log.speech_turn_receipt, dict)
+                and lm_log.speech_turn_receipt.get("status") == "interrupted"
+            ):
+                active_speech = self._active_committed_speech.get(
+                    request.action_id,
+                    {},
+                )
+                self._publish(
+                    "speech_turn_interrupted",
+                    round_number=request.round_state.number,
+                    phase=request.phase,
+                    actor=player.name,
+                    action=request.action,
+                    payload={
+                        "schema_version": 1,
+                        "action_id": request.action_id,
+                        "speech_id": lm_log.speech_id,
+                        "speech_status": "interrupted",
+                        "visible_text": "".join(lm_log.committed_speech_segments),
+                        "committed_segment_count": len(
+                            lm_log.committed_speech_segments
+                        ),
+                        "interruption_mode": "sentence_boundary",
+                        "reason": active_speech.get(
+                            "interruption_reason",
+                            "phase_advanced",
+                        ),
+                        "trigger_source": copy.deepcopy(
+                            active_speech.get("trigger_source")
+                        ),
+                    },
+                )
+            self._active_committed_speech.pop(request.action_id, None)
+        if request.action in BUFFERED_QUALITY_ACTIONS:
+            receipt_status = (
+                lm_log.speech_turn_receipt.get("status")
+                if isinstance(lm_log.speech_turn_receipt, dict)
+                else None
+            )
+            liveness_result = (
+                receipt_status
+                if receipt_status in {"complete", "partial", "interrupted"}
+                else "failed"
+                if action_log.execution_status in {"failed", "timed_out", "canceled"}
+                else "complete"
+            )
+            record_liveness_speech(
+                action=request.action,
+                experience_revision=self.liveness_experience.experience_revision,
+                result=liveness_result,
+                timing=action_log.liveness_timing,
+                hard_rejected_count=lm_log.hard_speech_gate_rejected_count,
             )
         return value, action_log
 
@@ -6664,6 +7723,8 @@ class GameEngine:
             model=request.player.model,
             raw_response=result.lm_log.raw_response,
             prompt=result.lm_log.prompt,
+            logical_action_id=request.action_id,
+            speech_turn_receipt=result.lm_log.speech_turn_receipt,
         )
 
     def _checkpoint_player_action_results(
@@ -6842,6 +7903,43 @@ class GameEngine:
             active_players=active_players.copy(),
             rng_state=self.rng.getstate(),
         )
+        recorder = getattr(self.checkpoint_manager, "record_actor_minds", None)
+        if callable(recorder) and self._actor_minds:
+            recorder(self._actor_minds, at_round_start=True)
+
+    def _record_accepted_actor_behavior(
+        self,
+        request: PlayerActionRequest,
+        lm_log: LmLog,
+    ) -> None:
+        mind = self._actor_minds.get(request.player.name)
+        if mind is None or request.action not in BUFFERED_QUALITY_ACTIONS:
+            return
+        if self.checkpoint_manager is not None:
+            recorded = getattr(
+                self.checkpoint_manager,
+                "cached_model_response_exists",
+                None,
+            )
+            if callable(recorded) and recorded(
+                actor=request.player.name,
+                action=request.action,
+                phase=request.phase,
+                model=request.player.model,
+                prompt=lm_log.prompt,
+            ):
+                return
+        plan = request.world_state.get("public_turn_plan")
+        safe_plan = plan if isinstance(plan, dict) else {}
+        updated = ActorMindReducer().record_behavior(
+            mind,
+            speech_act=str(safe_plan.get("primary_speech_act") or "respond"),
+            length_band=str(safe_plan.get("length_band") or "normal"),
+            opening_fingerprint=hashlib.sha256(
+                str((request.world_state.get("speech_prior_texts") or [""])[-1]).encode()
+            ).hexdigest()[:16],
+        )
+        self._actor_minds[request.player.name] = updated
 
     def _checkpoint_model_success(
         self,
@@ -6852,6 +7950,8 @@ class GameEngine:
         model: str,
         raw_response: str,
         prompt: str | None = None,
+        logical_action_id: str | None = None,
+        speech_turn_receipt: Mapping[str, object] | None = None,
     ) -> None:
         if self.checkpoint_manager is None:
             return
@@ -6862,6 +7962,9 @@ class GameEngine:
             model=model,
             raw_response=raw_response,
             prompt=prompt,
+            actor_minds=self._actor_minds,
+            logical_action_id=logical_action_id,
+            speech_turn_receipt=speech_turn_receipt,
         )
 
     def _checkpoint_model_failure(
@@ -7213,7 +8316,7 @@ class GameEngine:
             and event_type not in {"phase_started", "phase_completed"}
         ):
             return None
-        return self.event_sink.publish(
+        published = self.event_sink.publish(
             event_type,
             round_number=round_number,
             phase=phase,
@@ -7221,6 +8324,97 @@ class GameEngine:
             action=action,
             payload=payload,
         )
+        self._reduce_actor_minds_from_public_event(
+            published,
+            event_type=event_type,
+            phase=phase,
+            payload=payload or {},
+        )
+        return published
+
+    def _reduce_actor_minds_from_public_event(
+        self,
+        published: object | None,
+        *,
+        event_type: str,
+        phase: str | None,
+        payload: dict[str, object],
+    ) -> None:
+        if not self._actor_minds or event_type not in {"phase_started", "state_updated"}:
+            return
+        source_run_id = getattr(published, "run_id", None)
+        source_event_id = getattr(published, "id", None)
+        if (
+            not isinstance(source_run_id, str)
+            or not source_run_id
+            or type(source_event_id) is not int
+            or source_event_id < 1
+        ):
+            return
+        source = EventCoordinateV1(source_run_id, source_event_id)
+        reducer = ActorMindReducer()
+        stimuli: dict[str, ActorMindStimulusV1] = {}
+
+        if event_type == "phase_started":
+            urgency = 72 if phase in {"day", "sheriff_election", "exile"} else 45
+            for target in self._actor_minds:
+                stimuli[target] = ActorMindStimulusV1(
+                    source=source,
+                    kind="stage_pressure" if urgency >= 70 else "phase_decay",
+                    urgency=urgency,
+                )
+
+        debate_entry = payload.get("debate_entry")
+        if event_type == "state_updated" and isinstance(debate_entry, dict):
+            speaker = debate_entry.get("speaker")
+            message = debate_entry.get("message")
+            if isinstance(speaker, str) and isinstance(message, str):
+                compact = message.replace(" ", "")
+                for target in self._actor_minds:
+                    if target == speaker or target not in compact:
+                        continue
+                    kind: Literal["direct_question", "accusation", "support"] | None = None
+                    if any(mark in compact for mark in ("?", "？", "回答", "解释")):
+                        kind = "direct_question"
+                    elif any(mark in compact for mark in ("同意", "认同", "站边", "支持")):
+                        kind = "support"
+                    elif any(mark in compact for mark in ("狼", "踩", "怀疑", "不信", "出")):
+                        kind = "accusation"
+                    if kind is not None:
+                        stimuli[target] = ActorMindStimulusV1(
+                            source=source,
+                            kind=kind,
+                            source_actor=speaker,
+                            target=target,
+                            urgency=78 if kind == "direct_question" else 66,
+                        )
+
+        votes = payload.get("votes")
+        if event_type == "state_updated" and isinstance(votes, dict):
+            for voter, target in votes.items():
+                if (
+                    isinstance(voter, str)
+                    and isinstance(target, str)
+                    and target in self._actor_minds
+                    and voter != target
+                ):
+                    stimuli[target] = ActorMindStimulusV1(
+                        source=source,
+                        kind="vote",
+                        source_actor=voter,
+                        target=target,
+                        urgency=82,
+                    )
+
+        for target, stimulus in stimuli.items():
+            self._actor_minds[target] = reducer.apply(
+                self._actor_minds[target],
+                stimulus,
+            )
+        if stimuli and self.checkpoint_manager is not None:
+            recorder = getattr(self.checkpoint_manager, "record_actor_minds", None)
+            if callable(recorder):
+                recorder(self._actor_minds)
 
     def _start_phase(
         self,

@@ -78,6 +78,92 @@ def test_quality_coverage_counts_coalesced_live_voice_range() -> None:
     assert report.voice["missing_narratable_event_count"] == 0
 
 
+def test_liveness_metrics_have_explicit_denominators_and_stage_breakdown() -> None:
+    bundle = build_quality_evaluation_bundle(
+        state={"session_id": "game_liveness", "rounds": []},
+        logs=[
+            {
+                "actor": "阿青",
+                "action": "debate",
+                "prompt_chars": 420,
+                "liveness_timing": {
+                    "turn_ready_at": 1_784_505_599_200,
+                    "actor_brain_started_at": 1_784_505_599_210,
+                    "turn_plan_ready_at": 1_784_505_599_240,
+                    "renderer_started_at": 1_784_505_599_250,
+                    "first_model_delta_at": 1_784_505_599_290,
+                    "first_clause_committed_at": 1_784_505_599_320,
+                    "hard_gate_duration_ms": 4,
+                },
+                "speech_turn_receipt": {
+                    "speech_id": "speech_liveness",
+                    "status": "partial",
+                },
+                "lm_log": {
+                    "action_id": "action_liveness",
+                    "hard_speech_gate_rejected_count": 1,
+                },
+            }
+        ],
+        liveness_runtime={
+            "experience_revision": "liveness-v1",
+            "experiment_id": "experiment-1",
+            "variant": "treatment",
+            "experience_snapshot": {
+                "feature_modes": {"sentence_stream": "committed_segments"}
+            },
+            "voice_timings": [
+                {
+                    "speech_id": "speech_liveness",
+                    "status": "complete",
+                    "tts_started_at": "2026-07-20T00:00:00+00:00",
+                    "first_audio_chunk_at": "2026-07-20T00:00:00.080000+00:00",
+                }
+            ],
+            "playback_observations": [
+                {
+                    "playback_session_id": "playback-1",
+                    "client_status": "completed",
+                    "playback_started_at": "2026-07-20T00:00:00.100000+00:00",
+                    "playback_finished_at": "2026-07-20T00:00:01+00:00",
+                    "ack_received_at": "2026-07-20T00:00:01.020000+00:00",
+                },
+                {
+                    "playback_session_id": "playback-1",
+                    "client_status": "completed",
+                    "playback_started_at": "2026-07-20T00:00:01.120000+00:00",
+                    "playback_finished_at": "2026-07-20T00:00:02+00:00",
+                    "ack_received_at": "2026-07-20T00:00:02.020000+00:00",
+                }
+            ],
+            "actor_mind": {
+                "snapshot_count": 3,
+                "update_count": 8,
+                "source_complete_count": 8,
+            },
+        },
+    )
+
+    liveness = evaluate_quality_bundle(bundle, hmac_key=HMAC_KEY).liveness
+
+    assert liveness["public_speech_count"] == 1
+    assert liveness["timing_coverage"]["first_clause_committed_at"] == {
+        "count": 1,
+        "denominator": 1,
+        "rate": 1.0,
+    }
+    assert liveness["stage_latency_ms"]["renderer_to_first_delta"]["p95"] == 40
+    assert liveness["stage_latency_ms"]["turn_to_first_clause"]["p95"] == 120
+    assert liveness["tts_to_first_audio_ms"]["p95"] == 80
+    assert liveness["turn_to_first_audio_ms"]["p95"] == 880
+    assert liveness["voice_timing_coverage"]["denominator"] == 1
+    assert liveness["playback_timing_coverage"]["denominator"] == 2
+    assert liveness["speaker_gap_ms"]["p95"] == 120
+    assert liveness["hard_retry_rate"] == 1.0
+    assert liveness["partial_speech_count"] == 1
+    assert liveness["actor_mind"]["source_complete_count"] == 8
+
+
 def test_bundle_revision_and_issue_ids_are_deterministic() -> None:
     data = json.loads((FIXTURE_DIR / "run_05aa0b0f2b92_leaking.json").read_text(encoding="utf-8"))
     first_bundle = build_quality_evaluation_bundle(

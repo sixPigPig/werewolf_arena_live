@@ -345,6 +345,51 @@ export type AdminGameQualityEvaluation = {
     privacy_p0_issue_count: number;
     lineup_warning_count: number;
   };
+  liveness: {
+    experience_revision: string | null;
+    experiment_id: string | null;
+    variant: string | null;
+    feature_modes: {
+      style_gate?: "legacy" | "async_observe" | null;
+      actor_mind?: "off" | "shadow" | "read" | null;
+      sentence_stream?: "off" | "committed_segments" | null;
+      affect_delivery?: "off" | "shadow" | "on" | null;
+      tts_prefetch_depth?: 0 | 1 | null;
+      voice_preempt?: "off" | "deterministic" | null;
+    };
+    public_speech_count: number;
+    timing_coverage: Record<string, {
+      count: number;
+      denominator: number;
+      rate: number | null;
+    }>;
+    stage_latency_ms: Record<string, {
+      count: number;
+      p50: number | null;
+      p95: number | null;
+      max: number | null;
+    }>;
+    prompt_chars: { count: number; p50: number | null; p95: number | null; max: number | null };
+    hard_gate_duration_ms: { count: number; p50: number | null; p95: number | null; max: number | null };
+    hard_retry_count: number;
+    hard_retry_rate: number | null;
+    hard_exhausted_count: number;
+    hard_exhausted_rate: number | null;
+    partial_speech_count: number;
+    interrupted_speech_count: number;
+    voice_timing_coverage: Record<string, number>;
+    tts_to_first_audio_ms: { count: number; p50: number | null; p95: number | null; max: number | null };
+    turn_to_first_audio_ms: { count: number; p50: number | null; p95: number | null; max: number | null };
+    voice_status_counts: Record<string, number>;
+    playback_timing_coverage: Record<string, number>;
+    playback_status_counts: Record<string, number>;
+    speaker_gap_ms: { count: number; p50: number | null; p95: number | null; max: number | null };
+    actor_mind: {
+      snapshot_count: number;
+      update_count: number;
+      source_complete_count: number;
+    };
+  };
   critical_actions: AdminGameQualityCriticalAction[];
   evaluated_at: string | null;
 };

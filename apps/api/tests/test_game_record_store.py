@@ -144,10 +144,12 @@ def test_save_complete_game_lists_and_loads_session(db_session: Session) -> None
             "round_count": 1,
             "created_at": sessions[0]["created_at"],
             "rule_set": {"id": "starter_6", "name": "新手 6 人快局"},
+            "liveness_experience": sessions[0]["liveness_experience"],
             "resumable": False,
         }
     ]
     assert sessions[0]["created_at"].endswith("Z")
+    assert sessions[0]["liveness_experience"]["revision"] == "legacy-v0"
     assert loaded["session_id"] == "game_1200abcd"
     assert loaded["status"] == "complete"
     assert loaded["state"]["winner"] == "狼人阵营"

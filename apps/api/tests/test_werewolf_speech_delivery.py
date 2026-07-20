@@ -1,11 +1,35 @@
 from __future__ import annotations
 
 from app.werewolf.speech_delivery import (
+    AFFECT_DELIVERY_MAPPING_VERSION,
     DELIVERY_MAPPING_VERSION,
+    compile_affect_delivery_v2,
     compile_context_texts,
     delivery_from_result,
     normalize_delivery,
 )
+
+
+def test_affect_delivery_v2_is_deterministic_and_limits_abrupt_jumps() -> None:
+    delivery = compile_affect_delivery_v2(
+        base_mood="calm",
+        base_intensity="low",
+        base_pace="slow",
+        base_instruction="克制、停顿",
+        public_affect={"mood": "tense", "intensity": "high", "pace": "fast"},
+        speech_act="challenge",
+        phase="day",
+        previous_delivery={"mood": "calm", "intensity": "low", "pace": "slow"},
+    )
+
+    assert delivery == {
+        "schema_version": 1,
+        "mood": "tense",
+        "intensity": "medium",
+        "pace": "natural",
+        "instruction": "克制、停顿",
+    }
+    assert AFFECT_DELIVERY_MAPPING_VERSION == "affect-delivery-v2"
 
 
 def test_delivery_rejects_game_facts_but_keeps_valid_speech_style() -> None:

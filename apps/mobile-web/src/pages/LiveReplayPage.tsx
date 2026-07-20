@@ -22,7 +22,10 @@ import {
   MobileLiveTheater,
   type MobileLiveTheaterRun,
 } from "../components/MobileLiveTheater";
-import { voiceSubtitleToMobileSubtitle } from "../components/mobileLiveSubtitle";
+import {
+  committedSpeechToMobileSubtitle,
+  voiceSubtitleToMobileSubtitle,
+} from "../components/mobileLiveSubtitle";
 
 const EMPTY_EVENTS: LiveGameEvent[] = [];
 const EMPTY_VOICES: PlaybackVoiceUtterance[] = [];
@@ -158,8 +161,15 @@ export function LiveReplayPage() {
           (voiceEnabled && voice.connectionState === "open"
             ? null
             : replaySubtitle),
-      ),
-    [replaySubtitle, voice.connectionState, voice.currentSubtitle, voiceEnabled],
+      ) ?? committedSpeechToMobileSubtitle({ events: stageEvents, godViewState }),
+    [
+      godViewState,
+      replaySubtitle,
+      stageEvents,
+      voice.connectionState,
+      voice.currentSubtitle,
+      voiceEnabled,
+    ],
   );
   const visibleTerminalEvent = terminalEventFor(stageEvents);
   const terminalEvent = terminalEventFor(allEvents);

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import copy
 import json
 import inspect
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from app.werewolf.action_choice import normalize_action_choice
 from app.werewolf.execution_budget import ModelCallOptions, ModelDeadlineExceeded
@@ -56,6 +57,32 @@ class ModelProvider(Protocol):
         pass
 
 
+@dataclass(frozen=True)
+class VisibleTextCommitResult:
+    text: str
+    status: Literal[
+        "complete",
+        "partial_provider_failure",
+        "partial_hard_gate_stop",
+        "interrupted",
+    ]
+    should_retry: bool = False
+
+
+class VisibleTextCommitObserver(Protocol):
+    def start_attempt(self, *, action_id: str, request_id: str) -> None:
+        pass
+
+    def append(self, text: str) -> None:
+        pass
+
+    def finish(self, final_text: str) -> VisibleTextCommitResult:
+        pass
+
+    def fail(self, reason_code: str) -> VisibleTextCommitResult:
+        pass
+
+
 @dataclass
 class LmLog:
     prompt: str
@@ -74,6 +101,13 @@ class LmLog:
     speech_quality_initial_codes: list[str] = field(default_factory=list, repr=False)
     speech_quality_retry_duration_ms: int = field(default=0, repr=False)
     first_token_ms: int | None = field(default=None, repr=False)
+    liveness_timing: dict[str, int] = field(default_factory=dict, repr=False)
+    committed_speech_segments: list[str] = field(default_factory=list, repr=False)
+    speech_id: str | None = field(default=None, repr=False)
+    speech_turn_receipt: dict[str, Any] | None = field(default=None, repr=False)
+    speech_generation_status: str | None = field(default=None, repr=False)
+    hard_speech_gate_codes: list[str] = field(default_factory=list, repr=False)
+    hard_speech_gate_rejected_count: int = field(default=0, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         value = {
@@ -93,6 +127,19 @@ class LmLog:
         if self.choice_normalization_kind is not None:
             value["raw_choice"] = self.raw_choice
             value["choice_normalization_kind"] = self.choice_normalization_kind
+        if self.liveness_timing:
+            value["liveness_timing"] = self.liveness_timing.copy()
+        if self.speech_id is not None:
+            value["speech_id"] = self.speech_id
+            value["committed_speech_segments"] = self.committed_speech_segments.copy()
+        if self.speech_turn_receipt is not None:
+            value["speech_turn_receipt"] = copy.deepcopy(self.speech_turn_receipt)
+        if self.speech_generation_status is not None:
+            value["speech_generation_status"] = self.speech_generation_status
+            value["hard_speech_gate_codes"] = self.hard_speech_gate_codes.copy()
+            value["hard_speech_gate_rejected_count"] = (
+                self.hard_speech_gate_rejected_count
+            )
         return value
 
 
@@ -256,6 +303,8 @@ def generate_action_with_events(
     request_id_factory: Callable[[], str] | None = None,
     enable_progress_ticks: bool = True,
     call_options: ModelCallOptions | None = None,
+    visible_text_observer: VisibleTextCommitObserver | None = None,
+    generation_stage: Literal["planner", "renderer"] | None = None,
 ) -> tuple[Any | None, LmLog]:
     base_prompt, _schema = build_prompt(action, world_state)
     raw_responses: list[str] = []
@@ -279,6 +328,11 @@ def generate_action_with_events(
         action=event_context.get("action"),
         action_id=action_id,
     )
+    stage_payload = (
+        {"generation_stage": generation_stage}
+        if generation_stage is not None
+        else {}
+    )
 
     for attempt in range(retries):
         if invalid_attempts:
@@ -289,6 +343,11 @@ def generate_action_with_events(
             else f"req_{uuid.uuid4().hex[:12]}"
         )
         last_request_id = request_id
+        if visible_text_observer is not None:
+            visible_text_observer.start_attempt(
+                action_id=action_id,
+                request_id=request_id,
+            )
         temperature = min(1.0, 0.4 + attempt * 0.2)
         visible_field = action_visible_stream_field(action)
         waiting_message = waiting_message_for_action(action)
@@ -297,6 +356,7 @@ def generate_action_with_events(
             "model_request_started",
             context=context,
             payload={
+                **stage_payload,
                 "action_id": action_id,
                 "request_id": request_id,
                 "model": model,
@@ -331,6 +391,7 @@ def generate_action_with_events(
                 request_id=request_id,
                 progress=progress,
                 call_options=attempt_options,
+                visible_text_observer=visible_text_observer,
             )
         except Exception as exc:
             progress.stop()
@@ -355,6 +416,7 @@ def generate_action_with_events(
                 "model_request_failed",
                 context=context,
                 payload={
+                    **stage_payload,
                     "action_id": action_id,
                     "request_id": request_id,
                     "model": model,
@@ -362,6 +424,23 @@ def generate_action_with_events(
                     "attempt_result": attempt_result,
                 },
             )
+            partial = (
+                visible_text_observer.fail(attempt_result)
+                if visible_text_observer is not None
+                else None
+            )
+            if partial is not None and partial.text:
+                return partial.text, LmLog(
+                    prompt=current_prompt,
+                    raw_response="",
+                    result={result_key: partial.text} if result_key else {"text": partial.text},
+                    action_id=action_id,
+                    request_id=request_id,
+                    attempt_outcomes=attempt_outcomes.copy(),
+                    invalid_attempts=invalid_attempts.copy(),
+                    first_token_ms=last_first_token_ms,
+                    speech_generation_status=partial.status,
+                )
             raise
         finally:
             if not progress_stopped:
@@ -399,6 +478,7 @@ def generate_action_with_events(
                 "model_attempt_completed",
                 context=context,
                 payload={
+                    **stage_payload,
                     "action_id": action_id,
                     "request_id": request_id,
                     "model": model,
@@ -406,12 +486,30 @@ def generate_action_with_events(
                     "reason_code": reason_code,
                 },
             )
+            partial = (
+                visible_text_observer.fail(reason_code)
+                if visible_text_observer is not None
+                else None
+            )
+            if partial is not None and partial.text:
+                return partial.text, LmLog(
+                    prompt=current_prompt,
+                    raw_response=raw_response,
+                    result={result_key: partial.text} if result_key else {"text": partial.text},
+                    action_id=action_id,
+                    request_id=request_id,
+                    attempt_outcomes=attempt_outcomes.copy(),
+                    invalid_attempts=invalid_attempts.copy(),
+                    first_token_ms=last_first_token_ms,
+                    speech_generation_status=partial.status,
+                )
             if attempt + 1 < retries:
                 _publish_model_event(
                     event_sink,
                     "model_retry_scheduled",
                     context=context,
                     payload={
+                        **stage_payload,
                         "request_id": request_id,
                         "model": model,
                         "attempt": attempt + 2,
@@ -435,6 +533,44 @@ def generate_action_with_events(
         last_raw_choice = value if normalization is not None else None
         last_normalization_kind = normalization.kind if normalization is not None else None
         normalized_value = normalization.canonical_value if normalization else value
+        if visible_text_observer is not None and isinstance(normalized_value, str):
+            committed = visible_text_observer.finish(normalized_value)
+            if committed.text:
+                normalized_value = committed.text
+                result = dict(result)
+                if result_key is not None:
+                    result[result_key] = committed.text
+                value = committed.text
+            elif committed.should_retry:
+                invalid_attempt = _invalid_response_attempt(
+                    "hard_gate_rejected",
+                    result_key=result_key,
+                )
+                invalid_attempt.update(
+                    {"action_id": action_id, "request_id": request_id}
+                )
+                invalid_attempts.append(invalid_attempt)
+                attempt_outcomes.append(
+                    _provider_attempt_outcome(
+                        action_id=action_id,
+                        request_id=request_id,
+                        attempt_result="invalid_response",
+                    )
+                )
+                _publish_model_event(
+                    event_sink,
+                    "model_attempt_completed",
+                    context=context,
+                    payload={
+                        **stage_payload,
+                        "action_id": action_id,
+                        "request_id": request_id,
+                        "model": model,
+                        "attempt_result": "invalid_response",
+                        "reason_code": "hard_gate_rejected",
+                    },
+                )
+                continue
         if allowed_values is None or normalized_value in allowed_values:
             attempt_outcomes.append(
                 _provider_attempt_outcome(
@@ -448,6 +584,7 @@ def generate_action_with_events(
                 "model_attempt_completed",
                 context=context,
                 payload={
+                    **stage_payload,
                     "action_id": action_id,
                     "request_id": request_id,
                     "model": model,
@@ -467,6 +604,12 @@ def generate_action_with_events(
                     normalization.kind if normalization is not None else None
                 ),
                 first_token_ms=last_first_token_ms,
+                speech_generation_status=(
+                    committed.status
+                    if visible_text_observer is not None
+                    and isinstance(normalized_value, str)
+                    else None
+                ),
             )
         invalid_attempt = _invalid_attempt(
             value=value,
@@ -492,6 +635,7 @@ def generate_action_with_events(
             "model_attempt_completed",
             context=context,
             payload={
+                **stage_payload,
                 "action_id": action_id,
                 "request_id": request_id,
                 "model": model,
@@ -505,6 +649,7 @@ def generate_action_with_events(
                 "model_retry_scheduled",
                 context=context,
                 payload={
+                    **stage_payload,
                     "request_id": request_id,
                     "model": model,
                     "attempt": attempt + 2,
@@ -541,6 +686,7 @@ def _complete_json_with_optional_stream(
     request_id: str,
     progress: ModelRequestProgress,
     call_options: ModelCallOptions | None,
+    visible_text_observer: VisibleTextCommitObserver | None = None,
 ) -> tuple[str, int | None]:
     response_started_at = time.monotonic()
     stream_json = getattr(provider, "stream_json", None)
@@ -584,6 +730,8 @@ def _complete_json_with_optional_stream(
                     continue
                 progress.record_delta()
                 pending_visible_text += visible_text
+                if visible_text_observer is not None:
+                    visible_text_observer.append(visible_text)
                 if (
                     len(pending_visible_text) >= STREAM_DELTA_FLUSH_CHARS
                     or now - last_delta_published_at >= STREAM_DELTA_FLUSH_SECONDS

@@ -45,6 +45,65 @@ BASE_TTS_CONFIG = VolcengineTtsConfig(
 )
 
 
+def test_playback_ack_tracker_keeps_out_of_order_ack_for_the_next_utterance() -> None:
+    async def scenario() -> None:
+        acknowledgements: asyncio.Queue[str] = asyncio.Queue()
+        disconnect_task = asyncio.create_task(asyncio.Event().wait())
+        acknowledgements.put_nowait("voice-next")
+        acknowledgements.put_nowait("voice-current")
+        try:
+            assert await voice_stream_module._wait_for_playback_ack(
+                "voice-current",
+                acknowledgements,
+                disconnect_task,
+            )
+            assert await voice_stream_module._wait_for_playback_ack(
+                "voice-next",
+                acknowledgements,
+                disconnect_task,
+            )
+            assert acknowledgements.empty()
+        finally:
+            disconnect_task.cancel()
+
+    asyncio.run(scenario())
+
+
+def test_playback_ack_accepts_status_and_played_duration() -> None:
+    acknowledgement = voice_stream_module._playback_ack(
+        {
+            "text": json.dumps(
+                {
+                    "type": "voice_played",
+                    "utterance_id": "voice-1",
+                    "status": "interrupted",
+                    "played_ms": 730,
+                }
+            )
+        }
+    )
+
+    assert acknowledgement == voice_stream_module.PlaybackAck(
+        utterance_id="voice-1",
+        client_status="interrupted",
+        played_ms=730,
+    )
+
+
+def test_legacy_playback_ack_defaults_to_completed() -> None:
+    acknowledgement = voice_stream_module._playback_ack(
+        {
+            "text": json.dumps(
+                {"type": "voice_played", "utterance_id": "voice-legacy"}
+            )
+        }
+    )
+
+    assert acknowledgement == voice_stream_module.PlaybackAck(
+        utterance_id="voice-legacy"
+    )
+
+
 def test_static_judge_playback_voice_uses_media_duration_not_send_time() -> None:
     voices = build_static_judge_playback_voices(
         [
@@ -328,6 +387,7 @@ class RecordingVoiceStore:
         self.failed: list[dict] = []
         self.subtitle_timings: list[dict] = []
         self.recent_utterance: dict | None = None
+        self.materialized_utterances: dict[str, dict] = {}
         self.replay_chunks: list[bytes] = []
         self.find_recent_calls: list[dict] = []
 
@@ -404,7 +464,15 @@ class RecordingVoiceStore:
         return self.recent_utterance
 
     def load_chunks(self, utterance_id: str) -> list[bytes]:
-        return self.replay_chunks if self.recent_utterance else []
+        return (
+            self.replay_chunks
+            if self.recent_utterance
+            or utterance_id in self.materialized_utterances
+            else []
+        )
+
+    def load_utterance(self, utterance_id: str) -> dict | None:
+        return self.materialized_utterances.get(utterance_id)
 
 
 class FailingVoiceStore(RecordingVoiceStore):
@@ -1765,6 +1833,225 @@ def test_voice_stream_service_does_not_speak_delta_or_rejected_draft() -> None:
         if call["speaker"] == "player"
     ]
     assert player_calls == []
+
+
+def test_voice_broker_fans_out_committed_segment_without_second_tts_call() -> None:
+    RecordingTtsClient.instances.clear()
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    store = RecordingVoiceStore()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda _session_id: store,
+        materialized_voice_wait_seconds=0.5,
+    )
+
+    async def stream_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        event = registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "schema_version": 2,
+                "commit_state": "accepted_segment",
+                "generation_stage": "renderer",
+                "action_id": "act-committed",
+                "request_id": "req-committed",
+                "speech_id": "sp-committed",
+                "segment_id": "seg-committed-0",
+                "segment_index": 0,
+                "segment_final": True,
+                "visible_text": "我先把这一票讲清楚。",
+                "delta": "我先把这一票讲清楚。",
+                "is_public": True,
+                "presentation_id": "pres-committed-0",
+                "experience_revision": "liveness-v1",
+                "voice_snapshot": {
+                    "enabled": True,
+                    "speaker": "player",
+                    "effective_context_texts": [],
+                },
+            },
+        )
+        utterance_id = voice_stream_module.deterministic_voice_utterance_id(
+            run.run_id,
+            event.id,
+            "player",
+        )
+        store.materialized_utterances[utterance_id] = {
+            "utterance_id": utterance_id,
+            "run_id": run.run_id,
+            "source_event_id": event.id,
+            "last_source_event_id": event.id,
+            "speaker_kind": "player",
+            "speaker_name": "当前玩家",
+            "mime_type": "audio/pcm",
+            "audio_format": "pcm",
+            "sample_rate": 24000,
+            "audience": "player_public",
+            "duration_ms": 320,
+            "status": "complete",
+            "speech_id": "sp-committed",
+            "segment_id": "seg-committed-0",
+            "segment_index": 0,
+            "segment_final": True,
+            "presentation_id": "pres-committed-0",
+            "subtitle_timings": [],
+        }
+        store.replay_chunks = [b"durable-audio"]
+        for _ in range(50):
+            if any(message.get("type") == "voice_end" for message in websocket.messages):
+                break
+            await asyncio.sleep(0.01)
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_events())
+
+    player_calls = [
+        call
+        for instance in RecordingTtsClient.instances
+        for call in instance.calls
+        if call["speaker"] == "player"
+    ]
+    assert player_calls == []
+    assert [message["type"] for message in websocket.messages[:3]] == [
+        "voice_start",
+        "audio_chunk",
+        "voice_end",
+    ]
+    assert websocket.messages[0]["speech_id"] == "sp-committed"
+    assert websocket.messages[1]["data"]
+
+
+def test_voice_broker_preempts_current_speech_and_discards_queued_segments() -> None:
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    store = RecordingVoiceStore()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda _session_id: store,
+        materialized_voice_wait_seconds=0.5,
+    )
+
+    def materialized(event_id: int, segment_index: int) -> tuple[str, dict]:
+        utterance_id = voice_stream_module.deterministic_voice_utterance_id(
+            run.run_id,
+            event_id,
+            "player",
+        )
+        return utterance_id, {
+            "utterance_id": utterance_id,
+            "run_id": run.run_id,
+            "source_event_id": event_id,
+            "last_source_event_id": event_id,
+            "speaker_kind": "player",
+            "speaker_name": "当前玩家",
+            "mime_type": "audio/pcm",
+            "audio_format": "pcm",
+            "sample_rate": 24000,
+            "audience": "player_public",
+            "duration_ms": 320,
+            "status": "complete",
+            "speech_id": "sp-preempt",
+            "segment_id": f"seg-preempt-{segment_index}",
+            "segment_index": segment_index,
+            "segment_final": False,
+            "subtitle_timings": [],
+        }
+
+    def publish_segment(index: int):
+        return registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "schema_version": 2,
+                "commit_state": "accepted_segment",
+                "generation_stage": "renderer",
+                "action_id": "act-preempt",
+                "request_id": "req-preempt",
+                "speech_id": "sp-preempt",
+                "segment_id": f"seg-preempt-{index}",
+                "segment_index": index,
+                "segment_final": False,
+                "visible_text": f"第{index + 1}句。",
+                "delta": f"第{index + 1}句。",
+                "is_public": True,
+                "experience_revision": "liveness-v1",
+            },
+        )
+
+    async def stream_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        first = publish_segment(0)
+        first_id, first_record = materialized(first.id, 0)
+        store.materialized_utterances[first_id] = first_record
+        store.replay_chunks = [b"first"]
+        for _ in range(50):
+            if any(message.get("type") == "voice_end" for message in websocket.messages):
+                break
+            await asyncio.sleep(0.01)
+
+        second = publish_segment(1)
+        await asyncio.sleep(0)
+        registry.publish(
+            run.run_id,
+            "speech_playback_preempted",
+            actor="阿青",
+            action="debate",
+            payload={
+                "schema_version": 1,
+                "action_id": "act-preempt",
+                "speech_id": "sp-preempt",
+                "reason": "self_explosion",
+                "trigger_source": {
+                    "source_run_id": run.run_id,
+                    "source_event_id": second.id + 1,
+                },
+                "cut_after_segment_index": 0,
+                "audience": "player_public",
+            },
+        )
+        second_id, second_record = materialized(second.id, 1)
+        store.materialized_utterances[second_id] = second_record
+        for _ in range(50):
+            if any(message.get("type") == "voice_preempt" for message in websocket.messages):
+                break
+            await asyncio.sleep(0.01)
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_events())
+
+    starts = [
+        message
+        for message in websocket.messages
+        if message.get("type") == "voice_start"
+        and message.get("speech_id") == "sp-preempt"
+    ]
+    assert [message.get("segment_index") for message in starts] == [0]
+    preempt = next(
+        message
+        for message in websocket.messages
+        if message.get("type") == "voice_preempt"
+    )
+    assert preempt["speech_id"] == "sp-preempt"
+    assert preempt["reason"] == "self_explosion"
+    assert preempt["trigger_source"]["source_run_id"] == run.run_id
+    assert preempt["cut_after_segment_index"] == 0
+    assert preempt["fade_out_ms"] == 120
 
 
 def test_voice_stream_service_does_not_replay_historical_events_on_connect() -> None:

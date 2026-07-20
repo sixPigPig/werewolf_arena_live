@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.rule_sets.snapshots import resolve_rule_set_snapshot
+from app.werewolf.actor_mind import ActorMindReducer, ActorMindV1
 from app.werewolf.checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     ReplayThenLiveProvider,
@@ -355,7 +356,7 @@ def test_resume_checkpoint_manager_persists_checkpoint_to_record_store() -> None
     latest = store.checkpoints[-1]
     assert latest["session_id"] == "game_1200abcd"
     checkpoint = latest["checkpoint"]
-    assert checkpoint["schema_version"] == 2 == CHECKPOINT_SCHEMA_VERSION
+    assert checkpoint["schema_version"] == 3 == CHECKPOINT_SCHEMA_VERSION
     assert checkpoint["session_id"] == "game_1200abcd"
     assert checkpoint["last_error"] == "model provider offline"
     run_params = checkpoint["run_params"]
@@ -381,6 +382,186 @@ def test_resume_checkpoint_manager_persists_checkpoint_to_record_store() -> None
     assert state_snapshot is not run_params["rule_set_snapshot"]
     assert state_snapshot is not compiled.snapshot
     assert run_params["rule_set_snapshot"] is not compiled.snapshot
+
+
+def test_resume_checkpoint_round_trips_private_actor_minds_without_public_state() -> None:
+    store = RecordingRecordStore()
+    compiled = managed_official_compiled_rule_set("starter_6")
+    manager = ResumeCheckpointManager(
+        record_store=store,
+        session_id="game_1200abcd",
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+    )
+    state = initialize_game_state(
+        session_id="game_1200abcd",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=compiled.rule_set,
+    )
+    manager.start_round(
+        state=state,
+        logs=[],
+        round_number=1,
+        active_players=[player.name for player in state.players],
+        rng_state=None,
+    )
+    mind = ActorMindReducer().record_behavior(
+        ActorMindV1(actor=state.players[0].name),
+        speech_act="challenge",
+        length_band="brief",
+        opening_fingerprint="opening-1",
+    )
+    manager.record_actor_minds({mind.actor: mind}, at_round_start=True)
+    checkpoint = store.checkpoints[-1]["checkpoint"]
+
+    restored = ResumeCheckpointManager(
+        record_store=store,
+        session_id="game_1200abcd",
+        compiled_rule_set=compiled,
+        run_params=checkpoint["run_params"],
+        initial_checkpoint=checkpoint,
+    ).actor_minds()
+
+    assert restored[mind.actor].to_dict() == mind.to_dict()
+    assert checkpoint["private_runtime"]["actor_minds_at_round_start"][mind.actor] == mind.to_dict()
+    assert "actor_minds" not in checkpoint["state_at_round_start"]
+
+
+def test_resume_checkpoint_persists_actor_mind_with_cached_response_atomically() -> None:
+    store = RecordingRecordStore()
+    compiled = managed_official_compiled_rule_set("starter_6")
+    manager = ResumeCheckpointManager(
+        record_store=store,
+        session_id="game_1200abcd",
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+    )
+    state = initialize_game_state(
+        session_id="game_1200abcd",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=compiled.rule_set,
+    )
+    manager.start_round(
+        state=state,
+        logs=[],
+        round_number=1,
+        active_players=[player.name for player in state.players],
+        rng_state=None,
+    )
+    mind = ActorMindReducer().record_behavior(
+        ActorMindV1(actor=state.players[0].name),
+        speech_act="challenge",
+        length_band="brief",
+        opening_fingerprint="opening-atomic",
+    )
+
+    manager.record_success(
+        actor=mind.actor,
+        action="debate",
+        phase="day_debate",
+        model="villager-model",
+        raw_response='{"say":"我不同意。"}',
+        prompt="same-resume-prompt",
+        actor_minds={mind.actor: mind},
+    )
+
+    checkpoint = store.checkpoints[-1]["checkpoint"]
+    restored = ResumeCheckpointManager(
+        record_store=store,
+        session_id="game_1200abcd",
+        compiled_rule_set=compiled,
+        run_params=checkpoint["run_params"],
+        initial_checkpoint=checkpoint,
+    )
+
+    assert restored.actor_minds()[mind.actor].to_dict() == mind.to_dict()
+    assert restored.cached_model_response_exists(
+        actor=mind.actor,
+        action="debate",
+        phase="day_debate",
+        model="villager-model",
+        prompt="same-resume-prompt",
+    )
+    assert len(store.checkpoints) == 2
+
+
+def test_resume_checkpoint_round_trips_partial_committed_speech_receipt() -> None:
+    store = RecordingRecordStore()
+    compiled = managed_official_compiled_rule_set("starter_6")
+    manager = ResumeCheckpointManager(
+        record_store=store,
+        session_id="game_1200abcd",
+        compiled_rule_set=compiled,
+        run_params={
+            "villager_model": "villager-model",
+            "werewolf_model": "werewolf-model",
+            "seed": 21,
+            "max_rounds": 8,
+            "player_configs": [],
+        },
+    )
+    state = initialize_game_state(
+        session_id="game_1200abcd",
+        villager_model="villager-model",
+        werewolf_model="werewolf-model",
+        seed=21,
+        rule_set=compiled.rule_set,
+    )
+    manager.start_round(
+        state=state,
+        logs=[],
+        round_number=1,
+        active_players=[player.name for player in state.players],
+        rng_state=None,
+    )
+    receipt = {
+        "speech_id": "sp_resume",
+        "speech_stream_mode": "segments_v1",
+        "status": "partial",
+        "segment_count": 1,
+        "segments": [
+            {
+                "segment_id": "seg_resume",
+                "segment_index": 0,
+                "text": "这句已经公开。",
+                "presentation_id": "pres_resume",
+                "source_run_id": "run_previous",
+                "source_event_id": 17,
+            }
+        ],
+        "final_text": "这句已经公开。",
+        "accepted_renderer_request_id": "req_previous",
+    }
+    manager.record_speech_turn_receipt("act_resume", receipt)
+    checkpoint = store.checkpoints[-1]["checkpoint"]
+
+    restored = ResumeCheckpointManager(
+        record_store=store,
+        session_id="game_1200abcd",
+        compiled_rule_set=compiled,
+        run_params=checkpoint["run_params"],
+        initial_checkpoint=checkpoint,
+    ).speech_turn_receipt("act_resume")
+
+    assert restored == receipt
+    assert checkpoint["generation_runtime"]["speech_turn_receipts"]["act_resume"] == receipt
+    assert "speech_turn_receipts" not in checkpoint["state_at_round_start"]
 
 
 def test_resume_checkpoint_manager_preserves_prior_round_logs() -> None:
@@ -484,7 +665,7 @@ def test_checkpoint_reader_accepts_strict_legacy_and_managed_v2(
         (True, "invalid_structure", "Resume checkpoint structure is invalid"),
         (0, "unsupported_schema", "Resume checkpoint schema is unsupported"),
         ("2", "invalid_structure", "Resume checkpoint structure is invalid"),
-        (3, "unsupported_schema", "Resume checkpoint schema is unsupported"),
+        (4, "unsupported_schema", "Resume checkpoint schema is unsupported"),
     ],
 )
 def test_checkpoint_reader_rejects_malformed_and_unsupported_schema(
@@ -557,7 +738,7 @@ def test_checkpoint_reader_rejects_partial_v1_duplicate_rule_metadata() -> None:
     assert error.value.reason == "rule_metadata_mismatch"
 
 
-@pytest.mark.parametrize("checkpoint_schema_version", [1, 2])
+@pytest.mark.parametrize("checkpoint_schema_version", [1, 2, 3])
 def test_checkpoint_reader_rejects_consistently_untrimmed_managed_revision_id(
     checkpoint_schema_version: int,
 ) -> None:
@@ -565,12 +746,12 @@ def test_checkpoint_reader_rejects_consistently_untrimmed_managed_revision_id(
         "game_1200abcd",
         managed_official_compiled_rule_set("starter_6"),
         checkpoint_schema_version=checkpoint_schema_version,
-        include_rule_metadata=checkpoint_schema_version == 2,
+        include_rule_metadata=checkpoint_schema_version >= 2,
     )
     original_revision_id = checkpoint["state_at_round_start"]["rule_set"]["revision_id"]
     untrimmed = f" {original_revision_id} "
     checkpoint["state_at_round_start"]["rule_set"]["revision_id"] = untrimmed
-    if checkpoint_schema_version == 2:
+    if checkpoint_schema_version >= 2:
         checkpoint["run_params"]["revision_id"] = untrimmed
         checkpoint["run_params"]["rule_set_snapshot"]["revision_id"] = untrimmed
 
@@ -641,7 +822,7 @@ def test_failed_run_writes_resume_checkpoint(record_store: DatabaseReplayStore) 
     assert error.value.session_id is not None
     checkpoint = record_store.load_resume_checkpoint(error.value.session_id)
 
-    assert checkpoint["schema_version"] == CHECKPOINT_SCHEMA_VERSION == 2
+    assert checkpoint["schema_version"] == CHECKPOINT_SCHEMA_VERSION == 3
     assert checkpoint["session_id"] == error.value.session_id
     assert checkpoint["round_number"] == 1
     assert checkpoint["active_players"]
@@ -2321,7 +2502,7 @@ def test_complete_v1_resume_normalizes_only_when_next_round_is_written(
         )
 
     rewritten = record_store.load_resume_checkpoint(session_id)
-    assert rewritten["schema_version"] == 2
+    assert rewritten["schema_version"] == 3
     assert set(rewritten["run_params"]) == {
         "villager_model",
         "werewolf_model",
