@@ -223,12 +223,17 @@ class VoiceSynthesisBroker:
         self.playback_session_id = playback_session_id
         self.wait_seconds = max(0.1, wait_seconds)
         self.prefetch_depth = max(0, prefetch_depth)
-        self._queue: asyncio.Queue[VoiceUtterance | None] = asyncio.Queue()
+        self._queue: asyncio.Queue[VoiceUtterance | dict[str, Any] | None] = (
+            asyncio.Queue()
+        )
         self._preempted_speech_ids: set[str] = set()
         self._task = asyncio.create_task(self._run())
 
     async def enqueue(self, utterance: VoiceUtterance) -> None:
         await self._queue.put(utterance)
+
+    async def enqueue_message(self, message: dict[str, Any]) -> None:
+        await self._queue.put(message)
 
     async def preempt(
         self,
@@ -278,9 +283,18 @@ class VoiceSynthesisBroker:
     async def _run(self) -> None:
         pending_acks: deque[str] = deque()
         while True:
-            utterance = await self._queue.get()
-            if utterance is None:
+            queued = await self._queue.get()
+            if queued is None:
                 return
+            if isinstance(queued, dict):
+                if (
+                    queued.get("type") == "speech_opened"
+                    and queued.get("speech_id") in self._preempted_speech_ids
+                ):
+                    continue
+                await self.websocket.send_json(queued)
+                continue
+            utterance = queued
             if (
                 utterance.speech_id is not None
                 and utterance.speech_id in self._preempted_speech_ids
@@ -312,6 +326,15 @@ class VoiceSynthesisBroker:
                         "message": "Voice materialization unavailable",
                     }
                 )
+                if utterance.speech_id is not None:
+                    self._preempted_speech_ids.add(utterance.speech_id)
+                    await self.websocket.send_json(
+                        {
+                            "type": "speech_preempted",
+                            "speech_id": utterance.speech_id,
+                            "reason": "voice_materialization_unavailable",
+                        }
+                    )
                 continue
             record, chunks = materialized
             if (
@@ -410,6 +433,7 @@ class LiveVoiceStreamService:
             else None
         )
         drain_broker = False
+        segmented_speech_ids: set[str] = set()
         subscriber: queue.Queue[LiveEvent] | None = None
         speaker_config = VoiceSpeakerConfig(
             player_speaker=self.config.player_speaker,
@@ -537,6 +561,23 @@ class LiveVoiceStreamService:
                         ),
                     )
                     if voice_broker is not None:
+                        if (
+                            utterance.speech_id is not None
+                            and utterance.speech_id not in segmented_speech_ids
+                        ):
+                            segmented_speech_ids.add(utterance.speech_id)
+                            await voice_broker.enqueue_message(
+                                {
+                                    "type": "speech_opened",
+                                    "speech_id": utterance.speech_id,
+                                    "source_event_id": utterance.source_event_id,
+                                    "speaker_kind": utterance.speaker_kind,
+                                    "speaker_name": utterance.speaker_name,
+                                    "audience": utterance.audience,
+                                    "audio_format": self.config.audio_format,
+                                    "sample_rate": self.config.sample_rate,
+                                }
+                            )
                         await voice_broker.enqueue(utterance)
                     else:
                         await websocket.send_json(
@@ -548,6 +589,32 @@ class LiveVoiceStreamService:
                             }
                         )
                     utterance = None
+
+                if event.type == "action_parsed" and voice_broker is not None:
+                    speech_id = event.payload.get("speech_id")
+                    final_segment_index = event.payload.get("final_segment_index")
+                    segment_count = event.payload.get("segment_count")
+                    speech_status = event.payload.get("speech_status")
+                    if (
+                        isinstance(speech_id, str)
+                        and speech_id in segmented_speech_ids
+                        and type(final_segment_index) is int
+                        and final_segment_index >= 0
+                        and type(segment_count) is int
+                        and segment_count == final_segment_index + 1
+                        and speech_status in {"spoken", "partial", "interrupted"}
+                    ):
+                        segmented_speech_ids.remove(speech_id)
+                        await voice_broker.enqueue_message(
+                            {
+                                "type": "speech_sealed",
+                                "speech_id": speech_id,
+                                "final_segment_index": final_segment_index,
+                                "segment_count": segment_count,
+                                "speech_status": speech_status,
+                                "last_source_event_id": event.id,
+                            }
+                        )
 
                 if utterance is not None:
                     utterance = await _coalesce_request_deltas(

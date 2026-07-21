@@ -2141,7 +2141,74 @@ describe("live voice stream", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:voice-1");
   });
 
-  it("does not publish a speech completion for an intermediate segment", async () => {
+  it("does not let a ready prefetched segment overtake an earlier receiving segment", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    stubObjectUrls(["blob:voice-1", "blob:voice-2"]);
+    const { audioElements, play } = stubAudioElement();
+    const { result } = renderHook(() =>
+      useLiveVoiceStream("run-1", {
+        currentEventId: 5,
+        enabled: true,
+        isPaused: false,
+      }),
+    );
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      socket.emit(
+        voiceStartMessage({
+          utterance_id: "voice-1",
+          source_event_id: 4,
+          speech_id: "speech-1",
+          segment_id: "segment-0",
+          segment_index: 0,
+          segment_final: false,
+        }),
+      );
+      emitReadyUtterance(socket, "voice-2", 5, {
+        speechId: "speech-1",
+        segmentId: "segment-1",
+        segmentIndex: 1,
+        segmentFinal: false,
+      });
+    });
+
+    expect(result.current.currentItem).toMatchObject({
+      status: "receiving",
+      utteranceId: "voice-1",
+    });
+    expect(play).not.toHaveBeenCalled();
+
+    act(() => {
+      socket.emit(audioChunkMessage({ utterance_id: "voice-1" }));
+      socket.emit({
+        type: "voice_end",
+        utterance_id: "voice-1",
+        duration_ms: 1000,
+      });
+    });
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    expect(result.current.currentItem?.utteranceId).toBe("voice-1");
+
+    act(() => {
+      audioElements[0].dispatchEvent(new Event("ended"));
+    });
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(result.current.currentItem?.utteranceId).toBe("voice-2");
+
+    act(() => {
+      audioElements[1].dispatchEvent(new Event("ended"));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(2));
+    expect(
+      socket.send.mock.calls.map(([message]) =>
+        JSON.parse(String(message)).utterance_id,
+      ),
+    ).toEqual(["voice-1", "voice-2"]);
+  });
+
+  it("completes segmented speech only after every segment plays and the speech is sealed", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     stubObjectUrls(["blob:segment-0", "blob:segment-1"]);
     const { audioElements, play } = stubAudioElement();
@@ -2155,6 +2222,16 @@ describe("live voice stream", () => {
     const socket = MockWebSocket.instances[0];
 
     act(() => {
+      socket.emit({
+        type: "speech_opened",
+        speech_id: "speech-1",
+        source_event_id: 4,
+        speaker_kind: "player",
+        speaker_name: "阿青",
+        audience: "player_public",
+        audio_format: "mp3",
+        sample_rate: 24000,
+      });
       emitReadyUtterance(socket, "voice-segment-0", 4, {
         speechId: "speech-1",
         segmentId: "segment-0",
@@ -2165,7 +2242,15 @@ describe("live voice stream", () => {
         speechId: "speech-1",
         segmentId: "segment-1",
         segmentIndex: 1,
-        segmentFinal: true,
+        segmentFinal: false,
+      });
+      socket.emit({
+        type: "speech_sealed",
+        speech_id: "speech-1",
+        final_segment_index: 1,
+        segment_count: 2,
+        speech_status: "spoken",
+        last_source_event_id: 6,
       });
     });
 
@@ -2182,8 +2267,8 @@ describe("live voice stream", () => {
     await waitFor(() =>
       expect(result.current.lastCompletedPlayback).toMatchObject({
         speechId: "speech-1",
-        sourceEventId: 5,
-        lastSourceEventId: 5,
+        sourceEventId: 4,
+        lastSourceEventId: 6,
       }),
     );
   });

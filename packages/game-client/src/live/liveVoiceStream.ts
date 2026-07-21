@@ -930,6 +930,7 @@ export function useLiveVoiceStream(
   const isPausedRef = useRef(isPaused);
   const consumedUtteranceIdsRef = useRef<Set<string>>(new Set());
   const playedPresentationIdsRef = useRef<Set<string>>(new Set());
+  const completedSpeechIdsRef = useRef<Set<string>>(new Set());
   const playbackCompletionSequenceRef = useRef(0);
   useEffect(() => {
     isPausedRef.current = isPaused;
@@ -1065,13 +1066,11 @@ export function useLiveVoiceStream(
       }
       consumedUtteranceIdsRef.current.add(item.utteranceId);
       sendPlaybackAck(item.utteranceId, "skipped");
-      if (import.meta.env.DEV) {
-        dispatchSpeechPlaybackShadow({
-          type: "segment_finished",
-          utteranceId: item.utteranceId,
-          status: "skipped",
-        });
-      }
+      dispatchSpeechPlaybackShadow({
+        type: "segment_finished",
+        utteranceId: item.utteranceId,
+        status: "skipped",
+      });
       dispatch({
         type: "utterance_played",
         utteranceId: item.utteranceId,
@@ -1095,16 +1094,15 @@ export function useLiveVoiceStream(
       if (item.presentationId) {
         playedPresentationIdsRef.current.add(item.presentationId);
       }
-      // v2 segments deliberately never claim speech completion. During phase 2
-      // the shadow reducer owns that calculation; v1 keeps its final-segment
-      // completion and truly legacy utterances retain the event-range fallback.
+      // Segments never claim speech completion. The speech reducer owns that
+      // calculation; only unsegmented utterances retain the event-range fallback.
       const isSegmentedSpeech = Boolean(
         item.speechId &&
           (item.segmentId ||
             item.segmentIndex !== undefined ||
             item.segmentFinal !== undefined),
       );
-      if (isSegmentedSpeech && item.segmentFinal !== true) {
+      if (isSegmentedSpeech) {
         return;
       }
       playbackCompletionSequenceRef.current += 1;
@@ -1140,14 +1138,12 @@ export function useLiveVoiceStream(
           : Math.max(0, Date.now() - playbackStartedAt);
       consumedUtteranceIdsRef.current.add(utteranceId);
       sendPlaybackAck(utteranceId, status);
-      if (import.meta.env.DEV) {
-        dispatchSpeechPlaybackShadow({
-          type: "segment_finished",
-          utteranceId,
-          status,
-          ...(playedMs === undefined ? {} : { playedMs }),
-        });
-      }
+      dispatchSpeechPlaybackShadow({
+        type: "segment_finished",
+        utteranceId,
+        status,
+        ...(playedMs === undefined ? {} : { playedMs }),
+      });
       scheduledPcmChunkIndexesRef.current.delete(utteranceId);
       pcmEndTimesRef.current.delete(utteranceId);
       pcmSubtitleStartTimesRef.current.delete(utteranceId);
@@ -1275,10 +1271,9 @@ export function useLiveVoiceStream(
       (item) => item.status === "playing" && isConsumableItem(item),
     ) ??
     visibleQueue.items.find(
-      (item) => item.status === "ready" && isActivePlaybackItem(item),
-    ) ??
-    visibleQueue.items.find(
-      (item) => item.status === "receiving" && isActivePlaybackItem(item),
+      (item) =>
+        (item.status === "ready" || item.status === "receiving") &&
+        isActivePlaybackItem(item),
     ) ??
     null;
   const blobPlaybackKey =
@@ -1455,12 +1450,10 @@ export function useLiveVoiceStream(
             type: "utterance_started",
             utteranceId: currentItem.utteranceId,
           });
-          if (import.meta.env.DEV) {
-            dispatchSpeechPlaybackShadow({
-              type: "segment_started",
-              utteranceId: currentItem.utteranceId,
-            });
-          }
+          dispatchSpeechPlaybackShadow({
+            type: "segment_started",
+            utteranceId: currentItem.utteranceId,
+          });
         }
 
         pcmEndTimesRef.current.set(currentItem.utteranceId, latestEndTime);
@@ -1525,14 +1518,12 @@ export function useLiveVoiceStream(
         currentItem.utteranceId,
         completed ? "completed" : "failed",
       );
-      if (import.meta.env.DEV) {
-        dispatchSpeechPlaybackShadow({
-          type: "segment_finished",
-          utteranceId: currentItem.utteranceId,
-          status: completed ? "completed" : "failed",
-          ...(playedMs === undefined ? {} : { playedMs }),
-        });
-      }
+      dispatchSpeechPlaybackShadow({
+        type: "segment_finished",
+        utteranceId: currentItem.utteranceId,
+        status: completed ? "completed" : "failed",
+        ...(playedMs === undefined ? {} : { playedMs }),
+      });
       dispatch({
         type: "utterance_played",
         utteranceId: currentItem.utteranceId,
@@ -1592,12 +1583,10 @@ export function useLiveVoiceStream(
         type: "utterance_started",
         utteranceId: currentItem.utteranceId,
       });
-      if (import.meta.env.DEV) {
-        dispatchSpeechPlaybackShadow({
-          type: "segment_started",
-          utteranceId: currentItem.utteranceId,
-        });
-      }
+      dispatchSpeechPlaybackShadow({
+        type: "segment_started",
+        utteranceId: currentItem.utteranceId,
+      });
     } catch {
       reportPlaybackError();
       return;
@@ -1623,13 +1612,11 @@ export function useLiveVoiceStream(
       }
       consumedUtteranceIdsRef.current.add(blobPlaybackKey);
       sendPlaybackAck(blobPlaybackKey, "failed");
-      if (import.meta.env.DEV) {
-        dispatchSpeechPlaybackShadow({
-          type: "segment_finished",
-          utteranceId: blobPlaybackKey,
-          status: "failed",
-        });
-      }
+      dispatchSpeechPlaybackShadow({
+        type: "segment_finished",
+        utteranceId: blobPlaybackKey,
+        status: "failed",
+      });
       dispatch({
         type: "queue_error",
         message: "Unable to play live voice audio.",
@@ -1683,13 +1670,11 @@ export function useLiveVoiceStream(
 
       consumedUtteranceIdsRef.current.add(utteranceId);
       sendPlaybackAck(utteranceId, "failed");
-      if (import.meta.env.DEV) {
-        dispatchSpeechPlaybackShadow({
-          type: "segment_finished",
-          utteranceId,
-          status: "failed",
-        });
-      }
+      dispatchSpeechPlaybackShadow({
+        type: "segment_finished",
+        utteranceId,
+        status: "failed",
+      });
       dispatch({
         type: "queue_error",
         message: "Unable to play live voice audio.",
@@ -1780,14 +1765,13 @@ export function useLiveVoiceStream(
     acknowledgedUtteranceIdsRef.current.clear();
     pendingPlaybackAckIdsRef.current.clear();
     playbackStartedAtMsRef.current.clear();
+    completedSpeechIdsRef.current.clear();
     playbackCompletionSequenceRef.current = 0;
     pcmSubtitleStartTimesRef.current.clear();
     setLastCompletedPlayback(null);
     setSubtitleClock(null);
     dispatch({ type: "reset" });
-    if (import.meta.env.DEV) {
-      dispatchSpeechPlaybackShadow({ type: "reset" });
-    }
+    dispatchSpeechPlaybackShadow({ type: "reset" });
 
     if (!enabled || !streamUrl || !runId || !hasCurrentEventId) {
       setConnectionState("idle");
@@ -1902,11 +1886,9 @@ export function useLiveVoiceStream(
           return;
         }
 
-        if (import.meta.env.DEV) {
-          const shadowAction = speechPlaybackShadowActionForMessage(parsed);
-          if (shadowAction) {
-            dispatchSpeechPlaybackShadow(shadowAction);
-          }
+        const shadowAction = speechPlaybackShadowActionForMessage(parsed);
+        if (shadowAction) {
+          dispatchSpeechPlaybackShadow(shadowAction);
         }
 
         if (parsed.type === "voice_unavailable") {
@@ -1935,13 +1917,11 @@ export function useLiveVoiceStream(
         ) {
           consumedUtteranceIdsRef.current.add(parsed.utterance_id);
           sendPlaybackAck(parsed.utterance_id, "skipped");
-          if (import.meta.env.DEV) {
-            dispatchSpeechPlaybackShadow({
-              type: "segment_finished",
-              utteranceId: parsed.utterance_id,
-              status: "skipped",
-            });
-          }
+          dispatchSpeechPlaybackShadow({
+            type: "segment_finished",
+            utteranceId: parsed.utterance_id,
+            status: "skipped",
+          });
           return;
         }
 
@@ -1968,6 +1948,26 @@ export function useLiveVoiceStream(
     streamUrl,
   ]);
 
+  useEffect(() => {
+    for (const session of Object.values(speechPlaybackShadow.sessions)) {
+      if (
+        !session.completionEmitted ||
+        completedSpeechIdsRef.current.has(session.speechId)
+      ) {
+        continue;
+      }
+      completedSpeechIdsRef.current.add(session.speechId);
+      playbackCompletionSequenceRef.current += 1;
+      setLastCompletedPlayback({
+        id: `${session.speechId}:${playbackCompletionSequenceRef.current}`,
+        speechId: session.speechId,
+        sourceEventId: session.sourceEventId,
+        lastSourceEventId:
+          session.sealedLastSourceEventId ?? session.lastSourceEventId,
+      });
+    }
+  }, [speechPlaybackShadow.sessions]);
+
   return {
     connectionState,
     currentSpeakerName: isPaused ? null : currentItem?.speakerName ?? null,
@@ -1975,9 +1975,7 @@ export function useLiveVoiceStream(
     currentSubtitle,
     errors: visibleQueue.errors,
     lastCompletedPlayback,
-    speechPlaybackShadow: import.meta.env.DEV
-      ? speechPlaybackShadow
-      : null,
+    speechPlaybackShadow,
     unlockAudio,
   };
 }

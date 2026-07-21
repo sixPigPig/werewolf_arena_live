@@ -1507,7 +1507,7 @@ def test_voice_stream_service_does_not_speak_delta_or_rejected_draft() -> None:
     assert player_calls == []
 
 
-def test_voice_broker_fans_out_committed_segment_without_second_tts_call() -> None:
+def test_voice_broker_fans_out_and_seals_committed_speech_without_second_tts_call() -> None:
     RecordingTtsClient.instances.clear()
     registry = LiveRunRegistry()
     run = create_run(registry)
@@ -1582,6 +1582,23 @@ def test_voice_broker_fans_out_committed_segment_without_second_tts_call() -> No
             if any(message.get("type") == "voice_end" for message in websocket.messages):
                 break
             await asyncio.sleep(0.01)
+        registry.publish(
+            run.run_id,
+            "action_parsed",
+            actor="阿青",
+            action="debate",
+            payload={
+                "speech_id": "sp-committed",
+                "speech_stream_mode": "segments_v2",
+                "segment_count": 1,
+                "final_segment_index": 0,
+                "speech_status": "spoken",
+            },
+        )
+        for _ in range(50):
+            if any(message.get("type") == "speech_sealed" for message in websocket.messages):
+                break
+            await asyncio.sleep(0.01)
         registry.mark_completed(run.run_id, winner="好人阵营")
         await asyncio.wait_for(task, timeout=1)
 
@@ -1594,13 +1611,78 @@ def test_voice_broker_fans_out_committed_segment_without_second_tts_call() -> No
         if call["speaker"] == "player"
     ]
     assert player_calls == []
-    assert [message["type"] for message in websocket.messages[:3]] == [
+    assert [message["type"] for message in websocket.messages[:5]] == [
+        "speech_opened",
         "voice_start",
         "audio_chunk",
         "voice_end",
+        "speech_sealed",
     ]
     assert websocket.messages[0]["speech_id"] == "sp-committed"
-    assert websocket.messages[1]["data"]
+    assert websocket.messages[1]["speech_id"] == "sp-committed"
+    assert websocket.messages[2]["data"]
+    assert websocket.messages[4] == {
+        "type": "speech_sealed",
+        "speech_id": "sp-committed",
+        "final_segment_index": 0,
+        "segment_count": 1,
+        "speech_status": "spoken",
+        "last_source_event_id": websocket.messages[1]["source_event_id"] + 1,
+    }
+
+
+def test_voice_broker_releases_speech_lock_when_materialization_is_unavailable() -> None:
+    registry = LiveRunRegistry()
+    run = create_run(registry)
+    websocket = FakeWebSocket()
+    service = LiveVoiceStreamService(
+        registry=registry,
+        config=BASE_TTS_CONFIG,
+        client_factory=RecordingTtsClient,
+        voice_store_factory=lambda _session_id: RecordingVoiceStore(),
+        materialized_voice_wait_seconds=0.1,
+    )
+
+    async def stream_events() -> None:
+        task = asyncio.create_task(service.stream_run(run.run_id, websocket))
+        await wait_for_subscription(registry, run.run_id)
+        registry.publish(
+            run.run_id,
+            "model_response_delta",
+            actor="阿青",
+            action="debate",
+            payload={
+                "schema_version": 2,
+                "commit_state": "accepted_segment",
+                "generation_stage": "renderer",
+                "action_id": "act-unavailable",
+                "request_id": "req-unavailable",
+                "speech_id": "sp-unavailable",
+                "speech_stream_mode": "segments_v2",
+                "segment_id": "seg-unavailable-0",
+                "segment_index": 0,
+                "segment_final": False,
+                "visible_text": "这句暂时没有音频。",
+                "delta": "这句暂时没有音频。",
+                "is_public": True,
+            },
+        )
+        await wait_for_messages(websocket, 3)
+        registry.mark_completed(run.run_id, winner="好人阵营")
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(stream_events())
+
+    assert [message["type"] for message in websocket.messages[:3]] == [
+        "speech_opened",
+        "voice_error",
+        "speech_preempted",
+    ]
+    assert websocket.messages[2] == {
+        "type": "speech_preempted",
+        "speech_id": "sp-unavailable",
+        "reason": "voice_materialization_unavailable",
+    }
 
 
 def test_voice_broker_preempts_current_speech_and_discards_queued_segments() -> None:

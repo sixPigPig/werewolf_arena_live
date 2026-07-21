@@ -870,6 +870,88 @@ describe("LivePage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("does not flash committed text after a speech audio segment ends", async () => {
+    const segmentedSpeechEvents: LiveGameEvent[] = [
+      gameStartedEvent,
+      {
+        ...gameStartedEvent,
+        id: 2,
+        type: "action_requested",
+        actor: "阿青",
+        action: "debate",
+        payload: { options: [], result_key: "say" },
+      },
+      {
+        ...gameStartedEvent,
+        id: 3,
+        type: "model_request_started",
+        actor: "阿青",
+        action: "debate",
+        payload: { request_id: "req-speech-1" },
+      },
+      {
+        ...gameStartedEvent,
+        id: 4,
+        type: "model_response_delta",
+        actor: "阿青",
+        action: "debate",
+        payload: {
+          schema_version: 2,
+          commit_state: "accepted_segment",
+          request_id: "req-speech-1",
+          speech_id: "speech-1",
+          speech_stream_mode: "segments_v2",
+          segment_id: "segment-0",
+          segment_index: 0,
+          segment_final: false,
+          visible_text: "这句语音刚刚播完。",
+        },
+      },
+      {
+        ...gameStartedEvent,
+        id: 5,
+        type: "action_parsed",
+        actor: "阿青",
+        action: "debate",
+        payload: {
+          request_id: "req-speech-1",
+          speech_id: "speech-1",
+          speech_stream_mode: "segments_v2",
+          segment_count: 1,
+          final_segment_index: 0,
+          speech_status: "spoken",
+        },
+      },
+    ];
+    gameClientMocks.useGameRunEvents.mockReturnValue({
+      connectionState: "open",
+      events: segmentedSpeechEvents,
+      latestEvent: segmentedSpeechEvents.at(-1),
+    });
+    gameClientMocks.useLiveVoiceStream.mockReturnValue({
+      connectionState: "open",
+      currentItem: null,
+      currentSpeakerName: null,
+      currentSubtitle: null,
+      errors: [],
+      speechPlaybackShadow: {
+        sessions: {
+          "speech-1": { state: "sealed" },
+        },
+      },
+      unlockAudio,
+    });
+    const user = userEvent.setup();
+
+    renderLiveRoute();
+    await user.click(await screen.findByRole("button", { name: "最新" }));
+    await screen.findByRole("status", { name: "当前舞台" });
+
+    expect(
+      screen.queryByRole("status", { name: "直播字幕" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders a lower-third subtitle from live voice timing", async () => {
     gameClientMocks.useGameRunEvents.mockReturnValue({
       connectionState: "open",

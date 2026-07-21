@@ -82,6 +82,15 @@ export function LivePage() {
     isPaused: director.isPaused,
   });
   const voiceCurrentItem = voice.currentItem;
+  const currentSpeechSession = director.currentCue?.speechId
+    ? voice.speechPlaybackShadow?.sessions[director.currentCue.speechId]
+    : undefined;
+  const currentSpeechOwnsPlayback = Boolean(currentSpeechSession);
+  const currentSpeechIsPending =
+    currentSpeechSession !== undefined &&
+    !["completed", "interrupted", "skipped", "failed"].includes(
+      currentSpeechSession.state,
+    );
   const unlockVoiceAudio = voice.unlockAudio;
   const completeVoicePlayback = director.completeVoicePlayback;
   const completedTimelinePlayback = useMemo(
@@ -106,11 +115,12 @@ export function LivePage() {
   useEffect(() => {
     const shouldHold =
       voiceEnabled &&
-      isVoicePlaybackBlocking(
-        voiceCurrentItem,
-        directorSourceEventId,
-        director.currentCue?.speechId,
-      );
+      (currentSpeechIsPending ||
+        isVoicePlaybackBlocking(
+          voiceCurrentItem,
+          directorSourceEventId,
+          director.currentCue?.speechId,
+        ));
     // Voice playback depends on the current director event, so this feeds the
     // next render's hold flag back into the director without marking a user pause.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -120,6 +130,7 @@ export function LivePage() {
   }, [
     director.currentCue?.speechId,
     directorSourceEventId,
+    currentSpeechIsPending,
     voiceCurrentItem,
     voiceEnabled,
   ]);
@@ -193,8 +204,15 @@ export function LivePage() {
   const subtitle = useMemo(
     () =>
       voiceSubtitleToMobileSubtitle(voice.currentSubtitle) ??
-      committedSpeechToMobileSubtitle({ events: stageEvents, godViewState }),
-    [godViewState, stageEvents, voice.currentSubtitle],
+      (currentSpeechOwnsPlayback
+        ? null
+        : committedSpeechToMobileSubtitle({ events: stageEvents, godViewState })),
+    [
+      currentSpeechOwnsPlayback,
+      godViewState,
+      stageEvents,
+      voice.currentSubtitle,
+    ],
   );
   const liveStatus = deriveLiveNavStatus({
     backlogCount: director.backlogCount,
