@@ -11,6 +11,7 @@ from typing import Any, Literal, Protocol
 
 from app.werewolf.action_choice import normalize_action_choice
 from app.werewolf.execution_budget import ModelCallOptions, ModelDeadlineExceeded
+from app.werewolf.live import GameRunCanceled
 from app.werewolf.execution_telemetry import record_model_progress_event
 from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.streaming import (
@@ -393,6 +394,10 @@ def generate_action_with_events(
                 call_options=attempt_options,
                 visible_text_observer=visible_text_observer,
             )
+        except GameRunCanceled:
+            progress.stop()
+            progress_stopped = True
+            raise
         except Exception as exc:
             progress.stop()
             progress_stopped = True
@@ -689,6 +694,7 @@ def _complete_json_with_optional_stream(
     visible_text_observer: VisibleTextCommitObserver | None = None,
 ) -> tuple[str, int | None]:
     response_started_at = time.monotonic()
+    _check_model_cancellation(event_sink)
     stream_json = getattr(provider, "stream_json", None)
     if callable(stream_json):
         raw_chunks: list[str] = []
@@ -707,48 +713,57 @@ def _complete_json_with_optional_stream(
                 temperature=temperature,
                 call_options=call_options,
             )
-            for chunk in stream:
-                now = time.monotonic()
-                _ensure_call_within_deadline(
-                    call_options,
-                    now=now,
-                    stream_started_at=stream_started_at,
-                    received_first_token=received_first_token,
-                )
-                if not received_first_token:
-                    first_token_ms = max(
-                        0,
-                        round((now - response_started_at) * 1000),
+            try:
+                for chunk in stream:
+                    _check_model_cancellation(event_sink)
+                    now = time.monotonic()
+                    _ensure_call_within_deadline(
+                        call_options,
+                        now=now,
+                        stream_started_at=stream_started_at,
+                        received_first_token=received_first_token,
                     )
-                received_first_token = True
-                raw_chunks.append(chunk)
-                if extractor is None or visible_field is None:
-                    continue
-                raw_response = "".join(raw_chunks)
-                visible_text = extractor.update(raw_response)
-                if not visible_text:
-                    continue
-                progress.record_delta()
-                pending_visible_text += visible_text
-                if visible_text_observer is not None:
-                    visible_text_observer.append(visible_text)
-                if (
-                    len(pending_visible_text) >= STREAM_DELTA_FLUSH_CHARS
-                    or now - last_delta_published_at >= STREAM_DELTA_FLUSH_SECONDS
-                ):
-                    _publish_visible_delta(
-                        event_sink,
-                        context=context,
-                        request_id=request_id,
-                        model=model,
-                        field=visible_field,
-                        visible_text=pending_visible_text,
-                    )
-                    pending_visible_text = ""
-                    last_delta_published_at = now
-        except Exception as exc:
-            if raw_chunks or isinstance(exc, ModelDeadlineExceeded):
+                    if not received_first_token:
+                        first_token_ms = max(
+                            0,
+                            round((now - response_started_at) * 1000),
+                        )
+                    received_first_token = True
+                    raw_chunks.append(chunk)
+                    if extractor is None or visible_field is None:
+                        continue
+                    raw_response = "".join(raw_chunks)
+                    visible_text = extractor.update(raw_response)
+                    if not visible_text:
+                        continue
+                    progress.record_delta()
+                    pending_visible_text += visible_text
+                    if visible_text_observer is not None:
+                        visible_text_observer.append(visible_text)
+                    if (
+                        len(pending_visible_text) >= STREAM_DELTA_FLUSH_CHARS
+                        or now - last_delta_published_at >= STREAM_DELTA_FLUSH_SECONDS
+                    ):
+                        _publish_visible_delta(
+                            event_sink,
+                            context=context,
+                            request_id=request_id,
+                            model=model,
+                            field=visible_field,
+                            visible_text=pending_visible_text,
+                        )
+                        pending_visible_text = ""
+                        last_delta_published_at = now
+            finally:
+                close_stream = getattr(stream, "close", None)
+                if callable(close_stream):
+                    close_stream()
+        except (GameRunCanceled, ModelActionCanceled, ModelDeadlineExceeded):
+            raise
+        except Exception:
+            if raw_chunks:
                 raise
+            _check_model_cancellation(event_sink)
             complete_response = _call_provider_method(
                 provider.complete_json,
                 model=model,
@@ -777,6 +792,7 @@ def _complete_json_with_optional_stream(
         if raw_chunks:
             return "".join(raw_chunks), first_token_ms
 
+    _check_model_cancellation(event_sink)
     complete_response = _call_provider_method(
         provider.complete_json,
         model=model,
@@ -790,6 +806,12 @@ def _complete_json_with_optional_stream(
         0,
         round((time.monotonic() - response_started_at) * 1000),
     )
+
+
+def _check_model_cancellation(event_sink: Any) -> None:
+    check_cancellation = getattr(event_sink, "check_cancellation", None)
+    if callable(check_cancellation):
+        check_cancellation()
 
 
 def _call_provider_method(

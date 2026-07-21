@@ -2580,6 +2580,14 @@ a {
   justify-self: end;
 }
 
+.game-interrupt-pending {
+  display: inline-flex;
+  align-items: center;
+  color: #b54708;
+  font-size: 10px;
+  font-weight: 750;
+}
+
 .game-delete-dialog code {
   display: block;
   overflow-wrap: anywhere;
@@ -2588,6 +2596,34 @@ a {
   border-radius: 8px;
   color: #344054;
   background: #f9fafb;
+  font-size: 11px;
+}
+
+.game-interrupt-dialog > small {
+  display: block;
+  margin-top: 7px;
+  color: #667085;
+  font-size: 10px;
+}
+
+.game-interrupt-dialog > label {
+  display: block;
+  margin: 14px 0 6px;
+  color: #344054;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.game-interrupt-dialog > textarea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  color: #101828;
+  background: #fff;
+  font: inherit;
   font-size: 11px;
 }
 

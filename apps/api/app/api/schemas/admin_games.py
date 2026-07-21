@@ -116,6 +116,7 @@ class AdminGameRunSummary(BaseModel):
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    stop_requested_at: datetime | None
     event_count: int
     has_error: bool
 

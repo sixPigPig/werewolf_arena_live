@@ -15,6 +15,7 @@ export const contractRun = {
   created_at: "2026-07-10T01:00:00Z",
   started_at: "2026-07-10T01:00:01Z",
   completed_at: "2026-07-10T01:03:00Z",
+  stop_requested_at: null,
   event_count: 5,
   has_error: false,
 } satisfies NonNullable<AdminGameListItem["latest_run"]>;

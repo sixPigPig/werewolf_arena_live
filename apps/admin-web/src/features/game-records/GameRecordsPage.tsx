@@ -21,6 +21,7 @@ import {
   deleteAdminGame,
   listAdminGames,
 } from "@/features/game-records/api";
+import { GameInterruptDialog } from "@/features/game-records/GameInterruptDialog";
 import {
   gameListParamsFromSearch,
   setGameSearchValues,
@@ -32,6 +33,8 @@ import {
   RUN_STATUS_LABELS,
 } from "@/features/game-records/presentation";
 import { adminGameKeys } from "@/features/game-records/query-keys";
+import { controlAdminLiveRun } from "@/features/live-runs/api";
+import { adminLiveRunKeys } from "@/features/live-runs/query-keys";
 import type { AdminGameListItem } from "@/features/game-records/types";
 
 export default function GameRecordsPage() {
@@ -42,10 +45,19 @@ export default function GameRecordsPage() {
     game: AdminGameListItem;
     opener: HTMLButtonElement;
   } | null>(null);
+  const [interruptState, setInterruptState] = useState<{
+    game: AdminGameListItem;
+    opener: HTMLButtonElement;
+    runId: string;
+  } | null>(null);
   const params = gameListParamsFromSearch(searchParams);
   const canDelete = hasAdminPermission(
     session?.permissions ?? [],
     "games.delete",
+  );
+  const canControl = Boolean(
+    session?.permissions.includes("*") ||
+      session?.permissions.includes("runs.control"),
   );
   const invalidDateRange = Boolean(
     params.created_from &&
@@ -57,6 +69,14 @@ export default function GameRecordsPage() {
     placeholderData: keepPreviousData,
     queryFn: ({ signal }) => listAdminGames(params, signal),
     queryKey: adminGameKeys.list(params),
+    refetchInterval: (query) =>
+      query.state.data?.items.some(
+        (game) =>
+          game.latest_run?.status === "queued" ||
+          game.latest_run?.status === "running",
+      )
+        ? 5_000
+        : false,
   });
   const data = invalidDateRange ? undefined : gamesQuery.data;
   const deleteMutation = useMutation({
@@ -65,6 +85,22 @@ export default function GameRecordsPage() {
     onSuccess: async () => {
       setDeleteState(null);
       await queryClient.invalidateQueries({ queryKey: adminGameKeys.lists() });
+    },
+  });
+  const interruptMutation = useMutation({
+    mutationFn: ({ reason, runId }: { reason: string; runId: string }) =>
+      controlAdminLiveRun(
+        runId,
+        "stop",
+        reason,
+        session?.csrf_token ?? "",
+      ),
+    onSuccess: async () => {
+      setInterruptState(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: adminGameKeys.lists() }),
+        queryClient.invalidateQueries({ queryKey: adminLiveRunKeys.all }),
+      ]);
     },
   });
 
@@ -113,6 +149,22 @@ export default function GameRecordsPage() {
     }
     deleteMutation.reset();
     setDeleteState(null);
+  }
+
+  function openInterruptDialog(
+    game: AdminGameListItem,
+    opener: HTMLButtonElement,
+  ) {
+    const runId = game.latest_run?.run_id;
+    if (!runId) return;
+    interruptMutation.reset();
+    setInterruptState({ game, opener, runId });
+  }
+
+  function closeInterruptDialog() {
+    if (interruptMutation.isPending) return;
+    interruptMutation.reset();
+    setInterruptState(null);
   }
 
   const hasFilters = Boolean(
@@ -298,10 +350,12 @@ export default function GameRecordsPage() {
           <ul aria-label="对局记录列表" className="game-admin-list">
             {data.items.map((game) => (
               <GameListItem
+                canControl={canControl}
                 canDelete={canDelete}
                 game={game}
                 key={game.session_id}
                 onDelete={openDeleteDialog}
+                onInterrupt={openInterruptDialog}
               />
             ))}
           </ul>
@@ -336,19 +390,43 @@ export default function GameRecordsPage() {
           pending={deleteMutation.isPending}
         />
       ) : null}
+      {interruptState ? (
+        <GameInterruptDialog
+          error={interruptMutation.isError ? interruptMutation.error : null}
+          onClose={closeInterruptDialog}
+          onConfirm={(reason) =>
+            interruptMutation.mutate({
+              reason,
+              runId: interruptState.runId,
+            })
+          }
+          opener={interruptState.opener}
+          pending={interruptMutation.isPending}
+          runId={interruptState.runId}
+          sessionId={interruptState.game.session_id}
+        />
+      ) : null}
     </div>
   );
 }
 
 function GameListItem({
+  canControl,
   canDelete,
   game,
   onDelete,
+  onInterrupt,
 }: {
+  canControl: boolean;
   canDelete: boolean;
   game: AdminGameListItem;
   onDelete: (game: AdminGameListItem, opener: HTMLButtonElement) => void;
+  onInterrupt: (game: AdminGameListItem, opener: HTMLButtonElement) => void;
 }) {
+  const activeRun =
+    game.latest_run?.status === "queued" || game.latest_run?.status === "running"
+      ? game.latest_run
+      : null;
   return (
     <li className="game-admin-row">
       <div className="game-admin-identity">
@@ -389,6 +467,23 @@ function GameListItem({
         <small>更新于 {formatDateTime(game.updated_at)}</small>
       </div>
       <div className="game-admin-action-cell">
+        {canControl && activeRun?.stop_requested_at === null ? (
+          <button
+            aria-label={`打断对局 ${game.session_id}`}
+            className="admin-danger-button"
+            onClick={(event: MouseEvent<HTMLButtonElement>) =>
+              onInterrupt(game, event.currentTarget)
+            }
+            type="button"
+          >
+            打断
+          </button>
+        ) : null}
+        {activeRun?.stop_requested_at ? (
+          <span className="game-interrupt-pending" role="status">
+            正在打断
+          </span>
+        ) : null}
         {canDelete ? (
           <button
             aria-label={`删除对局 ${game.session_id}`}

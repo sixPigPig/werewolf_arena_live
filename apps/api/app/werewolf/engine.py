@@ -60,7 +60,7 @@ from app.werewolf.execution_telemetry import (
     record_action_execution,
     record_model_progress_event,
 )
-from app.werewolf.live import NullEventSink
+from app.werewolf.live import GameRunCanceled, NullEventSink
 from app.werewolf.liveness import (
     LivenessExperienceSnapshotV1,
     liveness_experience_from_storage,
@@ -362,10 +362,21 @@ class _BufferedEventSink:
         self,
         before_publish: Callable[[str], None] | None = None,
         lifecycle_destination: object | None = None,
+        cancellation_destination: object | None = None,
     ) -> None:
         self.events: list[tuple[str, dict[str, object]]] = []
         self._before_publish = before_publish
         self._lifecycle_destination = lifecycle_destination
+        self._cancellation_destination = cancellation_destination
+
+    def check_cancellation(self) -> None:
+        check_cancellation = getattr(
+            self._cancellation_destination,
+            "check_cancellation",
+            None,
+        )
+        if callable(check_cancellation):
+            check_cancellation()
 
     def publish(self, event_type: str, **kwargs: object) -> object | None:
         if self._before_publish is not None:
@@ -570,6 +581,11 @@ class _PrivateLifecycleEventSink:
     def __init__(self, destination: object) -> None:
         self._destination = destination
 
+    def check_cancellation(self) -> None:
+        check_cancellation = getattr(self._destination, "check_cancellation", None)
+        if callable(check_cancellation):
+            check_cancellation()
+
     def publish(self, event_type: str, **kwargs: object) -> object | None:
         if event_type not in self._ALLOWED_EVENT_TYPES:
             return
@@ -582,6 +598,21 @@ class _PrivateLifecycleEventSink:
         }
         publish = getattr(self._destination, "publish")
         publish(event_type, **{**kwargs, "payload": safe_payload})
+
+
+class _CancellationOnlyEventSink:
+    """Keep private model output silent while retaining operator cancellation."""
+
+    def __init__(self, destination: object) -> None:
+        self._destination = destination
+
+    def check_cancellation(self) -> None:
+        check_cancellation = getattr(self._destination, "check_cancellation", None)
+        if callable(check_cancellation):
+            check_cancellation()
+
+    def publish(self, event_type: str, **kwargs: object) -> None:
+        del event_type, kwargs
 
 
 class _PublishGateSink:
@@ -602,6 +633,11 @@ class _PublishGateSink:
         self._last_attempt: tuple[str, str] | None = None
         self._attempt_outcomes: list[dict[str, str]] = []
         self._late_discarded_requests: set[str] = set()
+
+    def check_cancellation(self) -> None:
+        check_cancellation = getattr(self._destination, "check_cancellation", None)
+        if callable(check_cancellation):
+            check_cancellation()
 
     def publish(self, event_type: str, **kwargs: object) -> object | None:
         with self._lock:
@@ -1546,6 +1582,12 @@ class GameEngine:
                     )
                 else:
                     results[index] = candidate_result
+            except GameRunCanceled:
+                for pending_future, pending_index in futures.items():
+                    gates[pending_index].close()
+                    pending_future.cancel()
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
             except Exception as exc:
                 if gates[index].result_was_late():
                     gates[index].close()
@@ -3604,7 +3646,7 @@ class GameEngine:
                     condition=condition,
                     next_index=next_index,
                 ),
-                NullEventSink(),
+                _CancellationOnlyEventSink(self.event_sink),
             )
             for index, request in enumerate(requests)
         )
@@ -5300,6 +5342,8 @@ class GameEngine:
                     }
                 },
             )
+        except GameRunCanceled:
+            raise
         except Exception:
             reason_code = "model_failure"
         if action_log is not None:
@@ -6025,7 +6069,7 @@ class GameEngine:
                 call_options=call_options,
                 generation_stage="planner",
             )
-        except ModelActionCanceled:
+        except (GameRunCanceled, ModelActionCanceled):
             raise
         except ModelDeadlineExceeded:
             plan_value = None
@@ -6125,7 +6169,7 @@ class GameEngine:
         model_event_sink = (
             public_event_sink
             if request.event_visibility == "public" or private_lifecycle_events
-            else NullEventSink()
+            else _CancellationOnlyEventSink(public_event_sink)
         )
         started_at = self.monotonic()
         actor_brain_started_at_ms = round(time.time() * 1000)
@@ -6591,6 +6635,7 @@ class GameEngine:
                     or isinstance(event_sink, _PublishGateSink)
                     else None
                 ),
+                cancellation_destination=event_sink,
             )
             observer = (
                 self._committed_speech_observer(

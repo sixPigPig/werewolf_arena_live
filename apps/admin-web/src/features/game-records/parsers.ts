@@ -796,6 +796,10 @@ function parseRun(value: unknown): AdminGameRun {
       record.completed_at,
       "run.completed_at",
     ),
+    stop_requested_at: nullableDateString(
+      record.stop_requested_at,
+      "run.stop_requested_at",
+    ),
     event_count: nonNegativeInteger(record.event_count, "run.event_count"),
     has_error: booleanValue(record.has_error, "run.has_error"),
   };

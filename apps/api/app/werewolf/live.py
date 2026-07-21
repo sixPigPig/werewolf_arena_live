@@ -3253,6 +3253,13 @@ class EventSink:
         self.run_id = run_id
         self.fence_token = fence_token
 
+    def check_cancellation(self) -> None:
+        """Raise before or during model I/O when an operator stopped this run."""
+        self.registry.raise_if_stop_requested(
+            self.run_id,
+            expected_fence_token=self.fence_token,
+        )
+
     def publish(
         self,
         event_type: str,
@@ -3313,6 +3320,9 @@ class EventSink:
 
 
 class NullEventSink:
+    def check_cancellation(self) -> None:
+        return None
+
     def publish(
         self,
         event_type: str,

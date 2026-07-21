@@ -45,6 +45,7 @@ export type AdminGameRun = {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  stop_requested_at: string | null;
   event_count: number;
   has_error: boolean;
 };

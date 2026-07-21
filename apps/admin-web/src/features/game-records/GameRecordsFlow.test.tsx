@@ -116,6 +116,9 @@ describe("admin game record flow", () => {
     expect(
       screen.queryByRole("button", { name: "删除对局 game_1234abcd" }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "打断对局 game_1234abcd" }),
+    ).not.toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText("对局状态"), "partial");
     await waitFor(() =>
@@ -201,6 +204,87 @@ describe("admin game record flow", () => {
       await screen.findByRole("heading", { name: "还没有对局记录" }),
     ).toBeInTheDocument();
     expect(deleteCalls).toBe(1);
+    expect(listCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("interrupts an active game from the game list to protect API quota", async () => {
+    let stopRequested = false;
+    let listCalls = 0;
+    const activeGame = {
+      ...contractGameItem,
+      status: "partial",
+      winner: null,
+      resumable: true,
+      latest_run: {
+        ...contractGameItem.latest_run,
+        status: "running",
+        completed_at: null,
+        stop_requested_at: null,
+      },
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse(session(["games.read", "runs.control"]));
+      }
+      if (url.includes("/api/v1/admin/games?")) {
+        listCalls += 1;
+        return jsonResponse({
+          items: [
+            {
+              ...activeGame,
+              latest_run: {
+                ...activeGame.latest_run,
+                stop_requested_at: stopRequested
+                  ? "2026-07-21T04:00:00Z"
+                  : null,
+              },
+            },
+          ],
+          pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
+        });
+      }
+      if (url.endsWith("/api/v1/admin/live-runs/run_1234abcd/stop")) {
+        expect(init?.method).toBe("POST");
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-CSRF-Token")).toBe("csrf-games");
+        expect(headers.get("Idempotency-Key")).toBeTruthy();
+        expect(JSON.parse(String(init?.body))).toEqual({
+          reason: "人工打断异常对局，避免继续消耗 API 额度",
+        });
+        stopRequested = true;
+        return jsonResponse(
+          {
+            action: "stop",
+            target_run_id: "run_1234abcd",
+            run_id: "run_1234abcd",
+            session_id: "game_1234abcd",
+            run_status: "running",
+            stop_requested_at: "2026-07-21T04:00:00Z",
+            replayed: false,
+          },
+          202,
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/operations/games");
+
+    await user.click(
+      await screen.findByRole("button", { name: "打断对局 game_1234abcd" }),
+    );
+    const dialog = screen.getByRole("alertdialog", { name: "打断对局" });
+    expect(dialog).toHaveAccessibleDescription();
+    expect(within(dialog).getByText("game_1234abcd")).toBeInTheDocument();
+    expect(within(dialog).getByText(/run_1234abcd/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "确认打断" }));
+
+    expect(await screen.findByText("正在打断")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "打断对局 game_1234abcd" }),
+    ).not.toBeInTheDocument();
     expect(listCalls).toBeGreaterThanOrEqual(2);
   });
 

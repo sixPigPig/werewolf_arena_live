@@ -12,6 +12,7 @@ import {
   listAdminGameModelRequests,
   retryAdminGameQualityEvaluation,
 } from "@/features/game-records/api";
+import { GameInterruptDialog } from "@/features/game-records/GameInterruptDialog";
 import {
   actionLabel,
   displayValue,
@@ -31,6 +32,8 @@ import {
   RUN_STATUS_LABELS,
 } from "@/features/game-records/presentation";
 import { adminGameKeys } from "@/features/game-records/query-keys";
+import { controlAdminLiveRun } from "@/features/live-runs/api";
+import { adminLiveRunKeys } from "@/features/live-runs/query-keys";
 import type {
   AdminGameDeath,
   AdminGameEvent,
@@ -62,6 +65,10 @@ export default function GameRecordDetailPage() {
   const [selectedModelRequestId, setSelectedModelRequestId] = useState<
     string | null
   >(null);
+  const [interruptState, setInterruptState] = useState<{
+    opener: HTMLButtonElement;
+    runId: string;
+  } | null>(null);
   const closeModelRequestDrawer = useCallback(
     () => setSelectedModelRequestId(null),
     [],
@@ -78,10 +85,20 @@ export default function GameRecordDetailPage() {
     session?.permissions.includes("*") ||
       session?.permissions.includes("runs.read"),
   );
+  const canControl = Boolean(
+    session?.permissions.includes("*") ||
+      session?.permissions.includes("runs.control"),
+  );
   const gameQuery = useQuery({
     enabled: Boolean(sessionId),
     queryFn: ({ signal }) => getAdminGame(sessionId!, signal),
     queryKey: adminGameKeys.detail(sessionId ?? "missing"),
+    refetchInterval: (query) =>
+      query.state.data?.runs.some(
+        (run) => run.status === "queued" || run.status === "running",
+      )
+        ? 5_000
+        : false,
   });
   const debugQuery = useQuery({
     enabled: Boolean(
@@ -143,6 +160,24 @@ export default function GameRecordDetailPage() {
       });
     },
   });
+  const interruptMutation = useMutation({
+    mutationFn: ({ reason, runId }: { reason: string; runId: string }) =>
+      controlAdminLiveRun(
+        runId,
+        "stop",
+        reason,
+        session?.csrf_token ?? "",
+      ),
+    onSuccess: async () => {
+      setInterruptState(null);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: adminGameKeys.detail(sessionId ?? "missing"),
+        }),
+        queryClient.invalidateQueries({ queryKey: adminLiveRunKeys.all }),
+      ]);
+    },
+  });
 
   if (gameQuery.isPending) {
     return (
@@ -163,6 +198,9 @@ export default function GameRecordDetailPage() {
   }
 
   const game = gameQuery.data;
+  const activeRun = game.runs.find(
+    (run) => run.status === "queued" || run.status === "running",
+  );
   const containsErrors = game.runs.some((run) => run.has_error);
   const revealsTerminalMetadata =
     game.status === "complete" && !game.resumable;
@@ -186,6 +224,26 @@ export default function GameRecordDetailPage() {
           <span className={`game-status-badge is-${game.status}`}>
             {GAME_STATUS_LABELS[game.status]}
           </span>
+          {canControl && activeRun?.stop_requested_at === null ? (
+            <button
+              className="admin-danger-button"
+              onClick={(event) => {
+                interruptMutation.reset();
+                setInterruptState({
+                  opener: event.currentTarget,
+                  runId: activeRun.run_id,
+                });
+              }}
+              type="button"
+            >
+              打断对局
+            </button>
+          ) : null}
+          {activeRun?.stop_requested_at ? (
+            <span className="game-interrupt-pending" role="status">
+              正在打断
+            </span>
+          ) : null}
           <button
             className="admin-secondary-button"
             disabled={gameQuery.isFetching}
@@ -382,6 +440,26 @@ export default function GameRecordDetailPage() {
           pending={modelRequestDetailQuery.isPending}
           request={modelRequestDetailQuery.data ?? null}
           requestId={selectedModelRequestId}
+        />
+      ) : null}
+      {interruptState ? (
+        <GameInterruptDialog
+          error={interruptMutation.isError ? interruptMutation.error : null}
+          onClose={() => {
+            if (interruptMutation.isPending) return;
+            interruptMutation.reset();
+            setInterruptState(null);
+          }}
+          onConfirm={(reason) =>
+            interruptMutation.mutate({
+              reason,
+              runId: interruptState.runId,
+            })
+          }
+          opener={interruptState.opener}
+          pending={interruptMutation.isPending}
+          runId={interruptState.runId}
+          sessionId={game.session_id}
         />
       ) : null}
     </div>

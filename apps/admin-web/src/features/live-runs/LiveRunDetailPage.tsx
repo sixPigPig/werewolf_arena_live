@@ -88,8 +88,8 @@ export default function LiveRunDetailPage() {
         result.run_status === "canceled"
           ? "Worker 租约已过期，失联运行已安全终止。"
           : runQuery.data?.worker_state === "stale"
-            ? "停止请求已持久化；若租约仍过期，当前 API Worker 会安全接管并终止运行。"
-          : "停止请求已提交；运行会在下一个安全事件边界结束。",
+            ? "打断请求已持久化；若租约仍过期，当前 API Worker 会安全接管并终止运行。"
+          : "打断请求已提交；Worker 会停止新请求并尽快关闭当前模型流。",
       );
       await runQuery.refetch();
     },
@@ -465,8 +465,8 @@ function RunControlPanel({
     <section aria-label="运行控制" className="live-run-control-panel">
       <div>
         <span>RUNTIME CONTROL</span>
-        <strong>安全运行控制</strong>
-        <p>停止不会删除对局；失联运行可通过 fencing token 安全接管检查点。</p>
+        <strong>对局额度保护</strong>
+        <p>打断不会删除对局；失联运行可通过 fencing token 安全接管检查点。</p>
         <small>
           {LIVE_RUN_WORKER_LABELS[run.worker_state]}
           {run.worker_heartbeat_at
@@ -488,7 +488,7 @@ function RunControlPanel({
       <div className="live-run-control-actions">
         {run.stop_requested_at ? (
           <span className="live-run-stop-pending" role="status">
-            停止请求已提交
+            打断请求已提交
           </span>
         ) : null}
         {canStop ? (
@@ -500,7 +500,7 @@ function RunControlPanel({
             }}
             type="button"
           >
-            停止运行
+            打断对局
           </button>
         ) : null}
         {canResume ? (
@@ -527,14 +527,14 @@ function RunControlPanel({
             onChange={(event) => setReason(event.target.value)}
             placeholder={
               action === "stop"
-                ? "说明停止原因（至少 3 个字符）"
+                ? "说明打断原因（至少 3 个字符）"
                 : "说明恢复原因（至少 3 个字符）"
             }
             value={reason}
           />
           <p>
             {action === "stop"
-              ? "确认后将发出协作取消信号，当前模型请求可能需要等待返回。"
+              ? "确认后会阻止新的模型请求，并在 Worker 收到信号后关闭当前模型流；已被上游接收的请求仍可能产生少量已处理 Token。"
               : run.worker_state === "stale"
                 ? "确认后将夺取过期租约并复用当前运行；旧 Worker 的后续写入会被拒绝。"
                 : "确认后将创建新的运行，原运行及审计记录保持不变。"}
@@ -557,7 +557,7 @@ function RunControlPanel({
               {pending
                 ? "提交中..."
                 : action === "stop"
-                  ? "确认停止"
+                  ? "确认打断"
                   : "确认恢复"}
             </button>
           </div>

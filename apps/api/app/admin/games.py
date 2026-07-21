@@ -73,6 +73,7 @@ class AdminGameRunRow:
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    stop_requested_at: datetime | None
     has_error: bool
 
 
@@ -391,6 +392,7 @@ def _run_summary_columns() -> tuple[Any, ...]:
         LiveRunRecord.created_at,
         LiveRunRecord.started_at,
         LiveRunRecord.completed_at,
+        LiveRunRecord.stop_requested_at,
         case(
             (
                 and_(LiveRunRecord.error.is_not(None), LiveRunRecord.error != ""),
@@ -418,6 +420,7 @@ def _run_row(row: Any) -> AdminGameRunRow:
         created_at=row.created_at,
         started_at=row.started_at,
         completed_at=row.completed_at,
+        stop_requested_at=row.stop_requested_at,
         has_error=bool(row.has_error),
     )
 

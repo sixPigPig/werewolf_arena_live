@@ -742,6 +742,7 @@ def test_admin_games_list_paginates_sorts_and_filters_without_loading_replay_pay
         "game_00000003",
     }
     assert combined_filters.json()["items"][0]["latest_run"]["status"] == "running"
+    assert combined_filters.json()["items"][0]["latest_run"]["stop_requested_at"] is None
 
 
 def test_admin_games_filter_and_render_exact_historical_rule_revisions(

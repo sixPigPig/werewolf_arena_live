@@ -36,7 +36,7 @@ from app.werewolf.execution_budget import (
     ActionExecutionBudgetV1,
     ModelDeadlineExceeded,
 )
-from app.werewolf.live import NullEventSink
+from app.werewolf.live import GameRunCanceled, NullEventSink
 from app.werewolf.lm import FakeProvider
 from app.werewolf.models import DeathEvent, DebateEntry, RoundLog, RoundState
 from app.werewolf.player_configs import PlayerConfig
@@ -3691,6 +3691,68 @@ class CapturingEventSink:
     def publish(self, event_type: str, **kwargs: object) -> object:
         self.events.append({"type": event_type, **kwargs})
         return SimpleNamespace(id=len(self.events))
+
+
+def test_operator_stop_interrupts_private_engine_stream_without_retry() -> None:
+    class InterruptingSink(CapturingEventSink):
+        def __init__(self) -> None:
+            super().__init__()
+            self.checks = 0
+
+        def check_cancellation(self) -> None:
+            self.checks += 1
+            if self.checks >= 3:
+                raise GameRunCanceled("operator stop")
+
+    class PrivateStreamingProvider:
+        def __init__(self) -> None:
+            self.closed = False
+            self.complete_calls = 0
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            del model, prompt, temperature
+            self.complete_calls += 1
+            return '{"reasoning":"不应回退","summary":"不应完成"}'
+
+        def stream_json(self, *, model: str, prompt: str, temperature: float):
+            del model, prompt, temperature
+            try:
+                yield '{"reasoning":"回顾本轮",'
+                yield '"summary":"仍在生成的私密记忆"}'
+            finally:
+                self.closed = True
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_operator_stop_private_stream",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260721,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    sink = InterruptingSink()
+    provider = PrivateStreamingProvider()
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+    )
+
+    with pytest.raises(GameRunCanceled, match="operator stop"):
+        engine._player_action(
+            player=state.players[0],
+            action="summarize",
+            options=[],
+            result_key="summary",
+            round_state=RoundState(number=1, players=active_players),
+            phase="summary",
+        )
+
+    assert provider.closed is True
+    assert provider.complete_calls == 0
 
 
 def test_run_game_publishes_live_events(record_store: DatabaseReplayStore) -> None:

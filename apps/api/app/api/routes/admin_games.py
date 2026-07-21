@@ -726,6 +726,7 @@ def _run_summary(
         created_at=_as_utc(run.created_at),
         started_at=_optional_utc(run.started_at),
         completed_at=_optional_utc(run.completed_at),
+        stop_requested_at=_optional_utc(run.stop_requested_at),
         event_count=event_counts.get(run.run_id, 0),
         has_error=run.has_error,
     )

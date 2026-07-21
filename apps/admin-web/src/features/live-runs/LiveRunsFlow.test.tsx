@@ -88,7 +88,9 @@ describe("admin live run flow", () => {
     expect(
       screen.getByRole("link", { name: "查看运行 run_1234abcd" }),
     ).toHaveAttribute("href", "/operations/runs/run_1234abcd");
-    expect(screen.queryByRole("button", { name: /停止|恢复|重试运行/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /打断|停止|恢复|重试运行/ }),
+    ).toBeNull();
 
     await user.selectOptions(screen.getByLabelText("运行状态"), "failed");
     await waitFor(() =>
@@ -221,7 +223,9 @@ describe("admin live run flow", () => {
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).endsWith("/debug")),
     ).toBe(false);
-    expect(screen.queryByRole("button", { name: /停止|恢复|重试运行/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /打断|停止|恢复|重试运行/ }),
+    ).toBeNull();
   });
 
   it("does not synthesize attempt or logical-action distributions for older payloads", async () => {
@@ -327,14 +331,16 @@ describe("admin live run flow", () => {
     const user = userEvent.setup();
     renderRoute("/operations/runs/run_active123");
 
-    await user.click(await screen.findByRole("button", { name: "停止运行" }));
+    await user.click(await screen.findByRole("button", { name: "打断对局" }));
     const reason = screen.getByLabelText("操作原因");
     await user.type(reason, "模型持续超时，停止本次运行");
-    await user.click(screen.getByRole("button", { name: "确认停止" }));
+    await user.click(screen.getByRole("button", { name: "确认打断" }));
 
-    expect(await screen.findByText(/下一个安全事件边界结束/)).toBeInTheDocument();
-    expect(screen.getByText("停止请求已提交")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "停止运行" })).toBeNull();
+    expect(
+      await screen.findByText(/停止新请求并尽快关闭当前模型流/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("打断请求已提交")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "打断对局" })).toBeNull();
   });
 
   it("resumes a canceled checkpoint into a new run and navigates to it", async () => {

@@ -13,6 +13,7 @@ from app.werewolf.lm import (
     generate_action_with_events,
     parse_json_object,
 )
+from app.werewolf.live import GameRunCanceled
 from app.werewolf.prompts_zh import build_prompt
 from app.werewolf.rules import get_rule_set, rule_set_snapshot
 from app.werewolf.providers import (
@@ -1069,6 +1070,62 @@ def test_generate_action_with_events_suppresses_private_action_deltas() -> None:
     assert log.result == {"reasoning": "夜晚决策", "remove": "Bob"}
     assert log.request_id == "req_private"
     assert [event["type"] for event in sink.events].count("model_response_delta") == 0
+
+
+def test_operator_stop_closes_private_model_stream_without_fallback_request() -> None:
+    class InterruptingSink(CapturingLmEventSink):
+        def __init__(self) -> None:
+            super().__init__()
+            self.checks = 0
+
+        def check_cancellation(self) -> None:
+            self.checks += 1
+            if self.checks >= 3:
+                raise GameRunCanceled("operator stop")
+
+    class ClosableStreamingProvider:
+        def __init__(self) -> None:
+            self.closed = False
+            self.complete_calls = 0
+
+        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
+            del model, prompt, temperature
+            self.complete_calls += 1
+            return '{"reasoning":"不应回退","remove":"Bob"}'
+
+        def stream_json(self, *, model: str, prompt: str, temperature: float):
+            del model, prompt, temperature
+            try:
+                yield '{"reasoning":"夜晚决策",'
+                yield '"remove":"Bob"}'
+            finally:
+                self.closed = True
+
+    sink = InterruptingSink()
+    provider = ClosableStreamingProvider()
+
+    with pytest.raises(GameRunCanceled, match="operator stop"):
+        generate_action_with_events(
+            provider=provider,
+            action="remove",
+            world_state=_world_state_for_special_action("狼人", "Bob、Carol"),
+            model="deepseek-chat",
+            allowed_values=["Bob", "Carol"],
+            result_key="remove",
+            event_sink=sink,
+            event_context={
+                "round_number": 1,
+                "phase": "night",
+                "actor": "Alice",
+                "action": "remove",
+            },
+            request_id_factory=lambda: "req_operator_stop",
+            enable_progress_ticks=False,
+        )
+
+    assert provider.closed is True
+    assert provider.complete_calls == 0
+    assert [event["type"] for event in sink.events] == ["model_request_started"]
 
 
 def test_generate_action_with_events_does_not_schedule_retry_on_final_invalid_attempt() -> None:
