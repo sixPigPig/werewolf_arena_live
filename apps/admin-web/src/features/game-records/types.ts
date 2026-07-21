@@ -347,19 +347,13 @@ export type AdminGameQualityEvaluation = {
   };
   liveness: {
     experience_revision: string | null;
-    experiment_id: string | null;
-    variant: string | null;
     feature_modes: {
-      style_gate?: "legacy" | "async_observe" | null;
-      actor_mind?: "off" | "shadow" | "read" | null;
-      sentence_stream?:
-        | "off"
-        | "committed_segments"
-        | "committed_segments_v2"
-        | null;
-      affect_delivery?: "off" | "shadow" | "on" | null;
-      tts_prefetch_depth?: 0 | 1 | null;
-      voice_preempt?: "off" | "deterministic" | null;
+      style_gate?: "async_observe" | null;
+      actor_mind?: "read" | null;
+      sentence_stream?: "committed_segments_v2" | null;
+      affect_delivery?: "on" | null;
+      tts_prefetch_depth?: 1 | null;
+      voice_preempt?: "deterministic" | null;
     };
     public_speech_count: number;
     timing_coverage: Record<string, {

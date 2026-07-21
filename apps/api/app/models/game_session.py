@@ -51,10 +51,6 @@ class GameSessionRecord(Base):
     liveness_experience_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True
     )
-    liveness_experiment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    liveness_experiment_variant: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -108,7 +104,7 @@ class SpeechTurnReceiptRecord(Base):
     __tablename__ = "speech_turn_receipts"
     __table_args__ = (
         CheckConstraint(
-            "speech_stream_mode IN ('segments_v1', 'segments_v2')",
+            "speech_stream_mode = 'segments_v2'",
             name="ck_speech_turn_receipts_stream_mode",
         ),
         Index("ix_speech_turn_receipts_session_status", "session_id", "status"),
@@ -127,8 +123,8 @@ class SpeechTurnReceiptRecord(Base):
     speech_stream_mode: Mapped[str] = mapped_column(
         String(24),
         nullable=False,
-        default="segments_v1",
-        server_default="segments_v1",
+        default="segments_v2",
+        server_default="segments_v2",
     )
     experience_revision: Mapped[str] = mapped_column(String(40), nullable=False)
     plan_id: Mapped[str | None] = mapped_column(String(40), nullable=True)

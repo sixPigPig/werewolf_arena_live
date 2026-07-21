@@ -26,12 +26,6 @@ def upgrade() -> None:
             batch_op.add_column(
                 sa.Column("liveness_experience_snapshot", sa.JSON(), nullable=True)
             )
-            batch_op.add_column(
-                sa.Column("liveness_experiment_id", sa.String(length=64), nullable=True)
-            )
-            batch_op.add_column(
-                sa.Column("liveness_experiment_variant", sa.String(length=64), nullable=True)
-            )
             batch_op.create_index(
                 f"ix_{table_name}_liveness_experience_revision",
                 ["liveness_experience_revision"],
@@ -212,7 +206,5 @@ def downgrade() -> None:
     for table_name in ("live_runs", "game_sessions"):
         with op.batch_alter_table(table_name) as batch_op:
             batch_op.drop_index(f"ix_{table_name}_liveness_experience_revision")
-            batch_op.drop_column("liveness_experiment_variant")
-            batch_op.drop_column("liveness_experiment_id")
             batch_op.drop_column("liveness_experience_snapshot")
             batch_op.drop_column("liveness_experience_revision")

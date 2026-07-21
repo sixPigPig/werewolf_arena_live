@@ -186,8 +186,6 @@ def _liveness_runtime_summary(
     return {
         "experience_revision": session_record.liveness_experience_revision,
         "experience_snapshot": session_record.liveness_experience_snapshot or {},
-        "experiment_id": session_record.liveness_experiment_id,
-        "variant": session_record.liveness_experiment_variant,
         "actor_mind": {
             "snapshot_count": len(minds),
             "update_count": sum(max(0, mind.revision) for mind in minds),

@@ -78,8 +78,6 @@ _EXECUTION_RUN_PARAM_NAMES = (
 )
 _OPTIONAL_LIVENESS_RUN_PARAM_NAMES = (
     "liveness_experience_snapshot",
-    "liveness_experiment_id",
-    "liveness_experiment_variant",
 )
 _DUPLICATE_RULE_PARAM_NAMES = (
     "revision_id",

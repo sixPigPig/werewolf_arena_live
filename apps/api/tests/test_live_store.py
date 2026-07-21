@@ -3166,19 +3166,34 @@ def test_live_store_creates_voice_job_with_narratable_event(db_session: Session)
         seed=7,
         max_rounds=8,
     )
+    speech_id = stable_speech_id(run.session_id, "act-final", "speech-v2")
+    segment_id = stable_segment_id(speech_id, 0, "最终公开发言。")
     event = registry.publish(
         run.run_id,
-        "action_parsed",
+        "model_response_delta",
         actor="阿青",
         action="debate",
         payload={
+            "schema_version": 2,
+            "commit_state": "accepted_segment",
+            "action_id": "act-final",
             "request_id": "req-final",
-            "visible_result": {"say": "最终公开发言。"},
+            "speech_id": speech_id,
+            "speech_stream_mode": "segments_v2",
+            "segment_id": segment_id,
+            "segment_index": 0,
+            "segment_final": False,
+            "visible_text": "最终公开发言。",
+            "is_public": True,
+            "presentation_id": stable_segment_presentation_id(segment_id),
+            "experience_revision": "liveness-v1",
         },
     )
     store = DatabaseLiveStore(db_session)
 
     store.save_run(run)
+    db_session.add(GameSessionRecord(session_id=run.session_id, status="partial"))
+    db_session.commit()
     store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
 
     job = db_session.get(
@@ -3202,7 +3217,7 @@ def test_live_store_atomically_persists_committed_segment_projection_receipt_and
         seed=7,
         max_rounds=8,
     )
-    speech_id = stable_speech_id(run.session_id, "act_segment", "speech-v1")
+    speech_id = stable_speech_id(run.session_id, "act_segment", "speech-v2")
     text_value = "我先听后置位。"
     segment_id = stable_segment_id(speech_id, 0, text_value)
     event = registry.publish(
@@ -3219,9 +3234,10 @@ def test_live_store_atomically_persists_committed_segment_projection_receipt_and
             "action_id": "act_segment",
             "request_id": "req_segment",
             "speech_id": speech_id,
+            "speech_stream_mode": "segments_v2",
             "segment_id": segment_id,
             "segment_index": 0,
-            "segment_final": True,
+            "segment_final": False,
             "delta": text_value,
             "visible_text": text_value,
             "field": "say",
@@ -3258,7 +3274,7 @@ def test_live_store_atomically_persists_committed_segment_projection_receipt_and
         (run.run_id, event.id, "player"),
     )
     public_event = db_session.get(PublicLiveEventRecord, (run.run_id, event.id))
-    assert receipt is not None and receipt.status == "complete"
+    assert receipt is not None and receipt.status == "partial"
     assert receipt.final_text == text_value
     assert segment is not None and segment.segment_id == segment_id
     assert public_event is not None

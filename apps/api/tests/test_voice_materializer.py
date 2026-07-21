@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
+from app.models.game_session import GameSessionRecord
 from app.models.live import (
     VoiceAudioChunkRecord,
     VoiceMaterializationJobRecord,
@@ -17,6 +18,11 @@ from app.models.live import (
 )
 from app.werewolf.live import LiveRunRegistry
 from app.werewolf.live_store import DatabaseLiveStore
+from app.werewolf.speech_gate import (
+    stable_segment_id,
+    stable_segment_presentation_id,
+    stable_speech_id,
+)
 from app.werewolf.voice import VoiceUtterance, deterministic_voice_utterance_id
 from app.werewolf.voice_materializer import VoiceMaterializer
 from app.werewolf.voice_store import DatabaseVoiceStore
@@ -82,9 +88,43 @@ def seed_event(
     with session_factory() as db:
         store = DatabaseLiveStore(db)
         store.save_run(run)
+        db.add(GameSessionRecord(session_id=run.session_id, status="partial"))
+        db.flush()
         store.append_event(event, worker_id=run.worker_id, fence_token=run.fence_token)
         job = db.query(VoiceMaterializationJobRecord).one()
         return (job.run_id, job.source_event_id, job.speaker_kind)
+
+
+def committed_segment_payload(
+    *,
+    request_id: str,
+    text: str,
+    voice_snapshot: dict[str, object] | None = None,
+) -> dict[str, object]:
+    action_id = f"act-{request_id}"
+    speech_id = stable_speech_id("game_materializer", action_id, "speech-v2")
+    segment_id = stable_segment_id(speech_id, 0, text)
+    payload: dict[str, object] = {
+        "schema_version": 2,
+        "commit_state": "accepted_segment",
+        "generation_stage": "renderer",
+        "action_id": action_id,
+        "request_id": request_id,
+        "speech_id": speech_id,
+        "speech_stream_mode": "segments_v2",
+        "segment_id": segment_id,
+        "segment_index": 0,
+        "segment_final": False,
+        "delta": text,
+        "visible_text": text,
+        "field": "say",
+        "is_public": True,
+        "presentation_id": stable_segment_presentation_id(segment_id),
+        "experience_revision": "liveness-v1",
+    }
+    if voice_snapshot is not None:
+        payload["voice_snapshot"] = voice_snapshot
+    return payload
 
 
 def test_static_judge_job_avoids_external_tts(
@@ -278,13 +318,13 @@ def test_dynamic_player_job_retries_without_duplicate_audio(
 ) -> None:
     key = seed_event(
         session_factory,
-        event_type="action_parsed",
+        event_type="model_response_delta",
         actor="阿青",
         action="debate",
-        payload={
-            "request_id": "req-final",
-            "visible_result": {"say": "这是最终公开发言。"},
-        },
+        payload=committed_segment_payload(
+            request_id="req-final",
+            text="这是最终公开发言。",
+        ),
     )
     client = FailOnceTtsClient()
     materializer = VoiceMaterializer(
@@ -329,13 +369,13 @@ def test_dynamic_player_job_uses_enqueue_time_voice_snapshot(
     contexts = ["像真人在桌上克制反问；语速稍快。"]
     key = seed_event(
         session_factory,
-        event_type="action_parsed",
+        event_type="model_response_delta",
         actor="阿青",
         action="debate",
-        payload={
-            "request_id": "req-snapshot",
-            "visible_result": {"say": "我不同意这个票型。"},
-            "voice_snapshot": {
+        payload=committed_segment_payload(
+            request_id="req-snapshot",
+            text="我不同意这个票型。",
+            voice_snapshot={
                 "enabled": True,
                 "speaker": "zh_female_gaolengyujie_uranus_bigtts",
                 "effective_delivery": delivery,
@@ -343,7 +383,7 @@ def test_dynamic_player_job_uses_enqueue_time_voice_snapshot(
                 "voice_config_version": 7,
                 "delivery_mapping_version": "delivery-v1",
             },
-        },
+        ),
     )
     client = CapturingTtsClient()
     materializer = VoiceMaterializer(
@@ -375,14 +415,14 @@ def test_dynamic_player_job_uses_enqueue_time_voice_snapshot(
         assert job.effective_context_texts == contexts
         assert job.voice_config_version == 7
         assert job.delivery_mapping_version == "delivery-v1"
-        assert job.tts_request_source == "accepted_player_action"
+        assert job.tts_request_source == "committed_speech_segment"
         assert utterance is not None
         assert utterance.speaker == "zh_female_gaolengyujie_uranus_bigtts"
         assert utterance.effective_delivery == delivery
         assert utterance.effective_context_texts == contexts
         assert utterance.voice_config_version == 7
         assert utterance.delivery_mapping_version == "delivery-v1"
-        assert utterance.tts_request_source == "accepted_player_action"
+        assert utterance.tts_request_source == "committed_speech_segment"
 
 
 def test_dynamic_clone_voice_keeps_say_but_omits_unsupported_context_texts(
@@ -391,13 +431,13 @@ def test_dynamic_clone_voice_keeps_say_but_omits_unsupported_context_texts(
     contexts = ["像真人在桌上克制反问；语速稍快。"]
     key = seed_event(
         session_factory,
-        event_type="action_parsed",
+        event_type="model_response_delta",
         actor="阿青",
         action="debate",
-        payload={
-            "request_id": "req-clone-context-gate",
-            "visible_result": {"say": "这句话仍然应当正常合成。"},
-            "voice_snapshot": {
+        payload=committed_segment_payload(
+            request_id="req-clone-context-gate",
+            text="这句话仍然应当正常合成。",
+            voice_snapshot={
                 "enabled": True,
                 "speaker": "S_clone_voice_001",
                 "effective_delivery": {
@@ -411,7 +451,7 @@ def test_dynamic_clone_voice_keeps_say_but_omits_unsupported_context_texts(
                 "voice_config_version": 4,
                 "delivery_mapping_version": "delivery-v1",
             },
-        },
+        ),
     )
     client = CapturingTtsClient()
     materializer = VoiceMaterializer(
@@ -571,13 +611,13 @@ def test_dynamic_player_job_reuses_equivalent_live_audio(
 ) -> None:
     key = seed_event(
         session_factory,
-        event_type="action_parsed",
+        event_type="model_response_delta",
         actor="阿青",
         action="debate",
-        payload={
-            "request_id": "req-live-saved",
-            "visible_result": {"say": "这段现场语音已经保存。"},
-        },
+        payload=committed_segment_payload(
+            request_id="req-live-saved",
+            text="这段现场语音已经保存。",
+        ),
     )
     with session_factory() as db:
         store = DatabaseVoiceStore(db, session_id="game_materializer")

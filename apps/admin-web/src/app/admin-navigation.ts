@@ -141,14 +141,6 @@ export const adminNavigation: AdminNavSection[] = [
         permission: "audit.read",
       },
       {
-        id: "liveness-rollout",
-        label: "灰度控制",
-        description: "活人感版本与新对局分流",
-        href: "/system/liveness-rollout",
-        marker: "灰",
-        permission: "settings.read",
-      },
-      {
         id: "settings",
         label: "系统设置",
         description: "安全配置与运行参数",

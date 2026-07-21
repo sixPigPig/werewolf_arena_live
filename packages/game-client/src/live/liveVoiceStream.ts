@@ -519,59 +519,6 @@ export function pruneStaleVoiceQueue(
   };
 }
 
-export function pruneTerminalVoiceQueue(
-  queue: LiveVoiceQueue,
-  terminalKeepFromEventId: number | null,
-  terminalEventId: number | null,
-): LiveVoiceQueue {
-  if (
-    !isValidTerminalVoiceWindow(
-      terminalKeepFromEventId,
-      terminalEventId,
-    )
-  ) {
-    return queue;
-  }
-
-  return {
-    ...queue,
-    items: queue.items.filter((item) =>
-      voiceItemIntersectsTerminalWindow(
-        item,
-        terminalKeepFromEventId,
-        terminalEventId,
-      ),
-    ),
-  };
-}
-
-function isValidTerminalVoiceWindow(
-  terminalKeepFromEventId: number | null,
-  terminalEventId: number | null,
-): boolean {
-  return (
-    terminalKeepFromEventId !== null &&
-    terminalEventId !== null &&
-    Number.isInteger(terminalKeepFromEventId) &&
-    Number.isInteger(terminalEventId) &&
-    terminalKeepFromEventId > 0 &&
-    terminalKeepFromEventId <= terminalEventId
-  );
-}
-
-function voiceItemIntersectsTerminalWindow(
-  item: Pick<LiveVoiceQueueItem, "sourceEventId" | "lastSourceEventId">,
-  terminalKeepFromEventId: number | null,
-  terminalEventId: number | null,
-) {
-  return (
-    terminalKeepFromEventId !== null &&
-    terminalEventId !== null &&
-    item.lastSourceEventId >= terminalKeepFromEventId &&
-    item.sourceEventId <= terminalEventId
-  );
-}
-
 function isStaleJudgeVoiceItem(
   item: LiveVoiceQueueItem,
   currentEventId: number,
@@ -919,15 +866,11 @@ export function useLiveVoiceStream(
     currentEventId,
     enabled,
     isPaused,
-    terminalEventId = null,
-    terminalKeepFromEventId = null,
   }: {
     audience?: "player_public" | "spectator_god_view";
     currentEventId: number | null;
     enabled: boolean;
     isPaused: boolean;
-    terminalEventId?: number | null;
-    terminalKeepFromEventId?: number | null;
   },
 ) {
   const hasCurrentEventId = currentEventId !== null;
@@ -956,34 +899,14 @@ export function useLiveVoiceStream(
   const queueStreamUrlRef = useRef(streamUrl);
   const latestCurrentEventIdRef = useRef(currentEventId);
   latestCurrentEventIdRef.current = currentEventId;
-  const terminalVoiceWindow = useMemo(
-    () =>
-      isValidTerminalVoiceWindow(
-        terminalKeepFromEventId,
-        terminalEventId,
-      )
-        ? {
-            keepFromEventId: terminalKeepFromEventId as number,
-            terminalEventId: terminalEventId as number,
-          }
-        : null,
-    [terminalEventId, terminalKeepFromEventId],
-  );
   const visibleQueue = useMemo(
     () => {
       if (queueStreamUrlRef.current !== streamUrl) {
         return createVoiceQueue();
       }
-      return pruneStaleVoiceQueue(
-        pruneTerminalVoiceQueue(
-          queue,
-          terminalVoiceWindow?.keepFromEventId ?? null,
-          terminalVoiceWindow?.terminalEventId ?? null,
-        ),
-        currentEventId,
-      );
+      return pruneStaleVoiceQueue(queue, currentEventId);
     },
-    [currentEventId, queue, streamUrl, terminalVoiceWindow],
+    [currentEventId, queue, streamUrl],
   );
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const queueItemsRef = useRef<LiveVoiceQueueItem[]>(queue.items);
@@ -1128,53 +1051,6 @@ export function useLiveVoiceStream(
     };
     lowerVolume();
   }, [clearPcmCompletionTimeout, sendPlaybackAck]);
-  useEffect(() => {
-    if (!enabled || !terminalVoiceWindow) {
-      return;
-    }
-
-    const preemptedItems = queue.items.filter(
-      (item) =>
-        item.status !== "played" &&
-        !voiceItemIntersectsTerminalWindow(
-          item,
-          terminalVoiceWindow.keepFromEventId,
-          terminalVoiceWindow.terminalEventId,
-        ),
-    );
-    if (preemptedItems.length === 0) {
-      return;
-    }
-    if (
-      preemptedItems.some(
-        (item) =>
-          item.status === "playing" && isPcmAudioFormat(item.audioFormat),
-      )
-    ) {
-      closePcmScheduler();
-    }
-    for (const item of preemptedItems) {
-      consumedUtteranceIdsRef.current.add(item.utteranceId);
-      sendPlaybackAck(item.utteranceId, "interrupted");
-      if (import.meta.env.DEV) {
-        dispatchSpeechPlaybackShadow({
-          type: "segment_finished",
-          utteranceId: item.utteranceId,
-          status: "interrupted",
-        });
-      }
-      dispatch({
-        type: "utterance_played",
-        utteranceId: item.utteranceId,
-      });
-    }
-  }, [
-    closePcmScheduler,
-    enabled,
-    queue.items,
-    sendPlaybackAck,
-    terminalVoiceWindow,
-  ]);
   useEffect(() => {
     if (!enabled || currentEventId === null) {
       return;

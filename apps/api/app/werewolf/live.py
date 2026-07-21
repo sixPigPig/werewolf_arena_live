@@ -47,8 +47,6 @@ ACTIVATION_ACK_RUN_FIELD_NAMES = frozenset(
         "p2_diagnostics",
         "liveness_experience_revision",
         "liveness_experience_snapshot",
-        "liveness_experiment_id",
-        "liveness_experiment_variant",
         "winner",
         "error",
         "worker_id",
@@ -375,8 +373,6 @@ class LiveGameRun:
     p2_diagnostics: dict[str, Any] = field(default_factory=dict, repr=False)
     liveness_experience_revision: str | None = None
     liveness_experience_snapshot: dict[str, Any] | None = None
-    liveness_experiment_id: str | None = None
-    liveness_experiment_variant: str | None = None
     status: RunStatus = "queued"
     created_at: str = field(default_factory=utc_now)
     started_at: str | None = None
@@ -442,10 +438,7 @@ class LiveGameRun:
         if self.liveness_experience_snapshot is not None:
             summary["liveness_experience"] = liveness_experience_from_storage(
                 self.liveness_experience_snapshot
-            ).public_summary(
-                experiment_id=self.liveness_experiment_id,
-                variant=self.liveness_experiment_variant,
-            )
+            ).public_summary()
         return summary
 
 
@@ -667,8 +660,6 @@ class LiveRunRegistry:
         lineup_quality_warnings: list[dict[str, str]] | None = None,
         lineup_quality_report: dict[str, object] | None = None,
         liveness_experience_snapshot: dict[str, Any] | None = None,
-        liveness_experiment_id: str | None = None,
-        liveness_experiment_variant: str | None = None,
     ) -> LiveGameRun:
         run = self.prepare_run(
             session_id=session_id,
@@ -688,8 +679,6 @@ class LiveRunRegistry:
             lineup_quality_warnings=lineup_quality_warnings,
             lineup_quality_report=lineup_quality_report,
             liveness_experience_snapshot=liveness_experience_snapshot,
-            liveness_experiment_id=liveness_experiment_id,
-            liveness_experiment_variant=liveness_experiment_variant,
         )
         try:
             return self._persist_and_attach_prepared_run(run)
@@ -719,8 +708,6 @@ class LiveRunRegistry:
         lineup_quality_warnings: list[dict[str, str]] | None = None,
         lineup_quality_report: dict[str, object] | None = None,
         liveness_experience_snapshot: dict[str, Any] | None = None,
-        liveness_experiment_id: str | None = None,
-        liveness_experiment_variant: str | None = None,
     ) -> LiveGameRun:
         rule_set_data = (
             _copy_json_payload(rule_set)
@@ -767,8 +754,6 @@ class LiveRunRegistry:
             lineup_quality_report=lineup_report_data,
             liveness_experience_revision=liveness_revision,
             liveness_experience_snapshot=liveness_snapshot_data,
-            liveness_experiment_id=liveness_experiment_id,
-            liveness_experiment_variant=liveness_experiment_variant,
             worker_id=self.worker_id,
         )
         run.events.append(
@@ -797,10 +782,7 @@ class LiveRunRegistry:
                     "lineup_quality_report": lineup_report_data,
                     **(
                         {
-                            "liveness_experience": liveness_experience.public_summary(
-                                experiment_id=liveness_experiment_id,
-                                variant=liveness_experiment_variant,
-                            )
+                            "liveness_experience": liveness_experience.public_summary()
                         }
                         if liveness_snapshot_data is not None
                         else {}
@@ -882,8 +864,6 @@ class LiveRunRegistry:
         rule_set: dict[str, Any] | None = None,
         player_configs: list[PlayerConfig] | None = None,
         liveness_experience_snapshot: dict[str, Any] | None = None,
-        liveness_experiment_id: str | None = None,
-        liveness_experiment_variant: str | None = None,
     ) -> tuple[LiveGameRun, bool]:
         validate_rule_set_revision_metadata(
             rule_set_revision_id=rule_set_revision_id,
@@ -910,8 +890,6 @@ class LiveRunRegistry:
             rule_set=rule_set,
             player_configs=player_configs,
             liveness_experience_snapshot=liveness_experience_snapshot,
-            liveness_experiment_id=liveness_experiment_id,
-            liveness_experiment_variant=liveness_experiment_variant,
         )
         try:
             return self._persist_and_attach_prepared_run(candidate), True
@@ -2470,8 +2448,6 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
         run.liveness_experience_snapshot
     ) is not dict:
         _raise_invalid_exact_json_value()
-    _require_exact_optional_str(run.liveness_experiment_id)
-    _require_exact_optional_str(run.liveness_experiment_variant)
     if type(run.events) is not list or type(run.subscribers) is not list:
         _raise_invalid_exact_json_value()
 
@@ -2497,8 +2473,6 @@ def _capture_activation_source_state(run: object) -> RunActivationSourceState:
         "p2_diagnostics": run.p2_diagnostics,
         "liveness_experience_revision": run.liveness_experience_revision,
         "liveness_experience_snapshot": run.liveness_experience_snapshot,
-        "liveness_experiment_id": run.liveness_experiment_id,
-        "liveness_experiment_variant": run.liveness_experiment_variant,
         "winner": run.winner,
         "error": run.error,
         "worker_id": run.worker_id,
@@ -3189,8 +3163,6 @@ def _raw_prepared_run_state(run: LiveGameRun) -> dict[str, object]:
         "p2_diagnostics": run.p2_diagnostics,
         "liveness_experience_revision": run.liveness_experience_revision,
         "liveness_experience_snapshot": run.liveness_experience_snapshot,
-        "liveness_experiment_id": run.liveness_experiment_id,
-        "liveness_experiment_variant": run.liveness_experiment_variant,
         "status": run.status,
         "created_at": run.created_at,
         "started_at": run.started_at,

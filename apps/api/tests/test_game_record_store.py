@@ -149,7 +149,7 @@ def test_save_complete_game_lists_and_loads_session(db_session: Session) -> None
         }
     ]
     assert sessions[0]["created_at"].endswith("Z")
-    assert sessions[0]["liveness_experience"]["revision"] == "legacy-v0"
+    assert sessions[0]["liveness_experience"]["revision"] == "liveness-v1"
     assert loaded["session_id"] == "game_1200abcd"
     assert loaded["status"] == "complete"
     assert loaded["state"]["winner"] == "狼人阵营"

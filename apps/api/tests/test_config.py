@@ -78,16 +78,6 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.judge_voice_worker_probe_max_age_seconds == 45.0
     assert settings.live_run_lease_seconds == 15.0
     assert settings.live_run_heartbeat_seconds == 3.0
-
-
-def test_liveness_rollout_defaults_off_and_is_bounded(monkeypatch) -> None:
-    settings = Settings(_env_file=None)
-    assert settings.werewolf_liveness_rollout_percent == 0
-    assert settings.werewolf_liveness_experiment_id == "lifelike-v1"
-
-    monkeypatch.setenv("WEREWOLF_LIVENESS_ROLLOUT_PERCENT", "101")
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None)
     assert settings.live_run_event_poll_seconds == 0.25
     assert settings.live_run_reaper_poll_seconds == 5.0
     assert settings.live_run_reaper_stale_grace_seconds == 30.0

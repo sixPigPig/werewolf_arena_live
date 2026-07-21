@@ -2441,13 +2441,6 @@ textarea {
   text-shadow: 0 2px 5px rgb(0 0 0 / 72%);
 }
 
-.mobile-live-subtitle-status {
-  color: #ffe5a8;
-  font-size: 0.68rem;
-  font-style: normal;
-  white-space: nowrap;
-}
-
 .mobile-live-subtitle-text {
   display: block;
   flex: 0 1 auto;

@@ -313,10 +313,12 @@ describe("committedSpeechToMobileSubtitle", () => {
     visible_text: "第二句！",
   });
 
-  it("groups accepted sentences by speech id without appending action_parsed say", () => {
+  it("groups accepted sentences by speech id without appending the sealed action text", () => {
     const closing = liveEvent(4, "action_parsed", {
       speech_id: "speech-1",
-      speech_stream_mode: "segments_v1",
+      speech_stream_mode: "segments_v2",
+      segment_count: 2,
+      final_segment_index: 1,
       speech_status: "partial",
       say: "第一句。第二句！",
     });

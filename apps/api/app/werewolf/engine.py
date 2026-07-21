@@ -450,11 +450,25 @@ class _CommittedSpeechObserver:
 
     def finish(self, final_text: str) -> VisibleTextCommitResult:
         if not self.stopped:
-            try:
-                final_segments = self._segmenter.finish(final_text)
-            except ValueError:
-                self._reject(("invalid_public_speech",))
-                final_segments = []
+            bounded_text = truncate_speech_to_complete_sentence(
+                final_text,
+                max_chars=self.character_limit,
+                fallback="",
+            )
+            if bounded_text != final_text.strip():
+                self.length_truncated = True
+                if not bounded_text.startswith(self.committed_text):
+                    self._reject(("invalid_public_speech",))
+                    final_segments = []
+                else:
+                    remaining = bounded_text[len(self.committed_text) :].strip()
+                    final_segments = split_complete_speech_segments(remaining)
+            else:
+                try:
+                    final_segments = self._segmenter.finish(final_text)
+                except ValueError:
+                    self._reject(("invalid_public_speech",))
+                    final_segments = []
             for index, segment in enumerate(final_segments):
                 if not self._accept(
                     segment,
@@ -5365,6 +5379,33 @@ class GameEngine:
                 "retry_completed": len(action_log.lm_log.attempt_outcomes) > 1
                 or action_log.lm_log.speech_quality_attempt_count > 1,
             }
+            if action_log.lm_log.speech_id is not None:
+                receipt = action_log.lm_log.speech_turn_receipt
+                stream_mode = (
+                    receipt.get("speech_stream_mode")
+                    if isinstance(receipt, dict)
+                    else None
+                )
+                if stream_mode != "segments_v2":
+                    raise RuntimeError("recovered speech receipt has invalid stream mode")
+                segment_count = len(action_log.lm_log.committed_speech_segments)
+                parsed_payload.update(
+                    {
+                        "schema_version": 1,
+                        "speech_id": action_log.lm_log.speech_id,
+                        "speech_stream_mode": stream_mode,
+                        "segment_count": segment_count,
+                        "final_segment_index": segment_count - 1,
+                        "speech_status": (
+                            "partial"
+                            if receipt.get("status") == "partial"
+                            else "interrupted"
+                            if receipt.get("status") == "interrupted"
+                            else "spoken"
+                        ),
+                        "tts_suppressed_by_segments": True,
+                    }
+                )
             if action_log.effective_delivery is not None:
                 player = self.state.player_by_name()[exiled]
                 parsed_payload["voice_snapshot"] = {
@@ -5984,8 +6025,10 @@ class GameEngine:
                 call_options=call_options,
                 generation_stage="planner",
             )
-        except (ModelActionCanceled, ModelDeadlineExceeded):
+        except ModelActionCanceled:
             raise
+        except ModelDeadlineExceeded:
+            plan_value = None
         except Exception:
             plan_value = None
         recognized_plan_fields = {
@@ -6257,15 +6300,10 @@ class GameEngine:
     def _committed_speech_stream_mode(
         self,
         request: PlayerActionRequest,
-    ) -> Literal["segments_v1", "segments_v2"] | None:
+    ) -> Literal["segments_v2"] | None:
         if request.event_visibility != "public":
             return None
-        sentence_stream = self.liveness_experience.feature_modes.sentence_stream
-        if sentence_stream == "committed_segments":
-            return "segments_v1"
-        if sentence_stream == "committed_segments_v2":
-            return "segments_v2"
-        return None
+        return "segments_v2"
 
     def _committed_speech_observer(
         self,
@@ -6273,7 +6311,7 @@ class GameEngine:
         *,
         event_sink: object,
         speech_id: str,
-        speech_stream_mode: Literal["segments_v1", "segments_v2"],
+        speech_stream_mode: Literal["segments_v2"],
         voice_snapshot: dict[str, object] | None,
     ) -> _CommittedSpeechObserver:
         character_limit = speech_character_limit(request.action) or 220
@@ -6305,9 +6343,7 @@ class GameEngine:
                 segment_index=segment_index,
                 text=text,
                 request_id=request_id,
-                segment_final=(
-                    segment_final if speech_stream_mode == "segments_v1" else False
-                ),
+                segment_final=False,
                 speech_stream_mode=speech_stream_mode,
                 voice_snapshot=voice_snapshot,
             )
@@ -6328,7 +6364,7 @@ class GameEngine:
         text: str,
         request_id: str,
         segment_final: bool,
-        speech_stream_mode: Literal["segments_v1", "segments_v2"],
+        speech_stream_mode: Literal["segments_v2"],
         voice_snapshot: dict[str, object] | None,
         renderer_attempts: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
@@ -6423,7 +6459,7 @@ class GameEngine:
         lm_log: LmLog,
         observer: _CommittedSpeechObserver,
         speech_id: str,
-        speech_stream_mode: Literal["segments_v1", "segments_v2"],
+        speech_stream_mode: Literal["segments_v2"],
     ) -> None:
         if not observer.segments:
             return
@@ -6575,7 +6611,7 @@ class GameEngine:
                     world_state=world_state,
                     call_options=call_options,
                     visible_text_observer=observer,
-                    retries=2 if observer is not None else 3,
+                    retries=1 if observer is not None else 3,
                 )
             except Exception as exc:
                 setattr(
@@ -6779,7 +6815,7 @@ class GameEngine:
         segments = receipt.get("segments")
         status = receipt.get("status")
         expected_stream_mode = self._committed_speech_stream_mode(request)
-        stored_stream_mode = receipt.get("speech_stream_mode") or "segments_v1"
+        stored_stream_mode = receipt.get("speech_stream_mode")
         if (
             not isinstance(speech_id, str)
             or not speech_id
@@ -6858,11 +6894,7 @@ class GameEngine:
                 "speech_stream_mode": speech_stream_mode,
                 "segment_id": segment_id,
                 "segment_index": segment_index,
-                "segment_final": (
-                    segment_index == len(lm_log.committed_speech_segments) - 1
-                    if speech_stream_mode == "segments_v1"
-                    else False
-                ),
+                "segment_final": False,
                 "delta": text,
                 "visible_text": text,
                 "field": request.result_key,
@@ -7488,7 +7520,7 @@ class GameEngine:
                     if isinstance(lm_log.speech_turn_receipt, dict)
                     else None
                 )
-                if speech_stream_mode not in {"segments_v1", "segments_v2"}:
+                if speech_stream_mode != "segments_v2":
                     raise RuntimeError("committed speech receipt has invalid stream mode")
                 segment_count = len(lm_log.committed_speech_segments)
                 parsed_payload.update(
@@ -7505,14 +7537,10 @@ class GameEngine:
                             else "spoken"
                         ),
                         "tts_suppressed_by_segments": True,
-                        **(
-                            {"final_segment_index": segment_count - 1}
-                            if speech_stream_mode == "segments_v2"
-                            else {}
-                        ),
+                        "final_segment_index": segment_count - 1,
                     }
                 )
-            elif voice_snapshot is not None:
+            if voice_snapshot is not None:
                 parsed_payload["voice_snapshot"] = copy.deepcopy(voice_snapshot)
             if request.action == ACTION_EXILE_LAST_WORDS:
                 speech_presentation_id = (

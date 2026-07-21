@@ -27,7 +27,6 @@ from app.werewolf.voice import (
     chunk_text_for_tts,
     deterministic_voice_utterance_id,
     event_to_voice_utterance,
-    is_public_complete_speech_event,
     is_public_speech_event,
     voice_job_candidate,
 )
@@ -449,7 +448,6 @@ class LiveVoiceStreamService:
                 if current_event_id is not None and event.id > replay_after_id
             )
             voice_context = _build_voice_context(context_events)
-            streamed_delta_request_ids: set[str] = set()
             subscriber = self.registry.subscribe(run_id, after_id=last_event_id)
             while True:
                 canonical_event = await _next_voice_event(
@@ -528,13 +526,6 @@ class LiveVoiceStreamService:
                             utterance,
                             audience="spectator_god_view",
                         )
-                if (
-                    utterance is not None
-                    and utterance.request_id in streamed_delta_request_ids
-                    and is_public_complete_speech_event(event)
-                ):
-                    utterance = None
-
                 if utterance is not None and is_public_speech_event(event):
                     utterance = replace(
                         utterance,
@@ -559,7 +550,6 @@ class LiveVoiceStreamService:
                     utterance = None
 
                 if utterance is not None:
-                    started_from_delta = is_public_speech_event(event)
                     utterance = await _coalesce_request_deltas(
                         utterance,
                         subscriber,
@@ -569,8 +559,6 @@ class LiveVoiceStreamService:
                         voice_context.player_seats,
                         audience,
                     )
-                    if started_from_delta and utterance.request_id is not None:
-                        streamed_delta_request_ids.add(utterance.request_id)
                     if disconnect_task.done():
                         return
                     persistence_store = _claim_voice_persistence_store(
@@ -2182,12 +2170,6 @@ async def _coalesce_request_deltas(
                 last_source_event_id,
                 next_utterance.last_source_event_id or next_utterance.source_event_id,
             )
-            if is_public_complete_speech_event(event):
-                return replace(
-                    utterance,
-                    last_source_event_id=last_source_event_id,
-                    text=next_utterance.text,
-                )
             texts.append(next_utterance.text)
             continue
 

@@ -46,8 +46,6 @@ export type UseLiveDirectorResult = {
   isPaused: boolean;
   speed: LiveDirectorSpeed;
   effectiveDurationMs: number;
-  terminalKeepFromEventId: number | null;
-  terminalEventId: number | null;
   pause: () => void;
   resume: () => void;
   togglePaused: () => void;
@@ -60,7 +58,6 @@ export type UseLiveDirectorResult = {
 
 type UseLiveDirectorOptions = {
   holdAdvance?: boolean;
-  preemptTerminalBacklog?: boolean;
   resetKey?: string;
   sessionKey?: string;
   startAtEventType?: string;
@@ -72,11 +69,6 @@ type StreamedSpeechSignature = {
   actor: string | null;
   action: string | null;
   text: string;
-};
-
-export type TerminalPlaybackWindow = {
-  keepFromEventId: number;
-  terminalEventId: number;
 };
 
 type SheriffRunBatch = {
@@ -383,23 +375,7 @@ export function useLiveDirector(
     }
     presentationScopeKeyRef.current = presentationScopeKey;
   }, [presentationScopeKey]);
-  const terminalPlaybackWindow = useMemo(
-    () => terminalPlaybackWindowForEvents(events),
-    [events],
-  );
-  const terminalPreemptionWindow =
-    options.preemptTerminalBacklog === false ? null : terminalPlaybackWindow;
-  const cues = useMemo(
-    () =>
-      terminalPreemptionWindow
-        ? allCues.filter(
-            (cue) =>
-              cue.latestEventId >= terminalPreemptionWindow.keepFromEventId &&
-              cue.eventId <= terminalPreemptionWindow.terminalEventId,
-          )
-        : allCues,
-    [allCues, terminalPreemptionWindow],
-  );
+  const cues = allCues;
   const latestTerminalCue = useMemo(
     () =>
       [...cues]
@@ -457,7 +433,6 @@ export function useLiveDirector(
     latestRequestedStartCue?.eventId ?? firstRequestedStartCue?.eventId ?? null,
   );
   const lastVoiceCompletionIdRef = useRef<string | null>(null);
-  const appliedTerminalPreemptionEventIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (
@@ -508,52 +483,6 @@ export function useLiveDirector(
     );
   }, [latestRequestedStartCue, options.startAtLatestEventType]);
 
-  useEffect(() => {
-    if (
-      !terminalPreemptionWindow ||
-      appliedTerminalPreemptionEventIdRef.current ===
-        terminalPreemptionWindow.terminalEventId
-    ) {
-      return;
-    }
-    appliedTerminalPreemptionEventIdRef.current =
-      terminalPreemptionWindow.terminalEventId;
-
-    const currentCue =
-      currentCueId === null
-        ? null
-        : cues.find((cue) => cue.eventId === currentCueId) ?? null;
-    const currentCueIntersectsWindow =
-      currentCue !== null &&
-      currentCue.latestEventId >= terminalPreemptionWindow.keepFromEventId &&
-      currentCue.eventId <= terminalPreemptionWindow.terminalEventId;
-    if (
-      currentCueIntersectsWindow ||
-      (currentCue !== null &&
-        currentCue.eventId > terminalPreemptionWindow.terminalEventId)
-    ) {
-      return;
-    }
-
-    const firstKeptCue =
-      cues.find(
-        (cue) =>
-          cue.latestEventId >= terminalPreemptionWindow.keepFromEventId &&
-          cue.eventId <= terminalPreemptionWindow.terminalEventId,
-      ) ??
-      cues.find(
-        (cue) => cue.eventId === terminalPreemptionWindow.terminalEventId,
-      );
-    if (!firstKeptCue) {
-      return;
-    }
-
-    startedAtRef.current = Date.now();
-    pausedAtRef.current = isPaused ? startedAtRef.current : null;
-    setVoiceCompletedCueId(null);
-    setCurrentCueId(firstKeptCue.eventId);
-  }, [cues, currentCueId, isPaused, terminalPreemptionWindow]);
-
   const currentIndex = useMemo(() => {
     if (cues.length === 0) {
       return -1;
@@ -601,7 +530,6 @@ export function useLiveDirector(
     terminalStartRequestedAtResetRef.current =
       options.startAtLatestTerminal === true;
     autoStartedTerminalEventIdRef.current = null;
-    appliedTerminalPreemptionEventIdRef.current = null;
     autoStartedEventTypeIdRef.current = null;
     setCurrentCueId(null);
     setIsPaused(false);
@@ -796,9 +724,6 @@ export function useLiveDirector(
     isPaused,
     speed,
     effectiveDurationMs,
-    terminalKeepFromEventId:
-      terminalPlaybackWindow?.keepFromEventId ?? null,
-    terminalEventId: terminalPlaybackWindow?.terminalEventId ?? null,
     pause,
     resume,
     togglePaused,
@@ -807,48 +732,6 @@ export function useLiveDirector(
     seekToEventId,
     catchUpToLatest,
     completeVoicePlayback,
-  };
-}
-
-export function terminalPlaybackWindowForEvents(
-  events: LiveGameEvent[],
-): TerminalPlaybackWindow | null {
-  const terminalEvent = [...events]
-    .reverse()
-    .find((event) => event.type === "game_completed");
-  if (!terminalEvent) {
-    return null;
-  }
-
-  const sourceKeepFromEventId = numberField(
-    payloadForEvent(terminalEvent),
-    "terminal_keep_from_event_id",
-  );
-  const terminalSourceEventId =
-    terminalEvent.source_event_id ?? terminalEvent.id;
-  if (
-    sourceKeepFromEventId === null ||
-    !Number.isInteger(sourceKeepFromEventId) ||
-    sourceKeepFromEventId < 1 ||
-    sourceKeepFromEventId > terminalSourceEventId
-  ) {
-    return null;
-  }
-
-  const terminalSourceRunId =
-    terminalEvent.source_run_id ?? terminalEvent.run_id;
-  const keepFromEvent = events.find(
-    (event) =>
-      (event.source_run_id ?? event.run_id) === terminalSourceRunId &&
-      (event.source_event_id ?? event.id) === sourceKeepFromEventId,
-  );
-  if (!keepFromEvent || keepFromEvent.id > terminalEvent.id) {
-    return null;
-  }
-
-  return {
-    keepFromEventId: keepFromEvent.id,
-    terminalEventId: terminalEvent.id,
   };
 }
 

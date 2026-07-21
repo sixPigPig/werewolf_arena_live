@@ -306,16 +306,12 @@ class AdminLivenessTimingCoverage(BaseModel):
 
 
 class AdminLivenessFeatureModes(BaseModel):
-    style_gate: Literal["legacy", "async_observe"] | None = None
-    actor_mind: Literal["off", "shadow", "read"] | None = None
-    sentence_stream: Literal[
-        "off",
-        "committed_segments",
-        "committed_segments_v2",
-    ] | None = None
-    affect_delivery: Literal["off", "shadow", "on"] | None = None
-    tts_prefetch_depth: Literal[0, 1] | None = None
-    voice_preempt: Literal["off", "deterministic"] | None = None
+    style_gate: Literal["async_observe"] | None = None
+    actor_mind: Literal["read"] | None = None
+    sentence_stream: Literal["committed_segments_v2"] | None = None
+    affect_delivery: Literal["on"] | None = None
+    tts_prefetch_depth: Literal[1] | None = None
+    voice_preempt: Literal["deterministic"] | None = None
 
 
 class AdminLivenessActorMind(BaseModel):
@@ -326,8 +322,6 @@ class AdminLivenessActorMind(BaseModel):
 
 class AdminQualityLiveness(BaseModel):
     experience_revision: str | None = Field(default=None, max_length=40)
-    experiment_id: str | None = Field(default=None, max_length=64)
-    variant: str | None = Field(default=None, max_length=64)
     feature_modes: AdminLivenessFeatureModes
     public_speech_count: int = Field(ge=0)
     timing_coverage: dict[str, AdminLivenessTimingCoverage]

@@ -319,12 +319,10 @@ export const contractGameDetail: AdminGameDetail = {
     },
     liveness: {
       experience_revision: "liveness-v1",
-      experiment_id: "lifelike-v1",
-      variant: "treatment",
       feature_modes: {
         style_gate: "async_observe",
         actor_mind: "read",
-        sentence_stream: "committed_segments",
+        sentence_stream: "committed_segments_v2",
         affect_delivery: "on",
         tts_prefetch_depth: 1,
         voice_preempt: "deterministic",

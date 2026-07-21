@@ -78,10 +78,6 @@ class LiveRunRecord(Base):
     liveness_experience_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True
     )
-    liveness_experiment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    liveness_experiment_variant: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
     winner: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

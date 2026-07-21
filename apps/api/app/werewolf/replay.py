@@ -355,31 +355,19 @@ class DatabaseReplayStore:
         checkpoint: dict[str, Any] | None = None,
     ) -> None:
         snapshot: object = None
-        experiment_id: object = None
-        variant: object = None
         if self.run_id is not None:
             live_run = self.db.get(LiveRunRecord, self.run_id)
             if live_run is not None and live_run.session_id == record.session_id:
                 snapshot = live_run.liveness_experience_snapshot
-                experiment_id = live_run.liveness_experiment_id
-                variant = live_run.liveness_experiment_variant
         if snapshot is None and isinstance(checkpoint, dict):
             run_params = checkpoint.get("run_params")
             if isinstance(run_params, dict):
                 snapshot = run_params.get("liveness_experience_snapshot")
-                experiment_id = run_params.get("liveness_experiment_id")
-                variant = run_params.get("liveness_experiment_variant")
         if snapshot is None:
             return
         experience = liveness_experience_from_storage(snapshot)
         record.liveness_experience_revision = experience.experience_revision
         record.liveness_experience_snapshot = experience.to_dict()
-        record.liveness_experiment_id = (
-            experiment_id if isinstance(experiment_id, str) and experiment_id else None
-        )
-        record.liveness_experiment_variant = (
-            variant if isinstance(variant, str) and variant else None
-        )
 
     def _get_or_create_payload(self, session_id: str) -> GameReplayPayload:
         payload = self.db.get(GameReplayPayload, session_id)
@@ -491,10 +479,7 @@ def _apply_rule_set_projection(
 def _liveness_summary(record: GameSessionRecord) -> dict[str, Any]:
     return liveness_experience_from_storage(
         record.liveness_experience_snapshot
-    ).public_summary(
-        experiment_id=record.liveness_experiment_id,
-        variant=record.liveness_experiment_variant,
-    )
+    ).public_summary()
 
 
 def _checkpoint_rule_set_projection(

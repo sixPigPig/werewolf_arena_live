@@ -37,7 +37,6 @@ from app.werewolf.execution_budget import (
     ModelDeadlineExceeded,
 )
 from app.werewolf.live import NullEventSink
-from app.werewolf.liveness import LivenessFeatureModesV1, liveness_experience_v1
 from app.werewolf.lm import FakeProvider
 from app.werewolf.models import DeathEvent, DebateEntry, RoundLog, RoundState
 from app.werewolf.player_configs import PlayerConfig
@@ -657,7 +656,7 @@ class ImmediateSelfExplosionDuringSpeechProvider(ScriptedChineseProvider):
         return super().complete_json(model=model, prompt=prompt, temperature=temperature)
 
     def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
-        if "行动：白天公开发言" in prompt:
+        if "白天公开发言" in prompt:
             assert self.decisions_ready.wait(timeout=2.0)
             return ['{"reasoning":"尚未公开的草稿","say":"这段话不应被发布。"}']
         return [self.complete_json(model=model, prompt=prompt, temperature=temperature)]
@@ -2070,7 +2069,7 @@ def test_exile_last_words_run_before_hunter_and_badge_settlement() -> None:
             self.actions: list[str] = []
 
         def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-            if "行动：被放逐后的公开遗言" in prompt:
+            if "当前动作：驱逐遗言" in prompt:
                 self.actions.append(ACTION_EXILE_LAST_WORDS)
                 return json.dumps(
                     {"reasoning": "留下最终判断。", "say": "我的遗言是继续复盘公开票型。"},
@@ -3156,9 +3155,12 @@ def _extract_options(prompt: str) -> list[str]:
 
 def _extract_actor_name(prompt: str) -> str:
     marker = "- 你是"
-    if marker not in prompt:
-        return ""
-    return prompt.split(marker, 1)[1].split("，", 1)[0]
+    if marker in prompt:
+        return prompt.split(marker, 1)[1].split("，", 1)[0]
+    scene_marker = '\"public_actor_name\":\"'
+    if scene_marker in prompt:
+        return prompt.split(scene_marker, 1)[1].split('\"', 1)[0]
+    return ""
 
 
 def _extract_living_players(prompt: str) -> list[str]:
@@ -4797,7 +4799,7 @@ def test_public_speech_preserves_objectively_wrong_vote_tally_as_model_output() 
             self.calls = 0
 
         def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-            if "行动：白天公开发言" in prompt:
+            if "白天公开发言" in prompt:
                 self.calls += 1
                 tally = "11:0" if self.calls == 1 else "10:1"
                 return json.dumps(
@@ -5314,6 +5316,8 @@ def test_ineligible_vote_appeal_is_preserved_without_semantic_rewrite() -> None:
 
         def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
             del model, temperature
+            if "私有行动规划器" in prompt:
+                return ["{}"]
             self.calls += 1
             self.prompts.append(prompt)
             speech = (
@@ -5371,343 +5375,6 @@ def test_ineligible_vote_appeal_is_preserved_without_semantic_rewrite() -> None:
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
 
 
-def test_liveness_v1_publishes_only_stable_committed_speech_segments() -> None:
-    rule_set = get_rule_set("classic_8")
-    state = initialize_game_state(
-        session_id="session_test_committed_segments",
-        villager_model="villager-model",
-        werewolf_model="wolf-model",
-        seed=20260719,
-        rule_set=rule_set,
-    )
-    active_players = [player.name for player in state.players]
-    speaker = state.players[1]
-    round_state = RoundState(number=1, players=active_players.copy())
-    round_state.speech_order = active_players.copy()
-    round_state.debate = [
-        DebateEntry(
-            speaker=active_players[0],
-            message="先看后置位，不要急着下结论。",
-        )
-    ]
-    provider = FakeProvider(
-        [
-            {
-                "reasoning": "回应上一位。",
-                "say": "我同意先听后置位。现在别急着归票！",
-            }
-        ]
-    )
-    sink = CapturingEventSink()
-    experience = liveness_experience_v1(
-        feature_modes=LivenessFeatureModesV1(
-            sentence_stream="committed_segments"
-        )
-    )
-    engine = GameEngine(
-        state=state,
-        provider=provider,
-        max_rounds=8,
-        rule_set=rule_set,
-        event_sink=sink,
-        speech_quality_retry_enabled=True,
-        liveness_experience_snapshot=experience.to_dict(),
-    )
-
-    message, action_log = engine._player_action(
-        player=speaker,
-        action=ACTION_DEBATE,
-        options=[],
-        result_key="say",
-        round_state=round_state,
-        phase="day",
-    )
-
-    segments = [
-        event
-        for event in sink.events
-        if event["type"] == "model_response_delta"
-    ]
-    assert message == "我同意先听后置位。现在别急着归票！"
-    assert provider.calls == 2
-    assert [event["payload"]["visible_text"] for event in segments] == [
-        "我同意先听后置位。",
-        "现在别急着归票！",
-    ]
-    assert [event["payload"]["segment_index"] for event in segments] == [0, 1]
-    assert [event["payload"]["segment_final"] for event in segments] == [False, True]
-    assert len({event["payload"]["speech_id"] for event in segments}) == 1
-    assert len({event["payload"]["segment_id"] for event in segments}) == 2
-    assert all(
-        event["payload"]["commit_state"] == "accepted_segment"
-        for event in segments
-    )
-    parsed = next(event for event in sink.events if event["type"] == "action_parsed")
-    assert parsed["payload"]["tts_suppressed_by_segments"] is True
-    assert parsed["payload"]["segment_count"] == 2
-    assert "voice_snapshot" not in parsed["payload"]
-    assert action_log.speech_quality_attempt_count == 1
-    assert "你是狼人杀桌边口语表达器" in action_log.lm_log.prompt
-    assert "身份是" not in action_log.lm_log.prompt
-    assert '"reasoning":' not in action_log.lm_log.prompt
-    assert action_log.speech_turn_receipt is not None
-    assert action_log.speech_turn_receipt["final_text"] == message
-    assert [
-        item["source_event_id"]
-        for item in action_log.speech_turn_receipt["segments"]
-    ] == [sink.events.index(event) + 1 for event in segments]
-
-
-def test_liveness_v1_commits_first_complete_sentence_before_renderer_finishes() -> None:
-    class IncrementalRendererProvider:
-        def __init__(self, sink: CapturingEventSink) -> None:
-            self.sink = sink
-            self.first_sentence_was_committed_while_streaming = False
-
-        def stream_json(self, **_kwargs) -> Generator[str, None, None]:
-            yield '{"reasoning":"公开表达","say":"我先回应上一位。'
-            self.first_sentence_was_committed_while_streaming = any(
-                event["type"] == "model_response_delta"
-                and event["payload"].get("commit_state") == "accepted_segment"
-                for event in self.sink.events
-            )
-            yield '这个问题我还要再听一下！"}'
-
-        def complete_json(self, **kwargs) -> str:
-            return "".join(self.stream_json(**kwargs))
-
-    rule_set = get_rule_set("classic_8")
-    state = initialize_game_state(
-        session_id="session_test_incremental_committed_segments",
-        villager_model="villager-model",
-        werewolf_model="wolf-model",
-        seed=20260720,
-        rule_set=rule_set,
-    )
-    active_players = [player.name for player in state.players]
-    round_state = RoundState(number=1, players=active_players.copy())
-    round_state.speech_order = active_players.copy()
-    sink = CapturingEventSink()
-    provider = IncrementalRendererProvider(sink)
-    experience = liveness_experience_v1(
-        feature_modes=LivenessFeatureModesV1(
-            sentence_stream="committed_segments"
-        )
-    )
-    engine = GameEngine(
-        state=state,
-        provider=provider,
-        max_rounds=8,
-        rule_set=rule_set,
-        event_sink=sink,
-        liveness_experience_snapshot=experience.to_dict(),
-    )
-
-    message, action_log = engine._player_action(
-        player=state.players[0],
-        action=ACTION_DEBATE,
-        options=[],
-        result_key="say",
-        round_state=round_state,
-        phase="day",
-    )
-
-    assert provider.first_sentence_was_committed_while_streaming is True
-    assert message == "我先回应上一位。这个问题我还要再听一下！"
-    assert action_log.lm_log.speech_generation_status == "complete"
-    event_types = [event["type"] for event in sink.events]
-    first_segment_index = event_types.index("model_response_delta")
-    assert event_types.index("model_request_started") < first_segment_index
-    renderer_completed_index = next(
-        index
-        for index, event in enumerate(sink.events)
-        if event["type"] == "model_attempt_completed"
-        and event["payload"].get("generation_stage") == "renderer"
-    )
-    assert first_segment_index < renderer_completed_index
-
-
-def test_segments_v2_seals_speech_when_all_sentences_were_committed_before_finish() -> None:
-    class FullyIncrementalRendererProvider:
-        def stream_json(self, **_kwargs) -> Generator[str, None, None]:
-            yield '{"reasoning":"公开表达","say":"我先回应上一位。'
-            yield "这个问题我还要再听一下！"
-            yield '"}'
-
-        def complete_json(self, **kwargs) -> str:
-            return "".join(self.stream_json(**kwargs))
-
-    class SpeechSealCheckpoint(RecordingCheckpointManager):
-        def __init__(self) -> None:
-            super().__init__()
-            self.receipts: list[tuple[str, dict[str, object]]] = []
-
-        def actor_minds(self) -> dict:
-            return {}
-
-        def speech_turn_receipt(self, _action_id: str) -> None:
-            return None
-
-        def record_actor_minds(self, *_args, **_kwargs) -> None:
-            return None
-
-        def record_speech_turn_receipt(
-            self,
-            action_id: str,
-            receipt: dict[str, object],
-        ) -> None:
-            self.receipts.append((action_id, copy.deepcopy(receipt)))
-
-    class RunCapturingEventSink(CapturingEventSink):
-        def publish(self, event_type: str, **kwargs: object) -> object:
-            published = super().publish(event_type, **kwargs)
-            return SimpleNamespace(id=published.id, run_id="run_segments_v2")
-
-    rule_set = get_rule_set("classic_8")
-    state = initialize_game_state(
-        session_id="session_test_segments_v2_seal",
-        villager_model="villager-model",
-        werewolf_model="wolf-model",
-        seed=20260720,
-        rule_set=rule_set,
-    )
-    active_players = [player.name for player in state.players]
-    round_state = RoundState(number=1, players=active_players.copy())
-    round_state.speech_order = active_players.copy()
-    sink = RunCapturingEventSink()
-    checkpoint = SpeechSealCheckpoint()
-    experience = liveness_experience_v1(
-        feature_modes=LivenessFeatureModesV1(
-            sentence_stream="committed_segments_v2"
-        )
-    )
-    engine = GameEngine(
-        state=state,
-        provider=FullyIncrementalRendererProvider(),
-        max_rounds=8,
-        rule_set=rule_set,
-        event_sink=sink,
-        checkpoint_manager=checkpoint,
-        liveness_experience_snapshot=experience.to_dict(),
-    )
-
-    message, action_log = engine._player_action(
-        player=state.players[0],
-        action=ACTION_DEBATE,
-        options=[],
-        result_key="say",
-        round_state=round_state,
-        phase="day",
-    )
-
-    segments = [
-        event
-        for event in sink.events
-        if event["type"] == "model_response_delta"
-        and event["payload"].get("commit_state") == "accepted_segment"
-    ]
-    parsed = next(event for event in sink.events if event["type"] == "action_parsed")
-    assert message == "我先回应上一位。这个问题我还要再听一下！"
-    assert [event["payload"]["segment_index"] for event in segments] == [0, 1]
-    assert [event["payload"]["segment_final"] for event in segments] == [False, False]
-    assert all(
-        event["payload"]["speech_stream_mode"] == "segments_v2"
-        for event in segments
-    )
-    assert parsed["payload"]["speech_stream_mode"] == "segments_v2"
-    assert parsed["payload"]["segment_count"] == 2
-    assert parsed["payload"]["final_segment_index"] == 1
-    assert parsed["payload"]["speech_status"] == "spoken"
-    assert parsed["payload"]["tts_suppressed_by_segments"] is True
-    assert action_log.speech_turn_receipt is not None
-    assert action_log.speech_turn_receipt["speech_stream_mode"] == "segments_v2"
-    assert action_log.speech_turn_receipt["segment_count"] == 2
-    assert checkpoint.successes[0]["speech_turn_receipt"]["status"] == "partial"
-    sealed_receipt = checkpoint.receipts[-1][1]
-    assert sealed_receipt["status"] == "complete"
-    assert sealed_receipt["final_segment_index"] == 1
-    assert sealed_receipt["sealed_source_run_id"] == "run_segments_v2"
-    assert sealed_receipt["sealed_source_event_id"] == sink.events.index(parsed) + 1
-
-
-def test_liveness_resume_keeps_partial_committed_text_without_calling_provider() -> None:
-    class ProviderMustNotRun:
-        def complete_json(self, **_kwargs) -> str:
-            raise AssertionError("partial committed speech must not be regenerated")
-
-    class PartialSpeechCheckpoint:
-        def actor_minds(self) -> dict:
-            return {}
-
-        def speech_turn_receipt(self, _action_id: str) -> dict:
-            return {
-                "speech_id": "sp_recovered",
-                "speech_stream_mode": "segments_v1",
-                "status": "partial",
-                "segment_count": 1,
-                "segments": [
-                    {
-                        "segment_id": "seg_recovered",
-                        "segment_index": 0,
-                        "text": "这句已经被观众听见。",
-                        "presentation_id": "pres_recovered",
-                        "source_run_id": "run_previous",
-                        "source_event_id": 11,
-                    }
-                ],
-                "final_text": "这句已经被观众听见。",
-                "accepted_renderer_request_id": "req_previous",
-            }
-
-        def record_success(self, **_kwargs) -> None:
-            return None
-
-        def record_actor_minds(self, *_args, **_kwargs) -> None:
-            return None
-
-    rule_set = get_rule_set("classic_8")
-    state = initialize_game_state(
-        session_id="session_test_resume_committed_segment",
-        villager_model="villager-model",
-        werewolf_model="wolf-model",
-        seed=20260719,
-        rule_set=rule_set,
-    )
-    sink = CapturingEventSink()
-    engine = GameEngine(
-        state=state,
-        provider=ProviderMustNotRun(),
-        max_rounds=8,
-        rule_set=rule_set,
-        event_sink=sink,
-        checkpoint_manager=PartialSpeechCheckpoint(),
-        liveness_experience_snapshot=liveness_experience_v1(
-            feature_modes=LivenessFeatureModesV1(
-                sentence_stream="committed_segments"
-            )
-        ).to_dict(),
-    )
-    round_state = RoundState(
-        number=1,
-        players=[player.name for player in state.players],
-    )
-
-    message, action_log = engine._player_action(
-        player=state.players[0],
-        action=ACTION_DEBATE,
-        options=[],
-        result_key="say",
-        round_state=round_state,
-        phase="day",
-    )
-
-    assert message == "这句已经被观众听见。"
-    assert action_log.speech_turn_receipt["status"] == "partial"
-    assert not any(event["type"] == "model_response_delta" for event in sink.events)
-    parsed = next(event for event in sink.events if event["type"] == "action_parsed")
-    assert parsed["payload"]["speech_status"] == "partial"
-
-
 def test_non_seer_investigation_plan_is_preserved_without_semantic_rewrite() -> None:
     class InvestigationPlanRetryProvider:
         def __init__(self) -> None:
@@ -5716,6 +5383,8 @@ def test_non_seer_investigation_plan_is_preserved_without_semantic_rewrite() -> 
 
         def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
             del model, temperature
+            if "私有行动规划器" in prompt:
+                return ["{}"]
             self.calls += 1
             self.prompts.append(prompt)
             speech = (
@@ -5776,7 +5445,7 @@ def test_non_seer_investigation_plan_is_preserved_without_semantic_rewrite() -> 
     "action",
     [ACTION_DEBATE, ACTION_SHERIFF_SPEECH, ACTION_SHERIFF_PK_SPEECH],
 )
-def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
+def test_public_speech_quality_warning_does_not_rewrite_for_every_stage(
     action: str,
 ) -> None:
     class SpeechQualityRetryProvider:
@@ -5786,6 +5455,8 @@ def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
 
         def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
             del model, temperature
+            if "私有行动规划器" in prompt:
+                return ["{}"]
             self.calls += 1
             self.prompts.append(prompt)
             speech = (
@@ -5840,23 +5511,22 @@ def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
         phase="day",
     )
 
-    assert provider.calls == 2
-    assert "本次发言质量任务" in provider.prompts[0]
-    assert "不要复述已有长句" in provider.prompts[1]
-    assert message == "3号玩家刚刚改票5号玩家，这个变化需要解释，我今天暂不跟票。"
+    assert provider.calls == 1
+    assert "当前动作：" in provider.prompts[0]
+    assert message == "第一轮全票挂警徽定狼，所以我仍然保持这个判断。"
     public_blob = str(sink.events)
-    assert "所以我仍然保持这个判断" not in public_blob
-    assert "3号玩家刚刚改票5号玩家" in public_blob
+    assert "所以我仍然保持这个判断" in public_blob
+    assert "3号玩家刚刚改票5号玩家" not in public_blob
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
-    assert action_log.speech_quality_attempt_count == 2
+    assert action_log.speech_quality_attempt_count == 1
     assert action_log.speech_quality_retry_exhausted is False
-    assert "repeated_debate_phrase" in action_log.speech_quality_initial_codes
+    assert action_log.speech_quality_initial_codes == []
     assert action_log.speech_quality_report is not None
-    assert action_log.speech_quality_report["requires_rewrite"] is False
-    assert len(action_log.lm_log.attempt_outcomes) == 2
+    assert action_log.speech_quality_report["requires_rewrite"] is True
+    assert len(action_log.lm_log.attempt_outcomes) == 1
     assert {
         outcome["request_id"] for outcome in action_log.lm_log.attempt_outcomes
-    } == {
+    } < {
         event["payload"]["request_id"]
         for event in sink.events
         if event["type"] == "model_attempt_completed"
@@ -5872,7 +5542,7 @@ def test_public_speech_quality_retry_buffers_rejected_draft_for_every_stage(
         for event in attempt_events
         if isinstance(event.get("payload"), dict)
     } == {action_log.lm_log.action_id}
-    assert "所以我仍然保持这个判断" not in str(action_log.to_dict())
+    assert "所以我仍然保持这个判断" in str(action_log.to_dict())
 
 
 def test_engine_builds_one_shared_speech_mission_rotation_for_mixed_lineup() -> None:
@@ -5927,13 +5597,15 @@ def test_engine_builds_one_shared_speech_mission_rotation_for_mixed_lineup() -> 
     assert mission_kinds[6:] == mission_kinds[:2]
 
 
-def test_public_speech_quality_retry_exhaustion_publishes_did_not_speak() -> None:
+def test_public_speech_quality_warning_does_not_make_player_silent() -> None:
     class ExhaustedSpeechProvider:
         def __init__(self) -> None:
             self.calls = 0
 
         def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
-            del model, prompt, temperature
+            del model, temperature
+            if "私有行动规划器" in prompt:
+                return ["{}"]
             self.calls += 1
             speech = (
                 "第一轮全票挂警徽定狼，所以我保持原判断。"
@@ -5983,23 +5655,248 @@ def test_public_speech_quality_retry_exhaustion_publishes_did_not_speak() -> Non
         phase="day",
     )
 
-    assert provider.calls == 2
-    assert message == ""
-    assert action_log.choice is None
-    assert action_log.execution_status == "failed"
-    assert action_log.effective_origin == "none"
+    assert provider.calls == 1
+    assert message == "第一轮全票挂警徽定狼，所以我保持原判断。"
+    assert action_log.choice == message
+    assert action_log.execution_status == "completed"
+    assert action_log.effective_origin is None
     assert action_log.fallback_reason is None
     public_blob = str(sink.events)
-    assert "所以我保持原判断" not in public_blob
+    assert "所以我保持原判断" in public_blob
     assert "所以我还是保持原判断" not in public_blob
-    assert "本轮未发言" in public_blob
-    assert [event["type"] for event in sink.events].count("player_did_not_speak") == 1
+    assert "本轮未发言" not in public_blob
+    assert [event["type"] for event in sink.events].count("player_did_not_speak") == 0
     assert [event["type"] for event in sink.events].count("action_parsed") == 1
     assert all(event["type"] != "speech_quality_retry_exhausted" for event in sink.events)
-    assert action_log.speech_quality_attempt_count == 2
-    assert action_log.speech_quality_retry_exhausted is True
+    assert action_log.speech_quality_attempt_count == 1
+    assert action_log.speech_quality_retry_exhausted is False
     assert action_log.speech_quality_report is not None
     assert action_log.speech_quality_report["requires_rewrite"] is True
+
+
+def test_segments_v2_commits_while_streaming_and_seals_at_action_boundary() -> None:
+    class IncrementalV2Provider:
+        def __init__(self, sink: CapturingEventSink) -> None:
+            self.sink = sink
+            self.first_sentence_was_committed_while_streaming = False
+
+        def stream_json(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            temperature: float,
+        ) -> Generator[str, None, None]:
+            del model, temperature
+            if "私有行动规划器" in prompt:
+                yield json.dumps(
+                    {
+                        "primary_speech_act": "brief_pass",
+                        "social_goal": "close_turn",
+                        "length_band": "brief",
+                        "affect_impulse": "steady",
+                        "public_points": [],
+                    },
+                    ensure_ascii=False,
+                )
+                return
+            yield '{"reasoning":"公开表达","say":"我先回应上一位。'
+            self.first_sentence_was_committed_while_streaming = any(
+                event["type"] == "model_response_delta"
+                and event["payload"].get("commit_state") == "accepted_segment"
+                for event in self.sink.events
+            )
+            yield '这个问题我还要再听一下！"}'
+
+        def complete_json(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            temperature: float,
+        ) -> str:
+            return "".join(
+                self.stream_json(
+                    model=model,
+                    prompt=prompt,
+                    temperature=temperature,
+                )
+            )
+
+    class SpeechSealCheckpoint(RecordingCheckpointManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.receipts: list[tuple[str, dict[str, object]]] = []
+
+        def actor_minds(self) -> dict:
+            return {}
+
+        def speech_turn_receipt(self, _action_id: str) -> None:
+            return None
+
+        def record_actor_minds(self, *_args, **_kwargs) -> None:
+            return None
+
+        def record_speech_turn_receipt(
+            self,
+            action_id: str,
+            receipt: dict[str, object],
+        ) -> None:
+            self.receipts.append((action_id, copy.deepcopy(receipt)))
+
+    class RunCapturingEventSink(CapturingEventSink):
+        def publish(self, event_type: str, **kwargs: object) -> object:
+            published = super().publish(event_type, **kwargs)
+            return SimpleNamespace(id=published.id, run_id="run_segments_v2")
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_segments_v2_seal",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260720,
+        rule_set=rule_set,
+    )
+    active_players = [player.name for player in state.players]
+    round_state = RoundState(number=1, players=active_players.copy())
+    round_state.speech_order = active_players.copy()
+    sink = RunCapturingEventSink()
+    checkpoint = SpeechSealCheckpoint()
+    provider = IncrementalV2Provider(sink)
+    engine = GameEngine(
+        state=state,
+        provider=provider,
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        checkpoint_manager=checkpoint,
+    )
+
+    message, action_log = engine._player_action(
+        player=state.players[0],
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    segments = [
+        event
+        for event in sink.events
+        if event["type"] == "model_response_delta"
+        and event["payload"].get("commit_state") == "accepted_segment"
+    ]
+    parsed = next(event for event in sink.events if event["type"] == "action_parsed")
+    assert provider.first_sentence_was_committed_while_streaming is True
+    assert message == "我先回应上一位。这个问题我还要再听一下！"
+    assert [event["payload"]["visible_text"] for event in segments] == [
+        "我先回应上一位。",
+        "这个问题我还要再听一下！",
+    ]
+    assert [event["payload"]["segment_index"] for event in segments] == [0, 1]
+    assert [event["payload"]["segment_final"] for event in segments] == [
+        False,
+        False,
+    ]
+    assert all(
+        event["payload"]["speech_stream_mode"] == "segments_v2"
+        for event in segments
+    )
+    renderer_completed_index = next(
+        index
+        for index, event in enumerate(sink.events)
+        if event["type"] == "model_attempt_completed"
+        and event["payload"].get("generation_stage") == "renderer"
+    )
+    assert sink.events.index(segments[0]) < renderer_completed_index
+    assert parsed["payload"]["speech_stream_mode"] == "segments_v2"
+    assert parsed["payload"]["segment_count"] == 2
+    assert parsed["payload"]["final_segment_index"] == 1
+    assert parsed["payload"]["tts_suppressed_by_segments"] is True
+    assert action_log.speech_turn_receipt is not None
+    assert action_log.speech_turn_receipt["status"] == "complete"
+    assert checkpoint.successes[0]["speech_turn_receipt"]["status"] == "partial"
+    sealed_receipt = checkpoint.receipts[-1][1]
+    assert sealed_receipt["status"] == "complete"
+    assert sealed_receipt["final_segment_index"] == 1
+    assert sealed_receipt["sealed_source_run_id"] == "run_segments_v2"
+    assert sealed_receipt["sealed_source_event_id"] == sink.events.index(parsed) + 1
+
+
+def test_segments_v2_resume_keeps_partial_committed_text_without_provider() -> None:
+    class ProviderMustNotRun:
+        def complete_json(self, **_kwargs) -> str:
+            raise AssertionError("partial committed speech must not be regenerated")
+
+    class PartialSpeechCheckpoint:
+        def actor_minds(self) -> dict:
+            return {}
+
+        def speech_turn_receipt(self, _action_id: str) -> dict[str, object]:
+            return {
+                "speech_id": "sp_recovered",
+                "speech_stream_mode": "segments_v2",
+                "status": "partial",
+                "segment_count": 1,
+                "segments": [
+                    {
+                        "segment_id": "seg_recovered",
+                        "segment_index": 0,
+                        "text": "这句已经被观众听见。",
+                        "presentation_id": "pres_recovered",
+                        "source_run_id": "run_previous",
+                        "source_event_id": 11,
+                    }
+                ],
+                "final_text": "这句已经被观众听见。",
+                "accepted_renderer_request_id": "req_previous",
+            }
+
+        def record_success(self, **_kwargs) -> None:
+            return None
+
+        def record_actor_minds(self, *_args, **_kwargs) -> None:
+            return None
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_resume_segments_v2",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=20260719,
+        rule_set=rule_set,
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=ProviderMustNotRun(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        checkpoint_manager=PartialSpeechCheckpoint(),
+    )
+    round_state = RoundState(
+        number=1,
+        players=[player.name for player in state.players],
+    )
+
+    message, action_log = engine._player_action(
+        player=state.players[0],
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert message == "这句已经被观众听见。"
+    assert action_log.speech_turn_receipt is not None
+    assert action_log.speech_turn_receipt["status"] == "partial"
+    assert not any(event["type"] == "model_response_delta" for event in sink.events)
+    parsed = next(event for event in sink.events if event["type"] == "action_parsed")
+    assert parsed["payload"]["speech_stream_mode"] == "segments_v2"
+    assert parsed["payload"]["speech_status"] == "partial"
 
 
 def test_public_speech_low_overlap_shared_fact_is_accepted_without_retry() -> None:
@@ -6008,7 +5905,9 @@ def test_public_speech_low_overlap_shared_fact_is_accepted_without_retry() -> No
             self.calls = 0
 
         def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
-            del model, prompt, temperature
+            del model, temperature
+            if "私有行动规划器" in prompt:
+                return ["{}"]
             self.calls += 1
             return [
                 '{"reasoning":"共享事实但不是复制",',
@@ -6068,7 +5967,7 @@ def test_public_speech_low_overlap_shared_fact_is_accepted_without_retry() -> No
     assert all(event["type"] != "player_did_not_speak" for event in sink.events)
 
 
-def test_public_speech_length_retry_exhaustion_publishes_did_not_speak() -> None:
+def test_public_speech_length_is_clipped_at_a_complete_sentence() -> None:
     overlong = "保留结论。" + ("甲" * 260) + "SENTINEL_OVERLONG_TAIL"
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -6080,8 +5979,14 @@ def test_public_speech_length_retry_exhaustion_publishes_did_not_speak() -> None
     )
     provider = FakeProvider(
         [
+            {
+                "primary_speech_act": "brief_pass",
+                "social_goal": "close_turn",
+                "length_band": "brief",
+                "affect_impulse": "steady",
+                "public_points": [],
+            },
             {"reasoning": "第一稿过长。", "say": overlong},
-            {"reasoning": "第二稿仍过长。", "say": overlong},
         ]
     )
     sink = CapturingEventSink()
@@ -6104,21 +6009,18 @@ def test_public_speech_length_retry_exhaustion_publishes_did_not_speak() -> None
     )
 
     assert provider.calls == 2
-    assert message == ""
-    assert action_log.choice is None
-    assert action_log.execution_status == "failed"
-    assert action_log.effective_origin == "none"
+    assert message == "保留结论。"
+    assert action_log.choice == message
+    assert action_log.execution_status == "completed"
+    assert action_log.effective_origin is None
     assert action_log.fallback_reason is None
     assert action_log.lm_log.result is not None
-    assert action_log.lm_log.result["say"] == ""
-    assert action_log.lm_log.raw_response == ""
-    assert "第二稿仍过长" not in str(action_log.to_dict())
+    assert action_log.lm_log.result["say"] == "保留结论。"
     assert "SENTINEL_OVERLONG_TAIL" not in str(sink.events)
-    assert "SENTINEL_OVERLONG_TAIL" not in str(action_log.to_dict())
-    assert [event["type"] for event in sink.events].count("player_did_not_speak") == 1
+    assert [event["type"] for event in sink.events].count("player_did_not_speak") == 0
 
 
-def test_hunter_future_shot_rule_error_is_preserved_as_model_output() -> None:
+def test_hunter_future_shot_rule_error_is_rejected_from_public_output() -> None:
     illegal_speech = "下一夜我会开枪带走1号玩家。SENTINEL_ILLEGAL_HUNTER_PLAN"
     rule_set = get_rule_set("classic_12_seer_witch_hunter_idiot")
     state = initialize_game_state(
@@ -6131,6 +6033,13 @@ def test_hunter_future_shot_rule_error_is_preserved_as_model_output() -> None:
     hunter = next(player for player in state.players if player.role == HUNTER)
     provider = FakeProvider(
         [
+            {
+                "primary_speech_act": "brief_pass",
+                "social_goal": "close_turn",
+                "length_band": "brief",
+                "affect_impulse": "steady",
+                "public_points": [],
+            },
             {"reasoning": "错误技能计划。", "say": illegal_speech},
             {"reasoning": "仍未修正。", "say": illegal_speech},
         ]
@@ -6154,14 +6063,14 @@ def test_hunter_future_shot_rule_error_is_preserved_as_model_output() -> None:
         phase="day",
     )
 
-    assert provider.calls == 1
-    assert message == illegal_speech
-    assert action_log.choice == message
-    assert action_log.execution_status == "completed"
+    assert provider.calls == 3
+    assert message == ""
+    assert action_log.choice is None
+    assert action_log.execution_status == "failed"
     assert action_log.fallback_reason is None
-    assert action_log.speech_quality_initial_codes == []
-    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" in str(sink.events)
-    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" in str(action_log.to_dict())
+    assert action_log.speech_quality_initial_codes
+    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" not in str(sink.events)
+    assert "SENTINEL_ILLEGAL_HUNTER_PLAN" not in str(action_log.to_dict())
 
 
 @pytest.mark.parametrize("action", ["werewolf_discuss", "werewolf_kill_vote"])
@@ -6211,9 +6120,9 @@ def test_werewolf_private_message_enforces_sixty_character_budget_without_leak(
     assert action_log.lm_log.result["message"] == "狼队结论。"
     assert action_log.lm_log.result["delivery"] == {
         "schema_version": 1,
-        "mood": "neutral",
-        "intensity": "medium",
-        "pace": "natural",
+        "mood": "calm",
+        "intensity": "low",
+        "pace": "slow",
         "instruction": "",
     }
     assert action_log.lm_log.raw_response == ""
@@ -6374,6 +6283,71 @@ def test_public_speech_timeout_publishes_did_not_speak_without_fake_text() -> No
     assert did_not_speak["payload"]["visible_text"].endswith("本轮未发言。")
     assert did_not_speak["payload"]["action_origin"] == "none"
     assert did_not_speak["payload"]["public_reason_code"] == "timeout"
+
+
+def test_public_speech_continues_with_fallback_plan_when_planner_times_out() -> None:
+    class PlannerTimeoutProvider:
+        def complete_json(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            temperature: float,
+        ) -> str:
+            del model, temperature
+            if "私有行动规划器" in prompt:
+                raise ModelDeadlineExceeded("planner timeout")
+            return json.dumps(
+                {
+                    "reasoning": "使用已有场景计划继续发言。",
+                    "say": "我先保留判断，重点看后置位怎么回应当前分歧。",
+                },
+                ensure_ascii=False,
+            )
+
+    rule_set = get_rule_set("classic_8")
+    state = initialize_game_state(
+        session_id="session_test_planner_timeout_fallback",
+        villager_model="villager-model",
+        werewolf_model="wolf-model",
+        seed=68,
+        rule_set=rule_set,
+    )
+    round_state = RoundState(
+        number=1,
+        players=[player.name for player in state.players],
+    )
+    sink = CapturingEventSink()
+    engine = GameEngine(
+        state=state,
+        provider=PlannerTimeoutProvider(),
+        max_rounds=8,
+        rule_set=rule_set,
+        event_sink=sink,
+        action_budgets_enabled=True,
+        speech_quality_retry_enabled=True,
+        fallback_seed=68,
+    )
+
+    speech, action_log = engine._player_action(
+        player=state.players[0],
+        action=ACTION_DEBATE,
+        options=[],
+        result_key="say",
+        round_state=round_state,
+        phase="day",
+    )
+
+    assert speech == "我先保留判断，重点看后置位怎么回应当前分歧。"
+    assert action_log.execution_status == "completed"
+    assert action_log.reason_code is None
+    assert all(event["type"] != "player_did_not_speak" for event in sink.events)
+    planner_failure = next(
+        event for event in sink.events if event["type"] == "model_request_failed"
+    )
+    assert planner_failure["payload"]["generation_stage"] == "planner"
+    parsed = next(event for event in sink.events if event["type"] == "action_parsed")
+    assert parsed["payload"]["speech_status"] == "spoken"
 
 
 def test_batch_deadline_falls_back_in_order_and_audits_late_result_without_content() -> None:
@@ -9262,9 +9236,9 @@ def test_werewolf_consensus_live_events_publish_only_safe_vote_results() -> None
         and event["payload"]["voice_snapshot"]["enabled"] is True
         and event["payload"]["voice_snapshot"]["effective_delivery"] == {
             "schema_version": 1,
-            "mood": "neutral",
-            "intensity": "medium",
-            "pace": "natural",
+            "mood": "calm",
+            "intensity": "low",
+            "pace": "slow",
             "instruction": "",
         }
         and event["payload"]["voice_snapshot"]["effective_context_texts"]
@@ -9334,6 +9308,8 @@ def _without_request_ids(value):
                 "duration_ms",
                 "first_token_ms",
                 "speech_quality_retry_duration_ms",
+                "liveness_timing",
+                "speech_turn_receipt",
             }
         }
     if isinstance(value, list):

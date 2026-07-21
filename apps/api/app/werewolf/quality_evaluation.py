@@ -514,8 +514,6 @@ def _liveness_metrics(bundle: QualityEvaluationBundleV1) -> dict[str, Any]:
     denominator = len(action_logs)
     return {
         "experience_revision": runtime.get("experience_revision"),
-        "experiment_id": runtime.get("experiment_id"),
-        "variant": runtime.get("variant"),
         "feature_modes": feature_modes if isinstance(feature_modes, dict) else {},
         "public_speech_count": denominator,
         "timing_coverage": {

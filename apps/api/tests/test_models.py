@@ -21,7 +21,6 @@ from app.models.live import (
     VoiceAudioChunkRecord,
     VoiceUtteranceRecord,
 )
-from app.models.liveness_rollout import LivenessRolloutConfigRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.public import PublicSession, UserFavoritePlayerProfile
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
@@ -454,40 +453,6 @@ def test_game_session_table_is_registered_in_metadata() -> None:
     assert "game_sessions" in Base.metadata.tables
 
 
-def test_liveness_rollout_config_table_matches_expected_schema() -> None:
-    table = LivenessRolloutConfigRecord.__table__
-
-    assert table.name == "liveness_rollout_configs"
-    assert set(table.columns.keys()) == {
-        "id",
-        "revision",
-        "experience_revision",
-        "experiment_id",
-        "treatment_percent",
-        "updated_by_user_id",
-        "created_at",
-        "updated_at",
-    }
-    assert table.c.id.primary_key is True
-    _assert_string_column(table.c.id, length=40, nullable=False)
-    _assert_string_column(table.c.experience_revision, length=40, nullable=False)
-    _assert_string_column(table.c.experiment_id, length=64, nullable=False)
-    assert table.c.treatment_percent.nullable is False
-    _assert_foreign_key(
-        table.c.updated_by_user_id,
-        target="users.id",
-        ondelete="SET NULL",
-    )
-    assert table.c.created_at.server_default is not None
-    assert table.c.updated_at.server_default is not None
-    assert {
-        constraint.name for constraint in table.constraints if constraint.name
-    } >= {
-        "ck_liveness_rollout_configs_revision_positive",
-        "ck_liveness_rollout_configs_treatment_percent",
-    }
-
-
 def test_game_session_table_matches_expected_schema() -> None:
     table = GameSessionRecord.__table__
     column_names = set(table.columns.keys())
@@ -505,8 +470,6 @@ def test_game_session_table_matches_expected_schema() -> None:
         "resumable",
         "liveness_experience_revision",
         "liveness_experience_snapshot",
-        "liveness_experiment_id",
-        "liveness_experiment_variant",
         "created_at",
         "updated_at",
     }
@@ -560,8 +523,6 @@ def test_live_run_table_matches_expected_schema() -> None:
         "p2_diagnostics",
         "liveness_experience_revision",
         "liveness_experience_snapshot",
-        "liveness_experiment_id",
-        "liveness_experiment_variant",
         "winner",
         "error",
         "created_at",
@@ -1144,17 +1105,10 @@ def test_liveness_runtime_tables_are_private_session_scoped_contracts() -> None:
         "playback_session_id",
         "utterance_id",
     }
-    _assert_string_column(
-        receipts.c.speech_stream_mode,
-        length=24,
-        nullable=False,
-    )
+    _assert_string_column(receipts.c.speech_stream_mode, length=24, nullable=False)
+    assert receipts.c.speech_stream_mode.default.arg == "segments_v2"
     assert receipts.c.final_segment_index.nullable is True
-    _assert_string_column(
-        receipts.c.sealed_source_run_id,
-        length=32,
-        nullable=True,
-    )
+    _assert_string_column(receipts.c.sealed_source_run_id, length=32, nullable=True)
     assert receipts.c.sealed_source_event_id.nullable is True
     assert {
         constraint.name for constraint in receipts.constraints if constraint.name

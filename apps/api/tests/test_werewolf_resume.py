@@ -29,6 +29,8 @@ from app.werewolf.checkpoint import (
     terminal_settlement_from_checkpoint,
 )
 from app.werewolf.engine import GameEngine, NO_HUNTER_SHOT, initialize_game_state
+from app.werewolf.live import LiveEvent
+from app.werewolf.liveness_store import LivenessRuntimeStore
 from app.werewolf.lm import LmLog
 from app.werewolf.models import (
     ActionLog,
@@ -236,19 +238,40 @@ class CrashAfterHunterPresentationSink(IdCapturingEventSink):
         return event
 
 
-class CrashBeforeExileLastWordsResultSink(IdCapturingEventSink):
+class DurableExileLastWordsCrashSink(IdCapturingEventSink):
+    def __init__(self, *, record_store: DatabaseReplayStore, session_id: str, after: bool) -> None:
+        super().__init__()
+        self.record_store = record_store
+        self.session_id = session_id
+        self.after = after
+        self.run_id = "run_resume_parent"
+
     def publish(self, event_type: str, **kwargs: object) -> object:
-        if event_type == "state_updated" and kwargs.get("action") == "exile_last_words":
+        is_crash_boundary = (
+            event_type == "state_updated" and kwargs.get("action") == "exile_last_words"
+        )
+        if is_crash_boundary and not self.after:
             raise RuntimeError("worker crashed before publishing exile last words result")
-        return super().publish(event_type, **kwargs)
-
-
-class CrashAfterExileLastWordsResultSink(IdCapturingEventSink):
-    def publish(self, event_type: str, **kwargs: object) -> object:
-        event = super().publish(event_type, **kwargs)
-        if event_type == "state_updated" and kwargs.get("action") == "exile_last_words":
+        published = super().publish(event_type, **kwargs)
+        event = LiveEvent(
+            id=int(published.id),
+            type=event_type,
+            run_id=self.run_id,
+            session_id=self.session_id,
+            created_at="2026-07-21T00:00:00Z",
+            round=kwargs.get("round_number") if isinstance(kwargs.get("round_number"), int) else None,
+            phase=kwargs.get("phase") if isinstance(kwargs.get("phase"), str) else None,
+            actor=kwargs.get("actor") if isinstance(kwargs.get("actor"), str) else None,
+            action=kwargs.get("action") if isinstance(kwargs.get("action"), str) else None,
+            payload=copy.deepcopy(kwargs.get("payload")) if isinstance(kwargs.get("payload"), dict) else {},
+        )
+        runtime_store = LivenessRuntimeStore(self.record_store.db)
+        runtime_store.stage_committed_segment(event)
+        runtime_store.finalize_speech_turn(event)
+        self.record_store.db.flush()
+        if is_crash_boundary:
             raise RuntimeError("worker crashed after publishing exile last words result")
-        return event
+        return SimpleNamespace(id=published.id, run_id=self.run_id)
 
 
 class CrashOnRoundStartedSink(IdCapturingEventSink):
@@ -501,7 +524,7 @@ def test_resume_checkpoint_persists_actor_mind_with_cached_response_atomically()
     assert len(store.checkpoints) == 2
 
 
-def test_resume_checkpoint_round_trips_partial_committed_speech_receipt() -> None:
+def test_resume_checkpoint_round_trips_partial_segments_v2_receipt() -> None:
     store = RecordingRecordStore()
     compiled = managed_official_compiled_rule_set("starter_6")
     manager = ResumeCheckpointManager(
@@ -532,7 +555,7 @@ def test_resume_checkpoint_round_trips_partial_committed_speech_receipt() -> Non
     )
     receipt = {
         "speech_id": "sp_resume",
-        "speech_stream_mode": "segments_v1",
+        "speech_stream_mode": "segments_v2",
         "status": "partial",
         "segment_count": 1,
         "segments": [
@@ -1968,10 +1991,10 @@ def test_pending_terminal_hunter_recovery_preserves_exile_last_words_across_publ
         assert player.gamestate is not None
         player.gamestate.current_players = before.copy()
     parent_provider = ScriptedProvider()
-    parent_sink = (
-        CrashAfterExileLastWordsResultSink()
-        if crash_after_publish
-        else CrashBeforeExileLastWordsResultSink()
+    parent_sink = DurableExileLastWordsCrashSink(
+        record_store=record_store,
+        session_id=state.session_id,
+        after=crash_after_publish,
     )
     engine = GameEngine(
         state=state,
@@ -1998,7 +2021,7 @@ def test_pending_terminal_hunter_recovery_preserves_exile_last_words_across_publ
             active,
         )
 
-    assert parent_provider.calls == 1
+    assert parent_provider.calls == 2
     assert active == [wolf.name, seer.name, civilian.name]
     persisted = terminal_settlement_from_checkpoint(
         record_store.load_resume_checkpoint(state.session_id)

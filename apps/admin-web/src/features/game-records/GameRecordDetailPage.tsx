@@ -681,7 +681,7 @@ function GameP3QualityPanel({
                 心智更新 {quality.liveness.actor_mind.update_count}
               </strong>
               <small>
-                {quality.liveness.experience_revision ?? "legacy"} · {quality.liveness.variant ?? "未分流"} · partial/interrupted {quality.liveness.partial_speech_count}/{quality.liveness.interrupted_speech_count}
+                {quality.liveness.experience_revision ?? "未记录"} · 固定 speech-v2 · partial/interrupted {quality.liveness.partial_speech_count}/{quality.liveness.interrupted_speech_count}
               </small>
             </article>
             <article>

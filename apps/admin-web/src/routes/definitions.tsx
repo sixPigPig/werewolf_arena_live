@@ -24,7 +24,6 @@ import {
   RuleSetNewRoute,
   RuleSetDetailRoute,
   ModelsRoute,
-  LivenessRolloutRoute,
 } from "@/routes/lazy-pages";
 
 export const routes: RouteObject[] = [
@@ -150,14 +149,6 @@ export const routes: RouteObject[] = [
                 element: (
                   <RequireAdminPermission permission="audit.read">
                     <AuditEventsRoute />
-                  </RequireAdminPermission>
-                ),
-              },
-              {
-                path: "system/liveness-rollout",
-                element: (
-                  <RequireAdminPermission permission="settings.read">
-                    <LivenessRolloutRoute />
                   </RequireAdminPermission>
                 ),
               },

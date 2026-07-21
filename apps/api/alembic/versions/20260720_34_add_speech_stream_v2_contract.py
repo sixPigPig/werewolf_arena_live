@@ -1,7 +1,7 @@
 """add speech stream v2 contract
 
 Revision ID: 20260720_34
-Revises: 20260720_33
+Revises: 20260721_33
 Create Date: 2026-07-20
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision = "20260720_34"
-down_revision = "20260720_33"
+down_revision = "20260721_33"
 branch_labels = None
 depends_on = None
 
@@ -24,7 +24,7 @@ def upgrade() -> None:
                 "speech_stream_mode",
                 sa.String(length=24),
                 nullable=False,
-                server_default="segments_v1",
+                server_default="segments_v2",
             )
         )
         batch_op.add_column(sa.Column("final_segment_index", sa.Integer(), nullable=True))
@@ -36,7 +36,7 @@ def upgrade() -> None:
         )
         batch_op.create_check_constraint(
             "ck_speech_turn_receipts_stream_mode",
-            "speech_stream_mode IN ('segments_v1', 'segments_v2')",
+            "speech_stream_mode = 'segments_v2'",
         )
 
 

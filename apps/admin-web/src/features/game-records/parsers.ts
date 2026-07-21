@@ -291,19 +291,17 @@ function parseQualityLiveness(
   const actorMind = recordValue(raw.actor_mind);
   return {
     experience_revision: nullableString(raw.experience_revision, "quality_evaluation.liveness.experience_revision"),
-    experiment_id: nullableString(raw.experiment_id, "quality_evaluation.liveness.experiment_id"),
-    variant: nullableString(raw.variant, "quality_evaluation.liveness.variant"),
     feature_modes: {
-      style_gate: optionalEnumValue(featureModes.style_gate, ["legacy", "async_observe"] as const, "quality_evaluation.liveness.feature_modes.style_gate"),
-      actor_mind: optionalEnumValue(featureModes.actor_mind, ["off", "shadow", "read"] as const, "quality_evaluation.liveness.feature_modes.actor_mind"),
+      style_gate: optionalEnumValue(featureModes.style_gate, ["async_observe"] as const, "quality_evaluation.liveness.feature_modes.style_gate"),
+      actor_mind: optionalEnumValue(featureModes.actor_mind, ["read"] as const, "quality_evaluation.liveness.feature_modes.actor_mind"),
       sentence_stream: optionalEnumValue(
         featureModes.sentence_stream,
-        ["off", "committed_segments", "committed_segments_v2"] as const,
+        ["committed_segments_v2"] as const,
         "quality_evaluation.liveness.feature_modes.sentence_stream",
       ),
-      affect_delivery: optionalEnumValue(featureModes.affect_delivery, ["off", "shadow", "on"] as const, "quality_evaluation.liveness.feature_modes.affect_delivery"),
-      tts_prefetch_depth: optionalEnumValue(featureModes.tts_prefetch_depth, [0, 1] as const, "quality_evaluation.liveness.feature_modes.tts_prefetch_depth"),
-      voice_preempt: optionalEnumValue(featureModes.voice_preempt, ["off", "deterministic"] as const, "quality_evaluation.liveness.feature_modes.voice_preempt"),
+      affect_delivery: optionalEnumValue(featureModes.affect_delivery, ["on"] as const, "quality_evaluation.liveness.feature_modes.affect_delivery"),
+      tts_prefetch_depth: optionalEnumValue(featureModes.tts_prefetch_depth, [1] as const, "quality_evaluation.liveness.feature_modes.tts_prefetch_depth"),
+      voice_preempt: optionalEnumValue(featureModes.voice_preempt, ["deterministic"] as const, "quality_evaluation.liveness.feature_modes.voice_preempt"),
     },
     public_speech_count: nonNegativeInteger(raw.public_speech_count, "quality_evaluation.liveness.public_speech_count"),
     timing_coverage: parseTimingCoverageRecord(raw.timing_coverage),
@@ -335,8 +333,6 @@ function emptyQualityLiveness(): AdminGameQualityEvaluation["liveness"] {
   const emptyLatency = { count: 0, p50: null, p95: null, max: null };
   return {
     experience_revision: null,
-    experiment_id: null,
-    variant: null,
     feature_modes: {},
     public_speech_count: 0,
     timing_coverage: {},

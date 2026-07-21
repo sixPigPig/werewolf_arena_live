@@ -537,7 +537,6 @@ describe("LiveReplayPage", () => {
         expect.any(Array),
         expect.objectContaining({
           holdAdvance: true,
-          preemptTerminalBacklog: false,
           resetKey: "session-1",
           startAtLatestTerminal: false,
         }),

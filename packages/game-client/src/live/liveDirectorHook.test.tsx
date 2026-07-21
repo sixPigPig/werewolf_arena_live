@@ -139,7 +139,7 @@ describe("useLiveDirector seekToEventId", () => {
     expect(result.current.backlogCount).toBe(2);
   });
 
-  it("preempts unplayed backlog when a new completion event declares its keep boundary", () => {
+  it("preserves unplayed backlog when a completion event arrives", () => {
     const initialEvents = [
       event({ id: 1, type: "game_started" }),
       event({ id: 3, type: "phase_started", round: 1, phase: "day" }),
@@ -188,18 +188,13 @@ describe("useLiveDirector seekToEventId", () => {
       ],
     });
 
-    expect(result.current.currentCue).toMatchObject({
-      eventId: 7,
-      latestEventId: 7,
-      action: "exile_resolved",
-    });
-    expect(result.current.currentEventId).toBe(7);
-    expect(result.current.backlogCount).toBe(1);
-    expect(result.current.terminalKeepFromEventId).toBe(7);
-    expect(result.current.terminalEventId).toBe(9);
+    expect(result.current.currentCue).toMatchObject({ eventId: 1 });
+    expect(result.current.currentEventId).toBe(1);
+    expect(result.current.cues.some((cue) => cue.eventId === 7)).toBe(true);
+    expect(result.current.cues.some((cue) => cue.eventId === 9)).toBe(true);
   });
 
-  it("keeps completed replay playback at the first event when terminal preemption is disabled", () => {
+  it("keeps completed replay playback at the first event", () => {
     const completedReplayEvents = [
       event({ id: 3, type: "game_started" }),
       event({
@@ -219,11 +214,7 @@ describe("useLiveDirector seekToEventId", () => {
         },
       }),
     ];
-    const { result } = renderHook(() =>
-      useLiveDirector(completedReplayEvents, {
-        preemptTerminalBacklog: false,
-      }),
-    );
+    const { result } = renderHook(() => useLiveDirector(completedReplayEvents));
 
     expect(result.current.currentEventId).toBe(3);
     expect(result.current.currentCue).toMatchObject({
@@ -233,11 +224,9 @@ describe("useLiveDirector seekToEventId", () => {
     expect(result.current.cues.map((cue) => cue.eventId)).toEqual([
       3, 955, 957,
     ]);
-    expect(result.current.terminalKeepFromEventId).toBe(955);
-    expect(result.current.terminalEventId).toBe(957);
   });
 
-  it("preempts run_2d12b755578b at the final-civilian exile boundary", () => {
+  it("does not skip run_2d12b755578b backlog at completion", () => {
     // Client layer for apps/api/tests/fixtures/run_2d12b755578b_terminal_regression.json.
     const scenarioEvent = (partial: Partial<LiveGameEvent>) =>
       event({
@@ -291,23 +280,13 @@ describe("useLiveDirector seekToEventId", () => {
       ],
     });
 
-    expect(result.current.currentCue).toMatchObject({
-      eventId: 1305,
-      latestEventId: 1305,
-      action: "exile_resolved",
-    });
-    expect(result.current.currentEventId).toBe(1305);
-    expect(result.current.backlogCount).toBe(2);
-    expect(result.current.terminalKeepFromEventId).toBe(1305);
-    expect(result.current.terminalEventId).toBe(1307);
-
-    act(() => result.current.advance());
-    expect(result.current.currentEventId).toBe(1306);
-    act(() => result.current.advance());
-    expect(result.current.currentEventId).toBe(1307);
+    expect(result.current.currentCue).toMatchObject({ eventId: 1 });
+    expect(result.current.currentEventId).toBe(1);
+    expect(result.current.cues.some((cue) => cue.eventId === 1305)).toBe(true);
+    expect(result.current.cues.some((cue) => cue.eventId === 1307)).toBe(true);
   });
 
-  it("keeps a coalesced cue whose source range intersects the terminal window", () => {
+  it("keeps a coalesced cue when completion arrives", () => {
     const initialEvents = [
       event({ id: 1, type: "game_started" }),
       event({
@@ -356,13 +335,10 @@ describe("useLiveDirector seekToEventId", () => {
 
     expect(result.current.currentCue).toMatchObject({ eventId: 4, latestEventId: 6 });
     expect(result.current.currentEventId).toBe(6);
-    expect(result.current.backlogCount).toBe(1);
-
-    act(() => result.current.advance());
-    expect(result.current.currentEventId).toBe(9);
+    expect(result.current.cues.some((cue) => cue.eventId === 9)).toBe(true);
   });
 
-  it("maps a resumed run source boundary onto folded timeline event ids", () => {
+  it("preserves a resumed run folded timeline from its first cue", () => {
     const decisiveEvent: LiveGameEvent = {
       ...event({
         id: 12,
@@ -393,9 +369,8 @@ describe("useLiveDirector seekToEventId", () => {
       ]),
     );
 
-    expect(result.current.currentEventId).toBe(12);
-    expect(result.current.terminalKeepFromEventId).toBe(12);
-    expect(result.current.terminalEventId).toBe(14);
+    expect(result.current.currentEventId).toBe(1);
+    expect(result.current.cues.map((cue) => cue.eventId)).toEqual([1, 12, 14]);
   });
 
   it("does not replay a child-run presentation that was already current in the parent run", () => {
@@ -865,57 +840,5 @@ describe("useLiveDirector seekToEventId", () => {
       });
     });
     expect(result.current.effectiveDurationMs).toBeGreaterThan(0);
-  });
-
-  it("uses speechId instead of an intersecting event range when available", () => {
-    vi.useFakeTimers();
-    const speechEvents = [
-      event({
-        id: 1,
-        type: "model_request_started",
-        actor: "1号玩家",
-        action: "debate",
-        payload: { request_id: "request-1" },
-      }),
-      event({
-        id: 2,
-        type: "model_response_delta",
-        actor: "1号玩家",
-        action: "debate",
-        payload: {
-          request_id: "request-1",
-          speech_id: "speech-1",
-          visible_text: "这是同一次逻辑发言。",
-        },
-      }),
-      event({ id: 3, type: "phase_started", round: 1, phase: "vote" }),
-    ];
-    const { result } = renderHook(() => useLiveDirector(speechEvents));
-
-    expect(result.current.currentCue).toMatchObject({
-      eventId: 1,
-      latestEventId: 2,
-      speechId: "speech-1",
-    });
-
-    act(() => {
-      result.current.completeVoicePlayback({
-        id: "wrong-speech:1",
-        speechId: "speech-2",
-        sourceEventId: 1,
-        lastSourceEventId: 2,
-      });
-    });
-    expect(result.current.effectiveDurationMs).toBeGreaterThan(0);
-
-    act(() => {
-      result.current.completeVoicePlayback({
-        id: "right-speech:1",
-        speechId: "speech-1",
-        sourceEventId: 999,
-        lastSourceEventId: 999,
-      });
-    });
-    expect(result.current.effectiveDurationMs).toBe(0);
   });
 });

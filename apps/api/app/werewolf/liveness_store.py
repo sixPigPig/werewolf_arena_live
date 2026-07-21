@@ -22,7 +22,7 @@ from app.werewolf.live import LiveEvent
 
 SERVER_PLAYBACK_STATUSES = frozenset({"acked", "connection_lost", "ack_timeout"})
 CLIENT_PLAYBACK_STATUSES = frozenset({"completed", "interrupted", "skipped", "failed"})
-SPEECH_STREAM_MODES = frozenset({"segments_v1", "segments_v2"})
+SPEECH_STREAM_MODE = "segments_v2"
 
 
 class LivenessIntegrityError(RuntimeError):
@@ -214,9 +214,7 @@ class LivenessRuntimeStore:
                 key: copy.deepcopy(checkpoint.get(key))
                 for key in core_keys
             }
-            checkpoint_core["speech_stream_mode"] = (
-                checkpoint.get("speech_stream_mode") or "segments_v1"
-            )
+            checkpoint_core["speech_stream_mode"] = checkpoint.get("speech_stream_mode")
             durable_core = {
                 key: copy.deepcopy(durable.get(key))
                 for key in core_keys
@@ -261,10 +259,10 @@ class LivenessRuntimeStore:
         presentation_id = _required_string(payload, "presentation_id")
         text = _required_string(payload, "visible_text")
         request_id = _optional_string(payload.get("request_id"))
-        speech_stream_mode = payload.get("speech_stream_mode") or "segments_v1"
+        speech_stream_mode = payload.get("speech_stream_mode")
         segment_index = payload.get("segment_index")
         segment_final = payload.get("segment_final")
-        if speech_stream_mode not in SPEECH_STREAM_MODES:
+        if speech_stream_mode != SPEECH_STREAM_MODE:
             raise LivenessIntegrityError("invalid committed speech stream mode")
         if (
             type(segment_index) is not int
@@ -272,7 +270,7 @@ class LivenessRuntimeStore:
             or type(segment_final) is not bool
         ):
             raise LivenessIntegrityError("invalid committed segment position")
-        if speech_stream_mode == "segments_v2" and segment_final:
+        if segment_final:
             raise LivenessIntegrityError("segments v2 cannot self-finalize")
         text_hash = hashlib.sha256(text.encode()).hexdigest()
         receipt_key = (event.session_id, action_id)
@@ -301,11 +299,7 @@ class LivenessRuntimeStore:
                     else []
                 ),
                 accepted_renderer_request_id=request_id,
-                status=(
-                    "complete"
-                    if speech_stream_mode == "segments_v1" and segment_final
-                    else "partial"
-                ),
+                status="partial",
                 final_text="",
                 delivery_snapshot=(
                     copy.deepcopy(payload.get("voice_snapshot"))
@@ -370,11 +364,7 @@ class LivenessRuntimeStore:
             )
         )
         receipt.final_text = "".join([*(item.text for item in prior_segments), text])
-        receipt.status = (
-            "complete"
-            if speech_stream_mode == "segments_v1" and segment_final
-            else "partial"
-        )
+        receipt.status = "partial"
         receipt.accepted_renderer_request_id = request_id
 
     def finalize_speech_turn(self, event: LiveEvent) -> None:
@@ -382,7 +372,7 @@ class LivenessRuntimeStore:
         if event.type != "action_parsed":
             return
         speech_stream_mode = payload.get("speech_stream_mode")
-        if speech_stream_mode not in SPEECH_STREAM_MODES:
+        if speech_stream_mode != SPEECH_STREAM_MODE:
             return
         action_id = _required_string(payload, "action_id")
         speech_id = _required_string(payload, "speech_id")
@@ -393,14 +383,11 @@ class LivenessRuntimeStore:
         if speech_status not in {"spoken", "partial", "interrupted"}:
             raise LivenessIntegrityError("invalid finalized speech status")
         final_segment_index = payload.get("final_segment_index")
-        if speech_stream_mode == "segments_v2":
-            if (
-                type(final_segment_index) is not int
-                or final_segment_index != segment_count - 1
-            ):
-                raise LivenessIntegrityError("invalid segments v2 final index")
-        elif final_segment_index is None:
-            final_segment_index = segment_count - 1
+        if (
+            type(final_segment_index) is not int
+            or final_segment_index != segment_count - 1
+        ):
+            raise LivenessIntegrityError("invalid segments v2 final index")
         receipt = self.db.get(SpeechTurnReceiptRecord, (event.session_id, action_id))
         if receipt is None:
             raise LivenessIntegrityError("finalized speech has no durable receipt")

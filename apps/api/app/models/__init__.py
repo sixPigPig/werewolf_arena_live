@@ -22,7 +22,6 @@ from app.models.live import (
     VoiceMaterializationJobRecord,
     VoiceUtteranceRecord,
 )
-from app.models.liveness_rollout import LivenessRolloutConfigRecord
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.public import PublicSession, UserFavoritePlayerProfile
@@ -46,7 +45,6 @@ __all__ = [
     "GodViewLiveEventRecord",
     "LiveEventRecord",
     "LiveRunRecord",
-    "LivenessRolloutConfigRecord",
     "ModelConfigurationRecord",
     "PublicLiveEventRecord",
     "PlayerAvatarAsset",

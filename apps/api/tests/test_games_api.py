@@ -44,7 +44,6 @@ from app.models.live import (
     VoiceAudioChunkRecord,
     VoiceUtteranceRecord,
 )
-from app.models.liveness_rollout import LivenessRolloutConfigRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.user import User
@@ -122,7 +121,6 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     monkeypatch.setattr(games_routes, "runtime_worker_is_alive", lambda *_args, **_kwargs: True)
     monkeypatch.setattr("app.api.routes.games.SessionLocal", TestingSessionLocal)
     with TestingSessionLocal() as session:
-        session.query(LivenessRolloutConfigRecord).delete()
         session.query(VoiceAudioChunkRecord).delete()
         session.query(VoiceUtteranceRecord).delete()
         session.query(LiveEventRecord).delete()
@@ -140,7 +138,6 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     _reset_rule_set_metrics_for_tests()
     app.dependency_overrides.clear()
     with TestingSessionLocal() as session:
-        session.query(LivenessRolloutConfigRecord).delete()
         session.query(VoiceAudioChunkRecord).delete()
         session.query(VoiceUtteranceRecord).delete()
         session.query(LiveEventRecord).delete()
@@ -924,7 +921,7 @@ def test_create_game_run_accepts_rule_set_id(
     assert compiled.rule_set.id == "starter_6"
 
 
-def test_create_game_run_uses_persisted_admin_liveness_rollout(
+def test_create_game_run_uses_the_single_supported_liveness_experience(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     add_virtual_profiles(8)
@@ -932,19 +929,6 @@ def test_create_game_run_uses_persisted_admin_liveness_rollout(
     override_live_registry(registry)
     monkeypatch.setattr("app.api.routes.games._run_game_in_background", lambda **_: None)
     monkeypatch.setattr("app.api.routes.games.threading.Thread", ImmediateThread)
-    with TestingSessionLocal() as session:
-        session.add(
-            LivenessRolloutConfigRecord(
-                id="default",
-                revision=3,
-                experience_revision="liveness-v1",
-                experiment_id="admin-canary-v1",
-                treatment_percent=100,
-                updated_by_user_id=None,
-            )
-        )
-        session.commit()
-
     try:
         response = client.post(
             "/api/v1/games/runs",
@@ -958,16 +942,14 @@ def test_create_game_run_uses_persisted_admin_liveness_rollout(
     with TestingSessionLocal() as session:
         saved = session.get(LiveRunRecord, payload["run_id"])
     assert saved is not None
-    assert saved.liveness_experiment_id == "admin-canary-v1"
-    assert saved.liveness_experiment_variant == "treatment"
     assert saved.liveness_experience_revision == "liveness-v1"
     assert saved.liveness_experience_snapshot["feature_modes"] == {
         "style_gate": "async_observe",
         "actor_mind": "read",
-        "sentence_stream": "off",
+        "sentence_stream": "committed_segments_v2",
         "affect_delivery": "on",
-        "tts_prefetch_depth": 0,
-        "voice_preempt": "off",
+        "tts_prefetch_depth": 1,
+        "voice_preempt": "deterministic",
     }
 
 

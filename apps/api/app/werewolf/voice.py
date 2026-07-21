@@ -181,19 +181,6 @@ def is_public_speech_event(event: LiveEvent) -> bool:
     )
 
 
-def is_public_complete_speech_event(event: LiveEvent) -> bool:
-    if event.type != "action_parsed" or event.action not in PUBLIC_SPEECH_ACTIONS:
-        return False
-    if event.payload.get("tts_suppressed_by_segments") is True:
-        return False
-    visible_result = event.payload.get("visible_result")
-    return (
-        isinstance(visible_result, dict)
-        and isinstance(visible_result.get("say"), str)
-        and bool(visible_result["say"].strip())
-    )
-
-
 def is_god_view_private_speech_event(event: LiveEvent) -> bool:
     if event.type != "action_parsed" or event.action not in GOD_VIEW_PRIVATE_SPEECH_ACTIONS:
         return False
@@ -216,8 +203,6 @@ def voice_job_candidate(
     if audience == "spectator_god_view" and is_god_view_private_speech_event(event):
         return "player"
     if is_public_speech_event(event):
-        return "player"
-    if is_public_complete_speech_event(event):
         return "player"
     if event.type == "state_updated" and event.action == "hunter_shot_resolved":
         return "judge"
@@ -323,16 +308,8 @@ def event_to_voice_utterance(
             presentation_id=presentation_id,
         )
 
-    if is_public_complete_speech_event(event) or is_public_speech_event(event):
-        if is_public_complete_speech_event(event):
-            visible_result = event.payload.get("visible_result")
-            visible_text = (
-                str(visible_result.get("say") or "")
-                if isinstance(visible_result, dict)
-                else ""
-            ).strip()
-        else:
-            visible_text = _string_payload(event, "visible_text").strip()
+    if is_public_speech_event(event):
+        visible_text = _string_payload(event, "visible_text").strip()
         if not visible_text:
             return None
         speaker_name = _player_label(event.actor, player_seats, fallback="当前玩家")

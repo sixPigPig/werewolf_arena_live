@@ -21,10 +21,7 @@ from app.werewolf.actor_mind import (
 )
 from app.werewolf.live import LiveEvent
 from app.werewolf.liveness import (
-    LivenessFeatureModesV1,
     LivenessSnapshotError,
-    assign_liveness_experiment_v1,
-    legacy_liveness_experience,
     liveness_experience_from_storage,
     liveness_experience_v1,
 )
@@ -50,27 +47,21 @@ from app.werewolf.turn_planning import (
 )
 
 
-def test_missing_liveness_snapshot_is_explicit_legacy_not_current_default() -> None:
-    legacy = liveness_experience_from_storage(None)
+def test_missing_liveness_snapshot_uses_the_only_supported_experience() -> None:
+    restored = liveness_experience_from_storage(None)
     current = liveness_experience_v1()
 
-    assert legacy == legacy_liveness_experience()
-    assert legacy.experience_revision == "legacy-v0"
-    assert legacy.feature_modes.style_gate == "legacy"
-    assert current.experience_revision == "liveness-v1"
-    assert current.feature_modes.style_gate == "async_observe"
+    assert restored == current
+    assert restored.feature_modes.style_gate == "async_observe"
+    assert restored.feature_modes.actor_mind == "read"
+    assert restored.feature_modes.sentence_stream == "committed_segments_v2"
+    assert restored.feature_modes.affect_delivery == "on"
+    assert restored.feature_modes.tts_prefetch_depth == 1
+    assert restored.feature_modes.voice_preempt == "deterministic"
 
 
 def test_liveness_snapshot_round_trip_freezes_feature_modes() -> None:
-    source = liveness_experience_v1(
-        feature_modes=LivenessFeatureModesV1(
-            actor_mind="read",
-            sentence_stream="committed_segments",
-            affect_delivery="on",
-            tts_prefetch_depth=1,
-            voice_preempt="deterministic",
-        )
-    )
+    source = liveness_experience_v1()
 
     restored = liveness_experience_from_storage(source.to_dict())
 
@@ -79,11 +70,7 @@ def test_liveness_snapshot_round_trip_freezes_feature_modes() -> None:
 
 
 def test_segments_v2_snapshot_round_trip_uses_versioned_speech_contract() -> None:
-    source = liveness_experience_v1(
-        feature_modes=LivenessFeatureModesV1(
-            sentence_stream="committed_segments_v2",
-        )
-    )
+    source = liveness_experience_v1()
 
     restored = liveness_experience_from_storage(source.to_dict())
 
@@ -91,52 +78,16 @@ def test_segments_v2_snapshot_round_trip_uses_versioned_speech_contract() -> Non
     assert restored.speech_stream_version == "speech-v2"
 
 
-@pytest.mark.parametrize(
-    ("sentence_stream", "speech_stream_version"),
-    [
-        ("committed_segments_v2", "speech-v1"),
-        ("committed_segments", "speech-v2"),
-    ],
-)
-def test_segments_v2_snapshot_rejects_mismatched_contract_versions(
-    sentence_stream: str,
-    speech_stream_version: str,
-) -> None:
+@pytest.mark.parametrize("field", ["sentence_stream", "speech_stream_version"])
+def test_fixed_snapshot_rejects_removed_or_mismatched_speech_contract(field: str) -> None:
     snapshot = liveness_experience_v1().to_dict()
-    snapshot["feature_modes"]["sentence_stream"] = sentence_stream
-    snapshot["speech_stream_version"] = speech_stream_version
+    if field == "sentence_stream":
+        snapshot["feature_modes"][field] = "committed_segments"
+    else:
+        snapshot[field] = "speech-v1"
 
-    with pytest.raises(LivenessSnapshotError, match="must be paired"):
+    with pytest.raises(LivenessSnapshotError):
         liveness_experience_from_storage(snapshot)
-
-
-def test_liveness_experiment_assignment_is_session_stable_and_stage_bounded() -> None:
-    control = assign_liveness_experiment_v1(
-        session_id="game_stable",
-        experiment_id="lifelike-v1",
-        treatment_percent=0,
-    )
-    treatment = assign_liveness_experiment_v1(
-        session_id="game_stable",
-        experiment_id="lifelike-v1",
-        treatment_percent=100,
-    )
-    repeated = assign_liveness_experiment_v1(
-        session_id="game_stable",
-        experiment_id="lifelike-v1",
-        treatment_percent=100,
-    )
-
-    assert control.variant == "control"
-    assert control.snapshot.feature_modes.actor_mind == "shadow"
-    assert control.snapshot.feature_modes.sentence_stream == "off"
-    assert treatment == repeated
-    assert treatment.variant == "treatment"
-    assert treatment.snapshot.feature_modes.actor_mind == "read"
-    assert treatment.snapshot.feature_modes.sentence_stream == "off"
-    assert treatment.snapshot.feature_modes.affect_delivery == "on"
-    assert treatment.snapshot.feature_modes.tts_prefetch_depth == 0
-    assert treatment.snapshot.feature_modes.voice_preempt == "off"
 
 
 def test_liveness_metrics_use_only_bounded_labels_and_stage_denominators() -> None:
@@ -326,7 +277,7 @@ def test_committed_segment_receipt_is_idempotent_and_reconstructs_final_text() -
         db.add(GameSessionRecord(session_id="game_1", status="partial"))
         db.commit()
         store = LivenessRuntimeStore(db)
-        speech_id = stable_speech_id("game_1", "act_1", "speech-v1")
+        speech_id = stable_speech_id("game_1", "act_1", "speech-v2")
         texts = ["我先听后置位。", "现在不急着归票！"]
         for index, text in enumerate(texts):
             segment_id = stable_segment_id(speech_id, index, text)
@@ -346,9 +297,10 @@ def test_committed_segment_receipt_is_idempotent_and_reconstructs_final_text() -
                     "action_id": "act_1",
                     "request_id": "req_1",
                     "speech_id": speech_id,
+                    "speech_stream_mode": "segments_v2",
                     "segment_id": segment_id,
                     "segment_index": index,
-                    "segment_final": index == len(texts) - 1,
+                    "segment_final": False,
                     "presentation_id": stable_segment_presentation_id(segment_id),
                     "experience_revision": "liveness-v1",
                     "visible_text": text,
@@ -368,12 +320,13 @@ def test_committed_segment_receipt_is_idempotent_and_reconstructs_final_text() -
             )
         )
         assert receipt is not None
-        assert receipt.status == "complete"
+        assert receipt.status == "partial"
         assert receipt.final_text == "".join(texts)
         assert [row.text for row in rows] == texts
         checkpoint_receipt = {
             "speech_id": speech_id,
-            "status": "complete",
+            "speech_stream_mode": "segments_v2",
+            "status": "partial",
             "segment_count": 2,
             "final_text": "".join(texts),
             "segments": [

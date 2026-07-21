@@ -101,7 +101,6 @@ describe("admin app routes", () => {
     ["/operations/games", "对局记录"],
     ["/operations/runs", "运行监控"],
     ["/system/settings", "运行设置"],
-    ["/system/liveness-rollout", "灰度控制"],
   ])("keeps the existing route %s connected", async (path, heading) => {
     renderRoute(path);
     expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();

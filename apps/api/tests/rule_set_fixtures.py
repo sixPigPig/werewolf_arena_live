@@ -258,5 +258,7 @@ def complete_resume_checkpoint(
             "actor_minds_at_round_start": {},
             "actor_minds": {},
         }
-        checkpoint["generation_runtime"] = {"speech_turn_receipts": {}}
+        checkpoint["generation_runtime"] = {
+            "speech_turn_receipts": {},
+        }
     return checkpoint

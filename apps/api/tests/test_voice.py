@@ -8,7 +8,6 @@ from app.werewolf.voice import (
     deterministic_voice_utterance_id,
     event_to_voice_materialization,
     event_to_voice_utterance,
-    is_public_complete_speech_event,
     is_public_speech_event,
     is_static_judge_voice_asset_used,
     voice_job_candidate,
@@ -49,7 +48,10 @@ def test_public_speech_event_matches_supported_actions() -> None:
             "commit_state": "accepted_segment",
             "request_id": "req-1",
             "speech_id": "sp_test",
+            "speech_stream_mode": "segments_v2",
             "segment_id": "seg_test_1",
+            "segment_index": 0,
+            "segment_final": False,
             "visible_text": "我先发言。",
             "is_public": True,
         },
@@ -58,7 +60,7 @@ def test_public_speech_event_matches_supported_actions() -> None:
     assert is_public_speech_event(event) is True
 
 
-def test_complete_public_speech_is_materialized_from_action_parsed() -> None:
+def test_action_parsed_never_creates_a_second_player_voice() -> None:
     event = live_event(
         9,
         "action_parsed",
@@ -76,13 +78,8 @@ def test_complete_public_speech_is_materialized_from_action_parsed() -> None:
         player_seats={"阿青": 1},
     )
 
-    assert is_public_complete_speech_event(event) is True
-    assert voice_job_candidate(event) == "player"
-    assert utterance is not None
-    assert utterance.utterance_id == deterministic_voice_utterance_id("run_1", 9, "player")
-    assert utterance.request_id == "req-final"
-    assert utterance.speaker_name == "1号玩家"
-    assert utterance.text == "这是最终完整发言。"
+    assert voice_job_candidate(event) is None
+    assert utterance is None
 
 
 def test_segment_final_action_does_not_create_duplicate_full_speech_voice() -> None:
@@ -93,25 +90,32 @@ def test_segment_final_action_does_not_create_duplicate_full_speech_voice() -> N
         action="debate",
         payload={
             "speech_id": "sp_test",
-            "speech_stream_mode": "segments_v1",
+            "speech_stream_mode": "segments_v2",
             "tts_suppressed_by_segments": True,
             "visible_result": {"say": "这是已经逐句提交的完整发言。"},
         },
     )
 
-    assert is_public_complete_speech_event(event) is False
     assert voice_job_candidate(event) is None
 
 
 def test_exile_last_words_use_the_exiled_players_public_voice() -> None:
     event = live_event(
         10,
-        "action_parsed",
+        "model_response_delta",
         actor="阿青",
         action="exile_last_words",
         payload={
+            "schema_version": 2,
+            "commit_state": "accepted_segment",
             "request_id": "req-last-words",
-            "visible_result": {"say": "这是我的最后判断。"},
+            "speech_id": "sp-last-words",
+            "speech_stream_mode": "segments_v2",
+            "segment_id": "seg-last-words-0",
+            "segment_index": 0,
+            "segment_final": False,
+            "visible_text": "这是我的最后判断。",
+            "is_public": True,
         },
         phase="last_words",
     )
@@ -253,13 +257,23 @@ def test_voice_coverage_counts_coalesced_live_voice_range() -> None:
     events = [
         {
             "id": 9,
-            "type": "action_parsed",
+            "type": "model_response_delta",
             "run_id": "run_1",
             "session_id": "game_1",
             "created_at": "2026-07-07T00:00:00Z",
             "actor": "阿青",
             "action": "debate",
-            "payload": {"visible_result": {"say": "完整发言。"}},
+            "payload": {
+                "schema_version": 2,
+                "commit_state": "accepted_segment",
+                "speech_id": "sp-coverage",
+                "speech_stream_mode": "segments_v2",
+                "segment_id": "seg-coverage-0",
+                "segment_index": 0,
+                "segment_final": False,
+                "visible_text": "完整发言。",
+                "is_public": True,
+            },
         }
     ]
     live_voice = {

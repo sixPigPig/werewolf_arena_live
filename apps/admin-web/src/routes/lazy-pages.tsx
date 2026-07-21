@@ -37,9 +37,6 @@ const AuditEventsPage = lazy(
 const OverviewPage = lazy(() => import("@/features/dashboard/OverviewPage"));
 const JobsPage = lazy(() => import("@/features/dashboard/JobsPage"));
 const SettingsPage = lazy(() => import("@/features/dashboard/SettingsPage"));
-const LivenessRolloutPage = lazy(
-  () => import("@/features/liveness-rollout/LivenessRolloutPage"),
-);
 
 function LazyRoute({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteLoading />}>{children}</Suspense>;
@@ -149,10 +146,6 @@ export function JobsRoute() {
 
 export function SettingsRoute() {
   return <LazyRoute><SettingsPage /></LazyRoute>;
-}
-
-export function LivenessRolloutRoute() {
-  return <LazyRoute><LivenessRolloutPage /></LazyRoute>;
 }
 
 export function NotFoundRoute() {

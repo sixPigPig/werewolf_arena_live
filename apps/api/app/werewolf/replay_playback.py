@@ -528,11 +528,7 @@ def _publish_action_events(
                     "speech_stream_mode": speech_stream_mode,
                     "segment_id": segment["segment_id"],
                     "segment_index": index,
-                    "segment_final": (
-                        index == len(segments) - 1
-                        if speech_stream_mode == "segments_v1"
-                        else False
-                    ),
+                    "segment_final": False,
                     "delta": segment["text"],
                     "visible_text": segment["text"],
                     "field": "say",
@@ -577,11 +573,7 @@ def _publish_action_events(
                         else "spoken"
                     ),
                     "tts_suppressed_by_segments": True,
-                    **(
-                        {"final_segment_index": len(receipt["segments"]) - 1}
-                        if speech_stream_mode == "segments_v2"
-                        else {}
-                    ),
+                    "final_segment_index": len(receipt["segments"]) - 1,
                 }
                 if receipt is not None
                 else {}
@@ -601,14 +593,14 @@ def _validated_speech_turn_receipt(
     if not isinstance(value, dict):
         raise ValueError("invalid speech turn receipt")
     speech_id = value.get("speech_id")
-    speech_stream_mode = value.get("speech_stream_mode") or "segments_v1"
+    speech_stream_mode = value.get("speech_stream_mode")
     status = value.get("status")
     segments = value.get("segments")
     final_text = value.get("final_text")
     if (
         not isinstance(speech_id, str)
         or not speech_id
-        or speech_stream_mode not in {"segments_v1", "segments_v2"}
+        or speech_stream_mode != "segments_v2"
         or status not in {"complete", "partial", "interrupted"}
         or not isinstance(segments, list)
         or not segments

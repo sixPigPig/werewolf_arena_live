@@ -1,12 +1,14 @@
 # 狼人杀虚拟玩家活人感系统重构开发设计
 
+> 2026-07-21 状态说明：本文保留角色心智、关系记忆、发言规划、质量门禁与情绪表达的产品依据。speech-v2 第一至四期已经恢复；灰度分流、旧版本兼容、运行时开关和本文旧实施状态全部作废。当前唯一语音实施合同见[逻辑发言流 speech-v2：固定路径开发基线](./2026-07-20-logical-speech-streaming-v2-design.md)。
+
 ## 1. 文档信息
 
 - 编写日期：2026-07-19；实施记录更新：2026-07-20
-- 文档状态：本地代码与确定性回归完成，真实模型/TTS、人工盲评和线上灰度尚未执行
+- 文档状态：活人感产品设计保留；语音交付、灰度和分期章节由固定 speech-v2 基线取代
 - 适用模式：现有直播娱乐模式
 - 适用范围：虚拟玩家角色心理、发言输入、表达策略、在线质量门禁、字幕、实时语音、恢复、Replay、质量评估、Admin 诊断与 Mobile 消费
-- 当前实现状态：版本快照、同步质量止损、ScenePacket、ActorMind shadow/read、token-time 完整句提交、恢复/Replay、单一 VoiceSynthesisBroker、预取/抢占、终态 ACK、Admin 指标与持久化灰度控制、Mobile 聚合字幕、匿名盲评工具和稳定 Session 分流均已完成；首次 Admin 保存前的环境默认 treatment 比例仍为 0%，未用真实模型/TTS 或人工样本宣称晋级
+- 当前实现状态：角色心智、关系记忆、ScenePacket、增量硬门禁、情绪 delivery、durable segment、SpeechPlaybackSession、连续 PCM、确定性 speech preempt、恢复、Replay、Admin 指标和 Mobile 字幕继续保留；灰度控制、Session 分流、旧协议兼容及终局 backlog 快进已删除。
 - 产品北极星：完整音频时间线盲测中，“更像真人玩家在狼人杀现场自然接话”的偏好胜率
 
 关联设计与证据：
@@ -24,7 +26,7 @@
 1. 本文取代 2026-07-18 设计中第 6.1 节和第 6.3 节的首版缓冲、表现层重写方案，并扩展其 `SpeechOutputV2` 与语音演绎合同。
 2. P2 中 `SpeechMission`、低新颖度、普通重复、口头禅和篇幅检查不再作为同步发布门禁，只保留为异步观察指标。
 3. 规则冻结快照、合法行动、终局顺序、事实因果、恢复、隐私 Audience、Live/Replay 来源和语音 ACK 的既有安全合同继续有效，不能因追求活人感而放松。
-4. 若本文与旧文档对公开发言发布时机存在冲突，以本文的“已提交语句”合同为准；历史对局仍按其开局冻结版本解释。
+4. 若本文与固定 speech-v2 基线冲突，以固定基线为准。本文涉及 experiment、variant、百分比、自动回退、`segments_v1` 或未来终局裁剪 backlog 的内容只保留为被否决的历史记录，不得据此实现。
 
 ## 2. 总体结论
 
@@ -230,24 +232,22 @@ LivenessExperienceSnapshotV1
   affect_mapping_version
   prompt_revision
   feature_modes
-    style_gate = legacy | async_observe
-    actor_mind = off | shadow | read
-    sentence_stream = off | committed_segments
-    affect_delivery = off | shadow | on
-    tts_prefetch_depth = 0 | 1
-    voice_preempt = off | deterministic
+    style_gate = async_observe
+    actor_mind = read
+    sentence_stream = committed_segments_v2
+    affect_delivery = on
+    tts_prefetch_depth = 1
+    voice_preempt = deterministic
 ```
 
 持久化建议：
 
 - `game_sessions.liveness_experience_revision`；
 - `game_sessions.liveness_experience_snapshot`；
-- `game_sessions.liveness_experiment_id`，可空；
-- `game_sessions.liveness_experiment_variant`，可空；
 - `live_runs` 复制上述字段，恢复 run 必须与父 Session 完全一致；
-- Replay 元数据保存同一快照摘要，不能根据当前服务器默认值猜测历史版本。
+- Replay 元数据保存同一固定快照摘要。
 
-旧记录字段缺失时解释为 `legacy-v0`，按旧事件和旧质量语义读取。迁移不回填虚构的新版本。
+项目不兼容旧记录；字段缺失或模式不符时 fail-closed。
 
 ### 7.2 实验单位
 

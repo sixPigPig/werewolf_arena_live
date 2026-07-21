@@ -104,8 +104,6 @@ class DatabaseLiveStore:
             liveness_experience_snapshot=copy.deepcopy(
                 run.liveness_experience_snapshot
             ),
-            liveness_experiment_id=run.liveness_experiment_id,
-            liveness_experiment_variant=run.liveness_experiment_variant,
             winner=run.winner,
             error=run.error,
             created_at=parse_live_datetime(run.created_at) or datetime.now(tz=UTC),
@@ -212,8 +210,6 @@ class DatabaseLiveStore:
         record.liveness_experience_snapshot = copy.deepcopy(
             run.liveness_experience_snapshot
         )
-        record.liveness_experiment_id = run.liveness_experiment_id
-        record.liveness_experiment_variant = run.liveness_experiment_variant
         if is_new or run.control_version >= record.control_version:
             record.stop_requested_at = parse_live_datetime(run.stop_requested_at)
             record.control_version = run.control_version
@@ -910,8 +906,6 @@ class DatabaseLiveStore:
             liveness_experience_snapshot=copy.deepcopy(
                 record.liveness_experience_snapshot
             ),
-            liveness_experiment_id=record.liveness_experiment_id,
-            liveness_experiment_variant=record.liveness_experiment_variant,
             status=record.status,
             created_at=format_live_datetime(record.created_at),
             started_at=_format_optional_datetime(record.started_at),
@@ -1311,8 +1305,6 @@ def _stored_expected_state_matches(
             "p2_diagnostics": record.p2_diagnostics,
             "liveness_experience_revision": record.liveness_experience_revision,
             "liveness_experience_snapshot": record.liveness_experience_snapshot,
-            "liveness_experiment_id": record.liveness_experiment_id,
-            "liveness_experiment_variant": record.liveness_experiment_variant,
             "winner": record.winner,
             "error": record.error,
             "worker_id": record.worker_id,

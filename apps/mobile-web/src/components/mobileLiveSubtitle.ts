@@ -149,9 +149,7 @@ export function committedSpeechToMobileSubtitle({
   const isInterrupted = terminal.type === "speech_turn_interrupted";
   const isSegmentFinalizer =
     terminal.type === "action_parsed" &&
-    ["segments_v1", "segments_v2"].includes(
-      stringPayloadField(terminalPayload, "speech_stream_mode"),
-    );
+    stringPayloadField(terminalPayload, "speech_stream_mode") === "segments_v2";
   if (
     !terminalSpeechId ||
     (!isAcceptedSegment && !isInterrupted && !isSegmentFinalizer)

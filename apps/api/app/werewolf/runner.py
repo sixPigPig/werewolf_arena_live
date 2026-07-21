@@ -60,8 +60,6 @@ def run_game(
     event_sink: object | None = None,
     player_configs: list[PlayerConfig] | None = None,
     liveness_experience_snapshot: dict[str, object] | None = None,
-    liveness_experiment_id: str | None = None,
-    liveness_experiment_variant: str | None = None,
 ) -> RunGameResult:
     started_at = _utc_now()
     session_id = session_id or new_session_id()
@@ -85,8 +83,6 @@ def run_game(
                 "liveness_experience_snapshot": liveness_experience_from_storage(
                     liveness_experience_snapshot
                 ).to_dict(),
-                "liveness_experiment_id": liveness_experiment_id,
-                "liveness_experiment_variant": liveness_experiment_variant,
             }
             if liveness_experience_snapshot is not None
             else {}

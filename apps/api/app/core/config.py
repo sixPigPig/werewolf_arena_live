@@ -65,13 +65,6 @@ class Settings(BaseSettings):
     werewolf_lineup_quality_mode: Literal["observe", "repair", "enforce"] = "repair"
     werewolf_speech_quality_retry_enabled: bool = True
     werewolf_action_budgets_enabled: bool = True
-    werewolf_liveness_rollout_percent: int = Field(default=0, ge=0, le=100)
-    werewolf_liveness_experiment_id: str = Field(
-        default="lifelike-v1",
-        min_length=1,
-        max_length=64,
-        pattern=r"^[A-Za-z0-9._-]+$",
-    )
     werewolf_required_action_request_seconds: float = Field(default=12.0, ge=0.1, le=300)
     werewolf_required_action_total_seconds: float = Field(default=15.0, ge=0.1, le=300)
     werewolf_required_action_batch_seconds: float = Field(default=15.0, ge=0.1, le=300)

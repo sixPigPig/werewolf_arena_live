@@ -50,13 +50,23 @@ def test_quality_coverage_counts_coalesced_live_voice_range() -> None:
         live_events=[
             {
                 "id": 9,
-                "type": "action_parsed",
+                "type": "model_response_delta",
                 "run_id": "run_voice_range",
                 "session_id": "game_1234abcd",
                 "created_at": "2026-07-14T00:00:00Z",
                 "actor": "阿青",
                 "action": "debate",
-                "payload": {"visible_result": {"say": "完整发言。"}},
+                "payload": {
+                    "schema_version": 2,
+                    "commit_state": "accepted_segment",
+                    "speech_id": "sp-quality",
+                    "speech_stream_mode": "segments_v2",
+                    "segment_id": "seg-quality-0",
+                    "segment_index": 0,
+                    "segment_final": False,
+                    "visible_text": "完整发言。",
+                    "is_public": True,
+                },
             }
         ],
         voice_utterances=[
@@ -107,10 +117,8 @@ def test_liveness_metrics_have_explicit_denominators_and_stage_breakdown() -> No
         ],
         liveness_runtime={
             "experience_revision": "liveness-v1",
-            "experiment_id": "experiment-1",
-            "variant": "treatment",
             "experience_snapshot": {
-                "feature_modes": {"sentence_stream": "committed_segments"}
+                "feature_modes": {"sentence_stream": "committed_segments_v2"}
             },
             "voice_timings": [
                 {

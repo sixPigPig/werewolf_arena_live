@@ -6,6 +6,7 @@ from types import ModuleType
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+import pytest
 import sqlalchemy as sa
 
 
@@ -20,12 +21,6 @@ VOICE_TIMING_MIGRATION_PATH = (
     / "alembic"
     / "versions"
     / "20260720_32_add_liveness_voice_timings.py"
-)
-ROLLOUT_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "alembic"
-    / "versions"
-    / "20260720_33_add_liveness_rollout_config.py"
 )
 SPEECH_STREAM_V2_MIGRATION_PATH = (
     Path(__file__).resolve().parents[1]
@@ -47,17 +42,6 @@ def load_voice_timing_migration() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "liveness_voice_timing_migration",
         VOICE_TIMING_MIGRATION_PATH,
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def load_rollout_migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "liveness_rollout_migration",
-        ROLLOUT_MIGRATION_PATH,
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -118,8 +102,6 @@ def test_liveness_runtime_migration_upgrade_and_downgrade() -> None:
             assert {
                 "liveness_experience_revision",
                 "liveness_experience_snapshot",
-                "liveness_experiment_id",
-                "liveness_experiment_variant",
             } <= columns
         voice_columns = {item["name"] for item in inspector.get_columns("voice_utterances")}
         assert {
@@ -193,47 +175,10 @@ def test_liveness_voice_timing_migration_upgrade_and_downgrade() -> None:
         }
 
 
-def test_liveness_rollout_migration_upgrade_and_downgrade() -> None:
-    migration = load_rollout_migration()
-    assert migration.revision == "20260720_33"
-    assert migration.down_revision == "20260720_32"
-
-    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
-    metadata = sa.MetaData()
-    sa.Table(
-        "users",
-        metadata,
-        sa.Column("id", sa.Integer(), primary_key=True),
-    )
-    metadata.create_all(engine)
-
-    with engine.begin() as connection:
-        migration.op = Operations(MigrationContext.configure(connection))
-        migration.upgrade()
-        inspector = sa.inspect(connection)
-        assert "liveness_rollout_configs" in inspector.get_table_names()
-        columns = {item["name"]: item for item in inspector.get_columns("liveness_rollout_configs")}
-        assert set(columns) == {
-            "id",
-            "revision",
-            "experience_revision",
-            "experiment_id",
-            "treatment_percent",
-            "updated_by_user_id",
-            "created_at",
-            "updated_at",
-        }
-        assert columns["id"]["primary_key"] == 1
-        assert columns["updated_by_user_id"]["nullable"] is True
-
-        migration.downgrade()
-        assert "liveness_rollout_configs" not in sa.inspect(connection).get_table_names()
-
-
 def test_speech_stream_v2_migration_upgrade_and_downgrade() -> None:
     migration = load_speech_stream_v2_migration()
     assert migration.revision == "20260720_34"
-    assert migration.down_revision == "20260720_33"
+    assert migration.down_revision == "20260721_33"
 
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
     metadata = sa.MetaData()
@@ -266,17 +211,19 @@ def test_speech_stream_v2_migration_upgrade_and_downgrade() -> None:
             item["name"]
             for item in inspector.get_columns("speech_turn_receipts")
         }
-        constraints = {
-            item["name"]
-            for item in inspector.get_check_constraints("speech_turn_receipts")
-        }
-        assert "ck_speech_turn_receipts_stream_mode" in constraints
         assert connection.execute(
             sa.text(
                 "SELECT speech_stream_mode FROM speech_turn_receipts "
                 "WHERE session_id = 'game_existing'"
             )
-        ).scalar_one() == "segments_v1"
+        ).scalar_one() == "segments_v2"
+        with pytest.raises(sa.exc.IntegrityError):
+            connection.execute(
+                sa.text(
+                    "UPDATE speech_turn_receipts SET speech_stream_mode = 'segments_v1' "
+                    "WHERE session_id = 'game_existing'"
+                )
+            )
 
         migration.downgrade()
         assert {

@@ -75,27 +75,11 @@ export function LivePage() {
     director.currentEventId,
     gameId,
   );
-  const terminalSourceKeepFromEventId = sourceEventIdForCurrentRun(
-    events,
-    director.terminalKeepFromEventId,
-    gameId,
-  );
-  const terminalSourceEventId = sourceEventIdForCurrentRun(
-    events,
-    director.terminalEventId,
-    gameId,
-  );
   const voice = useLiveVoiceStream(gameId, {
     audience: "spectator_god_view",
     currentEventId: directorSourceEventId,
     enabled: voiceEnabled,
     isPaused: director.isPaused,
-    ...(terminalSourceKeepFromEventId !== null && terminalSourceEventId !== null
-      ? {
-          terminalKeepFromEventId: terminalSourceKeepFromEventId,
-          terminalEventId: terminalSourceEventId,
-        }
-      : {}),
   });
   const voiceCurrentItem = voice.currentItem;
   const unlockVoiceAudio = voice.unlockAudio;

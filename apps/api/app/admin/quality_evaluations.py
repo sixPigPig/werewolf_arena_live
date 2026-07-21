@@ -608,8 +608,6 @@ def _liveness(value: object) -> dict[str, Any]:
     safe_actor_mind = actor_mind if isinstance(actor_mind, dict) else {}
     return {
         "experience_revision": _safe_text(raw.get("experience_revision"), 40) or None,
-        "experiment_id": _safe_text(raw.get("experiment_id"), 64) or None,
-        "variant": _safe_text(raw.get("variant"), 64) or None,
         "feature_modes": _liveness_feature_modes(raw.get("feature_modes")),
         "public_speech_count": _count(raw.get("public_speech_count")),
         "timing_coverage": _timing_coverage(raw.get("timing_coverage")),
@@ -650,15 +648,11 @@ def _liveness(value: object) -> dict[str, Any]:
 def _liveness_feature_modes(value: object) -> dict[str, object]:
     raw = value if isinstance(value, dict) else {}
     allowed = {
-        "style_gate": {"legacy", "async_observe"},
-        "actor_mind": {"off", "shadow", "read"},
-        "sentence_stream": {
-            "off",
-            "committed_segments",
-            "committed_segments_v2",
-        },
-        "affect_delivery": {"off", "shadow", "on"},
-        "voice_preempt": {"off", "deterministic"},
+        "style_gate": {"async_observe"},
+        "actor_mind": {"read"},
+        "sentence_stream": {"committed_segments_v2"},
+        "affect_delivery": {"on"},
+        "voice_preempt": {"deterministic"},
     }
     result: dict[str, object] = {
         key: value if isinstance(value, str) and value in choices else None
@@ -666,7 +660,7 @@ def _liveness_feature_modes(value: object) -> dict[str, object]:
         if (value := raw.get(key)) is not None
     }
     prefetch = raw.get("tts_prefetch_depth")
-    if type(prefetch) is int and prefetch in {0, 1}:
+    if prefetch == 1:
         result["tts_prefetch_depth"] = prefetch
     return result
 

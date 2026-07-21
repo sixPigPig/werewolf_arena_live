@@ -1100,7 +1100,7 @@ describe("LivePage", () => {
     );
   });
 
-  it("passes the declared terminal source window to live voice playback", async () => {
+  it("keeps presenting the full backlog when the run completes", async () => {
     const decisiveEvent: LiveGameEvent = {
       ...gameStartedEvent,
       id: 7,
@@ -1128,16 +1128,14 @@ describe("LivePage", () => {
 
     renderLiveRoute();
 
-    await waitFor(() =>
-      expect(gameClientMocks.useLiveVoiceStream).toHaveBeenLastCalledWith(
-        "run-1",
+    await waitFor(() => {
+      const options = gameClientMocks.useLiveVoiceStream.mock.calls.at(-1)?.[1];
+      expect(options).toEqual(
         expect.objectContaining({
-          currentEventId: 7,
-          terminalEventId: 9,
-          terminalKeepFromEventId: 7,
+          currentEventId: 1,
         }),
-      ),
-    );
+      );
+    });
   });
 
   it("holds the speech cue when coalesced voice reaches its first source event", async () => {
