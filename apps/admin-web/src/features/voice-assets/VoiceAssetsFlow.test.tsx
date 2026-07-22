@@ -5,6 +5,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { contractJudgeVoiceList } from "@/features/voice-assets/test-fixtures";
 import { routes } from "@/routes";
+import { selectAntdOption } from "@/tests/antd-select";
 
 function renderRoute(path: string) {
   const queryClient = new QueryClient({
@@ -89,7 +90,7 @@ describe("admin voice asset flow", () => {
       screen.queryByRole("button", { name: /生成缺失|重新生成|删除/ }),
     ).toBeNull();
 
-    await user.selectOptions(screen.getByLabelText("文件状态"), "missing");
+    await selectAntdOption(user, screen.getByLabelText("文件状态"), "缺失");
     await waitFor(() =>
       expect(router.state.location.search).toContain("availability=missing"),
     );

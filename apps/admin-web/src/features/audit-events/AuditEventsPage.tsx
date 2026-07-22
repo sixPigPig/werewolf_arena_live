@@ -6,6 +6,7 @@ import Card from "antd/es/card";
 import Flex from "antd/es/flex";
 import Input from "antd/es/input";
 import Pagination from "antd/es/pagination";
+import Select from "antd/es/select";
 import Table, { type ColumnsType } from "antd/es/table";
 import Tag from "antd/es/tag";
 import Typography from "antd/es/typography";
@@ -139,11 +140,16 @@ export default function AuditEventsPage() {
           </label>
           <label>
             <span>结果</span>
-            <select aria-label="审计结果" onChange={(event) => update({ result: event.target.value || undefined })} value={params.result ?? ""}>
-              <option value="">全部结果</option>
-              <option value="success">成功</option>
-              <option value="failure">失败</option>
-            </select>
+            <Select
+              aria-label="审计结果"
+              onChange={(value) => update({ result: value || undefined })}
+              options={[
+                { label: "全部结果", value: "" },
+                { label: "成功", value: "success" },
+                { label: "失败", value: "failure" },
+              ]}
+              value={params.result ?? ""}
+            />
           </label>
           <label>
             <span>资源类型</span>
@@ -159,10 +165,15 @@ export default function AuditEventsPage() {
           </label>
           <label>
             <span>排序</span>
-            <select aria-label="审计排序" onChange={(event) => update({ direction: event.target.value })} value={params.direction}>
-              <option value="desc">最近发生</option>
-              <option value="asc">最早发生</option>
-            </select>
+            <Select
+              aria-label="审计排序"
+              onChange={(value) => update({ direction: value })}
+              options={[
+                { label: "最近发生", value: "desc" },
+                { label: "最早发生", value: "asc" },
+              ]}
+              value={params.direction}
+            />
           </label>
           <Flex align="flex-end" gap={8}>
             <Button onClick={() => setSearchParams({})}>清除筛选</Button>

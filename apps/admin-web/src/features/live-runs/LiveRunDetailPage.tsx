@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Input from "antd/es/input";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -520,7 +521,7 @@ function RunControlPanel({
       {action ? (
         <div className="live-run-control-confirmation" role="group">
           <label htmlFor="live-run-control-reason">操作原因</label>
-          <textarea
+          <Input.TextArea
             autoFocus
             id="live-run-control-reason"
             maxLength={500}

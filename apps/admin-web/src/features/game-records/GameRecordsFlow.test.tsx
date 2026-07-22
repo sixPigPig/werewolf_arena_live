@@ -17,6 +17,7 @@ import {
   contractGameModelRequests,
 } from "@/features/game-records/test-fixtures";
 import { routes } from "@/routes";
+import { selectAntdOption } from "@/tests/antd-select";
 
 function renderRoute(path: string) {
   const queryClient = new QueryClient({
@@ -120,7 +121,7 @@ describe("admin game record flow", () => {
       screen.queryByRole("button", { name: "打断对局 game_1234abcd" }),
     ).not.toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText("对局状态"), "partial");
+    await selectAntdOption(user, screen.getByLabelText("对局状态"), "部分记录");
     await waitFor(() =>
       expect(router.state.location.search).toContain("status=partial"),
     );
@@ -132,9 +133,10 @@ describe("admin game record flow", () => {
       ).toBeInTheDocument(),
     );
 
-    await user.selectOptions(
+    await selectAntdOption(
+      user,
       screen.getByLabelText("最新运行状态"),
-      "failed",
+      "失败",
     );
     await waitFor(() =>
       expect(router.state.location.search).toContain("run_status=failed"),

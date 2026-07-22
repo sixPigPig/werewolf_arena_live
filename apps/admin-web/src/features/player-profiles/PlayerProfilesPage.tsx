@@ -1,4 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import Button from "antd/es/button";
+import Input from "antd/es/input";
+import Select from "antd/es/select";
 import { type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -97,7 +100,8 @@ export default function PlayerProfilesPage() {
         <form className="player-search-form" onSubmit={handleSearch} role="search">
           <label>
             <span>搜索玩家</span>
-            <input
+            <Input
+              aria-label="搜索玩家"
               defaultValue={params.q ?? ""}
               key={params.q ?? "empty-search"}
               name="q"
@@ -105,89 +109,96 @@ export default function PlayerProfilesPage() {
               type="search"
             />
           </label>
-          <button className="admin-secondary-button" type="submit">
+          <Button htmlType="submit">
             搜索
-          </button>
+          </Button>
         </form>
         <div className="player-filter-grid">
           <label>
             <span>生命周期</span>
-            <select
-              onChange={(event) => updateSearch({ status: event.target.value })}
+            <Select
+              aria-label="生命周期"
+              onChange={(value) => updateSearch({ status: value })}
+              options={[
+                { label: "全部状态", value: "" },
+                { label: "草稿", value: "draft" },
+                { label: "已发布", value: "published" },
+                { label: "已归档", value: "archived" },
+              ]}
               value={params.status ?? ""}
-            >
-              <option value="">全部状态</option>
-              <option value="draft">草稿</option>
-              <option value="published">已发布</option>
-              <option value="archived">已归档</option>
-            </select>
+            />
           </label>
           <label>
             <span>模型</span>
-            <select
+            <Select
+              aria-label="模型"
               disabled={optionsQuery.isPending || optionsQuery.isError}
-              onChange={(event) => updateSearch({ model: event.target.value })}
+              onChange={(value) => updateSearch({ model: value })}
+              options={[
+                { label: "全部模型", value: "" },
+                ...(optionsQuery.data?.models.map((option) => ({
+                  label: option.label,
+                  value: option.id,
+                })) ?? []),
+              ]}
               value={params.model ?? ""}
-            >
-              <option value="">全部模型</option>
-              {optionsQuery.data?.models.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            />
           </label>
           <label>
             <span>性格</span>
-            <select
+            <Select
+              aria-label="性格"
               disabled={optionsQuery.isPending || optionsQuery.isError}
-              onChange={(event) =>
-                updateSearch({ personality_id: event.target.value })
-              }
+              onChange={(value) => updateSearch({ personality_id: value })}
+              options={[
+                { label: "全部性格", value: "" },
+                ...(optionsQuery.data?.personalities.map((option) => ({
+                  label: option.label,
+                  value: option.id,
+                })) ?? []),
+              ]}
               value={params.personality_id ?? ""}
-            >
-              <option value="">全部性格</option>
-              {optionsQuery.data?.personalities.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            />
           </label>
           <label>
             <span>排序</span>
-            <select
-              onChange={(event) => {
-                const [sort, direction] = event.target.value.split(":");
+            <Select
+              aria-label="排序"
+              onChange={(value) => {
+                const [sort, direction] = value.split(":");
                 updateSearch({ sort, direction });
               }}
+              options={[
+                { label: "最近更新", value: "updated_at:desc" },
+                { label: "最近创建", value: "created_at:desc" },
+                { label: "名称 A–Z", value: "display_name:asc" },
+                { label: "C 端顺序", value: "display_order:asc" },
+              ]}
               value={`${params.sort}:${params.direction}`}
-            >
-              <option value="updated_at:desc">最近更新</option>
-              <option value="created_at:desc">最近创建</option>
-              <option value="display_name:asc">名称 A–Z</option>
-              <option value="display_order:asc">C 端顺序</option>
-            </select>
+            />
           </label>
           <label>
             <span>每页</span>
-            <select
-              onChange={(event) => updateSearch({ page_size: event.target.value })}
+            <Select
+              aria-label="每页"
+              onChange={(value) => updateSearch({ page_size: value })}
+              options={[
+                { label: "10 条", value: "10" },
+                { label: "20 条", value: "20" },
+                { label: "50 条", value: "50" },
+              ]}
               value={String(params.page_size)}
-            >
-              <option value="10">10 条</option>
-              <option value="20">20 条</option>
-              <option value="50">50 条</option>
-            </select>
+            />
           </label>
           {hasFilters ? (
-            <button
-              className="admin-text-button player-clear-filter"
+            <Button
+              className="player-clear-filter"
+              htmlType="button"
               onClick={clearFilters}
-              type="button"
+              type="text"
             >
               清除筛选
-            </button>
+            </Button>
           ) : null}
         </div>
       </section>

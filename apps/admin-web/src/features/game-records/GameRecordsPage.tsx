@@ -4,6 +4,9 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import Button from "antd/es/button";
+import Input from "antd/es/input";
+import Select from "antd/es/select";
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -194,7 +197,8 @@ export default function GameRecordsPage() {
         <form onSubmit={handleSearch} role="search">
           <label className="game-filter-wide">
             <span>搜索对局</span>
-            <input
+            <Input
+              aria-label="搜索对局"
               defaultValue={params.q ?? ""}
               key={`q-${params.q ?? ""}`}
               name="q"
@@ -204,34 +208,37 @@ export default function GameRecordsPage() {
           </label>
           <label>
             <span>对局状态</span>
-            <select
-              onChange={(event) => updateSearch({ status: event.target.value })}
+            <Select
+              aria-label="对局状态"
+              onChange={(value) => updateSearch({ status: value })}
+              options={[
+                { label: "全部状态", value: "" },
+                { label: "已完成", value: "complete" },
+                { label: "部分记录", value: "partial" },
+              ]}
               value={params.status ?? ""}
-            >
-              <option value="">全部状态</option>
-              <option value="complete">已完成</option>
-              <option value="partial">部分记录</option>
-            </select>
+            />
           </label>
           <label>
             <span>最新运行状态</span>
-            <select
-              onChange={(event) =>
-                updateSearch({ run_status: event.target.value })
-              }
+            <Select
+              aria-label="最新运行状态"
+              onChange={(value) => updateSearch({ run_status: value })}
+              options={[
+                { label: "全部最新运行状态", value: "" },
+                { label: "排队中", value: "queued" },
+                { label: "运行中", value: "running" },
+                { label: "已完成", value: "completed" },
+                { label: "失败", value: "failed" },
+                { label: "已取消", value: "canceled" },
+              ]}
               value={params.run_status ?? ""}
-            >
-              <option value="">全部最新运行状态</option>
-              <option value="queued">排队中</option>
-              <option value="running">运行中</option>
-              <option value="completed">已完成</option>
-              <option value="failed">失败</option>
-              <option value="canceled">已取消</option>
-            </select>
+            />
           </label>
           <label>
             <span>胜方</span>
-            <input
+            <Input
+              aria-label="胜方"
               defaultValue={params.winner ?? ""}
               key={`winner-${params.winner ?? ""}`}
               name="winner"
@@ -240,7 +247,8 @@ export default function GameRecordsPage() {
           </label>
           <label>
             <span>规则 ID</span>
-            <input
+            <Input
+              aria-label="规则 ID"
               defaultValue={params.rule_set_id ?? ""}
               key={`rule-${params.rule_set_id ?? ""}`}
               name="rule_set_id"
@@ -249,7 +257,8 @@ export default function GameRecordsPage() {
           </label>
           <label>
             <span>开始日期</span>
-            <input
+            <Input
+              aria-label="开始日期"
               defaultValue={params.created_from ?? ""}
               key={`from-${params.created_from ?? ""}`}
               name="created_from"
@@ -258,7 +267,8 @@ export default function GameRecordsPage() {
           </label>
           <label>
             <span>结束日期</span>
-            <input
+            <Input
+              aria-label="结束日期"
               defaultValue={params.created_to ?? ""}
               key={`to-${params.created_to ?? ""}`}
               name="created_to"
@@ -267,45 +277,47 @@ export default function GameRecordsPage() {
           </label>
           <label>
             <span>排序</span>
-            <select
-              onChange={(event) => {
-                const [sort, direction] = event.target.value.split(":");
+            <Select
+              aria-label="排序"
+              onChange={(value) => {
+                const [sort, direction] = value.split(":");
                 updateSearch({ sort, direction });
               }}
+              options={[
+                { label: "最近创建", value: "created_at:desc" },
+                { label: "最早创建", value: "created_at:asc" },
+                { label: "最近更新", value: "updated_at:desc" },
+                { label: "最早更新", value: "updated_at:asc" },
+              ]}
               value={`${params.sort}:${params.direction}`}
-            >
-              <option value="created_at:desc">最近创建</option>
-              <option value="created_at:asc">最早创建</option>
-              <option value="updated_at:desc">最近更新</option>
-              <option value="updated_at:asc">最早更新</option>
-            </select>
+            />
           </label>
           <label>
             <span>每页</span>
-            <select
-              onChange={(event) =>
-                updateSearch({ page_size: event.target.value })
-              }
+            <Select
+              aria-label="每页"
+              onChange={(value) => updateSearch({ page_size: value })}
+              options={[
+                { label: "10 条", value: "10" },
+                { label: "20 条", value: "20" },
+                { label: "50 条", value: "50" },
+              ]}
               value={String(params.page_size)}
-            >
-              <option value="10">10 条</option>
-              <option value="20">20 条</option>
-              <option value="50">50 条</option>
-            </select>
+            />
           </label>
           <div className="game-filter-actions">
             {hasFilters ? (
-              <button
-                className="admin-text-button"
+              <Button
+                htmlType="button"
                 onClick={clearFilters}
-                type="button"
+                type="text"
               >
                 清除筛选
-              </button>
+              </Button>
             ) : null}
-            <button className="admin-secondary-button" type="submit">
+            <Button htmlType="submit">
               应用筛选
-            </button>
+            </Button>
           </div>
         </form>
       </section>

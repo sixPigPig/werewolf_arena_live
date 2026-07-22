@@ -9,6 +9,11 @@ import {
 } from "@/features/player-profiles/preview-repository";
 import type { AdminPlayerProfile } from "@/features/player-profiles/types";
 import { routes } from "@/routes";
+import {
+  expectAntdSelectLabel,
+  getOpenAntdOptions,
+  selectAntdOption,
+} from "@/tests/antd-select";
 
 function renderRoute(path: string) {
   const queryClient = new QueryClient({
@@ -74,7 +79,11 @@ describe("admin player profile flow", () => {
     const { router } = renderRoute("/content/players");
     await screen.findByText("暮鸦归票");
 
-    await user.selectOptions(screen.getByLabelText("生命周期"), "draft");
+    await selectAntdOption(
+      user,
+      screen.getByLabelText("生命周期"),
+      "草稿",
+    );
     await waitFor(() =>
       expect(router.state.location.search).toContain("status=draft"),
     );
@@ -112,9 +121,7 @@ describe("admin player profile flow", () => {
 
     expect(await screen.findByText("AI 草稿已填入，请审核后保存")).toBeInTheDocument();
     expect(nameInput).toHaveValue("月影听风");
-    expect(document.querySelector('select[name="model"]')).toHaveValue(
-      "deepseek-v4-flash",
-    );
+    expectAntdSelectLabel(screen.getByLabelText("默认模型"), "DeepSeek V4 Flash");
     expect(screen.getByRole("button", { name: "保存草稿" })).toBeEnabled();
     expect(screen.getByRole("heading", { level: 1, name: "新建玩家草稿" })).toBeInTheDocument();
   });
@@ -181,19 +188,22 @@ describe("admin player profile flow", () => {
         name: "玩家音色与基础演绎",
       }),
     ).toBeInTheDocument();
-    const speakerSelect = screen.getByRole("combobox", { name: /^玩家音色 / });
+    const speakerSelect = screen.getByRole("combobox", { name: "玩家音色" });
     const instructionInput = screen.getByRole("textbox", {
       name: /^基础演绎提示/,
     });
-    expect(speakerSelect).toHaveTextContent("继承全局玩家音色");
-    expect(screen.getByRole("combobox", { name: /^基础情绪/ })).toHaveValue(
-      "restrained",
+    expectAntdSelectLabel(speakerSelect, "继承全局玩家音色");
+    expectAntdSelectLabel(
+      screen.getByRole("combobox", { name: "基础情绪" }),
+      "克制 · restrained",
     );
-    expect(screen.getByRole("combobox", { name: /^基础强度/ })).toHaveValue(
-      "medium",
+    expectAntdSelectLabel(
+      screen.getByRole("combobox", { name: "基础强度" }),
+      "中 · medium",
     );
-    expect(screen.getByRole("combobox", { name: /^基础语速/ })).toHaveValue(
-      "natural",
+    expectAntdSelectLabel(
+      screen.getByRole("combobox", { name: "基础语速" }),
+      "自然 · natural",
     );
     expect(screen.getByText(/配置版本 3/)).toBeInTheDocument();
     expect(
@@ -209,13 +219,10 @@ describe("admin player profile flow", () => {
       screen.getByText(/进行中、恢复、已排队语音和历史 Replay/),
     ).toBeInTheDocument();
 
-    await user.click(speakerSelect);
-    expect(screen.getByText("voice_type")).toBeInTheDocument();
-    expect(screen.getByText("音色名称")).toBeInTheDocument();
-    await user.click(
-      await screen.findByRole("option", {
-        name: /zh_female_vv_uranus_bigtts Vivi 2.0/,
-      }),
+    await selectAntdOption(
+      user,
+      speakerSelect,
+      /zh_female_vv_uranus_bigtts.*Vivi 2\.0/,
     );
     await user.clear(instructionInput);
     await user.type(instructionInput, "  自然接话  ");
@@ -232,64 +239,70 @@ describe("admin player profile flow", () => {
     const user = userEvent.setup();
     renderRoute("/content/players/preview-draft-1");
     const gender = await screen.findByRole("combobox", { name: /^角色性别/ });
-    const speaker = screen.getByRole("combobox", { name: /^玩家音色 / });
+    const speaker = screen.getByRole("combobox", { name: "玩家音色" });
 
     await user.click(speaker);
     expect(
-      screen.getByRole("option", {
-        name: /zh_female_vv_uranus_bigtts Vivi 2.0/,
-      }),
-    ).toBeInTheDocument();
+      getOpenAntdOptions().some((option) =>
+        option.textContent?.includes("zh_female_vv_uranus_bigtts"),
+      ),
+    ).toBe(true);
     expect(
-      screen.queryByRole("option", { name: /zh_male_m191_uranus_bigtts/ }),
-    ).not.toBeInTheDocument();
+      getOpenAntdOptions().some((option) =>
+        option.textContent?.includes("zh_male_m191_uranus_bigtts"),
+      ),
+    ).toBe(false);
     await user.keyboard("{Escape}");
 
-    await user.selectOptions(gender, "male");
+    await selectAntdOption(user, gender, "男");
     await user.click(speaker);
     expect(
-      screen.getByRole("option", { name: /zh_male_m191_uranus_bigtts 云舟/ }),
-    ).toBeInTheDocument();
+      getOpenAntdOptions().some((option) =>
+        option.textContent?.includes("zh_male_m191_uranus_bigtts"),
+      ),
+    ).toBe(true);
     expect(
-      screen.queryByRole("option", { name: /zh_female_vv_uranus_bigtts/ }),
-    ).not.toBeInTheDocument();
+      getOpenAntdOptions().some((option) =>
+        option.textContent?.includes("zh_female_vv_uranus_bigtts"),
+      ),
+    ).toBe(false);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("combobox", { name: /^中文方言/ })).toBeNull();
 
-    await user.selectOptions(gender, "female");
-    await user.click(speaker);
-    await user.click(
-      screen.getByRole("option", {
-        name: /zh_female_vv_uranus_bigtts Vivi 2.0/,
-      }),
+    await selectAntdOption(user, gender, "女");
+    await selectAntdOption(
+      user,
+      speaker,
+      /zh_female_vv_uranus_bigtts.*Vivi 2\.0/,
     );
     const dialect = screen.getByRole("combobox", { name: /^中文方言/ });
-    expect(dialect).toHaveValue("");
-    await user.selectOptions(dialect, "sichuan");
-    expect(dialect).toHaveValue("sichuan");
+    expectAntdSelectLabel(dialect, "普通话 / 不指定方言");
+    await selectAntdOption(user, dialect, "四川话");
+    expectAntdSelectLabel(dialect, "四川话");
   });
 
   it("previews the current unsaved voice draft and shows bounded safe output", async () => {
     const user = userEvent.setup();
     renderRoute("/content/players/preview-draft-1");
     await screen.findByRole("heading", { name: "草稿语音试听" });
-    const speakerSelect = screen.getByRole("combobox", { name: /^玩家音色 / });
-    await user.click(speakerSelect);
-    await user.click(
-      await screen.findByRole("option", {
-        name: /zh_female_vv_uranus_bigtts Vivi 2.0/,
-      }),
+    const speakerSelect = screen.getByRole("combobox", { name: "玩家音色" });
+    await selectAntdOption(
+      user,
+      speakerSelect,
+      /zh_female_vv_uranus_bigtts.*Vivi 2\.0/,
     );
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /^中文方言/ }),
-      "sichuan",
+    await selectAntdOption(
+      user,
+      screen.getByRole("combobox", { name: "中文方言" }),
+      "四川话",
     );
     const sayInput = screen.getByRole("textbox", { name: /^试听文本/ });
     await user.clear(sayInput);
     await user.type(sayInput, "这是尚未保存的试听文本。");
-    await user.selectOptions(
+    await selectAntdOption(
+      user,
       screen.getByRole("combobox", { name: "本轮情绪" }),
-      "tense",
+      "紧张 · tense",
     );
     await user.type(
       screen.getByRole("textbox", { name: /^本轮演绎提示/ }),
@@ -327,10 +340,9 @@ describe("admin player profile flow", () => {
     });
     renderRoute("/content/players/preview-draft-1");
     const speakerSelect = await screen.findByRole("combobox", {
-      name: /^玩家音色 /,
+      name: "玩家音色",
     });
-    expect(speakerSelect).toHaveTextContent("clone-speaker");
-    expect(speakerSelect).toHaveTextContent("当前已保存（不在可用列表）");
+    expectAntdSelectLabel(speakerSelect, /clone-speaker.*当前已保存/);
     await user.click(screen.getByRole("button", { name: "试听当前草稿" }));
 
     const alert = await screen.findByRole("alert");

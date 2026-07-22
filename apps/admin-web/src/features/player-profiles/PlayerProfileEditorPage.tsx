@@ -1,9 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import Checkbox from "antd/es/checkbox";
+import Input from "antd/es/input";
+import InputNumber from "antd/es/input-number";
+import Select from "antd/es/select";
 import {
   cloneElement,
   type FormEvent,
   isValidElement,
-  type KeyboardEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -641,7 +644,7 @@ function PlayerProfileEditor({
               />
               <div className="player-form-grid">
                 <Field label="玩家名称" error={formErrors.display_name} required>
-                  <input
+                  <Input
                     aria-label="玩家名称"
                     aria-invalid={Boolean(formErrors.display_name)}
                     maxLength={80}
@@ -651,29 +654,28 @@ function PlayerProfileEditor({
                   />
                 </Field>
                 <Field label="默认模型" error={formErrors.model} required>
-                  <select
+                  <Select
+                    aria-label="默认模型"
                     aria-invalid={Boolean(formErrors.model)}
-                    name="model"
-                    onChange={(event) => updateDraft("model", event.target.value)}
+                    onChange={(value) => updateDraft("model", value)}
+                    options={modelOptions.map((option) => ({
+                      label: option.label,
+                      value: option.id,
+                    }))}
                     value={draft.model}
-                  >
-                    {modelOptions.map((option) => (
-                      <option key={option.id} value={option.id}>{option.label}</option>
-                    ))}
-                  </select>
+                  />
                 </Field>
                 <Field label="角色性别" error={formErrors.gender} required>
-                  <select
+                  <Select
+                    aria-label="角色性别"
                     aria-invalid={Boolean(formErrors.gender)}
-                    name="gender"
-                    onChange={(event) =>
-                      updateGender(event.target.value as PlayerGender)
-                    }
+                    onChange={(value) => updateGender(value as PlayerGender)}
+                    options={[
+                      { label: "女", value: "female" },
+                      { label: "男", value: "male" },
+                    ]}
                     value={draft.gender}
-                  >
-                    <option value="female">女</option>
-                    <option value="male">男</option>
-                  </select>
+                  />
                 </Field>
                 <Field
                   className="is-wide"
@@ -681,7 +683,7 @@ function PlayerProfileEditor({
                   error={formErrors.short_description}
                   help="最多 160 个字符"
                 >
-                  <input
+                  <Input
                     aria-invalid={Boolean(formErrors.short_description)}
                     maxLength={160}
                     name="short_description"
@@ -702,29 +704,29 @@ function PlayerProfileEditor({
               />
               <div className="player-form-grid">
                 <Field label="性格">
-                  <select
-                    name="personality_id"
-                    onChange={(event) => updateDraft("personality_id", event.target.value)}
+                  <Select
+                    aria-label="性格"
+                    onChange={(value) => updateDraft("personality_id", value)}
+                    options={options.personalities.map((option) => ({
+                      label: option.label,
+                      value: option.id,
+                    }))}
                     value={draft.personality_id}
-                  >
-                    {options.personalities.map((option) => (
-                      <option key={option.id} value={option.id}>{option.label}</option>
-                    ))}
-                  </select>
+                  />
                 </Field>
                 <Field label="策略模板">
-                  <select
-                    name="strategy_profile"
-                    onChange={(event) => updateDraft("strategy_profile", event.target.value)}
+                  <Select
+                    aria-label="策略模板"
+                    onChange={(value) => updateDraft("strategy_profile", value)}
+                    options={options.strategies.map((option) => ({
+                      label: option.label,
+                      value: option.id,
+                    }))}
                     value={draft.strategy_profile}
-                  >
-                    {options.strategies.map((option) => (
-                      <option key={option.id} value={option.id}>{option.label}</option>
-                    ))}
-                  </select>
+                  />
                 </Field>
                 <Field className="is-wide" label="性格描述">
-                  <textarea
+                  <Input.TextArea
                     name="personality_text"
                     onChange={(event) => updateDraft("personality_text", event.target.value)}
                     rows={4}
@@ -749,7 +751,7 @@ function PlayerProfileEditor({
               />
               <div className="player-form-grid">
                 <Field label="背景故事" error={formErrors.background_story}>
-                  <textarea
+                  <Input.TextArea
                     aria-invalid={Boolean(formErrors.background_story)}
                     maxLength={1200}
                     name="background_story"
@@ -759,7 +761,7 @@ function PlayerProfileEditor({
                   />
                 </Field>
                 <Field label="发言风格" error={formErrors.speaking_style}>
-                  <textarea
+                  <Input.TextArea
                     aria-invalid={Boolean(formErrors.speaking_style)}
                     maxLength={800}
                     name="speaking_style"
@@ -769,7 +771,7 @@ function PlayerProfileEditor({
                   />
                 </Field>
                 <Field label="常用表达" error={formErrors.catchphrases} help="使用逗号分隔">
-                  <input
+                  <Input
                     aria-invalid={Boolean(formErrors.catchphrases)}
                     name="catchphrases"
                     onChange={(event) => {
@@ -780,7 +782,7 @@ function PlayerProfileEditor({
                   />
                 </Field>
                 <Field label="标签" error={formErrors.tags} help="使用逗号分隔">
-                  <input
+                  <Input
                     aria-invalid={Boolean(formErrors.tags)}
                     name="tags"
                     onChange={(event) => {
@@ -796,7 +798,7 @@ function PlayerProfileEditor({
                   error={formErrors.example_messages}
                   help="每行一条"
                 >
-                  <textarea
+                  <Input.TextArea
                     aria-invalid={Boolean(formErrors.example_messages)}
                     name="example_messages"
                     onChange={(event) => {
@@ -818,20 +820,19 @@ function PlayerProfileEditor({
                   title="玩家音色与基础演绎"
                 />
                 {draft.voice_enabled !== undefined ? (
-                  <label className="player-featured-control">
-                    <input
-                      checked={draft.voice_enabled}
-                      name="voice_enabled"
-                      onChange={(event) =>
-                        updateDraft("voice_enabled", event.target.checked)
-                      }
-                      type="checkbox"
-                    />
+                  <Checkbox
+                    checked={draft.voice_enabled}
+                    className="player-featured-control"
+                    name="voice_enabled"
+                    onChange={(event) =>
+                      updateDraft("voice_enabled", event.target.checked)
+                    }
+                  >
                     <span>
                       <strong>为新对局启用玩家语音</strong>
                       <small>关闭只影响之后创建的新对局，不改写运行中或历史语音。</small>
                     </span>
-                  </label>
+                  </Checkbox>
                 ) : null}
                 <div className="player-form-grid player-voice-config-grid">
                   {draft.tts_speaker !== undefined ? (
@@ -852,24 +853,24 @@ function PlayerProfileEditor({
                       label="中文方言"
                       help="仅展示当前音色在火山引擎 TTS 2.0 中明确支持的方言。"
                     >
-                      <select
+                      <Select
+                        aria-label="中文方言"
                         aria-invalid={Boolean(formErrors.tts_dialect)}
-                        name="tts_dialect"
-                        onChange={(event) =>
+                        onChange={(value) =>
                           updateDraft(
                             "tts_dialect",
-                            (event.target.value || null) as PlayerProfileEditableFields["tts_dialect"],
+                            (value || null) as PlayerProfileEditableFields["tts_dialect"],
                           )
                         }
+                        options={[
+                          { label: "普通话 / 不指定方言", value: "" },
+                          ...selectedTtsSpeaker.dialects.map((option) => ({
+                            label: option.label,
+                            value: option.id,
+                          })),
+                        ]}
                         value={draft.tts_dialect ?? ""}
-                      >
-                        <option value="">普通话 / 不指定方言</option>
-                        {selectedTtsSpeaker.dialects.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </Field>
                   ) : null}
                   {draft.base_delivery_mood !== undefined ? (
@@ -878,22 +879,21 @@ function PlayerProfileEditor({
                       label="基础情绪"
                       help="留空重置为内置中性情绪 neutral。"
                     >
-                      <select
-                        name="base_delivery_mood"
-                        onChange={(event) =>
+                      <Select
+                        aria-label="基础情绪"
+                        onChange={(value) =>
                           updateDraft(
                             "base_delivery_mood",
-                            event.target.value || null,
+                            value || null,
                           )
                         }
-                        value={draft.base_delivery_mood ?? ""}
-                      >
-                        {voiceDeliveryOptions(
+                        options={voiceDeliveryOptions(
                           PLAYER_DELIVERY_MOOD_OPTIONS,
                           draft.base_delivery_mood,
                           "内置默认 · neutral",
                         )}
-                      </select>
+                        value={draft.base_delivery_mood ?? ""}
+                      />
                     </Field>
                   ) : null}
                   {draft.base_delivery_intensity !== undefined ? (
@@ -902,22 +902,21 @@ function PlayerProfileEditor({
                       label="基础强度"
                       help="留空重置为内置中等强度 medium。"
                     >
-                      <select
-                        name="base_delivery_intensity"
-                        onChange={(event) =>
+                      <Select
+                        aria-label="基础强度"
+                        onChange={(value) =>
                           updateDraft(
                             "base_delivery_intensity",
-                            event.target.value || null,
+                            value || null,
                           )
                         }
-                        value={draft.base_delivery_intensity ?? ""}
-                      >
-                        {voiceDeliveryOptions(
+                        options={voiceDeliveryOptions(
                           PLAYER_DELIVERY_INTENSITY_OPTIONS,
                           draft.base_delivery_intensity,
                           "内置默认 · medium",
                         )}
-                      </select>
+                        value={draft.base_delivery_intensity ?? ""}
+                      />
                     </Field>
                   ) : null}
                   {draft.base_delivery_pace !== undefined ? (
@@ -926,22 +925,21 @@ function PlayerProfileEditor({
                       label="基础语速"
                       help="留空重置为内置自然语速 natural。"
                     >
-                      <select
-                        name="base_delivery_pace"
-                        onChange={(event) =>
+                      <Select
+                        aria-label="基础语速"
+                        onChange={(value) =>
                           updateDraft(
                             "base_delivery_pace",
-                            event.target.value || null,
+                            value || null,
                           )
                         }
-                        value={draft.base_delivery_pace ?? ""}
-                      >
-                        {voiceDeliveryOptions(
+                        options={voiceDeliveryOptions(
                           PLAYER_DELIVERY_PACE_OPTIONS,
                           draft.base_delivery_pace,
                           "内置默认 · natural",
                         )}
-                      </select>
+                        value={draft.base_delivery_pace ?? ""}
+                      />
                     </Field>
                   ) : null}
                   {draft.base_delivery_instruction !== undefined ? (
@@ -951,7 +949,7 @@ function PlayerProfileEditor({
                       label="基础演绎提示"
                       help="只描述演绎方式，不应包含身份、座位、行动结果或其他游戏事实。"
                     >
-                      <textarea
+                      <Input.TextArea
                         maxLength={240}
                         name="base_delivery_instruction"
                         onChange={(event) =>
@@ -987,7 +985,7 @@ function PlayerProfileEditor({
                   </header>
                   <div className="player-form-grid player-voice-preview-grid">
                     <Field className="is-wide" label="试听文本" help="最多 240 个字符">
-                      <textarea
+                      <Input.TextArea
                         maxLength={240}
                         name="voice_preview_say"
                         onChange={(event) => {
@@ -1000,56 +998,47 @@ function PlayerProfileEditor({
                       />
                     </Field>
                     <Field label="本轮情绪">
-                      <select
-                        name="voice_preview_mood"
-                        onChange={(event) =>
-                          updateTurnDelivery("mood", event.target.value)
-                        }
-                        value={turnDelivery.mood}
-                      >
-                        {voiceDeliveryOptions(
+                      <Select
+                        aria-label="本轮情绪"
+                        onChange={(value) => updateTurnDelivery("mood", value)}
+                        options={voiceDeliveryOptions(
                           PLAYER_DELIVERY_MOOD_OPTIONS,
                           turnDelivery.mood,
                           "沿用基础情绪",
                         )}
-                      </select>
+                        value={turnDelivery.mood}
+                      />
                     </Field>
                     <Field label="本轮强度">
-                      <select
-                        name="voice_preview_intensity"
-                        onChange={(event) =>
-                          updateTurnDelivery("intensity", event.target.value)
-                        }
-                        value={turnDelivery.intensity}
-                      >
-                        {voiceDeliveryOptions(
+                      <Select
+                        aria-label="本轮强度"
+                        onChange={(value) => updateTurnDelivery("intensity", value)}
+                        options={voiceDeliveryOptions(
                           PLAYER_DELIVERY_INTENSITY_OPTIONS,
                           turnDelivery.intensity,
                           "沿用基础强度",
                         )}
-                      </select>
+                        value={turnDelivery.intensity}
+                      />
                     </Field>
                     <Field label="本轮语速">
-                      <select
-                        name="voice_preview_pace"
-                        onChange={(event) =>
-                          updateTurnDelivery("pace", event.target.value)
-                        }
-                        value={turnDelivery.pace}
-                      >
-                        {voiceDeliveryOptions(
+                      <Select
+                        aria-label="本轮语速"
+                        onChange={(value) => updateTurnDelivery("pace", value)}
+                        options={voiceDeliveryOptions(
                           PLAYER_DELIVERY_PACE_OPTIONS,
                           turnDelivery.pace,
                           "沿用基础语速",
                         )}
-                      </select>
+                        value={turnDelivery.pace}
+                      />
                     </Field>
                     <Field
                       className="is-wide"
                       label="本轮演绎提示"
                       help="含座位、身份、阵营或行动事实时，后端会丢弃整段并安全回退。"
                     >
-                      <textarea
+                      <Input.TextArea
                         maxLength={240}
                         name="voice_preview_instruction"
                         onChange={(event) =>
@@ -1120,21 +1109,21 @@ function PlayerProfileEditor({
               />
               <div className="player-form-grid">
                 <Field label="内设形象">
-                  <select
-                    name="appearance_id"
-                    onChange={(event) => {
+                  <Select
+                    aria-label="内设形象"
+                    onChange={(value) => {
                       const appearance = options.appearances.find(
-                        (item) => item.id === event.target.value,
+                        (item) => item.id === value,
                       );
-                      updateDraft("appearance_id", event.target.value);
+                      updateDraft("appearance_id", value);
                       updateDraft("avatar_asset_id", appearance?.avatar_asset_id ?? null);
                     }}
+                    options={options.appearances.map((option) => ({
+                      label: option.label,
+                      value: option.id,
+                    }))}
                     value={draft.appearance_id}
-                  >
-                    {options.appearances.map((option) => (
-                      <option key={option.id} value={option.id}>{option.label}</option>
-                    ))}
-                  </select>
+                  />
                 </Field>
                 <div className="player-avatar-readonly">
                   {avatarImageUrl ? <img alt="当前玩家形象预览" src={avatarImageUrl} /> : <span>暂无形象</span>}
@@ -1150,18 +1139,17 @@ function PlayerProfileEditor({
                   id="player-presentation-title"
                   title="发布展示"
                 />
-                <label className="player-featured-control">
-                  <input
-                    checked={draft.featured}
-                    name="featured"
-                    onChange={(event) => updateDraft("featured", event.target.checked)}
-                    type="checkbox"
-                  />
+                <Checkbox
+                  checked={draft.featured}
+                  className="player-featured-control"
+                  name="featured"
+                  onChange={(event) => updateDraft("featured", event.target.checked)}
+                >
                   <span>
                     <strong>设为推荐玩家</strong>
                     <small>归档时推荐状态会自动清除。</small>
                   </span>
-                </label>
+                </Checkbox>
               </section>
             ) : null}
           </fieldset>
@@ -1329,21 +1317,15 @@ function PlayerProfileEditor({
   }) {
     return (
       <Field label={label} error={formErrors[field]}>
-        <input
+        <InputNumber
+          aria-label={label}
           aria-invalid={Boolean(formErrors[field])}
-          inputMode="numeric"
           max={5}
           min={1}
           name={field}
-          onChange={(event) =>
-            updateDraft(
-              field,
-              event.target.value === "" ? Number.NaN : Number(event.target.value),
-            )
-          }
+          onChange={(value) => updateDraft(field, value ?? Number.NaN)}
           step={1}
-          type="number"
-          value={Number.isFinite(draft[field]) ? draft[field] : ""}
+          value={Number.isFinite(draft[field]) ? draft[field] : null}
         />
       </Field>
     );
@@ -1370,15 +1352,8 @@ function TtsSpeakerField({
   value: string | null;
 }) {
   const generatedId = useId();
-  const labelId = `${generatedId}-label`;
-  const valueId = `${generatedId}-value`;
   const helpId = `${generatedId}-help`;
   const errorId = `${generatedId}-error`;
-  const listboxId = `${generatedId}-listbox`;
-  const containerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const [isOpen, setIsOpen] = useState(false);
   const selected = options.find((option) => option.voice_type === value);
   const legacyOption = value && !selected
     ? {
@@ -1398,159 +1373,43 @@ function TtsSpeakerField({
     ...(legacyOption ? [legacyOption] : []),
     ...options,
   ];
-  const selectedIndex = Math.max(
-    0,
-    displayedOptions.findIndex((option) => option.voice_type === (value ?? "")),
-  );
-  const [activeIndex, setActiveIndex] = useState(selectedIndex);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return undefined;
-    }
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    return () =>
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (isOpen) {
-      optionRefs.current[activeIndex]?.focus();
-    }
-  }, [activeIndex, isOpen]);
-
-  function openList(direction: "first" | "last" | "selected" = "selected") {
-    setActiveIndex(
-      direction === "first"
-        ? 0
-        : direction === "last"
-          ? displayedOptions.length - 1
-          : selectedIndex,
-    );
-    setIsOpen(true);
-  }
-
-  function selectOption(option: PlayerTtsSpeakerOption) {
-    onChange(option.voice_type || null);
-    setIsOpen(false);
-    triggerRef.current?.focus();
-  }
-
-  function handleOptionKeyDown(
-    event: KeyboardEvent<HTMLDivElement>,
-    index: number,
-  ) {
-    let nextIndex = index;
-    if (event.key === "ArrowDown") {
-      nextIndex = Math.min(displayedOptions.length - 1, index + 1);
-    } else if (event.key === "ArrowUp") {
-      nextIndex = Math.max(0, index - 1);
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = displayedOptions.length - 1;
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      setIsOpen(false);
-      triggerRef.current?.focus();
-      return;
-    } else {
-      return;
-    }
-    event.preventDefault();
-    setActiveIndex(nextIndex);
-  }
-
-  const selectedName = selected?.name ?? legacyOption?.name ?? "继承全局玩家音色";
+  const selectOptions = displayedOptions.map((option) => ({
+    label: (
+      <span className="player-speaker-value">
+        <code>{option.voice_type || "继承全局"}</code>
+        <span>{option.name}</span>
+      </span>
+    ),
+    searchText: `${option.voice_type} ${option.name}`,
+    value: option.voice_type,
+  }));
   return (
-    <div
-      className="player-form-field player-speaker-field is-wide"
-      ref={containerRef}
-    >
-      <span id={labelId}>玩家音色</span>
-      <div className="player-speaker-select">
-        <button
-          aria-controls={listboxId}
-          aria-describedby={[helpId, error ? errorId : null]
-            .filter(Boolean)
-            .join(" ")}
-          aria-expanded={isOpen}
-          aria-haspopup="listbox"
-          aria-invalid={Boolean(error)}
-          aria-labelledby={`${labelId} ${valueId}`}
-          className="player-speaker-trigger"
-          onClick={() => (isOpen ? setIsOpen(false) : openList())}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault();
-              openList(event.key === "ArrowDown" ? "first" : "last");
-            }
-          }}
-          ref={triggerRef}
-          role="combobox"
-          type="button"
-        >
-          <span className="player-speaker-value" id={valueId}>
-            <code>{value || "继承全局"}</code>
-            <span>{selectedName}</span>
-          </span>
-          <span aria-hidden="true" className="player-speaker-chevron">
-            ⌄
-          </span>
-        </button>
-        {isOpen ? (
-          <div className="player-speaker-menu" id={listboxId} role="listbox">
-            <div aria-hidden="true" className="player-speaker-menu-header">
-              <span>voice_type</span>
-              <span>音色名称</span>
-            </div>
-            {displayedOptions.map((option, index) => (
-              <div
-                aria-label={`${option.voice_type || "继承全局"} ${option.name}`}
-                aria-selected={option.voice_type === (value ?? "")}
-                className="player-speaker-option"
-                key={option.voice_type || "inherit-global"}
-                onClick={() => selectOption(option)}
-                onFocus={() => setActiveIndex(index)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    selectOption(option);
-                    return;
-                  }
-                  handleOptionKeyDown(event, index);
-                }}
-                ref={(node) => {
-                  optionRefs.current[index] = node;
-                }}
-                role="option"
-                tabIndex={activeIndex === index ? 0 : -1}
-              >
-                <code>{option.voice_type || "继承全局"}</code>
-                <span>{option.name}</span>
-              </div>
-            ))}
-            {isPending ? (
-              <div className="player-speaker-menu-status" role="status">
-                正在读取火山引擎音色列表…
-              </div>
-            ) : null}
-            {isError ? (
-              <div className="player-speaker-menu-status is-error" role="alert">
-                <span>音色列表暂时读取失败。</span>
-                <button onClick={onRetry} type="button">
-                  重试
-                </button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+    <div className="player-form-field player-speaker-field is-wide">
+      <span>玩家音色</span>
+      <Select
+        aria-describedby={[helpId, error ? errorId : null]
+          .filter(Boolean)
+          .join(" ")}
+        aria-invalid={Boolean(error)}
+        aria-label="玩家音色"
+        className="player-speaker-select"
+        loading={isPending}
+        notFoundContent={isPending ? "正在读取音色列表…" : "没有可用音色"}
+        onChange={(nextValue) => onChange(nextValue || null)}
+        optionFilterProp="searchText"
+        options={selectOptions}
+        showSearch
+        status={error ? "error" : undefined}
+        value={value ?? ""}
+      />
+      {isError ? (
+        <div className="player-speaker-menu-status is-error" role="alert">
+          <span>音色列表暂时读取失败。</span>
+          <button onClick={onRetry} type="button">
+            重试
+          </button>
+        </div>
+      ) : null}
       <small id={helpId}>
         仅列出与角色性别匹配、支持中文的 seed-tts-2.0
         双向流音色；留空表示继承全局 player_speaker。
@@ -1625,6 +1484,7 @@ function Field({
     ? cloneElement(children, {
         "aria-describedby": describedBy || undefined,
         "aria-errormessage": error ? errorId : undefined,
+        status: error ? "error" : children.props.status,
       })
     : children;
   return (
@@ -1724,19 +1584,16 @@ function voiceDeliveryOptions(
   const hasCurrent = current
     ? options.some((option) => option.id === current)
     : true;
-  return (
-    <>
-      <option value="">{emptyLabel}</option>
-      {!hasCurrent && current ? (
-        <option value={current}>当前值 · {current}</option>
-      ) : null}
-      {options.map((option) => (
-        <option key={option.id} value={option.id}>
-          {option.label} · {option.id}
-        </option>
-      ))}
-    </>
-  );
+  return [
+    { label: emptyLabel, value: "" },
+    ...(!hasCurrent && current
+      ? [{ label: `当前值 · ${current}`, value: current }]
+      : []),
+    ...options.map((option) => ({
+      label: `${option.label} · ${option.id}`,
+      value: option.id,
+    })),
+  ];
 }
 
 function formatDateTime(value: string) {

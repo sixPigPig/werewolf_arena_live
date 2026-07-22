@@ -1,3 +1,4 @@
+import Input from "antd/es/input";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import { isAdminApiError } from "@/api/problem-details";
@@ -76,7 +77,7 @@ export function GameInterruptDialog({
         <code>{sessionId}</code>
         <small>当前运行 · {runId}</small>
         <label htmlFor="game-interrupt-reason">操作原因</label>
-        <textarea
+        <Input.TextArea
           disabled={pending}
           id="game-interrupt-reason"
           maxLength={500}

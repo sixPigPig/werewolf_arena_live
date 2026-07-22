@@ -1,4 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Button from "antd/es/button";
+import Input from "antd/es/input";
+import Select from "antd/es/select";
 import { type FormEvent, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -151,7 +154,8 @@ export default function JudgeVoiceAssetsPage() {
         <form onSubmit={handleSearch} role="search">
           <label className="game-filter-wide">
             <span>搜索台词</span>
-            <input
+            <Input
+              aria-label="搜索台词"
               defaultValue={params.q ?? ""}
               key={`q-${params.q ?? ""}`}
               name="q"
@@ -161,71 +165,72 @@ export default function JudgeVoiceAssetsPage() {
           </label>
           <label>
             <span>文件状态</span>
-            <select
+            <Select
               aria-label="文件状态"
-              onChange={(event) =>
-                updateSearch({ availability: event.target.value })
-              }
+              onChange={(value) => updateSearch({ availability: value })}
+              options={[
+                { label: "全部状态", value: "" },
+                { label: "已生成", value: "available" },
+                { label: "缺失", value: "missing" },
+              ]}
               value={params.availability ?? ""}
-            >
-              <option value="">全部状态</option>
-              <option value="available">已生成</option>
-              <option value="missing">缺失</option>
-            </select>
+            />
           </label>
           <label>
             <span>台词分类</span>
-            <select
+            <Select
               aria-label="台词分类"
-              onChange={(event) => updateSearch({ category: event.target.value })}
+              onChange={(value) => updateSearch({ category: value })}
+              options={[
+                { label: "全部分类", value: "" },
+                ...(data?.categories ?? []).map((category) => ({
+                  label: `${category.name}（${category.available}/${category.total}）`,
+                  value: category.name,
+                })),
+              ]}
               value={params.category ?? ""}
-            >
-              <option value="">全部分类</option>
-              {(data?.categories ?? []).map((category) => (
-                <option key={category.name} value={category.name}>
-                  {category.name}（{category.available}/{category.total}）
-                </option>
-              ))}
-            </select>
+            />
           </label>
           <label>
             <span>排序</span>
-            <select
+            <Select
               aria-label="排序"
-              onChange={(event) => {
-                const [sort, direction] = event.target.value.split(":");
+              onChange={(value) => {
+                const [sort, direction] = value.split(":");
                 updateSearch({ sort, direction });
               }}
+              options={[
+                { label: "分类与席位", value: "category:asc" },
+                { label: "台词 ID", value: "id:asc" },
+                { label: "台词 ID 倒序", value: "id:desc" },
+                { label: "文件由大到小", value: "byte_size:desc" },
+                { label: "文件由小到大", value: "byte_size:asc" },
+              ]}
               value={`${params.sort}:${params.direction}`}
-            >
-              <option value="category:asc">分类与席位</option>
-              <option value="id:asc">台词 ID</option>
-              <option value="id:desc">台词 ID 倒序</option>
-              <option value="byte_size:desc">文件由大到小</option>
-              <option value="byte_size:asc">文件由小到大</option>
-            </select>
+            />
           </label>
           <label>
             <span>每页</span>
-            <select
+            <Select
               aria-label="每页"
-              onChange={(event) => updateSearch({ page_size: event.target.value })}
+              onChange={(value) => updateSearch({ page_size: value })}
+              options={[
+                { label: "20 条", value: "20" },
+                { label: "50 条", value: "50" },
+                { label: "100 条", value: "100" },
+              ]}
               value={String(params.page_size)}
-            >
-              <option value="20">20 条</option>
-              <option value="50">50 条</option>
-              <option value="100">100 条</option>
-            </select>
+            />
           </label>
           <div className="game-filter-actions">
             {hasFilters ? (
-              <button className="admin-text-button" onClick={clearFilters} type="button">
+              <Button htmlType="button" onClick={clearFilters} type="text">
                 清除筛选
-              </button>
+              </Button>
             ) : null}
-            <button className="admin-secondary-button" type="submit">
+            <Button htmlType="submit">
               应用筛选
-            </button>
+            </Button>
           </div>
         </form>
       </section>

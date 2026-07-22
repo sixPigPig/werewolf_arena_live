@@ -17,6 +17,7 @@ import {
   contractLiveRunItem,
 } from "@/features/live-runs/test-fixtures";
 import { routes } from "@/routes";
+import { selectAntdOption } from "@/tests/antd-select";
 
 function renderRoute(path: string) {
   const queryClient = new QueryClient({
@@ -92,7 +93,7 @@ describe("admin live run flow", () => {
       screen.queryByRole("button", { name: /打断|停止|恢复|重试运行/ }),
     ).toBeNull();
 
-    await user.selectOptions(screen.getByLabelText("运行状态"), "failed");
+    await selectAntdOption(user, screen.getByLabelText("运行状态"), "失败");
     await waitFor(() =>
       expect(router.state.location.search).toContain("status=failed"),
     );

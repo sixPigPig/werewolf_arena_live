@@ -9,6 +9,7 @@ import Flex from "antd/es/flex";
 import Input from "antd/es/input";
 import Modal from "antd/es/modal";
 import Pagination from "antd/es/pagination";
+import Select from "antd/es/select";
 import Table, { type ColumnsType } from "antd/es/table";
 import Tag from "antd/es/tag";
 import Typography from "antd/es/typography";
@@ -214,26 +215,41 @@ export default function AdminUsersPage() {
           </label>
           <label>
             <span>角色</span>
-            <select aria-label="账号角色" onChange={(event) => updateSearch({ role: event.target.value || undefined })} value={params.role ?? ""}>
-              <option value="">全部角色</option>
-              {Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
+            <Select
+              aria-label="账号角色"
+              onChange={(value) => updateSearch({ role: value || undefined })}
+              options={[
+                { label: "全部角色", value: "" },
+                ...Object.entries(roleLabels).map(([value, label]) => ({ label, value })),
+              ]}
+              value={params.role ?? ""}
+            />
           </label>
           <label>
             <span>状态</span>
-            <select aria-label="账号状态" onChange={(event) => updateSearch({ is_active: event.target.value || undefined })} value={params.is_active ?? ""}>
-              <option value="">全部状态</option>
-              <option value="true">已启用</option>
-              <option value="false">已停用</option>
-            </select>
+            <Select
+              aria-label="账号状态"
+              onChange={(value) => updateSearch({ is_active: value || undefined })}
+              options={[
+                { label: "全部状态", value: "" },
+                { label: "已启用", value: "true" },
+                { label: "已停用", value: "false" },
+              ]}
+              value={params.is_active ?? ""}
+            />
           </label>
           <label>
             <span>身份绑定</span>
-            <select aria-label="身份绑定" onChange={(event) => updateSearch({ identity_status: event.target.value || undefined })} value={params.identity_status ?? ""}>
-              <option value="">全部</option>
-              <option value="bound">已绑定 OIDC</option>
-              <option value="unbound">等待首次登录</option>
-            </select>
+            <Select
+              aria-label="身份绑定"
+              onChange={(value) => updateSearch({ identity_status: value || undefined })}
+              options={[
+                { label: "全部", value: "" },
+                { label: "已绑定 OIDC", value: "bound" },
+                { label: "等待首次登录", value: "unbound" },
+              ]}
+              value={params.identity_status ?? ""}
+            />
           </label>
           <Flex align="flex-end" gap={8}>
             <Button onClick={() => setSearchParams({})}>清除筛选</Button>
@@ -316,6 +332,7 @@ function AccountDialog({
 }) {
   const user = state.mode === "edit" ? state.user : null;
   const [reason, setReason] = useState("");
+  const [role, setRole] = useState<AdminRole>(user?.role ?? "viewer");
   const isSelf = user?.id === currentUserId;
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -327,7 +344,7 @@ function AccountDialog({
       isActive: user && isSelf ? user.is_active : data.get("is_active") === "on",
       mode: state.mode,
       reason,
-      role: user && (!canManageRoles || isSelf) ? user.role : (String(data.get("role")) as AdminRole),
+      role: user && (!canManageRoles || isSelf) ? user.role : role,
       user: user ?? undefined,
     });
   }
@@ -356,9 +373,13 @@ function AccountDialog({
         </label>
         <label>
           <span>固定角色</span>
-          <select defaultValue={user?.role ?? "viewer"} disabled={!canManageRoles || isSelf} name="role">
-            {Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
+          <Select
+            aria-label="固定角色"
+            disabled={!canManageRoles || isSelf}
+            onChange={(value) => setRole(value as AdminRole)}
+            options={Object.entries(roleLabels).map(([value, label]) => ({ label, value }))}
+            value={role}
+          />
         </label>
         {user ? (
           <Checkbox defaultChecked={user.is_active} disabled={isSelf} name="is_active">

@@ -158,17 +158,6 @@
   font-weight: 600;
 }
 
-.ant-admin-filter-grid select,
-.ant-account-form select {
-  width: 100%;
-  min-height: 36px;
-  padding: 6px 30px 6px 10px;
-  border: 1px solid #d9e0e8;
-  border-radius: 7px;
-  color: #172033;
-  background: #fff;
-}
-
 .ant-filter-wide {
   grid-column: span 2;
 }
@@ -581,28 +570,6 @@
 .voice-pagination button:hover:not(:disabled) {
   border-color: #0958d9;
   color: #0958d9;
-}
-
-.admin-page input:not(.ant-input),
-.admin-page select,
-.admin-page textarea:not(.ant-input) {
-  border-color: #d9e0e8;
-  border-radius: 7px;
-  box-shadow: none;
-}
-
-.admin-page input:not(.ant-input):hover,
-.admin-page select:hover,
-.admin-page textarea:not(.ant-input):hover {
-  border-color: #69a7ff;
-}
-
-.admin-page input:not(.ant-input):focus,
-.admin-page select:focus,
-.admin-page textarea:not(.ant-input):focus {
-  border-color: #0958d9;
-  box-shadow: 0 0 0 2px rgba(9, 88, 217, 0.12);
-  outline: 0;
 }
 
 @media (max-width: 1024px) {

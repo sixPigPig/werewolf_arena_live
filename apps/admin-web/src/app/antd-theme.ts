@@ -22,16 +22,9 @@ export const adminTheme: ThemeConfig = {
     wireframe: false,
   },
   components: {
-    Button: {
-      controlHeight: 36,
-      fontWeight: 600,
-    },
     Card: {
       borderRadiusLG: 10,
       headerBg: "transparent",
-    },
-    Input: {
-      controlHeight: 36,
     },
     Layout: {
       bodyBg: "#f5f7fa",

@@ -27,4 +27,6 @@ class TestResizeObserver implements ResizeObserver {
   unobserve = vi.fn();
 }
 
-vi.stubGlobal("ResizeObserver", TestResizeObserver);
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+});

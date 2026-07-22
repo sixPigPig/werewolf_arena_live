@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { routes } from "@/routes";
+import { selectAntdOption } from "@/tests/antd-select";
 
 const rootSession = {
   user: { id: "1", email: "root@example.test", display_name: "Root Admin", role: "super_admin" },
@@ -86,7 +87,7 @@ describe("admin system flows", () => {
     await user.click(screen.getByRole("button", { name: "开通账号" }));
     await user.type(screen.getByLabelText("邮箱"), "viewer@example.test");
     await user.type(screen.getByLabelText("显示名称"), "New Viewer");
-    await user.selectOptions(screen.getByLabelText("固定角色"), "viewer");
+    await selectAntdOption(user, screen.getByLabelText("固定角色"), "只读观察员");
     await user.type(screen.getByLabelText("操作原因"), "New support account");
     await user.click(screen.getByRole("button", { name: "确认开通" }));
     expect(await screen.findByText("已开通 viewer@example.test")).toBeInTheDocument();
@@ -94,7 +95,7 @@ describe("admin system flows", () => {
     await user.click(screen.getByRole("button", { name: "管理 Operations User" }));
     await user.clear(screen.getByLabelText("显示名称"));
     await user.type(screen.getByLabelText("显示名称"), "Primary Operator");
-    await user.selectOptions(screen.getByLabelText("固定角色"), "content_editor");
+    await selectAntdOption(user, screen.getByLabelText("固定角色"), "内容编辑");
     await user.type(screen.getByLabelText("操作原因"), "Team responsibility changed");
     await user.click(screen.getByRole("button", { name: "保存账号" }));
     expect(await screen.findByText("已更新 operator@example.test")).toBeInTheDocument();
@@ -133,7 +134,7 @@ describe("admin system flows", () => {
     expect(await screen.findByText("admin.user.update")).toBeInTheDocument();
     expect(screen.getByText("Role adjustment")).toBeInTheDocument();
     expect(screen.queryByText(/before|after|ip_address/)).toBeNull();
-    await user.selectOptions(screen.getByLabelText("审计结果"), "failure");
+    await selectAntdOption(user, screen.getByLabelText("审计结果"), "失败");
     await waitFor(() => expect(router.state.location.search).toContain("result=failure"));
   });
 

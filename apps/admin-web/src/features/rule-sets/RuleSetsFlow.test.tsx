@@ -3,6 +3,11 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { routes } from "@/routes";
+import {
+  expectAntdSelectLabel,
+  getOpenAntdOptions,
+  selectAntdOption,
+} from "@/tests/antd-select";
 import { resetPreviewRuleSets } from "./preview-repository";
 import { fixtureRuleSet, ruleContract, ruleSetOptions, standardConfig } from "./test-fixtures";
 
@@ -42,10 +47,10 @@ describe("admin rule set list flow", () => {
     await screen.findByText("classic_9 规则");
     await user.type(screen.getByLabelText("搜索规则"), "classic");
     await user.click(screen.getByRole("button", { name: "搜索" }));
-    await user.selectOptions(screen.getByLabelText("生命周期"), "published");
-    await user.selectOptions(screen.getByLabelText("玩家人数"), "9");
-    await user.selectOptions(screen.getByLabelText("排序"), "-updated_at");
-    await user.selectOptions(screen.getByLabelText("每页"), "20");
+    await selectAntdOption(user, screen.getByLabelText("生命周期"), "已发布");
+    await selectAntdOption(user, screen.getByLabelText("玩家人数"), "9 人");
+    await selectAntdOption(user, screen.getByLabelText("排序"), "-updated_at");
+    await selectAntdOption(user, screen.getByLabelText("每页"), "20 条");
     await waitFor(() => expect(router.state.location.search).toContain("q=classic"));
     for (const part of ["status=published", "player_count=9", "sort=updated_at", "direction=desc", "page_size=20"]) expect(router.state.location.search).toContain(part);
     await user.click(screen.getByRole("button", { name: "清除筛选" }));
@@ -117,8 +122,8 @@ describe("admin rule set list flow", () => {
       throw new Error(`Unexpected request: ${url}`);
     }));
     const user = userEvent.setup(); const { router } = renderRoute("/content/rules");
-    const playerCount = await screen.findByLabelText("玩家人数"); await waitFor(() => expect(playerCount).toHaveTextContent("8 人"));
-    expect(playerCount).toHaveTextContent("8 人"); expect(playerCount).toHaveTextContent("10 人"); expect(playerCount).not.toHaveTextContent("6 人"); expect(playerCount).not.toHaveTextContent("12 人");
+    const playerCount = await screen.findByLabelText("玩家人数"); await user.click(playerCount); const playerCountOptions = getOpenAntdOptions().map((option) => option.textContent ?? "");
+    expect(playerCountOptions).toContain("8 人"); expect(playerCountOptions).toContain("10 人"); expect(playerCountOptions).not.toContain("6 人"); expect(playerCountOptions).not.toContain("12 人"); await user.keyboard("{Escape}");
     await user.click(await screen.findByRole("button", { name: "复制 source_rule 规则" }));
     await user.type(screen.getByLabelText("新规则 ID"), "copy_rule");
     await user.type(screen.getByLabelText("新规则名称"), "动态约束副本");
@@ -134,7 +139,7 @@ describe("admin rule set list flow", () => {
   it("uses only custom advertised lifecycle and signed sort choices", async () => {
     useServerSession(["rules.read"]); const customOptions = { ...ruleSetOptions, statuses: [{ value: "archived" as const, label: "仅归档" }], sorts: [{ value: "-name" as const, label: "名称倒序" }] }; let listUrl = "";
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => { const url = String(input); if (url.endsWith("/api/v1/admin/me")) return serverSession(); if (url.endsWith("/api/v1/admin/rule-set-options")) return json(customOptions); if (url.includes("/api/v1/admin/rule-sets?")) { listUrl = url; return json({ items: [], pagination: { page: 1, page_size: 20, total: 0, pages: 0 } }); } throw new Error(`Unexpected request: ${url}`); }));
-    renderRoute("/content/rules?status=published&sort=updated_at&direction=asc"); await screen.findByRole("heading", { name: "还没有游戏规则" }); const status = screen.getByLabelText("生命周期"); const sort = screen.getByLabelText("排序"); expect(status).toHaveTextContent("仅归档"); expect(status).not.toHaveTextContent("草稿"); expect(sort).toHaveValue("-name"); expect(sort).toHaveTextContent("名称倒序"); expect(listUrl).toContain("sort=-name"); expect(listUrl).not.toContain("status=published");
+    const user = userEvent.setup(); renderRoute("/content/rules?status=published&sort=updated_at&direction=asc"); await screen.findByRole("heading", { name: "还没有游戏规则" }); const status = screen.getByLabelText("生命周期"); const sort = screen.getByLabelText("排序"); await user.click(status); expect(getOpenAntdOptions().some((option) => option.textContent?.includes("仅归档"))).toBe(true); expect(getOpenAntdOptions().some((option) => option.textContent?.includes("草稿"))).toBe(false); await user.keyboard("{Escape}"); expectAntdSelectLabel(sort, "名称倒序"); expect(listUrl).toContain("sort=-name"); expect(listUrl).not.toContain("status=published");
   });
 
   it("does not guess constraints while options are unavailable", async () => {
@@ -350,8 +355,9 @@ describe("rule editor", () => {
   });
 
   it("associates field and role-group errors with their controls", async () => {
+    const user = userEvent.setup();
     renderRoute("/content/rules/new"); await screen.findByLabelText("规则 ID");
-    fireEvent.change(screen.getByLabelText("狼人数量"), { target: { value: "0" } }); fireEvent.submit(screen.getByRole("button", { name: "保存草稿" }).closest("form")!);
+    await user.clear(screen.getByLabelText("狼人数量")); await user.type(screen.getByLabelText("狼人数量"), "0"); fireEvent.submit(screen.getByRole("button", { name: "保存草稿" }).closest("form")!);
     await waitFor(() => expect(screen.getByLabelText("规则 ID")).toHaveAttribute("aria-invalid", "true")); expect(screen.getByLabelText("规则 ID")).toHaveAccessibleDescription("规则 ID 格式不正确");
     expect(screen.getByRole("group", { name: "角色数量" })).toHaveAttribute("aria-invalid", "true"); expect(screen.getByLabelText("狼人数量")).toHaveAccessibleDescription(/角色数量/);
   });
@@ -479,7 +485,7 @@ describe("rule editor", () => {
   it("archive rule exhausts published pages and uses a deterministic later-page replacement lock", async () => {
     useServerSession(["rules.read", "rules.archive"]); const current = { ...fixtureRuleSet("current_default", "published", true), lock_version: 6 }; const detail = { ...current, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; const fillers = Array.from({ length: 99 }, (_, index) => fixtureRuleSet(`filler_${index}`, "published")); const replacementZ = { ...fixtureRuleSet("z_replacement", "published"), display_order: 2, lock_version: 88 }; const replacementA = { ...fixtureRuleSet("a_replacement", "published"), display_order: 2, lock_version: 99 }; const pages: number[] = []; let body: unknown;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/current_default") && !init?.method) return json(detail); if (url.includes("/api/v1/admin/rule-sets?")) { const page = Number(new URL(url, "https://admin.test").searchParams.get("page")); pages.push(page); return page === 1 ? json({ items: [current, ...fillers], pagination: { page: 1, page_size: 100, total: 102, pages: 2 } }) : json({ items: [replacementZ, replacementA], pagination: { page: 2, page_size: 100, total: 102, pages: 2 } }); } if (url.endsWith("/api/v1/admin/rule-sets/current_default/archive")) { body = JSON.parse(String(init?.body)); return json({ ...current, status: "archived", is_default: false, lock_version: 7 }); } throw new Error(`Unexpected request: ${url}`); }));
-    const user = userEvent.setup(); renderRoute("/content/rules/current_default"); await user.click(await screen.findByRole("button", { name: "归档规则" })); await waitFor(() => expect(screen.getByLabelText("替代默认规则")).toBeEnabled()); const options = Array.from((screen.getByLabelText("替代默认规则") as HTMLSelectElement).options).map((option) => option.value).filter(Boolean); expect(options.slice(-2)).toEqual(["a_replacement", "z_replacement"]); await user.selectOptions(screen.getByLabelText("替代默认规则"), "z_replacement"); await user.type(screen.getByLabelText("操作原因"), "替换默认规则"); await user.click(screen.getByRole("button", { name: "确认归档" })); await waitFor(() => expect(body).toBeDefined()); expect(pages.slice(0, 2)).toEqual([1, 2]); expect(body).toEqual({ expected_rule_set_lock_version: 6, replacement_default_rule_set_id: "z_replacement", replacement_expected_lock_version: 88, reason: "替换默认规则" });
+    const user = userEvent.setup(); renderRoute("/content/rules/current_default"); await user.click(await screen.findByRole("button", { name: "归档规则" })); await waitFor(() => expect(screen.getByLabelText("替代默认规则")).toBeEnabled()); const replacementControl = screen.getByLabelText("替代默认规则"); await user.click(replacementControl); await user.type(replacementControl, "replacement"); await waitFor(() => expect(getOpenAntdOptions().map((option) => option.textContent ?? "")).toEqual([expect.stringContaining("a_replacement"), expect.stringContaining("z_replacement")])); await user.click(getOpenAntdOptions()[1]); await user.type(screen.getByLabelText("操作原因"), "替换默认规则"); await user.click(screen.getByRole("button", { name: "确认归档" })); await waitFor(() => expect(body).toBeDefined()); expect(pages.slice(0, 2)).toEqual([1, 2]); expect(body).toEqual({ expected_rule_set_lock_version: 6, replacement_default_rule_set_id: "z_replacement", replacement_expected_lock_version: 88, reason: "替换默认规则" });
   });
 
   it.each([
@@ -523,13 +529,13 @@ describe("rule editor", () => {
     ["name", "text", "规则名称", "变更名称"], ["description", "text", "规则说明", "变更说明"], ["complexity", "text", "复杂度", "困难"], ["duration", "text", "预计时长", "60 分钟"],
     ["tags", "text", "规则标签", "新标签"], ["order", "text", "显示顺序", "9"],
     ["werewolf count", "text", "狼人数量", "2"], ["villager count", "text", "村民数量", "4"], ["seer count", "text", "预言家数量", "0"], ["guard count", "text", "守卫数量", "1"], ["witch count", "text", "女巫数量", "0"], ["hunter count", "text", "猎人数量", "0"], ["idiot count", "text", "白痴数量", "1"],
-    ["win condition", "select", "胜利条件", "slaughter_side"], ["sheriff enabled", "check", "启用警长", ""], ["sheriff weight", "select", "警长票权", "2"], ["speech", "select", "发言规则", "sequential"], ["self explosion", "check", "允许狼人自爆", ""], ["badge policy", "select", "警徽规则", "none"],
+    ["win condition", "select", "胜利条件", "屠边"], ["sheriff enabled", "check", "启用警长", ""], ["sheriff weight", "select", "警长票权", "2"], ["speech", "select", "发言规则", "顺序发言"], ["self explosion", "check", "允许狼人自爆", ""], ["badge policy", "select", "警徽规则", "不撕警徽"],
   ])("makes validation stale after editing %s and requires save plus revalidation", async (_name, kind, label, value) => {
     const user = userEvent.setup(); renderRoute("/content/rules/preview_draft");
     await user.click(await screen.findByRole("button", { name: "校验规则" })); expect(await screen.findByRole("button", { name: "发布规则" })).toBeEnabled();
     const control = screen.getByLabelText(label);
     if (kind === "check") await user.click(control);
-    else if (kind === "select") await user.selectOptions(control, value);
+    else if (kind === "select") await selectAntdOption(user, control, value);
     else { await user.clear(control); await user.type(control, value); }
     expect(screen.getByRole("button", { name: "发布规则" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "保存草稿" }));

@@ -5,6 +5,10 @@ import userEvent from "@testing-library/user-event";
 import { AdminSessionContext } from "@/features/auth/session-context";
 import ModelsPage from "@/features/models/ModelsPage";
 import { previewModelCatalog } from "@/features/models/preview";
+import {
+  expectAntdSelectLabel,
+  selectAntdOption,
+} from "@/tests/antd-select";
 
 function renderModelsPage() {
   const queryClient = new QueryClient({
@@ -149,11 +153,11 @@ describe("model management flow", () => {
 
     const thinking = within(model!).getByLabelText("Thinking");
     const reasoningEffort = within(model!).getByLabelText("Reasoning effort");
-    await user.selectOptions(reasoningEffort, "medium");
-    await user.selectOptions(thinking, "disabled");
+    await selectAntdOption(user, reasoningEffort, "medium");
+    await selectAntdOption(user, thinking, "关闭");
 
     expect(reasoningEffort).toBeDisabled();
-    expect(reasoningEffort).toHaveValue("");
+    expectAntdSelectLabel(reasoningEffort, "跟随提供方默认");
     expect(within(model!).getByText(/关闭 Thinking 时 Reasoning effort 不可用/)).toBeInTheDocument();
 
     await user.click(within(model!).getByRole("button", { name: "保存配置" }));

@@ -1,4 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Checkbox from "antd/es/checkbox";
+import InputNumber from "antd/es/input-number";
+import Select from "antd/es/select";
 import {
   cloneElement,
   type FormEvent,
@@ -305,46 +308,50 @@ function ModelConfigurationForm({
       <fieldset disabled={!canManage || !model.available || pending}>
         <legend>运行配置</legend>
         <div className="model-toggle-row">
-          <label>
-            <input defaultChecked={model.enabled} disabled={model.is_default} name="enabled" type="checkbox" />
-            <span>允许虚拟玩家使用</span>
-          </label>
-          <label>
-            <input defaultChecked={model.is_default} disabled={model.is_default} name="is_default" type="checkbox" />
-            <span>{model.is_default ? "当前默认模型" : "设为默认模型"}</span>
-          </label>
+          <Checkbox defaultChecked={model.enabled} disabled={model.is_default} name="enabled">
+            允许虚拟玩家使用
+          </Checkbox>
+          <Checkbox defaultChecked={model.is_default} disabled={model.is_default} name="is_default">
+            {model.is_default ? "当前默认模型" : "设为默认模型"}
+          </Checkbox>
         </div>
         <div className="model-parameter-grid">
           <ModelParameterField
             description="控制模型是否启用深度思考或推理模式。开启后通常能提升复杂问题的推理质量，但响应会更慢，并可能消耗更多 token。"
             label="Thinking"
           >
-            <select
+            <Select
+              aria-label="Thinking"
               disabled={!model.supports_thinking}
-              onChange={(event) => handleThinkingChange(event.target.value as ThinkingMode)}
+              onChange={(value) => handleThinkingChange(value as ThinkingMode)}
+              options={[
+                { label: "跟随提供方默认", value: "default" },
+                { label: "开启", value: "enabled" },
+                { label: "关闭", value: "disabled" },
+              ]}
               value={thinking}
-            >
-              <option value="default">跟随提供方默认</option>
-              <option value="enabled">开启</option>
-              <option value="disabled">关闭</option>
-            </select>
+            />
           </ModelParameterField>
           <ModelParameterField
             description="控制模型投入的推理强度。级别越高，通常会进行更深入的分析，但响应时间和 token 消耗也可能增加。可选级别由模型提供方决定。"
             label="Reasoning effort"
           >
-            <select
+            <Select
+              aria-label="Reasoning effort"
               disabled={reasoningEffortDisabled}
-              name="reasoning_effort"
-              onChange={(event) => {
-                setReasoningEffort(event.target.value);
+              onChange={(value) => {
+                setReasoningEffort(value);
                 setValidationError(null);
               }}
+              options={[
+                { label: "跟随提供方默认", value: "" },
+                ...model.reasoning_effort_options.map((option) => ({
+                  label: option,
+                  value: option,
+                })),
+              ]}
               value={reasoningEffort}
-            >
-              <option value="">跟随提供方默认</option>
-              {model.reasoning_effort_options.map((option) => <option key={option} value={option}>{option}</option>)}
-            </select>
+            />
           </ModelParameterField>
           <NumberField
             defaultValue={model.parameters.max_tokens}
@@ -429,7 +436,16 @@ function NumberField({ defaultValue, description, disabled, label, max, min, nam
 }) {
   return (
     <ModelParameterField description={description} label={label}>
-      <input defaultValue={defaultValue ?? ""} disabled={disabled} max={max} min={min} name={name} placeholder="默认" step={step} type="number" />
+      <InputNumber
+        aria-label={label}
+        defaultValue={defaultValue ?? undefined}
+        disabled={disabled}
+        max={max}
+        min={min}
+        name={name}
+        placeholder="默认"
+        step={step}
+      />
     </ModelParameterField>
   );
 }

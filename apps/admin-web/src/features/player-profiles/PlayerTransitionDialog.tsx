@@ -1,3 +1,4 @@
+import Input, { type InputRef } from "antd/es/input";
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 export function PlayerTransitionDialog({
@@ -20,7 +21,7 @@ export function PlayerTransitionDialog({
   const [reason, setReason] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
-  const reasonRef = useRef<HTMLTextAreaElement>(null);
+  const reasonRef = useRef<InputRef>(null);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -91,7 +92,8 @@ export function PlayerTransitionDialog({
           <p id="player-transition-description">{description}</p>
           <label>
             <span>操作原因</span>
-            <textarea
+            <Input.TextArea
+              aria-label="操作原因"
               aria-describedby="transition-reason-help transition-reason-error"
               aria-invalid={Boolean(validationError || error)}
               disabled={pending}
@@ -99,6 +101,7 @@ export function PlayerTransitionDialog({
               onChange={(event) => setReason(event.target.value)}
               ref={reasonRef}
               rows={4}
+              status={validationError || error ? "error" : undefined}
               value={reason}
             />
           </label>
