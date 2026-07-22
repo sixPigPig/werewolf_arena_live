@@ -1,9 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
+import Alert from "antd/es/alert";
+import Button from "antd/es/button";
+import Card from "antd/es/card";
+import Divider from "antd/es/divider";
+import Flex from "antd/es/flex";
+import Spin from "antd/es/spin";
+import Typography from "antd/es/typography";
 import { type FormEvent, useState } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 
-import { isAdminDevLoginEnabled } from "@/features/auth/runtime-config";
 import { getAdminLoginOptions } from "@/features/auth/auth-api";
+import { isAdminDevLoginEnabled } from "@/features/auth/runtime-config";
 import { useAdminSession } from "@/features/auth/session-context";
 
 export default function LoginPage() {
@@ -35,10 +42,10 @@ export default function LoginPage() {
   if (status === "loading") {
     return (
       <main className="auth-page">
-        <div aria-live="polite" className="auth-loading" role="status">
-          <span aria-hidden="true" />
-          正在检查现有后台会话...
-        </div>
+        <Flex align="center" aria-live="polite" gap={12} role="status">
+          <Spin size="small" />
+          <Typography.Text>正在检查现有后台会话...</Typography.Text>
+        </Flex>
       </main>
     );
   }
@@ -60,74 +67,99 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="auth-page">
-      <section className="auth-card" aria-labelledby="admin-login-title">
-        <div className="auth-brand" aria-hidden="true">
-          WA
-        </div>
-        <span className="auth-kicker">WEREWOLF ARENA ADMIN</span>
-        <h1 id="admin-login-title">登录管理后台</h1>
-        <p>后台仅面向获得授权的运营与技术人员，不支持公开注册。</p>
+    <main className="auth-page ant-auth-page">
+      <Card className="ant-auth-card">
+        <Flex align="center" className="ant-auth-brand-row" gap={12}>
+          <span className="auth-brand" aria-hidden="true">WA</span>
+          <span>
+            <Typography.Text className="auth-kicker">WEREWOLF ARENA</Typography.Text>
+            <Typography.Text type="secondary">运营与诊断后台</Typography.Text>
+          </span>
+        </Flex>
+        <Typography.Title id="admin-login-title" level={1}>登录管理后台</Typography.Title>
+        <Typography.Paragraph type="secondary">
+          后台仅面向获得授权的运营与技术人员，不支持公开注册。
+        </Typography.Paragraph>
 
-        {unauthenticatedReason === "expired" ? (
-          <div aria-live="polite" className="auth-notice is-warning" role="status">
-            会话已过期。请重新登录后继续。
-          </div>
-        ) : null}
-        {unauthenticatedReason === "signed-out" ? (
-          <div aria-live="polite" className="auth-notice is-success" role="status">
-            已安全退出后台。
-          </div>
-        ) : null}
+        <Flex gap={12} vertical>
+          {unauthenticatedReason === "expired" ? (
+            <Alert role="status" showIcon title="会话已过期。请重新登录后继续。" type="warning" />
+          ) : null}
+          {unauthenticatedReason === "signed-out" ? (
+            <Alert role="status" showIcon title="已安全退出后台。" type="success" />
+          ) : null}
 
-        {oidcStartPath ? (
-          <a
-            className="auth-primary-button"
-            href={`${oidcStartPath}?return_to=${encodeURIComponent(returnTo)}`}
-          >
-            使用企业账号登录
-          </a>
-        ) : null}
-
-        {devLoginEnabled ? (
-          <form className="auth-form" onSubmit={handleDevLogin}>
-            <div className="dev-login-description">
-              <strong>本地开发身份</strong>
-              <span>账号与角色由 API 服务端环境变量决定。</span>
-            </div>
-            <button
-              className="auth-primary-button"
-              disabled={pendingAction === "login"}
-              type="submit"
+          {oidcStartPath ? (
+            <Button
+              block
+              href={`${oidcStartPath}?return_to=${encodeURIComponent(returnTo)}`}
+              size="large"
+              type="primary"
             >
-              {pendingAction === "login" ? "正在建立会话..." : "使用开发身份登录"}
-            </button>
-          </form>
-        ) : !oidcStartPath && !loginOptions.isPending ? (
-          <div className="auth-notice" role="note">
-            当前环境未提供登录入口。请通过已配置的企业身份入口访问，或联系系统管理员。
-          </div>
-        ) : null}
+              使用企业账号登录
+            </Button>
+          ) : null}
 
-        {oidcError ? (
-          <div aria-live="assertive" className="auth-error" role="alert">
-            <strong>企业账号登录失败</strong>
-            <span>{oidcErrorMessage(oidcError)}</span>
-          </div>
-        ) : null}
+          {devLoginEnabled ? (
+            <form className="auth-form" onSubmit={handleDevLogin}>
+              <Card size="small">
+                <Flex gap={3} vertical>
+                  <Typography.Text strong>本地开发身份</Typography.Text>
+                  <Typography.Text type="secondary">
+                    账号与角色由 API 服务端环境变量决定。
+                  </Typography.Text>
+                </Flex>
+              </Card>
+              <Button
+                block
+                htmlType="submit"
+                loading={pendingAction === "login"}
+                size="large"
+                type="primary"
+              >
+                使用开发身份登录
+              </Button>
+            </form>
+          ) : !oidcStartPath && !loginOptions.isPending ? (
+            <Alert
+              role="note"
+              showIcon
+              title="当前环境未提供登录入口。请通过已配置的企业身份入口访问，或联系系统管理员。"
+              type="info"
+            />
+          ) : null}
 
-        {submitted && error ? (
-          <div aria-live="assertive" className="auth-error" role="alert">
-            <strong>{error.problem.title}</strong>
-            <span>{error.message}</span>
-            {error.requestId ? <small>请求编号：{error.requestId}</small> : null}
-          </div>
-        ) : null}
+          {oidcError ? (
+            <Alert
+              description={oidcErrorMessage(oidcError)}
+              role="alert"
+              showIcon
+              title="企业账号登录失败"
+              type="error"
+            />
+          ) : null}
 
-        <footer>
+          {submitted && error ? (
+            <Alert
+              description={
+                <Flex gap={2} vertical>
+                  <span>{error.message}</span>
+                  {error.requestId ? <small>请求编号：{error.requestId}</small> : null}
+                </Flex>
+              }
+              role="alert"
+              showIcon
+              title={error.problem.title}
+              type="error"
+            />
+          ) : null}
+        </Flex>
+
+        <Divider />
+        <Typography.Text type="secondary">
           会话凭据仅保存在安全的 HttpOnly Cookie 中，不会写入浏览器本地存储。
-        </footer>
-      </section>
+        </Typography.Text>
+      </Card>
     </main>
   );
 }

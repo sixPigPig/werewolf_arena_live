@@ -76,8 +76,8 @@ test.describe("Admin 运营工作台", () => {
     const menuButton = page.getByRole("button", { name: "打开导航" });
     await expect(menuButton).toBeVisible();
     await menuButton.click();
-    const sidebar = page.locator(".admin-sidebar");
-    await expect(sidebar).toHaveAttribute("data-open", "true");
+    const sidebar = page.locator(".admin-ant-mobile-drawer");
+    await expect(sidebar).toBeVisible();
 
     const jobsLink = sidebar.getByRole("link", {
       name: "任务中心 持久任务状态与失败诊断",
@@ -85,6 +85,6 @@ test.describe("Admin 运营工作台", () => {
     await expect(jobsLink).toBeVisible();
     await jobsLink.click();
     await expect(page.getByRole("heading", { name: "后台任务" })).toBeVisible();
-    await expect(sidebar).toHaveAttribute("data-open", "false");
+    await expect(sidebar).toBeHidden();
   });
 });

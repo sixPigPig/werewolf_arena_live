@@ -1,11 +1,34 @@
+import AntApp from "antd/es/app";
+import ConfigProvider from "antd/es/config-provider";
+import zhCN from "antd/locale/zh_CN";
 import { Outlet } from "react-router-dom";
 
+import { adminTheme } from "@/app/antd-theme";
 import { AdminSessionProvider } from "@/features/auth/AdminSessionProvider";
 import { getAdminRuntimeMode } from "@/features/auth/runtime-config";
 
 export function AdminPreviewBoundary() {
   const runtimeMode = getAdminRuntimeMode();
 
+  return (
+    <ConfigProvider
+      button={{ autoInsertSpace: false }}
+      locale={zhCN}
+      theme={adminTheme}
+      wave={{ disabled: true }}
+    >
+      <AntApp component={false}>
+        <AdminRuntimeBoundary runtimeMode={runtimeMode} />
+      </AntApp>
+    </ConfigProvider>
+  );
+}
+
+function AdminRuntimeBoundary({
+  runtimeMode,
+}: {
+  runtimeMode: ReturnType<typeof getAdminRuntimeMode>;
+}) {
   if (runtimeMode !== "closed") {
     return (
       <AdminSessionProvider runtimeMode={runtimeMode}>

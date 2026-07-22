@@ -1,4 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import SearchOutlined from "@ant-design/icons/es/icons/SearchOutlined";
+import Card from "antd/es/card";
+import Input from "antd/es/input";
+import Spin from "antd/es/spin";
+import Typography from "antd/es/typography";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -23,10 +28,42 @@ export function GlobalAdminSearch({ runtimeMode }: { runtimeMode: AdminRuntimeMo
   const open = input.trim().length >= 2;
   return (
     <div className="global-admin-search">
-      <label><span className="sr-only">全局 ID 搜索</span><input aria-label="全局 ID 搜索" onChange={(event) => setInput(event.target.value)} placeholder="搜索 Run / Session / 玩家 / 任务" value={input} /></label>
-      {open ? <div className="global-admin-search-results" role="status">
-        {runtimeMode === "preview" ? <span>预览模式不连接全局搜索。</span> : results.isFetching ? <span>正在搜索...</span> : results.isError ? <span>搜索暂时不可用。</span> : results.data?.items.length === 0 ? <span>没有匹配结果。</span> : results.data?.items.map((item) => <Link key={`${item.type}:${item.id}`} onClick={() => setInput("")} to={item.href}><span>{TYPE_LABELS[item.type]}</span><strong>{item.label}</strong><small>{item.description} · {item.status}</small></Link>)}
-      </div> : null}
+      <Input
+        allowClear
+        aria-label="全局 ID 搜索"
+        onChange={(event) => setInput(event.target.value)}
+        placeholder="搜索 Run / Session / 玩家 / 任务"
+        prefix={<SearchOutlined />}
+        value={input}
+      />
+      {open ? (
+        <Card className="global-admin-search-results" role="status" size="small">
+          {runtimeMode === "preview" ? (
+            <Typography.Text type="secondary">预览模式不连接全局搜索。</Typography.Text>
+          ) : results.isFetching ? (
+            <Spin description="正在搜索..." size="small" />
+          ) : results.isError ? (
+            <Typography.Text type="danger">搜索暂时不可用。</Typography.Text>
+          ) : results.data?.items.length === 0 ? (
+            <Typography.Text type="secondary">没有匹配结果。</Typography.Text>
+          ) : (
+            <div className="admin-search-result-list">
+              {(results.data?.items ?? []).map((item) => (
+                <Link
+                  aria-label={item.label}
+                  key={`${item.type}:${item.id}`}
+                  onClick={() => setInput("")}
+                  to={item.href}
+                >
+                  <span>{TYPE_LABELS[item.type]}</span>
+                  <strong>{item.label}</strong>
+                  <small>{item.description} · {item.status}</small>
+                </Link>
+              ))}
+            </div>
+          )}
+        </Card>
+      ) : null}
     </div>
   );
 }

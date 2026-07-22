@@ -1,5 +1,28 @@
+import AuditOutlined from "@ant-design/icons/es/icons/AuditOutlined";
+import CloudServerOutlined from "@ant-design/icons/es/icons/CloudServerOutlined";
+import ControlOutlined from "@ant-design/icons/es/icons/ControlOutlined";
+import DashboardOutlined from "@ant-design/icons/es/icons/DashboardOutlined";
+import DatabaseOutlined from "@ant-design/icons/es/icons/DatabaseOutlined";
+import MenuOutlined from "@ant-design/icons/es/icons/MenuOutlined";
+import ProfileOutlined from "@ant-design/icons/es/icons/ProfileOutlined";
+import RobotOutlined from "@ant-design/icons/es/icons/RobotOutlined";
+import SafetyCertificateOutlined from "@ant-design/icons/es/icons/SafetyCertificateOutlined";
+import SettingOutlined from "@ant-design/icons/es/icons/SettingOutlined";
+import SoundOutlined from "@ant-design/icons/es/icons/SoundOutlined";
+import TeamOutlined from "@ant-design/icons/es/icons/TeamOutlined";
+import Avatar from "antd/es/avatar";
+import Badge from "antd/es/badge";
+import Breadcrumb from "antd/es/breadcrumb";
+import Button from "antd/es/button";
+import Drawer from "antd/es/drawer";
+import Flex from "antd/es/flex";
+import Layout from "antd/es/layout";
+import Menu, { type MenuProps } from "antd/es/menu";
+import Space from "antd/es/space";
+import Tag from "antd/es/tag";
+import Typography from "antd/es/typography";
 import { useState } from "react";
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 
 import {
   adminNavigation,
@@ -14,11 +37,28 @@ import {
   useSettingsQuery,
 } from "@/features/dashboard/queries";
 
+const { Content, Header, Sider } = Layout;
+
 const roleLabels: Record<AdminRole, string> = {
   viewer: "只读观察员",
   content_editor: "内容编辑",
   operator: "运行运营",
   super_admin: "超级管理员",
+};
+
+const navigationIcons = {
+  "admin-users": <SafetyCertificateOutlined aria-hidden="true" />,
+  "audit-events": <AuditOutlined aria-hidden="true" />,
+  games: <DatabaseOutlined aria-hidden="true" />,
+  jobs: <ProfileOutlined aria-hidden="true" />,
+  models: <RobotOutlined aria-hidden="true" />,
+  overview: <DashboardOutlined aria-hidden="true" />,
+  players: <TeamOutlined aria-hidden="true" />,
+  rules: <ControlOutlined aria-hidden="true" />,
+  runs: <CloudServerOutlined aria-hidden="true" />,
+  settings: <SettingOutlined aria-hidden="true" />,
+  "v2-games": <DatabaseOutlined aria-hidden="true" />,
+  "voice-assets": <SoundOutlined aria-hidden="true" />,
 };
 
 export function AdminShell() {
@@ -33,10 +73,8 @@ export function AdminShell() {
   const canReadSettings = hasAdminPermission(permissions, "settings.read");
   const overview = useOverviewQuery(runtimeMode, canReadOverview);
   const settings = useSettingsQuery(runtimeMode, canReadSettings);
-  const alertCount = overview.data?.alerts.reduce(
-    (total, alert) => total + alert.count,
-    0,
-  ) ?? 0;
+  const alertCount =
+    overview.data?.alerts.reduce((total, alert) => total + alert.count, 0) ?? 0;
   const visibleNavigation = adminNavigation
     .map((section) => ({
       ...section,
@@ -45,13 +83,33 @@ export function AdminShell() {
       ),
     }))
     .filter((section) => section.items.length > 0);
+  const menuItems: MenuProps["items"] = visibleNavigation.map((section) => ({
+    children: section.items.map((item) => ({
+      icon: navigationIcons[item.id as keyof typeof navigationIcons],
+      key: item.href,
+      label: (
+        <Link
+          aria-label={`${item.label} ${item.description}`}
+          title={item.description}
+          to={item.href}
+        >
+          {item.label}
+        </Link>
+      ),
+    })),
+    key: section.id,
+    label: section.label,
+    type: "group",
+  }));
 
   async function handleLogout() {
     setLogoutError(null);
     try {
       await logout();
     } catch (error) {
-      setLogoutError(error instanceof Error ? error.message : "退出失败，请稍后重试。");
+      setLogoutError(
+        error instanceof Error ? error.message : "退出失败，请稍后重试。",
+      );
     }
   }
 
@@ -61,8 +119,45 @@ export function AdminShell() {
     });
   }
 
+  const sidebar = (
+    <div className="admin-ant-sider-inner">
+      <div className="admin-ant-brand">
+        <span className="admin-brand-mark" aria-hidden="true">
+          WA
+        </span>
+        <span className="admin-ant-brand-copy">
+          <strong>Werewolf Arena</strong>
+          <small>运营与诊断后台</small>
+        </span>
+      </div>
+      <nav aria-label="后台主导航">
+        <Menu
+          className="admin-ant-menu"
+          items={menuItems}
+          mode="inline"
+          onClick={() => setNavigationOpen(false)}
+          selectedKeys={activeItem ? [activeItem.href] : []}
+          theme="dark"
+        />
+      </nav>
+      <div className="admin-ant-sider-footer">
+        <Flex align="center" gap={9}>
+          <Badge status={runtimeMode === "preview" ? "warning" : "success"} />
+          <span>
+            <Typography.Text strong>
+              {runtimeMode === "preview" ? "规划预览模式" : "安全会话已连接"}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {runtimeMode === "preview" ? "未连接 Admin API" : "Admin API"}
+            </Typography.Text>
+          </span>
+        </Flex>
+      </div>
+    </div>
+  );
+
   return (
-    <div className="admin-app-shell">
+    <Layout className="admin-ant-layout admin-app-shell">
       <a
         className="skip-link"
         href="#admin-main-content"
@@ -70,128 +165,97 @@ export function AdminShell() {
       >
         跳到主要内容
       </a>
-      <button
-        aria-label="关闭导航"
-        className="admin-sidebar-backdrop"
-        data-open={navigationOpen}
-        onClick={() => setNavigationOpen(false)}
-        type="button"
-      />
-      <aside className="admin-sidebar" data-open={navigationOpen}>
-        <div className="admin-brand">
-          <span className="admin-brand-mark" aria-hidden="true">
-            WA
-          </span>
-          <span>
-            <strong>Werewolf Arena</strong>
-            <small>运营与诊断后台</small>
-          </span>
-        </div>
+      <Sider className="admin-ant-sider" width={260}>
+        {sidebar}
+      </Sider>
+      {navigationOpen ? (
+        <Drawer
+          closable={false}
+          onClose={() => setNavigationOpen(false)}
+          open
+          placement="left"
+          rootClassName="admin-ant-mobile-drawer"
+          size={276}
+          styles={{ body: { background: "#111827", padding: 0 } }}
+        >
+          {sidebar}
+        </Drawer>
+      ) : null}
 
-        <nav aria-label="后台主导航" className="admin-navigation">
-          {visibleNavigation.map((section) => (
-            <section className="admin-navigation-section" key={section.id}>
-              <h2>{section.label}</h2>
-              {section.items.map((item) => (
-                <NavLink
-                  className={({ isActive }) =>
-                    isActive ? "admin-nav-link is-active" : "admin-nav-link"
-                  }
-                  key={item.id}
-                  onClick={() => setNavigationOpen(false)}
-                  to={item.href}
-                >
-                  <span className="admin-nav-marker" aria-hidden="true">
-                    {item.marker}
-                  </span>
-                  <span>
-                    <strong>{item.label}</strong>
-                    <small>{item.description}</small>
-                  </span>
-                </NavLink>
-              ))}
-            </section>
-          ))}
-        </nav>
-
-        <footer className="admin-sidebar-footer">
-          <span className="status-dot" aria-hidden="true" />
-          <span>
-            <strong>
-              {runtimeMode === "preview" ? "规划预览模式" : "安全会话已连接"}
-            </strong>
-            <small>
-              {runtimeMode === "preview" ? "未连接 Admin API" : "Admin API"}
-            </small>
-          </span>
-        </footer>
-      </aside>
-
-      <div className="admin-workspace">
-        <header className="admin-topbar">
-          <button
+      <Layout className="admin-ant-workspace">
+        <Header className="admin-ant-header">
+          <Button
             aria-expanded={navigationOpen}
             aria-label="打开导航"
-            className="admin-menu-button"
-            onClick={() => setNavigationOpen((current) => !current)}
-            type="button"
-          >
-            <span />
-            <span />
-            <span />
-          </button>
-          <div className="admin-breadcrumbs" aria-label="当前位置">
-            <span>管理后台</span>
-            <span aria-hidden="true">/</span>
-            <strong>{activeItem?.label ?? "页面"}</strong>
-          </div>
-          {canReadOverview ? (
-            <GlobalAdminSearch runtimeMode={runtimeMode} />
-          ) : null}
-          <div className="admin-topbar-actions">
+            className="admin-ant-menu-trigger"
+            icon={<MenuOutlined />}
+            onClick={() => setNavigationOpen(true)}
+            type="text"
+          />
+          <Breadcrumb
+            aria-label="当前位置"
+            items={[
+              { title: "管理后台" },
+              { title: activeItem?.label ?? "页面" },
+            ]}
+          />
+          {canReadOverview ? <GlobalAdminSearch runtimeMode={runtimeMode} /> : null}
+          <Space className="admin-ant-header-actions" size={10}>
             {logoutError ? (
-              <span aria-live="assertive" className="topbar-error" role="alert">
+              <Typography.Text aria-live="assertive" role="alert" type="danger">
                 {logoutError}
-              </span>
+              </Typography.Text>
             ) : null}
             {alertCount > 0 ? (
-              <Link className="admin-alert-reminder" to="/overview">
-                {alertCount} 项异常
+              <Link
+                aria-label={`${alertCount} 项异常`}
+                title="查看活动异常"
+                to="/overview"
+              >
+                <Badge count={alertCount} overflowCount={99}>
+                  <Button type="text">
+                    <span className="admin-ant-alert-label">异常</span>
+                  </Button>
+                </Badge>
               </Link>
             ) : null}
-            <span className="environment-badge">
+            <Tag className="admin-ant-environment" color="blue">
               {runtimeMode === "preview"
                 ? "LOCAL PREVIEW"
                 : (settings.data?.environment ?? "ADMIN").toUpperCase()}
-            </span>
+            </Tag>
             <span
               aria-label="当前后台身份"
-              className="preview-principal"
+              className="admin-ant-principal"
               role="group"
             >
-              <span aria-hidden="true">超</span>
-              <span>
+              <Avatar size={32}>{user?.display_name?.slice(0, 1) ?? "管"}</Avatar>
+              <span className="admin-ant-principal-copy">
                 <strong>{user ? roleLabels[user.role] : "后台用户"}</strong>
                 <small>{user?.display_name ?? "unknown principal"}</small>
               </span>
             </span>
             {runtimeMode === "authenticated" ? (
-              <button
-                className="admin-logout-button"
-                disabled={pendingAction === "logout"}
+              <Button
+                aria-label="退出"
+                loading={pendingAction === "logout"}
                 onClick={() => void handleLogout()}
-                type="button"
+                size="small"
               >
-                {pendingAction === "logout" ? "退出中" : "退出"}
-              </button>
+                退出
+              </Button>
             ) : null}
-          </div>
-        </header>
+          </Space>
+        </Header>
 
-        <main className="admin-main" id="admin-main-content" tabIndex={-1}>
+        <Content
+          className="admin-ant-content"
+          id="admin-main-content"
+          tabIndex={-1}
+        >
           <Outlet />
-        </main>
-      </div>
-    </div>
+        </Content>
+      </Layout>
+    </Layout>
   );
 }

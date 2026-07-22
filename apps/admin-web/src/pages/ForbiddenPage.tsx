@@ -1,9 +1,14 @@
+import Alert from "antd/es/alert";
+import Button from "antd/es/button";
+import Result from "antd/es/result";
+import Space from "antd/es/space";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { useAdminSession } from "@/features/auth/session-context";
 
 export default function ForbiddenPage() {
+  const navigate = useNavigate();
   const { error, logout, pendingAction, session } = useAdminSession();
   const [logoutFailed, setLogoutFailed] = useState(false);
 
@@ -17,42 +22,35 @@ export default function ForbiddenPage() {
   }
 
   return (
-    <main className="auth-page">
-      <section className="auth-card forbidden-card" aria-labelledby="forbidden-title">
-        <span className="forbidden-code" aria-hidden="true">
-          403
-        </span>
-        <span className="auth-kicker">ACCESS DENIED</span>
-        <h1 id="forbidden-title">没有访问权限</h1>
-        <p>
-          当前后台身份无权访问这个页面。如果工作职责已变更，请联系超级管理员调整权限。
-        </p>
-        {error?.requestId ? <small>请求编号：{error.requestId}</small> : null}
-        {logoutFailed ? (
-          <div aria-live="assertive" className="auth-error" role="alert">
-            <span>{error?.message ?? "退出失败，请稍后重试。"}</span>
-          </div>
-        ) : null}
-        <div className="auth-actions">
-          <Link className="auth-primary-button" to="/content/players">
-            返回玩家管理
-          </Link>
-          {session ? (
-            <button
-              className="auth-secondary-button"
-              disabled={pendingAction === "logout"}
-              onClick={() => void handleLogout()}
-              type="button"
-            >
-              {pendingAction === "logout" ? "正在退出..." : "退出当前账号"}
-            </button>
-          ) : (
-            <Link className="auth-secondary-button" to="/login">
-              返回登录
-            </Link>
-          )}
-        </div>
-      </section>
+    <main className="auth-page ant-auth-page">
+      <Result
+        extra={
+          <Space wrap>
+            <Button onClick={() => navigate("/content/players")} type="primary">返回玩家管理</Button>
+            {session ? (
+              <Button
+                loading={pendingAction === "logout"}
+                onClick={() => void handleLogout()}
+              >
+                退出当前账号
+              </Button>
+            ) : (
+              <Button onClick={() => navigate("/login")}>返回登录</Button>
+            )}
+          </Space>
+        }
+        status="403"
+        subTitle={
+          <Space orientation="vertical" size={8}>
+            <span>当前后台身份无权访问这个页面。如果工作职责已变更，请联系超级管理员调整权限。</span>
+            {error?.requestId ? <small>请求编号：{error.requestId}</small> : null}
+            {logoutFailed ? (
+              <Alert role="alert" title={error?.message ?? "退出失败，请稍后重试。"} type="error" />
+            ) : null}
+          </Space>
+        }
+        title={<h1 id="forbidden-title">没有访问权限</h1>}
+      />
     </main>
   );
 }

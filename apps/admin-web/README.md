@@ -67,6 +67,10 @@ pnpm test:e2e
 
 ## 设计原则
 
+- 管理后台统一使用 Ant Design 6；主题 token 集中在 `src/app/antd-theme.ts`，页面壳与状态组件集中在 `src/components/admin/`；
+- Ant Design 组件使用 `antd/es/*` 按组件导入，避免开发与测试环境加载完整组件入口；
+- 新页面优先组合 `AdminPage`、`AdminPageHeader`、`Card`、`Table`、`Form`、`Alert`、`Tag`，不再新增页面私有按钮、表格和弹窗实现；
+- 复杂业务编辑器迁移期间由 `src/styles/antd-overrides.css` 统一外观，迁移不得改变既有权限、表单字段、键盘操作和 API 契约；
 - 不调用当前匿名 `/api/v1/*` 管理写接口；
 - 不从其他前端应用跨目录导入；
 - 不复制 Mobile 的哥特全局样式和 C 端页面；
