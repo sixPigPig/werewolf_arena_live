@@ -3,15 +3,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import json
-import re
 import time
 from typing import Any
 
 import httpx
-
-
-_SENTENCE_END = re.compile(r"[。！？!?]")
-_FORBIDDEN_OUTPUT = re.compile(r"[`#{}\[\]\n\r]")
 
 
 class V2ModelError(RuntimeError):
@@ -34,6 +29,15 @@ class V2ModelSpeech:
     sentence_ms: int
 
 
+@dataclass(frozen=True)
+class V2ModelDecision:
+    target_player_id: str | None
+    speech: str
+    provider_request_id: str
+    first_token_ms: int
+    completed_ms: int
+
+
 class V2ModelClient:
     def __init__(
         self,
@@ -50,24 +54,72 @@ class V2ModelClient:
         self._first_token_seconds = first_token_seconds
         self._total_seconds = total_seconds
 
-    async def generate_first_sentence(
+    async def generate_judge_sentence(
         self,
         *,
         action_context: dict[str, Any],
         attempt_id: str,
+        model_id: str | None = None,
     ) -> V2ModelSpeech:
-        if not self._api_key or not self._model_id:
+        raw, provider_request_id, first_token_ms, completed_ms = await self._stream_text(
+            action_context=action_context,
+            attempt_id=attempt_id,
+            max_output_tokens=256,
+            input_builder=_model_input,
+            model_id=model_id,
+        )
+        return V2ModelSpeech(
+            text=_required_speech(raw, error_code="model_empty_speech"),
+            provider_request_id=provider_request_id,
+            first_token_ms=first_token_ms,
+            sentence_ms=completed_ms,
+        )
+
+    async def generate_action_decision(
+        self,
+        *,
+        action_context: dict[str, Any],
+        attempt_id: str,
+        model_id: str | None = None,
+    ) -> V2ModelDecision:
+        raw, provider_request_id, first_token_ms, completed_ms = await self._stream_text(
+            action_context=action_context,
+            attempt_id=attempt_id,
+            max_output_tokens=256,
+            input_builder=_decision_model_input,
+            model_id=model_id,
+        )
+        target_player_id, normalized_speech = _decision_fields(raw)
+        return V2ModelDecision(
+            target_player_id=target_player_id,
+            speech=normalized_speech,
+            provider_request_id=provider_request_id,
+            first_token_ms=first_token_ms,
+            completed_ms=completed_ms,
+        )
+
+    async def _stream_text(
+        self,
+        *,
+        action_context: dict[str, Any],
+        attempt_id: str,
+        max_output_tokens: int,
+        input_builder: Any,
+        model_id: str | None,
+    ) -> tuple[str, str, int, int]:
+        selected_model_id = (model_id or self._model_id).strip()
+        if not self._api_key or not selected_model_id:
             raise V2ModelError("model_not_configured")
         started = time.monotonic()
         first_token_at: float | None = None
         provider_request_id = attempt_id
         text = ""
         payload = {
-            "model": self._model_id,
+            "model": selected_model_id,
             "stream": True,
-            "max_output_tokens": 96,
+            "max_output_tokens": max_output_tokens,
             "thinking": {"type": "disabled"},
-            "input": _model_input(action_context),
+            "input": input_builder(action_context),
         }
         timeout = httpx.Timeout(connect=8.0, read=None, write=8.0, pool=8.0)
         try:
@@ -120,29 +172,19 @@ class V2ModelClient:
                         event = _sse_data(line)
                         if event is None:
                             continue
-                        event_type = event.get("type")
                         response_object = event.get("response")
                         if isinstance(response_object, dict):
                             candidate_id = response_object.get("id")
                             if isinstance(candidate_id, str) and candidate_id:
                                 provider_request_id = candidate_id
-                        if event_type == "response.output_text.delta":
+                        if event.get("type") == "response.output_text.delta":
                             delta = event.get("delta")
                             if not isinstance(delta, str) or not delta:
                                 continue
                             if first_token_at is None:
                                 first_token_at = time.monotonic()
                             text += delta
-                            sentence = _accepted_sentence(text)
-                            if sentence is not None:
-                                completed = time.monotonic()
-                                return V2ModelSpeech(
-                                    text=sentence,
-                                    provider_request_id=provider_request_id,
-                                    first_token_ms=round((first_token_at - started) * 1000),
-                                    sentence_ms=round((completed - started) * 1000),
-                                )
-                        if event_type in {"response.failed", "error"}:
+                        if event.get("type") in {"response.failed", "error"}:
                             raise V2ModelError("model_provider_failed")
         except V2ModelError:
             raise
@@ -150,7 +192,13 @@ class V2ModelClient:
             raise V2ModelError("model_transport_failed") from exc
         if first_token_at is None:
             raise V2ModelError("model_empty_stream")
-        raise V2QualityError("model_no_complete_sentence")
+        completed = time.monotonic()
+        return (
+            text.strip(),
+            provider_request_id,
+            round((first_token_at - started) * 1000),
+            round((completed - started) * 1000),
+        )
 
 
 def _model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -162,9 +210,9 @@ def _model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "type": "input_text",
                     "text": (
-                        "你是狼人杀直播法官。只输出一句自然、简短、适合直接播报的中文开场白。"
-                        "必须用句号、问号或感叹号结束；不要输出引号、标题、列表、Markdown、"
-                        "解释或玩家身份信息。"
+                        "你是狼人杀直播法官。根据实时动作要求，输出自然、适合直接播报的"
+                        "中文法官话术。只输出播报正文，不要附加解释或"
+                        "玩家身份信息。"
                     ),
                 }
             ],
@@ -175,6 +223,36 @@ def _model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "type": "input_text",
                     "text": f"请执行这个实时动作：{context_json}",
+                }
+            ],
+        },
+    ]
+
+
+def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:
+    context_json = json.dumps(action_context, ensure_ascii=False, separators=(",", ":"))
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": (
+                        "你正在扮演一名狼人杀玩家。只根据给出的实时动作上下文做决定，"
+                        "不得使用未提供的私密信息。输出一个 JSON 对象，其中包含"
+                        "target_player_id 和 speech 两个字段。target_player_id 必须是候选列表"
+                        "中的 player_id；允许放弃时可为 null。speech 是准备直接播报的自然"
+                        "中文，可以包含多句话。"
+                    ),
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": f"请完成这个实时动作：{context_json}",
                 }
             ],
         },
@@ -196,19 +274,43 @@ def _sse_data(line: str) -> dict[str, Any] | None:
     return value
 
 
-def _accepted_sentence(text: str) -> str | None:
-    match = _SENTENCE_END.search(text)
-    if match is None:
-        if len(text) > 160:
-            raise V2QualityError("model_sentence_too_long")
-        return None
-    sentence = text[: match.end()].strip()
-    if len(sentence) < 6:
-        raise V2QualityError("model_sentence_too_short")
-    if len(sentence) > 120:
-        raise V2QualityError("model_sentence_too_long")
-    if _FORBIDDEN_OUTPUT.search(sentence):
-        raise V2QualityError("model_sentence_forbidden_format")
-    if sentence[0] in "\"'“‘《" or sentence[-1] in "\"'”’》":
-        raise V2QualityError("model_sentence_quoted")
-    return sentence
+def _decision_object(raw: str) -> dict[str, Any]:
+    candidates = [raw.strip()]
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if 0 <= start < end:
+        candidates.append(raw[start : end + 1])
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+        raise V2QualityError("model_decision_invalid_shape")
+    raise V2QualityError("model_decision_invalid_json")
+
+
+def _decision_fields(raw: str) -> tuple[str | None, str]:
+    value = _decision_object(raw)
+    if "target_player_id" not in value or "speech" not in value:
+        raise V2QualityError("model_decision_invalid_shape")
+    target_player_id = value["target_player_id"]
+    if target_player_id is not None and (
+        not isinstance(target_player_id, str) or not target_player_id.strip()
+    ):
+        raise V2QualityError("model_decision_invalid_target")
+    speech = _required_speech(
+        value["speech"],
+        error_code="model_decision_invalid_speech",
+    )
+    return (target_player_id.strip() if target_player_id else None), speech
+
+
+def _required_speech(value: Any, *, error_code: str) -> str:
+    if not isinstance(value, str):
+        raise V2QualityError(error_code)
+    speech = value.strip()
+    if not speech:
+        raise V2QualityError(error_code)
+    return speech

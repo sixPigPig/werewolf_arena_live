@@ -14,11 +14,27 @@ V2LiveState = Literal[
     "awaiting_observation",
     "failed",
 ]
+V2GamePhaseId = Literal["legacy", "opening", "first_night", "day_1"]
+V2GamePhaseState = Literal[
+    "legacy_frozen",
+    "opening_ready",
+    "opening_speech_closed",
+    "nightfall_ready",
+    "nightfall_announced",
+    "night_running",
+    "dawn_announcement_ready",
+    "dawn_announced",
+    "dawn_reactions_ready",
+    "public_day_ready",
+    "sheriff_election_ready",
+    "game_completed",
+    "failed",
+]
 
 
 class V2ApiMetaResponse(BaseModel):
     api_version: Literal["v2"] = "v2"
-    status: Literal["realtime_first_sentence"] = "realtime_first_sentence"
+    status: Literal["realtime_first_night"] = "realtime_first_night"
 
 
 class V2LobbyRoleSnapshot(BaseModel):
@@ -60,6 +76,15 @@ class V2LobbyRuleSnapshot(BaseModel):
     schema_version: int | None = Field(default=None, ge=1)
     content_hash: str | None = Field(default=None, min_length=64, max_length=64)
     is_default: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_role_composition(self) -> "V2LobbyRuleSnapshot":
+        role_names = [item.role for item in self.roles]
+        if len(role_names) != len(set(role_names)):
+            raise ValueError("rule roles must be unique")
+        if sum(item.count for item in self.roles) != self.player_count:
+            raise ValueError("rule role count must match player count")
+        return self
 
 
 class V2LobbyPlayerSnapshot(BaseModel):
@@ -147,7 +172,7 @@ class V2LobbyCreateSnapshot(BaseModel):
 class V2GameCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: str = Field(default="Live V2 实时首句对局", min_length=1, max_length=120)
+    title: str = Field(default="Live V2 实时对局", min_length=1, max_length=120)
     lobby_snapshot: V2LobbyCreateSnapshot | None = None
 
     @field_validator("title")
@@ -162,6 +187,14 @@ class V2GameCreateRequest(BaseModel):
 class V2ActorResponse(BaseModel):
     kind: Literal["judge", "player"]
     id: str
+
+
+class V2GamePhaseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phase_seq: int = Field(ge=0)
+    phase_id: V2GamePhaseId
+    phase_state: V2GamePhaseState
 
 
 class V2CurrentPresentationResponse(BaseModel):
@@ -183,28 +216,120 @@ class V2PublicPlayerSeatResponse(BaseModel):
     player_id: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=80)
     avatar_url: str | None = Field(default=None, max_length=2000)
+    alive: bool = True
+
+
+class V2PublicRoleCountResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(min_length=1, max_length=80)
+    count: int = Field(ge=1, le=24)
+
+
+class V2PublicRuleSnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=40)
+    player_count: int = Field(ge=1, le=24)
+    roles: list[V2PublicRoleCountResponse] = Field(min_length=1, max_length=24)
+    max_rounds: int = Field(ge=1, le=20)
+    sheriff_enabled: bool | None
+    werewolf_self_explosion_enabled: bool | None
+    exile_last_words_enabled: bool | None
+
+
+class V2PublicRoleAssignmentStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["sealed", "unavailable"]
+    assigned_count: int = Field(ge=0, le=24)
+
+    @model_validator(mode="after")
+    def validate_state_count(self) -> "V2PublicRoleAssignmentStatusResponse":
+        if self.state == "sealed" and self.assigned_count == 0:
+            raise ValueError("sealed role assignments require players")
+        if self.state == "unavailable" and self.assigned_count != 0:
+            raise ValueError("unavailable role assignments cannot contain players")
+        return self
 
 
 class V2LiveSnapshotResponse(BaseModel):
     protocol_version: Literal[1] = 1
     type: Literal["live.snapshot"] = "live.snapshot"
     api_version: Literal["v2"] = "v2"
-    audience: Literal["player_public", "spectator_god_view"]
+    audience: Literal["player_public"]
     game_id: str
     run_id: str
     live_state: V2LiveState
+    game_phase: V2GamePhaseResponse
     latest_presentation_seq: int = Field(ge=0)
     server_time: datetime
+    public_rule: V2PublicRuleSnapshotResponse | None
     public_players: list[V2PublicPlayerSeatResponse] = Field(max_length=24)
+    public_role_assignment: V2PublicRoleAssignmentStatusResponse
+    current_presentation: V2CurrentPresentationResponse | None
+
+
+class V2GodViewPlayerIdentityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    seat: int = Field(ge=1, le=24)
+    player_id: str = Field(min_length=1, max_length=80)
+    display_name: str = Field(min_length=1, max_length=80)
+    avatar_url: str | None = Field(default=None, max_length=2000)
+    role: str = Field(min_length=1, max_length=80)
+    team: str | None = Field(default=None, max_length=40)
+    alive: bool = True
+    death_cause: str | None = Field(default=None, max_length=40)
+
+
+class V2GodViewIdentitySnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol_version: Literal[1] = 1
+    type: Literal["god_view.identity_snapshot"] = "god_view.identity_snapshot"
+    api_version: Literal["v2"] = "v2"
+    audience: Literal["spectator_god_view"] = "spectator_god_view"
+    game_id: str
+    run_id: str
+    live_state: V2LiveState
+    game_phase: V2GamePhaseResponse
+    server_time: datetime
+    rule: V2PublicRuleSnapshotResponse | None
+    players: list[V2GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
+
+
+class V2GodViewLiveSnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol_version: Literal[1] = 1
+    type: Literal["god_view.live_snapshot"] = "god_view.live_snapshot"
+    api_version: Literal["v2"] = "v2"
+    audience: Literal["spectator_god_view"] = "spectator_god_view"
+    game_id: str
+    run_id: str
+    live_state: V2LiveState
+    game_phase: V2GamePhaseResponse
+    latest_presentation_seq: int = Field(ge=0)
+    server_time: datetime
+    rule: V2PublicRuleSnapshotResponse | None
+    players: list[V2GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
     current_presentation: V2CurrentPresentationResponse | None
 
 
 class V2GameCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     game_id: str
     run_id: str
-    status: str
+    status: Literal["ready"]
     snapshot_url: str
     websocket_url: str
+    god_view_snapshot_url: str
+    god_view_websocket_url: str
+    god_view_access_token: str = Field(min_length=32, max_length=128)
 
 
 class AdminV2GameListItem(BaseModel):
@@ -215,6 +340,9 @@ class AdminV2GameListItem(BaseModel):
     record_schema_version: int
     last_record_seq: int
     last_presentation_seq: int
+    phase_seq: int
+    phase_id: str
+    phase_state: str
     created_at: datetime
     updated_at: datetime
 
@@ -253,9 +381,11 @@ class AdminV2PresentationResponse(BaseModel):
     presentation_seq: int
     presentation_id: str
     action_id: str | None
+    activation_id: str | None
     phase_id: str
     actor_kind: str
     actor_id: str
+    audience: str
     speech_id: str
     segment_index: int
     source_event_id: int
@@ -270,6 +400,8 @@ class AdminV2PresentationResponse(BaseModel):
 class AdminV2VoiceAssetResponse(BaseModel):
     voice_asset_id: str
     action_id: str
+    activation_id: str | None
+    audience: str
     presentation_id: str
     speech_id: str
     segment_index: int
@@ -289,7 +421,14 @@ class AdminV2VoiceAssetResponse(BaseModel):
 class AdminV2GameDetailResponse(AdminV2GameListItem):
     rule_snapshot: dict[str, Any]
     players_snapshot: list[dict[str, Any]]
+    ability_snapshot: dict[str, Any]
     runs: list[AdminV2RunResponse]
     events: list[AdminV2EventResponse]
     presentations: list[AdminV2PresentationResponse]
     voice_assets: list[AdminV2VoiceAssetResponse]
+    player_states: list[dict[str, Any]]
+    action_windows: list[dict[str, Any]]
+    ability_instances: list[dict[str, Any]]
+    ability_activations: list[dict[str, Any]]
+    effect_intents: list[dict[str, Any]]
+    knowledge_facts: list[dict[str, Any]]

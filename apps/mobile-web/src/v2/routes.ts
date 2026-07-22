@@ -7,3 +7,11 @@ export const liveV2Route: RouteObject = {
     return { Component: LiveV2Page };
   },
 };
+
+export const godViewV2Route: RouteObject = {
+  path: "v2/games/:gameId/live/god",
+  lazy: async () => {
+    const { GodViewPage } = await import("./god-view/GodViewPage");
+    return { Component: GodViewPage };
+  },
+};

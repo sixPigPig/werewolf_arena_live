@@ -6,6 +6,9 @@ export type V2GameRecordListItem = {
   record_schema_version: number;
   last_record_seq: number;
   last_presentation_seq: number;
+  phase_seq: number;
+  phase_id: string;
+  phase_state: string;
   created_at: string;
   updated_at: string;
 };
@@ -42,9 +45,11 @@ export type V2GamePresentation = {
   presentation_seq: number;
   presentation_id: string;
   action_id: string | null;
+  activation_id: string | null;
   phase_id: string;
   actor_kind: string;
   actor_id: string;
+  audience: string;
   speech_id: string;
   segment_index: number;
   source_event_id: number;
@@ -59,6 +64,8 @@ export type V2GamePresentation = {
 export type V2VoiceAsset = {
   voice_asset_id: string;
   action_id: string;
+  activation_id: string | null;
+  audience: string;
   presentation_id: string;
   speech_id: string;
   segment_index: number;
@@ -78,8 +85,15 @@ export type V2VoiceAsset = {
 export type V2GameRecordDetail = V2GameRecordListItem & {
   rule_snapshot: Record<string, unknown>;
   players_snapshot: Array<Record<string, unknown>>;
+  ability_snapshot: Record<string, unknown>;
   runs: V2GameRun[];
   events: V2GameRecordEvent[];
   presentations: V2GamePresentation[];
   voice_assets: V2VoiceAsset[];
+  player_states: Array<Record<string, unknown>>;
+  action_windows: Array<Record<string, unknown>>;
+  ability_instances: Array<Record<string, unknown>>;
+  ability_activations: Array<Record<string, unknown>>;
+  effect_intents: Array<Record<string, unknown>>;
+  knowledge_facts: Array<Record<string, unknown>>;
 };

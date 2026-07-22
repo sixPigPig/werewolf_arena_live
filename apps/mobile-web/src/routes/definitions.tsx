@@ -1,7 +1,7 @@
 import { Navigate, type RouteObject } from "react-router-dom";
 
 import { MobileAppShell } from "../layout/MobileAppShell";
-import { liveV2Route } from "../v2/routes";
+import { godViewV2Route, liveV2Route } from "../v2/routes";
 
 export const routes: RouteObject[] = [
   {
@@ -15,6 +15,7 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <Navigate to="/games" replace /> },
       liveV2Route,
+      godViewV2Route,
       {
         path: "games",
         lazy: async () => {

@@ -1,25 +1,24 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { routes } from "../../routes/definitions";
+import { GodViewPage } from "./GodViewPage";
 
 const gameId = "v2_game_0123456789abcdef";
-const runId = "v2_run_0123456789abcdef";
+const accessToken = "a".repeat(43);
 const actionId = "v2_action_0123456789abcdef";
 const presentationId = "v2_pres_0123456789abcdef";
 const speechId = "v2_speech_0123456789abcdef";
-
 const sourceStart = vi.fn();
-const copyToChannel = vi.fn();
 
 class FakeAudioContext {
   currentTime = 0;
   destination = {} as AudioDestinationNode;
   resume = vi.fn(async () => undefined);
   close = vi.fn(async () => undefined);
-  createBuffer = vi.fn(() => ({ copyToChannel }) as unknown as AudioBuffer);
+  createBuffer = vi.fn(
+    () => ({ copyToChannel: vi.fn() }) as unknown as AudioBuffer,
+  );
   createBufferSource = vi.fn(
     () =>
       ({
@@ -35,6 +34,7 @@ class FakeAudioContext {
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   binaryType = "blob";
+  protocol = "live-v2-god-view";
   onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
@@ -42,9 +42,11 @@ class FakeWebSocket {
   send = vi.fn();
   close = vi.fn(() => this.onclose?.());
   readonly url: string;
+  readonly protocols?: string | string[];
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string | string[]) {
     this.url = url;
+    this.protocols = protocols;
     FakeWebSocket.instances.push(this);
   }
 
@@ -65,87 +67,86 @@ beforeEach(() => {
   window.sessionStorage.clear();
   FakeWebSocket.instances = [];
   sourceStart.mockClear();
-  copyToChannel.mockClear();
-  vi.stubGlobal("AudioContext", FakeAudioContext);
-  vi.stubGlobal("WebSocket", FakeWebSocket);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(snapshot("ready", null)), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    ),
-  );
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("LiveV2Page", () => {
-  it("shows the immutable public seats before starting any realtime action", async () => {
-    renderPage();
+describe("GodViewPage", () => {
+  it("shows every private identity without opening realtime transport", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(identitySnapshot()), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const webSocketMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", webSocketMock);
+
+    renderPage(`#access_token=${accessToken}`);
 
     expect(await screen.findByText("阿青")).toBeInTheDocument();
-    expect(screen.getByText("白石")).toBeInTheDocument();
-    expect(screen.getByText("1号")).toBeInTheDocument();
-    expect(screen.getByText("2号")).toBeInTheDocument();
-    expect(screen.getByText("身份已私密封存 · 2 人")).toBeInTheDocument();
-    expect(screen.getByText(/普通直播不会展示任何座位对应的角色或阵营/)).toBeInTheDocument();
-    expect(FakeWebSocket.instances).toHaveLength(0);
-    expect(sourceStart).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "进入实时直播" })).toBeInTheDocument();
-  });
-
-  it("shows the frozen public rule before starting any realtime action", async () => {
-    renderPage();
-
-    expect(await screen.findByRole("heading", { name: "测试两人局" })).toBeInTheDocument();
-    expect(screen.getByText("2 位玩家 · 最多 8 轮")).toBeInTheDocument();
     expect(screen.getByText("狼人")).toBeInTheDocument();
+    expect(screen.getByText("狼人阵营")).toBeInTheDocument();
+    expect(screen.getByText("白石")).toBeInTheDocument();
     expect(screen.getByText("村民")).toBeInTheDocument();
-    expect(screen.getByText("狼人自爆").nextSibling).toHaveTextContent("开启");
-    expect(FakeWebSocket.instances).toHaveLength(0);
-    expect(sourceStart).not.toHaveBeenCalled();
-  });
-
-  it("offers the separately credentialed God View without starting realtime", async () => {
-    window.sessionStorage.setItem(`live-v2:god-view:${gameId}`, "a".repeat(43));
-    renderPage();
-
-    const link = await screen.findByRole("link", { name: /进入上帝视角/ });
-    expect(link).toHaveAttribute(
-      "href",
-      `/v2/games/${gameId}/live/god#access_token=${"a".repeat(43)}`,
+    expect(screen.getByText("好人阵营")).toBeInTheDocument();
+    expect(webSocketMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(init.headers).get("Authorization")).toBe(
+      `Bearer ${accessToken}`,
     );
-    expect(FakeWebSocket.instances).toHaveLength(0);
-    expect(sourceStart).not.toHaveBeenCalled();
   });
 
-  it("plays the preview-only opening and nightfall in order", async () => {
-    renderPage();
+  it("fails closed before any request when the credential is absent", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
 
-    expect(FakeWebSocket.instances).toHaveLength(0);
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时直播" }));
+    renderPage("");
+
+    expect(await screen.findByText(/缺少上帝视角访问凭证/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("watches opening and nightfall while every identity stays visible", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(identitySnapshot()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderPage(`#access_token=${accessToken}`);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "进入上帝视角实时观赛" }),
+    );
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
-    expect(socket.url.endsWith(`/api/v2/live/games/${gameId}/ws`)).toBe(true);
-    expect(socket.binaryType).toBe("arraybuffer");
+    expect(socket.url).toContain(`/api/v2/god-view/games/${gameId}/ws`);
+    expect(socket.url).not.toContain(accessToken);
+    expect(socket.protocols).toEqual(["live-v2-god-view", accessToken]);
 
     act(() => {
       socket.open();
-      socket.emitJson(snapshot("ready", null));
+      socket.emitJson(liveSnapshot("ready", null));
     });
     await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
     expect(JSON.parse(String(socket.send.mock.calls[0][0]))).toEqual({
       protocol_version: 1,
-      type: "client.ready",
+      type: "god_view.ready",
       audio: { encoding: "pcm_s16le", sample_rate: 24000, channels: 1 },
     });
 
     act(() => {
-      socket.emitJson(snapshot("ready", null));
+      socket.emitJson(liveSnapshot("ready", null));
       socket.emitJson(state("generating"));
       socket.emitJson({
         ...base("presentation.opened"),
@@ -166,7 +167,7 @@ describe("LiveV2Page", () => {
         text: "欢迎来到这场实时狼人杀对局。",
       });
       socket.emitJson(state("broadcasting"));
-      socket.emitBinary(audioFrame(0, 0));
+      socket.emitBinary(audioFrame());
       socket.emitJson(state("finalizing"));
       socket.emitJson({
         ...base("presentation.closed"),
@@ -206,7 +207,7 @@ describe("LiveV2Page", () => {
         text: "夜幕已经降临，请所有玩家闭眼。",
       });
       socket.emitJson(state("broadcasting"));
-      socket.emitBinary(audioFrame(0, 0, 2));
+      socket.emitBinary(audioFrame(2));
       socket.emitJson(state("finalizing"));
       socket.emitJson({
         ...base("presentation.closed"),
@@ -225,136 +226,137 @@ describe("LiveV2Page", () => {
     expect(await screen.findByText("天黑，请闭眼")).toBeInTheDocument();
     expect(screen.getByText(/当前验收切片已实时完成/)).toBeInTheDocument();
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
+    expect(screen.getByText("狼人")).toBeInTheDocument();
+    expect(screen.getByText("村民")).toBeInTheDocument();
     expect(sourceStart).toHaveBeenCalledTimes(2);
-    expect(copyToChannel).toHaveBeenCalledTimes(2);
-    expect(socket.send).toHaveBeenCalledTimes(1);
   });
 
-  it("does not replay a completed sentence after reconnect", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时直播" }));
+  it("does not replay the completed judge sentence after reconnect", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(identitySnapshot()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderPage(`#access_token=${accessToken}`);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "进入上帝视角实时观赛" }),
+    );
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
-
     act(() => {
       socket.open();
-      socket.emitJson(snapshot("awaiting_observation", null));
+      socket.emitJson(liveSnapshot("awaiting_observation", null));
     });
 
-    expect(
-      await screen.findByText(/当前验收切片已实时完成/),
-    ).toBeInTheDocument();
-    expect(sourceStart).not.toHaveBeenCalled();
+    expect(await screen.findByText(/上帝视角正在等待本步验收/)).toBeInTheDocument();
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
+    expect(sourceStart).not.toHaveBeenCalled();
   });
 
-  it("labels a public player presentation with the frozen display name", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时直播" }));
+  it("shows private ability targets and deterministic death causes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(identitySnapshot()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderPage(`#access_token=${accessToken}`);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "进入上帝视角实时观赛" }),
+    );
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     act(() => {
       socket.open();
-      socket.emitJson(snapshot("ready", null));
+      socket.emitJson(liveSnapshot("ready", null));
     });
     await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
     act(() => {
       socket.emitJson({
+        ...base("ability.progress_changed"),
+        ability_id: "werewolf.attack",
+        status: "decision_committed",
+        actor_player_id: "profile-1",
+        target_player_id: "profile-2",
+        round_no: 1,
+      });
+      socket.emitJson({
+        ...base("ability.progress_changed"),
+        ability_id: "werewolf.attack",
+        status: "completed",
+        actor_player_id: "profile-1",
+        target_player_id: "profile-2",
+        round_no: null,
+      });
+      socket.emitJson({
+        ...base("god_view.night_resolved"),
+        deaths: [{ player_id: "profile-2", cause: "werewolf_attack" }],
+        attack_prevented_by: null,
+      });
+      socket.emitJson({
         ...base("presentation.opened"),
         action_id: actionId,
-        presentation_seq: 1,
+        presentation_seq: 2,
         presentation_id: presentationId,
-        phase_id: "day_1",
+        phase_id: "first_night",
         actor: { kind: "player", id: "profile-1" },
         speech_id: speechId,
       });
       socket.emitJson({
         ...base("speech.segment_committed"),
         action_id: actionId,
-        presentation_seq: 1,
+        presentation_seq: 2,
         presentation_id: presentationId,
         speech_id: speechId,
         segment_index: 0,
-        text: "我选择不开枪。",
+        text: "我选择二号。",
       });
     });
 
+    const progress = await screen.findByRole("region", { name: "首夜实时决策" });
+    expect(within(progress).getAllByText("狼人袭击")).toHaveLength(1);
+    expect(within(progress).getByText("目标：白石")).toBeInTheDocument();
+    expect(screen.getByText("已死亡 · 狼人袭击")).toBeInTheDocument();
     expect(await screen.findByRole("region", { name: "阿青" })).toBeInTheDocument();
-  });
-
-  it("shows only safe night progress and public dawn deaths", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时直播" }));
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    const socket = FakeWebSocket.instances[0];
-    act(() => {
-      socket.open();
-      socket.emitJson(snapshot("ready", null));
-    });
-    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
-    act(() => {
-      socket.emitJson(snapshot("ready", null));
-      socket.emitJson({
-        ...base("game.phase_changed"),
-        phase_seq: 2,
-        previous_phase_id: "opening",
-        phase_id: "first_night",
-        phase_state: "night_running",
-      });
-      socket.emitJson({
-        ...base("night.progress_changed"),
-        stage: "actions_in_progress",
-        latest_presentation_seq: 5,
-      });
-      socket.emitJson({
-        ...base("dawn.result_announced"),
-        dead_player_ids: ["profile-1"],
-      });
-      socket.emitJson({
-        ...base("game.phase_changed"),
-        phase_seq: 3,
-        previous_phase_id: "first_night",
-        phase_id: "day_1",
-        phase_state: "public_day_ready",
-      });
-      socket.emitJson(state("awaiting_observation"));
-    });
-
-    expect(await screen.findByText("阿青 · 已死亡")).toBeInTheDocument();
-    expect(screen.getByText("黎明结算完成")).toBeInTheDocument();
-    expect(screen.queryByText(/狼人袭击/)).not.toBeInTheDocument();
   });
 });
 
-function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  const router = createMemoryRouter(routes, {
-    initialEntries: [`/v2/games/${gameId}/live`],
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
+function renderPage(hash: string) {
+  const router = createMemoryRouter(
+    [{ path: "/v2/games/:gameId/live/god", element: <GodViewPage /> }],
+    { initialEntries: [`/v2/games/${gameId}/live/god${hash}`] },
   );
+  return render(<RouterProvider router={router} />);
 }
 
-function snapshot(
-  liveState: string,
-  presentation: Record<string, unknown> | null,
-) {
+function identitySnapshot() {
   return {
-    ...base("live.snapshot"),
+    protocol_version: 1,
+    type: "god_view.identity_snapshot",
     api_version: "v2",
-    audience: "player_public",
-    live_state: liveState,
-    game_phase:
-      liveState === "awaiting_observation"
-        ? { phase_seq: 2, phase_id: "first_night", phase_state: "nightfall_announced" }
-        : { phase_seq: 1, phase_id: "opening", phase_state: "opening_ready" },
-    latest_presentation_seq: presentation ? 1 : 0,
-    public_rule: {
+    audience: "spectator_god_view",
+    game_id: gameId,
+    run_id: "v2_run_0123456789abcdef",
+    live_state: "ready",
+    game_phase: {
+      phase_seq: 1,
+      phase_id: "opening",
+      phase_state: "opening_ready",
+    },
+    server_time: "2026-07-22T12:00:00Z",
+    rule: {
       rule_id: "classic_2",
       name: "测试两人局",
       version: "1",
@@ -365,27 +367,49 @@ function snapshot(
       ],
       max_rounds: 8,
       sheriff_enabled: false,
-      werewolf_self_explosion_enabled: true,
+      werewolf_self_explosion_enabled: false,
       exile_last_words_enabled: true,
     },
-    public_players: [
+    players: [
       {
         seat: 1,
         player_id: "profile-1",
         display_name: "阿青",
         avatar_url: null,
+        role: "狼人",
+        team: "werewolves",
         alive: true,
+        death_cause: null,
       },
       {
         seat: 2,
         player_id: "profile-2",
         display_name: "白石",
         avatar_url: null,
+        role: "村民",
+        team: "villagers",
         alive: true,
+        death_cause: null,
       },
     ],
-    public_role_assignment: { state: "sealed", assigned_count: 2 },
-    current_presentation: presentation,
+  };
+}
+
+function liveSnapshot(
+  liveState: string,
+  currentPresentation: Record<string, unknown> | null,
+) {
+  const identity = identitySnapshot();
+  return {
+    ...identity,
+    type: "god_view.live_snapshot",
+    live_state: liveState,
+    game_phase:
+      liveState === "awaiting_observation"
+        ? { phase_seq: 2, phase_id: "first_night", phase_state: "nightfall_announced" }
+        : identity.game_phase,
+    latest_presentation_seq: currentPresentation ? 1 : 0,
+    current_presentation: currentPresentation,
   };
 }
 
@@ -398,16 +422,12 @@ function base(type: string) {
     protocol_version: 1,
     type,
     game_id: gameId,
-    run_id: runId,
+    run_id: "v2_run_0123456789abcdef",
     server_time: "2026-07-22T12:00:00Z",
   };
 }
 
-function audioFrame(
-  chunkIndex: number,
-  startSample: number,
-  presentationSeq = 1,
-): ArrayBuffer {
+function audioFrame(presentationSeq = 1): ArrayBuffer {
   const header = new TextEncoder().encode(
     JSON.stringify({
       protocol_version: 1,
@@ -416,8 +436,8 @@ function audioFrame(
       presentation_id: presentationSeq === 1 ? presentationId : `${presentationId}2`,
       speech_id: presentationSeq === 1 ? speechId : `${speechId}2`,
       segment_index: 0,
-      chunk_index: chunkIndex,
-      start_sample: startSample,
+      chunk_index: 0,
+      start_sample: 0,
       sample_count: 2,
       sample_rate: 24000,
       channels: 1,

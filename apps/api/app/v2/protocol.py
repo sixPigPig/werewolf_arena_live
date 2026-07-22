@@ -5,7 +5,7 @@ import json
 import struct
 from typing import Any
 
-from app.v2.repository import V2PresentationIdentity
+from app.v2.repository import V2PhaseTransition, V2PresentationIdentity
 
 
 PROTOCOL_VERSION = 1
@@ -42,8 +42,8 @@ def presentation_opened(identity: V2PresentationIdentity) -> dict[str, Any]:
             "action_id": identity.action_id,
             "presentation_seq": identity.presentation_seq,
             "presentation_id": identity.presentation_id,
-            "phase_id": "opening",
-            "actor": {"kind": "judge", "id": "judge"},
+            "phase_id": identity.phase_id,
+            "actor": {"kind": identity.actor_kind, "id": identity.actor_id},
             "speech_id": identity.speech_id,
         },
     )
@@ -77,6 +77,101 @@ def live_state(
         game_id=game_id,
         run_id=run_id,
         fields={"live_state": state, "reason": reason},
+    )
+
+
+def game_phase_changed(transition: V2PhaseTransition) -> dict[str, Any]:
+    return control_message(
+        message_type="game.phase_changed",
+        game_id=transition.game_id,
+        run_id=transition.run_id,
+        fields={
+            "phase_seq": transition.phase_seq,
+            "previous_phase_id": transition.previous_phase_id,
+            "phase_id": transition.phase_id,
+            "phase_state": transition.phase_state,
+        },
+    )
+
+
+def night_progress(
+    *,
+    game_id: str,
+    run_id: str,
+    stage: str,
+    latest_presentation_seq: int,
+) -> dict[str, Any]:
+    if stage not in {
+        "night_started",
+        "actions_in_progress",
+        "night_resolved",
+        "dawn_announced",
+    }:
+        raise V2LiveProtocolError("invalid public night progress")
+    return control_message(
+        message_type="night.progress_changed",
+        game_id=game_id,
+        run_id=run_id,
+        fields={
+            "stage": stage,
+            "latest_presentation_seq": latest_presentation_seq,
+        },
+    )
+
+
+def ability_progress(
+    *,
+    game_id: str,
+    run_id: str,
+    ability_id: str,
+    status: str,
+    actor_player_id: str | None = None,
+    target_player_id: str | None = None,
+    round_no: int | None = None,
+) -> dict[str, Any]:
+    return control_message(
+        message_type="ability.progress_changed",
+        game_id=game_id,
+        run_id=run_id,
+        fields={
+            "ability_id": ability_id,
+            "status": status,
+            "actor_player_id": actor_player_id,
+            "target_player_id": target_player_id,
+            "round_no": round_no,
+        },
+    )
+
+
+def public_dawn_result(
+    *,
+    game_id: str,
+    run_id: str,
+    dead_player_ids: list[str],
+) -> dict[str, Any]:
+    return control_message(
+        message_type="dawn.result_announced",
+        game_id=game_id,
+        run_id=run_id,
+        fields={"dead_player_ids": dead_player_ids},
+    )
+
+
+def god_view_night_resolution(
+    *,
+    game_id: str,
+    run_id: str,
+    deaths: list[dict[str, str]],
+    attack_prevented_by: str | None,
+) -> dict[str, Any]:
+    return control_message(
+        message_type="god_view.night_resolved",
+        game_id=game_id,
+        run_id=run_id,
+        fields={
+            "deaths": deaths,
+            "attack_prevented_by": attack_prevented_by,
+        },
     )
 
 

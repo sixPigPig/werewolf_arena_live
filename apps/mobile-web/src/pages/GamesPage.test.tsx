@@ -119,6 +119,11 @@ function buildV2Game() {
     status: "ready" as const,
     snapshot_url: "/api/v2/live/games/v2_game_0123456789abcdef/snapshot",
     websocket_url: "/api/v2/live/games/v2_game_0123456789abcdef/ws",
+    god_view_snapshot_url:
+      "/api/v2/god-view/games/v2_game_0123456789abcdef/identity-snapshot",
+    god_view_websocket_url:
+      "/api/v2/god-view/games/v2_game_0123456789abcdef/ws",
+    god_view_access_token: "a".repeat(43),
   };
 }
 
@@ -308,6 +313,7 @@ function getAlphaAt(
 
 describe("GamesPage", () => {
   beforeEach(() => {
+    window.sessionStorage.clear();
     gameClientMocks.listRuleSets.mockResolvedValue({
       rule_sets: [classicRuleSet],
     });
@@ -777,6 +783,11 @@ describe("GamesPage", () => {
         "/v2/games/v2_game_0123456789abcdef/live",
       );
     });
+    expect(
+      window.sessionStorage.getItem(
+        "live-v2:god-view:v2_game_0123456789abcdef",
+      ),
+    ).toBe("a".repeat(43));
   });
 
   it("requires a second tap before clearing assigned seats", async () => {

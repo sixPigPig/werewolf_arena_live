@@ -27,12 +27,27 @@ class V2GameRecord(Base):
         default=0,
         server_default="0",
     )
+    phase_seq: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    phase_id: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="legacy",
+        server_default="legacy",
+    )
+    phase_state: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="legacy_frozen",
+        server_default="legacy_frozen",
+    )
     rule_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     players_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
         nullable=False,
         default=list,
     )
+    ability_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    ability_snapshot_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -68,6 +83,71 @@ class V2GameRun(Base):
         server_default=func.now(),
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class V2GodViewAccessGrant(Base):
+    __tablename__ = "v2_god_view_access_grants"
+
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    token_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class V2RoleAssignmentBatch(Base):
+    __tablename__ = "v2_role_assignment_batches"
+
+    assignment_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    seed_hex: Mapped[str] = mapped_column(String(64), nullable=False)
+    assignment_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    player_count: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class V2RoleAssignment(Base):
+    __tablename__ = "v2_role_assignments"
+    __table_args__ = (
+        UniqueConstraint("game_id", "player_id", name="uq_v2_role_assignments_player"),
+    )
+
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    seat: Mapped[int] = mapped_column(primary_key=True)
+    assignment_id: Mapped[str] = mapped_column(
+        String(48),
+        ForeignKey("v2_role_assignment_batches.assignment_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    player_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    role: Mapped[str] = mapped_column(String(80), nullable=False)
+    role_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    team: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
 
 
 class V2GameRecordEvent(Base):
@@ -119,6 +199,7 @@ class V2LivePresentation(Base):
     presentation_seq: Mapped[int] = mapped_column(primary_key=True)
     presentation_id: Mapped[str] = mapped_column(String(48), nullable=False)
     action_id: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
+    activation_id: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
     run_id: Mapped[str] = mapped_column(
         String(40),
         ForeignKey("v2_game_runs.run_id", ondelete="CASCADE"),
@@ -128,6 +209,7 @@ class V2LivePresentation(Base):
     phase_id: Mapped[str] = mapped_column(String(40), nullable=False)
     actor_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     actor_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    audience: Mapped[str] = mapped_column(String(32), nullable=False, default="all")
     speech_id: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
     segment_index: Mapped[int] = mapped_column(nullable=False)
     source_event_id: Mapped[int] = mapped_column(nullable=False)
@@ -180,6 +262,8 @@ class V2VoiceAsset(Base):
         index=True,
     )
     action_id: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    activation_id: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
+    audience: Mapped[str] = mapped_column(String(32), nullable=False, default="all")
     presentation_id: Mapped[str] = mapped_column(String(48), nullable=False)
     speech_id: Mapped[str] = mapped_column(String(48), nullable=False)
     segment_index: Mapped[int] = mapped_column(nullable=False)
@@ -198,3 +282,192 @@ class V2VoiceAsset(Base):
         server_default=func.now(),
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class V2PlayerState(Base):
+    __tablename__ = "v2_player_states"
+
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    player_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    seat: Mapped[int] = mapped_column(nullable=False)
+    alive: Mapped[bool] = mapped_column(nullable=False, default=True)
+    death_cause: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    death_window_seq: Mapped[int | None] = mapped_column(nullable=True)
+    state: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class V2ActionWindow(Base):
+    __tablename__ = "v2_action_windows"
+    __table_args__ = (
+        UniqueConstraint("game_id", "window_seq", name="uq_v2_action_windows_game_seq"),
+    )
+
+    window_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    window_seq: Mapped[int] = mapped_column(nullable=False)
+    window_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    ability_snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    opened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class V2AbilityInstance(Base):
+    __tablename__ = "v2_ability_instances"
+    __table_args__ = (
+        UniqueConstraint(
+            "game_id", "ability_id", "owner_id", name="uq_v2_ability_instances_owner"
+        ),
+    )
+
+    ability_instance_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ability_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    ability_version: Mapped[int] = mapped_column(nullable=False)
+    owner_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    owner_role_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    state: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class V2AbilityActivation(Base):
+    __tablename__ = "v2_ability_activations"
+    __table_args__ = (
+        UniqueConstraint(
+            "game_id",
+            "window_id",
+            "ability_instance_id",
+            "occurrence",
+            name="uq_v2_ability_activations_occurrence",
+        ),
+    )
+
+    activation_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    window_id: Mapped[str] = mapped_column(
+        String(48),
+        ForeignKey("v2_action_windows.window_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ability_instance_id: Mapped[str] = mapped_column(
+        String(48),
+        ForeignKey("v2_ability_instances.ability_instance_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    occurrence: Mapped[int] = mapped_column(nullable=False, default=1)
+    action_id: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
+    decision_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    actor_player_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    knowledge_fact_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    decision: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    opened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class V2EffectIntent(Base):
+    __tablename__ = "v2_effect_intents"
+
+    effect_intent_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    window_id: Mapped[str] = mapped_column(
+        String(48),
+        ForeignKey("v2_action_windows.window_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    activation_id: Mapped[str] = mapped_column(
+        String(48),
+        ForeignKey("v2_ability_activations.activation_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    effect_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    actor_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    target_player_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    state: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class V2KnowledgeFact(Base):
+    __tablename__ = "v2_knowledge_facts"
+
+    knowledge_fact_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_activation_id: Mapped[str | None] = mapped_column(
+        String(48),
+        ForeignKey("v2_ability_activations.activation_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    owner_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    fact_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

@@ -1,4 +1,4 @@
-import type { V2AudioFrame, V2Presentation } from "../contracts";
+import type { V2AudioFrame, V2Presentation } from "./contracts";
 
 export class V2PcmPlayer {
   private readonly context: AudioContext;

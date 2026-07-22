@@ -72,14 +72,16 @@ class V2TtsClient:
         *,
         text: str,
         attempt_id: str,
+        speaker: str | None = None,
     ) -> AsyncIterator[bytes]:
+        selected_speaker = (speaker or self._speaker).strip()
         if not all(
             (
                 self._enabled,
                 self._api_key,
                 self._resource_id,
                 self._ws_url,
-                self._speaker,
+                selected_speaker,
             )
         ):
             raise V2TtsError("tts_not_configured")
@@ -110,7 +112,7 @@ class V2TtsClient:
                     "event": _START_SESSION,
                     "namespace": "BidirectionalTTS",
                     "req_params": {
-                        "speaker": self._speaker,
+                        "speaker": selected_speaker,
                         "audio_params": {
                             "enable_subtitle": False,
                             "format": "pcm",

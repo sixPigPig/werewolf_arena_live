@@ -24,10 +24,12 @@ import { PlayersPage } from "../pages/PlayersPage";
 import { routes } from "../routes/definitions";
 import { updateRootFontSize } from "../styles/rem";
 import { LiveV2Page } from "../v2/live/LiveV2Page";
+import { GodViewPage } from "../v2/god-view/GodViewPage";
 
 const requiredRoutes = [
   "/",
   "/v2/games/:gameId/live",
+  "/v2/games/:gameId/live/god",
   "/games",
   "/games/:gameId",
   "/games/:gameId/live",
@@ -41,6 +43,7 @@ const requiredRoutes = [
 const routeSmokeCases = [
   { path: "/", heading: "狼人杀对局大厅" },
   { path: "/v2/games/wolf-1/live", heading: "Live V2" },
+  { path: "/v2/games/wolf-1/live/god", heading: "上帝视角" },
   { path: "/games", heading: "狼人杀对局大厅" },
   { path: "/games/wolf-1", heading: "移动复盘" },
   { path: "/games/wolf-1/live", heading: "实时观战" },
@@ -58,6 +61,7 @@ const eagerTestRoutes: RouteObject[] = [
     children: [
       { index: true, element: <Navigate to="/games" replace /> },
       { path: "v2/games/:gameId/live", element: <LiveV2Page /> },
+      { path: "v2/games/:gameId/live/god", element: <GodViewPage /> },
       { path: "games", element: <GamesPage /> },
       { path: "games/:gameId", element: <GameDetailPage /> },
       { path: "games/:gameId/live", element: <LivePage /> },

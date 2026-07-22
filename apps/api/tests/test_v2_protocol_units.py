@@ -4,14 +4,35 @@ import hashlib
 import json
 from pathlib import Path
 import struct
+from types import SimpleNamespace
 import wave
 
 import pytest
 
-from app.v2.model_client import V2ModelError, V2QualityError, _accepted_sentence, _sse_data
+from app.v2.god_view_access import (
+    issue_god_view_access_token,
+    verify_god_view_access_token,
+)
+from app.v2.god_view_projection import (
+    V2GodViewProjectionError,
+    project_god_view_player_identities,
+)
+from app.v2.model_client import (
+    V2ModelError,
+    V2QualityError,
+    _decision_fields,
+    _required_speech,
+    _sse_data,
+)
 from app.v2.protocol import V2LiveProtocolError, audio_frame
-from app.v2.public_projection import V2PublicProjectionError, project_public_player_seats
+from app.v2.public_projection import (
+    V2PublicProjectionError,
+    project_public_player_seats,
+    project_public_role_assignment_status,
+    project_public_rule_snapshot,
+)
 from app.v2.repository import V2PresentationIdentity
+from app.v2.role_assignment import V2RoleAssignmentError, assign_private_roles
 from app.v2.tts_client import (
     _AUDIO_SERVER,
     _CONNECTION_STARTED,
@@ -29,6 +50,7 @@ def _identity() -> V2PresentationIdentity:
         game_id="v2_game_0000000000000001",
         run_id="v2_run_0000000000000001",
         action_id="v2_action_0000000000000001",
+        phase_id="opening",
         presentation_seq=1,
         presentation_id="v2_pres_0000000000000001",
         speech_id="v2_speech_0000000000000001",
@@ -39,15 +61,33 @@ def _identity() -> V2PresentationIdentity:
     )
 
 
-def test_sentence_gate_accepts_only_the_first_complete_public_sentence() -> None:
-    assert _accepted_sentence("欢迎来到这场实时") is None
-    assert (
-        _accepted_sentence("欢迎来到这场实时狼人杀对局。后续文字") == "欢迎来到这场实时狼人杀对局。"
+def test_speech_validation_only_requires_non_empty_text() -> None:
+    speech = "“先听我说完。然后我们再决定！”\n#这是自然发言的一部分"
+    assert _required_speech(f"  {speech}  ", error_code="invalid") == speech
+    with pytest.raises(V2QualityError, match="invalid"):
+        _required_speech("  \n  ", error_code="invalid")
+
+
+def test_decision_fields_accept_multi_sentence_text_and_extra_fields() -> None:
+    raw = """模型结果如下：
+```json
+{"target_player_id":" player-2 ","speech":"先听二号怎么说。之后我再判断！","note":"ignored"}
+```"""
+    assert _decision_fields(raw) == (
+        "player-2",
+        "先听二号怎么说。之后我再判断！",
     )
-    with pytest.raises(V2QualityError, match="model_sentence_quoted"):
-        _accepted_sentence("“欢迎来到这场实时狼人杀对局。”")
-    with pytest.raises(V2QualityError, match="model_sentence_forbidden_format"):
-        _accepted_sentence("欢迎来到这场#实时狼人杀对局。")
+
+
+def test_decision_fields_keep_only_fundamental_failures() -> None:
+    with pytest.raises(V2QualityError, match="model_decision_invalid_json"):
+        _decision_fields("not json")
+    with pytest.raises(V2QualityError, match="model_decision_invalid_shape"):
+        _decision_fields('{"speech":"我先保留意见。"}')
+    with pytest.raises(V2QualityError, match="model_decision_invalid_target"):
+        _decision_fields('{"target_player_id":3,"speech":"我投三号。"}')
+    with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
+        _decision_fields('{"target_player_id":null,"speech":"  "}')
 
 
 def test_sse_parser_rejects_malformed_provider_events() -> None:
@@ -86,12 +126,14 @@ def test_public_player_projection_is_ordered_and_fail_closed() -> None:
             "player_id": "profile-1",
             "display_name": "阿青",
             "avatar_url": "/avatar/profile-1",
+            "alive": True,
         },
         {
             "seat": 2,
             "player_id": "profile-2",
             "display_name": "2号玩家",
             "avatar_url": None,
+            "alive": True,
         },
     ]
     with pytest.raises(V2PublicProjectionError, match="duplicate player seat"):
@@ -107,6 +149,163 @@ def test_public_player_projection_is_ordered_and_fail_closed() -> None:
                 {"seat": 1, "profile_id": "profile-1"},
                 {"seat": 2, "profile_id": "profile-1"},
             ]
+        )
+
+
+def test_public_rule_projection_excludes_internal_rule_fields() -> None:
+    projected = project_public_rule_snapshot(
+        {
+            "max_rounds": 8,
+            "rule_set_revision_id": "private-revision",
+            "lineup_quality_report": {"private": True},
+            "rule_set": {
+                "id": "classic_2",
+                "name": "测试两人局",
+                "version": "1",
+                "player_count": 2,
+                "content_hash": "private-hash",
+                "roles": [
+                    {"role": "狼人", "count": 1, "team": "private-team"},
+                    {"role": "村民", "count": 1, "model_group": "private-model-group"},
+                ],
+                "sheriff_enabled": False,
+                "werewolf_self_explosion_enabled": True,
+                "exile_last_words_enabled": True,
+            },
+        }
+    )
+
+    assert projected is not None
+    assert projected.model_dump(mode="json") == {
+        "rule_id": "classic_2",
+        "name": "测试两人局",
+        "version": "1",
+        "player_count": 2,
+        "roles": [{"role": "狼人", "count": 1}, {"role": "村民", "count": 1}],
+        "max_rounds": 8,
+        "sheriff_enabled": False,
+        "werewolf_self_explosion_enabled": True,
+        "exile_last_words_enabled": True,
+    }
+    with pytest.raises(V2PublicProjectionError, match="does not match"):
+        project_public_rule_snapshot(
+            {
+                "max_rounds": 8,
+                "rule_set": {
+                    "id": "broken",
+                    "name": "错误规则",
+                    "version": "1",
+                    "player_count": 2,
+                    "roles": [{"role": "村民", "count": 1}],
+                },
+            }
+        )
+
+
+def test_private_role_assignment_is_deterministic_and_public_status_is_sealed() -> None:
+    players = [
+        {"seat": 2, "profile_id": "profile-2"},
+        {"seat": 1, "profile_id": "profile-1"},
+    ]
+    rule = {
+        "rule_set": {
+            "roles": [
+                {"role": "狼人", "count": 1, "team": "werewolves"},
+                {"role": "村民", "count": 1, "team": "village"},
+            ]
+        }
+    }
+    first = assign_private_roles(
+        players_snapshot=players,
+        rule_snapshot=rule,
+        seed_hex="01" * 32,
+    )
+    second = assign_private_roles(
+        players_snapshot=list(reversed(players)),
+        rule_snapshot=rule,
+        seed_hex="01" * 32,
+    )
+
+    assert first == second
+    assert [item.seat for item in first.assignments] == [1, 2]
+    assert sorted((item.role, item.team) for item in first.assignments) == [
+        ("村民", "village"),
+        ("狼人", "werewolves"),
+    ]
+    assert len(first.digest) == 64
+    assert project_public_role_assignment_status(2).model_dump(mode="json") == {
+        "state": "sealed",
+        "assigned_count": 2,
+    }
+    assert project_public_role_assignment_status(None).model_dump(mode="json") == {
+        "state": "unavailable",
+        "assigned_count": 0,
+    }
+    with pytest.raises(V2RoleAssignmentError, match="does not match"):
+        assign_private_roles(
+            players_snapshot=players,
+            rule_snapshot={"rule_set": {"roles": [{"role": "村民", "count": 1}]}},
+            seed_hex="01" * 32,
+        )
+
+
+def test_god_view_access_and_projection_are_separate_and_fail_closed() -> None:
+    token, token_hash = issue_god_view_access_token()
+    assert token != token_hash
+    assert verify_god_view_access_token(token=token, expected_sha256=token_hash)
+    assert not verify_god_view_access_token(
+        token="wrong-token-that-is-long-enough-to-be-valid",
+        expected_sha256=token_hash,
+    )
+
+    projected = project_god_view_player_identities(
+        players_snapshot=[
+            {
+                "seat": 1,
+                "profile_id": "profile-1",
+                "name": "阿青",
+                "model": "must-not-leak",
+                "personality": "must-not-leak",
+            }
+        ],
+        assignments=[
+            SimpleNamespace(
+                seat=1,
+                player_id="profile-1",
+                role="狼人",
+                team="werewolves",
+            )
+        ],
+        player_states={
+            "profile-1": SimpleNamespace(alive=True, death_cause=None),
+        },
+    )
+    assert [item.model_dump(mode="json") for item in projected] == [
+        {
+            "seat": 1,
+            "player_id": "profile-1",
+            "display_name": "阿青",
+            "avatar_url": None,
+            "role": "狼人",
+            "team": "werewolves",
+            "alive": True,
+            "death_cause": None,
+        }
+    ]
+    with pytest.raises(V2GodViewProjectionError, match="does not match"):
+        project_god_view_player_identities(
+            players_snapshot=[{"seat": 1, "profile_id": "profile-1"}],
+            assignments=[
+                SimpleNamespace(
+                    seat=1,
+                    player_id="profile-2",
+                    role="狼人",
+                    team="werewolves",
+                )
+            ],
+            player_states={
+                "profile-1": SimpleNamespace(alive=True, death_cause=None),
+            },
         )
 
 

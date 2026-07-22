@@ -13,6 +13,9 @@ const item = {
   record_schema_version: 1,
   last_record_seq: 2,
   last_presentation_seq: 1,
+  phase_seq: 2,
+  phase_id: "first_night",
+  phase_state: "nightfall_announced",
   created_at: "2026-07-21T10:00:00Z",
   updated_at: "2026-07-21T10:00:00Z",
 };
@@ -37,6 +40,7 @@ describe("V2 game record parsers", () => {
       ...item,
       rule_snapshot: {},
       players_snapshot: [],
+      ability_snapshot: {},
       runs: [
         {
           run_id: item.current_run_id,
@@ -62,9 +66,11 @@ describe("V2 game record parsers", () => {
           presentation_seq: 1,
           presentation_id: "v2_pres_0123456789abcdef",
           action_id: "v2_action_0123456789abcdef",
+          activation_id: null,
           phase_id: "opening",
           actor_kind: "judge",
           actor_id: "judge",
+          audience: "all",
           speech_id: "v2_speech_0123456789abcdef",
           segment_index: 0,
           source_event_id: 2,
@@ -80,6 +86,8 @@ describe("V2 game record parsers", () => {
         {
           voice_asset_id: "v2_voice_0123456789abcdef",
           action_id: "v2_action_0123456789abcdef",
+          activation_id: null,
+          audience: "all",
           presentation_id: "v2_pres_0123456789abcdef",
           speech_id: "v2_speech_0123456789abcdef",
           segment_index: 0,
@@ -96,6 +104,12 @@ describe("V2 game record parsers", () => {
           completed_at: item.updated_at,
         },
       ],
+      player_states: [],
+      action_windows: [],
+      ability_instances: [],
+      ability_activations: [],
+      effect_intents: [],
+      knowledge_facts: [],
     });
 
     expect(result.events[0].record_seq).toBe(2);
